@@ -1,0 +1,172 @@
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PingWatch — Network Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<!-- STYLE_INJECT -->
+</head>
+<body>
+<canvas id="netbg"></canvas>
+
+<!-- Login screen -->
+<div id="login-screen" style="display:none">
+  <div class="login-box">
+    <div class="login-head">
+      <div class="login-logo">
+        <svg width="26" height="26" viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="8.5" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
+          <circle cx="10" cy="10" r="5"   stroke="rgba(255,255,255,.4)"  stroke-width="1"/>
+          <circle cx="10" cy="10" r="2"   fill="white" opacity=".9"/>
+          <line x1="1.5" y1="10" x2="5"  y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
+          <line x1="15"  y1="10" x2="18.5" y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
+          <line x1="10"  y1="1.5" x2="10" y2="5"  stroke="white" stroke-width="1.2" opacity=".7"/>
+          <line x1="10"  y1="15" x2="10" y2="18.5" stroke="white" stroke-width="1.2" opacity=".7"/>
+        </svg>
+      </div>
+      <div class="login-title">
+        <span class="lt-ping">Ping</span><span class="lt-watch">Watch</span>
+      </div>
+      <div class="login-sub">Network Monitor — Sign In</div>
+    </div>
+    <div class="login-body">
+      <div class="login-err" id="login-err"></div>
+      <div class="login-field">
+        <label class="login-label" for="login-user">Username</label>
+        <input class="login-input" id="login-user" type="text" placeholder="admin" autocomplete="username" autocapitalize="none"/>
+      </div>
+      <div class="login-field">
+        <label class="login-label" for="login-pass">Password</label>
+        <input class="login-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password"/>
+      </div>
+      <button class="login-btn" id="login-btn" onclick="submitLogin()">Sign In</button>
+    </div>
+  </div>
+</div>
+<div id="cbn">⚠ Connection to server lost — retrying…</div>
+
+<!-- Top bar -->
+<div id="topbar">
+  <div class="tb-brand">
+    <div class="tb-logo">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="10" cy="10" r="8.5" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
+        <circle cx="10" cy="10" r="5"   stroke="rgba(255,255,255,.4)"  stroke-width="1"/>
+        <circle cx="10" cy="10" r="2"   fill="white" opacity=".9"/>
+        <line x1="1.5" y1="10" x2="5"  y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="15"  y1="10" x2="18.5" y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="10"  y1="1.5" x2="10" y2="5"  stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="10"  y1="15" x2="10" y2="18.5" stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="3.5" y1="3.5" x2="6.4" y2="6.4" stroke="white" stroke-width=".9" opacity=".4"/>
+        <line x1="13.6" y1="13.6" x2="16.5" y2="16.5" stroke="white" stroke-width=".9" opacity=".4"/>
+        <line x1="16.5" y1="3.5" x2="13.6" y2="6.4" stroke="white" stroke-width=".9" opacity=".4"/>
+        <line x1="6.4" y1="13.6" x2="3.5" y2="16.5" stroke="white" stroke-width=".9" opacity=".4"/>
+      </svg>
+    </div>
+    <div>
+      <div class="tb-wordmark">
+        <span class="tw-ping">Ping</span><span class="tw-watch">Watch</span>
+      </div>
+      <div class="tb-ver" id="tbVer">Network Monitor v3</div>
+    </div>
+  </div>
+  <div class="tb-mid">
+    <div class="tb-pills">
+      <div class="stpill up">  <div class="stpill-dot blink"></div><span id="pu">0</span>&nbsp;Up</div>
+      <div class="stpill down"><div class="stpill-dot"></div><span id="pd">0</span>&nbsp;Down</div>
+      <div class="stpill warn"><div class="stpill-dot"></div><span id="pw">0</span>&nbsp;Warning</div>
+      <div class="stpill idle"><div class="stpill-dot"></div><span id="pi">0</span>&nbsp;Idle</div>
+    </div>
+  </div>
+  <div class="tb-right">
+    <div class="tb-time" id="clk"></div>
+    <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
+    <span id="tb-user" style="font-size:11px;color:var(--text3);display:none"></span>
+    <button id="btnAddGroup" class="rbac-op" onclick="openAddGroup()">⊞ Add Group</button>
+    <button id="btnAdd" class="rbac-op" onclick="openAddDevice()">＋ Add Device</button>
+    <button id="btnSettings" onclick="openSettings()" style="display:none" title="Settings">⚙</button>
+    <button id="btnLogout" onclick="doLogout()" style="display:none">⎋ Sign Out</button>
+  </div>
+</div>
+
+<!-- Sidebar expand tab (visible when sidebar is collapsed) -->
+<button id="sidebarExpandTab" title="Expand sidebar" onclick="toggleSidebar()">›</button>
+
+<!-- Layout -->
+<div id="layout">
+  <div id="sidebar">
+    <div class="sb-hdr">
+      <span>Device Tree</span>
+      <button id="sidebarToggleBtn" title="Collapse sidebar" onclick="toggleSidebar()">‹</button>
+    </div>
+    <div id="devTree">
+      <div style="padding:18px 14px;color:var(--text3);font-size:11px;text-align:center;line-height:1.8">
+        No devices yet.<br>Click <strong>＋ Add Device</strong>.
+      </div>
+    </div>
+  </div>
+  <div id="main">
+    <!-- Tab bar -->
+    <div id="mainTabs">
+      <button class="mtab" id="tabDashboard" onclick="switchMainTab('dashboard')">◧ Dashboard</button>
+      <button class="mtab" id="tabDevices" onclick="switchMainTab('devices')">⊞ Devices</button>
+      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events <span class="mtab-badge" id="evtBadge" style="display:none">0</span></button>
+      <button class="mtab" id="tabMap" onclick="switchMainTab('map')">⬡ Map</button>
+    </div>
+    <!-- Dashboard view -->
+    <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
+      <div id="dw-grid" class="dw-grid"></div>
+      <button class="dw-add-btn" onclick="_dwOpenPicker()">＋ Add Widget</button>
+    </div>
+    <!-- Map view -->
+    <div id="mapView" style="display:none;flex:1;overflow:hidden;height:100%;">
+      <iframe id="map-frame" data-src="/map" style="width:100%;height:100%;border:none;display:block;"></iframe>
+    </div>
+    <!-- Events view -->
+    <div id="eventsView" style="display:none">
+      <div class="evt-view-hdr">
+        <div class="evt-view-title">⚡ Flap Events</div>
+        <div class="evt-view-sub">State changes detected across all monitored sensors</div>
+      </div>
+      <div id="evtList"><div class="evt-empty">No flaps recorded yet.</div></div>
+    </div>
+    <div id="emptyMain" style="display:none">
+      <!-- Hero radar SVG -->
+      <div class="hero-radar" id="heroRadar">
+        <canvas id="radarCvs" width="220" height="220"></canvas>
+        <div class="hero-ico-wrap">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="24" cy="24" r="20" stroke="rgba(47,129,247,.5)" stroke-width="1.5"/>
+            <circle cx="24" cy="24" r="12" stroke="rgba(47,129,247,.4)" stroke-width="1.5"/>
+            <circle cx="24" cy="24" r="5"  fill="rgba(47,129,247,.9)"/>
+            <line x1="4"  y1="24" x2="12" y2="24" stroke="rgba(47,129,247,.5)" stroke-width="1.5"/>
+            <line x1="36" y1="24" x2="44" y2="24" stroke="rgba(47,129,247,.5)" stroke-width="1.5"/>
+            <line x1="24" y1="4"  x2="24" y2="12" stroke="rgba(47,129,247,.5)" stroke-width="1.5"/>
+            <line x1="24" y1="36" x2="24" y2="44" stroke="rgba(47,129,247,.5)" stroke-width="1.5"/>
+          </svg>
+        </div>
+      </div>
+      <div class="hero-title">
+        <span class="ht-ping">Ping</span><span class="ht-watch">Watch</span>
+      </div>
+      <div class="hero-sub">Real-time network intelligence</div>
+      <div class="hero-caps">
+        <div class="hcap"><div class="hcap-ico">◉</div><div class="hcap-lbl">ICMP Ping</div></div>
+        <div class="hcap-div"></div>
+        <div class="hcap"><div class="hcap-ico">⇌</div><div class="hcap-lbl">TCP Ports</div></div>
+        <div class="hcap-div"></div>
+        <div class="hcap"><div class="hcap-ico">◈</div><div class="hcap-lbl">HTTP/S</div></div>
+        <div class="hcap-div"></div>
+        <div class="hcap"><div class="hcap-ico">◎</div><div class="hcap-lbl">SNMP</div></div>
+      </div>
+      <button class="em-btn" onclick="openAddDevice()">＋ Add Your First Device</button>
+      <div class="hero-hint">Settings are saved automatically to <code>pingwatch.db</code></div>
+    </div>
+    <div id="dpanels" style="display:none"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<!-- SCRIPT_INJECT -->
+</body>
+</html>
