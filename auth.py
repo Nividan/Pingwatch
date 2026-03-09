@@ -1,6 +1,5 @@
 """
 auth.py — Password hashing and session management.
-test
 """
 
 import hashlib
