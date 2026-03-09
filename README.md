@@ -19,15 +19,18 @@ Pingwatch is a Python-based network monitoring platform designed to help users m
    ```bash
    cd Pingwatch
    ```
-3. **Install the required dependencies:**  
+3. **Install the required dependencies:**
+   ****  
    ```bash
+   ./start.bat
+   or
    pip install -r requirements.txt
    ```
 
 ## Usage
 To start monitoring, run the following command:
 ```bash
-python pingwatch.py
+python pingwatch.pyw (no console)
 ```
 
 ## Configuration
