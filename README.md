@@ -33,27 +33,6 @@ To start monitoring, run the following command:
 python pingwatch.pyw (no console)
 ```
 
-## Configuration
-The configuration options are located in `config.yaml`. Here you can define:
-- The list of devices to monitor
-- The ping interval
-- Notification settings
-
-### Example Configuration:
-```yaml
-devices:
-  - name: "Router"
-    ip: "192.168.1.1"
-  - name: "Server"
-    ip: "192.168.1.2"
-
-ping_interval: 60  # seconds
-notification:
-  enabled: true
-  method: "email"
-  email: "your-email@example.com"
-```
-
 ## Architecture
 Pingwatch follows a modular architecture:
 - **Ping Module:** Handles sending and receiving ping requests.
