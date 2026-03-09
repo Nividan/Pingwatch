@@ -1,5 +1,6 @@
 """
 auth.py — Password hashing and session management.
+Test Commit
 """
 
 import hashlib
