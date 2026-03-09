@@ -10,6 +10,15 @@ Pingwatch is a Python-based network monitoring platform designed to help users m
 - Notification support via email or messaging apps
 - Simple web dashboard for visual representation of device status
 
+## Technologies Used
+- Backend: Python 3.x
+- Web Server: Python's built-in http.server module
+- Database: SQLite
+- Frontend: HTML, CSS, JavaScript
+- System Tray Integration: pystray, Pillow
+- Network Probing: Uses standard Python libraries (socket, urllib, subprocess ) for various network checks.
+
+
 ## Installation
 1. **Clone the repository:**  
    ```bash
@@ -19,12 +28,18 @@ Pingwatch is a Python-based network monitoring platform designed to help users m
    ```bash
    cd Pingwatch
    ```
-3. **Install the required dependencies:**
+3. **Install the required dependencies and start the server**
    ****  
+   Installing requirements and starting the server with the console
    ```bash
    ./start.bat
-   or
+   ```
+   **or**
+   
+   Installing requirements, then start the server without the console
+   ```bash
    pip install -r requirements.txt
+   python pingwatch.pyw (no console)
    ```
 
 ## Usage
