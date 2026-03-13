@@ -67,10 +67,7 @@ Collected data is displayed in a web-based dashboard that provides event logging
    ```bash
    cd Pingwatch
    ```
-3. **Install the required dependencies and start the server**
-
-   Install requirements and start the server with the console:
-
+3. **Install the required dependencies and start the server:**
    ```bash
    ./start.bat
    ```
