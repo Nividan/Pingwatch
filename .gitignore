@@ -1,0 +1,21 @@
+# Database
+pingwatch.db
+pingwatch.db-wal
+pingwatch.db-shm
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyw.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
