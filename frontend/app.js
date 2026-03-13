@@ -164,13 +164,20 @@ function updatePills(){
 
 // ── Events / Flap log ────────────────────────────────────────────
 const FLAPS=[];   // newest first; size controlled by MAX_FLAPS
+const _FLAP_SEEN=new Set(); // dedup keys to prevent API+SSE duplicates
 let MAX_FLAPS=20;
 let unseenFlaps=0;
+
+function _flapKey(d){
+  // Unique key: device+sensor+timestamp+direction (covers both flaps and traps)
+  return (d.did||d.src_ip||'')+'|'+(d.sid||d.trap_oid||'')+'|'+(d.ts||'')+'|'+(d._direction||d.direction||'');
+}
 let activeMainTab=(()=>{try{return localStorage.getItem('pw_tab')||'devices';}catch{return 'devices';}})();
 // Apply correct tab button immediately — synchronous, no network request needed
 document.getElementById('tab'+activeMainTab[0].toUpperCase()+activeMainTab.slice(1))?.classList.add('active');
 
 function pushFlap(d){
+  const k=_flapKey(d); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
   FLAPS.unshift(d);
   if(FLAPS.length>MAX_FLAPS) FLAPS.pop();
   renderFlaps();
@@ -184,6 +191,7 @@ function pushFlap(d){
 
 function pushThresholdEvent(d, level){
   const entry=Object.assign({},d,{_direction:'threshold',_thr_level:level});
+  const k=_flapKey(entry); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
   FLAPS.unshift(entry);
   if(FLAPS.length>MAX_FLAPS)FLAPS.pop();
   renderFlaps();
@@ -195,6 +203,7 @@ function pushThresholdEvent(d, level){
 }
 
 function renderFlaps(){
+  if(typeof _renderEvtView==='function'){ _renderEvtView(); return; }
   const list=document.getElementById('evtList');
   if(!list) return;
   if(!FLAPS.length){
@@ -303,15 +312,14 @@ async function _refreshDevices(){
 
 async function _refreshEvents(){
   try{
-    FLAPS.length=0;
+    FLAPS.length=0; _FLAP_SEEN.clear();
     const [fd,td]=await Promise.all([
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
     ]);
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; FLAPS.push(f); });
-    (td.traps||[]).forEach(t=>{ t._direction='trap'; FLAPS.push(t); });
+    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
+    (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
-    if(FLAPS.length>MAX_FLAPS*2) FLAPS.length=MAX_FLAPS*2;
     renderFlaps();
   }catch(e){}
 }
@@ -381,16 +389,15 @@ async function loadAll(){
   try {
     const fr=await fetch('/api/flaps');
     const fd=await fr.json();
-    (fd.flaps||[]).forEach(f=>{ FLAPS.push(f); });  // already newest-first from DB
+    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
   } catch(e){}
   try {
     const tr=await fetch('/api/traps');
     const td=await tr.json();
-    (td.traps||[]).forEach(t=>{ t._direction='trap'; FLAPS.push(t); });
+    (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
   } catch(e){}
   // Sort combined list newest-first and cap size
   FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
-  if(FLAPS.length>MAX_FLAPS*2)FLAPS.length=MAX_FLAPS*2;
   renderFlaps();
 
   const r=await fetch('/api/devices');
@@ -407,6 +414,7 @@ async function loadAll(){
     document.getElementById('emptyMain').style.display='none';
     if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
   }
+  renderFlaps(); // re-render events now that S.devices (groups) is populated
   updatePills();
   restoreGroupOrder();
   renderSidebar();

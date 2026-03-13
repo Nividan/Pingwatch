@@ -72,9 +72,9 @@ if %errorlevel% neq 0 (
 :: ── 5. Desktop shortcut (ask once) ─────────────────────────────────────────
 powershell -NoProfile -Command "if(Test-Path([Environment]::GetFolderPath('Desktop')+'\PingWatch.lnk')){exit 0}else{exit 1}" >nul 2>&1
 if %errorlevel% equ 0 goto :skip_sc
-set _SC=
-set /p _SC="Create a desktop shortcut for PingWatch? [Y/N] "
-if /i "%_SC%"=="Y" (
+powershell -NoProfile -Command "Add-Type -AssemblyName PresentationFramework; $r=[System.Windows.MessageBox]::Show('Create a desktop shortcut for PingWatch?','PingWatch Setup','YesNo','Question'); if($r -eq 'Yes'){exit 0}else{exit 1}" >nul 2>&1
+if %errorlevel% neq 0 goto :skip_sc
+if %errorlevel% equ 0 (
     for /f "delims=" %%E in ('python -c "import sys; print(sys.executable)"') do (
         (
             echo $ws = New-Object -ComObject WScript.Shell
