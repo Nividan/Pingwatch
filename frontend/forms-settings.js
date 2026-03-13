@@ -1,0 +1,561 @@
+// ── Settings modal (General, Alerts, Database, Audit, Sensors, Networking) ─
+
+async function openSettings(){
+  closeM('mset');
+  const [sr, ur] = await Promise.all([
+    api('GET','/api/settings'),
+    api('GET','/api/users'),
+  ]);
+  const o=document.createElement('div'); o.className='mo'; o.id='mset';
+  o.onclick=e=>{if(e.target===o)closeM('mset');};
+  o.innerHTML=`
+  <div class="mbox" style="width:640px;max-width:96vw">
+    <div class="mhd">
+      <div class="mttl">⚙ Settings</div>
+      <button class="mclose" onclick="closeM('mset')">✕</button>
+    </div>
+    <div class="dw-tabs" style="padding:0 4px">
+      <button class="dw-tab active" id="stab-btn-general" onclick="switchSettingsTab('general')">General</button>
+      <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">Users</button>
+      <button class="dw-tab" id="stab-btn-alerts" onclick="switchSettingsTab('alerts')">Alerts</button>
+      <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">Database</button>
+      <button class="dw-tab" id="stab-btn-audit" onclick="switchSettingsTab('audit')">Audit</button>
+      <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">Sensors</button>
+      <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">Networking</button>
+    </div>
+    <div class="mbdy" id="stab-general" style="max-height:65vh;overflow-y:auto">
+      <div class="fr">
+        <label class="fl">Session Timeout (seconds)</label>
+        <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px">Current: ${Math.round((sr.session_ttl||86400)/3600*10)/10}h — takes effect on next login</div>
+      </div>
+      <div class="fr" style="margin-top:12px">
+        <label class="fl">Sample Retention (days)</label>
+        <input type="number" id="st-ret" value="${sr.retention_days||365}" min="1" max="365" style="max-width:120px"/>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px">How long to keep latency history samples (default: 365 days)</div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">New Sensor Defaults</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Interval (s)</label>
+            <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
+        </div>
+        <div class="fgrid" style="margin-top:6px">
+          <div class="fr"><label class="fl">Fail After (probes)</label>
+            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||1}" min="1" max="60" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Recover After (probes)</label>
+            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="60" style="max-width:100px"/></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Events shown</label>
+            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||20}" min="5" max="200" style="max-width:100px"/>
+            <div class="fh">Max events shown in Events tab</div></div>
+          <div class="fr"><label class="fl">Events in DB</label>
+            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||500}" min="50" max="10000" style="max-width:100px"/>
+            <div class="fh">Max flap entries kept in database</div></div>
+        </div>
+        <div class="fr" style="margin-top:6px"><label class="fl">SNMP Traps in DB</label>
+          <input type="number" id="st-trap-db" value="${sr.max_trap_entries||500}" min="50" max="10000" style="max-width:100px"/>
+          <div class="fh">Max SNMP trap entries kept in database</div></div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Security</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Max login attempts</label>
+            <input type="number" id="st-fail-max" value="${sr.login_fail_max||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Attempts before lockout</div></div>
+          <div class="fr"><label class="fl">Lockout window (s)</label>
+            <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
+            <div class="fh">Window to count failed attempts</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Appearance</div>
+        <div class="fr"><label class="fl">Organisation Name</label>
+          <input type="text" id="st-orgname" value="${esc(sr.org_name||'')}" placeholder="Network Monitor" style="max-width:260px"/>
+          <div class="fh">Shown in the top bar and browser tab title</div></div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Latency Colour Thresholds</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
+            <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl" style="color:var(--warn)">Warn (yellow) &lt; (ms)</label>
+            <input type="number" id="st-lwarn" value="${sr.latency_warn_ms||300}" min="1" max="10000" style="max-width:100px"/></div>
+        </div>
+        <div class="fh">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
+      </div>
+      <div class="fr" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:12px">Change Password</div>
+        <div class="fr"><label class="fl">Current Password</label>
+          <input type="password" id="st-cpw" placeholder="current password"/></div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">New Password</label>
+            <input type="password" id="st-npw" placeholder="min 8 characters"/></div>
+          <div class="fr"><label class="fl">Confirm</label>
+            <input type="password" id="st-npw2" placeholder="confirm"/></div>
+        </div>
+        <button class="btn-p" id="btnChgPw" style="margin-top:10px;font-size:12px;padding:7px 14px"
+                onclick="changeOwnPassword()">Update Password</button>
+      </div>
+      <div class="fr" style="margin-top:16px">
+        <div class="fl" style="margin-bottom:10px">Server Info</div>
+        <div class="st-info-grid">
+          <span class="st-info-key">Port</span><span class="st-info-val">${sr.port}</span>
+          <span class="st-info-key">Address</span><span class="st-info-val">${sr.bind}</span>
+          <span class="st-info-key">Database</span><span class="st-info-val">${esc(sr.db_path||'')}</span>
+        </div>
+      </div>
+    </div>
+    <div class="mbdy" id="stab-users" style="display:none;padding-top:8px">
+      <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
+      <div style="margin-top:14px">
+        <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
+      </div>
+    </div>
+    <div class="mbdy" id="stab-alerts" style="display:none">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
+      <div class="fgrid">
+        <div class="fr"><label class="fl">SMTP Host</label>
+          <input type="text" id="st-smtp-host" value="${sr.smtp_host||''}" placeholder="smtp.gmail.com"/></div>
+        <div class="fr"><label class="fl">Port</label>
+          <input type="number" id="st-smtp-port" value="${sr.smtp_port||587}" style="max-width:100px"/></div>
+      </div>
+      <div class="fr" style="margin-top:8px"><label class="fl">Security</label>
+        <select id="st-smtp-tls" style="max-width:180px">
+          <option value="starttls" ${sr.smtp_tls==='starttls'?'selected':''}>STARTTLS (port 587)</option>
+          <option value="ssl"      ${sr.smtp_tls==='ssl'     ?'selected':''}>SSL/TLS  (port 465)</option>
+          <option value="none"     ${sr.smtp_tls==='none'    ?'selected':''}>None     (port 25)</option>
+        </select>
+      </div>
+      <div class="fgrid" style="margin-top:8px">
+        <div class="fr"><label class="fl">Username</label>
+          <input type="text"     id="st-smtp-user" value="${sr.smtp_user||''}" placeholder="user@gmail.com"/></div>
+        <div class="fr"><label class="fl">Password</label>
+          <input type="password" id="st-smtp-pass" placeholder="${sr.smtp_pass_set?'\u25cf\u25cf\u25cf\u25cf\u25cf (set \u2014 leave blank to keep)':'enter password'}"/></div>
+      </div>
+      <div class="fgrid" style="margin-top:8px">
+        <div class="fr"><label class="fl">From</label>
+          <input type="email" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
+        <div class="fr"><label class="fl">To</label>
+          <input type="email" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
+      </div>
+      <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
+        <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>
+        <div class="fh">Wait this many seconds before sending a DOWN email — if sensor recovers in time, no email is sent. Set to 0 to alert immediately.</div>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+        <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
+        <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--text3)">
+        Emails are sent on sensor DOWN and RECOVERED events (after fail_after / recover_after debounce).
+      </div>
+    </div>
+    <div class="mft" id="stab-footer-general">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSettings()">Save Settings</button>
+    </div>
+    <div class="mft" id="stab-footer-users" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
+    <div class="mft" id="stab-footer-alerts" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSettings()">Save Settings</button>
+    </div>
+    <div class="mbdy" id="stab-database" style="display:none">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Backup &amp; Restore</div>
+      <div class="fr">
+        <label class="fl">Export Database</label>
+        <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="exportDb()">&#8681; Download Backup</button>
+        <div class="fh">Downloads a complete snapshot of all data (devices, sensors, history, network topology, settings, users).</div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <label class="fl">Import Database</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn-s" style="font-size:12px;padding:7px 16px" onclick="importDb()">&#8679; Restore from Backup</button>
+          <span id="db-import-status" style="font-size:12px;color:var(--text3)"></span>
+        </div>
+        <div class="fh" style="color:var(--down);margin-top:6px">Warning: this replaces ALL current data and restarts the server.</div>
+      </div>
+    </div>
+    <div class="mft" id="stab-footer-database" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
+    <div class="mbdy" id="stab-audit" style="display:none;padding:0">
+      <div id="auditLogBody" style="max-height:65vh;overflow-y:auto">
+        <div style="color:var(--text3);font-size:12px;padding:16px">Loading…</div>
+      </div>
+    </div>
+    <div class="mft" id="stab-footer-audit" style="display:none">
+      <span style="font-size:11px;color:var(--text3)">Last 200 entries · admin only</span>
+    </div>
+    <div class="mbdy" id="stab-sensors" style="display:none;max-height:65vh;overflow-y:auto">
+      <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
+    </div>
+    <div class="mft" id="stab-footer-sensors" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
+    </div>
+    <div class="mbdy" id="stab-networking" style="display:none">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Ports</div>
+      <div class="fr">
+        <label class="fl">HTTP Port</label>
+        <input type="number" id="st-http-port" value="${sr.http_port||7070}" min="1" max="65535" style="max-width:120px"/>
+        <div class="fh">Port the web interface listens on</div>
+      </div>
+      <div class="fr" style="margin-top:12px">
+        <label class="fl">SNMP Trap Port</label>
+        <input type="number" id="st-snmp-port" value="${sr.snmp_port||162}" min="1" max="65535" style="max-width:120px"/>
+        <div class="fh">UDP port for SNMP trap reception. Falls back to 1162 then 2162 if binding fails.</div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:6px">HTTPS</div>
+        <div style="font-size:12px;color:var(--text3)">HTTPS is not natively supported. Use a reverse proxy (Nginx, Caddy, HAProxy) to terminate TLS in front of PingWatch.</div>
+      </div>
+      <div style="margin-top:16px;padding:10px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--warn)">
+        Port changes require a server restart to take effect.
+      </div>
+    </div>
+    <div class="mft" id="stab-footer-networking" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+function switchSettingsTab(tab){
+  ['general','users','alerts','database','audit','sensors','networking'].forEach(t=>{
+    document.getElementById(`stab-${t}`).style.display = t===tab ? '' : 'none';
+    document.getElementById(`stab-btn-${t}`).classList.toggle('active', t===tab);
+    document.getElementById(`stab-footer-${t}`).style.display = t===tab ? '' : 'none';
+  });
+  if(tab==='audit')   loadAuditLog();
+  if(tab==='sensors') loadSensorsDefaultsTab();
+}
+
+async function saveNetworkingSettings(){
+  const httpPort=parseInt(document.getElementById('st-http-port')?.value);
+  const snmpPort=parseInt(document.getElementById('st-snmp-port')?.value);
+  if(!httpPort||httpPort<1||httpPort>65535){toast('HTTP port must be 1–65535','err');return;}
+  if(!snmpPort||snmpPort<1||snmpPort>65535){toast('SNMP port must be 1–65535','err');return;}
+  const btn=document.querySelector('#stab-footer-networking .btn-p');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  const r=await api('PATCH','/api/settings',{http_port:httpPort,snmp_port:snmpPort});
+  if(btn){btn.disabled=false;btn.textContent='Save Networking';}
+  if(!r.ok){toast('Failed to save networking settings','err');return;}
+  toast('Saved — restart the server for port changes to take effect','ok');
+}
+
+async function loadAuditLog(){
+  const el=document.getElementById('auditLogBody');
+  if(!el) return;
+  const r=await fetch('/api/audit');
+  if(!r.ok){ el.innerHTML='<div style="color:var(--down);padding:12px">Access denied</div>'; return; }
+  const {entries}=await r.json();
+  if(!entries.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:12px">No audit entries yet.</div>'; return; }
+  el.innerHTML=`<table class="audit-tbl"><thead><tr>
+    <th>Time</th><th>User</th><th>IP</th><th>Action</th><th>Target</th><th>Detail</th>
+  </tr></thead><tbody>${entries.map(e=>`<tr>
+    <td class="audit-ts">${new Date(e.ts*1000).toLocaleString()}</td>
+    <td class="audit-actor">${e.actor}</td>
+    <td class="audit-ip">${e.ip}</td>
+    <td class="audit-action ${_auditCls(e.action)}">${e.action}</td>
+    <td class="audit-target">${e.target||'—'}</td>
+    <td class="audit-detail">${e.detail||''}</td>
+  </tr>`).join('')}</tbody></table>`;
+}
+
+function _auditCls(a){
+  if(a.includes('delete')||a==='db_import') return 'aud-danger';
+  if(a.includes('fail')||a.includes('pass')) return 'aud-warn';
+  if(a==='login_ok'||a.includes('create')) return 'aud-ok';
+  return '';
+}
+
+// ── Per-type sensor defaults tab ──────────────────────────────────────────
+
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:500,  http_keyword:500,  banner:300};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:2000, http_keyword:1500, banner:1000};
+
+const _SDR_META = {
+  ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},
+  tcp:          {ico:'🔌', label:'TCP Port',     desc:'TCP connection reachability'},
+  http:         {ico:'🌐', label:'HTTP/S',       desc:'HTTP/HTTPS status & latency'},
+  snmp:         {ico:'📊', label:'SNMP',         desc:'SNMP OID polling'},
+  dns:          {ico:'🔍', label:'DNS',          desc:'DNS record resolution'},
+  tls:          {ico:'🔒', label:'TLS',          desc:'TLS/SSL certificate expiry'},
+  http_keyword: {ico:'🏷', label:'HTTP Keyword', desc:'HTTP response body search'},
+  banner:       {ico:'📋', label:'Banner',       desc:'TCP banner / regex match'},
+};
+
+function _sdrExtraFields(type, d){
+  const v  = (k,def) => d?.[k] != null ? d[k] : def;
+  const chk= (k,def) => (d?.[k] != null ? d[k] : def) ? 'checked' : '';
+  switch(type){
+    case 'tcp':
+      return `<div class="fr"><label class="fl">Default Port</label>
+        <input type="number" id="sdr_tcp_port" value="${v('port','')}" min="1" max="65535" style="max-width:100px"/></div>`;
+    case 'http':
+      return `<div class="fr"><label class="fl">Verify SSL</label>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:4px">
+          <input type="checkbox" id="sdr_http_verify_ssl" ${chk('verify_ssl',true)}/> Verify SSL certificate</label></div>
+        <div class="fr"><label class="fl">Expected Status (0 = any 2xx)</label>
+        <input type="number" id="sdr_http_expected_status" value="${v('http_expected_status',0)}" min="0" max="599" style="max-width:100px"/></div>`;
+    case 'snmp':
+      return `<div class="fr"><label class="fl">Community</label>
+        <input type="text" id="sdr_snmp_community" value="${esc(v('community','public'))}" style="max-width:160px"/></div>
+        <div class="fgrid"><div class="fr"><label class="fl">Version</label>
+          <select id="sdr_snmp_version">
+            <option value="2c" ${v('version','2c')==='2c'?'selected':''}>v2c</option>
+            <option value="1"  ${v('version','2c')==='1' ?'selected':''}>v1</option>
+          </select></div>
+        <div class="fr"><label class="fl">Port</label>
+          <input type="number" id="sdr_snmp_port" value="${v('port',161)}" min="1" max="65535" style="max-width:100px"/></div></div>`;
+    case 'dns':
+      return `<div class="fgrid">
+        <div class="fr"><label class="fl">Record Type</label>
+          <select id="sdr_dns_record_type">${['A','AAAA','CNAME','MX','NS','TXT','PTR'].map(rt=>
+            `<option value="${rt}" ${v('record_type','A')===rt?'selected':''}>${rt}</option>`).join('')}</select></div>
+        <div class="fr"><label class="fl">Port</label>
+          <input type="number" id="sdr_dns_port" value="${v('port',53)}" min="1" max="65535" style="max-width:100px"/></div></div>
+        <div class="fr"><label class="fl">DNS Server (blank = system)</label>
+          <input type="text" id="sdr_dns_server" value="${esc(v('dns_server',''))}" placeholder="8.8.8.8" style="max-width:180px"/></div>`;
+    case 'tls':
+      return `<div class="fr"><label class="fl">Port</label>
+        <input type="number" id="sdr_tls_port" value="${v('port',443)}" min="1" max="65535" style="max-width:100px"/></div>`;
+    case 'http_keyword':
+      return `<div class="fr"><label class="fl">Verify SSL</label>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:4px">
+          <input type="checkbox" id="sdr_http_keyword_verify_ssl" ${chk('verify_ssl',true)}/> Verify SSL certificate</label></div>
+        <div class="fr"><label class="fl">Case Sensitive</label>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:4px">
+          <input type="checkbox" id="sdr_http_keyword_keyword_case" ${chk('keyword_case',false)}/> Case-sensitive keyword match</label></div>`;
+    case 'banner':
+      return `<div class="fr"><label class="fl">Default Port</label>
+        <input type="number" id="sdr_banner_port" value="${v('port',21)}" min="1" max="65535" style="max-width:100px"/></div>`;
+    default: return '';
+  }
+}
+
+async function loadSensorsDefaultsTab(){
+  const el = document.getElementById('sdrTabBody');
+  if(!el) return;
+  const {devices} = await api('GET','/api/devices');
+  const typeCounts = {};
+  for(const dev of devices)
+    for(const s of (dev.sensors||[]))
+      typeCounts[s.stype] = (typeCounts[s.stype]||0) + 1;
+  const types = Object.keys(typeCounts).sort();
+  if(!types.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:8px">No sensors found.</div>'; return; }
+  const td = window._snrTypeDefaults || {};
+  el.innerHTML = types.map(t => {
+    const m   = _SDR_META[t] || {ico:'?', label:t, desc:''};
+    const d   = td[t] || {};
+    const cnt = typeCounts[t];
+    const iv  = d.interval      != null ? d.interval      : (window._snrDef?.interval||5);
+    const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||4);
+    const fa  = d.fail_after    != null ? d.fail_after    : (window._snrDef?.fail_after||1);
+    const ra  = d.recover_after != null ? d.recover_after : (window._snrDef?.recover_after||1);
+    const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
+    const cm  = d.crit_ms  != null ? d.crit_ms  : (_SDR_CRIT_DEF[t] || '');
+    const extra = _sdrExtraFields(t, d);
+    return `<div class="sdr-card" data-type="${t}">
+      <div class="sdr-card-hd">
+        <span class="sdr-icon">${m.ico}</span>
+        <div class="sdr-card-title">
+          <span class="sdr-lbl">${m.label}</span>
+          <span class="sdr-desc">${m.desc}</span>
+        </div>
+        <span class="sdr-cnt">${cnt} sensor${cnt>1?'s':''}</span>
+      </div>
+      <div class="sdr-fields">
+        <div class="sdr-field">
+          <label>Interval</label>
+          <div class="sdr-input-row">
+            <input type="number" id="sdr_${t}_interval" value="${iv}" min="1" max="300"/>
+            <span class="sdr-unit">s</span>
+          </div>
+        </div>
+        <div class="sdr-field">
+          <label>Timeout</label>
+          <div class="sdr-input-row">
+            <input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/>
+            <span class="sdr-unit">s</span>
+          </div>
+        </div>
+        <div class="sdr-field">
+          <label>Fail After</label>
+          <div class="sdr-input-row">
+            <input type="number" id="sdr_${t}_fail_after" value="${fa}" min="1" max="60"/>
+            <span class="sdr-unit">×</span>
+          </div>
+        </div>
+        <div class="sdr-field">
+          <label>Recover After</label>
+          <div class="sdr-input-row">
+            <input type="number" id="sdr_${t}_recover_after" value="${ra}" min="1" max="60"/>
+            <span class="sdr-unit">×</span>
+          </div>
+        </div>
+        <div class="sdr-field">
+          <label>${t==='tls'?'Warn Days':t==='snmp'?'Warn Val':'Warn (ms)'}</label>
+          <div class="sdr-input-row">
+            <input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/>
+            <span class="sdr-unit">${t==='snmp'||t==='tls'?'val':'ms'}</span>
+          </div>
+        </div>
+        <div class="sdr-field">
+          <label>${t==='tls'?'Crit Days':t==='snmp'?'Crit Val':'Crit (ms)'}</label>
+          <div class="sdr-input-row">
+            <input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/>
+            <span class="sdr-unit">${t==='snmp'||t==='tls'?'val':'ms'}</span>
+          </div>
+        </div>
+      </div>
+      ${extra ? `<div class="sdr-extra">${extra}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function saveSensorTypeDefaults(){
+  const sections = document.querySelectorAll('.sdr-card');
+  const result = {};
+  sections.forEach(el => {
+    const t = el.dataset.type;
+    const _n = id => { const e=document.getElementById(id); return e ? +e.value : null; };
+    const _v = id => { const e=document.getElementById(id); return e ? e.value  : null; };
+    const _b = id => { const e=document.getElementById(id); return e ? e.checked: null; };
+    const d = {};
+    const iv=_n(`sdr_${t}_interval`);      if(iv  !=null&&iv  >0) d.interval     =iv;
+    const to=_n(`sdr_${t}_timeout`);       if(to  !=null&&to  >0) d.timeout      =to;
+    const fa=_n(`sdr_${t}_fail_after`);    if(fa  !=null&&fa  >0) d.fail_after   =fa;
+    const ra=_n(`sdr_${t}_recover_after`); if(ra  !=null&&ra  >0) d.recover_after=ra;
+    const wm=_n(`sdr_${t}_warn_ms`);       if(wm  !=null&&wm  >0) d.warn_ms      =wm;
+    const cm=_n(`sdr_${t}_crit_ms`);       if(cm  !=null&&cm  >0) d.crit_ms      =cm;
+    if(t==='tcp')         { const p=_n('sdr_tcp_port');                   if(p>0)    d.port=p; }
+    if(t==='snmp')        { const p=_n('sdr_snmp_port');                  if(p>0)    d.port=p;
+                            const c=_v('sdr_snmp_community');             if(c!=null) d.community=c;
+                            const sv=_v('sdr_snmp_version');              if(sv)      d.version=sv; }
+    if(t==='dns')         { const p=_n('sdr_dns_port');                   if(p>0)    d.port=p;
+                            const rt=_v('sdr_dns_record_type');           if(rt)      d.record_type=rt;
+                            const ds=_v('sdr_dns_server');                if(ds!=null) d.dns_server=ds; }
+    if(t==='tls')         { const p=_n('sdr_tls_port');                   if(p>0)    d.port=p; }
+    if(t==='banner')      { const p=_n('sdr_banner_port');                if(p>0)    d.port=p; }
+    if(t==='http')        { const vs=_b('sdr_http_verify_ssl');           if(vs!=null) d.verify_ssl=vs;
+                            const xs=_n('sdr_http_expected_status');      if(xs!=null) d.http_expected_status=xs; }
+    if(t==='http_keyword'){ const vs=_b('sdr_http_keyword_verify_ssl');   if(vs!=null) d.verify_ssl=vs;
+                            const kc=_b('sdr_http_keyword_keyword_case'); if(kc!=null) d.keyword_case=kc; }
+    result[t] = d;
+  });
+  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result});
+  if(!r.ok){ toast('Save failed','err'); return; }
+  window._snrTypeDefaults = result;
+  toast('Sensor defaults saved','ok');
+}
+
+function renderUserTable(users){
+  if(!users||!users.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No users found.</div>';
+  const rows=users.map(u=>`
+    <tr>
+      <td><strong>${esc(u.username)}</strong></td>
+      <td><span style="color:var(--text2)">${esc(u.role)}</span></td>
+      <td><div class="usr-act">
+        <button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Password</button>
+        <button class="del" onclick="deleteUser('${esc(u.username)}')">🗑 Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `<table class="usr-table">
+    <thead><tr><th>Username</th><th>Role</th><th>Actions</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function saveSettings(){
+  const ttl=parseInt(document.getElementById('st-ttl')?.value);
+  const ret=parseInt(document.getElementById('st-ret')?.value);
+  if(!ttl||ttl<60){toast('Session timeout must be at least 60 seconds','err');return;}
+  const btn=[...document.querySelectorAll('[onclick="saveSettings()"]')].find(el=>el.offsetParent!==null);
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  const body={session_ttl:ttl};
+  if(ret&&ret>=1)body.retention_days=ret;
+  const snrIv =parseInt(document.getElementById('st-snr-iv')?.value);
+  const snrTmo=parseInt(document.getElementById('st-snr-tmo')?.value);
+  const snrFa =parseInt(document.getElementById('st-snr-fa')?.value);
+  const snrRa =parseInt(document.getElementById('st-snr-ra')?.value);
+  if(snrIv>=1)  body.snr_interval=snrIv;
+  if(snrTmo>=1) body.snr_timeout=snrTmo;
+  if(snrFa>=1)  body.snr_fail_after=snrFa;
+  if(snrRa>=1)  body.snr_recover_after=snrRa;
+  const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
+  const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
+  const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);
+  if(flapDisp>=5)  body.max_flaps_display=flapDisp;
+  if(flapDb>=50)   body.max_flap_entries=flapDb;
+  if(trapDb>=50)   body.max_trap_entries=trapDb;
+  const failMax=parseInt(document.getElementById('st-fail-max')?.value);
+  const failWin=parseInt(document.getElementById('st-fail-win')?.value);
+  if(failMax>=1)  body.login_fail_max=failMax;
+  if(failWin>=10) body.login_fail_window=failWin;
+  body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
+  const lGood=parseInt(document.getElementById('st-lgood')?.value);
+  const lWarn=parseInt(document.getElementById('st-lwarn')?.value);
+  if(lGood>=1) body.latency_good_ms=lGood;
+  if(lWarn>=1) body.latency_warn_ms=lWarn;
+  const smtp={
+    smtp_host:       document.getElementById('st-smtp-host')?.value.trim()||'',
+    smtp_port:       parseInt(document.getElementById('st-smtp-port')?.value)||587,
+    smtp_tls:        document.getElementById('st-smtp-tls')?.value||'starttls',
+    smtp_user:       document.getElementById('st-smtp-user')?.value.trim()||'',
+    smtp_from:       document.getElementById('st-smtp-from')?.value.trim()||'',
+    smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
+    smtp_down_delay: parseInt(document.getElementById('st-smtp-delay')?.value)??10,
+  };
+  const pw=document.getElementById('st-smtp-pass')?.value||'';
+  if(pw) smtp.smtp_pass=pw;
+  Object.assign(body,smtp);
+  const r=await api('PATCH','/api/settings',body);
+  if(btn){btn.disabled=false;btn.textContent='Save Settings';}
+  if(!r.ok){toast('Failed to save settings','err');return;}
+  if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
+  if(body.latency_good_ms)   window._lGood=body.latency_good_ms;
+  if(body.latency_warn_ms)   window._lWarn=body.latency_warn_ms;
+  if('org_name' in body){
+    window._snrDef=window._snrDef||{};
+    const el=document.getElementById('tbVer');
+    if(el) el.textContent=body.org_name||'Network Monitor v3';
+    document.title='PingWatch \u2014 '+(body.org_name||'Network Monitor');
+  }
+  window._snrDef=window._snrDef||{};
+  if(body.snr_interval)     window._snrDef.interval=body.snr_interval;
+  if(body.snr_timeout)      window._snrDef.timeout=body.snr_timeout;
+  if(body.snr_fail_after)   window._snrDef.fail_after=body.snr_fail_after;
+  if(body.snr_recover_after)window._snrDef.recover_after=body.snr_recover_after;
+  toast('Settings saved','ok');
+}
+
+async function testSmtp(){
+  const btn=document.querySelector('[onclick="testSmtp()"]');
+  const res=document.getElementById('smtp-test-result');
+  if(btn){btn.disabled=true;btn.textContent='Testing...';}
+  if(res) res.textContent='';
+  const cfg={
+    smtp_host: document.getElementById('st-smtp-host')?.value.trim(),
+    smtp_port: parseInt(document.getElementById('st-smtp-port')?.value)||587,
+    smtp_tls:  document.getElementById('st-smtp-tls')?.value,
+    smtp_user: document.getElementById('st-smtp-user')?.value.trim(),
+    smtp_pass: document.getElementById('st-smtp-pass')?.value,
+    smtp_from: document.getElementById('st-smtp-from')?.value.trim(),
+    smtp_to:   document.getElementById('st-smtp-to')?.value.trim(),
+  };
+  const r=await api('POST','/api/settings/smtp_test',cfg);
+  if(btn){btn.disabled=false;btn.textContent='Send Test Email';}
+  if(res) res.style.color=r.ok?'var(--up)':'var(--down)';
+  if(res) res.textContent=r.msg||'Unknown error';
+}

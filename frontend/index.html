@@ -67,7 +67,7 @@
       <div class="tb-wordmark">
         <span class="tw-ping">Ping</span><span class="tw-watch">Watch</span>
       </div>
-      <div class="tb-ver" id="tbVer">Network Monitor v3</div>
+      <div class="tb-ver" id="tbVer">Network Monitor v0.5</div>
     </div>
   </div>
   <div class="tb-mid">
@@ -125,10 +125,74 @@
     <!-- Events view -->
     <div id="eventsView" style="display:none">
       <div class="evt-view-hdr">
-        <div class="evt-view-title">⚡ Flap Events</div>
-        <div class="evt-view-sub">State changes detected across all monitored sensors</div>
+        <div>
+          <div class="evt-view-title">⚡ Events</div>
+          <div class="evt-view-sub">State changes detected across all monitored sensors <span id="evtCount" style="margin-left:8px;color:var(--text3)"></span></div>
+        </div>
+        <div class="evt-hdr-actions">
+          <button class="evt-view-btn active" id="evtBtnCard"  onclick="_setEvtViewMode('card')">☰ Cards</button>
+          <button class="evt-view-btn"        id="evtBtnTable" onclick="_setEvtViewMode('table')">⊞ Table</button>
+          <div class="evt-export-group">
+            <button class="evt-export-btn" onclick="_evtExportCsv()">⬇ CSV</button>
+            <button class="evt-export-btn" onclick="_evtExportJson()">⬇ JSON</button>
+            <button class="evt-export-btn" onclick="_evtExportSyslog()">⬇ Syslog</button>
+          </div>
+        </div>
       </div>
-      <div id="evtList"><div class="evt-empty">No flaps recorded yet.</div></div>
+      <div class="evt-filters">
+        <select id="evtFTime" onchange="_onEvtFilterChange()">
+          <option value="5m">Last 5 min</option>
+          <option value="1h">Last 1 hour</option>
+          <option value="24h" selected>Last 24 hours</option>
+          <option value="all">All time</option>
+          <option value="custom">Custom range…</option>
+        </select>
+        <input id="evtFFrom" type="datetime-local" style="display:none" onchange="_onEvtFilterChange()" title="From">
+        <input id="evtFTo"   type="datetime-local" style="display:none" onchange="_onEvtFilterChange()" title="To">
+        <select id="evtFGroup" onchange="_onEvtFilterChange()">
+          <option value="">All Groups</option>
+        </select>
+        <select id="evtFDevice" onchange="_onEvtFilterChange()">
+          <option value="">All Devices</option>
+        </select>
+        <select id="evtFType" onchange="_onEvtFilterChange()">
+          <option value="">All Types</option>
+          <option value="down">Down</option>
+          <option value="recovered">Recovered</option>
+          <option value="threshold">Threshold</option>
+          <option value="trap">SNMP Trap</option>
+        </select>
+        <select id="evtFSev" onchange="_onEvtFilterChange()">
+          <option value="">All Severity</option>
+          <option value="critical">🔴 Critical</option>
+          <option value="warning">🟠 Warning</option>
+          <option value="recovery">🟢 Recovery</option>
+          <option value="info">🔵 Info</option>
+        </select>
+        <input id="evtFSearch" type="search" placeholder="🔎 Search events…" oninput="_onEvtFilterChange()" class="evt-search">
+        <button class="evt-clear-btn" onclick="_clearEvtFilters()">✕ Clear</button>
+      </div>
+      <div id="evtList"><div class="evt-empty">No events recorded yet.</div></div>
+    </div>
+
+    <!-- Event detail modal -->
+    <div id="evtDetailModal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.55);align-items:center;justify-content:center;">
+      <div class="evt-modal-inner">
+        <div class="evt-modal-hdr">
+          <span>Event Details</span>
+          <button onclick="_closeEvtDetail()" style="background:none;border:none;color:var(--text2);font-size:18px;cursor:pointer;padding:0 4px;line-height:1">✕</button>
+        </div>
+        <div class="evt-modal-body">
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Severity</span><span id="evtDtlSev"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Time</span>    <span id="evtDtlTs"     style="font-family:'JetBrains Mono',monospace;font-size:12px"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Duration</span><span id="evtDtlDur"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Device</span>  <span id="evtDtlDev"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Host / IP</span><span id="evtDtlHost"  style="font-family:'JetBrains Mono',monospace;font-size:12px"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Sensor</span>  <span id="evtDtlSensor"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Type</span>    <span id="evtDtlType"></span></div>
+          <div class="evt-dtl-row"><span class="evt-dtl-label">Message</span> <span id="evtDtlMsg"   style="color:var(--text2);font-size:12px;line-height:1.5"></span></div>
+        </div>
+      </div>
     </div>
     <div id="emptyMain" style="display:none">
       <!-- Hero radar SVG -->

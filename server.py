@@ -73,7 +73,7 @@ from db import (
 from state import MonitorState
 
 # ── Version ────────────────────────────────────────────────────────
-APP_VERSION   = "0.4.1"
+APP_VERSION   = "0.5"
 _SERVER_START = time.time()
 
 # ── Application state ─────────────────────────────────────────────
@@ -85,7 +85,7 @@ _effective_snmp_port = 162
 
 
 # ── Helper: serve the frontend HTML from disk ─────────────────────
-_JS_FILES = ["bg.js", "devices.js", "sensors.js", "forms.js", "dashboard.js", "app.js"]
+_JS_FILES = ["bg.js", "devices.js", "sensors.js", "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-settings.js", "forms-io.js", "forms-users.js", "dashboard.js", "events.js", "app.js"]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
 

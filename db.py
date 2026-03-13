@@ -410,12 +410,12 @@ def db_log_flap(flap):
 
 
 def db_load_flaps():
-    """Return last 50 flap/recovery events, newest first."""
+    """Return last 500 flap/recovery events, newest first."""
     try:
         con = sqlite3.connect(DB_PATH)
         rows = con.execute(
             "SELECT ts,did,sid,dname,sname,host,stype,detail,direction "
-            "FROM flap_log ORDER BY id DESC LIMIT 50"
+            "FROM flap_log ORDER BY id DESC LIMIT 500"
         ).fetchall()
         con.close()
         return [{"ts": r[0], "did": r[1], "sid": r[2], "dname": r[3],
@@ -455,12 +455,12 @@ def db_log_trap(t):
 
 
 def db_load_traps():
-    """Return last 50 SNMP traps, newest first."""
+    """Return last 500 SNMP traps, newest first."""
     try:
         con = sqlite3.connect(DB_PATH)
         rows = con.execute(
             "SELECT ts,src_ip,dname,community,trap_oid,detail "
-            "FROM snmp_traps ORDER BY id DESC LIMIT 50"
+            "FROM snmp_traps ORDER BY id DESC LIMIT 500"
         ).fetchall()
         con.close()
         return [{"ts": r[0], "src_ip": r[1], "dname": r[2],
@@ -616,7 +616,17 @@ def db_load(state):
     _rcon = None
     try:
         _cutoff = time.time() - int(_settings.get("retention_days", 7)) * 86400
-        _rcon = sqlite3.connect(DB_PATH)
+        # Open read-only to avoid triggering a WAL checkpoint on close
+        _rcon = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+
+        # ── Batch-fetch all counts in one query ────────────────────
+        _count_map = {}  # (did, sid) -> (total, success)
+        for _row in _rcon.execute(
+            "SELECT did, sid, COUNT(*), SUM(ok) FROM sensor_samples "
+            "WHERE ts>=? GROUP BY did, sid", (_cutoff,)
+        ).fetchall():
+            _count_map[(_row[0], _row[1])] = (int(_row[2] or 0), int(_row[3] or 0))
+
         for _dev in state.devices.values():
             for _s in _dev.sensors.values():
                 # Last 80 samples newest-first → reverse for history deque
@@ -632,14 +642,8 @@ def db_load(state):
                     _s.alive      = bool(_last[0])
                     _s.last_ms    = _last[1]
                     _s.last_value = _last[2]
-                # Counts within retention window for loss %
-                _cnt = _rcon.execute(
-                    "SELECT COUNT(*), SUM(ok) FROM sensor_samples "
-                    "WHERE did=? AND sid=? AND ts>=?",
-                    (_s.device_id, _s.sensor_id, _cutoff)
-                ).fetchone()
-                _s.total   = int(_cnt[0] or 0)
-                _s.success = int(_cnt[1] or 0)
+                _s.total, _s.success = _count_map.get(
+                    (_s.device_id, _s.sensor_id), (0, 0))
         log.info("Runtime state restored from sensor_samples.")
     except Exception as _e:
         log.error(f"DB restore runtime error: {_e}")
