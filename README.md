@@ -1,4 +1,4 @@
-# PingWatch
+# PingWatch – Network Monitoring Platform
 
 ![Python](https://img.shields.io/badge/python-3.x-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -15,14 +15,19 @@
 - [Usage](#usage)
 - [Screenshots](#screenshots)
 - [Architecture](#architecture)
+- [Core Components](#core-components)
+- [Frontend Structure](#frontend-structure)
+- [High-Level Flow](#high-level-flow)
+- [Project Structure](#project-structure)
+
 
 
 ## Project Overview
 
 PingWatch is a Python-based network monitoring platform designed to track the availability and health of network devices and services.
 
-The system supports multiple sensor types such as ICMP (ping), HTTP/HTTPS, TCP port checks, SNMP, and more, network service checks, and other monitoring probes.  
-Collected data is displayed in a web-based dashboard with event logging, device management, and network topology visualization.
+The system supports multiple sensor types such as ICMP (ping), HTTP/HTTPS checks, TCP port checks, SNMP, and other network monitoring probes. 
+Collected data is displayed in a web-based dashboard that provides event logging, device management, and network topology visualization.
 
 
 ## Features
@@ -35,15 +40,21 @@ Collected data is displayed in a web-based dashboard with event logging, device 
 - 🌐 Web-based monitoring dashboard
 - 🗺 Interactive Network Topology Manager (NTM)
 
+### Supported Sensors
+
+- ICMP (Ping)
+- HTTP / HTTPS
+- TCP Port
+- SNMP
 
 ## Technologies Used
 
-   - Backend: Python 3.x
-   - Web Server: Python's built-in http.server module
-   - Database: SQLite
-   - Frontend: HTML, CSS, JavaScript
-   - System Tray Integration: pystray, Pillow
-   - Network Monitoring: Uses Python libraries (socket, urllib, subprocess) for multiple sensor types, including ICMP and service checks.
+- **Backend:** Python 3.x
+- **Web Server:** Python's built-in `http.server`
+- **Database:** SQLite
+- **Frontend:** HTML, CSS, JavaScript
+- **System Tray Integration:** pystray, Pillow
+- **Network Monitoring:** Uses Python libraries (`socket`, `urllib`, `subprocess`) for multiple sensor types.
 
 
 ## Installation
@@ -57,13 +68,15 @@ Collected data is displayed in a web-based dashboard with event logging, device 
    cd Pingwatch
    ```
 3. **Install the required dependencies and start the server**
-   ****  
-   Installing requirements and starting the server with the console
+
+   Install requirements and start the server with the console:
+
    ```bash
    ./start.bat
    ```
 
 ## Usage
+   
    To start monitoring, run the following command:
    ```bash
    start.bat (with console)
@@ -119,12 +132,10 @@ PingWatch follows a modular architecture:
 - **Web Interface**  
   Provides the dashboard, topology view, and log viewer.
 
-This modular design allows new monitoring methods and features to be added easily.
-
-This architecture allows for easy extension, as new modules can be added without major changes to the existing codebase.
+This modular design allows new monitoring methods and features to be added without major changes to the existing codebase.
 
 
-### Core Components
+## Core Components
 
 - **`server.py`**  
   Main application entry point and HTTP server.  
@@ -206,6 +217,7 @@ The frontend is located in the `frontend/` directory and provides the web dashbo
 7. SNMP traps can be received asynchronously through **`trap_receiver.py`**.
 8. The frontend updates live views such as dashboard panels, event logs, and the Network Topology Manager.
 
+## Project Structure
 
 pingwatch/
 ├── auth.py
