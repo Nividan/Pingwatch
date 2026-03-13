@@ -19,3 +19,9 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Claude Code — ephemeral tool files (settings.json is kept intentionally)
+.claude/plans/
+.claude/projects/
+.claude/worktrees/
+.claude/scheduled-tasks/
