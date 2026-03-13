@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 
 from config import SYS
+from logger import log_sensors
 
 
 def probe_ping(host, timeout=4):
@@ -31,6 +32,7 @@ def probe_ping(host, timeout=4):
     except subprocess.TimeoutExpired:
         return {"ok": False, "ms": None, "detail": f"Timeout after {timeout}s"}
     except Exception as e:
+        log_sensors.warning("probe_ping %s: unexpected error: %s", host, e)
         return {"ok": False, "ms": None, "detail": str(e)}
 
 
@@ -46,6 +48,7 @@ def probe_tcp(host, port, timeout=5):
     except ConnectionRefusedError:
         return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
     except Exception as e:
+        log_sensors.warning("probe_tcp %s:%s: unexpected error: %s", host, port, e)
         return {"ok": False, "ms": None, "detail": str(e)}
 
 
@@ -74,6 +77,7 @@ def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
     except urllib.error.URLError as e:
         return {"ok": False, "ms": None, "detail": str(e.reason)[:80]}
     except Exception as e:
+        log_sensors.warning("probe_http %s: unexpected error: %s", url, e)
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
@@ -105,6 +109,7 @@ def probe_dns(host, query, record_type="A", dns_server=None, port=53, timeout=5)
         except socket.gaierror as e:
             return {"ok": False, "ms": None, "detail": f"DNS error: {e}"}
         except Exception as e:
+            log_sensors.warning("probe_dns %s (system resolver): unexpected error: %s", query, e)
             return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
     # ── Raw UDP DNS query (works for all types and custom servers) ──
@@ -195,6 +200,7 @@ def probe_dns(host, query, record_type="A", dns_server=None, port=53, timeout=5)
     except socket.timeout:
         return {"ok": False, "ms": None, "detail": f"DNS timeout after {timeout}s"}
     except Exception as e:
+        log_sensors.warning("probe_dns %s via %s: unexpected error: %s", query, server, e)
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
@@ -245,6 +251,7 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
     except subprocess.TimeoutExpired:
         return {"ok": False, "ms": None, "detail": f"SNMP timeout after {timeout}s"}
     except Exception as e:
+        log_sensors.warning("probe_snmp %s oid=%s: unexpected error: %s", host, oid, e)
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
@@ -369,6 +376,7 @@ def probe_tls(host, port=443, timeout=10):
     except socket.timeout:
         return {"ok": False, "ms": None, "detail": f"TLS timeout after {timeout}s"}
     except Exception as e:
+        log_sensors.warning("probe_tls %s:%s: unexpected error: %s", host, port, e)
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
     finally:
         if conn:
@@ -404,6 +412,7 @@ def probe_http_keyword(url, keyword, timeout=8, verify_ssl=True, case_sensitive=
     except urllib.error.URLError as e:
         return {"ok": False, "ms": None, "detail": str(e.reason)[:80]}
     except Exception as e:
+        log_sensors.warning("probe_http_keyword %s: unexpected error: %s", url, e)
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
@@ -437,6 +446,7 @@ def probe_banner(host, port, banner_regex="", timeout=5):
     except ConnectionRefusedError:
         return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
     except Exception as e:
+        log_sensors.warning("probe_banner %s:%s: unexpected error: %s", host, port, e)
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
     finally:
         if s:
