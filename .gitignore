@@ -12,10 +12,6 @@ __pycache__/
 *.pyo
 *.pyw.bak
 
-# .gitignore
-.gitignore
-
-
 # OS
 .DS_Store
 Thumbs.db
@@ -24,9 +20,5 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Claude Code — ephemeral tool files (settings.json is kept intentionally)
-.claude/settings.local.json
-.claude/plans/
-.claude/projects/
-.claude/worktrees/
-.claude/scheduled-tasks/
+# Claude Code — ephemeral tool files
+.claude/
