@@ -9,6 +9,7 @@ import queue
 
 import app_state
 from db import db_load_flaps, db_load_traps
+from logger import log
 
 
 def handle(h, method, path, body):
@@ -28,6 +29,7 @@ def handle(h, method, path, body):
         try:
             h.wfile.write(b": connected\n\n")
             h.wfile.flush()
+            log.info("SSE client connected: %s", h.client_address[0])
             while True:
                 try:
                     msg = q.get(timeout=15)
@@ -40,6 +42,7 @@ def handle(h, method, path, body):
             pass
         finally:
             STATE.unsubscribe(q)
+            log.debug("SSE client disconnected: %s", h.client_address[0])
         return True
 
     # ── /api/flaps GET ────────────────────────────────────────────

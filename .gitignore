@@ -12,6 +12,10 @@ __pycache__/
 *.pyo
 *.pyw.bak
 
+# .gitignore
+.gitignore
+
+
 # OS
 .DS_Store
 Thumbs.db

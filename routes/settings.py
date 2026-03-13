@@ -118,6 +118,7 @@ def handle(h, method, path, body):
             _settings.load({"smtp_pass": _pw})
             _db_enqueue(lambda _p=_pw: db_save_settings({"smtp_pass": _p}))
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
+        log.info("Settings updated by %s: %s", user, list(body.keys()))
         h._json(200, {"ok": True})
         return True
 
