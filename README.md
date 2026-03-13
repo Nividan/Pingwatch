@@ -119,7 +119,7 @@ NTM provides an interactive topology map where devices, switches, and servers ar
 
 PingWatch follows a modular architecture:
 
-- **Sensor Engine**
+- **Sensor Engine**  
   Handles different monitoring probes such as ICMP checks, service availability checks, and other sensor types.
 
 - **Logging Module**  
@@ -218,6 +218,7 @@ The frontend is located in the `frontend/` directory and provides the web dashbo
 
 ## Project Structure
 
+```
 pingwatch/
 ├── auth.py
 ├── config.py
@@ -250,3 +251,4 @@ pingwatch/
     ├── forms-utils.js
     ├── bg.js
     └── style.css
+```
