@@ -48,6 +48,9 @@
    ```bash
    python pingwatch.pyw (no console)
    ```
+
+## Screenshots
+
 ### 📡 Network Dashboard
 Real-time monitoring of all devices with live status, latency, and connectivity.
 <img width="2201" height="671" alt="image" src="https://github.com/user-attachments/assets/91e2237f-a3c8-447c-adbc-5d91e950f63a" />
