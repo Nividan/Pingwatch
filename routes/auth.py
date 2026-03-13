@@ -1,0 +1,174 @@
+"""
+routes/auth.py — Authentication and user-management endpoints.
+
+Handles: /api/login, /api/logout, /api/me, /api/me/password,
+         /api/users (GET/POST), /api/users/{u} (DELETE),
+         /api/users/{u}/password (PATCH).
+"""
+
+import threading
+import time
+
+from auth   import (auth_check, auth_check_role, auth_login, auth_logout,
+                    auth_revoke_user_sessions, auth_verify_current)
+from config import _RE_USER, _RE_USER_PW, _RE_ME_PW
+from db     import (db_log_audit, db_list_users, db_add_user,
+                    db_delete_user, db_set_password)
+from logger import log
+import settings as _settings
+
+# ── Login rate-limiting state ─────────────────────────────────────
+_FAIL_LOCK   = threading.Lock()
+_FAIL_LOG: dict = {}   # ip → [timestamp, ...]
+_FAIL_WINDOW = 60
+_FAIL_MAX    = 5
+
+
+def handle(h, method, path, body):
+    """Return True if this module handled the request, False otherwise."""
+
+    # ── /api/me ───────────────────────────────────────────────────
+    if path == "/api/me" and method == "GET":
+        token = h._get_token()
+        user  = auth_check(token)
+        if user:
+            role = auth_check_role(token) or "viewer"
+            h._json(200, {"username": user, "role": role})
+        else:
+            h._json(401, {"error": "unauthorized"})
+        return True
+
+    # ── /api/users GET ────────────────────────────────────────────
+    if path == "/api/users" and method == "GET":
+        user, _ = h._require("admin")
+        if not user: return True
+        h._json(200, {"users": db_list_users()})
+        return True
+
+    # ── /api/users POST ───────────────────────────────────────────
+    if path == "/api/users" and method == "POST":
+        user, role = h._require("admin")
+        if not user: return True
+        username = body.get("username", "").strip()
+        password = body.get("password", "")
+        new_role = body.get("role", "admin")
+        if new_role not in ("viewer", "operator", "admin"):
+            new_role = "admin"
+        if not username or not password:
+            h._json(400, {"error": "username and password required"})
+            return True
+        ok = db_add_user(username, password, new_role)
+        if not ok:
+            h._json(409, {"error": "username already exists"})
+            return True
+        log.info(f"User created: {username} (role={new_role})")
+        db_log_audit(user, h.client_address[0], 'user_create', username, f"role={new_role}")
+        h._json(200, {"ok": True})
+        return True
+
+    # ── /api/users/{u} DELETE ─────────────────────────────────────
+    m = _RE_USER.match(path)
+    if m and method == "DELETE":
+        me, _ = h._require("admin")
+        if not me: return True
+        username = m.group(1)
+        if username == me:
+            h._json(400, {"error": "cannot delete your own account"})
+            return True
+        users = db_list_users()
+        if len(users) <= 1:
+            h._json(400, {"error": "cannot delete the last user"})
+            return True
+        ok = db_delete_user(username)
+        if not ok:
+            h._json(404, {"error": "user not found"})
+            return True
+        log.info(f"User deleted: {username}")
+        db_log_audit(me, h.client_address[0], 'user_delete', username)
+        h._json(200, {"ok": True})
+        return True
+
+    # ── /api/users/{u}/password PATCH ─────────────────────────────
+    m = _RE_USER_PW.match(path)
+    if m and method == "PATCH":
+        user, _ = h._require("admin")
+        if not user: return True
+        username = m.group(1)
+        password = body.get("password", "")
+        if not password:
+            h._json(400, {"error": "password required"})
+            return True
+        if len(password) < 8:
+            h._json(400, {"error": "Password must be at least 8 characters"})
+            return True
+        db_set_password(username, password)
+        auth_revoke_user_sessions(username)
+        log.info(f"Password reset for user: {username}")
+        db_log_audit(user, h.client_address[0], 'pass_reset', username)
+        h._json(200, {"ok": True})
+        return True
+
+    # ── /api/me/password PATCH ────────────────────────────────────
+    if _RE_ME_PW.match(path) and method == "PATCH":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"})
+            return True
+        current = body.get("current_password", "")
+        new_pw  = body.get("password", "")
+        if not current or not new_pw:
+            h._json(400, {"error": "current_password and password required"})
+            return True
+        if len(new_pw) < 8:
+            h._json(400, {"error": "Password must be at least 8 characters"})
+            return True
+        if not auth_verify_current(me, current):
+            h._json(400, {"error": "Current password is incorrect"})
+            return True
+        db_set_password(me, new_pw)
+        log.info(f"User {me} changed their own password")
+        db_log_audit(me, h.client_address[0], 'pass_change', me)
+        h._json(200, {"ok": True})
+        return True
+
+    # ── /api/login POST ───────────────────────────────────────────
+    if path == "/api/login" and method == "POST":
+        ip = h.client_address[0]
+        with _FAIL_LOCK:
+            now = time.time()
+            _fail_window = int(_settings.get("login_fail_window", _FAIL_WINDOW))
+            _fail_max    = int(_settings.get("login_fail_max",    _FAIL_MAX))
+            _FAIL_LOG[ip] = [t for t in _FAIL_LOG.get(ip, []) if now - t < _fail_window]
+            if len(_FAIL_LOG[ip]) >= _fail_max:
+                h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})
+                return True
+        username = body.get("username", "").strip()
+        password = body.get("password", "")
+        token    = auth_login(username, password)
+        if not token:
+            with _FAIL_LOCK:
+                _FAIL_LOG.setdefault(ip, []).append(time.time())
+            db_log_audit(username, ip, 'login_fail', username)
+            log.warning(f"Login FAILED: {username!r} from {ip}")
+            h._json(401, {"error": "Invalid username or password"})
+            return True
+        with _FAIL_LOCK:
+            _FAIL_LOG.pop(ip, None)
+        db_log_audit(username, ip, 'login_ok', username)
+        log.info(f"Login OK: {username!r} from {ip}")
+        h._send_with_cookie(
+            200, {"ok": True, "username": username},
+            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}"
+        )
+        return True
+
+    # ── /api/logout POST ──────────────────────────────────────────
+    if path == "/api/logout" and method == "POST":
+        token     = h._get_token()
+        me_logout = auth_check(token) or "anonymous"
+        if token: auth_logout(token)
+        db_log_audit(me_logout, h.client_address[0], 'logout', me_logout)
+        h._send_with_cookie(200, {"ok": True}, "session=; HttpOnly; Path=/; Max-Age=0")
+        return True
+
+    return False

@@ -287,12 +287,14 @@ function switchMainTab(tab){
     const mf=document.getElementById('map-frame');
     if(mf&&!mf.src&&mf.dataset.src) mf.src=mf.dataset.src;
     else if(mf&&mf.contentWindow) mf.contentWindow.postMessage({type:'pw_reload_pages'},'*');
+    mf?.contentWindow?.postMessage({type:'ntm_resume'},'*');
     if(typeof startMap==='function') startMap();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     emptyMain.style.display=hasDevices?'none':'flex';
     dpanels.style.display=hasDevices?'':'none';
     if(typeof stopMap==='function') stopMap();
+    document.getElementById('map-frame')?.contentWindow?.postMessage({type:'ntm_pause'},'*');
     _refreshDevices();
   }
 }

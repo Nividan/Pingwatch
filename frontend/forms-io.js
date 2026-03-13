@@ -51,24 +51,27 @@ async function importDb(){
     const file=inp.files[0]; if(!file) return;
     _importConfirm(file.name, async()=>{
       const statusEl=document.getElementById('db-import-status');
-      if(statusEl){statusEl.style.color='var(--text3)';statusEl.textContent='Reading file…';}
+      if(statusEl){statusEl.style.color='var(--text3)';statusEl.textContent='Uploading…';}
       try{
-        const buf=await file.arrayBuffer();
-        const bytes=new Uint8Array(buf);
-        let binary='';
-        for(let i=0;i<bytes.length;i+=8192) binary+=String.fromCharCode(...bytes.subarray(i,i+8192));
-        const b64=btoa(binary);
-        if(statusEl) statusEl.textContent='Uploading…';
-        const r=await api('POST','/api/db/import',{data:b64});
+        // Send the raw file bytes directly — avoids base64 encoding the entire
+        // file in memory (which previously required ~3× the file size in RAM).
+        const resp=await fetch('/api/db/import',{
+          method:'POST',
+          headers:{'Content-Type':'application/octet-stream'},
+          body:file,
+        });
+        const r=resp.ok||resp.status===200 ? await resp.json().catch(()=>({ok:true})) : null;
         if(r&&r.ok){
           if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=r.msg||'Imported — restarting…';}
           toast(r.msg||'Imported — server restarting…','ok');
           setTimeout(()=>location.reload(),4000);
         }else{
-          if(statusEl){statusEl.style.color='var(--down)';statusEl.textContent=(r&&r.error)||'Import failed';}
-          toast((r&&r.error)||'Import failed','err');
+          const err=(r&&r.error)||('HTTP '+resp.status);
+          if(statusEl){statusEl.style.color='var(--down)';statusEl.textContent=err;}
+          toast('Import failed: '+err,'err');
         }
       }catch(e){
+        // A network error here most likely means the server already restarted.
         const isNetErr=!e.name||e.name==='TypeError'||e.name==='NetworkError';
         if(isNetErr){
           if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent='Imported — restarting…';}
