@@ -106,8 +106,10 @@ Centralized event logging with timestamps, severity levels, and device filtering
 
 ### 🗺 Network Topology Visualization
 NTM provides an interactive topology map where devices, switches, and servers are displayed visually with their connections.
+
 **Monitor Live Device NTM**
 <img width="2143" height="1195" alt="image" src="https://github.com/user-attachments/assets/2eff647b-befd-4c4c-b0e6-ee43adb1c713" />
+
 **Draw.io style NTM**
 <img width="2200" height="1209" alt="image" src="https://github.com/user-attachments/assets/f42cb4f3-4167-4c91-b6d2-df635ad7c4ef" />
 
