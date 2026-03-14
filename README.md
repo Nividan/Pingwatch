@@ -1,4 +1,4 @@
-# PingWatch – Network Monitoring Platform
+# PingWatch – AI Build Network Monitoring Platform
 
 ![Python](https://img.shields.io/badge/python-3.x-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
