@@ -7,32 +7,61 @@ assignees: ''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## 🐞 Bug Report
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+### Summary
+A clear and concise description of the bug.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+Example:
+> The dashboard widget "Slowest Ping Devices" stops updating after switching tabs.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+---
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+### Environment
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+| Item | Value |
+|-----|------|
+| PingWatch Version | |
+| OS | (Windows / Linux / macOS) |
+| Browser | (Chrome / Firefox / Edge / etc.) |
+| Browser Version | |
+| Deployment Type | (Local / Server / Docker / etc.) |
 
-**Additional context**
-Add any other context about the problem here.
+---
+
+### Steps to Reproduce
+
+1. Go to `...`
+2. Click `...`
+3. Navigate to `...`
+4. Observe the behavior
+
+---
+
+### Expected Behavior
+
+Describe what **should happen**.
+
+Example:
+> The widget should refresh every 30 seconds.
+
+---
+
+### Actual Behavior
+
+Describe what **actually happens**.
+
+Example:
+> The widget stops updating and shows outdated values.
+
+---
+
+### Screenshots / Video (optional)
+
+If applicable, add screenshots to help explain the problem.
+
+---
+
+### Logs / Errors
+
+Paste any relevant logs or error messages.
