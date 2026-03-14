@@ -43,7 +43,7 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - 🔒 Role-based access control (viewer / operator / admin)
 - 📤 Database export and import (SQLite backup/restore)
 - 🖥 Native desktop status window with optional system-tray icon
-- 💾 **Automated device configuration backup** via SSH and Telnet with encrypted credential storage
+- 💾 Automated device configuration backup via SSH and Telnet with encrypted credential storage
 
 ### Supported Sensor Types
 
@@ -137,6 +137,10 @@ NTM provides an interactive topology map where devices, switches, and servers ar
 
 **Draw.io style NTM**
 <img width="2200" height="1209" alt="image" src="https://github.com/user-attachments/assets/f42cb4f3-4167-4c91-b6d2-df635ad7c4ef" />
+
+### 💾 Device Config Backup
+
+
 
 
 ---
