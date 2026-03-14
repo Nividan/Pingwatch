@@ -3069,14 +3069,21 @@ function exportSVG() {
 }
 
 async function _inlineFontsForExport() {
-  // Fetch Google Fonts CSS, then inline each font file as base64 data URI
+  // Fetch Google Fonts CSS then inline each font as base64.
+  // 4-second hard timeout per request — if Google Fonts is unreachable
+  // (firewall / no internet) we skip font inlining rather than hanging forever.
+  function _ft(url) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+  }
   const GFONTS = 'https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap';
   try {
-    let css = await fetch(GFONTS).then(r => r.text());
+    let css = await _ft(GFONTS).then(r => r.text());
     const fontUrls = [...css.matchAll(/url\((https:\/\/[^)]+)\)/g)].map(m => m[1]);
     for (const fu of fontUrls) {
       try {
-        const blob = await fetch(fu).then(r => r.blob());
+        const blob = await _ft(fu).then(r => r.blob());
         const b64 = await new Promise(res => { const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(blob); });
         css = css.replaceAll(fu, b64);
       } catch {}
@@ -3086,24 +3093,32 @@ async function _inlineFontsForExport() {
 }
 
 async function exportPNG() {
-  const SCALE = 4;
+  // SCALE=2 → 4× pixel area of the SVG viewport (crisp quality without
+  // risking browser canvas size limits that SCALE=4 hits on large topologies)
+  const SCALE = 2;
   const res = _exportBuildClone(SCALE);
   if (!res) { toast('Nothing to export'); return; }
   toast('Preparing PNG…');
-  // Inline fonts so SVG renders correctly as a standalone image
+
+  // Try to inline fonts (times out in 4 s if offline — PNG still renders
+  // with system font fallbacks in that case)
   const fontCSS = await _inlineFontsForExport();
   if (fontCSS) {
     const styleEl = res.clone.querySelector('style');
     if (styleEl) styleEl.textContent = fontCSS + '\n' + styleEl.textContent;
   }
+
   const xml = new XMLSerializer().serializeToString(res.clone);
-  const url = URL.createObjectURL(new Blob([xml],{type:'image/svg+xml'}));
+  const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml' }));
+
   const img = new Image();
   img.onload = () => {
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = res.vw * SCALE; canvas.height = res.vh * SCALE;
+      canvas.width  = Math.round(res.vw * SCALE);
+      canvas.height = Math.round(res.vh * SCALE);
       const ctx = canvas.getContext('2d');
+      if (!ctx) { URL.revokeObjectURL(url); toast('PNG export failed'); return; }
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0);
@@ -3116,15 +3131,20 @@ async function exportPNG() {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
         toast('PNG exported');
       }, 'image/png');
     } catch (_e) {
       URL.revokeObjectURL(url);
+      console.error('PNG export error:', _e);
       toast('PNG export failed');
     }
   };
-  img.onerror = () => { URL.revokeObjectURL(url); toast('PNG export failed'); };
+  img.onerror = (e) => {
+    URL.revokeObjectURL(url);
+    console.error('PNG export: SVG failed to load as image', e);
+    toast('PNG export failed');
+  };
   img.src = url;
 }
 

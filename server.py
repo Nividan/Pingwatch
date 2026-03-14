@@ -165,7 +165,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "   # blob: needed for canvas/PNG export
+            "worker-src blob:;"              # blob: needed for canvas toBlob()
         )
 
     def _json(self, code, data):
