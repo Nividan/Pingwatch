@@ -24,11 +24,11 @@ const _DW_REG = {
     refresh: (wid, _cfg) => _dwRefreshDeviceStatus(wid),
   },
   network_avail: {
-    label: 'Network Availability',
+    label: 'Network Availability History (24h)',
     icon:  '✦',
     defaultCols: 1,
     fields: [],
-    render:  (wid, _cfg) => _dwRefreshNetAvail(wid),
+    render:  (wid, _cfg) => _dwRenderNetAvail(wid),
     refresh: (wid, _cfg) => _dwRefreshNetAvail(wid),
   },
   sensor_gauge: {
@@ -60,6 +60,81 @@ const _DW_REG = {
     fields: [],
     render:  (wid, _cfg) => _dwRenderSystemStatus(wid),
     refresh: (wid, _cfg) => _dwRenderSystemStatus(wid),
+  },
+  down_devices: {
+    label: 'Down & Warning Devices',
+    icon:  '⚠',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshDownDevices(wid),
+    refresh: (wid, _cfg) => _dwRefreshDownDevices(wid),
+  },
+  top_latency: {
+    label: 'Slowest Ping Devices',
+    icon:  '⏱',
+    defaultCols: 1,
+    fields: [
+      { key: 'limit', label: 'Show top', type: 'select',
+        options: [{v:5,l:'5 devices'},{v:10,l:'10 devices'},{v:15,l:'15 devices'}], def: 10 },
+    ],
+    render:  (wid, cfg) => _dwRefreshTopLatency(wid, cfg),
+    refresh: (wid, cfg) => _dwRefreshTopLatency(wid, cfg),
+  },
+  event_count: {
+    label: 'Event Summary',
+    icon:  '📊',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshEventCount(wid),
+    refresh: (wid, _cfg) => _dwRefreshEventCount(wid),
+  },
+  packet_loss: {
+    label: 'Packet Loss',
+    icon:  '◎',
+    defaultCols: 1,
+    fields: [
+      { key: 'limit',     label: 'Max sensors', type: 'select',
+        options: [{v:5,l:'5'},{v:10,l:'10'},{v:20,l:'20'}], def: 10 },
+      { key: 'threshold', label: 'Min loss',    type: 'select',
+        options: [{v:1,l:'≥1%'},{v:5,l:'≥5%'},{v:10,l:'≥10%'}], def: 1 },
+    ],
+    render:  (wid, cfg) => _dwRefreshPacketLoss(wid, cfg),
+    refresh: (wid, cfg) => _dwRefreshPacketLoss(wid, cfg),
+  },
+  sla_report: {
+    label: 'SLA Report',
+    icon:  '◈',
+    defaultCols: 1,
+    fields: [
+      { key: 'did',    label: 'Device', type: 'device-select' },
+      { key: 'sid',    label: 'Sensor', type: 'sensor-select' },
+      { key: 'period', label: 'Period', type: 'select',
+        options: [{v:1440,l:'24h'},{v:10080,l:'7d'},{v:43200,l:'30d'},{v:129600,l:'90d'}],
+        def: 10080 },
+    ],
+    render:  (wid, cfg) => _dwRenderSLA(wid, cfg),
+    refresh: (wid, cfg) => _dwFetchSLA(wid, cfg),
+  },
+  flap_detect: {
+    label: 'Flapping Devices',
+    icon:  '🔁',
+    defaultCols: 1,
+    fields: [
+      { key: 'window',    label: 'Time window', type: 'select',
+        options: [{v:1,l:'1h'},{v:6,l:'6h'},{v:24,l:'24h'}], def: 6 },
+      { key: 'min_flaps', label: 'Min flaps',   type: 'select',
+        options: [{v:3,l:'3 events'},{v:5,l:'5 events'},{v:10,l:'10 events'}], def: 3 },
+    ],
+    render:  (wid, cfg) => _dwRefreshFlapDetect(wid, cfg),
+    refresh: (wid, cfg) => _dwRefreshFlapDetect(wid, cfg),
+  },
+  internet_health: {
+    label: 'Internet Health',
+    icon:  '🌐',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshInternetHealth(wid),
+    refresh: (wid, _cfg) => _dwRefreshInternetHealth(wid),
   },
 };
 
@@ -116,15 +191,19 @@ function _dwRenderAll() {
     return;
   }
   grid.innerHTML = widgets.map(w => `
-    <div class="dw-card${w.cols === 2 ? ' dw-wide' : ''}" id="dw-${w.id}"
+    <div class="dw-card${w.cols === 2 ? ' dw-wide' : ''}" id="dw-${w.id}" data-wid="${w.id}"
          draggable="true"
          ondragstart="_dwDragStart(event,'${w.id}')"
-         ondragover="_dwDragOver(event)"
+         ondragover="_dwDragOver(event,'${w.id}')"
+         ondragleave="_dwDragLeave(event)"
+         ondragend="_dwDragEnd(event)"
          ondrop="_dwDrop(event,'${w.id}')">
       <div class="dw-hdr">
         <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||'◧'}</span>
         <span class="dw-title">${esc(w.title)}</span>
-        <button class="dw-rm" onclick="_dwRemove('${w.id}')" title="Remove widget">×</button>
+        <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">✎</button>
+        <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">⤢</button>
+        <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">×</button>
       </div>
       <div class="dw-body" id="dw-body-${w.id}"></div>
     </div>`).join('');
@@ -145,28 +224,104 @@ function _dwRemove(wid) {
 
 // ── Drag-and-drop reorder ─────────────────────────────────────────
 let _dwDragSrcId = null;
+let _dwDropDone  = false;
+
 function _dwDragStart(e, wid) {
   _dwDragSrcId = wid;
+  _dwDropDone  = false;
   e.dataTransfer.effectAllowed = 'move';
-  document.getElementById(`dw-${wid}`)?.classList.add('dw-dragging');
+  setTimeout(() => {
+    document.getElementById(`dw-${wid}`)?.classList.add('dw-dragging');
+    // Append a drop-here placeholder at the end of the grid
+    const grid = document.getElementById('dw-grid');
+    if (grid && !document.getElementById('dw-placeholder')) {
+      const ph = document.createElement('div');
+      ph.id        = 'dw-placeholder';
+      ph.className = 'dw-card dw-placeholder';
+      ph.innerHTML = '<span style="pointer-events:none">↓ Drop here</span>';
+      ph.addEventListener('dragover',  _dwPlaceholderOver);
+      ph.addEventListener('dragleave', _dwDragLeave);
+      ph.addEventListener('drop',      _dwPlaceholderDrop);
+      grid.appendChild(ph);
+    }
+  }, 0);
 }
-function _dwDragOver(e) {
+
+function _dwDragOver(e, targetId) {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
+  if (!_dwDragSrcId || _dwDragSrcId === targetId) return;
+  const grid  = document.getElementById('dw-grid');
+  const srcEl = document.getElementById(`dw-${_dwDragSrcId}`);
+  const tgtEl = document.getElementById(`dw-${targetId}`);
+  if (!srcEl || !tgtEl || !grid) return;
+  grid.querySelectorAll('.dw-drop-target').forEach(el => el.classList.remove('dw-drop-target'));
+  tgtEl.classList.add('dw-drop-target');
+  const rect = tgtEl.getBoundingClientRect();
+  if (e.clientY < rect.top + rect.height / 2) {
+    grid.insertBefore(srcEl, tgtEl);
+  } else {
+    grid.insertBefore(srcEl, tgtEl.nextSibling);
+  }
 }
+
+function _dwPlaceholderOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (!_dwDragSrcId) return;
+  const grid  = document.getElementById('dw-grid');
+  const srcEl = document.getElementById(`dw-${_dwDragSrcId}`);
+  const ph    = document.getElementById('dw-placeholder');
+  if (!srcEl || !ph || !grid) return;
+  grid.querySelectorAll('.dw-drop-target').forEach(el => el.classList.remove('dw-drop-target'));
+  ph.classList.add('dw-drop-target');
+  // Move dragged card just before the placeholder (append to real cards)
+  grid.insertBefore(srcEl, ph);
+}
+
+function _dwPlaceholderDrop(e) {
+  e.preventDefault();
+  _dwDropDone = true;
+  _dwCleanupDrag();
+  _dwSaveDomOrder();
+  _dwDragSrcId = null;
+}
+
+function _dwDragLeave(e) {
+  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+    e.currentTarget.classList.remove('dw-drop-target');
+  }
+}
+
 function _dwDrop(e, targetId) {
   e.preventDefault();
-  document.querySelectorAll('.dw-dragging').forEach(el => el.classList.remove('dw-dragging'));
-  if (!_dwDragSrcId || _dwDragSrcId === targetId) { _dwDragSrcId = null; return; }
-  const widgets = _dwLoad();
-  const si = widgets.findIndex(w => w.id === _dwDragSrcId);
-  const ti = widgets.findIndex(w => w.id === targetId);
-  if (si < 0 || ti < 0) { _dwDragSrcId = null; return; }
-  const [moved] = widgets.splice(si, 1);
-  widgets.splice(ti, 0, moved);
-  _dwSave(widgets);
+  _dwDropDone = true;
+  _dwCleanupDrag();
+  if (!_dwDragSrcId) return;
+  _dwSaveDomOrder();
   _dwDragSrcId = null;
-  _dwRenderAll();
+}
+
+function _dwDragEnd(e) {
+  _dwCleanupDrag();
+  if (!_dwDropDone) _dwRenderAll(); // cancelled — restore
+  _dwDragSrcId = null;
+  _dwDropDone  = false;
+}
+
+function _dwCleanupDrag() {
+  document.querySelectorAll('.dw-dragging, .dw-drop-target').forEach(el =>
+    el.classList.remove('dw-dragging', 'dw-drop-target'));
+  document.getElementById('dw-placeholder')?.remove();
+}
+
+function _dwSaveDomOrder() {
+  const grid = document.getElementById('dw-grid');
+  if (!grid) return;
+  const newOrder  = [...grid.querySelectorAll('.dw-card[data-wid]')].map(el => el.dataset.wid);
+  const widgets   = _dwLoad();
+  const reordered = newOrder.map(id => widgets.find(w => w.id === id)).filter(Boolean);
+  _dwSave(reordered);
 }
 
 // ── Add widget — picker + config ──────────────────────────────────
@@ -247,13 +402,7 @@ function _dwSelectType(type) {
   if (firstDev && reg.fields.some(f => f.type === 'device-select')) _dwCfgDeviceChange(firstDev);
 }
 
-function _dwCfgDeviceChange(did) {
-  const sel = document.getElementById('dw-cfg-sid');
-  if (!sel) return;
-  const sensors = Object.values(S.sensors).filter(s => s.device_id === did);
-  sel.innerHTML = sensors.map(s =>
-    `<option value="${s.sensor_id}">${esc(s.name)} (${s.stype})</option>`).join('');
-}
+// _dwCfgDeviceChange defined below (supports optional preselectSid for edit mode)
 
 function _dwConfirmAdd(type) {
   const reg = _DW_REG[type];
@@ -276,6 +425,144 @@ function _dwConfirmAdd(type) {
   _dwSave(widgets);
   document.getElementById('dw-cfg-overlay')?.remove();
   _dwRenderAll();
+}
+
+// ── Edit existing widget ──────────────────────────────────────────
+function _dwOpenEdit(wid) {
+  const w = _dwLoad().find(x => x.id === wid);
+  if (!w) return;
+  const reg = _DW_REG[w.type];
+  if (!reg) return;
+  // Build the same config form as Add flow
+  const fieldsHtml = reg.fields.map(f => {
+    if (f.type === 'device-select') {
+      const opts = Object.values(S.devices).map(d =>
+        `<option value="${d.device_id}"${d.device_id===w.cfg.did?' selected':''}>${esc(d.name)} (${esc(d.host||'')})</option>`).join('');
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}" onchange="_dwCfgDeviceChange(this.value,'${w.cfg.sid}')">${opts}</select>
+      </div>`;
+    }
+    if (f.type === 'sensor-select') {
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}"></select>
+      </div>`;
+    }
+    if (f.type === 'select') {
+      const opts = f.options.map(o =>
+        `<option value="${o.v}"${String(o.v)===String(w.cfg[f.key]||f.def)?' selected':''}>${o.l}</option>`).join('');
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}">${opts}</select>
+      </div>`;
+    }
+    return '';
+  }).join('');
+  const html = `
+    <div class="mo" id="dw-cfg-overlay" onclick="if(event.target===this)this.remove()">
+      <div class="mbox" style="width:380px">
+        <div class="mhd">
+          <span class="mttl">${reg.icon} Edit — ${reg.label}</span>
+          <button class="mclose" onclick="document.getElementById('dw-cfg-overlay').remove()">✕</button>
+        </div>
+        <div class="mbdy">
+          <div class="fr">
+            <label class="fl">Widget Title</label>
+            <input id="dw-cfg-title" type="text" value="${esc(w.title)}" placeholder="Widget title">
+          </div>
+          ${fieldsHtml}
+        </div>
+        <div class="mft">
+          <button class="btn-s" onclick="document.getElementById('dw-cfg-overlay').remove()">Cancel</button>
+          <button class="btn-p" onclick="_dwSaveEdit('${wid}')">Save Changes</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  // Pre-populate sensor select with the current device's sensors (and preserve selection)
+  if (w.cfg.did && reg.fields.some(f => f.type === 'device-select'))
+    _dwCfgDeviceChange(w.cfg.did, w.cfg.sid);
+}
+
+function _dwSaveEdit(wid) {
+  const widgets = _dwLoad();
+  const w = widgets.find(x => x.id === wid);
+  if (!w) return;
+  const reg = _DW_REG[w.type];
+  if (!reg) return;
+  w.title = document.getElementById('dw-cfg-title')?.value.trim() || w.title;
+  reg.fields.forEach(f => {
+    const el = document.getElementById(`dw-cfg-${f.key}`);
+    if (el) w.cfg[f.key] = f.type === 'select' || f.key === 'minutes' ? Number(el.value) : el.value;
+  });
+  _dwSave(widgets);
+  document.getElementById('dw-cfg-overlay')?.remove();
+  // Update card header title in place
+  const card = document.querySelector(`.dw-card[data-wid="${wid}"]`);
+  if (card) {
+    const titleEl = card.querySelector('.dw-title');
+    if (titleEl) titleEl.textContent = w.title;
+    const bodyEl = document.getElementById(`dw-body-${wid}`);
+    if (bodyEl) reg.render(wid, w.cfg);
+  }
+}
+
+// Patch _dwCfgDeviceChange to accept optional pre-selected sensor
+function _dwCfgDeviceChange(did, preselectSid) {
+  const sel = document.getElementById('dw-cfg-sid');
+  if (!sel) return;
+  const sensors = Object.values(S.sensors).filter(s => s.device_id === did);
+  sel.innerHTML = sensors.map(s =>
+    `<option value="${s.sensor_id}"${s.sensor_id===preselectSid?' selected':''}>${esc(s.name)} (${s.stype})</option>`).join('');
+}
+
+// ── Fullscreen expand ─────────────────────────────────────────────
+let _dwFsInterval = null;
+
+function _dwEnsureFullscreenModal() {
+  if (document.getElementById('dw-fs-overlay')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="dw-fs-overlay" class="mo" style="display:none"
+         onclick="if(event.target===this)_dwCloseFullscreen()">
+      <div class="dw-fs-box">
+        <div class="dw-fs-hdr">
+          <span class="dw-fs-icon" id="dw-fs-icon"></span>
+          <span class="dw-fs-title" id="dw-fs-title"></span>
+          <button class="mclose" onclick="_dwCloseFullscreen()">✕</button>
+        </div>
+        <div class="dw-fs-body" id="dw-fs-body"></div>
+      </div>
+    </div>`);
+}
+
+function _dwOpenFullscreen(wid) {
+  const w = _dwLoad().find(x => x.id === wid);
+  if (!w) return;
+  const reg = _DW_REG[w.type];
+  if (!reg) return;
+  _dwEnsureFullscreenModal();
+  _dwCloseFullscreen(); // clear any previous
+  document.getElementById('dw-fs-icon').textContent  = reg.icon;
+  document.getElementById('dw-fs-title').textContent = w.title;
+  const fsBody = document.getElementById('dw-fs-body');
+  fsBody.innerHTML = '';
+  // Use wid with a fs- prefix so IDs don't clash with the grid card
+  const fsWid = 'fs-' + wid;
+  fsBody.id = `dw-body-${fsWid}`;
+  reg.render(fsWid, w.cfg);
+  document.getElementById('dw-fs-overlay').style.display = 'flex';
+  // Auto-refresh every 15 s while open
+  _dwFsInterval = setInterval(() => reg.refresh(fsWid, w.cfg), 15000);
+}
+
+function _dwCloseFullscreen() {
+  clearInterval(_dwFsInterval); _dwFsInterval = null;
+  const ov = document.getElementById('dw-fs-overlay');
+  if (!ov) return;
+  ov.style.display = 'none';
+  const fsBody = document.getElementById('dw-fs-body') || ov.querySelector('[id^="dw-body-fs-"]');
+  if (fsBody) { fsBody.innerHTML = ''; fsBody.id = 'dw-fs-body'; }
 }
 
 // ── Widget: Sensor History Chart ──────────────────────────────────
@@ -353,53 +640,133 @@ function _dwRefreshDeviceStatus(wid) {
 // ── SSE hooks (called from app.js event handlers) ─────────────────
 function _dwOnSensorUpdate(did, sid) {
   if (activeMainTab !== 'dashboard') return;
+  let topLatencyDirty = false;
   _dwLoad().forEach(w => {
     if (w.type === 'sensor_chart' && w.cfg.did === did && w.cfg.sid === sid)
       _dwLoadSensorChart(w.id, did, sid, w.cfg.minutes);
     if (w.type === 'sensor_gauge' && w.cfg.did === did && w.cfg.sid === sid)
       _dwRefreshGauge(w.id, w.cfg);
-    if (w.type === 'network_avail')
-      _dwRefreshNetAvail(w.id);
+    if (w.type === 'network_avail')    _dwRefreshNetAvail(w.id);
+    if (w.type === 'top_latency')      topLatencyDirty = true;
+    if (w.type === 'packet_loss')      _dwRefreshPacketLoss(w.id, w.cfg);
+    if (w.type === 'internet_health')  _dwRefreshInternetHealth(w.id);
   });
+  if (topLatencyDirty)
+    _dwLoad().filter(w => w.type === 'top_latency').forEach(w => _dwRefreshTopLatency(w.id, w.cfg));
 }
 function _dwOnDeviceUpdate() {
   if (activeMainTab !== 'dashboard') return;
   _dwLoad().forEach(w => {
-    if (w.type === 'device_status') _dwRefreshDeviceStatus(w.id);
-    if (w.type === 'network_avail') _dwRefreshNetAvail(w.id);
+    if (w.type === 'device_status')   _dwRefreshDeviceStatus(w.id);
+    if (w.type === 'network_avail')   _dwRefreshNetAvail(w.id);
+    if (w.type === 'down_devices')    _dwRefreshDownDevices(w.id);
+    if (w.type === 'internet_health') _dwRefreshInternetHealth(w.id);
   });
 }
 function _dwOnFlapEvent() {
   if (activeMainTab !== 'dashboard') return;
   _dwLoad().forEach(w => {
     if (w.type === 'flap_events') _dwRefreshFlapEvents(w.id, w.cfg);
+    if (w.type === 'event_count') _dwRefreshEventCount(w.id);
+    if (w.type === 'flap_detect') _dwRefreshFlapDetect(w.id, w.cfg);
+  });
+}
+function _dwOnSensorUpdateExtra(did) {
+  if (activeMainTab !== 'dashboard') return;
+  _dwLoad().forEach(w => {
+    if (w.type === 'top_latency') _dwRefreshTopLatency(w.id, w.cfg);
   });
 }
 
-// ── Widget: Network Availability ──────────────────────────────────
+// ── Widget: Network Availability History (24h) ────────────────────
+function _dwRenderNetAvail(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  body.innerHTML = `
+    <div class="dw-na-wrap">
+      <div class="dw-na-pct" id="dw-na-pct-${wid}">—<span class="dw-na-sym">%</span></div>
+      <div class="dw-na-lbl">sensors online</div>
+      <div class="dw-na-pills" id="dw-na-pills-${wid}"></div>
+      <div class="dw-na-total" id="dw-na-total-${wid}"></div>
+    </div>
+    <canvas id="dw-na-canvas-${wid}" class="dw-na-canvas" height="80"></canvas>`;
+  _dwRefreshNetAvail(wid);
+}
+
 function _dwRefreshNetAvail(wid) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
+  // If scaffold not built yet (e.g. fullscreen open before render), build it first
+  if (!document.getElementById(`dw-na-pct-${wid}`)) { _dwRenderNetAvail(wid); return; }
   const sensors = Object.values(S.sensors);
   const total = sensors.length;
   const up    = sensors.filter(s => s.alive === true).length;
   const down  = sensors.filter(s => s.alive === false).length;
-  const warn  = 0;
   const idle  = sensors.filter(s => s.alive == null).length;
   const pct   = total ? Math.round(up / total * 100) : 0;
   const color = pct >= 90 ? 'var(--up)' : pct >= 70 ? 'var(--warn)' : 'var(--down)';
-  body.innerHTML = `
-    <div class="dw-na-wrap">
-      <div class="dw-na-pct" style="color:${color}">${pct}<span class="dw-na-sym">%</span></div>
-      <div class="dw-na-lbl">sensors online</div>
-      <div class="dw-na-pills">
-        <span class="dw-ds-pill up">${up} Up</span>
-        <span class="dw-ds-pill down">${down} Down</span>
-        ${warn  ? `<span class="dw-ds-pill warn">${warn} Warn</span>` : ''}
-        ${idle  ? `<span class="dw-ds-pill idle">${idle} Idle</span>` : ''}
-      </div>
-      <div class="dw-na-total">${total} sensor${total!==1?'s':''} monitored</div>
-    </div>`;
+  const pctEl   = document.getElementById(`dw-na-pct-${wid}`);
+  const pillsEl = document.getElementById(`dw-na-pills-${wid}`);
+  const totalEl = document.getElementById(`dw-na-total-${wid}`);
+  if (pctEl)   { pctEl.style.color = color; pctEl.innerHTML = `${pct}<span class="dw-na-sym">%</span>`; }
+  if (pillsEl) pillsEl.innerHTML = `
+    <span class="dw-ds-pill up">${up} Up</span>
+    <span class="dw-ds-pill down">${down} Down</span>
+    ${idle ? `<span class="dw-ds-pill idle">${idle} Idle</span>` : ''}`;
+  if (totalEl) totalEl.textContent = `${total} sensor${total !== 1 ? 's' : ''} monitored`;
+  _dwDrawNetAvailChart(wid); // fire-and-forget
+}
+
+async function _dwDrawNetAvailChart(wid) {
+  const canvas = document.getElementById(`dw-na-canvas-${wid}`);
+  if (!canvas) return;
+  let availability = [];
+  try {
+    const r = await fetch('/api/availability?minutes=1440');
+    const d = await r.json();
+    availability = d.availability || [];
+  } catch { return; }
+  canvas.width = canvas.offsetWidth || 340;
+  const W = canvas.width, H = canvas.height || 80;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, W, H);
+  if (!availability.length) {
+    ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('No historical data yet', W / 2, H / 2);
+    return;
+  }
+  const BOT = 14, TOP = 4;
+  const plotW = W - 8, plotH = H - TOP - BOT;
+  const now = Date.now() / 1000, winStart = now - 1440 * 60;
+  const xOf = ts  => 4 + ((ts - winStart) / (1440 * 60)) * plotW;
+  const yOf = pct => TOP + plotH - (Math.min(100, Math.max(0, pct)) / 100) * plotH;
+  const avgPct = availability.reduce((s, b) => s + b.pct, 0) / availability.length;
+  const lineColor = avgPct >= 90 ? '#23d18b' : avgPct >= 70 ? '#f0a500' : '#f85149';
+  const fillAlpha = avgPct >= 90 ? 'rgba(35,209,139,.18)' : avgPct >= 70 ? 'rgba(240,165,0,.18)' : 'rgba(248,81,73,.18)';
+  const pts = availability.map(b => ({ x: xOf(b.ts + 1800), y: yOf(b.pct) }));
+  if (pts.length < 2) return;
+  // Filled area
+  const g = ctx.createLinearGradient(0, TOP, 0, H - BOT);
+  g.addColorStop(0, fillAlpha); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, H - BOT);
+  pts.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.lineTo(pts[pts.length - 1].x, H - BOT);
+  ctx.closePath(); ctx.fillStyle = g; ctx.fill();
+  // Line
+  ctx.beginPath();
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 1.5; ctx.stroke();
+  // X-axis time labels every 6h
+  const startHour = Math.ceil(winStart / 3600) * 3600;
+  ctx.fillStyle = 'rgba(139,148,158,.6)'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+  for (let ts = startHour; ts <= now; ts += 6 * 3600) {
+    const x = xOf(ts);
+    if (x < 14 || x > W - 14) continue;
+    const d = new Date(ts * 1000);
+    ctx.fillText(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), x, H - 2);
+  }
 }
 
 // ── Widget: Sensor Gauge ──────────────────────────────────────────
@@ -480,4 +847,296 @@ async function _dwFetchSystemStatus(wid) {
       <div class="dw-ss-row"><span class="dw-ss-lbl">DB Size</span><span class="dw-ss-val">${dbMB}</span></div>
       <div class="dw-ss-row"><span class="dw-ss-lbl">Log Size</span><span class="dw-ss-val">${logMB}</span></div>
     </div>`;
+}
+
+// ── Widget: Down & Warning Devices ────────────────────────────────
+function _dwRefreshDownDevices(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const bad = Object.values(S.devices).filter(d => d.status === 'down' || d.status === 'warn');
+  if (!bad.length) {
+    body.innerHTML = '<div class="dw-dd-ok">✓ All devices healthy</div>';
+    return;
+  }
+  const rows = bad.map(d => {
+    const st = d.status;
+    const failSensors = Object.values(S.sensors)
+      .filter(s => s.device_id === d.device_id && s.alive === false)
+      .map(s => esc(s.name)).join(', ');
+    return `<div class="dw-dd-row">
+      <span class="dw-ds-dot ${st}"></span>
+      <div class="dw-dd-info">
+        <span class="dw-dd-name">${esc(d.name)}</span>
+        <span class="dw-dd-host">${esc(d.host||'')}</span>
+        ${failSensors ? `<span class="dw-dd-sensors">${failSensors}</span>` : ''}
+      </div>
+      <span class="dw-ds-st ${st}">${st}</span>
+    </div>`;
+  }).join('');
+  body.innerHTML = `<div class="dw-dd-list">${rows}</div>`;
+}
+
+// ── Widget: Slowest Ping Devices ──────────────────────────────────
+function _dwRefreshTopLatency(wid, cfg) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const limit = Number(cfg?.limit) || 10;
+  // Collect ping sensors with valid last_ms, group by device, take max per device
+  const byDevice = {};
+  Object.values(S.sensors).forEach(s => {
+    if (s.stype !== 'ping' || s.last_ms == null) return;
+    const ms = Number(s.last_ms);
+    if (!byDevice[s.device_id] || ms > byDevice[s.device_id].ms)
+      byDevice[s.device_id] = { ms, did: s.device_id };
+  });
+  const sorted = Object.values(byDevice).sort((a, b) => b.ms - a.ms).slice(0, limit);
+  if (!sorted.length) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No ping data yet</div>';
+    return;
+  }
+  const maxMs = sorted[0].ms || 1;
+  const rows = sorted.map(({ ms, did }) => {
+    const dev = S.devices[did];
+    if (!dev) return '';
+    const pct = Math.min(100, Math.round(ms / maxMs * 100));
+    const cls = typeof msC === 'function' ? msC(ms, {}) : (ms > 200 ? 'b' : ms > 50 ? 'w' : 'g');
+    const colorMap = { g: 'var(--up)', w: 'var(--warn)', b: 'var(--down)', m: 'var(--text3)' };
+    const color = colorMap[cls] || 'var(--text2)';
+    return `<div class="dw-tl-row">
+      <span class="dw-tl-name">${esc(dev.name)}</span>
+      <div class="dw-tl-bar-wrap">
+        <div class="dw-tl-bar" style="width:${pct}%;background:${color}"></div>
+      </div>
+      <span class="dw-tl-val" style="color:${color}">${ms}ms</span>
+    </div>`;
+  }).join('');
+  body.innerHTML = `<div class="dw-tl-list">${rows}</div>`;
+}
+
+// ── Widget: Event Summary ─────────────────────────────────────────
+function _dwRefreshEventCount(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const flaps = (typeof FLAPS !== 'undefined' ? FLAPS : []);
+  const now = Date.now();
+  const h1  = now - 3600000;
+  const h24 = now - 86400000;
+  const d7  = now - 604800000;
+  function countIn(since, type) {
+    return flaps.filter(f => {
+      const t = new Date(f.ts).getTime();
+      if (isNaN(t) || t < since) return false;
+      return !type || f._direction === type;
+    }).length;
+  }
+  const periods = [
+    { label: 'Last 1 h',  since: h1  },
+    { label: 'Last 24 h', since: h24 },
+    { label: 'Last 7 d',  since: d7  },
+  ];
+  const types = [
+    { key: 'down',      label: 'Down',      color: 'var(--down)' },
+    { key: 'recovered', label: 'Recovered', color: 'var(--up)'   },
+    { key: 'threshold', label: 'Threshold', color: 'var(--warn)' },
+    { key: 'trap',      label: 'SNMP Trap', color: '#a855f7'     },
+  ];
+  const headerRow = `<div class="dw-ec-row dw-ec-hdr">
+    <span class="dw-ec-lbl"></span>
+    ${periods.map(p => `<span class="dw-ec-cell dw-ec-period">${p.label}</span>`).join('')}
+  </div>`;
+  const dataRows = types.map(t => `
+    <div class="dw-ec-row">
+      <span class="dw-ec-lbl" style="color:${t.color}">${t.label}</span>
+      ${periods.map(p => {
+        const n = countIn(p.since, t.key);
+        return `<span class="dw-ec-cell" style="color:${n ? t.color : 'var(--text3)'}">${n}</span>`;
+      }).join('')}
+    </div>`).join('');
+  const totalRow = `<div class="dw-ec-row dw-ec-total">
+    <span class="dw-ec-lbl">Total</span>
+    ${periods.map(p => `<span class="dw-ec-cell">${countIn(p.since, null)}</span>`).join('')}
+  </div>`;
+  body.innerHTML = `<div class="dw-ec-table">${headerRow}${dataRows}${totalRow}</div>`;
+}
+
+// ── Widget: Packet Loss ───────────────────────────────────────────
+function _dwRefreshPacketLoss(wid, cfg) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const limit     = Number(cfg?.limit)     || 10;
+  const threshold = Number(cfg?.threshold) || 1;
+  const lossy = Object.values(S.sensors)
+    .filter(s => s.stype === 'ping' && s.loss_pct != null && s.loss_pct >= threshold)
+    .sort((a, b) => b.loss_pct - a.loss_pct)
+    .slice(0, limit);
+  if (!lossy.length) {
+    body.innerHTML = '<div class="dw-pl-ok">✓ No packet loss</div>';
+    return;
+  }
+  const maxLoss = lossy[0].loss_pct || 1;
+  const rows = lossy.map(s => {
+    const dev   = S.devices[s.device_id];
+    const barW  = Math.min(100, Math.round(s.loss_pct / maxLoss * 100));
+    const color = s.loss_pct >= 20 ? 'var(--down)' : s.loss_pct >= 5 ? 'var(--warn)' : '#f0a500';
+    return `<div class="dw-tl-row">
+      <span class="dw-tl-name">${esc(dev?.name || s.device_id)}</span>
+      <div class="dw-tl-bar-wrap"><div class="dw-tl-bar" style="width:${barW}%;background:${color}"></div></div>
+      <span class="dw-tl-val" style="color:${color}">${s.loss_pct}%</span>
+    </div>`;
+  }).join('');
+  body.innerHTML = `<div class="dw-tl-list">${rows}</div>`;
+}
+
+// ── Widget: SLA Report ────────────────────────────────────────────
+function _dwRenderSLA(wid, cfg) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  body.innerHTML = `<div class="dw-sla-wrap" id="dw-sla-${wid}"><div class="dw-sla-loading">Loading…</div></div>`;
+  _dwFetchSLA(wid, cfg);
+}
+
+async function _dwFetchSLA(wid, cfg) {
+  const wrap = document.getElementById(`dw-sla-${wid}`);
+  if (!wrap) return;
+  const did  = cfg?.did;
+  const sid  = cfg?.sid;
+  const mins = Number(cfg?.period) || 10080;
+  if (!did || !sid) {
+    wrap.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px">Select a device and sensor.</div>';
+    return;
+  }
+  let summary = [];
+  try {
+    const r = await fetch(`/api/device/${did}/sensor/${sid}/summary?minutes=${mins}`);
+    const d = await r.json();
+    summary = d.summary || [];
+  } catch { wrap.innerHTML = '<div style="color:var(--down);padding:8px;font-size:11px">Error loading data</div>'; return; }
+  const totalOk   = summary.reduce((s, b) => s + (b.ok   || 0), 0);
+  const totalFail = summary.reduce((s, b) => s + (b.fail || 0), 0);
+  const totalAll  = totalOk + totalFail;
+  if (!totalAll) {
+    wrap.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px">No data for this period.</div>';
+    return;
+  }
+  const slaPct  = totalOk / totalAll * 100;
+  const slaFixed = slaPct.toFixed(3);
+  const slaColor = slaPct >= 99.5 ? 'var(--up)' : slaPct >= 99 ? 'var(--warn)' : 'var(--down)';
+  const slaLabel = slaPct >= 99.9 ? 'SLA 99.9%' : slaPct >= 99.5 ? 'SLA 99.5%' : slaPct >= 99 ? 'SLA 99%' : 'Below 99%';
+  const dtSec = Math.round(totalFail / totalAll * mins * 60);
+  const dtH   = Math.floor(dtSec / 3600);
+  const dtM   = String(Math.floor((dtSec % 3600) / 60)).padStart(2, '0');
+  wrap.innerHTML = `
+    <div class="dw-sla-pct" style="color:${slaColor}">${slaFixed}<span class="dw-sla-sym">%</span></div>
+    <div class="dw-sla-tier" style="color:${slaColor}">${slaLabel}</div>
+    <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" style="width:${Math.min(100,slaPct).toFixed(2)}%;background:${slaColor}"></div></div>
+    <div class="dw-sla-stats">
+      <span><span class="dw-sla-key">Downtime</span>${dtH}h ${dtM}m</span>
+      <span><span class="dw-sla-key">Samples</span>${totalAll}</span>
+    </div>`;
+}
+
+// ── Widget: Flapping Devices ──────────────────────────────────────
+function _dwTimeAgo(epochMs) {
+  const s = Math.round((Date.now() - epochMs) / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + 'm ago';
+  return Math.round(m / 60) + 'h ago';
+}
+
+function _dwRefreshFlapDetect(wid, cfg) {
+  const body      = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const windowH   = Number(cfg?.window)    || 6;
+  const minFlaps  = Number(cfg?.min_flaps) || 3;
+  const cutoff    = Date.now() - windowH * 3600 * 1000;
+  const allFlaps  = (typeof FLAPS !== 'undefined' ? FLAPS : []);
+  const recent    = allFlaps.filter(f => {
+    const t = new Date(f.ts).getTime();
+    return !isNaN(t) && t >= cutoff &&
+      (f._direction === 'down' || f._direction === 'recovered');
+  });
+  const byDev = {};
+  recent.forEach(f => {
+    if (!byDev[f.did]) byDev[f.did] = { count: 0, lastMs: 0, dname: f.dname };
+    byDev[f.did].count++;
+    const t = new Date(f.ts).getTime();
+    if (t > byDev[f.did].lastMs) byDev[f.did].lastMs = t;
+  });
+  const flapping = Object.values(byDev)
+    .filter(d => d.count >= minFlaps)
+    .sort((a, b) => b.count - a.count);
+  if (!flapping.length) {
+    body.innerHTML = '<div class="dw-fd-ok">✓ No flapping devices</div>';
+    return;
+  }
+  const rows = flapping.map(d => `
+    <div class="dw-fd-row">
+      <span class="dw-ds-dot down"></span>
+      <div class="dw-fd-info">
+        <span class="dw-fd-name">${esc(d.dname)}</span>
+        <span class="dw-fd-meta">${d.count} flaps · last ${_dwTimeAgo(d.lastMs)}</span>
+      </div>
+      <span class="dw-fd-cnt">${d.count}</span>
+    </div>`).join('');
+  body.innerHTML = `<div class="dw-fd-list">${rows}</div>`;
+}
+
+// ── Widget: Internet Health ───────────────────────────────────────
+function _dwIsPrivate(host) {
+  if (!host) return true;
+  const h = host.split(':')[0].toLowerCase();
+  if (h === 'localhost' || h === '::1' || h === '127.0.0.1') return true;
+  if (h.endsWith('.local')) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true;
+  const m = h.match(/^172\.(\d+)\./);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  return false;
+}
+
+function _dwRefreshInternetHealth(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const external = Object.values(S.sensors).filter(s => {
+    let target = s.host;
+    if (s.stype === 'http' && s.url) { try { target = new URL(s.url).hostname; } catch {} }
+    return !_dwIsPrivate(target);
+  });
+  if (!external.length) {
+    body.innerHTML = `<div class="dw-ih-wrap">
+      <div class="dw-ih-badge idle">NO EXTERNAL SENSORS</div>
+      <div class="dw-ih-sub">No external targets detected</div>
+    </div>`;
+    return;
+  }
+  const up    = external.filter(s => s.alive === true).length;
+  const down  = external.filter(s => s.alive === false).length;
+  const idle  = external.filter(s => s.alive == null).length;
+  const total = external.length;
+  const allUp = down === 0 && idle === 0;
+  const badgeCls = allUp ? 'healthy' : down > 0 ? 'down' : 'degraded';
+  const badgeTxt = allUp ? 'HEALTHY' : down > 0 ? 'DOWN' : 'DEGRADED';
+  const failed = external.filter(s => s.alive === false);
+  const failRows = failed.map(s => {
+    const dev = S.devices[s.device_id];
+    let target = s.host;
+    if (s.stype === 'http' && s.url) { try { target = new URL(s.url).hostname; } catch {} }
+    return `<div class="dw-ih-fail-row">
+      <span class="dw-ds-dot down"></span>
+      <span class="dw-ih-fail-name">${esc(dev?.name || s.device_id)}</span>
+      <span class="dw-ih-fail-host">${esc(target || '')}</span>
+    </div>`;
+  }).join('');
+  body.innerHTML = `<div class="dw-ih-wrap">
+    <div class="dw-ih-badge ${badgeCls}">${badgeTxt}</div>
+    <div class="dw-ih-counts">
+      <span style="color:var(--up)">${up} up</span> ·
+      <span style="color:var(--down)">${down} down</span> ·
+      <span style="color:var(--text3)">${idle} idle</span>
+      <span style="color:var(--text3);font-size:10px"> / ${total} external</span>
+    </div>
+    ${failed.length ? `<div class="dw-ih-fail-list">${failRows}</div>` : ''}
+  </div>`;
 }

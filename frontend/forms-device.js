@@ -17,11 +17,6 @@ function openAddDevice(){
       </div>
       <div class="fr"><label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional — POST on status change)</span></label>
         <input type="text" id="ad-wh" placeholder="https://hooks.slack.com/…" autocomplete="off"/></div>
-      <div class="fr">
-        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:var(--text2)">
-          <input type="checkbox" id="ad-ap" checked style="width:auto;cursor:pointer"/> Auto-scan for sensors after adding
-        </label>
-      </div>
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('mad')">Cancel</button>
@@ -37,7 +32,6 @@ async function submitAddDevice(){
   const name=(document.getElementById('ad-n')?.value||'').trim();
   const host=(document.getElementById('ad-h')?.value||'').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
   const group=(document.getElementById('ad-g')?.value||'Default Group').trim();
-  const ap=document.getElementById('ad-ap')?.checked;
   const webhook_url=(document.getElementById('ad-wh')?.value||'').trim();
   if(!name||!host){toast('Name and host are required','err');return;}
   const btn=document.querySelector('#mad .btn-p');
@@ -57,7 +51,7 @@ async function submitAddDevice(){
   renderDp(dev);renderSidebar();updatePills();
   refreshGroupCounts();
   toast(`Added: ${name}`,'ok');
-  if(ap) openScanModal(r.did);
+  openScanModal(r.did);
 }
 
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────

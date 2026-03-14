@@ -19,12 +19,12 @@ from config import (
     _RE_DEVICE, _RE_DEVICE_ACTION, _RE_DEVICE_LOGS,
     _RE_SENSOR, _RE_SENSOR_ACTION, _RE_SENSOR_ITEM,
     _RE_SENSOR_HISTORY, _RE_SENSOR_SUMMARY, _RE_DEVICE_SCAN,
-    _RE_SENSOR_LOGS,
+    _RE_SENSOR_LOGS, _RE_AVAILABILITY,
 )
 from db     import (
     _db_enqueue, db_save, db_log_audit,
     db_load_err_logs, db_clear_err_logs, db_clear_sensor_err_logs,
-    db_clear_device_traps, db_load_history, db_load_summary,
+    db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
 )
 from logger import log
 from probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
@@ -411,6 +411,18 @@ def handle(h, method, path, body):
         db_log_audit(user, h.client_address[0], 'sensor_create', f"{_dev_name}/{name}")
         log.info(f"Sensor added: {name!r} on {_dev_name}")
         h._json(200, {"sid": sid})
+        return True
+
+    # ── GET /api/availability ─────────────────────────────────────────
+    if _RE_AVAILABILITY.match(path) and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        qs = parse_qs(urlparse(h.path).query)
+        try:
+            minutes = max(1, int(qs.get('minutes', ['1440'])[0]))
+        except (ValueError, TypeError):
+            h._json(400, {'error': 'bad param'}); return True
+        h._json(200, {'availability': db_load_availability(minutes)})
         return True
 
     return False

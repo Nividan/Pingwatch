@@ -17,6 +17,7 @@ from db.samples     import (
     db_log_sample,
     db_load_history,
     db_load_summary,
+    db_load_availability,
     db_clean_samples,
 )
 
@@ -55,7 +56,7 @@ __all__ = [
     "db_load", "db_save", "autosave_loop",
     # samples
     "db_buffer_sample", "db_flush_samples", "db_log_sample",
-    "db_load_history", "db_load_summary", "db_clean_samples",
+    "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
     # events
     "db_log_flap", "db_load_flaps",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",
