@@ -100,8 +100,7 @@ async function doLogout(){
   document.getElementById('tb-user').style.display='none';
   document.getElementById('btnLogout').style.display='none';
   document.getElementById('btnSettings').style.display='none';
-  document.getElementById('btnAdd').style.display='none';
-  document.getElementById('btnAddGroup').style.display='none';
+  document.getElementById('devActBar').style.display='none';
   showLogin();
 }
 function onAuthenticated(username){
@@ -118,15 +117,9 @@ function applyRbac(){
   const admin = S.role==='admin';
   document.querySelectorAll('.rbac-op').forEach(el=>el.style.display=op?'':'none');
   document.querySelectorAll('.rbac-admin').forEach(el=>el.style.display=admin?'':'none');
-  // Add buttons are Devices-tab-only — re-apply after rbac
-  const _devTab = activeMainTab==='devices';
-  document.getElementById('btnAdd').style.display      = (op&&_devTab)?'':'none';
-  document.getElementById('btnAddGroup').style.display = (op&&_devTab)?'':'none';
 }
 async function checkAuth(){
   // Hide UI controls until we confirm auth
-  document.getElementById('btnAdd').style.display='none';
-  document.getElementById('btnAddGroup').style.display='none';
   document.getElementById('btnSettings').style.display='none';
   document.getElementById('btnLogout').style.display='none';
   try{
@@ -250,9 +243,6 @@ function renderFlaps(){
 function switchMainTab(tab){
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
-  const _canWrite=S.role==='operator'||S.role==='admin';
-  document.getElementById('btnAdd').style.display      =(tab==='devices'&&_canWrite)?'':'none';
-  document.getElementById('btnAddGroup').style.display =(tab==='devices'&&_canWrite)?'':'none';
   document.getElementById('tabDashboard').classList.toggle('active',tab==='dashboard');
   document.getElementById('tabDevices').classList.toggle('active',tab==='devices');
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
@@ -265,12 +255,13 @@ function switchMainTab(tab){
   dashboardView.style.display='none';
   eventsView.style.display   ='none';
   mapView.style.display      ='none';
+  document.getElementById('devActBar').style.display='none';
   if(tab==='dashboard'){
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
     if(typeof stopMap==='function') stopMap();
-    if(typeof _dwRenderAll==='function') _dwRenderAll();
+    if(typeof _dwInit==='function') _dwInit();
   } else if(tab==='events'){
     eventsView.style.display='flex';
     emptyMain.style.display='none';
@@ -291,6 +282,7 @@ function switchMainTab(tab){
     if(typeof startMap==='function') startMap();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
+    document.getElementById('devActBar').style.display='';
     emptyMain.style.display=hasDevices?'none':'flex';
     dpanels.style.display=hasDevices?'':'none';
     if(typeof stopMap==='function') stopMap();
@@ -414,7 +406,10 @@ async function loadAll(){
   });
   if(data.devices.length){
     document.getElementById('emptyMain').style.display='none';
-    if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
+    if(activeMainTab==='devices'){
+      document.getElementById('dpanels').style.display='';
+      document.getElementById('devActBar').style.display='';
+    }
   }
   renderFlaps(); // re-render events now that S.devices (groups) is populated
   updatePills();
@@ -434,6 +429,7 @@ async function loadAll(){
   // Ensure devices tab shows panels if it became active after loading
   if(activeMainTab==='devices' && Object.keys(S.devices).length){
     document.getElementById('dpanels').style.display='';
+    document.getElementById('devActBar').style.display='';
   }
 }
 // App bootstrap — check session before doing anything

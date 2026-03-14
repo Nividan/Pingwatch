@@ -131,25 +131,37 @@ def handle(h, method, path, body):
             except OSError: pass
             log.warning(f"DB import: validation error — {_ve}")
             h._json(400, {"error": f"Database validation failed: {_ve}"}); return True
+        # Compact the imported file before it becomes the live DB
+        try:
+            _vvac = _sq3_v.connect(tmp)
+            _vvac.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _vvac.execute("VACUUM")
+            _vvac.close()
+            log.info("DB import: VACUUM complete on imported file")
+        except Exception as _ve:
+            log.warning(f"DB import: VACUUM failed (non-fatal) — {_ve}")
         log.info(f"DB import: temp file written to {tmp} — sending response, will swap DB in 2 s")
         h._json(200, {"ok": True, "msg": "Database imported — server is restarting…"})
         try: h.wfile.flush()
         except Exception: pass
         def _restart():
             time.sleep(2.0)
-            log.info(f"DB import: swapping {tmp} → {DB_PATH}")
+            # On Windows the live DB file is locked by open SQLite connections, so
+            # os.replace() directly would fail with "Access is denied".
+            # Instead, copy the validated+VACUUMed file to a ".pending_import" path
+            # in the same directory as the live DB (same drive = rename on next boot).
+            # server.py:main() picks it up before db_init() opens any connections.
+            import shutil as _shutil
+            _pending = str(DB_PATH) + ".pending_import"
             try:
-                os.replace(tmp, str(DB_PATH))
-                log.info("DB import: DB file replaced successfully")
-                for _ext in ('-wal', '-shm'):
-                    _jpath = str(DB_PATH) + _ext
-                    try:
-                        os.unlink(_jpath)
-                        log.info(f"DB import: removed stale journal file {_jpath}")
-                    except OSError:
-                        pass
+                _shutil.copy2(tmp, _pending)
+                log.info(f"DB import: staged pending file at {_pending}")
             except Exception as _e:
-                log.error(f"DB import: failed to replace DB file — {_e}")
+                log.error(f"DB import: failed to stage pending file — {_e}")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
             log.info(f"DB import: restarting process — {sys.executable} {sys.argv}")
             try:
                 from db import db_flush_samples

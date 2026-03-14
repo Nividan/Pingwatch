@@ -19,7 +19,7 @@ function openAddDevice(){
         <input type="text" id="ad-wh" placeholder="https://hooks.slack.com/…" autocomplete="off"/></div>
       <div class="fr">
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:var(--text2)">
-          <input type="checkbox" id="ad-ap" checked style="width:auto;cursor:pointer"/> Auto-add Ping sensor
+          <input type="checkbox" id="ad-ap" checked style="width:auto;cursor:pointer"/> Auto-scan for sensors after adding
         </label>
       </div>
     </div>
@@ -50,11 +50,14 @@ async function submitAddDevice(){
   const dev=await devR.json();
   S.devices[r.did]=dev;
   document.getElementById('emptyMain').style.display='none';
-  if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
+  if(activeMainTab==='devices'){
+    document.getElementById('dpanels').style.display='';
+    document.getElementById('devActBar').style.display='';
+  }
   renderDp(dev);renderSidebar();updatePills();
   refreshGroupCounts();
   toast(`Added: ${name}`,'ok');
-  if(ap)await addSensorDirect(r.did,`Ping ${host}`,'ping',host,null,null,5,4,true);
+  if(ap) openScanModal(r.did);
 }
 
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────

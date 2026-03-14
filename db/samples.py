@@ -114,6 +114,16 @@ def db_clean_samples(retention_days=365):
         if con:
             con.close()
 
+    # Reclaim free pages left by the DELETE (must be outside any transaction)
+    try:
+        vac = sqlite3.connect(DB_PATH, timeout=30)
+        vac.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        vac.execute("VACUUM")
+        vac.close()
+        log.info("DB vacuum complete")
+    except Exception as e:
+        log.warning("DB vacuum error: %s", e)
+
 
 def db_load_history(did, sid, minutes=1440, limit=1000):
     """Return up to `limit` evenly-distributed samples from the last `minutes` minutes, oldest first."""

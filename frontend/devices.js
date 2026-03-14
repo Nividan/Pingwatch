@@ -112,6 +112,9 @@ function renderDp(dev){
   dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
   refreshGroupCounts();
   applyRbac();
+  // Re-apply search filter so new/updated cards are filtered correctly
+  const _srch=document.getElementById('devSearch');
+  if(_srch&&_srch.value) _applyDevFilter(_srch.value);
 }
 
 function sSnrPreview(did){
@@ -159,14 +162,6 @@ function cardHTML(dev){
         ${sSnrPreview(dev.device_id)}
       </div>
     </div>
-    <div class="dc-foot" onclick="event.stopPropagation()">
-      <button class="dc-act s" onclick="startDev('${dev.device_id}')">▶ Start</button>
-      <button class="dc-act"   onclick="stopDev('${dev.device_id}')">■ Stop</button>
-      <button class="dc-act"   onclick="openAddSensor('${dev.device_id}')">＋ Sensor</button>
-      <button class="dc-act rbac-op" onclick="openScanModal('${dev.device_id}')">⊕ Scan</button>
-      <button class="dc-act"   onclick="openEditDevice('${dev.device_id}')">✎ Edit</button>
-      <button class="dc-act d" onclick="delDev('${dev.device_id}')">✕</button>
-    </div>
   </div>`;
 }
 
@@ -198,9 +193,21 @@ function updateCardSensor(s){
 
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DRAG AND DROP �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
 let dragDid=null, dragEl=null, dropIndicator=null;
-let _dragGrp=null, _dragGrpEl=null, _grpDragOK=false;
+let _dragGrp=null, _dragGrpEl=null, _grpDragOK=false, _grpDragging=false;
 // Reset drag-from-handle flag on any mouseup (handles aborted drags)
 document.addEventListener('mouseup',()=>{ _grpDragOK=false; });
+// Edge-scroll helper: called from onGrpDragOver to scroll #dpanels
+// when the cursor is near the top or bottom of the container.
+// (HTML5 drag API blocks native scroll, so we must do it manually here.)
+function _grpEdgeScroll(clientY){
+  const dp=document.getElementById('dpanels');
+  if(!dp) return;
+  const r=dp.getBoundingClientRect();
+  const zone=80; // px from edge that triggers scrolling
+  const speed=12;
+  if(clientY<r.top+zone)     dp.scrollTop-=speed;
+  else if(clientY>r.bottom-zone) dp.scrollTop+=speed;
+}
 
 function applyDrag(card){
   card.setAttribute('draggable','true');
@@ -286,6 +293,7 @@ function onGrpDragStart(e){
   if(e.target.closest('.dc')) return; // let card drag proceed normally
   if(!_grpDragOK){ e.preventDefault(); return; }
   _grpDragOK=false;
+  _grpDragging=true;
   e.stopPropagation();
   _dragGrpEl=e.currentTarget;
   _dragGrp=_dragGrpEl.querySelector('.grp-grid')?.dataset.group||null;
@@ -295,6 +303,7 @@ function onGrpDragStart(e){
 }
 
 function onGrpDragEnd(){
+  _grpDragging=false;
   if(_dragGrpEl){ _dragGrpEl.classList.remove('grp-dragging'); saveGroupOrder(); }
   _dragGrpEl=null; _dragGrp=null;
 }
@@ -303,6 +312,7 @@ function onGrpDragOver(e){
   if(!_dragGrpEl) return;
   e.preventDefault(); e.stopPropagation();
   e.dataTransfer.dropEffect='move';
+  _grpEdgeScroll(e.clientY); // scroll container when near its edges
   const target=e.currentTarget;
   if(target===_dragGrpEl) return;
   const rect=target.getBoundingClientRect();
@@ -434,7 +444,10 @@ function submitAddGroup(){
   ensureGroupSection(name);
   // Make dpanels visible if it wasn't
   document.getElementById('emptyMain').style.display='none';
-  if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
+  if(activeMainTab==='devices'){
+    document.getElementById('dpanels').style.display='';
+    document.getElementById('devActBar').style.display='';
+  }
   closeM('mag');
   toast('Group "'+name+'" created','ok');
   // Scroll the new group into view
@@ -597,4 +610,57 @@ function setupChartsByDid(did){
     });
   },50);
 }
+
+// ── Device search / filter ────────────────────────────────────────
+function _applyDevFilter(query){
+  const q=(query||'').trim().toLowerCase();
+  let anyVisible=false;
+  document.querySelectorAll('.grp-wrap').forEach(wrap=>{
+    const grid=wrap.querySelector('.grp-grid');
+    if(!grid){wrap.style.display='';return;}
+    if(!q){
+      wrap.style.display='';
+      grid.querySelectorAll('.dc:not(.dc-add)').forEach(c=>c.style.display='');
+      anyVisible=true;
+      return;
+    }
+    let groupHasMatch=false;
+    grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+      const did=card.id.replace('dp-','');
+      const dev=S.devices[did];
+      const nameMatch=dev&&dev.name.toLowerCase().includes(q);
+      const sensorMatch=Object.values(S.sensors)
+        .filter(s=>s.device_id===did)
+        .some(s=>s.name.toLowerCase().includes(q));
+      const show=nameMatch||sensorMatch;
+      card.style.display=show?'':'none';
+      if(show) groupHasMatch=true;
+    });
+    wrap.style.display=groupHasMatch?'':'none';
+    if(groupHasMatch) anyVisible=true;
+  });
+  // Show / hide empty state message
+  let noRes=document.getElementById('devNoResults');
+  if(q && !anyVisible){
+    if(!noRes){
+      noRes=document.createElement('div');
+      noRes.id='devNoResults';
+      noRes.className='dev-no-results';
+      const dp=document.getElementById('dpanels');
+      if(dp) dp.parentNode.insertBefore(noRes,dp.nextSibling);
+    }
+    noRes.textContent='No devices or sensors match "'+query+'"';
+    noRes.style.display='';
+  } else if(noRes){
+    noRes.style.display='none';
+  }
+}
+
+// Ctrl+F / Cmd+F focuses the device search when the devices tab is active
+document.addEventListener('keydown', e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='f'&&activeMainTab==='devices'){
+    const inp=document.getElementById('devSearch');
+    if(inp){ e.preventDefault(); inp.focus(); inp.select(); }
+  }
+});
 

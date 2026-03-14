@@ -135,6 +135,11 @@ def db_init():
                 target TEXT    DEFAULT '',
                 detail TEXT    DEFAULT ''
             )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS dashboard_widgets (
+                username TEXT PRIMARY KEY,
+                widgets  TEXT NOT NULL DEFAULT '[]'
+            )""")
         con.commit()
         # Seed defaults in app_settings if not present
         for _k, _v in [

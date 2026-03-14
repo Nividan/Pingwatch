@@ -41,6 +41,8 @@ from db.users       import (
     db_set_password,
     db_load_settings,
     db_save_settings,
+    db_get_dashboard,
+    db_save_dashboard,
 )
 
 # audit
@@ -62,6 +64,7 @@ __all__ = [
     # users & settings
     "db_list_users", "db_add_user", "db_delete_user", "db_set_password",
     "db_load_settings", "db_save_settings",
+    "db_get_dashboard", "db_save_dashboard",
     # audit
     "db_log_audit", "db_get_audit",
 ]

@@ -63,12 +63,35 @@ const _DW_REG = {
   },
 };
 
-// ── Persistence ───────────────────────────────────────────────────
+// ── Persistence (server-side, per user) ───────────────────────────
+let _dwWidgets = null;   // in-memory cache; null = not yet loaded
+
 function _dwLoad() {
-  try { return JSON.parse(localStorage.getItem('pw-dashboard') || '[]'); } catch { return []; }
+  return _dwWidgets || [];
 }
 function _dwSave(widgets) {
-  try { localStorage.setItem('pw-dashboard', JSON.stringify(widgets)); } catch {}
+  _dwWidgets = widgets;
+  fetch('/api/dashboard', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ widgets }),
+  }).catch(() => {});   // fire-and-forget; errors are silent
+}
+async function _dwInit() {
+  // Clear any stale localStorage data left from the old storage scheme
+  try { localStorage.removeItem('pw-dashboard'); } catch {}
+  try {
+    const r = await fetch('/api/dashboard');
+    if (r.ok) {
+      const data = await r.json();
+      _dwWidgets = Array.isArray(data.widgets) ? data.widgets : [];
+    } else {
+      _dwWidgets = [];
+    }
+  } catch {
+    _dwWidgets = [];
+  }
+  _dwRenderAll();
 }
 
 // ── Dashboard-wide tick (30 s) ────────────────────────────────────

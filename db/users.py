@@ -94,3 +94,33 @@ def db_set_password(username: str, password: str):
         con.close()
     except Exception as e:
         log.error(f"DB set password error: {e}")
+
+
+# ── Dashboard widget layout ───────────────────────────────────────
+
+def db_get_dashboard(username: str) -> str:
+    """Return the stored widgets JSON string for this user (default '[]')."""
+    try:
+        con = sqlite3.connect(DB_PATH)
+        row = con.execute(
+            "SELECT widgets FROM dashboard_widgets WHERE username=?", (username,)
+        ).fetchone()
+        con.close()
+        return row[0] if row else "[]"
+    except Exception as e:
+        log.error(f"DB get dashboard error: {e}")
+        return "[]"
+
+
+def db_save_dashboard(username: str, widgets_json: str):
+    """Upsert the widgets JSON string for this user."""
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute(
+            "INSERT OR REPLACE INTO dashboard_widgets (username, widgets) VALUES (?,?)",
+            (username, widgets_json)
+        )
+        con.commit()
+        con.close()
+    except Exception as e:
+        log.error(f"DB save dashboard error: {e}")
