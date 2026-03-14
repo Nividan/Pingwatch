@@ -120,9 +120,27 @@ def db_clean_samples(retention_days=365):
         vac.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         vac.execute("VACUUM")
         vac.close()
-        log.info("DB vacuum complete")
+        log.debug("DB vacuum complete")
     except Exception as e:
         log.warning("DB vacuum error: %s", e)
+
+
+def db_load_availability(minutes: int = 1440):
+    """Return per-hour aggregate availability across ALL sensors for the last `minutes` minutes."""
+    try:
+        cutoff = time.time() - minutes * 60
+        con = sqlite3.connect(DB_PATH)
+        rows = con.execute(
+            "SELECT CAST(ts/3600 AS INTEGER)*3600 AS h, SUM(ok), COUNT(*) "
+            "FROM sensor_samples WHERE ts>=? GROUP BY h ORDER BY h ASC",
+            (cutoff,)
+        ).fetchall()
+        con.close()
+        return [{"ts": r[0], "pct": round(r[1] / r[2] * 100, 1) if r[2] else 0,
+                 "up": int(r[1] or 0), "total": int(r[2] or 0)} for r in rows]
+    except Exception as e:
+        log.error(f"DB load availability error: {e}")
+        return []
 
 
 def db_load_history(did, sid, minutes=1440, limit=1000):

@@ -198,7 +198,6 @@ let _dragGrp=null, _dragGrpEl=null, _grpDragOK=false, _grpDragging=false;
 document.addEventListener('mouseup',()=>{ _grpDragOK=false; });
 // Edge-scroll helper: called from onGrpDragOver to scroll #dpanels
 // when the cursor is near the top or bottom of the container.
-// (HTML5 drag API blocks native scroll, so we must do it manually here.)
 function _grpEdgeScroll(clientY){
   const dp=document.getElementById('dpanels');
   if(!dp) return;
@@ -208,6 +207,14 @@ function _grpEdgeScroll(clientY){
   if(clientY<r.top+zone)     dp.scrollTop-=speed;
   else if(clientY>r.bottom-zone) dp.scrollTop+=speed;
 }
+// Also forward mouse-wheel events directly to #dpanels while a group is being
+// dragged — the HTML5 drag API suppresses default browser scroll so we do it
+// ourselves.  passive:true means we never block the event; we just piggyback.
+document.addEventListener('wheel', e=>{
+  if(!_grpDragging) return;
+  const dp=document.getElementById('dpanels');
+  if(dp) dp.scrollTop += e.deltaY;
+},{passive:true});
 
 function applyDrag(card){
   card.setAttribute('draggable','true');

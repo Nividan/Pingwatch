@@ -30,13 +30,23 @@ let _pwActiveTraces = 0;     // concurrent animation count
 
 // ── Performance: canvas pause/resume via postMessage from parent ──────────
 let _ntmVisible = true;
+// Resume callbacks — set by initDashBg / initMainBg so the loops restart
+// immediately when coming back from a paused state.
+let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
   if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
-  if (e.data?.type === 'ntm_resume') _ntmVisible = true;
+  if (e.data?.type === 'ntm_resume') {
+    _ntmVisible = true;
+    _resumeDashBg?.();
+    _resumeMainBg?.();
+  }
 });
 // Also pause when this document's own visibility changes (e.g. OS switch)
 let _bgPaused = false;
-document.addEventListener('visibilitychange', () => { _bgPaused = document.hidden; });
+document.addEventListener('visibilitychange', () => {
+  _bgPaused = document.hidden;
+  if (!document.hidden) { _resumeDashBg?.(); _resumeMainBg?.(); }
+});
 
 // ── Performance: batch _pwLiveUpdate calls — one DOM pass per rAF ─────────
 const _pendingLiveUpdates = new Set();
@@ -503,7 +513,7 @@ function _pwFindPath(fromDid, toDid) {
   return null;
 }
 
-const PW_MAX_TRACES = 12;
+const PW_MAX_TRACES = 6;
 
 function _pwFireTrace(toDid, alive) {
   if (_pwActiveTraces >= PW_MAX_TRACES) return;
@@ -3280,9 +3290,9 @@ function initDashBg() {
   const ctx = canvas.getContext('2d');
   let pts = [], scanY = 0;
 
-  // ── Performance: throttle to 20 fps ──────────────────────────────────────
-  const DB_FPS = 20, DB_MS = 1000 / DB_FPS;
-  let _dbLast = 0;
+  // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
+  const DB_FPS = 10, DB_MS = 1000 / DB_FPS;
+  let _dbLast = 0, _rafId = null;
 
   function resize() {
     canvas.width  = canvas.offsetWidth  || 300;
@@ -3290,7 +3300,8 @@ function initDashBg() {
   }
 
   function spawn() {
-    pts = Array.from({ length: 28 }, () => ({
+    // 16 particles (was 28) — pair checks: 120 vs 378 per frame
+    pts = Array.from({ length: 16 }, () => ({
       x:  Math.random() * canvas.width,
       y:  Math.random() * canvas.height,
       vx: (Math.random() - 0.5) * 0.25,
@@ -3301,10 +3312,10 @@ function initDashBg() {
   }
 
   function frame(ts) {
-    requestAnimationFrame(frame); // always re-schedule
-    // Throttle + pause guards
-    if (ts - _dbLast < DB_MS) return;
-    if (_bgPaused || !_ntmVisible) return;
+    // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
+    if (_bgPaused || !_ntmVisible) { _rafId = null; return; }
+    _rafId = requestAnimationFrame(frame);
+    if (ts - _dbLast < DB_MS) return; // throttle to 10 fps
     _dbLast = ts;
 
     const W = canvas.width, H = canvas.height;
@@ -3318,43 +3329,43 @@ function initDashBg() {
       if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
     });
 
-    // Connections
+    // Connections — single batched path (1 stroke call instead of N)
+    const MD2 = 90 * 90;
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(0,212,255,0.12)';
+    ctx.lineWidth = 0.6;
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
         const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
-        const d = Math.sqrt(dx*dx + dy*dy);
-        if (d < 90) {
-          ctx.beginPath();
-          ctx.strokeStyle = `rgba(0,212,255,${(1 - d/90) * 0.18})`;
-          ctx.lineWidth = 0.6;
+        if (dx*dx + dy*dy < MD2) {
           ctx.moveTo(pts[i].x, pts[i].y);
           ctx.lineTo(pts[j].x, pts[j].y);
-          ctx.stroke();
         }
       }
     }
+    ctx.stroke();
 
     // Particles
     pts.forEach(p => {
       const glow = 0.45 + 0.4 * Math.sin(t * 1.6 + p.ph);
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,212,255,${glow})`;
+      ctx.fillStyle = `rgba(0,212,255,${glow.toFixed(2)})`;
       ctx.fill();
     });
 
-    // Slow horizontal scan bar
+    // Scan bar — simple fillRect, no gradient allocation
     scanY = (scanY + 0.4) % H;
-    const sg = ctx.createLinearGradient(0, scanY - 18, 0, scanY + 4);
-    sg.addColorStop(0, 'rgba(0,212,255,0)');
-    sg.addColorStop(1, 'rgba(0,212,255,0.07)');
-    ctx.fillStyle = sg;
+    ctx.fillStyle = 'rgba(0,212,255,0.04)';
     ctx.fillRect(0, scanY - 18, W, 22);
-    ctx.fillStyle = 'rgba(0,212,255,0.12)';
+    ctx.fillStyle = 'rgba(0,212,255,0.10)';
     ctx.fillRect(0, scanY, W, 1);
   }
 
-  resize(); spawn(); requestAnimationFrame(frame);
+  function start() { if (!_rafId) _rafId = requestAnimationFrame(frame); }
+
+  resize(); spawn(); start();
+  _resumeDashBg = start;
   new ResizeObserver(() => { resize(); spawn(); }).observe(canvas.parentElement);
 }
 
@@ -3454,9 +3465,9 @@ function initMainBg() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
-  // ── Performance: throttle to 20 fps ──────────────────────────────────────
-  const BG_FPS = 20, BG_MS = 1000 / BG_FPS;
-  let _bgLast = 0;
+  // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
+  const BG_FPS = 10, BG_MS = 1000 / BG_FPS;
+  let _bgLast = 0, _bgRafId = null;
 
   let pts = [], rings = [], streams = [], scanY = 0;
   const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ';
@@ -3506,8 +3517,8 @@ function initMainBg() {
   }
 
   function spawnParticles() {
-    // Reduced from 60 → 35 particles (pair checks: 1770 → 595 per frame)
-    pts = Array.from({ length: 35 }, () => ({
+    // Reduced from 35 → 20 particles (pair checks: 595 → 190 per frame)
+    pts = Array.from({ length: 20 }, () => ({
       x: Math.random() * canvas.width,
       y: Math.random() * canvas.height,
       vx: (Math.random() - 0.5) * 0.2,
@@ -3519,7 +3530,8 @@ function initMainBg() {
   }
 
   function spawnStreams() {
-    const cols = Math.floor(canvas.width / 22);
+    // Cap at 28 streams regardless of window width (was canvas.width/22 ≈ 58)
+    const cols = Math.min(Math.floor(canvas.width / 36), 28);
     streams = Array.from({ length: cols }, (_, i) => ({
       x: i * 22 + 11,
       y: Math.random() * canvas.height,
@@ -3568,10 +3580,10 @@ function initMainBg() {
 
   let lastRing = 0;
   function frame(ts) {
-    requestAnimationFrame(frame); // always re-schedule
-    // Throttle: skip if not enough time elapsed, or paused / NTM not visible
-    if (ts - _bgLast < BG_MS) return;
-    if (_bgPaused || !_ntmVisible) return;
+    // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
+    if (_bgPaused || !_ntmVisible) { _bgRafId = null; return; }
+    _bgRafId = requestAnimationFrame(frame);
+    if (ts - _bgLast < BG_MS) return; // throttle to 10 fps
     _bgLast = ts;
 
     const W = canvas.width, H = canvas.height;
@@ -3599,20 +3611,25 @@ function initMainBg() {
       }
     });
 
-    // Particles + connections
+    // Particles movement
     pts.forEach(p => { p.x += p.vx; p.y += p.vy; if (p.x < 0) p.x = W; if (p.x > W) p.x = 0; if (p.y < 0) p.y = H; if (p.y > H) p.y = 0; });
+
+    // Connections — single batched path (1 stroke call instead of N)
     const MD2 = 110 * 110;
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(0,212,255,0.08)';
+    ctx.lineWidth = 0.6;
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
         const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
-        const d2 = dx*dx + dy*dy;
-        if (d2 < MD2) {
-          const alpha = (1 - Math.sqrt(d2) / 110) * 0.1;
-          ctx.beginPath(); ctx.strokeStyle = `rgba(0,212,255,${alpha.toFixed(3)})`; ctx.lineWidth = 0.6;
-          ctx.moveTo(pts[i].x, pts[i].y); ctx.lineTo(pts[j].x, pts[j].y); ctx.stroke();
+        if (dx*dx + dy*dy < MD2) {
+          ctx.moveTo(pts[i].x, pts[i].y);
+          ctx.lineTo(pts[j].x, pts[j].y);
         }
       }
     }
+    ctx.stroke();
+
     pts.forEach(p => {
       const pulse = 0.35 + 0.5 * Math.sin(t * 1.5 + p.ph);
       const a = pulse.toFixed(2);
@@ -3624,7 +3641,7 @@ function initMainBg() {
     // Ring pulses
     if (t - lastRing > 2.8 + Math.random() * 3) { spawnRing(); lastRing = t; }
     rings.forEach(r => { r.r += 1.1; });
-    rings.forEach((r, i) => {
+    rings.forEach(r => {
       const progress = r.r / r.maxR;
       const alpha = (1 - progress) * 0.22;
       if (alpha <= 0) return;
@@ -3635,20 +3652,22 @@ function initMainBg() {
     });
     for (let i = rings.length - 1; i >= 0; i--) { if (rings[i].r >= rings[i].maxR) rings.splice(i, 1); }
 
-    // Scan line
+    // Scan line — simple fillRect, no gradient allocation per frame
     scanY = (scanY + 0.55) % H;
-    const sg = ctx.createLinearGradient(0, scanY - 35, 0, scanY + 4);
-    sg.addColorStop(0, 'rgba(0,212,255,0)');
-    sg.addColorStop(1, 'rgba(0,212,255,0.045)');
-    ctx.fillStyle = sg; ctx.fillRect(0, scanY - 35, W, 39);
-    ctx.fillStyle = 'rgba(0,212,255,0.07)'; ctx.fillRect(0, scanY, W, 1);
+    ctx.fillStyle = 'rgba(0,212,255,0.03)';
+    ctx.fillRect(0, scanY - 35, W, 39);
+    ctx.fillStyle = 'rgba(0,212,255,0.07)';
+    ctx.fillRect(0, scanY, W, 1);
 
     // Corner HUD
     drawCorners(W, H);
   }
 
+  function startMainBg() { if (!_bgRafId) _bgRafId = requestAnimationFrame(frame); }
+
   resize();
-  requestAnimationFrame(frame);
+  startMainBg();
+  _resumeMainBg = startMainBg;
   window.addEventListener('resize', resize);
 }
 

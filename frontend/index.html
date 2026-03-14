@@ -77,6 +77,10 @@
       <div class="stpill warn"><div class="stpill-dot"></div><span id="pw">0</span>&nbsp;Warning</div>
       <div class="stpill idle"><div class="stpill-dot"></div><span id="pi">0</span>&nbsp;Idle</div>
     </div>
+    <div id="tb-health" class="tb-health" style="display:none">
+      <span class="tb-health-dot"></span>
+      <span id="tb-health-val">—</span>
+    </div>
   </div>
   <div class="tb-right">
     <div class="tb-time" id="clk"></div>
@@ -229,6 +233,7 @@
         <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">＋ Add Device</button>
         <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">⊞ Add Group</button>
       </div>
+      <div class="dev-act-sep"></div>
       <input id="devSearch" type="search" placeholder="🔎 Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
     </div>
     <div id="dpanels" style="display:none"></div>

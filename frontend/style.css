@@ -462,20 +462,22 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 
 /* Devices tab action bar (Add Device / Add Group + search) */
 #devActBar{
-  display:flex;align-items:center;gap:8px;
-  padding:10px 16px 8px;
-  border-bottom:1px solid var(--border);
-  background:var(--bg2);
+  display:flex;align-items:center;gap:10px;
+  padding:10px 20px;
+  border-bottom:2px solid var(--border);
+  background:linear-gradient(180deg,var(--bg3) 0%,var(--bg2) 100%);
   flex-shrink:0;
+  box-shadow:0 2px 8px rgba(0,0,0,.18);
 }
-.dev-act-left{display:flex;gap:8px;flex-shrink:0}
+.dev-act-left{display:flex;gap:8px;flex-shrink:0;align-items:center;}
+.dev-act-sep{width:1px;height:22px;background:var(--border2);flex-shrink:0;margin:0 2px;}
 .dev-search-inp{
-  margin-left:auto;width:220px;min-width:120px;
-  padding:5px 10px;border-radius:6px;font-size:12px;
-  border:1px solid var(--border);background:var(--bg3);color:var(--text);
-  outline:none;transition:border-color .15s;
+  margin-left:auto;width:240px;min-width:120px;
+  padding:5px 12px;border-radius:20px;font-size:12px;
+  border:1px solid var(--border2);background:var(--bg4);color:var(--text);
+  outline:none;transition:border-color .15s,box-shadow .15s;
 }
-.dev-search-inp:focus{border-color:var(--accent)}
+.dev-search-inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
 .dev-no-results{
   padding:32px 20px;text-align:center;color:var(--text3);
   font-size:13px;font-style:italic;
@@ -1130,6 +1132,9 @@ canvas.dm-hist-canvas{width:100%;height:180px;display:block;border-radius:6px;ba
 .dw-grid           {display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;width:100%;}
 .dw-card           {background:var(--card);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;min-height:220px;overflow:hidden;cursor:grab;transition:opacity .15s,border-color .15s;}
 .dw-card.dw-dragging{opacity:.35;border-color:var(--accent);}
+.dw-card.dw-drop-target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent),0 8px 24px rgba(47,129,247,.25);background:rgba(47,129,247,.07);}
+.dw-placeholder{border:2px dashed var(--border)!important;background:transparent!important;cursor:default;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:12px;opacity:.6;}
+.dw-placeholder.dw-drop-target{border-color:var(--accent)!important;background:rgba(47,129,247,.07)!important;color:var(--accent);opacity:1;}
 .dw-card[draggable=true]:active{cursor:grabbing;}
 .dw-wide           {grid-column:span 2;}
 .dw-hdr            {display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);flex-shrink:0;background:rgba(255,255,255,.02);}
@@ -1137,6 +1142,10 @@ canvas.dm-hist-canvas{width:100%;height:180px;display:block;border-radius:6px;ba
 .dw-title          {font-size:12px;font-weight:600;color:var(--text2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dw-rm             {background:none;border:none;color:var(--text3);cursor:pointer;font-size:17px;line-height:1;padding:0 2px;transition:color .15s;}
 .dw-rm:hover       {color:var(--down);}
+.dw-edit           {background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;transition:color .15s;}
+.dw-edit:hover     {color:var(--accent);}
+.dw-exp            {background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;transition:color .15s;}
+.dw-exp:hover      {color:var(--text);}
 .dw-body           {flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:4px;}
 .dw-empty          {color:var(--text3);font-size:12px;padding:20px;text-align:center;grid-column:1/-1;}
 .dw-add-btn        {margin:14px auto 20px;padding:8px 22px;background:rgba(47,129,247,.12);border:1px dashed rgba(47,129,247,.35);border-radius:8px;color:var(--accent);font-size:12px;cursor:pointer;transition:all .15s;}
@@ -1205,6 +1214,85 @@ canvas.dm-hist-canvas{width:100%;height:180px;display:block;border-radius:6px;ba
 .dw-ss-lbl         {font-size:11px;color:var(--text3);}
 .dw-ss-val         {font-size:12px;color:var(--text);font-weight:600;font-family:monospace;}
 .dw-ss-val.accent  {color:var(--accent);}
+/* Fullscreen widget expand modal */
+.dw-fs-box         {background:var(--bg2);border:1px solid var(--border);border-radius:10px;width:min(95vw,1100px);height:min(88vh,700px);display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.55);}
+.dw-fs-hdr         {display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.dw-fs-icon        {font-size:16px;}
+.dw-fs-title       {font-size:14px;font-weight:600;color:var(--text);flex:1;}
+.dw-fs-body        {flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:8px;}
+/* Down & Warning Devices widget */
+.dw-dd-ok          {color:var(--up);font-size:13px;font-weight:600;padding:20px;text-align:center;}
+.dw-dd-list        {display:flex;flex-direction:column;gap:4px;overflow-y:auto;}
+.dw-dd-row         {display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:4px;border-bottom:1px solid rgba(255,255,255,.04);}
+.dw-dd-row:hover   {background:rgba(255,255,255,.04);}
+.dw-dd-info        {display:flex;flex-direction:column;gap:1px;flex:1;overflow:hidden;}
+.dw-dd-name        {font-size:12px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dw-dd-host        {font-size:10px;color:var(--text3);font-family:monospace;}
+.dw-dd-sensors     {font-size:10px;color:var(--down);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* Top Latency widget */
+.dw-tl-list        {display:flex;flex-direction:column;gap:5px;overflow-y:auto;width:100%;}
+.dw-tl-row         {display:flex;align-items:center;gap:8px;}
+.dw-tl-name        {font-size:11px;color:var(--text2);width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;}
+.dw-tl-bar-wrap    {flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;}
+.dw-tl-bar         {height:100%;border-radius:3px;transition:width .3s;}
+.dw-tl-val         {font-size:11px;font-family:monospace;font-weight:600;flex-shrink:0;width:52px;text-align:right;}
+/* Event Count / Summary widget */
+.dw-ec-table       {display:flex;flex-direction:column;gap:0;width:100%;}
+.dw-ec-row         {display:flex;align-items:center;border-bottom:1px solid rgba(255,255,255,.05);padding:6px 4px;}
+.dw-ec-row:last-child{border-bottom:none;}
+.dw-ec-hdr         {background:rgba(255,255,255,.03);}
+.dw-ec-total       {background:rgba(255,255,255,.03);font-weight:600;}
+.dw-ec-lbl         {font-size:11px;color:var(--text2);flex:1;font-weight:500;}
+.dw-ec-cell        {font-size:12px;font-family:monospace;font-weight:600;width:52px;text-align:center;}
+.dw-ec-period      {font-size:10px;color:var(--text3);font-weight:500;}
+
+/* ── Widget: Packet Loss ─────────────────────────────────────────── */
+.dw-pl-ok{color:var(--up);font-size:13px;font-weight:600;padding:20px;text-align:center;}
+
+/* ── Widget: SLA Report ──────────────────────────────────────────── */
+.dw-sla-wrap   {display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 8px;flex:1;justify-content:center;}
+.dw-sla-loading{color:var(--text3);font-size:11px;}
+.dw-sla-pct    {font-size:48px;font-weight:700;line-height:1;letter-spacing:-2px;}
+.dw-sla-sym    {font-size:24px;font-weight:400;}
+.dw-sla-tier   {font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;}
+.dw-sla-bar-wrap{width:100%;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin:4px 0;}
+.dw-sla-bar    {height:100%;border-radius:3px;transition:width .4s;}
+.dw-sla-stats  {display:flex;gap:16px;font-size:12px;color:var(--text2);}
+.dw-sla-key    {color:var(--text3);font-size:10px;margin-right:4px;text-transform:uppercase;letter-spacing:.04em;}
+
+/* ── Widget: Flapping Devices ────────────────────────────────────── */
+.dw-fd-ok   {color:var(--up);font-size:13px;font-weight:600;padding:20px;text-align:center;}
+.dw-fd-list {display:flex;flex-direction:column;gap:4px;overflow-y:auto;}
+.dw-fd-row  {display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:4px;border-bottom:1px solid rgba(255,255,255,.04);}
+.dw-fd-row:hover{background:rgba(255,255,255,.04);}
+.dw-fd-info {display:flex;flex-direction:column;gap:1px;flex:1;overflow:hidden;}
+.dw-fd-name {font-size:12px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dw-fd-meta {font-size:10px;color:var(--text3);}
+.dw-fd-cnt  {font-size:14px;font-weight:700;color:var(--down);flex-shrink:0;min-width:24px;text-align:right;}
+
+/* ── Widget: Internet Health ─────────────────────────────────────── */
+.dw-ih-wrap      {display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 8px;flex:1;}
+.dw-ih-badge     {padding:6px 20px;border-radius:20px;font-size:13px;font-weight:700;letter-spacing:.08em;border:1px solid;}
+.dw-ih-badge.healthy {color:var(--up);background:var(--up-bg);border-color:var(--up-border);}
+.dw-ih-badge.degraded{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-border);}
+.dw-ih-badge.down    {color:var(--down);background:var(--down-bg);border-color:var(--down-border);}
+.dw-ih-badge.idle    {color:var(--text3);background:var(--pause-bg);border-color:var(--pause-border);}
+.dw-ih-counts    {font-size:12px;color:var(--text2);}
+.dw-ih-sub       {font-size:11px;color:var(--text3);}
+.dw-ih-fail-list {display:flex;flex-direction:column;gap:3px;width:100%;margin-top:4px;border-top:1px solid var(--border);padding-top:6px;}
+.dw-ih-fail-row  {display:flex;align-items:center;gap:6px;padding:2px 0;}
+.dw-ih-fail-name {font-size:11px;color:var(--text);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dw-ih-fail-host {font-size:10px;color:var(--text3);font-family:monospace;flex-shrink:0;}
+
+/* ── Widget: Network Availability History canvas ─────────────────── */
+.dw-na-canvas{width:100%;display:block;flex-shrink:0;margin-top:4px;}
+
+/* ── Topbar: Global Network Health Badge ─────────────────────────── */
+.tb-health     {display:flex;align-items:center;gap:5px;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid;margin-left:8px;transition:all .3s;}
+.tb-health-dot {width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}
+.tb-health.healthy {color:var(--up);background:var(--up-bg);border-color:var(--up-border);}
+.tb-health.degraded{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-border);}
+.tb-health.down    {color:var(--down);background:var(--down-bg);border-color:var(--down-border);}
 
 /* ── Events tab enhancements (v0.5) ─────────────────────────────── */
 

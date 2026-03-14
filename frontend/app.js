@@ -153,6 +153,22 @@ function updatePills(){
   document.getElementById('pd').textContent=d;
   document.getElementById('pw').textContent=w;
   document.getElementById('pi').textContent=i;
+  // ── Global health badge ──────────────────────────────────────────
+  const _hEl=document.getElementById('tb-health');
+  const _hVal=document.getElementById('tb-health-val');
+  if(_hEl&&_hVal){
+    const allS=Object.values(S.sensors),tot=allS.length;
+    if(!tot){_hEl.style.display='none';}
+    else{
+      const alive=allS.filter(s=>s.alive===true).length;
+      const pct=Math.round(alive/tot*100);
+      const cls=pct>=90?'healthy':pct>=70?'degraded':'down';
+      const lbl=pct>=90?`${pct}% Healthy`:pct>=70?`${pct}% Degraded`:`${pct}% DOWN`;
+      _hVal.textContent=lbl;
+      _hEl.className=`tb-health ${cls}`;
+      _hEl.style.display='';
+    }
+  }
 }
 
 // ── Events / Flap log ────────────────────────────────────────────
@@ -404,11 +420,13 @@ async function loadAll(){
     });
     renderDp(dev);
   });
+  if(activeMainTab==='devices'){
+    document.getElementById('devActBar').style.display='';
+  }
   if(data.devices.length){
     document.getElementById('emptyMain').style.display='none';
     if(activeMainTab==='devices'){
       document.getElementById('dpanels').style.display='';
-      document.getElementById('devActBar').style.display='';
     }
   }
   renderFlaps(); // re-render events now that S.devices (groups) is populated
