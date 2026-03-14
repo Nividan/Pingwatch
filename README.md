@@ -138,10 +138,6 @@ NTM provides an interactive topology map where devices, switches, and servers ar
 **Draw.io style NTM**
 <img width="2200" height="1209" alt="image" src="https://github.com/user-attachments/assets/f42cb4f3-4167-4c91-b6d2-df635ad7c4ef" />
 
-### 💾 Device Config Backup
-
-
-
 
 ---
 
