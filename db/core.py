@@ -140,6 +140,36 @@ def db_init():
                 username TEXT PRIMARY KEY,
                 widgets  TEXT NOT NULL DEFAULT '[]'
             )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS backup_devices (
+                did          TEXT PRIMARY KEY,
+                enabled      INTEGER DEFAULT 0,
+                method       TEXT    DEFAULT 'ssh',
+                port         INTEGER DEFAULT 22,
+                username     TEXT    DEFAULT '',
+                password_enc TEXT    DEFAULT '',
+                enable_enc   TEXT    DEFAULT '',
+                commands     TEXT    DEFAULT '["show running-config"]',
+                paging_cmd   TEXT    DEFAULT '',
+                timeout      INTEGER DEFAULT 30,
+                schedule     TEXT    DEFAULT ''
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS backup_runs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                did        TEXT    NOT NULL,
+                ts         TEXT    NOT NULL,
+                success    INTEGER DEFAULT 0,
+                method     TEXT    DEFAULT '',
+                size_bytes INTEGER DEFAULT 0,
+                sha256     TEXT    DEFAULT '',
+                config     TEXT    DEFAULT '',
+                error_msg  TEXT    DEFAULT ''
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS ix_backup_runs_did_ts "
+            "ON backup_runs(did, ts DESC)"
+        )
         con.commit()
         # Seed defaults in app_settings if not present
         for _k, _v in [

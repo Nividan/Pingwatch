@@ -114,6 +114,19 @@
       <button class="mtab" id="tabDevices" onclick="switchMainTab('devices')">⊞ Devices</button>
       <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events <span class="mtab-badge" id="evtBadge" style="display:none">0</span></button>
       <button class="mtab" id="tabMap" onclick="switchMainTab('map')">⬡ Map</button>
+      <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
+    </div>
+    <!-- Global Network Health Bar -->
+    <div id="healthBar" style="display:none">
+      <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
+      <span id="hb-pct" class="hb-pct-healthy">—</span>
+      <span id="hb-label" class="hb-lbl-healthy">—</span>
+      <div id="hb-pills">
+        <span class="hb-pill up"   id="hb-up"></span>
+        <span class="hb-pill down" id="hb-dn" style="display:none"></span>
+        <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
+      </div>
+      <canvas id="hb-spark" height="20" style="flex:0 0 80px"></canvas>
     </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
@@ -237,6 +250,15 @@
       <input id="devSearch" type="search" placeholder="🔎 Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
     </div>
     <div id="dpanels" style="display:none"></div>
+    <!-- Backups view -->
+    <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+      <div id="bk-toolbar">
+        <span class="bk-title">💾 Device Configuration Backups</span>
+        <button class="btn-sm rbac-op" id="bkRunAllBtn" onclick="_bkRunAll()">▶ Run All Enabled</button>
+        <button class="btn-sm" onclick="_bkInit()">↺ Refresh</button>
+      </div>
+      <div id="bk-table-wrap"></div>
+    </div>
   </div>
 </div>
 <div id="toast"></div>

@@ -4,6 +4,15 @@ function grpId(g){ return 'grp-'+btoa(unescape(encodeURIComponent(g))).replace(/
 function gridId(g){ return 'gg-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 function cntId(g){  return 'gc-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 
+/** Safe localStorage JSON reader — returns fallback on parse error or missing key. */
+function _lsGet(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; }
+  catch { return fallback; }
+}
+function _lsSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota/private mode */ }
+}
+
 function ensureGroupSection(group){
   const id=grpId(group);
   if(document.getElementById(id)) return;
@@ -16,7 +25,7 @@ function ensureGroupSection(group){
   const hdr=document.createElement('div');
   hdr.className='grp-hdr';
 
-  const _grpCol=new Set(JSON.parse(localStorage.getItem('pw-grp-collapsed')||'[]'));
+  const _grpCol=new Set(_lsGet('pw-grp-collapsed', []));
   const isCol=_grpCol.has(group);
 
   const dragH=document.createElement('div');
@@ -82,9 +91,9 @@ function toggleGroup(group){
   if(!grid) return;
   const nowCol=grid.classList.toggle('collapsed');
   if(arr){arr.classList.toggle('open',!nowCol);arr.title=nowCol?'Expand':'Collapse';}
-  const set=new Set(JSON.parse(localStorage.getItem('pw-grp-collapsed')||'[]'));
+  const set=new Set(_lsGet('pw-grp-collapsed', []));
   if(nowCol) set.add(group); else set.delete(group);
-  localStorage.setItem('pw-grp-collapsed',JSON.stringify([...set]));
+  _lsSet('pw-grp-collapsed', [...set]);
 }
 
 function pruneEmptyGroups(){
@@ -341,11 +350,11 @@ function saveGroupOrder(){
     const g=w.querySelector('.grp-grid');
     return g?g.dataset.group:null;
   }).filter(Boolean);
-  localStorage.setItem('pw-grp-order',JSON.stringify(order));
+  _lsSet('pw-grp-order', order);
 }
 
 function restoreGroupOrder(){
-  const order=JSON.parse(localStorage.getItem('pw-grp-order')||'[]');
+  const order=_lsGet('pw-grp-order', []);
   if(!order.length) return;
   const dpanels=document.getElementById('dpanels');
   order.forEach(grp=>{
