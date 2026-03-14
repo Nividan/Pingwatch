@@ -14,6 +14,7 @@
 - [Installation](#installation)
 - [Usage](#usage)
 - [Screenshots](#screenshots)
+- [Device Configuration Backup](#device-configuration-backup)
 - [Architecture](#architecture)
 - [Core Components](#core-components)
 - [Frontend Structure](#frontend-structure)
@@ -27,7 +28,7 @@
 PingWatch is a Python-based network monitoring platform designed to track the availability and health of network devices and services.
 
 The system supports multiple sensor types such as ICMP (ping), HTTP/HTTPS checks, TCP port checks, SNMP, DNS, TLS, and banner probes.
-Collected data is displayed in a web-based dashboard that provides real-time event streaming, device management, latency history charts, and an interactive network topology visualizer.
+Collected data is displayed in a web-based dashboard that provides real-time event streaming, device management, latency history charts, an interactive network topology visualizer, and automated device configuration backup.
 
 
 ## Features
@@ -42,6 +43,7 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - 🔒 Role-based access control (viewer / operator / admin)
 - 📤 Database export and import (SQLite backup/restore)
 - 🖥 Native desktop status window with optional system-tray icon
+- 💾 **Automated device configuration backup** via SSH and Telnet with encrypted credential storage
 
 ### Supported Sensor Types
 
@@ -65,6 +67,8 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - **Real-time updates:** Server-Sent Events (SSE)
 - **System Tray:** pystray + Pillow *(optional)*
 - **Network probes:** `socket`, `urllib`, `subprocess`, `pysnmp`
+- **SSH backup:** `paramiko` *(required for backup feature)*
+- **Credential encryption:** `cryptography` (Fernet) *(required for backup feature)*
 
 
 ## Installation
@@ -81,6 +85,8 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
    ```bash
    start.bat
    ```
+
+> `start.bat` automatically installs `paramiko` and `cryptography` if they are not already present.
 
 
 ## Usage
@@ -133,6 +139,76 @@ NTM provides an interactive topology map where devices, switches, and servers ar
 <img width="2200" height="1209" alt="image" src="https://github.com/user-attachments/assets/f42cb4f3-4167-4c91-b6d2-df635ad7c4ef" />
 
 
+---
+
+## Device Configuration Backup
+
+PingWatch includes a built-in **Configuration Backup** system that connects to network devices over SSH or Telnet, retrieves their running configuration, stores it encrypted in the database, and tracks a full revision history.
+
+### How It Works
+
+1. Navigate to the **Backups** tab in the dashboard.
+2. Click the ⚙ icon on any device row to open its backup settings.
+3. Configure the connection method, credentials, commands, and optional schedule.
+4. Click **Run Now** or wait for the scheduled trigger.
+5. Click any device row to open the **Config Viewer** and browse revision history.
+
+### Backup Settings per Device
+
+| Field | Description |
+|-------|-------------|
+| **Method** | `ssh` or `telnet` |
+| **Host / Port** | Taken from the monitored device — override port if needed |
+| **Username** | Login username for the device |
+| **Password** | Stored AES-encrypted (Fernet) in the database — never in plaintext on disk or in memory |
+| **Enable password** | Optional second-stage enable password (Cisco-style) |
+| **Paging command** | Sent once after login to disable paging (e.g. `terminal length 0` for Cisco, `set cli screen-length 0` for JUNOS) |
+| **Commands** | One command per line — each is sent in sequence and its output collected |
+| **Timeout** | Per-connection timeout in seconds (default 30 s) |
+| **Schedule** | Cron-style expression for automatic runs (e.g. `0 2 * * *` = daily at 02:00) |
+
+### Device Compatibility
+
+| Vendor / OS | Method | Notes |
+|-------------|--------|-------|
+| **Cisco IOS / IOS-XE** | SSH or Telnet | Paging: `terminal length 0` · Enable password supported |
+| **Cisco NX-OS** | SSH | Paging: `terminal length 0` |
+| **Juniper JUNOS** | SSH | Login as a CLI user (non-root). Paging: `set cli screen-length 0`. Supports both `password` and `keyboard-interactive` auth |
+| **Fortinet FortiGate** | SSH | Paging: `config system console` + `set output standard` |
+| **Any SSH/Telnet device** | SSH or Telnet | Supply the correct commands for your platform |
+
+> **JUNOS root users:** The root account drops into a BSD shell. Either use a dedicated CLI user account, or prefix your command with `cli -c "show configuration | display set | no-more"`.
+
+### Security
+
+- Passwords are encrypted at rest using **Fernet symmetric encryption** (AES-128-CBC + HMAC-SHA256).
+- The encryption key is auto-generated on first use and stored in the `app_settings` table.
+- Plaintext passwords are **never** written to disk, log files, or held in server memory beyond the duration of a single backup run.
+- Credentials are fetched fresh from the database on every backup trigger.
+- All backup actions are recorded in the **audit log**.
+
+### Config Viewer
+
+Each device keeps the **3 most recent** backup runs (older runs are automatically purged from the database). Click any device row in the Backups table to open the Config Viewer:
+
+- Browse revisions with **← Older / Newer →** navigation
+- View run timestamp, success/fail status, config size, and **SHA-256** integrity hash
+- **📋 Copy** button copies the full config text to the clipboard
+- Real-time status updates via SSE — the table refreshes automatically when a backup completes
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/backups` | List all devices with latest backup metadata |
+| `GET` | `/api/backups/<did>` | Get backup settings for a device (no plaintext passwords) |
+| `PUT` | `/api/backups/<did>` | Save backup settings |
+| `GET` | `/api/backups/<did>/history` | List backup run metadata for a device |
+| `GET` | `/api/backups/run/<id>` | Full run record including config text |
+| `POST` | `/api/backups/<did>/run` | Trigger an immediate backup (async, rate-limited 30 s) |
+| `DELETE` | `/api/backups/run/<id>` | Delete a specific backup run *(admin only)* |
+
+---
 
 ## Architecture
 
@@ -146,6 +222,7 @@ Browser / Desktop GUI
         │
         ├── state.py              ← In-memory runtime state (devices, sensors)
         ├── probes.py             ← Sensor engine (ICMP, HTTP, TCP, …)
+        ├── backup_engine.py      ← SSH / Telnet config backup engine
         ├── db/                   ← SQLite persistence package
         ├── auth.py               ← Session management & RBAC
         ├── network_map.py        ← Topology (NTM) data layer
@@ -171,6 +248,9 @@ This design keeps each layer independently testable and allows new sensor types 
 
 - **`probes.py`** — Sensor engine.
   Implements every monitoring probe type: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner.
+
+- **`backup_engine.py`** — Configuration backup engine.
+  Opens SSH (paramiko) or Telnet connections to network devices, sends user-defined commands, collects output, and returns the result for storage. Supports password auth, keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable, and configurable per-command idle timeouts.
 
 - **`auth.py`** — Authentication and session management.
   Handles login, password hashing (bcrypt-style), RBAC roles (`viewer` / `operator` / `admin`), and active sessions.
@@ -206,6 +286,7 @@ This design keeps each layer independently testable and allows new sensor types 
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/import`, `/api/audit` |
+| `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
 
 ### Database Package (`db/`)
 
@@ -217,6 +298,7 @@ This design keeps each layer independently testable and allows new sensor types 
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management, app settings |
 | `audit.py` | Audit log write & query |
+| `backups.py` | Backup settings (encrypted), run history, 3-run retention |
 | `__init__.py` | Re-exports all public symbols (callers unchanged) |
 
 
@@ -233,6 +315,7 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 | `devices.js` | Device list and detail panel |
 | `sensors.js` | Sensor list and detail panel |
 | `events.js` | Flap/trap/error event log viewer |
+| `backups.js` | Backup table, settings modal, config viewer |
 | `forms-device.js` | Add/edit device form |
 | `forms-sensor.js` | Add/edit sensor form |
 | `forms-settings.js` | Application settings form |
@@ -255,16 +338,18 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 6. State changes persist automatically through the autosave loop (every 60 s) and an immediate write-queue for high-priority operations.
 7. **`smtp_alert.py`** sends email alerts when sensors transition between up/down states.
 8. **`trap_receiver.py`** ingests asynchronous SNMP traps and routes them into the event pipeline.
+9. **`backup_engine.py`** connects to devices on demand or on schedule, retrieves configuration, and stores it encrypted in the database via `db/backups.py`.
 
 
 ## Project Structure
 
 ```
 pingwatch/
-├── server.py               ← HTTP dispatcher + entry point (~400 lines)
+├── server.py               ← HTTP dispatcher + entry point
 ├── app_state.py            ← Shared runtime globals
 ├── state.py                ← In-memory device/sensor state
 ├── probes.py               ← Sensor engine
+├── backup_engine.py        ← SSH / Telnet config backup engine
 ├── auth.py                 ← Authentication & RBAC
 ├── network_map.py          ← NTM topology data layer
 ├── trap_receiver.py        ← SNMP trap listener
@@ -276,6 +361,7 @@ pingwatch/
 ├── gui.py                  ← Desktop status window
 ├── pingwatch.pyw           ← Windowless launcher
 ├── start.bat               ← Console launcher
+├── requirements.txt        ← Python dependencies
 │
 ├── db/                     ← SQLite persistence package
 │   ├── __init__.py         ← Re-exports all public symbols
@@ -284,7 +370,8 @@ pingwatch/
 │   ├── samples.py          ← Probe sample buffer & queries
 │   ├── events.py           ← Flap, trap, error logs
 │   ├── users.py            ← User management & settings
-│   └── audit.py            ← Audit log
+│   ├── audit.py            ← Audit log
+│   └── backups.py          ← Backup settings & run history
 │
 ├── routes/                 ← HTTP route handlers
 │   ├── auth.py             ← Login, logout, users
@@ -292,7 +379,8 @@ pingwatch/
 │   ├── monitoring.py       ← SSE, flaps, traps, SNMP
 │   ├── settings.py         ← App settings, server info
 │   ├── topology.py         ← NTM pages/nodes/links/groups
-│   └── export.py           ← DB export/import, audit
+│   ├── export.py           ← DB export/import, audit
+│   └── backups.py          ← Device config backup API
 │
 └── frontend/               ← Web UI (served statically)
     ├── index.html
@@ -302,6 +390,7 @@ pingwatch/
     ├── devices.js
     ├── sensors.js
     ├── events.js
+    ├── backups.js
     ├── forms-device.js
     ├── forms-sensor.js
     ├── forms-settings.js
