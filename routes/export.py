@@ -137,7 +137,7 @@ def handle(h, method, path, body):
             _vvac.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             _vvac.execute("VACUUM")
             _vvac.close()
-            log.info("DB import: VACUUM complete on imported file")
+            log.debug("DB import: VACUUM complete on imported file")
         except Exception as _ve:
             log.warning(f"DB import: VACUUM failed (non-fatal) — {_ve}")
         log.info(f"DB import: temp file written to {tmp} — sending response, will swap DB in 2 s")

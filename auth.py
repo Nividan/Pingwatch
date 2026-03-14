@@ -58,8 +58,8 @@ def auth_login(username: str, password: str):
         _rc.close()
         if _rr:
             _role = _rr[0]
-    except Exception:
-        pass
+    except Exception as _re:
+        log.warning(f"auth: role lookup failed for {username!r}, defaulting to viewer: {_re}")
     with _SESSIONS_LOCK:
         _SESSIONS[token] = {"username": username, "expires": expires, "role": _role}
     try:

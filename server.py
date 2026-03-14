@@ -58,7 +58,7 @@ _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js",
     "forms-settings.js", "forms-io.js", "forms-users.js",
-    "dashboard.js", "events.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "app.js",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
@@ -207,7 +207,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── GET ───────────────────────────────────────────────────────
     def do_GET(self):
-        from routes import auth, devices, monitoring, settings, topology, export
+        from routes import auth, devices, monitoring, settings, topology, export, backups
         p = urlparse(self.path).path
 
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
@@ -250,7 +250,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        for mod in (auth, devices, monitoring, settings, topology, export):
+        for mod in (auth, devices, monitoring, settings, topology, export, backups):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -258,7 +258,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── POST ──────────────────────────────────────────────────────
     def do_POST(self):
-        from routes import auth, devices, monitoring, settings, topology, export
+        from routes import auth, devices, monitoring, settings, topology, export, backups
         p = urlparse(self.path).path
 
         # DB import reads its own oversized body before we call _body()
@@ -268,7 +268,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         body = self._body()
 
-        for mod in (auth, devices, monitoring, settings, topology, export):
+        for mod in (auth, devices, monitoring, settings, topology, export, backups):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -288,7 +288,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology, settings
+        from routes import topology, settings, backups
         p    = urlparse(self.path).path
         body = self._body()
 
@@ -296,15 +296,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if topology.handle(self, 'PUT', p, body):
             return
+        if backups.handle(self, 'PUT', p, body):
+            return
 
         self._json(404, {"error": "not found"})
 
     # ── DELETE ────────────────────────────────────────────────────
     def do_DELETE(self):
-        from routes import auth, devices, topology
+        from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        for mod in (auth, devices, topology):
+        for mod in (auth, devices, topology, backups):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 

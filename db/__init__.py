@@ -49,6 +49,20 @@ from db.users       import (
 # audit
 from db.audit       import db_log_audit, db_get_audit
 
+# backups
+from db.backups     import (
+    db_get_backup_list,
+    db_get_backup_settings,
+    db_save_backup_settings,
+    db_get_backup_history,
+    db_get_backup_run,
+    db_save_backup_run,
+    db_delete_backup_run,
+    db_ensure_backup_device,
+    encrypt_pw,
+    decrypt_pw,
+)
+
 __all__ = [
     # core
     "db_init", "db_seed_users", "_db_enqueue",
@@ -68,4 +82,9 @@ __all__ = [
     "db_get_dashboard", "db_save_dashboard",
     # audit
     "db_log_audit", "db_get_audit",
+    # backups
+    "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
+    "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",
+    "db_delete_backup_run", "db_ensure_backup_device",
+    "encrypt_pw", "decrypt_pw",
 ]

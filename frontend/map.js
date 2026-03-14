@@ -3100,19 +3100,29 @@ async function exportPNG() {
   const url = URL.createObjectURL(new Blob([xml],{type:'image/svg+xml'}));
   const img = new Image();
   img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = res.vw * SCALE; canvas.height = res.vh * SCALE;
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, 0, 0);
-    URL.revokeObjectURL(url);
-    canvas.toBlob(b => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(b);
-      a.download = 'topology.png'; a.click();
-      toast('PNG exported');
-    }, 'image/png');
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = res.vw * SCALE; canvas.height = res.vh * SCALE;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(b => {
+        if (!b) { toast('PNG export failed'); return; }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = 'topology.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        toast('PNG exported');
+      }, 'image/png');
+    } catch (_e) {
+      URL.revokeObjectURL(url);
+      toast('PNG export failed');
+    }
   };
   img.onerror = () => { URL.revokeObjectURL(url); toast('PNG export failed'); };
   img.src = url;

@@ -56,6 +56,10 @@ function connectSSE(){
     const d=JSON.parse(e.data); d._direction='trap'; pushFlap(d);
     pushDevTrap(d);
   });
+  sse.addEventListener('backup_complete',e=>{
+    const d=JSON.parse(e.data);
+    if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
+  });
   sse.onerror=()=>{
     document.getElementById('cbn').style.display='block';
     setTimeout(connectSSE,3000);
@@ -71,12 +75,16 @@ function toast(msg,type='info'){
 }
 
 // ── Auth ─────────────────────────────────────────────────────────
-function showLogin(msg){
+function showLogin(msg, keepInput){
   document.getElementById('login-screen').style.display='flex';
-  document.getElementById('login-err').style.display = msg ? 'block' : 'none';
-  document.getElementById('login-err').textContent = msg || '';
-  document.getElementById('login-btn').disabled=false;
-  setTimeout(()=>document.getElementById('login-user')?.focus(),80);
+  const errEl=document.getElementById('login-err');
+  errEl.style.display = msg ? 'block' : 'none';
+  errEl.textContent = msg || '';
+  errEl.classList.toggle('info', !!keepInput);
+  if(!keepInput){
+    document.getElementById('login-btn').disabled=false;
+    setTimeout(()=>document.getElementById('login-user')?.focus(),80);
+  }
 }
 function hideLogin(){
   document.getElementById('login-screen').style.display='none';
@@ -87,13 +95,21 @@ async function submitLogin(){
   if(!user||!pass){showLogin('Please enter username and password.');return;}
   const btn=document.getElementById('login-btn');
   btn.disabled=true; btn.textContent='Signing in…';
+  // Show a hint if the server is taking long (e.g. loading a large DB after import)
+  const slowHint=setTimeout(()=>showLogin('Server is starting up — please wait…',true),6000);
   try{
-    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass})});
+    const ctrl=new AbortController();
+    const tmo=setTimeout(()=>ctrl.abort(),90000); // 90 s max (large DB can take ~40 s to load)
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass}),signal:ctrl.signal});
+    clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
     hideLogin();
     onAuthenticated(d.username);
-  }catch(e){showLogin('Server error. Try again.');btn.textContent='Sign In';}
+  }catch(e){
+    const msg=e.name==='AbortError'?'Server is taking too long — it may still be loading. Try again.':'Server error. Try again.';
+    showLogin(msg);btn.textContent='Sign In';
+  }finally{clearTimeout(slowHint);}
 }
 async function doLogout(){
   await fetch('/api/logout',{method:'POST'});
@@ -111,6 +127,9 @@ function onAuthenticated(username){
   applyRbac();
   loadAll();
   connectSSE();
+  // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
+  if (_hbSparkInterval) clearInterval(_hbSparkInterval);
+  _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, 300000);
 }
 function applyRbac(){
   const op    = S.role==='operator'||S.role==='admin';
@@ -153,22 +172,63 @@ function updatePills(){
   document.getElementById('pd').textContent=d;
   document.getElementById('pw').textContent=w;
   document.getElementById('pi').textContent=i;
-  // ── Global health badge ──────────────────────────────────────────
-  const _hEl=document.getElementById('tb-health');
-  const _hVal=document.getElementById('tb-health-val');
-  if(_hEl&&_hVal){
-    const allS=Object.values(S.sensors),tot=allS.length;
-    if(!tot){_hEl.style.display='none';}
-    else{
-      const alive=allS.filter(s=>s.alive===true).length;
-      const pct=Math.round(alive/tot*100);
-      const cls=pct>=90?'healthy':pct>=70?'degraded':'down';
-      const lbl=pct>=90?`${pct}% Healthy`:pct>=70?`${pct}% Degraded`:`${pct}% DOWN`;
-      _hVal.textContent=lbl;
-      _hEl.className=`tb-health ${cls}`;
-      _hEl.style.display='';
-    }
-  }
+  _hbUpdate();
+}
+
+// ── Global Network Health Bar ─────────────────────────────────────
+let _hbSparkLoaded = false;
+let _hbSparkInterval = null;
+function _hbUpdate() {
+  const devs = Object.values(S.devices);
+  if (!devs.length) return;
+  const bar = document.getElementById('healthBar');
+  if (!bar) return;
+  bar.style.display = '';
+  const up  = devs.filter(d => d.status === 'up').length;
+  const dn  = devs.filter(d => d.status === 'down').length;
+  const wn  = devs.filter(d => d.status === 'warn').length;
+  const tot = devs.length;
+  const pct = Math.round(up / tot * 100);
+  const cls = pct >= 90 ? 'healthy' : pct >= 70 ? 'degraded' : 'critical';
+  const lbl = pct >= 90 ? 'Healthy' : pct >= 70 ? 'Degraded' : 'Critical';
+  const fill = document.getElementById('hb-bar-fill');
+  if (fill) { fill.style.width = pct + '%'; fill.className = 'hb-fill-' + cls; }
+  const pctEl = document.getElementById('hb-pct');
+  if (pctEl) { pctEl.textContent = pct + '%'; pctEl.className = 'hb-pct-' + cls; }
+  const lblEl = document.getElementById('hb-label');
+  if (lblEl) { lblEl.textContent = lbl; lblEl.className = 'hb-lbl-' + cls; }
+  const upEl = document.getElementById('hb-up');
+  const dnEl = document.getElementById('hb-dn');
+  const wnEl = document.getElementById('hb-wn');
+  if (upEl) upEl.textContent = up + ' Up';
+  if (dnEl) { dnEl.textContent = dn + ' Down'; dnEl.style.display = dn ? '' : 'none'; }
+  if (wnEl) { wnEl.textContent = wn + ' Warn'; wnEl.style.display = wn ? '' : 'none'; }
+  if (!_hbSparkLoaded) { _hbSparkLoaded = true; _hbDrawSpark(); }
+}
+async function _hbDrawSpark() {
+  const canvas = document.getElementById('hb-spark');
+  if (!canvas) return;
+  try {
+    const r = await fetch('/api/availability?minutes=1440');
+    const d = await r.json();
+    const pts = d.availability || [];
+    if (!pts.length) return;
+    canvas.width = canvas.offsetWidth || 80;
+    const W = canvas.width, H = canvas.height || 20;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    const avg = pts.reduce((s, b) => s + b.pct, 0) / pts.length;
+    const color = avg >= 90 ? '#23d18b' : avg >= 70 ? '#f0a500' : '#f85149';
+    const now = Date.now() / 1000, win = 1440 * 60;
+    const xOf = ts => (ts - (now - win)) / win * W;
+    const yOf = pct => H - (Math.min(100, Math.max(0, pct)) / 100) * H;
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const x = xOf(p.ts + 1800), y = yOf(p.pct);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+  } catch (e) { /* non-critical */ }
 }
 
 // ── Events / Flap log ────────────────────────────────────────────
@@ -263,14 +323,17 @@ function switchMainTab(tab){
   document.getElementById('tabDevices').classList.toggle('active',tab==='devices');
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
+  document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
+  const backupsView  =document.getElementById('backupsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
   eventsView.style.display   ='none';
   mapView.style.display      ='none';
+  backupsView.style.display  ='none';
   document.getElementById('devActBar').style.display='none';
   if(tab==='dashboard'){
     dashboardView.style.display='flex';
@@ -293,16 +356,22 @@ function switchMainTab(tab){
     mapView.style.display='flex';
     const mf=document.getElementById('map-frame');
     if(mf&&!mf.src&&mf.dataset.src) mf.src=mf.dataset.src;
-    else if(mf&&mf.contentWindow) mf.contentWindow.postMessage({type:'pw_reload_pages'},'*');
-    mf?.contentWindow?.postMessage({type:'ntm_resume'},'*');
+    else if(mf&&mf.contentWindow) mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
+    mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
     if(typeof startMap==='function') startMap();
+  } else if(tab==='backups'){
+    backupsView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    if(typeof stopMap==='function') stopMap();
+    if(typeof _bkInit==='function') _bkInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
     emptyMain.style.display=hasDevices?'none':'flex';
     dpanels.style.display=hasDevices?'':'none';
     if(typeof stopMap==='function') stopMap();
-    document.getElementById('map-frame')?.contentWindow?.postMessage({type:'ntm_pause'},'*');
+    document.getElementById('map-frame')?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshDevices();
   }
 }

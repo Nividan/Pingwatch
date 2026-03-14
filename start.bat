@@ -45,7 +45,15 @@ if %errorlevel% neq 0 (
     echo.
 )
 
-:: ── 4. Ensure net-snmp (snmpget) is available ──────────────────────────────
+:: ── 4. Ensure SSH backup packages are installed ─────────────────────────────
+python -c "import paramiko; import cryptography" 2>nul
+if %errorlevel% neq 0 (
+    echo Installing required packages ^(paramiko, cryptography^)...
+    python -m pip install paramiko cryptography
+    echo.
+)
+
+:: ── 5. Ensure net-snmp (snmpget) is available ──────────────────────────────
 where snmpget >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] snmpget not found. Attempting to install net-snmp via Chocolatey...
@@ -69,7 +77,7 @@ if %errorlevel% neq 0 (
     )
 )
 
-:: ── 5. Desktop shortcut (ask once) ─────────────────────────────────────────
+:: ── 6. Desktop shortcut (ask once) ─────────────────────────────────────────
 powershell -NoProfile -Command "if(Test-Path([Environment]::GetFolderPath('Desktop')+'\PingWatch.lnk')){exit 0}else{exit 1}" >nul 2>&1
 if %errorlevel% equ 0 goto :skip_sc
 powershell -NoProfile -Command "Add-Type -AssemblyName PresentationFramework; $r=[System.Windows.MessageBox]::Show('Create a desktop shortcut for PingWatch?','PingWatch Setup','YesNo','Question'); if($r -eq 'Yes'){exit 0}else{exit 1}" >nul 2>&1
@@ -96,7 +104,7 @@ if %errorlevel% equ 0 (
 )
 :skip_sc
 
-:: ── 6. Firewall rules ───────────────────────────────────────────────────────
+:: ── 7. Firewall rules ───────────────────────────────────────────────────────
 :: Dashboard (TCP 7070)
 netsh advfirewall firewall show rule name="PingWatch Dashboard" >nul 2>&1
 if %errorlevel% neq 0 (
@@ -118,11 +126,11 @@ if %errorlevel% equ 0 (
     )
 )
 
-:: ── 7. Kill any existing PingWatch process on port 7070 ────────────────────
+:: ── 8. Kill any existing PingWatch process on port 7070 ────────────────────
 powershell -NoProfile -Command "$c=Get-NetTCPConnection -LocalPort 7070 -State Listen -EA SilentlyContinue; if($c){Write-Host '[!] Port 7070 in use. Stopping PingWatch...'; $c|ForEach-Object{$p=Get-Process -Id $_.OwningProcess -EA SilentlyContinue; if($p -and $p.Name -match 'python'){Write-Host ('  Stopping PID '+$p.Id+' ('+$p.Name+')...'); Stop-Process -Id $p.Id -Force}}; Start-Sleep 1}"
 echo.
 
-:: ── 8. Start server ─────────────────────────────────────────────────────────
+:: ── 9. Start server ─────────────────────────────────────────────────────────
 echo Starting PingWatch...
 python server.py
 if %errorlevel% neq 0 (
