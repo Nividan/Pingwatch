@@ -82,8 +82,6 @@
     <div class="tb-time" id="clk"></div>
     <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
     <span id="tb-user" style="font-size:11px;color:var(--text3);display:none"></span>
-    <button id="btnAddGroup" class="rbac-op" onclick="openAddGroup()">⊞ Add Group</button>
-    <button id="btnAdd" class="rbac-op" onclick="openAddDevice()">＋ Add Device</button>
     <button id="btnSettings" onclick="openSettings()" style="display:none" title="Settings">⚙</button>
     <button id="btnLogout" onclick="doLogout()" style="display:none">⎋ Sign Out</button>
   </div>
@@ -225,6 +223,13 @@
       </div>
       <button class="em-btn" onclick="openAddDevice()">＋ Add Your First Device</button>
       <div class="hero-hint">Settings are saved automatically to <code>pingwatch.db</code></div>
+    </div>
+    <div id="devActBar" style="display:none">
+      <div class="dev-act-left">
+        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">＋ Add Device</button>
+        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">⊞ Add Group</button>
+      </div>
+      <input id="devSearch" type="search" placeholder="🔎 Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
     </div>
     <div id="dpanels" style="display:none"></div>
   </div>

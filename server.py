@@ -288,10 +288,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology
+        from routes import topology, settings
         p    = urlparse(self.path).path
         body = self._body()
 
+        if settings.handle(self, 'PUT', p, body):
+            return
         if topology.handle(self, 'PUT', p, body):
             return
 
@@ -328,6 +330,19 @@ def main():
     if SYS in ("Linux", "Darwin") and os.geteuid() != 0:
         log.warning("ICMP ping may need root on this OS.")
         log.warning("If pings fail: sudo python3 server.py")
+
+    # ── Apply pending DB import (Windows-safe two-step swap) ─────────
+    _pending = str(DB_PATH) + ".pending_import"
+    if os.path.exists(_pending):
+        try:
+            for _ext in ('', '-wal', '-shm'):
+                _cur = str(DB_PATH) + _ext
+                if os.path.exists(_cur):
+                    os.unlink(_cur)
+            os.replace(_pending, str(DB_PATH))
+            log.info("DB import: applied pending import → live DB")
+        except Exception as _pe:
+            log.error(f"DB import: failed to apply pending import — {_pe}")
 
     db_init()
     try:

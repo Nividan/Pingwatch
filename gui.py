@@ -59,6 +59,13 @@ class StatusWindow:
         self._health_canvas   = None
         self._lbl_health_pct  = None
         self._lbl_dev_total   = None
+        # ── system status labels ───────────────────────────────────
+        self._lbl_sys_version = None
+        self._lbl_sys_uptime  = None
+        self._lbl_sys_devices = None
+        self._lbl_sys_sensors = None
+        self._lbl_sys_dbsize  = None
+        self._lbl_sys_logsize = None
         # ── log source selection ───────────────────────────────────
         _here = os.path.dirname(os.path.abspath(__file__))
         _logdir = os.path.join(_here, "logs")
@@ -224,6 +231,29 @@ class StatusWindow:
                                       font=("Consolas", 13), justify="left")
         self._lbl_snr_typ.pack(anchor="w", padx=10, pady=(0, 6))
 
+        # ── System Status row (full width, below Devices + Sensors) ──
+        syf = self._panel(self._root, "SYSTEM STATUS")
+        syf.pack(fill="x", padx=14, pady=(0, 4))
+        inner = tk.Frame(syf, bg=BG)
+        inner.pack(fill="x", padx=8, pady=6)
+        for col, (attr, label, fg) in enumerate([
+            ("version", "Version",  ACCENT),
+            ("uptime",  "Uptime",   TEXT),
+            ("devices", "Devices",  TEXT),
+            ("sensors", "Sensors",  TEXT),
+            ("dbsize",  "DB Size",  TEXT2),
+            ("logsize", "Log Size", TEXT2),
+        ]):
+            inner.columnconfigure(col, weight=1)
+            cell = tk.Frame(inner, bg=BG)
+            cell.grid(row=0, column=col, padx=8, sticky="w")
+            tk.Label(cell, text=label, fg=TEXT3, bg=BG,
+                     font=("Segoe UI", 10)).pack(anchor="w")
+            lbl = tk.Label(cell, text="—", fg=fg, bg=BG,
+                           font=("Consolas", 12, "bold"))
+            lbl.pack(anchor="w")
+            setattr(self, f"_lbl_sys_{attr}", lbl)
+
     def _panel(self, parent, title):
         """Return a styled LabelFrame."""
         return tk.LabelFrame(parent, text=f"  {title}  ", bg=BG,
@@ -333,6 +363,7 @@ class StatusWindow:
         try:
             self._update_uptime()
             self._update_summary()
+            self._update_system_status()
             self._update_log()
         except Exception:
             pass
@@ -345,6 +376,48 @@ class StatusWindow:
         self._lbl_uptime.config(
             text=f"Port {self._port}   Uptime {h:02d}:{m:02d}:{s:02d}"
         )
+
+    def _update_system_status(self):
+        import app_state
+        from config import DB_PATH as _DB_PATH
+
+        # Version
+        self._lbl_sys_version.config(text=f"v{app_state.APP_VERSION}")
+
+        # Uptime (same source as header)
+        elapsed = datetime.datetime.now() - self._start
+        secs    = int(elapsed.total_seconds())
+        h, rem  = divmod(secs, 3600)
+        m, s    = divmod(rem, 60)
+        self._lbl_sys_uptime.config(
+            text=f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
+        )
+
+        # Devices / Sensors
+        devs = len(self._state.devices)
+        snrs = sum(len(d.sensors) for d in self._state.devices.values())
+        self._lbl_sys_devices.config(text=str(devs))
+        self._lbl_sys_sensors.config(text=str(snrs))
+
+        # DB size
+        try:
+            db_mb = os.path.getsize(_DB_PATH) / 1_048_576
+            self._lbl_sys_dbsize.config(text=f"{db_mb:.2f} MB")
+        except Exception:
+            self._lbl_sys_dbsize.config(text="—")
+
+        # Log size
+        try:
+            _here   = os.path.dirname(os.path.abspath(__file__))
+            _logdir = os.path.join(_here, "logs")
+            log_bytes = sum(
+                os.path.getsize(os.path.join(_logdir, f))
+                for f in os.listdir(_logdir)
+                if os.path.isfile(os.path.join(_logdir, f))
+            ) if os.path.isdir(_logdir) else 0
+            self._lbl_sys_logsize.config(text=f"{log_bytes / 1_048_576:.2f} MB")
+        except Exception:
+            self._lbl_sys_logsize.config(text="—")
 
     def _update_summary(self):
         counts    = {"up": 0, "down": 0, "warn": 0, "idle": 0}

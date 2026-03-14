@@ -99,33 +99,6 @@ body{
   background:var(--bg3);
 }
 .tb-db-dot{width:5px;height:5px;border-radius:50%;background:#23d18b;box-shadow:0 0 6px #23d18b}
-#btnAddGroup{
-  display:flex;align-items:center;gap:6px;
-  background:transparent;color:var(--text2);
-  border:1px solid var(--border2);
-  padding:6px 14px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;
-  transition:all .2s;
-}
-#btnAddGroup:hover{
-  background:var(--bg4);color:var(--text);
-  border-color:var(--accent);
-  box-shadow:0 0 12px rgba(47,129,247,.15);
-  transform:translateY(-1px);
-}
-#btnAddGroup:active{transform:translateY(0)}
-#btnAdd{
-  display:flex;align-items:center;gap:6px;
-  background:var(--accent);color:#fff;border:none;
-  padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;
-  transition:all .2s;
-  box-shadow:0 0 0 rgba(47,129,247,0);
-}
-#btnAdd:hover{
-  background:var(--accent-hover);
-  box-shadow:0 0 20px var(--accent-glow);
-  transform:translateY(-1px);
-}
-#btnAdd:active{transform:translateY(0)}
 
 /* ── Layout ── */
 #layout{display:flex;position:fixed;top:var(--header-h);left:0;right:0;bottom:0}
@@ -487,20 +460,26 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 /* "more sensors" hint */
 .dc-more{font-size:9px;color:var(--text3);text-align:center;padding:2px 0;letter-spacing:.3px}
 
-/* Card footer with action buttons */
-.dc-foot{
-  display:flex;align-items:center;gap:4px;padding:10px 12px;
-  border-top:1px solid rgba(255,255,255,.05);
-  background:rgba(0,0,0,.15);position:relative;z-index:1;
+/* Devices tab action bar (Add Device / Add Group + search) */
+#devActBar{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 16px 8px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg2);
+  flex-shrink:0;
 }
-.dc-act{
-  flex:1;padding:5px 0;border-radius:5px;font-size:10px;font-weight:500;
-  border:1px solid var(--border);background:rgba(28,35,51,.7);color:var(--text3);
-  cursor:pointer;transition:all .15s;text-align:center;white-space:nowrap;overflow:hidden;
+.dev-act-left{display:flex;gap:8px;flex-shrink:0}
+.dev-search-inp{
+  margin-left:auto;width:220px;min-width:120px;
+  padding:5px 10px;border-radius:6px;font-size:12px;
+  border:1px solid var(--border);background:var(--bg3);color:var(--text);
+  outline:none;transition:border-color .15s;
 }
-.dc-act:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
-.dc-act.s:hover{background:var(--up-bg);  color:var(--up);  border-color:var(--up-border)}
-.dc-act.d:hover{background:var(--down-bg);color:var(--down);border-color:var(--down-border)}
+.dev-search-inp:focus{border-color:var(--accent)}
+.dev-no-results{
+  padding:32px 20px;text-align:center;color:var(--text3);
+  font-size:13px;font-style:italic;
+}
 
 /* Empty card slot (add new) */
 .dc-add{
@@ -877,6 +856,11 @@ select{cursor:pointer;appearance:none;
 .btn-p:active{transform:translateY(0)}
 .btn-s{background:var(--bg3);color:var(--text2);border:1px solid var(--border);padding:8px 16px;border-radius:4px;font-size:13px;font-weight:500;cursor:pointer;transition:all .12s}
 .btn-s:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
+.btn-sm{padding:5px 12px;border-radius:5px;font-size:12px;font-weight:500;cursor:pointer;
+  border:1px solid var(--border);background:var(--bg3);color:var(--text2);transition:all .12s}
+.btn-sm:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
+.btn-sm.btn-accent{background:var(--accent);color:#fff;border-color:transparent}
+.btn-sm.btn-accent:hover{background:var(--accent-hover)}
 
 /* ── Detail window ── */
 .dmo{

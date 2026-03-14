@@ -11,7 +11,7 @@ import time
 
 import app_state
 from config import DB_PATH, BIND
-from db     import _db_enqueue, db_log_audit, db_save_settings
+from db     import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
 from logger import log
 import settings as _settings
 
@@ -159,6 +159,30 @@ def handle(h, method, path, body):
             "db_size_bytes":  os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0,
             "log_size_bytes": _log_bytes,
         })
+        return True
+
+    # ── /api/dashboard GET ────────────────────────────────────────
+    if path == "/api/dashboard" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        raw = db_get_dashboard(user)
+        try:
+            widgets = json.loads(raw)
+        except Exception:
+            widgets = []
+        h._json(200, {"widgets": widgets})
+        return True
+
+    # ── /api/dashboard PUT ────────────────────────────────────────
+    if path == "/api/dashboard" and method == "PUT":
+        user, _ = h._require("viewer")
+        if not user: return True
+        widgets = body.get("widgets")
+        if not isinstance(widgets, list):
+            h._json(400, {"error": "widgets must be an array"}); return True
+        widgets_json = json.dumps(widgets)
+        _db_enqueue(lambda _u=user, _j=widgets_json: db_save_dashboard(_u, _j))
+        h._json(200, {"ok": True})
         return True
 
     return False
