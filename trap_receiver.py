@@ -179,6 +179,21 @@ def _recv_loop(sock, state):
             log.warning(f"SNMP trap: could not parse packet from {src_ip} ({len(data)} bytes)")
             continue
 
+        # Validate community string against all SNMP sensors configured in STATE.
+        # If no SNMP sensors exist yet, skip validation (fail-open for fresh installs).
+        known_communities = {
+            getattr(s, 'snmp_community', None)
+            for d in state.devices.values()
+            for s in d.sensors.values()
+            if getattr(s, 'snmp_community', None)
+        }
+        if known_communities and parsed['community'] not in known_communities:
+            log.warning(
+                "SNMP trap dropped: unknown community %r from %s",
+                parsed['community'], src_ip
+            )
+            continue
+
         ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Try to match source IP to a known device

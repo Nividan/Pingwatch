@@ -626,6 +626,20 @@ function _pwLiveUpdate(did) {
     dot.style.boxShadow  = anyDown ? '0 0 5px #ff3333' : '0 0 5px #00ff9d';
   }
 
+  // Update connected link stroke colors to reflect device status
+  pwLinks
+    .filter(lk => lk.src_did === did || lk.tgt_did === did)
+    .forEach(lk => {
+      const lineEl = document.querySelector(`[data-pwlid="${CSS.escape(lk.id)}"] .link-main`);
+      if (!lineEl) return;
+      const otherDid = lk.src_did === did ? lk.tgt_did : lk.src_did;
+      const otherDev = pwDevices.find(d => d.device_id === otherDid);
+      const lkCfg    = lcfg(lk.link_type || 'trunk');
+      const newStroke = (dev?.status === 'down' || otherDev?.status === 'down')
+                        ? '#ff3333' : lkCfg.stroke;
+      lineEl.setAttribute('stroke', newStroke);
+    });
+
   // Update right panel only if relevant and no input is focused
   if (_selectedPwDid === did && !_pwInputFocused()) {
     showPwNodePanel(did);
@@ -829,13 +843,16 @@ function renderPwLinksInLayer(layer, lblLayer) {
     if (!src || !tgt) return;
     const sc = nodeCenter(src), tc = nodeCenter(tgt);
     const cfg = lcfg(lk.link_type || 'trunk');
+    const srcDev = pwDevices.find(d => d.device_id === lk.src_did);
+    const tgtDev = pwDevices.find(d => d.device_id === lk.tgt_did);
+    const stroke = (srcDev?.status === 'down' || tgtDev?.status === 'down') ? '#ff3333' : cfg.stroke;
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
     gg.innerHTML = `
       <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
       <line class="link-main ${cfg.cls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-        stroke="${cfg.stroke}" stroke-width="${cfg.width}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+        stroke="${stroke}" stroke-width="${cfg.width}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
     `;
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);

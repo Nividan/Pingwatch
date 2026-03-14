@@ -32,6 +32,11 @@ def _connect(host, port, tls, user, password):
     return srv
 
 
+def _safe(v):
+    """Strip CR/LF from user-controlled values to prevent email header injection."""
+    return str(v or '').replace('\r', '').replace('\n', ' ')
+
+
 def send_alert_email(direction, evt):
     """Send a flap alert email. Called in a daemon thread from state.py."""
     host      = _cfg('smtp_host', '')
@@ -45,14 +50,14 @@ def send_alert_email(direction, evt):
         return
     emoji = '\U0001f534' if direction == 'down' else '\U0001f7e2'
     label = 'DOWN' if direction == 'down' else 'RECOVERED'
-    subject = f"[PingWatch] {emoji} {label}: {evt.get('dname','')} / {evt.get('sname','')}"
+    subject = f"[PingWatch] {emoji} {label}: {_safe(evt.get('dname'))} / {_safe(evt.get('sname'))}"
     body = (
         f"Status : {label}\n"
-        f"Device : {evt.get('dname','')}\n"
-        f"Sensor : {evt.get('sname','')} ({evt.get('stype','')})\n"
-        f"Host   : {evt.get('host','')}\n"
-        f"Time   : {evt.get('ts','')}\n"
-        f"Detail : {evt.get('detail','')}\n"
+        f"Device : {_safe(evt.get('dname'))}\n"
+        f"Sensor : {_safe(evt.get('sname'))} ({_safe(evt.get('stype'))})\n"
+        f"Host   : {_safe(evt.get('host'))}\n"
+        f"Time   : {_safe(evt.get('ts'))}\n"
+        f"Detail : {_safe(evt.get('detail'))}\n"
     )
     srv = None
     try:

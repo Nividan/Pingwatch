@@ -230,10 +230,12 @@ def db_seed_users():
             pw = _sec.token_urlsafe(9)
             con.execute("INSERT INTO users VALUES (?,?,?)", ("admin", _hash_pw(pw), "admin"))
             con.commit()
-            log.warning("=" * 51)
-            log.warning(f"  Default admin password: {pw}")
-            log.warning("  Change it in Settings -> Users -> Reset Password")
-            log.warning("=" * 51)
+            # Print to terminal only — never write the plaintext password to the log file
+            print("=" * 51, flush=True)
+            print(f"  Default admin password: {pw}", flush=True)
+            print("  Change it in Settings -> Users -> Reset Password", flush=True)
+            print("=" * 51, flush=True)
+            log.warning("Default admin user created — password printed to terminal")
         rows = con.execute(
             "SELECT s.token, s.username, s.expires, COALESCE(u.role, 'admin') "
             "FROM sessions s LEFT JOIN users u ON s.username = u.username "

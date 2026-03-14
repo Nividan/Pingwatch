@@ -49,8 +49,7 @@ function _calcDurations(events) {
     } else if (d._direction === 'down' && recMap[d.sid]) {
       const rec = recMap[d.sid];
       const secs = Math.abs((rec.ts - new Date(d.ts).getTime()) / 1000);
-      events[i]._duration = secs;
-      events[rec.idx]._duration = secs;
+      events[rec.idx]._duration = secs;   // duration only on the RECOVERY row
       delete recMap[d.sid];
     }
   }

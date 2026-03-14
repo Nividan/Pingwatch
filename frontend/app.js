@@ -228,8 +228,8 @@ function renderFlaps(){
       dotStyle='background:#8e44ad;box-shadow:0 0 6px rgba(142,68,173,.8)'; label='TRAP';
     }
     const isTrap=d._direction==='trap';
-    const dispName=isTrap?(d.dname||d.src_ip||'Unknown'):(esc(d.dname||''));
-    const dispSub =isTrap?('◎ '+(d.trap_oid?d.trap_oid.split('.').slice(-4).join('.'):'trap')):(ico+' '+esc(d.sname||''));
+    const dispName=isTrap?esc(d.dname||d.src_ip||'Unknown'):esc(d.dname||'');
+    const dispSub =isTrap?('◎ '+esc(d.trap_oid?d.trap_oid.split('.').slice(-4).join('.'):'trap')):(ico+' '+esc(d.sname||''));
     const dispHost=isTrap?esc(d.src_ip||''):esc(d.host||'');
     const dispTime=d.ts?(typeof fmtTs==='function'?fmtTs(d.ts):d.ts.split('T')[1]||d.ts):(time||'');
     const dispDate=d.ts?(d.ts.split('T')[0]||''):(date||'');

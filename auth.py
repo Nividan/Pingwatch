@@ -8,6 +8,11 @@ import sqlite3
 import threading
 import time
 
+
+def _hash_token(token: str) -> str:
+    """SHA-256 of the session token — stored in DB so a DB leak ≠ valid session."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
 import settings as _settings
 from config import DB_PATH
 from logger import log
@@ -59,7 +64,7 @@ def auth_login(username: str, password: str):
         _SESSIONS[token] = {"username": username, "expires": expires, "role": _role}
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("INSERT INTO sessions VALUES (?,?,?)", (token, username, expires))
+        con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), username, expires))
         con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
         con.commit()
         con.close()
@@ -73,7 +78,7 @@ def auth_logout(token: str):
         _SESSIONS.pop(token, None)
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("DELETE FROM sessions WHERE token=?", (token,))
+        con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
         con.commit()
         con.close()
     except Exception:

@@ -150,8 +150,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
     @staticmethod
     def _valid_url(u):  return bool(u and (u.startswith("http://") or u.startswith("https://")))
 
+    _ALLOWED_ORIGINS = {f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}"}
+
     def _origin(self):
-        return self.headers.get("Origin") or "*"
+        """Return the request Origin only if it is whitelisted, else None."""
+        o = self.headers.get("Origin", "")
+        return o if o in self._ALLOWED_ORIGINS else None
+
+    def _sec_headers(self):
+        """Emit security headers on every response."""
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+        )
 
     def _json(self, code, data):
         body   = json.dumps(data).encode()
@@ -159,20 +174,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", origin)
-        if origin != "*":
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
+        self._sec_headers()
         self.end_headers()
         self.wfile.write(body)
 
     def _cors(self):
         origin = self._origin()
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", origin)
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS,PATCH")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        if origin != "*":
-            self.send_header("Access-Control-Allow-Credentials", "true")
+        self._sec_headers()
         self.end_headers()
 
     def do_OPTIONS(self): self._cors()
@@ -199,6 +216,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self._sec_headers()
             self.end_headers()
             self.wfile.write(body)
             return
@@ -210,6 +228,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('Content-Length', len(data))
+            self._sec_headers()
             self.end_headers()
             self.wfile.write(data)
             return
@@ -225,6 +244,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', _STATIC_TYPES[ext])
                 self.send_header('Content-Length', len(data))
+                self._sec_headers()
                 self.end_headers()
                 self.wfile.write(data)
                 return

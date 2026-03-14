@@ -89,6 +89,12 @@ def handle(h, method, path, body):
         webhook_url = body.get("webhook_url", "").strip()
         if not name or not host:
             h._json(400, {"error": "name and host required"}); return True
+        if len(name) > 255:
+            h._json(400, {"error": "name too long (max 255)"}); return True
+        if len(host) > 253:
+            h._json(400, {"error": "host too long (max 253)"}); return True
+        if webhook_url and len(webhook_url) > 2048:
+            h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
             h._json(400, {"error": "invalid host — use a hostname or IP address"}); return True
         did = STATE.add_device(name, host, group)
@@ -201,12 +207,22 @@ def handle(h, method, path, body):
             dev = STATE.devices.get(did)
             if not dev:
                 h._json(404, {"error": "device not found"}); return True
-            if "group"        in body: dev.group        = body["group"]
-            if "name"         in body: dev.name         = body["name"]
-            if "webhook_url"  in body: dev.webhook_url  = body["webhook_url"].strip()
+            if "group" in body: dev.group = body["group"]
+            if "name" in body:
+                _n = str(body["name"]).strip()
+                if len(_n) > 255:
+                    h._json(400, {"error": "name too long (max 255)"}); return True
+                dev.name = _n
+            if "webhook_url" in body:
+                _w = body["webhook_url"].strip()
+                if _w and len(_w) > 2048:
+                    h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
+                dev.webhook_url = _w
             if "alerts_muted" in body: dev.alerts_muted = bool(body["alerts_muted"])
             if "host" in body:
                 h2 = body["host"].strip()
+                if len(h2) > 253:
+                    h._json(400, {"error": "host too long (max 253)"}); return True
                 if not h._valid_host(h2):
                     h._json(400, {"error": "invalid host"}); return True
                 dev.host = h2
