@@ -1,9 +1,10 @@
-# PingWatch – AI Build Network Monitoring Platform
+# PingWatch – Real-Time Network Monitoring Platform
 
 ![Python](https://img.shields.io/badge/python-3.x-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![License](https://img.shields.io/github/license/Nividan/Pingwatch)
 ![Stars](https://img.shields.io/github/stars/Nividan/Pingwatch?style=social)
+[![Built with Claude](https://img.shields.io/badge/Built%20with-Claude%20AI-orange?logo=anthropic)](https://claude.ai)
 
 
 ## Table of Contents
@@ -29,6 +30,8 @@ PingWatch is a Python-based network monitoring platform designed to track the av
 
 The system supports multiple sensor types such as ICMP (ping), HTTP/HTTPS checks, TCP port checks, SNMP, DNS, TLS, and banner probes.
 Collected data is displayed in a web-based dashboard that provides real-time event streaming, device management, latency history charts, an interactive network topology visualizer, and automated device configuration backup.
+
+> 🤖 This project was designed and built with [Claude AI](https://claude.ai) (Anthropic) as an AI-driven development experiment — from architecture to implementation.
 
 
 ## Features
