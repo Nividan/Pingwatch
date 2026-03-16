@@ -287,8 +287,8 @@ This design keeps each layer independently testable and allows new sensor types 
 |--------|-------------------|
 | `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*` |
-| `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/snmp/*` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test` |
+| `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/dashboard` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
@@ -316,7 +316,7 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 | `index.html` | Main dashboard shell |
 | `style.css` | Main application styling |
 | `app.js` | Bootstrap, tab routing, shared app logic |
-| `dashboard.js` | Device cards, live latency sparklines |
+| `dashboard.js` | Customizable widget dashboard (device cards, sparklines, event summary, uptime bars, SLA, and more) |
 | `devices.js` | Device list and detail panel |
 | `sensors.js` | Sensor list and detail panel |
 | `events.js` | Flap/trap/error event log viewer |
