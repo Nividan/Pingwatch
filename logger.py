@@ -56,7 +56,18 @@ _ah = RotatingFileHandler(
 )
 _ah.setFormatter(_fmt)
 log_audit.addHandler(_ah)
-# propagate=False ensures neither logger bleeds into pingwatch.log or log_buffer.
+
+# ── Backup logger → logs/pingwatchbackup.log ──────────────────────────────
+log_backup = logging.getLogger("pingwatch.backup")
+log_backup.setLevel(logging.DEBUG)
+log_backup.propagate = False    # keep backup messages out of pingwatch.log
+_bkh = RotatingFileHandler(
+    os.path.join(_LOG_DIR, "pingwatchbackup.log"),
+    maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+)
+_bkh.setFormatter(_fmt)
+log_backup.addHandler(_bkh)
+# propagate=False ensures no logger bleeds into pingwatch.log or log_buffer.
 
 # ── In-memory ring buffer (consumed by the status GUI) ────────────────────
 import collections

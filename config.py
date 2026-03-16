@@ -15,6 +15,7 @@ DB_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pingwatc
 SESSION_TTL = 86400   # 24 hours
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
+CONFIGS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
 
 # Pre-compiled HTTP route patterns
 _RE_DEVICE_LOGS   = re.compile(r'^/api/device/([^/]+)/logs$')

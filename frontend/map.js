@@ -3112,6 +3112,7 @@ async function exportPNG() {
   const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml' }));
 
   const img = new Image();
+  img.crossOrigin = 'anonymous';
   img.onload = () => {
     try {
       const canvas = document.createElement('canvas');

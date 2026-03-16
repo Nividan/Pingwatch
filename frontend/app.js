@@ -1,6 +1,8 @@
 // ── App state ────────────────────────────────────────────────────
 const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer'};
 let sse;
+let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
+let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
 
 // ── Clock ────────────────────────────────────────────────────────
 setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),500);
@@ -9,7 +11,12 @@ setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTi
 function connectSSE(){
   if(sse)sse.close();
   sse=new EventSource('/events');
-  sse.onopen=()=>document.getElementById('cbn').style.display='none';
+  sse.onopen=()=>{
+    document.getElementById('cbn').style.display='none';
+    if(_sseFirstConnect){ _sseFirstConnect=false; return; }
+    // Reconnect after drop — re-sync state and refresh widgets
+    _sseResync();
+  };
   sse.addEventListener('sensor',e=>{
     const d=JSON.parse(e.data);
     const _key=`${d.device_id}/${d.sensor_id}`;
@@ -62,9 +69,66 @@ function connectSSE(){
   });
   sse.onerror=()=>{
     document.getElementById('cbn').style.display='block';
-    setTimeout(connectSSE,3000);
+    // Guard: onerror can fire multiple times (browser retries) before the timer fires.
+    // Only schedule one reconnect attempt at a time to avoid a reconnect storm.
+    if(!_reconnectTimer)
+      _reconnectTimer=setTimeout(()=>{ _reconnectTimer=null; connectSSE(); },3000);
   };
 }
+// ── Re-sync after SSE reconnect ──────────────────────────────────
+// Generation counter: each new _sseResync() call increments this so that any
+// in-flight retry chain from a previous call will self-cancel if superseded.
+let _resyncGen = 0;
+async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
+  // Re-fetch full device/sensor state so S stays consistent after server restarts
+  // Retries up to 5× (every 3 s) if the server just restarted and has no devices yet
+  if (gen !== _resyncGen) return;  // a newer call took over — abort this chain
+  try {
+    const r = await fetch('/api/devices');
+    if (!r.ok) {
+      if (retryCount < 5) setTimeout(() => _sseResync(retryCount + 1, gen), 3000);
+      return;
+    }
+    const data = await r.json();
+    if (!data.devices.length && retryCount < 5) {
+      setTimeout(() => _sseResync(retryCount + 1, gen), 3000);
+      return;
+    }
+    data.devices.forEach(dev => {
+      S.devices[dev.device_id] = dev;
+      dev.sensors.forEach(s => {
+        S.sensors[`${dev.device_id}/${s.sensor_id}`] = s;
+      });
+    });
+    updatePills();
+  } catch {
+    if (retryCount < 5) setTimeout(() => _sseResync(retryCount + 1, gen), 3000);
+    return;
+  }
+  // Refresh dashboard widgets in-place without full DOM rebuild
+  if (activeMainTab === 'dashboard' && typeof _dwLoad === 'function' && typeof _DW_REG !== 'undefined') {
+    _dwLoad().forEach(w => { const r = _DW_REG[w.type]; if (r) r.refresh(w.id, w.cfg); });
+  }
+  // Refresh backups table if that tab is open
+  if (activeMainTab === 'backups' && typeof _bkInit === 'function') {
+    _bkInited = false;
+    _bkInit();
+  }
+}
+
+// ── Resync when user returns to tab after being away ─────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // If SSE dropped while the tab was hidden, reconnect (resync fires via onopen)
+  if (!sse || sse.readyState === EventSource.CLOSED) {
+    _sseFirstConnect = false;  // treat as reconnect so resync runs on open
+    connectSSE();
+  } else {
+    // SSE still open but data may be stale — full state refresh immediately
+    _sseResync();
+  }
+});
+
 // connectSSE() is called by onAuthenticated() after login check
 
 // ── Toast ────────────────────────────────────────────────────────
@@ -163,15 +227,6 @@ async function api(method,path,body=null){
 
 // ── Pills ────────────────────────────────────────────────────────
 function updatePills(){
-  let u=0,d=0,w=0,i=0;
-  Object.values(S.devices).forEach(v=>{
-    const s=v.status;
-    if(s==='up')u++;else if(s==='down')d++;else if(s==='warn')w++;else i++;
-  });
-  document.getElementById('pu').textContent=u;
-  document.getElementById('pd').textContent=d;
-  document.getElementById('pw').textContent=w;
-  document.getElementById('pi').textContent=i;
   _hbUpdate();
 }
 
@@ -213,7 +268,9 @@ async function _hbDrawSpark() {
     const d = await r.json();
     const pts = d.availability || [];
     if (!pts.length) return;
-    canvas.width = canvas.offsetWidth || 80;
+    // Use rAF to ensure the canvas is laid out before reading offsetWidth
+    await new Promise(res => requestAnimationFrame(res));
+    canvas.width = canvas.offsetWidth || 120;
     const W = canvas.width, H = canvas.height || 20;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, W, H);
@@ -228,6 +285,10 @@ async function _hbDrawSpark() {
       i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     });
     ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+    // Only show the canvas (and its label) after it has content
+    canvas.style.display = '';
+    const lbl = document.getElementById('hb-spark-lbl');
+    if (lbl) lbl.style.display = '';
   } catch (e) { /* non-critical */ }
 }
 
@@ -400,6 +461,7 @@ async function _refreshEvents(){
     (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
     renderFlaps();
+    if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
   }catch(e){}
 }
 
@@ -478,6 +540,7 @@ async function loadAll(){
   // Sort combined list newest-first and cap size
   FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
   renderFlaps();
+  if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
 
   const r=await fetch('/api/devices');
   const data=await r.json();

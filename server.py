@@ -165,7 +165,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: blob:; "   # blob: needed for canvas/PNG export
             "worker-src blob:;"              # blob: needed for canvas toBlob()
         )
@@ -385,6 +386,8 @@ def main():
         args=(STATE, app_state.effective_snmp_port),
         daemon=True,
     ).start()
+    from backup_scheduler import start_scheduler
+    start_scheduler()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _local_url = f"http://127.0.0.1:{app_state.effective_port}"

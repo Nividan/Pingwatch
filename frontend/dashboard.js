@@ -155,6 +155,16 @@ function _dwSave(widgets) {
 async function _dwInit() {
   // Clear any stale localStorage data left from the old storage scheme
   try { localStorage.removeItem('pw-dashboard'); } catch {}
+
+  // Already initialized — DOM widgets exist; just refresh content + restart tick
+  // (avoids tearing down/rebuilding DOM and resetting live counters on every tab switch)
+  if (_dwWidgets !== null) {
+    _dwLoad().forEach(w => { const r = _DW_REG[w.type]; if (r) r.refresh(w.id, w.cfg); });
+    _dwStartTick();
+    return;
+  }
+
+  // First load — fetch layout from server
   try {
     const r = await fetch('/api/dashboard');
     if (r.ok) {
@@ -169,14 +179,14 @@ async function _dwInit() {
   _dwRenderAll();
 }
 
-// ── Dashboard-wide tick (30 s) ────────────────────────────────────
+// ── Dashboard-wide tick (15 s) ────────────────────────────────────
 let _dwTickTimer = null;
 function _dwStartTick() {
   if (_dwTickTimer) return;
   _dwTickTimer = setInterval(() => {
     if (activeMainTab !== 'dashboard') { clearInterval(_dwTickTimer); _dwTickTimer = null; return; }
     _dwLoad().forEach(w => { const r = _DW_REG[w.type]; if (r) r.refresh(w.id, w.cfg); });
-  }, 30000);
+  }, 10000);
 }
 
 // ── Grid render ───────────────────────────────────────────────────
@@ -553,7 +563,7 @@ function _dwOpenFullscreen(wid) {
   reg.render(fsWid, w.cfg);
   document.getElementById('dw-fs-overlay').style.display = 'flex';
   // Auto-refresh every 15 s while open
-  _dwFsInterval = setInterval(() => reg.refresh(fsWid, w.cfg), 15000);
+  _dwFsInterval = setInterval(() => reg.refresh(fsWid, w.cfg), 10000);
 }
 
 function _dwCloseFullscreen() {
@@ -831,22 +841,71 @@ function _dwRenderSystemStatus(wid) {
 async function _dwFetchSystemStatus(wid) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
+
   let info = {};
   try { info = await (await fetch('/api/server_info')).json(); } catch {}
-  const up = info.uptime_s || 0;
-  const h  = Math.floor(up / 3600), m = Math.floor((up % 3600) / 60), s = up % 60;
-  const uptimeStr = h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
+
+  // Guard: if fetch returned empty/zero data, don't overwrite a working display
+  const hasData = info.version || info.uptime_s || info.devices;
+  const alreadyRendered = !!document.getElementById(`dw-ss-uptime-${wid}`);
+  if (alreadyRendered && !hasData) return;
+
   const dbMB  = info.db_size_bytes  ? (info.db_size_bytes  / 1048576).toFixed(2) + ' MB' : '—';
   const logMB = info.log_size_bytes ? (info.log_size_bytes / 1048576).toFixed(2) + ' MB' : '—';
+  const _fmtUp = s => {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+  };
+  const _fmtDT = () => {
+    const n = new Date();
+    const d = String(n.getDate()).padStart(2,'0'), mo = String(n.getMonth()+1).padStart(2,'0'), y = n.getFullYear();
+    const h = String(n.getHours()).padStart(2,'0'), mi = String(n.getMinutes()).padStart(2,'0'), s = String(n.getSeconds()).padStart(2,'0');
+    return `${d}/${mo}/${y}  ${h}:${mi}:${s}`;
+  };
+
+  if (alreadyRendered) {
+    // ── Refresh path: targeted updates only — uptime ticker keeps running untouched ──
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set(`dw-ss-ver-${wid}`,  `v${info.version || '—'}`);
+    set(`dw-ss-devs-${wid}`, info.devices || 0);
+    set(`dw-ss-sens-${wid}`, info.sensors  || 0);
+    set(`dw-ss-db-${wid}`,   dbMB);
+    set(`dw-ss-log-${wid}`,  logMB);
+    return;
+  }
+
+  // ── First render: build full HTML + start live ticker ──
+  let uptimeSecs = info.uptime_s || 0;
   body.innerHTML = `
     <div class="dw-ss-rows">
-      <div class="dw-ss-row"><span class="dw-ss-lbl">Version</span><span class="dw-ss-val accent">v${esc(info.version||'—')}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">Uptime</span><span class="dw-ss-val">${uptimeStr}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">Devices</span><span class="dw-ss-val">${info.devices||0}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">Sensors</span><span class="dw-ss-val">${info.sensors||0}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">DB Size</span><span class="dw-ss-val">${dbMB}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">Log Size</span><span class="dw-ss-val">${logMB}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Version</span>
+        <span class="dw-ss-val accent" id="dw-ss-ver-${wid}">v${esc(info.version||'—')}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Date / Time</span>
+        <span class="dw-ss-val" id="dw-ss-time-${wid}" style="font-variant-numeric:tabular-nums">${_fmtDT()}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Uptime</span>
+        <span class="dw-ss-val" id="dw-ss-uptime-${wid}">${_fmtUp(uptimeSecs)}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Devices</span>
+        <span class="dw-ss-val" id="dw-ss-devs-${wid}">${info.devices||0}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Sensors</span>
+        <span class="dw-ss-val" id="dw-ss-sens-${wid}">${info.sensors||0}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">DB Size</span>
+        <span class="dw-ss-val" id="dw-ss-db-${wid}">${dbMB}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Log Size</span>
+        <span class="dw-ss-val" id="dw-ss-log-${wid}">${logMB}</span></div>
     </div>`;
+  // Live ticker — uptime counts up + date/time updates every second, no API calls needed
+  const card = body.closest('.dw-card');
+  if (card) {
+    if (card._interval) clearInterval(card._interval);
+    card._interval = setInterval(() => {
+      const el = document.getElementById(`dw-ss-uptime-${wid}`);
+      if (!el) { clearInterval(card._interval); card._interval = null; return; }
+      uptimeSecs++;
+      el.textContent = _fmtUp(uptimeSecs);
+      const tel = document.getElementById(`dw-ss-time-${wid}`);
+      if (tel) tel.textContent = _fmtDT();
+    }, 1000);
+  }
 }
 
 // ── Widget: Down & Warning Devices ────────────────────────────────
@@ -914,25 +973,13 @@ function _dwRefreshTopLatency(wid, cfg) {
 }
 
 // ── Widget: Event Summary ─────────────────────────────────────────
-function _dwRefreshEventCount(wid) {
+async function _dwRefreshEventCount(wid) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
-  const flaps = (typeof FLAPS !== 'undefined' ? FLAPS : []);
-  const now = Date.now();
-  const h1  = now - 3600000;
-  const h24 = now - 86400000;
-  const d7  = now - 604800000;
-  function countIn(since, type) {
-    return flaps.filter(f => {
-      const t = new Date(f.ts).getTime();
-      if (isNaN(t) || t < since) return false;
-      return !type || f._direction === type;
-    }).length;
-  }
   const periods = [
-    { label: 'Last 1 h',  since: h1  },
-    { label: 'Last 24 h', since: h24 },
-    { label: 'Last 7 d',  since: d7  },
+    { label: 'Last 1 h',  key: '1h'  },
+    { label: 'Last 24 h', key: '24h' },
+    { label: 'Last 7 d',  key: '7d'  },
   ];
   const types = [
     { key: 'down',      label: 'Down',      color: 'var(--down)' },
@@ -940,6 +987,25 @@ function _dwRefreshEventCount(wid) {
     { key: 'threshold', label: 'Threshold', color: 'var(--warn)' },
     { key: 'trap',      label: 'SNMP Trap', color: '#a855f7'     },
   ];
+  // Fetch counts directly from server (uses server-side time, unaffected by
+  // client-side FLAPS array size or load-order race conditions)
+  let summary = null;
+  try {
+    const r = await fetch('/api/events/summary');
+    if (r.ok) summary = (await r.json()).summary;
+  } catch {}
+  function getCount(periodKey, typeKey) {
+    if (summary && summary[periodKey]) return summary[periodKey][typeKey] || 0;
+    // Fallback: count from client-side FLAPS if API is unavailable
+    const flaps = (typeof FLAPS !== 'undefined' ? FLAPS : []);
+    const msMap = { '1h': 3600000, '24h': 86400000, '7d': 604800000 };
+    const since = Date.now() - (msMap[periodKey] || 86400000);
+    return flaps.filter(f => {
+      const t = new Date(f.ts).getTime();
+      if (isNaN(t) || t < since) return false;
+      return !typeKey || f._direction === typeKey;
+    }).length;
+  }
   const headerRow = `<div class="dw-ec-row dw-ec-hdr">
     <span class="dw-ec-lbl"></span>
     ${periods.map(p => `<span class="dw-ec-cell dw-ec-period">${p.label}</span>`).join('')}
@@ -948,13 +1014,16 @@ function _dwRefreshEventCount(wid) {
     <div class="dw-ec-row">
       <span class="dw-ec-lbl" style="color:${t.color}">${t.label}</span>
       ${periods.map(p => {
-        const n = countIn(p.since, t.key);
+        const n = getCount(p.key, t.key);
         return `<span class="dw-ec-cell" style="color:${n ? t.color : 'var(--text3)'}">${n}</span>`;
       }).join('')}
     </div>`).join('');
   const totalRow = `<div class="dw-ec-row dw-ec-total">
     <span class="dw-ec-lbl">Total</span>
-    ${periods.map(p => `<span class="dw-ec-cell">${countIn(p.since, null)}</span>`).join('')}
+    ${periods.map(p => {
+      const n = types.reduce((s, t) => s + getCount(p.key, t.key), 0);
+      return `<span class="dw-ec-cell">${n}</span>`;
+    }).join('')}
   </div>`;
   body.innerHTML = `<div class="dw-ec-table">${headerRow}${dataRows}${totalRow}</div>`;
 }
@@ -1008,9 +1077,13 @@ async function _dwFetchSLA(wid, cfg) {
   let summary = [];
   try {
     const r = await fetch(`/api/device/${did}/sensor/${sid}/summary?minutes=${mins}`);
+    if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     summary = d.summary || [];
-  } catch { wrap.innerHTML = '<div style="color:var(--down);padding:8px;font-size:11px">Error loading data</div>'; return; }
+  } catch {
+    wrap.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">⟳ Waiting for data…</div>';
+    return;
+  }
   const totalOk   = summary.reduce((s, b) => s + (b.ok   || 0), 0);
   const totalFail = summary.reduce((s, b) => s + (b.fail || 0), 0);
   const totalAll  = totalOk + totalFail;

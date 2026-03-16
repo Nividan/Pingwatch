@@ -64,6 +64,7 @@ def auth_login(username: str, password: str):
         _SESSIONS[token] = {"username": username, "expires": expires, "role": _role}
     try:
         con = sqlite3.connect(DB_PATH)
+        con.execute("DELETE FROM sessions WHERE username=?", (username,))  # clear old sessions for this user
         con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), username, expires))
         con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
         con.commit()

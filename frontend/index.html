@@ -3,7 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PingWatch — Network Monitor</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <!-- STYLE_INJECT -->
 </head>
 <body>
@@ -71,15 +71,17 @@
     </div>
   </div>
   <div class="tb-mid">
-    <div class="tb-pills">
-      <div class="stpill up">  <div class="stpill-dot blink"></div><span id="pu">0</span>&nbsp;Up</div>
-      <div class="stpill down"><div class="stpill-dot"></div><span id="pd">0</span>&nbsp;Down</div>
-      <div class="stpill warn"><div class="stpill-dot"></div><span id="pw">0</span>&nbsp;Warning</div>
-      <div class="stpill idle"><div class="stpill-dot"></div><span id="pi">0</span>&nbsp;Idle</div>
-    </div>
-    <div id="tb-health" class="tb-health" style="display:none">
-      <span class="tb-health-dot"></span>
-      <span id="tb-health-val">—</span>
+    <div id="healthBar" style="display:none">
+      <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
+      <span id="hb-pct" class="hb-pct-healthy">—</span>
+      <span id="hb-label" class="hb-lbl-healthy">—</span>
+      <div id="hb-pills">
+        <span class="hb-pill up"   id="hb-up"></span>
+        <span class="hb-pill down" id="hb-dn" style="display:none"></span>
+        <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
+      </div>
+      <span id="hb-spark-lbl" style="display:none;font-size:10px;color:var(--text3);white-space:nowrap">24h trend</span>
+      <canvas id="hb-spark" height="20" style="display:none"></canvas>
     </div>
   </div>
   <div class="tb-right">
@@ -115,18 +117,6 @@
       <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events <span class="mtab-badge" id="evtBadge" style="display:none">0</span></button>
       <button class="mtab" id="tabMap" onclick="switchMainTab('map')">⬡ Map</button>
       <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
-    </div>
-    <!-- Global Network Health Bar -->
-    <div id="healthBar" style="display:none">
-      <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
-      <span id="hb-pct" class="hb-pct-healthy">—</span>
-      <span id="hb-label" class="hb-lbl-healthy">—</span>
-      <div id="hb-pills">
-        <span class="hb-pill up"   id="hb-up"></span>
-        <span class="hb-pill down" id="hb-dn" style="display:none"></span>
-        <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
-      </div>
-      <canvas id="hb-spark" height="20" style="flex:0 0 80px"></canvas>
     </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">

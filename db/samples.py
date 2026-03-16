@@ -127,6 +127,7 @@ def db_clean_samples(retention_days=365):
 
 def db_load_availability(minutes: int = 1440):
     """Return per-hour aggregate availability across ALL sensors for the last `minutes` minutes."""
+    con = None
     try:
         cutoff = time.time() - minutes * 60
         con = sqlite3.connect(DB_PATH)
@@ -135,16 +136,18 @@ def db_load_availability(minutes: int = 1440):
             "FROM sensor_samples WHERE ts>=? GROUP BY h ORDER BY h ASC",
             (cutoff,)
         ).fetchall()
-        con.close()
         return [{"ts": r[0], "pct": round(r[1] / r[2] * 100, 1) if r[2] else 0,
                  "up": int(r[1] or 0), "total": int(r[2] or 0)} for r in rows]
     except Exception as e:
         log.error(f"DB load availability error: {e}")
         return []
+    finally:
+        if con: con.close()
 
 
 def db_load_history(did, sid, minutes=1440, limit=1000):
     """Return up to `limit` evenly-distributed samples from the last `minutes` minutes, oldest first."""
+    con = None
     try:
         cutoff = time.time() - minutes * 60
         con = sqlite3.connect(DB_PATH)
@@ -168,16 +171,18 @@ def db_load_history(did, sid, minutes=1440, limit=1000):
                 ") WHERE rn % ? = 1 ORDER BY ts ASC LIMIT ?",
                 (did, sid, cutoff, stride, limit)
             ).fetchall()
-        con.close()
         return [{"ts": r[0], "ok": bool(r[1]), "ms": r[2], "value": r[3]}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load history error: {e}")
         return []
+    finally:
+        if con: con.close()
 
 
 def db_load_summary(did, sid, minutes=1440):
     """Return per-hour aggregation over the last `minutes` minutes."""
+    con = None
     try:
         cutoff = time.time() - minutes * 60
         con = sqlite3.connect(DB_PATH)
@@ -189,7 +194,6 @@ def db_load_summary(did, sid, minutes=1440):
             WHERE did=? AND sid=? AND ts>=?
             GROUP BY hour_ts ORDER BY hour_ts ASC
         """, (did, sid, cutoff)).fetchall()
-        con.close()
         return [{"ts": r[0], "ok": int(r[1] or 0), "fail": int(r[2] or 0),
                  "avg_ms": round(r[3], 1) if r[3] is not None else None,
                  "min_ms": round(r[4], 1) if r[4] is not None else None,
@@ -198,3 +202,5 @@ def db_load_summary(did, sid, minutes=1440):
     except Exception as e:
         log.error(f"DB load summary error: {e}")
         return []
+    finally:
+        if con: con.close()

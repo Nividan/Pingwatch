@@ -153,35 +153,45 @@ def db_load(state):
     # total/success counters so the dashboard is live immediately on restart.
     _rcon = None
     try:
-        _cutoff = time.time() - int(_settings.get("retention_days", 7)) * 86400
+        # Cap the startup count window at 30 days regardless of full retention
+        # setting.  Counting a full year of data (millions of rows) for dashboard
+        # counters makes startup unnecessarily slow; 30-day counts are just as
+        # meaningful for display purposes.
+        _count_window = min(int(_settings.get("retention_days", 30)), 30)
+        _cutoff = time.time() - _count_window * 86400
         # Open read-only to avoid triggering a WAL checkpoint on close
         _rcon = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
 
-        # ── Batch-fetch all counts in one query ────────────────────
-        _count_map = {}  # (did, sid) -> (total, success)
-        for _row in _rcon.execute(
-            "SELECT did, sid, COUNT(*), SUM(ok) FROM sensor_samples "
-            "WHERE ts>=? GROUP BY did, sid", (_cutoff,)
-        ).fetchall():
-            _count_map[(_row[0], _row[1])] = (int(_row[2] or 0), int(_row[3] or 0))
-
         for _dev in state.devices.values():
             for _s in _dev.sensors.values():
-                # Last 80 samples newest-first → reverse for history deque
+                # History: fetch ok+ms only — fully covered by idx_samples_ds_cov,
+                # so SQLite never touches the main-table heap pages (no random I/O).
                 _rows = _rcon.execute(
-                    "SELECT ok, ms, value FROM sensor_samples "
+                    "SELECT ok, ms FROM sensor_samples "
                     "WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80",
                     (_s.device_id, _s.sensor_id)
                 ).fetchall()
                 if _rows:
-                    for _ok, _ms, _val in reversed(_rows):
+                    for _ok, _ms in reversed(_rows):
                         _s.history.append(_ms)
                     _last = _rows[0]
-                    _s.alive      = bool(_last[0])
-                    _s.last_ms    = _last[1]
-                    _s.last_value = _last[2]
-                _s.total, _s.success = _count_map.get(
-                    (_s.device_id, _s.sensor_id), (0, 0))
+                    _s.alive   = bool(_last[0])
+                    _s.last_ms = _last[1]
+                    # last_value needs 1 heap lookup per sensor — acceptable (70 total)
+                    _vrow = _rcon.execute(
+                        "SELECT value FROM sensor_samples "
+                        "WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 1",
+                        (_s.device_id, _s.sensor_id)
+                    ).fetchone()
+                    _s.last_value = _vrow[0] if _vrow else None
+                # Count: ok+ms in covering index → SUM(ok) has no heap lookup either
+                _cnt = _rcon.execute(
+                    "SELECT COUNT(*), SUM(ok) FROM sensor_samples "
+                    "WHERE did=? AND sid=? AND ts>=?",
+                    (_s.device_id, _s.sensor_id, _cutoff)
+                ).fetchone()
+                _s.total   = int(_cnt[0] or 0)
+                _s.success = int(_cnt[1] or 0)
         log.info("Runtime state restored from sensor_samples.")
     except Exception as _e:
         log.error(f"DB restore runtime error: {_e}")
