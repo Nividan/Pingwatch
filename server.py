@@ -27,7 +27,7 @@ except ImportError:
 
 import settings as _settings
 from auth        import auth_check, auth_check_role
-from config      import BIND, DB_PATH, FRONTEND_DIR, PORT, SYS, _RE_DB_IMPORT
+from config      import BIND, DB_PATH, FRONTEND_DIR, PORT, SYS, TLS_PORT_DEFAULT, _RE_DB_IMPORT
 from logger      import log
 from network_map import init_topo_db, migrate_topo_from_file
 from db          import (
@@ -239,9 +239,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # ── Generic static files from frontend/ (CSS, JS, …) ─────
         ext = os.path.splitext(p)[1].lower()
         if ext in _STATIC_TYPES:
-            fp = os.path.normpath(os.path.join(FRONTEND_DIR, p.lstrip('/')))
-            # Safety check: never serve files outside FRONTEND_DIR
-            if fp.startswith(os.path.normpath(FRONTEND_DIR)) and os.path.isfile(fp):
+            from pathlib import Path as _Path
+            _base = _Path(FRONTEND_DIR).resolve()
+            fp_path = (_base / p.lstrip('/')).resolve()
+            fp = str(fp_path)
+            # Safety check: resolve() collapses .. and symlinks before prefix test
+            if str(fp_path).startswith(str(_base)) and fp_path.is_file():
                 with open(fp, 'rb') as _f:
                     data = _f.read()
                 self.send_response(200)
@@ -253,7 +256,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        for mod in (auth, devices, monitoring, settings, topology, export, backups):
+        from routes import tls as _tls_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, _tls_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -261,7 +265,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── POST ──────────────────────────────────────────────────────
     def do_POST(self):
-        from routes import auth, devices, monitoring, settings, topology, export, backups
+        from routes import auth, devices, monitoring, settings, topology, export, backups, tls as _tls_mod
         p = urlparse(self.path).path
 
         # DB import reads its own oversized body before we call _body()
@@ -271,7 +275,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         body = self._body()
 
-        for mod in (auth, devices, monitoring, settings, topology, export, backups):
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, _tls_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -279,11 +283,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology
+        from routes import auth, devices, settings, topology, tls as _tls_mod
         p    = urlparse(self.path).path
         body = self._body()
 
-        for mod in (auth, devices, settings, topology):
+        for mod in (auth, devices, settings, topology, _tls_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -327,6 +331,38 @@ def _make_tray_icon():
     d.ellipse([24, 24, 40, 40], outline=(255, 255, 255, 220), width=2)
     d.ellipse([29, 29, 35, 35], fill=(255, 255, 255, 255))
     return img
+
+
+# ── HTTP → HTTPS redirect helper ─────────────────────────────────
+
+def _start_http_redirect(http_port: int, https_port: int):
+    """
+    Start a tiny HTTP server on http_port that returns 301 redirects to the
+    HTTPS server on https_port.  Runs in a daemon thread — fails silently if
+    the port is already in use (the main HTTPS server still works).
+    """
+    import http.server as _hs
+
+    class _RedirectHandler(_hs.BaseHTTPRequestHandler):
+        def do_GET(self):  self._redirect()
+        def do_POST(self): self._redirect()
+        def do_HEAD(self): self._redirect()
+        def _redirect(self):
+            host = (self.headers.get("Host") or "localhost").split(":")[0]
+            target = f"https://{host}:{https_port}{self.path}"
+            self.send_response(301)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        def log_message(self, *_): pass   # suppress access log noise
+
+    try:
+        _rsrv = _hs.ThreadingHTTPServer((BIND, http_port), _RedirectHandler)
+        threading.Thread(target=_rsrv.serve_forever, daemon=True,
+                         name="http-redirect").start()
+        log.info(f"HTTP→HTTPS redirect active: http://:{http_port} → https://:{https_port}")
+    except OSError as _e:
+        log.warning(f"HTTP redirect server could not bind to port {http_port}: {_e}")
 
 
 # ── Entry point ───────────────────────────────────────────────────
@@ -375,6 +411,63 @@ def main():
         )
         return
 
+    # ── TLS / HTTPS ─────────────────────────────────────────────────
+    app_state.tls_active = False
+    _tls_enabled = int(_settings.get("tls_enabled", 0))
+    if not _tls_enabled:
+        log.info("TLS disabled — serving plain HTTP")
+    if _tls_enabled:
+        from tls import (discover_or_generate_cert, build_ssl_context,
+                         check_cert_expiry_warn)
+        from db.backups import encrypt_pw
+        from db import db_save_settings
+        _tls_port = int(_settings.get("tls_port", TLS_PORT_DEFAULT))
+        _org_name = _settings.get("org_name", "PingWatch") or "PingWatch"
+        import socket as _sock
+        _hostname = _settings.get("tls_cn", "") or _sock.gethostname() or "localhost"
+        try:
+            _cert_pem, _key_pem, _source = discover_or_generate_cert(_org_name, _hostname)
+            # Persist freshly discovered/generated certs to DB
+            if _source in ("generated", "imported"):
+                _key_enc = encrypt_pw(_key_pem)
+                db_save_settings({
+                    "tls_cert_pem":    _cert_pem,
+                    "tls_key_pem_enc": _key_enc,
+                    "tls_cert_source": _source,
+                })
+                _settings.load({
+                    "tls_cert_pem":    _cert_pem,
+                    "tls_key_pem_enc": _key_enc,
+                    "tls_cert_source": _source,
+                })
+                log.info(f"TLS: certificate ({_source}) saved to database")
+            check_cert_expiry_warn(_cert_pem)
+            # Close the plain HTTP socket and rebind on the TLS port
+            server.server_close()
+            try:
+                server = QuietServer((BIND, _tls_port), Handler)
+            except OSError:
+                log.error(
+                    f"Cannot bind to TLS port {_tls_port} — port may be in use or requires admin. "
+                    f"Falling back to HTTP on port {app_state.effective_port}."
+                )
+                server = QuietServer((BIND, app_state.effective_port), Handler)
+                _tls_enabled = 0
+            else:
+                _ssl_ctx = build_ssl_context(_cert_pem, _key_pem)
+                server.socket = _ssl_ctx.wrap_socket(server.socket, server_side=True)
+                app_state.effective_port = _tls_port
+                app_state.tls_active = True
+                log.info(f"HTTPS server ready on port {_tls_port} (cert source: {_source})")
+        except Exception as _tls_err:
+            log.error(f"TLS startup failed — falling back to HTTP: {_tls_err}", exc_info=True)
+
+    # ── Optional HTTP → HTTPS redirect server ───────────────────────
+    if app_state.tls_active and int(_settings.get("http_redirect", 0)):
+        _http_port = int(_settings.get("http_port", PORT))
+        _https_port = app_state.effective_port
+        _start_http_redirect(_http_port, _https_port)
+
     # ── Load state & start background threads ──────────────────────
     _t0 = time.time()
     db_load(STATE)
@@ -390,7 +483,8 @@ def main():
     start_scheduler()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    _local_url = f"http://127.0.0.1:{app_state.effective_port}"
+    _scheme = "https" if app_state.tls_active else "http"
+    _local_url = f"{_scheme}://127.0.0.1:{app_state.effective_port}"
     log.info(f"PingWatch ready -> {_local_url}")
 
     # ── GUI ────────────────────────────────────────────────────────

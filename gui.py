@@ -391,7 +391,7 @@ class StatusWindow:
         from config import DB_PATH as _DB_PATH
 
         # Version
-        self._lbl_sys_version.config(text=f"v{app_state.APP_VERSION}")
+        self._lbl_sys_version.config(text=f"v{app_state.APP_VERSION} · {app_state.APP_VERSION_NAME}")
 
         # Uptime (same source as header)
         elapsed = datetime.datetime.now() - self._start

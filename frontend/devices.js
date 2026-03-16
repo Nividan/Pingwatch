@@ -421,7 +421,7 @@ function openAddGroup(){
   closeM('mag');
   const o=document.createElement('div');
   o.className='mo';o.id='mag';
-  o.onclick=e=>{if(e.target===o)closeM('mag');};
+  _overlayClose(o, ()=>closeM('mag'));
   o.innerHTML=`
   <div class="mbox" style="min-width:360px;max-width:420px">
     <div class="mhd">

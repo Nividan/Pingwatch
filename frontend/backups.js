@@ -185,7 +185,7 @@ async function _bkOpenSettings(did) {
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'bk-settings';
-  o.onclick = e => { if (e.target === o) closeM('bk-settings'); };
+  _overlayClose(o, ()=>closeM('bk-settings'));
   o.innerHTML = `
     <div class="mbox" style="width:min(95vw,560px)">
       <div class="mhd">

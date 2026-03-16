@@ -103,7 +103,6 @@ def handle(h, method, path, body):
                 STATE.devices[did].webhook_url = webhook_url
         _db_enqueue(lambda: db_save(STATE))
         db_log_audit(user, h.client_address[0], 'device_create', name)
-        log.info(f"Device added: {name!r} ({host})")
         h._json(200, {"did": did})
         return True
 
@@ -243,7 +242,6 @@ def handle(h, method, path, body):
         STATE.remove_device(ddid)
         _db_enqueue(lambda: db_save(STATE))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
-        log.info(f"Device deleted: {ddname!r}")
         h._json(200, {"status": "ok"})
         return True
 
@@ -349,7 +347,6 @@ def handle(h, method, path, body):
         STATE.remove_sensor(sdid, ssid)
         _db_enqueue(lambda: db_save(STATE))
         db_log_audit(user, h.client_address[0], 'sensor_delete', f"{sdname}/{ssname}")
-        log.info(f"Sensor deleted: {ssname!r} on {sdname}")
         h._json(200, {"status": "ok"})
         return True
 
@@ -409,7 +406,6 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: db_save(STATE))
         _dev_name = dev.name if dev else did
         db_log_audit(user, h.client_address[0], 'sensor_create', f"{_dev_name}/{name}")
-        log.info(f"Sensor added: {name!r} on {_dev_name}")
         h._json(200, {"sid": sid})
         return True
 

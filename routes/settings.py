@@ -10,7 +10,7 @@ import os
 import time
 
 import app_state
-from config import DB_PATH, BIND
+from config import DB_PATH, BIND, PORT
 from db     import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
 from logger import log
 import settings as _settings
@@ -27,7 +27,7 @@ def handle(h, method, path, body):
             "session_ttl":    _settings.get("session_ttl", 86400),
             "retention_days": _settings.get("retention_days", 7),
             "port":           app_state.effective_port,
-            "http_port":      app_state.effective_port,
+            "http_port":      int(_settings.get("http_port", PORT)),
             "snmp_port":      app_state.effective_snmp_port,
             "bind":           BIND,
             "db_path":        str(DB_PATH),
@@ -62,7 +62,7 @@ def handle(h, method, path, body):
             "backup_sched_enabled": int(_settings.get("backup_sched_enabled", 0)),
             "backup_sched_freq":    _settings.get("backup_sched_freq",  "daily"),
             "backup_sched_time":    _settings.get("backup_sched_time",  "02:00"),
-            "backup_sched_days":    _settings.get("backup_sched_days",  "1,2,3,4,5,6,7"),
+            "backup_sched_days":    str(_settings.get("backup_sched_days",  "1,2,3,4,5,6,7")),
             "backup_keep":          int(_settings.get("backup_keep", 3)),
         })
         return True
@@ -141,7 +141,6 @@ def handle(h, method, path, body):
             _settings.load({"smtp_pass": _pw})
             _db_enqueue(lambda _p=_pw: db_save_settings({"smtp_pass": _p}))
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
-        log.info("Settings updated by %s: %s", user, list(body.keys()))
         h._json(200, {"ok": True})
         return True
 
@@ -176,6 +175,7 @@ def handle(h, method, path, body):
         ) if os.path.isdir(_log_dir) else 0
         h._json(200, {
             "version":        app_state.APP_VERSION,
+            "version_name":   app_state.APP_VERSION_NAME,
             "uptime_s":       int(time.time() - app_state.SERVER_START),
             "devices":        len(STATE.devices),
             "sensors":        sum(len(d.sensors) for d in STATE.devices.values()),

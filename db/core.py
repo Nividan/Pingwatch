@@ -200,6 +200,14 @@ def db_init():
             ("backup_sched_time",    "02:00"),
             ("backup_sched_days",    "1,2,3,4,5,6,7"),
             ("backup_keep",          "3"),
+            # TLS / HTTPS settings
+            ("tls_enabled",          "1"),   # 0=HTTP only, 1=HTTPS enabled (default on for fresh installs)
+            ("tls_port",             "8443"), # HTTPS listening port
+            ("tls_cert_pem",         ""),    # PEM certificate (plain text)
+            ("tls_key_pem_enc",      ""),    # PEM private key (Fernet-encrypted)
+            ("tls_cert_source",      ""),    # "generated" | "imported" | "uploaded"
+            ("tls_cn",               ""),    # CN/hostname used when generating self-signed cert
+            ("http_redirect",        "1"),   # 0=off, 1=redirect HTTP→HTTPS (default on for fresh installs)
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))

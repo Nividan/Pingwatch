@@ -1,0 +1,166 @@
+"""
+routes/tls.py — TLS/HTTPS certificate management API endpoints.
+
+GET    /api/tls           → cert metadata + TLS settings (no private key)
+PATCH  /api/tls           → update tls_enabled, tls_port, http_redirect
+POST   /api/tls/upload    → upload and validate a new cert+key pair
+POST   /api/tls/generate  → generate a new self-signed certificate
+"""
+
+import settings as _settings
+import app_state
+
+from config import _RE_TLS, _RE_TLS_UPLOAD, _RE_TLS_GENERATE, TLS_PORT_DEFAULT
+from db     import _db_enqueue, db_log_audit, db_save_settings
+from logger import log
+
+
+# ── Shared helper: build the cert-info dict ───────────────────────────────────
+
+def _cert_info() -> dict:
+    """Return parsed cert metadata from the current DB cert, or {}."""
+    from tls import parse_cert_info
+    cert_pem = _settings.get("tls_cert_pem", "")
+    info = parse_cert_info(cert_pem) if cert_pem else {}
+    if info:
+        info["source"] = _settings.get("tls_cert_source", "")
+    return info
+
+
+def _tls_response() -> dict:
+    return {
+        "tls_enabled":   int(_settings.get("tls_enabled",  0)),
+        "tls_port":      int(_settings.get("tls_port",     TLS_PORT_DEFAULT)),
+        "http_redirect": int(_settings.get("http_redirect", 0)),
+        "tls_active":    getattr(app_state, "tls_active", False),
+        "cert":          _cert_info(),
+    }
+
+
+# ── Route handler ─────────────────────────────────────────────────────────────
+
+def handle(h, method, path, body):
+    """Return True if this module handled the request, False otherwise."""
+
+    # ── GET /api/tls ──────────────────────────────────────────────
+    if _RE_TLS.match(path) and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        h._json(200, _tls_response())
+        return True
+
+    # ── PATCH /api/tls ────────────────────────────────────────────
+    if _RE_TLS.match(path) and method == "PATCH":
+        user, _ = h._require("admin")
+        if not user: return True
+
+        updates = {}
+
+        if "tls_enabled" in body:
+            updates["tls_enabled"] = "1" if body["tls_enabled"] else "0"
+
+        if "tls_port" in body:
+            try:
+                p = int(body["tls_port"])
+                if not (1 <= p <= 65535):
+                    raise ValueError
+            except (TypeError, ValueError):
+                h._json(400, {"error": "tls_port must be an integer between 1 and 65535"})
+                return True
+            updates["tls_port"] = str(p)
+
+        if "http_redirect" in body:
+            updates["http_redirect"] = "1" if body["http_redirect"] else "0"
+
+        if updates:
+            _settings.load(updates)
+            _db_enqueue(lambda _u=dict(updates): db_save_settings(_u))
+            db_log_audit(user, h.client_address[0], "tls_settings_update", "",
+                         str(list(updates.keys())))
+            log.info(f"TLS settings updated by {user!r}: {list(updates.keys())}")
+
+        h._json(200, {"ok": True, "restart_required": True})
+        return True
+
+    # ── POST /api/tls/upload ──────────────────────────────────────
+    if _RE_TLS_UPLOAD.match(path) and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+
+        cert_pem = (body.get("cert_pem") or "").strip()
+        key_pem  = (body.get("key_pem")  or "").strip()
+
+        if not cert_pem or not key_pem:
+            h._json(400, {"error": "cert_pem and key_pem are required"})
+            return True
+
+        from tls import validate_cert_key_pair, parse_cert_info
+        from db.backups import encrypt_pw
+
+        err = validate_cert_key_pair(cert_pem, key_pem)
+        if err:
+            h._json(400, {"error": err})
+            return True
+
+        key_enc = encrypt_pw(key_pem)
+        updates = {
+            "tls_cert_pem":    cert_pem,
+            "tls_key_pem_enc": key_enc,
+            "tls_cert_source": "uploaded",
+        }
+        _settings.load(updates)
+        _db_enqueue(lambda _u=dict(updates): db_save_settings(_u))
+        info = parse_cert_info(cert_pem)
+        db_log_audit(user, h.client_address[0], "tls_cert_upload", "",
+                     f"subject={info.get('subject','?')} expires={info.get('not_after','?')}")
+        log.info(
+            f"TLS certificate uploaded by {user!r} — "
+            f"subject={info.get('subject','?')}, "
+            f"expires={info.get('not_after','?')} ({info.get('days_left','?')}d), "
+            f"self_signed={info.get('self_signed','?')}"
+        )
+        info["source"] = "uploaded"
+        h._json(200, {"ok": True, "cert": info, "restart_required": True})
+        return True
+
+    # ── POST /api/tls/generate ────────────────────────────────────
+    if _RE_TLS_GENERATE.match(path) and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+
+        from tls import generate_self_signed_cert, parse_cert_info
+        from db.backups import encrypt_pw
+        import socket as _sock
+
+        org_name   = (body.get("org_name") or _settings.get("org_name") or "PingWatch").strip()
+        hostname   = (body.get("hostname") or _settings.get("tls_cn") or _sock.gethostname() or "localhost").strip()
+        extra_sans = [s.strip() for s in (body.get("extra_sans") or []) if str(s).strip()]
+        try:
+            cert_pem, key_pem = generate_self_signed_cert(org_name, hostname, extra_sans=extra_sans)
+        except Exception as e:
+            log.error(f"TLS cert generation failed: {e}", exc_info=True)
+            h._json(500, {"error": f"Certificate generation failed: {e}"})
+            return True
+
+        key_enc = encrypt_pw(key_pem)
+        updates = {
+            "tls_cert_pem":    cert_pem,
+            "tls_key_pem_enc": key_enc,
+            "tls_cert_source": "generated",
+            "tls_cn":          hostname,
+        }
+        _settings.load(updates)
+        _db_enqueue(lambda _u=dict(updates): db_save_settings(_u))
+        info = parse_cert_info(cert_pem)
+        db_log_audit(user, h.client_address[0], "tls_cert_generate", "",
+                     f"subject={info.get('subject','?')} expires={info.get('not_after','?')}")
+        log.info(
+            f"New self-signed TLS certificate generated by {user!r} — "
+            f"subject={info.get('subject','?')}, "
+            f"expires={info.get('not_after','?')} ({info.get('days_left','?')}d)"
+        )
+        info["source"] = "generated"
+        h._json(200, {"ok": True, "cert": info, "restart_required": True})
+        return True
+
+    return False

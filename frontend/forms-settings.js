@@ -2,12 +2,23 @@
 
 async function openSettings(){
   closeM('mset');
-  const [sr, ur] = await Promise.all([
+  const [sr, ur, tr] = await Promise.all([
     api('GET','/api/settings'),
     api('GET','/api/users'),
+    api('GET','/api/tls'),
   ]);
+  window._tlsSettings = {...tr, org_name: sr.org_name||''};
   const o=document.createElement('div'); o.className='mo'; o.id='mset';
-  o.onclick=e=>{if(e.target===o)closeM('mset');};
+  _overlayClose(o, ()=>closeM('mset'));
+  // Pre-compute backup tab values so the template stays single-level
+  const _bkFreq = sr.backup_sched_freq || 'daily';
+  const _bkDaysActive = (_bkFreq === 'weekly') ? '' : 'none';
+  const _bkDaysSaved = String(sr.backup_sched_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  const _bkDayLabels = [['1','Mon'],['2','Tue'],['3','Wed'],['4','Thu'],['5','Fri'],['6','Sat'],['7','Sun']];
+  const _bkDaysHtml = _bkDayLabels.map(([v,l]) =>
+    '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
+    '<input type="checkbox" id="st-bk-d' + v + '" value="' + v + '"' + (_bkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
+  ).join('');
   o.innerHTML=`
   <div class="mbox" style="width:640px;max-width:96vw">
     <div class="mhd">
@@ -203,24 +214,66 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
-    <div class="mbdy" id="stab-networking" style="display:none">
+    <div class="mbdy" id="stab-networking" style="display:none;max-height:65vh;overflow-y:auto">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Ports</div>
       <div class="fr">
         <label class="fl">HTTP Port</label>
         <input type="number" id="st-http-port" value="${sr.http_port||7070}" min="1" max="65535" style="max-width:120px"/>
-        <div class="fh">Port the web interface listens on</div>
+        <div class="fh">Port the web interface listens on (HTTP). When HTTPS is enabled this port can optionally redirect to HTTPS.</div>
       </div>
       <div class="fr" style="margin-top:12px">
         <label class="fl">SNMP Trap Port</label>
         <input type="number" id="st-snmp-port" value="${sr.snmp_port||162}" min="1" max="65535" style="max-width:120px"/>
         <div class="fh">UDP port for SNMP trap reception. Falls back to 1162 then 2162 if binding fails.</div>
       </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:6px">HTTPS</div>
-        <div style="font-size:12px;color:var(--text3)">HTTPS is not natively supported. Use a reverse proxy (Nginx, Caddy, HAProxy) to terminate TLS in front of PingWatch.</div>
+
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">HTTPS / TLS</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-tls-enabled" ${tr.tls_enabled?'checked':''}>
+            <span class="fl" style="margin:0">Enable HTTPS</span>
+          </label>
+          <div class="fh">Restart required to take effect. Self-signed certificates will show a browser warning — install a CA-signed certificate for production use.</div>
+        </div>
+        <div class="fr" style="margin-top:12px">
+          <label class="fl">HTTPS Port</label>
+          <input type="number" id="st-tls-port" value="${tr.tls_port||8443}" min="1" max="65535" style="max-width:120px"/>
+          <div class="fh">Default: 8443. Port 443 requires admin/root privileges.</div>
+        </div>
+        <div class="fr" style="margin-top:12px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-http-redirect" ${tr.http_redirect?'checked':''}>
+            <span class="fl" style="margin:0">Redirect HTTP → HTTPS</span>
+          </label>
+          <div class="fh">When enabled, a redirect server runs on the HTTP port and sends browsers to HTTPS automatically.</div>
+        </div>
+
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Certificate</div>
+          ${(()=>{
+            const c=tr.cert||{};
+            if(!c.subject) return '<div style="font-size:12px;color:var(--text3)">No certificate loaded. Enable HTTPS and save — a self-signed certificate will be generated automatically on the next startup.</div>';
+            const daysLeft=c.days_left??0;
+            const badgeColor=daysLeft<0?'var(--err)':daysLeft<=30?'var(--warn)':'var(--ok)';
+            const badgeTxt=daysLeft<0?'EXPIRED':(daysLeft<=30?`⚠ ${daysLeft}d left`:`✓ ${daysLeft}d`);
+            const srcLabel={'generated':'Auto-generated (self-signed)','imported':'Imported from certs/ folder','uploaded':'Manually uploaded','db':'Loaded from database'}[c.source]||c.source||'—';
+            return `<div style="display:grid;grid-template-columns:130px 1fr;gap:5px 10px;font-size:12px">
+              <span style="color:var(--text3)">Subject</span><span>${esc(c.subject||'—')}</span>
+              <span style="color:var(--text3)">Issuer</span><span>${esc(c.issuer||'—')}${c.self_signed?' <span style="color:var(--text3)">(self-signed)</span>':''}</span>
+              <span style="color:var(--text3)">Expires</span><span>${esc(c.not_after||'—')} <span style="color:${badgeColor};font-weight:600">${badgeTxt}</span></span>
+              <span style="color:var(--text3)">Source</span><span>${esc(srcLabel)}</span>
+            </div>`;
+          })()}
+          <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+            <button class="btn-s" onclick="openUploadCert()">Upload Certificate</button>
+            <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate New Self-Signed</button>
+          </div>
+        </div>
       </div>
+
       <div style="margin-top:16px;padding:10px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--warn)">
-        Port changes require a server restart to take effect.
+        Port changes and HTTPS toggle require a server restart to take effect.
       </div>
     </div>
     <div class="mft" id="stab-footer-networking" style="display:none">
@@ -234,30 +287,22 @@ async function openSettings(){
           <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Scheduled Backups</div>
           <div class="fh" style="margin:0">Run config backups automatically at the specified time</div>
         </div>
-        <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-bk-enabled"><span class="tsl"></span></label>
+        <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-bk-enabled" ${sr.backup_sched_enabled?'checked':''}><span class="tsl"></span></label>
       </div>
       <div class="fr" style="margin-top:14px" id="st-bk-freq-row">
         <label class="fl">Frequency</label>
         <select id="st-bk-freq" style="max-width:160px" onchange="_bkFreqChange()">
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
+          <option value="daily" ${_bkFreq==='daily'?'selected':''}>Daily</option>
+          <option value="weekly" ${_bkFreq==='weekly'?'selected':''}>Weekly</option>
         </select>
       </div>
-      <div class="fr" style="margin-top:14px;display:none" id="st-bk-days-row">
+      <div class="fr" style="margin-top:14px;display:${_bkDaysActive}" id="st-bk-days-row">
         <label class="fl">Days</label>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d1" value="1"> Mon</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d2" value="2"> Tue</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d3" value="3"> Wed</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d4" value="4"> Thu</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d5" value="5"> Fri</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d6" value="6"> Sat</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d7" value="7"> Sun</label>
-        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">${_bkDaysHtml}</div>
       </div>
       <div class="fr" style="margin-top:14px">
         <label class="fl">Backup Time</label>
-        <input type="time" id="st-bk-time" value="02:00" style="max-width:140px"/>
+        <input type="time" id="st-bk-time" value="${sr.backup_sched_time||'02:00'}" style="max-width:140px"/>
         <div class="fh">Server local time (24h)</div>
       </div>
       <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
@@ -267,7 +312,7 @@ async function openSettings(){
             <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Configs to Keep per Device</div>
             <div class="fh" style="margin:0">Oldest config file and DB entry are deleted when the limit is exceeded</div>
           </div>
-          <input type="number" id="st-bk-keep" min="1" max="50" value="3" style="width:70px;flex-shrink:0;text-align:center"/>
+          <input type="number" id="st-bk-keep" min="1" max="50" value="${sr.backup_keep!=null?sr.backup_keep:3}" style="width:70px;flex-shrink:0;text-align:center"/>
         </div>
       </div>
       <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
@@ -296,14 +341,140 @@ function switchSettingsTab(tab){
 async function saveNetworkingSettings(){
   const httpPort=parseInt(document.getElementById('st-http-port')?.value);
   const snmpPort=parseInt(document.getElementById('st-snmp-port')?.value);
+  const tlsEnabled=document.getElementById('st-tls-enabled')?.checked||false;
+  const tlsPort=parseInt(document.getElementById('st-tls-port')?.value)||8443;
+  const httpRedirect=document.getElementById('st-http-redirect')?.checked||false;
   if(!httpPort||httpPort<1||httpPort>65535){toast('HTTP port must be 1–65535','err');return;}
   if(!snmpPort||snmpPort<1||snmpPort>65535){toast('SNMP port must be 1–65535','err');return;}
+  if(!tlsPort||tlsPort<1||tlsPort>65535){toast('HTTPS port must be 1–65535','err');return;}
   const btn=document.querySelector('#stab-footer-networking .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  const r=await api('PATCH','/api/settings',{http_port:httpPort,snmp_port:snmpPort});
-  if(btn){btn.disabled=false;btn.textContent='Save Networking';}
-  if(!r.ok){toast('Failed to save networking settings','err');return;}
-  toast('Saved — restart the server for port changes to take effect','ok');
+  let r1,r2;
+  try{
+    [r1,r2]=await Promise.all([
+      api('PATCH','/api/settings',{http_port:httpPort,snmp_port:snmpPort}),
+      api('PATCH','/api/tls',{tls_enabled:tlsEnabled,tls_port:tlsPort,http_redirect:httpRedirect}),
+    ]);
+  }catch(e){
+    toast('Failed to save networking settings','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save Networking';}
+  }
+  if(!r1.ok||!r2.ok){toast('Failed to save networking settings','err');return;}
+  toast('Saved — restart the server for changes to take effect','ok');
+}
+
+function openUploadCert(){
+  closeM('muc');
+  const o=document.createElement('div');o.className='mo';o.id='muc';
+  _overlayClose(o,()=>closeM('muc'));
+  o.innerHTML=`
+  <div class="mbox" style="width:560px;max-width:96vw">
+    <div class="mhd"><div class="mttl">Upload Certificate</div><button class="mclose" onclick="closeM('muc')">✕</button></div>
+    <div class="mbdy">
+      <div class="fr">
+        <label class="fl">Certificate (PEM)</label>
+        <textarea id="uc-cert" rows="7" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+      </div>
+      <div class="fr" style="margin-top:12px">
+        <label class="fl">Private Key (PEM)</label>
+        <textarea id="uc-key" rows="7" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+      </div>
+      <div id="uc-err" style="display:none;margin-top:10px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--err)"></div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('muc')">Cancel</button>
+      <button class="btn-p" id="btn-uc-save" onclick="submitUploadCert()">Validate &amp; Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+async function submitUploadCert(){
+  const cert_pem=(document.getElementById('uc-cert')?.value||'').trim();
+  const key_pem =(document.getElementById('uc-key')?.value||'').trim();
+  const errEl=document.getElementById('uc-err');
+  const btn=document.getElementById('btn-uc-save');
+  if(!cert_pem||!key_pem){errEl.textContent='Both certificate and private key are required.';errEl.style.display='';return;}
+  btn.disabled=true;btn.textContent='Validating...';
+  errEl.style.display='none';
+  let r;
+  try{
+    r=await api('POST','/api/tls/upload',{cert_pem,key_pem});
+  }catch(e){
+    errEl.textContent='Request failed — check server connectivity.';errEl.style.display='';
+    btn.disabled=false;btn.textContent='Validate & Save';
+    return;
+  }
+  if(r.error){
+    errEl.textContent=r.error;errEl.style.display='';
+    btn.disabled=false;btn.textContent='Validate & Save';
+    return;
+  }
+  closeM('muc');
+  toast('Certificate uploaded — restart the server to apply','ok');
+}
+
+function generateNewCert(){
+  closeM('mgc');
+  const o=document.createElement('div');o.className='mo';o.id='mgc';
+  _overlayClose(o,()=>closeM('mgc'));
+  // Pre-fill with saved tls_cn or machine hostname (loaded from /api/tls)
+  const _tr=window._tlsSettings||{};
+  const _defaultCn=(_tr.cert&&_tr.cert.subject)||'';
+  o.innerHTML=`
+  <div class="mbox" style="width:480px;max-width:96vw">
+    <div class="mhd"><div class="mttl">Generate Self-Signed Certificate</div><button class="mclose" onclick="closeM('mgc')">✕</button></div>
+    <div class="mbdy">
+      <div class="fr">
+        <label class="fl">Common Name (CN)</label>
+        <input type="text" id="gc-cn" value="${esc(_defaultCn)}" placeholder="e.g. pingwatch.local or 192.168.1.10" autocomplete="off"/>
+        <div class="fh">The hostname or IP address browsers will connect to. Shown as the certificate name.</div>
+      </div>
+      <div class="fr" style="margin-top:12px">
+        <label class="fl">Organization (O)</label>
+        <input type="text" id="gc-org" value="${esc(_tr.org_name||'')}" placeholder="e.g. My Company" autocomplete="off"/>
+        <div class="fh">Optional. Shown in the certificate details.</div>
+      </div>
+      <div class="fr" style="margin-top:12px">
+        <label class="fl">Additional SANs</label>
+        <textarea id="gc-sans" rows="3" placeholder="One per line — DNS name or IP address&#10;e.g. pingwatch.local&#10;e.g. 192.168.1.10" autocomplete="off" style="resize:vertical;font-family:monospace;font-size:12px"></textarea>
+        <div class="fh">Optional. Extra Subject Alternative Names added to the certificate. The CN, localhost, and 127.0.0.1 are always included.</div>
+      </div>
+      <div style="margin-top:12px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--text3)">
+        A new RSA-2048 self-signed certificate valid for 825 days will be generated and saved. Restart the server to apply it.
+      </div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('mgc')">Cancel</button>
+      <button class="btn-p" id="btn-gc-submit" onclick="submitGenerateCert()">Generate</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('gc-cn')?.focus(),50);
+}
+
+async function submitGenerateCert(){
+  const hostname=(document.getElementById('gc-cn')?.value||'').trim();
+  const org_name=(document.getElementById('gc-org')?.value||'').trim();
+  const extra_sans=(document.getElementById('gc-sans')?.value||'')
+    .split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!hostname){toast('Common Name is required','err');return;}
+  const btn=document.getElementById('btn-gc-submit');
+  if(btn){btn.disabled=true;btn.textContent='Generating...';}
+  let r;
+  try{
+    r=await api('POST','/api/tls/generate',{hostname,org_name,extra_sans});
+  }catch(e){
+    toast('Certificate generation failed','err');
+    if(btn){btn.disabled=false;btn.textContent='Generate';}
+    return;
+  }
+  if(btn){btn.disabled=false;btn.textContent='Generate';}
+  if(r.error){toast(r.error,'err');return;}
+  closeM('mgc');
+  toast('New self-signed certificate generated — restart the server to apply','ok');
 }
 
 async function loadAuditLog(){
@@ -573,8 +744,15 @@ async function saveSettings(){
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
   Object.assign(body,smtp);
-  const r=await api('PATCH','/api/settings',body);
-  if(btn){btn.disabled=false;btn.textContent='Save Settings';}
+  let r;
+  try{
+    r=await api('PATCH','/api/settings',body);
+  }catch(e){
+    toast('Failed to save settings','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save Settings';}
+  }
   if(!r.ok){toast('Failed to save settings','err');return;}
   if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
   if(body.latency_good_ms)   window._lGood=body.latency_good_ms;
@@ -610,7 +788,7 @@ async function _loadBackupScheduleSettings(){
   if(time) time.value = r.backup_sched_time || '02:00';
   if(keep) keep.value = r.backup_keep != null ? r.backup_keep : 3;
   // Populate day checkboxes
-  const days = (r.backup_sched_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  const days = String(r.backup_sched_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
   for(let i=1; i<=7; i++){
     const cb = document.getElementById(`st-bk-d${i}`);
     if(cb) cb.checked = days.includes(String(i));
@@ -632,16 +810,21 @@ async function saveBackupScheduleSettings(){
   }
   const btn = document.querySelector('#stab-footer-backup .btn-p');
   if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
-  const r = await api('PATCH', '/api/settings', {
-    backup_sched_enabled: enabled,
-    backup_sched_freq:    freq,
-    backup_sched_time:    time,
-    backup_sched_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
-    backup_keep:          keep,
-  });
-  if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
-  if(!r.ok){ toast('Failed to save backup settings','err'); return; }
-  toast('Backup schedule settings saved','ok');
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      backup_sched_enabled: enabled,
+      backup_sched_freq:    freq,
+      backup_sched_time:    time,
+      backup_sched_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
+      backup_keep:          keep,
+    });
+    if(!r?.ok){ toast('Failed to save backup settings','err'); return; }
+    toast('Backup schedule settings saved','ok');
+  } catch(e) {
+    toast('Failed to save backup settings','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
+  }
 }
 
 async function testSmtp(){

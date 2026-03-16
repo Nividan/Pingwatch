@@ -403,10 +403,15 @@ function _closeEvtDetail() {
   if (modal) modal.style.display = 'none';
 }
 
-// Close modal on backdrop click
+// Close modal on backdrop click (ignore mousedown-inside drags)
+let _evtMdown = false;
+document.addEventListener('mousedown', e => {
+  const modal = document.getElementById('evtDetailModal');
+  if (modal && modal.style.display === 'flex') _evtMdown = (e.target === modal);
+});
 document.addEventListener('click', e => {
   const modal = document.getElementById('evtDetailModal');
-  if (modal && e.target === modal) _closeEvtDetail();
+  if (modal && e.target === modal && _evtMdown) _closeEvtDetail();
 });
 
 // ── Export ────────────────────────────────────────────────────────

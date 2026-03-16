@@ -8,7 +8,9 @@ Each run_backup() call returns a result dict consumed by db_save_backup_run().
 import datetime
 import hashlib
 import json
+import os
 import re
+import threading
 import time
 
 # Strip ANSI/VT100 escape sequences from SSH shell output.
@@ -20,6 +22,71 @@ _ANSI_RE = re.compile(
 
 from logger import log_backup as log
 from db.backups import decrypt_pw
+from config import DB_PATH
+
+# ── SSH known-host fingerprint store (TOFU — Trust On First Use) ──────────
+# Keys are stored as  "host:port -> key_type:base64_fingerprint" in a simple
+# text file next to the database.  On first connect the key is accepted and
+# persisted; on subsequent connects a mismatch is treated as a hard error.
+
+_KNOWN_HOSTS_PATH = os.path.join(os.path.dirname(DB_PATH), "ssh_known_hosts.txt")
+_kh_lock = threading.Lock()
+
+
+def _load_known_hosts() -> dict:
+    """Return {host_port_str: (key_type, hex_fingerprint)}."""
+    out: dict = {}
+    try:
+        if not os.path.isfile(_KNOWN_HOSTS_PATH):
+            return out
+        with open(_KNOWN_HOSTS_PATH, 'r') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split('\t')
+                if len(parts) == 3:
+                    out[parts[0]] = (parts[1], parts[2])
+    except Exception as e:
+        log.warning(f"Could not read SSH known_hosts file: {e}")
+    return out
+
+
+def _save_known_host(hostport: str, key_type: str, fingerprint: str) -> None:
+    with _kh_lock:
+        with open(_KNOWN_HOSTS_PATH, 'a') as fh:
+            fh.write(f"{hostport}\t{key_type}\t{fingerprint}\n")
+
+
+def _verify_host_key(transport: 'paramiko.Transport', host: str, port: int) -> str | None:
+    """
+    Verify remote host key using TOFU.
+    Returns None on success, or an error string on failure.
+    """
+    import base64
+    remote_key = transport.get_remote_server_key()
+    key_type = remote_key.get_name()
+    fingerprint = hashlib.sha256(remote_key.asbytes()).hexdigest()
+    hostport = f"{host}:{port}"
+
+    known = _load_known_hosts()
+    if hostport not in known:
+        # First time seeing this host — trust and record
+        _save_known_host(hostport, key_type, fingerprint)
+        log.info(
+            f"SSH backup: trusting new host key for {hostport} "
+            f"({key_type} SHA256:{fingerprint[:16]}…) — saved to known_hosts"
+        )
+        return None
+
+    stored_type, stored_fp = known[hostport]
+    if stored_fp != fingerprint or stored_type != key_type:
+        return (
+            f"HOST KEY MISMATCH for {hostport}: expected {stored_type} "
+            f"SHA256:{stored_fp[:16]}… but got {key_type} SHA256:{fingerprint[:16]}… "
+            f"— possible MITM. To reset, remove the entry from {_KNOWN_HOSTS_PATH}"
+        )
+    return None
 
 # Optional dependency check
 try:
@@ -80,6 +147,15 @@ def _ssh_backup(device: dict, settings: dict) -> dict:
     except Exception as _conn_err:
         return _fail('ssh', f'SSH connection failed: {_conn_err}')
 
+    # ── Host key verification (TOFU) ──────────────────────────────────
+    _hk_err = _verify_host_key(_transport_factory, host, port)
+    if _hk_err:
+        try:
+            _transport_factory.close()
+        except Exception:
+            pass
+        return _fail('ssh', _hk_err)
+
     # ── Discover which auth methods the server actually accepts ───────
     _allowed: list = []
     try:
@@ -138,8 +214,10 @@ def _ssh_backup(device: dict, settings: dict) -> dict:
         )
 
     # ── Wire authenticated transport into an SSHClient ────────────────
+    # Host key was already verified above via _verify_host_key(); RejectPolicy
+    # is set here so any unexpected re-connect attempt is denied rather than silently accepted.
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
     client._transport = _transport_factory
 
     try:
@@ -293,7 +371,7 @@ def _ok(method: str, config: str) -> dict:
         'method':     method,
         'size_bytes': len(encoded),
         'sha256':     hashlib.sha256(encoded).hexdigest(),
-        'ts':         datetime.datetime.utcnow().isoformat(),
+        'ts':         datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 
@@ -305,7 +383,7 @@ def _fail(method: str, error_msg: str) -> dict:
         'method':     method,
         'size_bytes': 0,
         'sha256':     '',
-        'ts':         datetime.datetime.utcnow().isoformat(),
+        'ts':         datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 

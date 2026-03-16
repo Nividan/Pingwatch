@@ -14,8 +14,10 @@ SYS            = platform.system()
 DB_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pingwatch.db")
 SESSION_TTL = 86400   # 24 hours
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
-CONFIGS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
+FRONTEND_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
+CONFIGS_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
+CERTS_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
+TLS_PORT_DEFAULT = 8443
 
 # Pre-compiled HTTP route patterns
 _RE_DEVICE_LOGS   = re.compile(r'^/api/device/([^/]+)/logs$')
@@ -40,3 +42,6 @@ _RE_BACKUP_DEV      = re.compile(r'^/api/backups/([^/]+)$')
 _RE_BACKUP_HISTORY  = re.compile(r'^/api/backups/([^/]+)/history$')
 _RE_BACKUP_RUN_ID   = re.compile(r'^/api/backups/run/(\d+)$')
 _RE_BACKUP_TRIGGER  = re.compile(r'^/api/backups/([^/]+)/run$')
+_RE_TLS             = re.compile(r'^/api/tls$')
+_RE_TLS_UPLOAD      = re.compile(r'^/api/tls/upload$')
+_RE_TLS_GENERATE    = re.compile(r'^/api/tls/generate$')

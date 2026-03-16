@@ -20,6 +20,10 @@ let ctxTargetNode = null;
 // Single source of truth for VLAN colors — loaded from DB on boot
 let VLAN_COLORS = { '10': '#00d4ff', '20': '#ff8c00', '30': '#a855f7', '40': '#ffd700' };
 
+// Generation counter — incremented on every tab switch so in-flight loadData /
+// loadPingWatchPage calls from a previous switch self-cancel when superseded.
+let _pageGen = 0;
+
 // ═══════════════════════════ PINGWATCH LIVE TAB ═══════════════════════════
 let isPingWatchPage = true;   // true while PingWatch live tab is active
 let pwDevices = [];           // cached device list from /api/devices
@@ -99,16 +103,9 @@ function renderPageBar() {
     lbl.title = pg.name;
     lbl.textContent = pg.name;
     tab.appendChild(lbl);
-    if (pages.length > 1) {
-      const del = document.createElement('button');
-      del.className = 'page-tab-del';
-      del.title = 'Delete page';
-      del.innerHTML = '×';
-      del.addEventListener('click', e => { e.stopPropagation(); deletePage(pg.id, pg.name); });
-      tab.appendChild(del);
-    }
     tab.addEventListener('click', () => switchPage(pg.id));
     tab.addEventListener('dblclick', e => { e.stopPropagation(); renamePage(pg.id, pg.name); });
+    tab.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); _tabMenu(e, pg); });
     bar.appendChild(tab);
   }
   const addBtn = document.createElement('button');
@@ -180,6 +177,7 @@ async function switchToPingWatchPage() {
 }
 
 async function loadPingWatchPage() {
+  const gen = ++_pageGen;
   try {
     const [data, ovrRes, grpRes, lnkRes] = await Promise.all([
       fetch('/api/devices').then(r => r.json()),
@@ -187,11 +185,12 @@ async function loadPingWatchPage() {
       api('GET', '/api/settings/pw_group_overrides').catch(() => null),
       api('GET', '/api/settings/pw_links').catch(() => null),
     ]);
+    if (gen !== _pageGen) return; // superseded by a newer tab switch
     pwDevices = data.devices || [];
     pwOverrides = ovrRes?.value || {};
     pwGroupOverrides = grpRes?.value || {};
     pwLinks = lnkRes?.value || [];
-  } catch(e) { pwDevices = []; }
+  } catch(e) { if (gen !== _pageGen) return; pwDevices = []; }
   renderPingWatchCanvas();
   startPwSSE();
   fitToView();
@@ -687,6 +686,7 @@ function _pwSave(key, value) {
 }
 
 async function loadData() {
+  const gen = ++_pageGen;
   try {
     const [nodesData, linksData, settingsData, groupsData] = await Promise.all([
       api('GET', `/api/nodes?page=${currentPageId}`),
@@ -694,6 +694,7 @@ async function loadData() {
       api('GET', '/api/settings/vlan_colors').catch(() => null),
       api('GET', `/api/groups?page=${currentPageId}`).catch(() => []),
     ]);
+    if (gen !== _pageGen) return; // superseded by a newer tab switch
     nodes = nodesData;
     links = linksData;
     groups = groupsData;
@@ -706,7 +707,7 @@ async function loadData() {
     updateHeaderStats();
     if (!selectedEl) showDashboardPanel();
   } catch (e) {
-    toast('⚠ Failed to load: ' + e.message);
+    if (gen === _pageGen) toast('⚠ Failed to load: ' + e.message);
   }
 }
 
@@ -1713,6 +1714,34 @@ function showLinkPanel(lk) {
   `;
 }
 
+// ── Tab right-click context menu ─────────────────────────────────────────────
+function _tabMenu(e, pg) {
+  document.getElementById('_tab_ctx_menu')?.remove();
+  const menu = document.createElement('div');
+  menu.id = '_tab_ctx_menu';
+  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:#1a2035;border:1px solid rgba(0,212,255,0.2);border-radius:6px;padding:4px 0;z-index:9999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,0.5);`;
+  const items = [
+    { icon: '✏', label: 'Rename', action: () => renamePage(pg.id, pg.name), danger: false },
+    ...(pages.length > 1 ? [{ icon: '🗑', label: 'Delete', action: () => deletePage(pg.id, pg.name), danger: true }] : []),
+  ];
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.style.cssText = `padding:7px 14px;cursor:pointer;font-size:11px;font-family:'Share Tech Mono',monospace;letter-spacing:.5px;color:${item.danger ? '#ff5555' : 'rgba(0,212,255,0.8)'};display:flex;align-items:center;gap:8px;`;
+    row.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
+    row.onmouseenter = () => row.style.background = 'rgba(0,212,255,0.07)';
+    row.onmouseleave = () => row.style.background = '';
+    row.onclick = () => { close(); item.action(); };
+    menu.appendChild(row);
+  });
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  if (r.right  > window.innerWidth)  menu.style.left = (window.innerWidth  - r.width  - 8) + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top  = (window.innerHeight - r.height - 8) + 'px';
+  const close = () => menu.remove();
+  setTimeout(() => document.addEventListener('click', close, { once: true }), 0);
+  document.addEventListener('keydown', ev => { if (ev.key === 'Escape') close(); }, { once: true });
+}
+
 // ── Shared confirm dialog (replaces window.confirm — blocked on remote HTTP) ──
 function _confirm(msg, onYes, yesLabel='Yes, Delete', danger=true) {
   const ov = document.createElement('div');
@@ -2388,9 +2417,11 @@ window.addEventListener('keydown', e => {
   }
 });
 
-// Close modals on overlay click
+// Close modals on overlay click (ignore mousedown-inside drags)
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
-  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.classList.remove('open'); });
+  let _mdown = false;
+  overlay.addEventListener('mousedown', e => { _mdown = (e.target === overlay); });
+  overlay.addEventListener('click',     e => { if (e.target === overlay && _mdown) overlay.classList.remove('open'); });
 });
 
 // ═══════════════════════════ CONTEXT MENU ═══════════════════════════

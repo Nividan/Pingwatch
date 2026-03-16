@@ -8,8 +8,15 @@ async function changeOwnPassword(){
   if(np!==np2){toast('Passwords do not match','err');return;}
   if(np.length<8){toast('Password must be at least 8 characters','err');return;}
   btn.disabled=true;btn.textContent='Updating...';
-  const r=await api('PATCH','/api/me/password',{current_password:cur,password:np});
-  btn.disabled=false;btn.textContent='Update Password';
+  let r;
+  try{
+    r=await api('PATCH','/api/me/password',{current_password:cur,password:np});
+  }catch(e){
+    toast('Failed to update password','err');
+    return;
+  }finally{
+    btn.disabled=false;btn.textContent='Update Password';
+  }
   if(r.error){toast(r.error,'err');return;}
   document.getElementById('st-cpw').value='';
   document.getElementById('st-npw').value='';
@@ -26,7 +33,7 @@ async function reloadUserTable(){
 function openAddUser(){
   closeM('mau');
   const o=document.createElement('div'); o.className='mo'; o.id='mau';
-  o.onclick=e=>{if(e.target===o)closeM('mau');};
+  _overlayClose(o,()=>closeM('mau'));
   o.innerHTML=`
   <div class="mbox">
     <div class="mhd">
@@ -66,8 +73,15 @@ async function submitAddUser(){
   if(pw!==pw2){toast('Passwords do not match','err');return;}
   const btn=document.querySelector('#mau .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Creating...';}
-  const r=await api('POST','/api/users',{username,password:pw,role});
-  if(btn){btn.disabled=false;btn.textContent='Create User';}
+  let r;
+  try{
+    r=await api('POST','/api/users',{username,password:pw,role});
+  }catch(e){
+    toast('Failed to create user','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Create User';}
+  }
   if(r.error){toast(r.error,'err');return;}
   closeM('mau');
   await reloadUserTable();
@@ -79,7 +93,7 @@ function openResetPw(username){
   _resetPwTarget=username;
   closeM('mrpw');
   const o=document.createElement('div'); o.className='mo'; o.id='mrpw';
-  o.onclick=e=>{if(e.target===o)closeM('mrpw');};
+  _overlayClose(o,()=>closeM('mrpw'));
   o.innerHTML=`
   <div class="mbox">
     <div class="mhd">
@@ -108,8 +122,15 @@ async function submitResetPw(){
   if(pw!==pw2){toast('Passwords do not match','err');return;}
   const btn=document.querySelector('#mrpw .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Setting...';}
-  const r=await api('PATCH',`/api/users/${encodeURIComponent(_resetPwTarget)}/password`,{password:pw});
-  if(btn){btn.disabled=false;btn.textContent='Set Password';}
+  let r;
+  try{
+    r=await api('PATCH',`/api/users/${encodeURIComponent(_resetPwTarget)}/password`,{password:pw});
+  }catch(e){
+    toast('Failed to set password','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Set Password';}
+  }
   if(r.error){toast(r.error,'err');return;}
   closeM('mrpw');
   toast(`Password updated for "${_resetPwTarget}"`,'ok');

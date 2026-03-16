@@ -2,7 +2,7 @@
 function openAddDevice(){
   closeM('mad');
   const o=document.createElement('div');o.className='mo';o.id='mad';
-  o.onclick=e=>{if(e.target===o)closeM('mad')};
+  _overlayClose(o, ()=>closeM('mad'));
   o.innerHTML=`
   <div class="mbox">
     <div class="mhd"><div class="mttl">Add Device</div><button class="mclose" onclick="closeM('mad')">✕</button></div>
@@ -36,8 +36,15 @@ async function submitAddDevice(){
   if(!name||!host){toast('Name and host are required','err');return;}
   const btn=document.querySelector('#mad .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
-  const r=await api('POST','/api/device',{name,host,group,webhook_url});
-  if(btn){btn.disabled=false;btn.textContent='Add Device';}
+  let r;
+  try{
+    r=await api('POST','/api/device',{name,host,group,webhook_url});
+  }catch(e){
+    toast('Failed to add device','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Add Device';}
+  }
   if(!r.did){toast('Failed to add device','err');return;}
   closeM('mad');
   const devR=await fetch(`/api/device/${r.did}`);
@@ -62,7 +69,7 @@ function openEditDevice(did){
   closeM('dwo');
   closeM('med');
   const o = document.createElement('div'); o.className='mo'; o.id='med';
-  o.onclick = e => { if(e.target===o) closeM('med'); };
+  _overlayClose(o, ()=>closeM('med'));
   o.innerHTML = `
   <div class="mbox">
     <div class="mhd">
@@ -119,8 +126,15 @@ async function submitEditDevice(did){
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  const r = await api('PATCH', `/api/device/${did}`, {name, host, group, webhook_url, alerts_muted});
-  if(btn){btn.disabled=false;btn.textContent='Save Changes';}
+  let r;
+  try{
+    r = await api('PATCH', `/api/device/${did}`, {name, host, group, webhook_url, alerts_muted});
+  }catch(e){
+    toast('Failed to save changes','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save Changes';}
+  }
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   closeM('med');
   const dev = S.devices[did];

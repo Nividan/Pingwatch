@@ -244,7 +244,7 @@ function openAddSensor(did){
   window._snrAddMode=true;
   closeM('mas');
   const o=document.createElement('div');o.className='mo';o.id='mas';
-  o.onclick=e=>{if(e.target===o)closeM('mas')};
+  _overlayClose(o, ()=>closeM('mas'));
   o.innerHTML=`
   <div class="mbox" style="max-width:560px">
     <div class="mhd">
@@ -281,7 +281,7 @@ function openEditSensor(did, sid){
   window._snrAddMode=false;
   closeM('mes');
   const o=document.createElement('div');o.className='mo';o.id='mes';
-  o.onclick=e=>{if(e.target===o)closeM('mes')};
+  _overlayClose(o, ()=>closeM('mes'));
   o.innerHTML=`
   <div class="mbox" style="max-width:560px">
     <div class="mhd">
@@ -308,8 +308,15 @@ async function submitEditSensor(did, sid){
   if(!payload) return;
   const btn=document.querySelector('#mes .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  const r = await api('PATCH', `/api/device/${did}/sensor/${sid}`, payload);
-  if(btn){btn.disabled=false;btn.textContent='Save Changes';}
+  let r;
+  try{
+    r = await api('PATCH', `/api/device/${did}/sensor/${sid}`, payload);
+  }catch(e){
+    toast('Failed to update sensor','err');
+    return;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save Changes';}
+  }
   if(r.status !== 'updated'){toast('Failed to update sensor','err');return;}
   closeM('mes');
   closeM('dm');
@@ -426,8 +433,15 @@ async function discoverInterfaces(){
   if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Querying device…'; }
   if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
-  const r=await api('POST','/api/snmp/interfaces',{host,community,port,version});
-  if(btn){ btn.disabled=false; btn.textContent='⊕ Discover Interfaces'; }
+  let r;
+  try{
+    r=await api('POST','/api/snmp/interfaces',{host,community,port,version});
+  }catch(e){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    return;
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover Interfaces'; }
+  }
   if(r.error){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
     return;
