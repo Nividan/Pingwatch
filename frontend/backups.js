@@ -5,6 +5,7 @@
 let _bkDevices  = [];           // cached device list from /api/backups
 let _bkRunning  = new Set();    // device IDs currently backing up
 let _bkInited   = false;
+let _bkKeepMax  = 3;            // backup_keep from settings (configs to keep per device)
 
 // ── Init / refresh ───────────────────────────────────────────────────
 async function _bkInit() {
@@ -13,12 +14,17 @@ async function _bkInit() {
   if (!wrap) return;
   wrap.innerHTML = '<div class="bk-loading">Loading…</div>';
   try {
-    const r = await fetch('/api/backups');
+    const [r, sr] = await Promise.all([fetch('/api/backups'), fetch('/api/settings')]);
     if (r.status === 401) { showLogin('Session expired'); return; }
     const d = await r.json();
+    if (sr.ok) {
+      const s = await sr.json();
+      _bkKeepMax = parseInt(s.backup_keep) || 3;
+    }
     _bkDevices = d.devices || [];
     _bkRenderTable(_bkDevices);
   } catch (e) {
+    _bkInited = false;  // allow retry on next tab click
     wrap.innerHTML = `<div class="bk-err">Failed to load: ${esc(String(e))}</div>`;
   }
 }
@@ -28,51 +34,44 @@ function _bkRenderTable(devices) {
   const wrap = document.getElementById('bk-table-wrap');
   if (!wrap) return;
 
-  // Sort: enabled (configured) devices first, then alphabetically by name
-  const sorted = [...devices].sort((a, b) => {
-    const aConf = a.enabled ? 2 : (a.username ? 1 : 0);
-    const bConf = b.enabled ? 2 : (b.username ? 1 : 0);
-    if (bConf !== aConf) return bConf - aConf;
-    return (a.name || a.did).localeCompare(b.name || b.did);
-  });
-  devices = sorted;
-
   if (!devices.length) {
     wrap.innerHTML = '<div class="bk-empty">No devices found. Add devices in the Devices tab first.</div>';
     return;
   }
 
   const rows = devices.map(dev => {
-    const isRunning = _bkRunning.has(dev.did);
-    const statusCell = _bkStatusCell(dev, isRunning);
-    const timeCell   = dev.last_ts ? _bkRelTime(dev.last_ts) : '<span class="bk-never">—</span>';
-    const credCell   = dev.username
-      ? `<span class="bk-cred">⚿ ${esc(dev.username)}</span>`
+    const isRunning  = _bkRunning.has(dev.did);
+    const scheduled  = dev.enabled && dev.in_schedule
+      ? '<span class="bk-dot-on" title="In schedule">✓</span>'
       : '<span class="bk-never">—</span>';
-    const cntCell    = dev.run_count
-      ? `<span class="bk-run-cnt">${dev.run_count}/3</span>`
-      : '<span class="bk-never">0</span>';
+    const timeCell   = dev.last_ts ? _bkRelTime(dev.last_ts) : '<span class="bk-never">—</span>';
+    const statusCell = _bkStatusCell(dev, isRunning);
     const enabledDot = dev.enabled
       ? '<span class="bk-dot-on" title="Backup enabled">●</span>'
       : '<span class="bk-dot-off" title="Backup disabled">○</span>';
+    const cnt = dev.run_count || 0;
+    const cntCell = dev.enabled
+      ? `<span class="bk-cnt ${cnt >= _bkKeepMax ? 'bk-cnt-full' : ''}" title="${cnt} saved, max ${_bkKeepMax}">${cnt}/${_bkKeepMax}</span>`
+      : '<span class="bk-never">—</span>';
 
     return `<tr onclick="_bkOpenSettings('${esc(dev.did)}')" title="Click to configure">
       <td>${enabledDot} <strong>${esc(dev.name || dev.did)}</strong></td>
       <td class="bk-mono">${esc(dev.host || '—')}</td>
-      <td><span class="bk-method">${esc((dev.method || 'ssh').toUpperCase())}</span></td>
-      <td>${credCell}</td>
+      <td style="text-align:center">${scheduled}</td>
       <td>${timeCell}</td>
       <td>${statusCell}</td>
-      <td>${cntCell}</td>
-      <td onclick="event.stopPropagation()" class="bk-actions">
+      <td style="text-align:center">${cntCell}</td>
+      <td onclick="event.stopPropagation()" style="text-align:center">
+        ${dev.last_run_id
+          ? `<button class="btn-sm" onclick="_bkOpenViewer(${dev.last_run_id}, '${esc(dev.did)}')" title="View latest config">📄</button>`
+          : `<button class="btn-sm" disabled title="No backups yet">📄</button>`}
+      </td>
+      <td onclick="event.stopPropagation()" style="text-align:center">
         <button class="btn-sm ${isRunning ? 'bk-btn-spin' : ''}"
                 onclick="_bkTriggerRun('${esc(dev.did)}')"
                 ${isRunning ? 'disabled' : ''} title="Run backup now">
           ${isRunning ? '⟳' : '▶'}
         </button>
-        ${dev.last_run_id
-          ? `<button class="btn-sm" onclick="_bkOpenViewer(${dev.last_run_id}, '${esc(dev.did)}')" title="View latest config">📄</button>`
-          : `<button class="btn-sm" disabled title="No backups yet">📄</button>`}
       </td>
     </tr>`;
   }).join('');
@@ -81,14 +80,14 @@ function _bkRenderTable(devices) {
     <table class="bk-table">
       <thead>
         <tr>
-          <th>Device</th>
-          <th>Host</th>
-          <th>Method</th>
-          <th>Credentials</th>
+          <th>Device Name</th>
+          <th>IP Address</th>
+          <th>Scheduled</th>
           <th>Last Backup</th>
-          <th>Status</th>
-          <th>Configs</th>
-          <th>Actions</th>
+          <th>Last Status</th>
+          <th>Saved</th>
+          <th>Config</th>
+          <th>Run</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -163,7 +162,8 @@ function _bkOnBackupComplete(evt) {
     entry.last_error   = evt.error || '';
     entry.last_run_id  = evt.run_id || entry.last_run_id;
     entry.last_size    = evt.size || 0;
-    entry.run_count    = Math.min(3, (entry.run_count || 0) + 1);
+    // run_count is capped at _bkKeepMax because old entries are pruned on each run
+    entry.run_count    = Math.min(_bkKeepMax, (entry.run_count || 0) + 1);
   }
   if (activeMainTab === 'backups') _bkRenderTable(_bkDevices);
   const name = entry?.name || did;
@@ -174,8 +174,12 @@ function _bkOnBackupComplete(evt) {
 // ── Settings Modal ────────────────────────────────────────────────────
 async function _bkOpenSettings(did) {
   closeM('bk-settings');
-  const r = await fetch(`/api/backups/${did}`);
-  const d = await r.json();
+  let d;
+  try {
+    const r = await fetch(`/api/backups/${did}`);
+    if (!r.ok) { toast('Failed to load backup settings', 'err'); return; }
+    d = await r.json();
+  } catch { toast('Network error loading backup settings', 'err'); return; }
   const s = d.settings || {};
   const dev = _bkDevices.find(x => x.did === did) || {};
 
@@ -231,13 +235,12 @@ async function _bkOpenSettings(did) {
           <label class="fl">Commands <span style="color:var(--text3);font-size:10px">(one per line)</span></label>
           <textarea id="bks-cmds" rows="4" style="font-family:monospace;font-size:11px">${esc((s.commands || ['show running-config']).join('\n'))}</textarea>
         </div>
-        <div class="fr">
-          <label class="fl">Schedule</label>
-          <select id="bks-sched" style="width:100%">
-            <option value=""       ${!s.schedule?'selected':''}>Manual only</option>
-            <option value="daily"  ${s.schedule==='daily'?'selected':''}>Daily</option>
-            <option value="weekly" ${s.schedule==='weekly'?'selected':''}>Weekly</option>
-          </select>
+        <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:0">
+          <div style="flex:1">
+            <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Add to Scheduled Backup</div>
+            <div class="fh" style="margin:0">Runs when the global backup schedule fires (Settings → Config Backup)</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="bks-in-schedule" ${s.in_schedule ? 'checked' : ''}><span class="tsl"></span></label>
         </div>
       </div>
       <div class="mft">
@@ -266,7 +269,7 @@ async function _bkSaveSettings(did) {
     paging_cmd:      document.getElementById('bks-paging')?.value?.trim() || '',
     commands,
     timeout:         parseInt(document.getElementById('bks-timeout')?.value) || 30,
-    schedule:        document.getElementById('bks-sched')?.value        || '',
+    in_schedule:     document.getElementById('bks-in-schedule')?.checked || false,
   };
 
   const r = await api('PUT', `/api/backups/${did}`, payload);
@@ -276,9 +279,10 @@ async function _bkSaveSettings(did) {
   // Update local cache
   const entry = _bkDevices.find(d => d.did === did);
   if (entry) {
-    entry.enabled    = payload.enabled;
-    entry.method     = payload.method;
-    entry.username   = payload.username;
+    entry.enabled     = payload.enabled;
+    entry.method      = payload.method;
+    entry.username    = payload.username;
+    entry.in_schedule = payload.in_schedule;
     entry.has_password = entry.has_password || !!payload.password;
   }
 

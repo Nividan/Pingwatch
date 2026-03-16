@@ -69,10 +69,11 @@ class StatusWindow:
         # ── log source selection ───────────────────────────────────
         _here = os.path.dirname(os.path.abspath(__file__))
         _logdir = os.path.join(_here, "logs")
-        self._log_source = "app"   # "app" | "sensors" | "audit"
+        self._log_source = "app"   # "app" | "sensors" | "audit" | "backup"
         self._log_paths  = {
             "sensors": os.path.join(_logdir, "pingwatchsensors.log"),
             "audit":   os.path.join(_logdir, "pingwatchaudit.log"),
+            "backup":  os.path.join(_logdir, "pingwatchbackup.log"),
         }
         self._file_pos   = {}   # path -> byte offset (for tailing)
         self._file_lines = []   # accumulated lines for current file source
@@ -275,7 +276,7 @@ class StatusWindow:
                  font=("Segoe UI", 11, "bold")).pack(side="left")
 
         # Source selector buttons
-        for src, label in [("app", "App"), ("sensors", "Sensors"), ("audit", "Audit")]:
+        for src, label in [("app", "App"), ("sensors", "Sensors"), ("audit", "Audit"), ("backup", "Backup")]:
             _src = src
             btn = tk.Button(
                 lhdr, text=label, relief="flat", bd=0, cursor="hand2",
@@ -353,7 +354,15 @@ class StatusWindow:
             font=("Segoe UI", 13), padx=16, cursor="hand2",
             activebackground=BG3, activeforeground=RED, bd=0,
             command=self._do_quit,
-        ).pack(side="right", padx=14)
+        ).pack(side="right", padx=(4, 14))
+
+        tk.Button(
+            ft, text="↺ Restart",
+            bg=BG3, fg=YELLOW, relief="flat",
+            font=("Segoe UI", 13), padx=16, cursor="hand2",
+            activebackground=BG3, activeforeground=YELLOW, bd=0,
+            command=self._do_restart,
+        ).pack(side="right", padx=4)
 
     # ── periodic refresh ──────────────────────────────────────────
 
@@ -608,3 +617,8 @@ class StatusWindow:
 
     def _do_quit(self):
         self._quit()   # caller stops tray + calls self.destroy()
+
+    def _do_restart(self):
+        import sys, subprocess
+        subprocess.Popen([sys.executable] + sys.argv)
+        self._quit()

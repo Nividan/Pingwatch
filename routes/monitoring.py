@@ -5,9 +5,13 @@ Handles: /events (SSE), /api/flaps, /api/traps,
          /api/snmp/catalog, /api/snmp/interfaces.
 """
 
+import datetime
 import queue
+import sqlite3
+import time
 
 import app_state
+from config import DB_PATH
 from db import db_load_flaps, db_load_traps
 from logger import log
 
@@ -55,6 +59,40 @@ def handle(h, method, path, body):
         user, _ = h._require("viewer")
         if not user: return True
         h._json(200, {"traps": db_load_traps()})
+        return True
+
+    # ── /api/events/summary GET ───────────────────────────────────
+    if path == "/api/events/summary" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        now = time.time()
+        periods = {"1h": 3600, "24h": 86400, "7d": 604800}
+        con = None
+        try:
+            con = sqlite3.connect(DB_PATH)
+            result = {}
+            for label, secs in periods.items():
+                cutoff = datetime.datetime.utcfromtimestamp(now - secs).strftime("%Y-%m-%dT%H:%M:%SZ")
+                rows = con.execute(
+                    "SELECT direction, COUNT(*) FROM flap_log WHERE ts >= ? GROUP BY direction",
+                    (cutoff,)
+                ).fetchall()
+                counts = {r[0]: r[1] for r in rows}
+                trap_row = con.execute(
+                    "SELECT COUNT(*) FROM snmp_traps WHERE ts >= ?", (cutoff,)
+                ).fetchone()
+                result[label] = {
+                    "down":      counts.get("down", 0),
+                    "recovered": counts.get("recovered", 0),
+                    "threshold": counts.get("threshold", 0),
+                    "trap":      trap_row[0] if trap_row else 0,
+                }
+            h._json(200, {"summary": result})
+        except Exception as e:
+            log.error(f"Events summary error: {e}")
+            h._json(500, {"error": str(e)})
+        finally:
+            if con: con.close()
         return True
 
     # ── /api/snmp/catalog GET ─────────────────────────────────────

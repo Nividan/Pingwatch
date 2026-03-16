@@ -58,6 +58,12 @@ def handle(h, method, path, body):
             "latency_warn_ms":   int(_settings.get("latency_warn_ms", 300)),
             # Group F — per-type sensor defaults
             "snr_type_defaults": json.loads(_settings.get("snr_type_defaults", "{}")),
+            # Group G — global backup scheduler
+            "backup_sched_enabled": int(_settings.get("backup_sched_enabled", 0)),
+            "backup_sched_freq":    _settings.get("backup_sched_freq",  "daily"),
+            "backup_sched_time":    _settings.get("backup_sched_time",  "02:00"),
+            "backup_sched_days":    _settings.get("backup_sched_days",  "1,2,3,4,5,6,7"),
+            "backup_keep":          int(_settings.get("backup_keep", 3)),
         })
         return True
 
@@ -102,6 +108,23 @@ def handle(h, method, path, body):
                 _raw = json.dumps(_raw)
             _settings.load({"snr_type_defaults": _raw})
             _db_enqueue(lambda _v=_raw: db_save_settings({"snr_type_defaults": _v}))
+        # Backup scheduler settings
+        if "backup_sched_enabled" in body:
+            _bse = "1" if body["backup_sched_enabled"] else "0"
+            _settings.load({"backup_sched_enabled": _bse})
+            _db_enqueue(lambda _v=_bse: db_save_settings({"backup_sched_enabled": _v}))
+        if "backup_keep" in body:
+            try:
+                _bk = str(max(1, min(50, int(body["backup_keep"]))))
+            except (ValueError, TypeError):
+                h._json(400, {"error": "backup_keep must be an integer"}); return True
+            _settings.load({"backup_keep": _bk})
+            _db_enqueue(lambda _v=_bk: db_save_settings({"backup_keep": _v}))
+        for _k in ("backup_sched_freq", "backup_sched_time", "backup_sched_days"):
+            if _k in body:
+                _val = str(body[_k]).strip()
+                _settings.load({_k: _val})
+                _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to", "smtp_down_delay",
             "snr_interval", "snr_timeout", "snr_fail_after", "snr_recover_after",

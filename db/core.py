@@ -115,6 +115,13 @@ def db_init():
             "CREATE INDEX IF NOT EXISTS idx_samples_ds "
             "ON sensor_samples(did, sid, ts)"
         )
+        # Covering index: includes ok and ms so startup history/count queries
+        # never need to touch the main-table heap pages.  Eliminates thousands
+        # of random-read I/Os and reduces startup from minutes to seconds.
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
+            "ON sensor_samples(did, sid, ts, ok, ms)"
+        )
         con.execute("""
             CREATE TABLE IF NOT EXISTS snmp_traps (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,8 +192,14 @@ def db_init():
             ("login_fail_max",     "5"),
             ("login_fail_window",  "60"),
             ("org_name",           ""),
-            ("latency_good_ms",    "100"),
-            ("latency_warn_ms",    "300"),
+            ("latency_good_ms",      "100"),
+            ("latency_warn_ms",      "300"),
+            # Global backup scheduler settings
+            ("backup_sched_enabled", "0"),
+            ("backup_sched_freq",    "daily"),
+            ("backup_sched_time",    "02:00"),
+            ("backup_sched_days",    "1,2,3,4,5,6,7"),
+            ("backup_keep",          "3"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -251,6 +264,14 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # backup_devices — replace per-device schedule with global-schedule flag
+        try:
+            con.execute("ALTER TABLE backup_devices ADD COLUMN in_schedule INTEGER DEFAULT 0")
+            # Promote old per-device daily/weekly → participates in global schedule
+            con.execute("UPDATE backup_devices SET in_schedule=1 WHERE schedule IN ('daily','weekly')")
+            con.commit()
+        except Exception:
+            pass
     finally:
         con.close()
     log.info("DB init: schema ready")
@@ -271,16 +292,9 @@ def db_seed_users():
             print("  Change it in Settings -> Users -> Reset Password", flush=True)
             print("=" * 51, flush=True)
             log.warning("Default admin user created — password printed to terminal")
-        rows = con.execute(
-            "SELECT s.token, s.username, s.expires, COALESCE(u.role, 'admin') "
-            "FROM sessions s LEFT JOIN users u ON s.username = u.username "
-            "WHERE s.expires > ?",
-            (time.time(),)
-        ).fetchall()
-        with _SESSIONS_LOCK:
-            for token, username, expires, role in rows:
-                _SESSIONS[token] = {"username": username, "expires": expires, "role": role}
-        if rows:
-            log.info(f"DB seed: restored {len(rows)} active session(s) into memory")
+        # Clear all sessions on startup — everyone must log in again after a restart
+        con.execute("DELETE FROM sessions")
+        con.commit()
+        log.info("DB seed: all sessions cleared (server restarted)")
     finally:
         con.close()

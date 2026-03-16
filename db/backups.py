@@ -7,7 +7,10 @@ has_password / has_enable booleans instead.
 """
 
 import json
+import os
+import re
 import sqlite3
+from pathlib import Path
 
 from config import DB_PATH
 from logger import log
@@ -85,15 +88,14 @@ def db_get_backup_list() -> list:
     """
     con = _con()
     try:
-        # All configured devices
         rows = con.execute(
             "SELECT did, enabled, method, port, username, password_enc, "
-            "enable_enc, commands, paging_cmd, timeout, schedule "
+            "enable_enc, commands, paging_cmd, timeout, "
+            "COALESCE(in_schedule, 0) "
             "FROM backup_devices"
         ).fetchall()
         cfg_map = {r[0]: r for r in rows}
 
-        # Latest run per device
         latest = con.execute(
             "SELECT did, id, ts, success, size_bytes, error_msg "
             "FROM backup_runs "
@@ -101,17 +103,15 @@ def db_get_backup_list() -> list:
         ).fetchall()
         latest_map = {r[0]: r for r in latest}
 
-        # Count per device
         counts = con.execute(
             "SELECT did, COUNT(*) FROM backup_runs GROUP BY did"
         ).fetchall()
         count_map = {r[0]: r[1] for r in counts}
 
-        # All device IDs from backup_devices table
         result = []
         for did, cfg in cfg_map.items():
             _, enabled, method, port, username, password_enc, enable_enc, \
-                commands, paging_cmd, timeout, schedule = cfg
+                commands, paging_cmd, timeout, in_schedule = cfg
             lr = latest_map.get(did)
             result.append({
                 "did": did,
@@ -124,7 +124,7 @@ def db_get_backup_list() -> list:
                 "commands": _parse_cmds(commands),
                 "paging_cmd": paging_cmd,
                 "timeout": timeout,
-                "schedule": schedule,
+                "in_schedule": bool(in_schedule),
                 "last_run_id": lr[1] if lr else None,
                 "last_ts": lr[2] if lr else None,
                 "last_success": bool(lr[3]) if lr else None,
@@ -152,7 +152,8 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
     try:
         r = con.execute(
             "SELECT did, enabled, method, port, username, password_enc, "
-            "enable_enc, commands, paging_cmd, timeout, schedule "
+            "enable_enc, commands, paging_cmd, timeout, "
+            "COALESCE(in_schedule, 0) "
             "FROM backup_devices WHERE did=?", (did,)
         ).fetchone()
         if not r:
@@ -162,7 +163,8 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
             "port": r[3], "username": r[4],
             "has_password": bool(r[5]), "has_enable": bool(r[6]),
             "commands": _parse_cmds(r[7]),
-            "paging_cmd": r[8], "timeout": r[9], "schedule": r[10],
+            "paging_cmd": r[8], "timeout": r[9],
+            "in_schedule": bool(r[10]),
         }
         if with_secrets:
             result["password_enc"] = r[5] or ''
@@ -200,14 +202,14 @@ def db_save_backup_settings(did: str, data: dict):
         con.execute("""
             INSERT INTO backup_devices
                 (did, enabled, method, port, username, password_enc, enable_enc,
-                 commands, paging_cmd, timeout, schedule)
+                 commands, paging_cmd, timeout, in_schedule)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(did) DO UPDATE SET
                 enabled=excluded.enabled, method=excluded.method, port=excluded.port,
                 username=excluded.username, password_enc=excluded.password_enc,
                 enable_enc=excluded.enable_enc, commands=excluded.commands,
                 paging_cmd=excluded.paging_cmd, timeout=excluded.timeout,
-                schedule=excluded.schedule
+                in_schedule=excluded.in_schedule
         """, (
             did,
             1 if data.get('enabled') else 0,
@@ -219,7 +221,7 @@ def db_save_backup_settings(did: str, data: dict):
             commands_json,
             data.get('paging_cmd', ''),
             int(data.get('timeout', 30)),
-            data.get('schedule', ''),
+            1 if data.get('in_schedule') else 0,
         ))
         con.commit()
     finally:
@@ -265,9 +267,13 @@ def db_get_backup_run(run_id: int) -> dict | None:
 
 def db_save_backup_run(did: str, result: dict) -> int:
     """
-    INSERT a backup run result. Enforces 3-run retention per device.
+    INSERT a backup run result. Enforces per-device retention based on
+    the global 'backup_keep' setting (default 3).
     Returns the new run's id.
     """
+    from settings import get as _cfg
+    keep = max(1, int(_cfg('backup_keep', 3)))
+
     con = _con()
     try:
         cur = con.execute(
@@ -285,16 +291,51 @@ def db_save_backup_run(did: str, result: dict) -> int:
             )
         )
         new_id = cur.lastrowid
-        # Enforce 3-run retention
+        # Enforce configurable retention
         con.execute(
             "DELETE FROM backup_runs WHERE did=? AND id NOT IN "
-            "(SELECT id FROM backup_runs WHERE did=? ORDER BY ts DESC LIMIT 3)",
-            (did, did)
+            "(SELECT id FROM backup_runs WHERE did=? ORDER BY ts DESC LIMIT ?)",
+            (did, did, keep)
         )
         con.commit()
         return new_id
     finally:
         con.close()
+
+
+def db_write_config_file(did: str, device_name: str, ts_str: str, config_text: str):
+    """
+    Write config to configs/{device_name}/config_{ts}.txt and prune old files
+    to match the backup_keep retention setting.
+    """
+    from config import CONFIGS_DIR
+    from settings import get as _cfg
+
+    safe_name = re.sub(r'[^\w\-]', '_', device_name) or did
+    dev_dir = os.path.join(CONFIGS_DIR, safe_name)
+    os.makedirs(dev_dir, exist_ok=True)
+
+    # config_2026-03-14_02-00.txt
+    ts_file = ts_str[:16].replace('T', '_').replace(':', '-')
+    fpath = os.path.join(dev_dir, f'config_{ts_file}.txt')
+    try:
+        with open(fpath, 'w', encoding='utf-8') as f:
+            f.write(config_text)
+    except OSError as e:
+        log.warning(f"backup: could not write config file {fpath}: {e}")
+        return
+
+    # Enforce file-level retention
+    keep = max(1, int(_cfg('backup_keep', 3)))
+    try:
+        files = sorted(
+            Path(dev_dir).glob('config_*.txt'),
+            key=lambda p: p.stat().st_mtime
+        )
+        while len(files) > keep:
+            files.pop(0).unlink(missing_ok=True)
+    except OSError as e:
+        log.warning(f"backup: could not prune config files in {dev_dir}: {e}")
 
 
 def db_delete_backup_run(run_id: int):

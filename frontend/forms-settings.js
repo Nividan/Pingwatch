@@ -22,6 +22,7 @@ async function openSettings(){
       <button class="dw-tab" id="stab-btn-audit" onclick="switchSettingsTab('audit')">Audit</button>
       <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">Sensors</button>
       <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">Networking</button>
+      <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">Config Backup</button>
     </div>
     <div class="mbdy" id="stab-general" style="max-height:65vh;overflow-y:auto">
       <div class="fr">
@@ -226,18 +227,70 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
     </div>
+    <div class="mbdy" id="stab-backup" style="display:none;max-height:65vh;overflow-y:auto">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Global Backup Schedule</div>
+      <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="flex:1">
+          <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Scheduled Backups</div>
+          <div class="fh" style="margin:0">Run config backups automatically at the specified time</div>
+        </div>
+        <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-bk-enabled"><span class="tsl"></span></label>
+      </div>
+      <div class="fr" style="margin-top:14px" id="st-bk-freq-row">
+        <label class="fl">Frequency</label>
+        <select id="st-bk-freq" style="max-width:160px" onchange="_bkFreqChange()">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+        </select>
+      </div>
+      <div class="fr" style="margin-top:14px;display:none" id="st-bk-days-row">
+        <label class="fl">Days</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d1" value="1"> Mon</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d2" value="2"> Tue</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d3" value="3"> Wed</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d4" value="4"> Thu</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d5" value="5"> Fri</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d6" value="6"> Sat</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer"><input type="checkbox" id="st-bk-d7" value="7"> Sun</label>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Backup Time</label>
+        <input type="time" id="st-bk-time" value="02:00" style="max-width:140px"/>
+        <div class="fh">Server local time (24h)</div>
+      </div>
+      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Retention</div>
+        <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div style="flex:1">
+            <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Configs to Keep per Device</div>
+            <div class="fh" style="margin:0">Oldest config file and DB entry are deleted when the limit is exceeded</div>
+          </div>
+          <input type="number" id="st-bk-keep" min="1" max="50" value="3" style="width:70px;flex-shrink:0;text-align:center"/>
+        </div>
+      </div>
+      <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
+        Enable individual devices via <strong style="color:var(--text2)">Device Config Backup → Configure</strong> using the "Add to Scheduled Backup" toggle.
+      </div>
+    </div>
+    <div class="mft" id="stab-footer-backup" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
+    </div>
   </div>`;
   document.body.appendChild(o);
 }
 
 function switchSettingsTab(tab){
-  ['general','users','alerts','database','audit','sensors','networking'].forEach(t=>{
+  ['general','users','alerts','database','audit','sensors','networking','backup'].forEach(t=>{
     document.getElementById(`stab-${t}`).style.display = t===tab ? '' : 'none';
     document.getElementById(`stab-btn-${t}`).classList.toggle('active', t===tab);
     document.getElementById(`stab-footer-${t}`).style.display = t===tab ? '' : 'none';
   });
   if(tab==='audit')   loadAuditLog();
   if(tab==='sensors') loadSensorsDefaultsTab();
+  if(tab==='backup')  _loadBackupScheduleSettings();
 }
 
 async function saveNetworkingSettings(){
@@ -538,6 +591,57 @@ async function saveSettings(){
   if(body.snr_fail_after)   window._snrDef.fail_after=body.snr_fail_after;
   if(body.snr_recover_after)window._snrDef.recover_after=body.snr_recover_after;
   toast('Settings saved','ok');
+}
+
+function _bkFreqChange(){
+  const freq = document.getElementById('st-bk-freq')?.value;
+  const daysRow = document.getElementById('st-bk-days-row');
+  if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
+}
+
+async function _loadBackupScheduleSettings(){
+  const r = await api('GET', '/api/settings');
+  const en = document.getElementById('st-bk-enabled');
+  const freq = document.getElementById('st-bk-freq');
+  const time = document.getElementById('st-bk-time');
+  const keep = document.getElementById('st-bk-keep');
+  if(en)   en.checked = !!r.backup_sched_enabled;
+  if(freq) freq.value = r.backup_sched_freq || 'daily';
+  if(time) time.value = r.backup_sched_time || '02:00';
+  if(keep) keep.value = r.backup_keep != null ? r.backup_keep : 3;
+  // Populate day checkboxes
+  const days = (r.backup_sched_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  for(let i=1; i<=7; i++){
+    const cb = document.getElementById(`st-bk-d${i}`);
+    if(cb) cb.checked = days.includes(String(i));
+  }
+  _bkFreqChange();
+}
+
+async function saveBackupScheduleSettings(){
+  const enabled = document.getElementById('st-bk-enabled')?.checked ? 1 : 0;
+  const freq    = document.getElementById('st-bk-freq')?.value || 'daily';
+  const time    = document.getElementById('st-bk-time')?.value || '02:00';
+  const keep    = parseInt(document.getElementById('st-bk-keep')?.value) || 3;
+  const days = [];
+  for(let i=1; i<=7; i++){
+    if(document.getElementById(`st-bk-d${i}`)?.checked) days.push(i);
+  }
+  if(freq === 'weekly' && !days.length){
+    toast('Select at least one day for weekly schedule','err'); return;
+  }
+  const btn = document.querySelector('#stab-footer-backup .btn-p');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  const r = await api('PATCH', '/api/settings', {
+    backup_sched_enabled: enabled,
+    backup_sched_freq:    freq,
+    backup_sched_time:    time,
+    backup_sched_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
+    backup_keep:          keep,
+  });
+  if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
+  if(!r.ok){ toast('Failed to save backup settings','err'); return; }
+  toast('Backup schedule settings saved','ok');
 }
 
 async function testSmtp(){

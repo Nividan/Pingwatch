@@ -18,7 +18,7 @@ _ANSI_RE = re.compile(
     r'\x07|\r'
 )
 
-from logger import log
+from logger import log_backup as log
 from db.backups import decrypt_pw
 
 # Optional dependency check
@@ -317,3 +317,44 @@ def _parse_commands(raw) -> list:
         return v if isinstance(v, list) else [str(v)]
     except Exception:
         return [raw] if raw else ['show running-config']
+
+
+# ── Shared execution helper (used by manual API and scheduler) ───────
+
+def do_backup(did: str):
+    """
+    Execute backup for one device and persist the result.
+    Called by both the manual API trigger and the background scheduler.
+    """
+    import app_state as _as
+    from db.backups import (db_get_backup_settings, db_save_backup_run,
+                            db_write_config_file)
+
+    device = _as.STATE.devices.get(did)
+    if not device:
+        log.warning(f"Backup: device '{did}' not found in state — skipping")
+        return
+
+    settings = db_get_backup_settings(did, with_secrets=True)
+    if not settings or not settings.get('enabled'):
+        log.info(f"Backup: skipping '{did}' — not enabled")
+        return
+
+    result = run_backup(device, settings)
+    run_id = db_save_backup_run(did, result)
+
+    if result.get('success') and result.get('config'):
+        db_write_config_file(did, device.name, result['ts'], result['config'])
+
+    status = 'success' if result.get('success') else 'failed'
+    log.info(f"Backup: {status} for {device.name} ({device.host}) — "
+             f"{result.get('size_bytes', 0)} bytes")
+
+    _as.STATE._broadcast('backup_complete', {
+        'did':        did,
+        'run_id':     run_id,
+        'success':    result.get('success'),
+        'ts':         result.get('ts'),
+        'size_bytes': result.get('size_bytes', 0),
+        'error_msg':  result.get('error_msg', ''),
+    })

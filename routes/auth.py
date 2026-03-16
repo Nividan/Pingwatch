@@ -139,6 +139,10 @@ def handle(h, method, path, body):
             _fail_window = int(_settings.get("login_fail_window", _FAIL_WINDOW))
             _fail_max    = int(_settings.get("login_fail_max",    _FAIL_MAX))
             _FAIL_LOG[ip] = [t for t in _FAIL_LOG.get(ip, []) if now - t < _fail_window]
+            # Prune stale entries from other IPs so the dict doesn't grow unbounded
+            # (exclude current ip — its entry was just rebuilt and may be empty)
+            for _old_ip in [k for k, v in _FAIL_LOG.items() if not v and k != ip]:
+                del _FAIL_LOG[_old_ip]
             if len(_FAIL_LOG[ip]) >= _fail_max:
                 h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})
                 return True

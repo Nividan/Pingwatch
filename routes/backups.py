@@ -21,9 +21,10 @@ from db import (
     db_log_audit,
     db_get_backup_list, db_get_backup_settings, db_save_backup_settings,
     db_get_backup_history, db_get_backup_run,
-    db_save_backup_run, db_delete_backup_run, db_ensure_backup_device,
+    db_delete_backup_run, db_ensure_backup_device,
 )
-from logger import log
+from backup_engine import do_backup
+from logger import log_backup as log
 
 # ── Rate-limit: prevent spamming backup triggers per device ──────────────────
 _last_trigger: dict = {}
@@ -56,15 +57,17 @@ def handle(h, method, path, body):
                     'enabled': False, 'method': 'ssh', 'port': 22,
                     'username': '', 'has_password': False, 'has_enable': False,
                     'commands': ['show running-config'], 'paging_cmd': '',
-                    'timeout': 30, 'schedule': '',
+                    'timeout': 30, 'in_schedule': False,
                     'last_run_id': None, 'last_ts': None,
                     'last_success': None, 'last_size': None, 'last_error': None,
                     'run_count': 0,
                 })
-        # Enabled devices first → has-credentials second → alphabetically last
+        # Enabled+scheduled devices first → enabled-only second → alphabetically last
         def _sort_key(e):
-            configured = 2 if e.get('enabled') else (1 if e.get('username') else 0)
-            return (-configured, e.get('name', '').lower())
+            pri = 3 if (e.get('enabled') and e.get('in_schedule')) else \
+                  2 if e.get('enabled') else \
+                  1 if e.get('username') else 0
+            return (-pri, e.get('name', '').lower())
         devices.sort(key=_sort_key)
         h._json(200, {'devices': devices})
         return True
@@ -91,7 +94,15 @@ def handle(h, method, path, body):
         _last_trigger[did] = now
         db_log_audit(user, h.client_address[0], 'backup_run', did)
         log.info(f"Backup: manual trigger for device {did!r} by {user!r}")
-        threading.Thread(target=_do_backup, args=(did,), daemon=True).start()
+
+        def _run_backup(device_id):
+            try:
+                do_backup(device_id)
+            except Exception as e:
+                log.error(f"Backup crashed for device {device_id!r}: {e}", exc_info=True)
+
+        threading.Thread(target=_run_backup, args=(did,), daemon=True,
+                         name=f"manual-bk-{did}").start()
         h._json(202, {'ok': True, 'started': True})
         return True
 
@@ -123,12 +134,11 @@ def handle(h, method, path, body):
         did = m.group(1)
         settings = db_get_backup_settings(did)
         if not settings:
-            # Return defaults if not yet configured
             settings = {
                 'did': did, 'enabled': False, 'method': 'ssh', 'port': 22,
                 'username': '', 'has_password': False, 'has_enable': False,
                 'commands': ['show running-config'], 'paging_cmd': '',
-                'timeout': 30, 'schedule': '',
+                'timeout': 30, 'in_schedule': False,
             }
         h._json(200, {'settings': settings})
         return True
@@ -145,51 +155,3 @@ def handle(h, method, path, body):
         return True
 
     return False
-
-
-# ── Async backup execution ────────────────────────────────────────────
-
-def _do_backup(did: str):
-    """Run in a background thread. Fetches settings, runs backup, saves result."""
-    try:
-        from app_state import STATE
-        import app_state as _as
-
-        device = STATE.devices.get(did)
-        if not device:
-            log.warning(f"Backup: device {did!r} not found in state")
-            return
-
-        # with_secrets=True so the engine receives password_enc / enable_enc
-        settings_row = db_get_backup_settings(did, with_secrets=True)
-        if not settings_row:
-            log.warning(f"Backup: no settings for device {did!r}")
-            return
-
-        from backup_engine import run_backup
-        result = run_backup(device, settings_row)
-        new_id = db_save_backup_run(did, result)
-
-        status = 'success' if result['success'] else 'failed'
-        log.info(
-            f"Backup: {status} for {device.name} "
-            f"({device.host}) — {result.get('size_bytes', 0)} bytes"
-        )
-        if not result['success']:
-            log.warning(f"Backup error for {did!r}: {result.get('error_msg','')}")
-
-        # Push SSE event so the frontend table updates in real time
-        try:
-            _as.STATE._broadcast('backup_complete', {
-                'did':     did,
-                'run_id':  new_id,
-                'success': result['success'],
-                'ts':      result['ts'],
-                'size':    result.get('size_bytes', 0),
-                'error':   result.get('error_msg', ''),
-            })
-        except Exception as e:
-            log.warning(f"Backup SSE push failed: {e}")
-
-    except Exception as e:
-        log.error(f"Backup thread error for {did!r}: {e}")
