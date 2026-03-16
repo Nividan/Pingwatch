@@ -14,6 +14,7 @@
 - [Technologies Used](#technologies-used)
 - [Installation](#installation)
 - [Usage](#usage)
+- [HTTPS / TLS](#https--tls)
 - [Screenshots](#screenshots)
 - [Device Configuration Backup](#device-configuration-backup)
 - [Architecture](#architecture)
@@ -44,9 +45,11 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - 🌐 Web-based monitoring dashboard with live latency sparklines
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control (viewer / operator / admin)
-- 📤 Database export and import (SQLite backup/restore)
+- 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
+- 📤 Database export and import (SQLite backup/restore, up to 2 GB)
 - 🖥 Native desktop status window with optional system-tray icon
 - 💾 Automated device configuration backup via SSH and Telnet with encrypted credential storage
+- 🧙 Interactive first-run setup wizard (`start.bat` → `setup_wizard.py`)
 
 ### Supported Sensor Types
 
@@ -64,10 +67,11 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 ## Technologies Used
 
 - **Backend:** Python 3.x (stdlib only — no third-party web framework)
-- **Web Server:** Python's built-in `http.server` (threading mode)
+- **Web Server:** Python's built-in `http.server` (threading mode) + `ssl.SSLContext` for HTTPS
 - **Database:** SQLite with WAL mode and a single-writer queue
 - **Frontend:** Vanilla HTML, CSS, JavaScript (no build step)
 - **Real-time updates:** Server-Sent Events (SSE)
+- **TLS / HTTPS:** `cryptography` library (RSA-2048, X.509, Fernet key encryption)
 - **System Tray:** pystray + Pillow *(optional)*
 - **Network probes:** `socket`, `urllib`, `subprocess`, `pysnmp`
 - **SSH backup:** `paramiko` *(required for backup feature)*
@@ -84,12 +88,17 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
    ```bash
    cd Pingwatch
    ```
-3. **Install dependencies and start the server:**
+3. **Run the launcher — the setup wizard starts automatically on first launch:**
    ```bash
    start.bat
    ```
 
-> `start.bat` automatically installs `paramiko` and `cryptography` if they are not already present.
+The first-run wizard checks required packages, configures HTTP/HTTPS ports, generates a TLS certificate, sets firewall rules, and initialises the database — all interactively. Subsequent launches skip the wizard and go straight to the server.
+
+To re-run the wizard on an existing install:
+```bash
+start.bat --setup
+```
 
 
 ## Usage
@@ -102,13 +111,60 @@ start.bat
 pythonw pingwatch.pyw
 ```
 
-After startup, PingWatch opens at **http://localhost:7070** by default.
+After startup, PingWatch is available at **https://localhost:8443** by default (HTTPS enabled on fresh installs).
 The first-run password is printed to the console — change it immediately in **Settings → Users**.
 
 > **Linux / macOS:** ICMP ping requires root privileges.
 > ```bash
 > sudo python3 server.py
 > ```
+
+
+## HTTPS / TLS
+
+PingWatch v0.6 ships with native HTTPS support enabled by default on fresh installs.
+
+### How it works
+
+- The server wraps its built-in HTTP listener with `ssl.SSLContext` (TLS 1.2+ enforced, compression disabled).
+- On startup, the certificate is discovered in this order:
+  1. **Database** — previously generated or uploaded certificate (stored as PEM; private key Fernet-encrypted)
+  2. **`certs/` folder** — `cert.pem` + `key.pem` (validated before use)
+  3. **Auto-generate** — a new RSA-2048 self-signed certificate
+
+### Certificate management
+
+Navigate to **Settings → Networking → HTTPS / TLS**:
+
+| Action | Description |
+|--------|-------------|
+| **Generate self-signed** | Fill in CN, Organization, OU, Country, State, Locality, validity period, and optional extra SANs (DNS names or IP addresses). Certificate is stored encrypted in the database. |
+| **Upload certificate** | Paste an existing PEM certificate + private key. The pair is validated before saving. |
+| **Enable / Disable HTTPS** | Toggle TLS on or off (restart required). |
+| **HTTP → HTTPS redirect** | Optionally run a second lightweight HTTP listener on the HTTP port that redirects all traffic to HTTPS. |
+
+### Subject Alternative Names (SANs)
+
+When generating a self-signed certificate, the following SANs are always included automatically:
+- The CN / hostname you specify
+- `localhost` and `127.0.0.1`
+- Your machine's local hostname
+
+You can add extra SANs (additional DNS names or IP addresses) in both the setup wizard and the Settings UI — just enter one per line (UI) or comma-separated (wizard). No `DNS:` / `IP:` prefix needed; the type is detected automatically.
+
+### Certificate expiry
+
+PingWatch logs a **WARNING** at startup when the active certificate expires within 30 days, and an **ERROR** if it is already expired. Upload a new certificate in **Settings → Networking** to resolve it.
+
+### Ports (defaults)
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 7070 | HTTP | Dashboard (or redirect to HTTPS) |
+| 8443 | HTTPS | Main TLS-secured dashboard |
+| 1162 | UDP | SNMP trap reception |
+
+All ports are configurable in **Settings → Networking** or during the first-run wizard.
 
 
 ## Screenshots
@@ -190,6 +246,7 @@ PingWatch includes a built-in **Configuration Backup** system that connects to n
 - The encryption key is auto-generated on first use and stored in the `app_settings` table.
 - Plaintext passwords are **never** written to disk, log files, or held in server memory beyond the duration of a single backup run.
 - Credentials are fetched fresh from the database on every backup trigger.
+- SSH host keys are verified using **TOFU** (Trust On First Use) — stored in `ssh_known_hosts.txt` and rejected if they change.
 - All backup actions are recorded in the **audit log**.
 
 ### Config Viewer
@@ -225,6 +282,7 @@ Browser / Desktop GUI
         ▼
   server.py  ──  routes/          ← HTTP dispatcher + route modules
         │
+        ├── tls.py                ← TLS certificate management
         ├── state.py              ← In-memory runtime state (devices, sensors)
         ├── probes.py             ← Sensor engine (ICMP, HTTP, TCP, …)
         ├── backup_engine.py      ← SSH / Telnet config backup engine
@@ -243,9 +301,15 @@ This design keeps each layer independently testable and allows new sensor types 
 ### Backend
 
 - **`server.py`** — HTTP dispatcher and application entry point.
-  Serves static files, delegates every API route to a `routes/` module, and starts background threads.
+  Serves static files, delegates every API route to a `routes/` module, and starts background threads. Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled.
 
-- **`app_state.py`** — Shared runtime globals (`STATE`, effective ports, tray-icon reference).
+- **`tls.py`** — TLS certificate management module.
+  Handles RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` folder → auto-generate), SSL context construction, certificate metadata parsing, pair validation, and expiry warnings.
+
+- **`setup_wizard.py`** — Interactive first-run setup wizard.
+  Guides new installs through package checks, HTTP/HTTPS port selection, TLS certificate setup, SNMP port configuration, firewall rules, and desktop shortcut creation. Writes all choices to the database and exits cleanly so `start.bat` can launch `server.py`.
+
+- **`app_state.py`** — Shared runtime globals (`STATE`, effective ports, TLS active flag, tray-icon reference).
   Prevents circular imports between `server.py` and `routes/`.
 
 - **`state.py`** — In-memory runtime state manager.
@@ -255,7 +319,7 @@ This design keeps each layer independently testable and allows new sensor types 
   Implements every monitoring probe type: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner.
 
 - **`backup_engine.py`** — Configuration backup engine.
-  Opens SSH (paramiko) or Telnet connections to network devices, sends user-defined commands, collects output, and returns the result for storage. Supports password auth, keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable, and configurable per-command idle timeouts.
+  Opens SSH (paramiko) or Telnet connections to network devices, sends user-defined commands, collects output, and returns the result for storage. Supports TOFU SSH host key verification, password auth, keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable, and configurable per-command idle timeouts.
 
 - **`auth.py`** — Authentication and session management.
   Handles login, password hashing (bcrypt-style), RBAC roles (`viewer` / `operator` / `admin`), and active sessions.
@@ -279,7 +343,9 @@ This design keeps each layer independently testable and allows new sensor types 
 - **`gui.py`** — Desktop status window.
   Lightweight tkinter window with a live log view, quick-launch button, and quit control.
 
-- **`pingwatch.pyw` / `start.bat`** — Launch helpers.
+- **`start.bat`** — Thin launcher. Elevates to admin, checks Python 3.8+, detects first run (or `--setup` flag), invokes `setup_wizard.py` when needed, then starts `server.py`.
+
+- **`pingwatch.pyw`** — Windowless launcher (no console window).
 
 ### Route Modules (`routes/`)
 
@@ -289,9 +355,19 @@ This design keeps each layer independently testable and allows new sensor types 
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/dashboard` |
+| `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
+
+### TLS API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/tls` | Certificate metadata + TLS settings (no private key) |
+| `PATCH` | `/api/tls` | Update `tls_enabled`, `tls_port`, `http_redirect` |
+| `POST` | `/api/tls/upload` | Upload and validate a new PEM cert + key pair |
+| `POST` | `/api/tls/generate` | Generate a new self-signed certificate |
 
 ### Database Package (`db/`)
 
@@ -323,7 +399,7 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 | `backups.js` | Backup table, settings modal, config viewer |
 | `forms-device.js` | Add/edit device form |
 | `forms-sensor.js` | Add/edit sensor form |
-| `forms-settings.js` | Application settings form |
+| `forms-settings.js` | Application settings form (including TLS/Networking tab) |
 | `forms-users.js` | User management form |
 | `forms-io.js` | DB export/import form |
 | `forms-utils.js` | Shared form helpers |
@@ -336,7 +412,7 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 ## High-Level Flow
 
 1. User opens the **web dashboard** in a browser or the **desktop GUI**.
-2. **`server.py`** receives every HTTP request and dispatches it to the matching `routes/` module.
+2. **`server.py`** receives every HTTP request and dispatches it to the matching `routes/` module. When HTTPS is enabled the socket is wrapped with `ssl.SSLContext`; a second lightweight HTTP server optionally redirects plain-HTTP traffic to HTTPS.
 3. Route handlers read/update runtime objects in **`state.py`** and call **`db/`** for persistence.
 4. Monitoring probes run on per-sensor background threads via **`probes.py`**.
 5. Probe results are pushed to connected browsers over **SSE** (`/events`).
@@ -350,7 +426,9 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 
 ```
 pingwatch/
-├── server.py               ← HTTP dispatcher + entry point
+├── server.py               ← HTTP/HTTPS dispatcher + entry point
+├── tls.py                  ← TLS certificate management
+├── setup_wizard.py         ← First-run interactive setup wizard
 ├── app_state.py            ← Shared runtime globals
 ├── state.py                ← In-memory device/sensor state
 ├── probes.py               ← Sensor engine
@@ -365,8 +443,9 @@ pingwatch/
 ├── snmp_catalog.py         ← SNMP OID catalog
 ├── gui.py                  ← Desktop status window
 ├── pingwatch.pyw           ← Windowless launcher
-├── start.bat               ← Console launcher
+├── start.bat               ← Thin console launcher (first-run detection)
 ├── requirements.txt        ← Python dependencies
+├── ssh_known_hosts.txt     ← SSH TOFU host key store (auto-created)
 │
 ├── db/                     ← SQLite persistence package
 │   ├── __init__.py         ← Re-exports all public symbols
@@ -383,9 +462,12 @@ pingwatch/
 │   ├── devices.py          ← Device & sensor CRUD
 │   ├── monitoring.py       ← SSE, flaps, traps, SNMP
 │   ├── settings.py         ← App settings, server info
+│   ├── tls.py              ← TLS certificate management API
 │   ├── topology.py         ← NTM pages/nodes/links/groups
 │   ├── export.py           ← DB export/import, audit
 │   └── backups.py          ← Device config backup API
+│
+├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
 └── frontend/               ← Web UI (served statically)
     ├── index.html
