@@ -82,12 +82,12 @@ function _bkRenderTable(devices) {
         <tr>
           <th>Device Name</th>
           <th>IP Address</th>
-          <th>Scheduled</th>
+          <th style="text-align:center">Scheduled</th>
           <th>Last Backup</th>
           <th>Last Status</th>
-          <th>Saved</th>
-          <th>Config</th>
-          <th>Run</th>
+          <th style="text-align:center">Saved</th>
+          <th style="text-align:center">Config</th>
+          <th style="text-align:center">Run</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
