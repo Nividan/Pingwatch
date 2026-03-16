@@ -148,6 +148,22 @@ def handle(h, method, path, body):
         user, _ = h._require('operator')
         if not user: return True
         did = m.group(1)
+        # Validate user-supplied fields before persisting
+        _method = (body.get('method') or 'ssh').lower()
+        if _method not in ('ssh', 'telnet'):
+            h._json(400, {'error': f"Unsupported backup method: {_method!r}"}); return True
+        try:
+            _port = int(body.get('port', 22))
+            if not (1 <= _port <= 65535):
+                raise ValueError
+        except (TypeError, ValueError):
+            h._json(400, {'error': 'Port must be an integer between 1 and 65535'}); return True
+        try:
+            _timeout = int(body.get('timeout', 30))
+            if not (1 <= _timeout <= 300):
+                raise ValueError
+        except (TypeError, ValueError):
+            h._json(400, {'error': 'Timeout must be an integer between 1 and 300'}); return True
         db_ensure_backup_device(did)
         db_save_backup_settings(did, body)
         db_log_audit(user, h.client_address[0], 'backup_settings_save', did)

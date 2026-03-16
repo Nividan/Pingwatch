@@ -364,7 +364,7 @@ def probe_tls(host, port=443, timeout=10):
         conn.close(); conn = None
         not_after = cert.get("notAfter", "")
         exp = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-        days = (exp - datetime.datetime.utcnow()).days
+        days = (exp - datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)).days
         ok = days > 0
         detail = (f"TLS valid, expires in {days}d ({ms}ms)" if ok
                   else f"TLS cert expired {-days}d ago ({ms}ms)")

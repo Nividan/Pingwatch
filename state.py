@@ -206,17 +206,32 @@ class Device:
 
 def _send_webhook(url: str, payload: dict):
     """POST a flap event to a webhook URL. Runs in a daemon thread."""
+    from logger import log
+    import ipaddress as _ip, socket as _sock, urllib.parse as _up
+
+    # ── Scheme check: only http/https are allowed ─────────────────────
+    _parsed = _up.urlparse(url)
+    if _parsed.scheme not in ('http', 'https'):
+        log.warning(f"Webhook blocked — disallowed scheme '{_parsed.scheme}': {url}")
+        return
+
+    # ── SSRF guard: resolve hostname and reject internal addresses ────
+    # Fail-closed: if DNS resolution or IP parsing fails, abort rather
+    # than falling through to the request.
     try:
-        import ipaddress as _ip, socket as _sock, urllib.parse as _up
-        _host = _up.urlparse(url).hostname or ""
+        _host = _parsed.hostname or ""
+        if not _host:
+            log.warning(f"Webhook blocked — no hostname: {url}")
+            return
         _addr = _sock.gethostbyname(_host)
         _obj  = _ip.ip_address(_addr)
-        if _obj.is_loopback or _obj.is_private or _obj.is_link_local:
-            from logger import log
-            log.warning(f"Webhook blocked — private/loopback address: {url}")
+        if _obj.is_loopback or _obj.is_private or _obj.is_link_local or _obj.is_reserved:
+            log.warning(f"Webhook blocked — private/reserved address {_addr}: {url}")
             return
-    except Exception:
-        pass  # DNS failure or parse error — let urlopen handle it
+    except Exception as _e:
+        log.warning(f"Webhook blocked — DNS/IP resolution failed for {url}: {_e}")
+        return
+
     try:
         import json as _json
         import urllib.request
@@ -228,7 +243,6 @@ def _send_webhook(url: str, payload: dict):
         )
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
-        from logger import log
         log.warning(f"Webhook failed ({url}): {e}")
 
 
@@ -381,7 +395,7 @@ class MonitorState:
         while s.running:
             result = s.probe()
             s.total += 1
-            _ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            _ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             _ts_float = time.time()
             _muted = s.alerts_muted or dev.alerts_muted
 

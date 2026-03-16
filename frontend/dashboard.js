@@ -342,7 +342,7 @@ function _dwOpenPicker() {
       <div class="dw-type-label">${reg.label}</div>
     </div>`).join('');
   const html = `
-    <div class="mo" id="dw-picker-overlay" onclick="if(event.target===this)this.remove()">
+    <div class="mo" id="dw-picker-overlay">
       <div class="mbox" style="width:440px">
         <div class="mhd">
           <span class="mttl">Add Widget</span>
@@ -354,6 +354,7 @@ function _dwOpenPicker() {
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+  _overlayClose(document.getElementById('dw-picker-overlay'), () => document.getElementById('dw-picker-overlay')?.remove());
 }
 
 function _dwSelectType(type) {
@@ -387,7 +388,7 @@ function _dwSelectType(type) {
   }).join('');
   const titleDefault = reg.label;
   const html = `
-    <div class="mo" id="dw-cfg-overlay" onclick="if(event.target===this)this.remove()">
+    <div class="mo" id="dw-cfg-overlay">
       <div class="mbox" style="width:380px">
         <div class="mhd">
           <span class="mttl">${reg.icon} ${reg.label}</span>
@@ -407,6 +408,7 @@ function _dwSelectType(type) {
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+  _overlayClose(document.getElementById('dw-cfg-overlay'), () => document.getElementById('dw-cfg-overlay')?.remove());
   // Populate sensor select for the initially-selected device
   const firstDev = Object.keys(S.devices)[0];
   if (firstDev && reg.fields.some(f => f.type === 'device-select')) _dwCfgDeviceChange(firstDev);
@@ -470,7 +472,7 @@ function _dwOpenEdit(wid) {
     return '';
   }).join('');
   const html = `
-    <div class="mo" id="dw-cfg-overlay" onclick="if(event.target===this)this.remove()">
+    <div class="mo" id="dw-cfg-overlay">
       <div class="mbox" style="width:380px">
         <div class="mhd">
           <span class="mttl">${reg.icon} Edit — ${reg.label}</span>
@@ -490,6 +492,7 @@ function _dwOpenEdit(wid) {
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+  _overlayClose(document.getElementById('dw-cfg-overlay'), () => document.getElementById('dw-cfg-overlay')?.remove());
   // Pre-populate sensor select with the current device's sensors (and preserve selection)
   if (w.cfg.did && reg.fields.some(f => f.type === 'device-select'))
     _dwCfgDeviceChange(w.cfg.did, w.cfg.sid);

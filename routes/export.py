@@ -52,11 +52,11 @@ def handle(h, method, path, body):
         if not user: return True
         db_log_audit(user, h.client_address[0], 'db_import')
         log.info(f"DB import: request received from {h.client_address[0]} by '{user}'")
-        _MAX_IMPORT = 512 * 1024 * 1024  # 512 MB
+        _MAX_IMPORT = 2 * 1024 * 1024 * 1024  # 2 GB
         n = int(h.headers.get("Content-Length", 0))
         if n > _MAX_IMPORT:
             log.warning(f"DB import: rejected — payload too large ({n} bytes)")
-            h._json(413, {"error": "File too large (max 512 MB)"}); return True
+            h._json(413, {"error": "File too large (max 2 GB)"}); return True
         if not n:
             h._json(400, {"error": "No data provided"}); return True
 

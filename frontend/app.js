@@ -7,6 +7,12 @@ let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
 // ── Clock ────────────────────────────────────────────────────────
 setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),500);
 
+// ── SSE helpers ──────────────────────────────────────────────────
+function _parseSSE(e){
+  try{ return JSON.parse(e.data); }
+  catch(err){ console.warn('SSE parse error',err,e.data); return null; }
+}
+
 // ── SSE ──────────────────────────────────────────────────────────
 function connectSSE(){
   if(sse)sse.close();
@@ -18,7 +24,7 @@ function connectSSE(){
     _sseResync();
   };
   sse.addEventListener('sensor',e=>{
-    const d=JSON.parse(e.data);
+    const d=_parseSSE(e); if(!d) return;
     const _key=`${d.device_id}/${d.sensor_id}`;
     if(!S.sensors[_key]) return;  // sensor was deleted — ignore stale probe event
     S.sensors[_key]=d;
@@ -30,7 +36,7 @@ function connectSSE(){
     if(typeof _dwOnSensorUpdate==='function') _dwOnSensorUpdate(d.device_id, d.sensor_id);
   });
   sse.addEventListener('device_status',e=>{
-    const d=JSON.parse(e.data);
+    const d=_parseSSE(e); if(!d) return;
     if(S.devices[d.did])S.devices[d.did].status=d.status;
     updateCardStatus(d.did,d.status);
     updateSbDevDot(d.did,d.status);
@@ -38,33 +44,33 @@ function connectSSE(){
     if(typeof _dwOnDeviceUpdate==='function') _dwOnDeviceUpdate();
   });
   sse.addEventListener('log',e=>{
-    const d=JSON.parse(e.data);
+    const d=_parseSSE(e); if(!d) return;
     pushLog(d.did,d.sid,d.msg,d.type);
   });
   sse.addEventListener('flap',e=>{
-    const d=JSON.parse(e.data);
+    const d=_parseSSE(e); if(!d) return;
     pushFlap(d);
   });
   sse.addEventListener('flap_down',e=>{
-    const d=JSON.parse(e.data); d._direction='down'; pushFlap(d);
+    const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
   });
   sse.addEventListener('flap_recovered',e=>{
-    const d=JSON.parse(e.data); d._direction='recovered'; pushFlap(d);
+    const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
   });
   sse.addEventListener('threshold_warning',e=>{
-    const d=JSON.parse(e.data); pushThresholdEvent(d,'warn');
+    const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
   });
   sse.addEventListener('threshold_critical',e=>{
-    const d=JSON.parse(e.data); pushThresholdEvent(d,'crit');
+    const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
   });
   sse.addEventListener('snmp_trap',e=>{
-    const d=JSON.parse(e.data); d._direction='trap'; pushFlap(d);
+    const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
     pushDevTrap(d);
   });
   sse.addEventListener('backup_complete',e=>{
-    const d=JSON.parse(e.data);
+    const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
   });
   sse.onerror=()=>{

@@ -335,13 +335,6 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .page-tab.active { color:var(--accent); background:rgba(0,212,255,0.09); }
 .page-tab.active::after { content:''; position:absolute; bottom:0; left:0; right:0; height:2px; background:var(--accent); }
 .page-tab-name { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.page-tab-del {
-  opacity:0; font-size:13px; line-height:1; padding:0 1px;
-  color:rgba(255,255,255,0.28); background:none; border:none; cursor:pointer;
-  transition:color 0.15s, opacity 0.15s;
-}
-.page-tab:hover .page-tab-del { opacity:1; }
-.page-tab-del:hover { color:var(--danger) !important; }
 #page-add-btn {
   flex-shrink:0; margin-left:6px; width:22px; height:22px;
   display:inline-flex; align-items:center; justify-content:center;
