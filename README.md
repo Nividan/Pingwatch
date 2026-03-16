@@ -138,18 +138,15 @@ NTM provides an interactive topology map where devices, switches, and servers ar
 **Draw.io style NTM**
 <img width="2200" height="1209" alt="image" src="https://github.com/user-attachments/assets/f42cb4f3-4167-4c91-b6d2-df635ad7c4ef" />
 
-### 💾 Device Config Backup
+### Device Configuration Backup
+PingWatch includes a built-in **Configuration Backup** system that connects to network devices over SSH or Telnet, retrieves their running configuration, stores it encrypted in the database, and tracks a full revision history.
+
 <img width="2154" height="420" alt="image" src="https://github.com/user-attachments/assets/0f94bfcd-d5e7-40aa-b950-c711c72f325b" />
 <img width="802" height="1042" alt="image" src="https://github.com/user-attachments/assets/886afeb8-e44d-487d-92b9-7ab3dbddab04" />
 <img width="818" height="982" alt="image" src="https://github.com/user-attachments/assets/5026650f-be34-44aa-a017-c813cf75880d" />
 
-
 ---
-
 ## Device Configuration Backup
-
-PingWatch includes a built-in **Configuration Backup** system that connects to network devices over SSH or Telnet, retrieves their running configuration, stores it encrypted in the database, and tracks a full revision history.
-
 ### How It Works
 
 1. Navigate to the **Backups** tab in the dashboard.
