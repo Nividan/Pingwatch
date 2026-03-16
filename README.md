@@ -2,6 +2,8 @@
 
 ![Python](https://img.shields.io/badge/python-3.x-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![License](https://img.shields.io/github/license/Nividan/Pingwatch)
+![Stars](https://img.shields.io/github/stars/Nividan/Pingwatch?style=social)
 [![Built with Claude](https://img.shields.io/badge/Built%20with-Claude%20AI-orange?logo=anthropic)](https://claude.ai)
 
 
