@@ -357,7 +357,7 @@ def _start_http_redirect(http_port: int, https_port: int):
         def log_message(self, *_): pass   # suppress access log noise
 
     try:
-        _rsrv = _hs.ThreadingHTTPServer((BIND, http_port), _RedirectHandler)
+        _rsrv = QuietServer((BIND, http_port), _RedirectHandler)
         threading.Thread(target=_rsrv.serve_forever, daemon=True,
                          name="http-redirect").start()
         log.info(f"HTTP→HTTPS redirect active: http://:{http_port} → https://:{https_port}")
