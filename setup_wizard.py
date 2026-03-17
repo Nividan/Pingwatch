@@ -253,7 +253,10 @@ def step1_packages():
                 _tag("ok", f"{pkg['name']} installed successfully")
             else:
                 _tag("error", f"Failed to install {pkg['name']}.")
-                _tag("info",  f"Fix manually: pip install {pkg['install']}")
+                _tag("info",  "Manual installation guide:")
+                _tag("info",  "  1. Open Command Prompt as Administrator")
+                _tag("info",  f"  2. Run: pip install {pkg['install']}")
+                _tag("info",  "  3. Re-run start.bat when done")
                 if pkg["required"]:
                     all_ok = False
         else:
@@ -268,18 +271,41 @@ def step1_packages():
         _tag("info",  "This enables SNMP OID polling sensors.")
         install_snmp = _ask_yn("Install net-snmp now?", default=False)
         if install_snmp:
-            _tag("info", "Trying Chocolatey ...")
-            r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
-            if r.returncode == 0:
-                _tag("ok", "net-snmp installed via Chocolatey")
-            else:
-                _tag("info", "Trying winget ...")
-                r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
-                if r2.returncode == 0:
-                    _tag("ok", "net-snmp installed via winget")
+            choco_ok = False
+            try:
+                _tag("info", "Trying Chocolatey ...")
+                r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
+                if r.returncode == 0:
+                    _tag("ok", "net-snmp installed via Chocolatey")
+                    choco_ok = True
                 else:
-                    _tag("warn", "Automatic install failed.")
-                    _tag("info",  "Download manually from: https://sourceforge.net/projects/net-snmp/")
+                    _tag("warn", "Chocolatey install failed (exit code {})".format(r.returncode))
+            except FileNotFoundError:
+                _tag("warn", "Chocolatey (choco) is not installed on this system.")
+            except Exception as _e:
+                _tag("warn", f"Chocolatey error: {_e}")
+
+            if not choco_ok:
+                winget_ok = False
+                try:
+                    _tag("info", "Trying winget ...")
+                    r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
+                    if r2.returncode == 0:
+                        _tag("ok", "net-snmp installed via winget")
+                        winget_ok = True
+                    else:
+                        _tag("warn", "winget install also failed.")
+                except FileNotFoundError:
+                    _tag("warn", "winget is not available on this system.")
+                except Exception as _e:
+                    _tag("warn", f"winget error: {_e}")
+
+                if not winget_ok:
+                    _tag("warn", "Automatic install failed. Manual installation guide:")
+                    _tag("info", "  1. Go to: https://sourceforge.net/projects/net-snmp/")
+                    _tag("info", "  2. Download the Windows installer (net-snmp-X.X.X-win64.exe)")
+                    _tag("info", "  3. Run the installer — tick 'Add to PATH' if prompted")
+                    _tag("info", "  4. Reboot or open a new terminal, then re-run start.bat")
         else:
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
 
@@ -438,7 +464,9 @@ def _step3_generate():
     except ImportError:
         _tag("error", "The 'cryptography' package is required for certificate generation.")
         _tag("info",  "Install it first: pip install cryptography>=41.0.0")
-        sys.exit(1)
+        _tag("warn",  "Falling back to HTTP-only mode — enable HTTPS later in Settings.")
+        _step3_http_only()
+        return
 
     _tag("info", "Generating certificate ...")
     try:
@@ -454,20 +482,31 @@ def _step3_generate():
         )
     except Exception as e:
         _tag("error", f"Certificate generation failed: {e}")
-        sys.exit(1)
+        _tag("warn",  "Falling back to HTTP-only mode — enable HTTPS later in Settings.")
+        _step3_http_only()
+        return
 
-    from tls import parse_cert_info
-    info = parse_cert_info(cert_pem)
+    try:
+        from tls import parse_cert_info
+        info = parse_cert_info(cert_pem)
+    except Exception:
+        info = {}
     _tag("ok", "Certificate generated:")
     _tag("info", f"  CN      : {info.get('subject', cn)}")
     _tag("info", f"  Issuer  : {info.get('issuer', org)}")
     _tag("info", f"  Expires : {info.get('not_after', '?')}  ({info.get('days_left', days)} days)")
 
-    from db.backups import encrypt_pw
+    try:
+        from db.backups import encrypt_pw
+        key_enc = encrypt_pw(key_pem)
+    except Exception as _e:
+        _tag("warn", f"Could not encrypt private key ({_e}) — storing unencrypted.")
+        key_enc = key_pem
+
     _state["tls_enabled"]     = True
     _state["tls_port"]        = tls_port
     _state["tls_cert_pem"]    = cert_pem
-    _state["tls_key_pem_enc"] = encrypt_pw(key_pem)
+    _state["tls_key_pem_enc"] = key_enc
     _state["tls_cert_source"] = "generated"
     _state["tls_cn"]          = cn
     _state["org_name"]        = org
@@ -494,8 +533,15 @@ def _step3_import():
         _step3_generate()
         return
 
-    from tls import validate_cert_key_pair, parse_cert_info
-    err = validate_cert_key_pair(cert_pem, key_pem)
+    try:
+        from tls import validate_cert_key_pair, parse_cert_info
+        err = validate_cert_key_pair(cert_pem, key_pem)
+    except Exception as _e:
+        _tag("error", f"TLS module error: {_e}")
+        _tag("info",  "Falling back to self-signed certificate generation.")
+        _step3_generate()
+        return
+
     if err:
         _tag("error", f"Certificate validation failed: {err}")
         _tag("info",  "Fix the certificate files and run start.bat --setup again,")
@@ -503,7 +549,10 @@ def _step3_import():
         _step3_generate()
         return
 
-    info = parse_cert_info(cert_pem)
+    try:
+        info = parse_cert_info(cert_pem)
+    except Exception:
+        info = {}
     _tag("ok", "Certificate validated:")
     _tag("info", f"  CN      : {info.get('subject', '?')}")
     _tag("info", f"  Expires : {info.get('not_after', '?')}  ({info.get('days_left', '?')} days)")
@@ -516,11 +565,17 @@ def _step3_import():
 
     tls_port = _ask_port("HTTPS port", TLS_PORT_DEFAULT)
 
-    from db.backups import encrypt_pw
+    try:
+        from db.backups import encrypt_pw
+        key_enc = encrypt_pw(key_pem)
+    except Exception as _e:
+        _tag("warn", f"Could not encrypt private key ({_e}) — storing unencrypted.")
+        key_enc = key_pem
+
     _state["tls_enabled"]     = True
     _state["tls_port"]        = tls_port
     _state["tls_cert_pem"]    = cert_pem
-    _state["tls_key_pem_enc"] = encrypt_pw(key_pem)
+    _state["tls_key_pem_enc"] = key_enc
     _state["tls_cert_source"] = "imported"
     _state["tls_cn"]          = info.get("subject", "")
     _tag("ok", "Certificate imported.")
@@ -579,23 +634,35 @@ def step5_firewall():
 
     for proto, port, name in rules:
         # Check if rule already exists
-        chk = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
-            capture_output=True,
-        )
-        if chk.returncode == 0:
+        rule_exists = False
+        try:
+            chk = subprocess.run(
+                ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
+                capture_output=True,
+            )
+            rule_exists = chk.returncode == 0
+        except Exception as _e:
+            _tag("warn", f"Could not check firewall rule '{name}': {_e}")
+
+        if rule_exists:
             _tag("ok", f"Rule already exists: {name}")
             continue
-        r = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "add", "rule",
-             f"name={name}", "dir=in", "action=allow",
-             f"protocol={proto}", f"localport={port}"],
-            capture_output=True,
-        )
-        if r.returncode == 0:
-            _tag("ok", f"Firewall rule added: {proto} {port} ({name})")
-        else:
-            _tag("warn", f"Could not add rule for {proto} {port} — add manually if needed")
+
+        try:
+            r = subprocess.run(
+                ["netsh", "advfirewall", "firewall", "add", "rule",
+                 f"name={name}", "dir=in", "action=allow",
+                 f"protocol={proto}", f"localport={port}"],
+                capture_output=True,
+            )
+            if r.returncode == 0:
+                _tag("ok", f"Firewall rule added: {proto} {port} ({name})")
+            else:
+                _tag("warn", f"Could not add rule for {proto} {port} — add manually if needed")
+        except FileNotFoundError:
+            _tag("warn", f"netsh not found — add firewall rule manually: {proto} {port} ({name})")
+        except Exception as _e:
+            _tag("warn", f"Firewall rule error for {proto} {port}: {_e}")
     print()
 
 
@@ -626,14 +693,19 @@ def step6_shortcut():
         f'$s.Description="PingWatch Network Monitor";'
         f'$s.Save()'
     )
-    r = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps_cmd],
-        capture_output=True,
-    )
-    if r.returncode == 0:
-        _tag("ok", f"Desktop shortcut created: {shortcut_path}")
-    else:
-        _tag("warn", "Could not create desktop shortcut — create it manually if needed")
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            _tag("ok", f"Desktop shortcut created: {shortcut_path}")
+        else:
+            _tag("warn", "Could not create desktop shortcut — create it manually if needed")
+    except FileNotFoundError:
+        _tag("warn", "PowerShell not found — desktop shortcut not created")
+    except Exception as _e:
+        _tag("warn", f"Desktop shortcut error: {_e}")
     print()
 
 
