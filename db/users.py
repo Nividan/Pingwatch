@@ -4,8 +4,8 @@ db/users.py — User management and app settings persistence.
 
 import sqlite3
 
-from config import DB_PATH
-from logger import log
+from core.config import DB_PATH
+from core.logger import log
 
 
 # ── App settings ─────────────────────────────────────────────────
@@ -56,7 +56,7 @@ def db_list_users() -> list:
 
 def db_add_user(username: str, password: str, role: str = "admin") -> bool:
     """Insert a new user. Returns False if username already exists."""
-    from auth import _hash_pw
+    from core.auth import _hash_pw
     try:
         con = sqlite3.connect(DB_PATH)
         con.execute("INSERT INTO users VALUES (?,?,?)", (username, _hash_pw(password), role))
@@ -85,7 +85,7 @@ def db_delete_user(username: str) -> bool:
 
 def db_set_password(username: str, password: str):
     """Update the password hash for an existing user."""
-    from auth import _hash_pw
+    from core.auth import _hash_pw
     try:
         con = sqlite3.connect(DB_PATH)
         con.execute("UPDATE users SET pw_hash=? WHERE username=?",

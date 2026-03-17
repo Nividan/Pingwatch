@@ -1,5 +1,5 @@
 """
-backup_engine.py — Device configuration backup execution.
+backup/engine.py — Device configuration backup execution.
 
 Supports SSH (via paramiko) and Telnet.
 Each run_backup() call returns a result dict consumed by db_save_backup_run().
@@ -20,9 +20,9 @@ _ANSI_RE = re.compile(
     r'\x07|\r'
 )
 
-from logger import log_backup as log
+from core.logger import log_backup as log
 from db.backups import decrypt_pw
-from config import DB_PATH
+from core.config import DB_PATH
 
 # ── SSH known-host fingerprint store (TOFU — Trust On First Use) ──────────
 # Keys are stored as  "host:port -> key_type:base64_fingerprint" in a simple
@@ -404,7 +404,7 @@ def do_backup(did: str):
     Execute backup for one device and persist the result.
     Called by both the manual API trigger and the background scheduler.
     """
-    import app_state as _as
+    import core.app_state as _as
     from db.backups import (db_get_backup_settings, db_save_backup_run,
                             db_write_config_file)
 

@@ -6,14 +6,14 @@ without creating circular imports (routes should never import from server.py).
 """
 
 import time
-from state import MonitorState
+from .state import MonitorState
 
 # ── Application state ─────────────────────────────────────────────
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "0.6.1"
-APP_VERSION_NAME = "bug-fixes"
+APP_VERSION      = "0.7.0"
+APP_VERSION_NAME = "file-structure"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─

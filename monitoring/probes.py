@@ -10,8 +10,8 @@ import time
 import urllib.error
 import urllib.request
 
-from config import SYS
-from logger import log_sensors
+from core.config import SYS
+from core.logger import log_sensors
 
 
 def probe_ping(host, timeout=4):

@@ -14,8 +14,8 @@ import re
 import threading
 from urllib.parse import urlparse, parse_qs
 
-import app_state
-from config import (
+import core.app_state as app_state
+from core.config import (
     _RE_DEVICE, _RE_DEVICE_ACTION, _RE_DEVICE_LOGS,
     _RE_SENSOR, _RE_SENSOR_ACTION, _RE_SENSOR_ITEM,
     _RE_SENSOR_HISTORY, _RE_SENSOR_SUMMARY, _RE_DEVICE_SCAN,
@@ -26,8 +26,8 @@ from db     import (
     db_load_err_logs, db_clear_err_logs, db_clear_sensor_err_logs,
     db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
 )
-from logger import log
-from probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
+from core.logger import log
+from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
 
 # ── Port-scan target list ─────────────────────────────────────────
 _SCAN_TARGETS = [

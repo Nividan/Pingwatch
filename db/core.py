@@ -7,9 +7,9 @@ import sqlite3
 import threading
 import time
 
-from auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
-from config import DB_PATH
-from logger import log
+from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
+from core.config import DB_PATH
+from core.logger import log
 
 # ── Single-writer queue ───────────────────────────────────────────
 _DB_QUEUE: queue.Queue = queue.Queue()
@@ -280,6 +280,75 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS enterprise_oid_map (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                enterprise_oid TEXT NOT NULL UNIQUE,
+                vendor         TEXT NOT NULL,
+                product_family TEXT DEFAULT '',
+                notes          TEXT DEFAULT ''
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_eom_oid "
+            "ON enterprise_oid_map(enterprise_oid)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS trap_definitions (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                trap_oid           TEXT NOT NULL UNIQUE,
+                trap_name          TEXT NOT NULL,
+                vendor             TEXT DEFAULT '',
+                product_family     TEXT DEFAULT '',
+                severity           TEXT DEFAULT 'info',
+                category           TEXT DEFAULT '',
+                probable_cause     TEXT DEFAULT '',
+                description        TEXT DEFAULT '',
+                recommended_action TEXT DEFAULT '',
+                varbind_hints      TEXT DEFAULT '{}',
+                mib_name           TEXT DEFAULT '',
+                source             TEXT DEFAULT 'builtin'
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_td_oid    ON trap_definitions(trap_oid)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_td_vendor ON trap_definitions(vendor)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS trap_categories (
+                name  TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                color TEXT DEFAULT ''
+            )""")
+        # ── snmp_traps enrichment columns (migration) ─────────────────
+        for _col in [
+            "ALTER TABLE snmp_traps ADD COLUMN vendor          TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN product_family  TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN trap_name       TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN severity        TEXT DEFAULT 'info'",
+            "ALTER TABLE snmp_traps ADD COLUMN category        TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN probable_cause  TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN recommended_action TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN raw_varbinds    TEXT DEFAULT '[]'",
+            "ALTER TABLE snmp_traps ADD COLUMN enriched        INTEGER DEFAULT 0",
+        ]:
+            try:
+                con.execute(_col)
+                con.commit()
+            except Exception:
+                pass
+        # Fast lookup indexes on snmp_traps
+        for _idx in [
+            "CREATE INDEX IF NOT EXISTS idx_traps_src    ON snmp_traps(src_ip, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_traps_vendor ON snmp_traps(vendor, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_traps_oid    ON snmp_traps(trap_oid)",
+        ]:
+            try:
+                con.execute(_idx)
+            except Exception:
+                pass
+        con.commit()
     finally:
         con.close()
     log.info("DB init: schema ready")

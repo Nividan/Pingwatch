@@ -13,13 +13,13 @@ import ssl
 import tempfile
 from pathlib import Path
 
-from logger import log
+from .logger import log
 
 # ── CERTS_DIR (discovery folder) ─────────────────────────────────────────────
 # Imported lazily inside functions to avoid circular imports at module load time.
 
 def _certs_dir() -> Path:
-    from config import CERTS_DIR
+    from .config import CERTS_DIR
     return Path(CERTS_DIR)
 
 

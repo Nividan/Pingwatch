@@ -468,6 +468,28 @@ async function _refreshEvents(){
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
     renderFlaps();
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
+    _loadTrapFilters();
+  }catch(e){}
+}
+
+async function _loadTrapFilters(){
+  try{
+    const [vd, cd] = await Promise.all([
+      fetch('/api/traps/vendors').then(r=>r.json()),
+      fetch('/api/traps/categories').then(r=>r.json()),
+    ]);
+    const vSel = document.getElementById('evtFVendor');
+    const cSel = document.getElementById('evtFCat');
+    if(vSel && vd.vendors){
+      vd.vendors.forEach(v=>{
+        const o=document.createElement('option'); o.value=v; o.textContent=v; vSel.appendChild(o);
+      });
+    }
+    if(cSel && cd.categories){
+      cd.categories.forEach(c=>{
+        const o=document.createElement('option'); o.value=c.name; o.textContent=c.label; cSel.appendChild(o);
+      });
+    }
   }catch(e){}
 }
 

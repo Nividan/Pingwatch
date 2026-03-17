@@ -5,11 +5,11 @@ db/persistence.py — Device/sensor save, load, and autosave loop.
 import sqlite3
 import time
 
-from config      import DB_PATH
-from logger      import log
-from state       import Device, Sensor
-from db.core     import _db_enqueue
-import settings as _settings
+from core.config  import DB_PATH
+from core.logger  import log
+from core.state   import Device, Sensor
+from db.core      import _db_enqueue
+import core.settings as _settings
 
 
 def db_save(state):

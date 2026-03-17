@@ -13,7 +13,7 @@ DELETE /api/backups/run/<id>           → delete a backup run (admin)
 import threading
 import time as _time
 
-from config import (
+from core.config import (
     _RE_BACKUPS, _RE_BACKUP_DEV, _RE_BACKUP_HISTORY,
     _RE_BACKUP_RUN_ID, _RE_BACKUP_TRIGGER,
 )
@@ -23,8 +23,8 @@ from db import (
     db_get_backup_history, db_get_backup_run,
     db_delete_backup_run, db_ensure_backup_device,
 )
-from backup_engine import do_backup
-from logger import log_backup as log
+from backup.engine import do_backup
+from core.logger import log_backup as log
 
 # ── Rate-limit: prevent spamming backup triggers per device ──────────────────
 _last_trigger: dict = {}
@@ -38,7 +38,7 @@ def handle(h, method, path, body):
     if _RE_BACKUPS.match(path) and method == 'GET':
         user, _ = h._require('viewer')
         if not user: return True
-        from app_state import STATE
+        from core.app_state import STATE
         devices = db_get_backup_list()
         # Merge with live device names/hosts from STATE
         dev_map = {did: d for did, d in STATE.devices.items()}
