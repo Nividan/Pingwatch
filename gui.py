@@ -337,7 +337,7 @@ class StatusWindow:
             bg=ACCENT, fg="white", relief="flat",
             font=("Segoe UI", 13, "bold"), padx=16, cursor="hand2",
             activebackground="#1a6ed4", activeforeground="white", bd=0,
-            command=lambda: webbrowser.open(f"http://127.0.0.1:{self._port}"),
+            command=lambda: webbrowser.open(self._dashboard_url()),
         ).pack(side="left", padx=14)
 
         tk.Button(
@@ -345,7 +345,7 @@ class StatusWindow:
             bg=PURPLE, fg="white", relief="flat",
             font=("Segoe UI", 13, "bold"), padx=16, cursor="hand2",
             activebackground="#6c3483", activeforeground="white", bd=0,
-            command=lambda: webbrowser.open(f"http://127.0.0.1:{self._port}/map"),
+            command=lambda: webbrowser.open(self._dashboard_url("/map")),
         ).pack(side="left", padx=4)
 
         tk.Button(
@@ -378,12 +378,20 @@ class StatusWindow:
             pass
         self._root.after(2000, self._refresh)
 
+    def _dashboard_url(self, path: str = "") -> str:
+        import app_state
+        scheme = "https" if getattr(app_state, "tls_active", False) else "http"
+        port   = getattr(app_state, "effective_port", self._port)
+        return f"{scheme}://127.0.0.1:{port}{path}"
+
     def _update_uptime(self):
         elapsed = datetime.datetime.now() - self._start
         h, rem  = divmod(int(elapsed.total_seconds()), 3600)
         m, s    = divmod(rem, 60)
+        import app_state
+        port = getattr(app_state, "effective_port", self._port)
         self._lbl_uptime.config(
-            text=f"Port {self._port}   Uptime {h:02d}:{m:02d}:{s:02d}"
+            text=f"Port {port}   Uptime {h:02d}:{m:02d}:{s:02d}"
         )
 
     def _update_system_status(self):
