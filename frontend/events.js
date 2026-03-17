@@ -9,7 +9,11 @@ function evtSeverity(d) {
   if (dir === 'down')                                  return 'critical';
   if (dir === 'threshold' && d._thr_level === 'crit') return 'critical';
   if (dir === 'threshold' && d._thr_level === 'warn') return 'warning';
-  if (dir === 'trap')                                  return 'warning';
+  if (dir === 'trap') {
+    // Use enriched severity if available
+    const s = d.severity || 'warning';
+    return s === 'critical' ? 'critical' : s === 'info' ? 'info' : 'warning';
+  }
   return 'info';
 }
 
@@ -20,11 +24,25 @@ const _EVT_ICONS = {
   ping: '🖥', tcp: '🔌', http: '🌐', snmp: '📡',
   dns: '🌐', tls: '🔌', http_keyword: '🌐', banner: '🔌'
 };
+const _VENDOR_ICONS = {
+  'Fortinet': '🛡', 'Cisco': '🔵', 'Juniper': '🟠',
+  'APC': '⚡', 'HPE': '🔷', 'Aruba': '🔷', 'Ubiquiti': '📶',
+  'MikroTik': '🔴', 'VMware': '☁️', 'Net-SNMP': '🐧',
+  'Palo Alto': '🔥', 'Generic': '📡'
+};
 function evtIcon(d) {
   const dir = d._direction || d.direction || '';
-  if (dir === 'trap')      return '📡';
+  if (dir === 'trap') return _VENDOR_ICONS[d.vendor] || '📡';
   if (dir === 'threshold') return '⚠️';
   return _EVT_ICONS[d.stype] || '⚠️';
+}
+function _trapLabel(d) {
+  if (d.trap_name) return d.trap_name;
+  return d.trap_oid ? d.trap_oid.split('.').slice(-4).join('.') : 'trap';
+}
+function _vendorBadge(d) {
+  if (!d.vendor || d.vendor === 'Unknown') return '';
+  return `<span class="evt-vendor-badge">${esc(d.vendor)}</span> `;
 }
 
 // ── Duration ──────────────────────────────────────────────────────
@@ -64,7 +82,9 @@ const EVT_FILTER = {
   device: '',
   type: '',          // ''|'down'|'recovered'|'threshold'|'trap'
   severity: '',      // ''|'critical'|'warning'|'recovery'|'info'
-  search: ''
+  search: '',
+  vendor: '',
+  category: ''
 };
 
 function _applyEvtFilters() {
@@ -112,6 +132,16 @@ function _applyEvtFilters() {
   // Severity
   if (EVT_FILTER.severity) {
     result = result.filter(d => evtSeverity(d) === EVT_FILTER.severity);
+  }
+
+  // Vendor filter (traps only)
+  if (EVT_FILTER.vendor) {
+    result = result.filter(d => (d.vendor||'') === EVT_FILTER.vendor);
+  }
+
+  // Category filter (traps only)
+  if (EVT_FILTER.category) {
+    result = result.filter(d => (d.category||'') === EVT_FILTER.category);
   }
 
   // Full-text search
@@ -208,6 +238,8 @@ function _onEvtFilterChange() {
   EVT_FILTER.type      = document.getElementById('evtFType')?.value || '';
   EVT_FILTER.severity  = document.getElementById('evtFSev')?.value || '';
   EVT_FILTER.search    = document.getElementById('evtFSearch')?.value || '';
+  EVT_FILTER.vendor    = document.getElementById('evtFVendor')?.value || '';
+  EVT_FILTER.category  = document.getElementById('evtFCat')?.value || '';
 
   // Custom date range
   const fromEl = document.getElementById('evtFFrom');
@@ -230,8 +262,9 @@ function _clearEvtFilters() {
   EVT_FILTER.timeRange='24h'; EVT_FILTER.fromTs=null; EVT_FILTER.toTs=null;
   EVT_FILTER.group=''; EVT_FILTER.device=''; EVT_FILTER.type='';
   EVT_FILTER.severity=''; EVT_FILTER.search='';
+  EVT_FILTER.vendor=''; EVT_FILTER.category='';
   try { localStorage.removeItem('pw_evt_filter'); } catch(_) {}
-  const ids = ['evtFTime','evtFGroup','evtFDevice','evtFType','evtFSev','evtFSearch','evtFFrom','evtFTo'];
+  const ids = ['evtFTime','evtFGroup','evtFDevice','evtFType','evtFSev','evtFSearch','evtFFrom','evtFTo','evtFVendor','evtFCat'];
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -256,10 +289,11 @@ function _buildEvtCard(d) {
   const isTrap   = (d._direction || d.direction) === 'trap';
   const dispName = isTrap ? esc(d.dname||d.src_ip||'Unknown') : esc(d.dname||'');
   const dispSub  = isTrap
-    ? ('📡 ' + esc(d.trap_oid ? d.trap_oid.split('.').slice(-4).join('.') : 'trap'))
+    ? (icon + ' ' + esc(_trapLabel(d)))
     : (icon + ' ' + esc(d.sname||''));
   const dispHost = isTrap ? esc(d.src_ip||'') : esc(d.host||'');
   const durStr   = d._duration != null ? _fmtDuration(d._duration) : null;
+  const unknownCls = (isTrap && !d.enriched) ? ' evt-trap-unknown' : '';
 
   const row = document.createElement('div');
   row.className = 'evt-row';
@@ -268,7 +302,8 @@ function _buildEvtCard(d) {
   row.innerHTML =
     '<div class="evt-top">' +
       `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span>` +
-      '<div class="evt-name">' + dispName + ' · ' + dispSub + '</div>' +
+      '<div class="evt-name' + unknownCls + '">' + (isTrap ? _vendorBadge(d) : '') + dispName + ' · ' + dispSub + '</div>' +
+      (isTrap && d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') +
       (durStr ? `<span class="evt-dur">${durStr}</span>` : '') +
       '<div class="evt-time">' + dispTime + '</div>' +
     '</div>' +
@@ -286,8 +321,8 @@ function _buildEvtTable(events) {
   tbl.className = 'evt-table';
   tbl.innerHTML =
     '<thead><tr>' +
-      '<th>Sev</th><th>Time</th><th>Device</th><th>Sensor / Source</th>' +
-      '<th>Detail</th><th>Duration</th>' +
+      '<th>Sev</th><th>Time</th><th>Device</th><th>Trap / Sensor</th>' +
+      '<th>Vendor</th><th>Detail</th><th>Duration</th>' +
     '</tr></thead>';
   const tbody = document.createElement('tbody');
   events.forEach(d => {
@@ -298,8 +333,11 @@ function _buildEvtTable(events) {
     const dispTime = d.ts ? (typeof fmtTs==='function' ? fmtTs(d.ts) : (time||d.ts)) : (time||'');
     const dispDate = d.ts ? (d.ts.split('T')[0]||date||'') : (date||'');
     const dispSub  = isTrap
-      ? ('📡 ' + esc(d.trap_oid ? d.trap_oid.split('.').slice(-4).join('.') : 'trap'))
+      ? (icon + ' ' + esc(_trapLabel(d)) + (!d.enriched ? ' <em style="opacity:.5">(unknown)</em>' : ''))
       : (icon + ' ' + esc(d.sname||''));
+    const vendorCell = isTrap
+      ? (d.vendor && d.vendor !== 'Unknown' ? _vendorBadge(d) + (d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') : '—')
+      : '—';
     const durStr = d._duration != null ? _fmtDuration(d._duration) : '—';
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
@@ -309,6 +347,7 @@ function _buildEvtTable(events) {
       `<td class="evt-td-time">${dispTime}<br><span style="color:var(--text3);font-size:10px">${dispDate}</span></td>` +
       `<td>${esc(isTrap ? (d.dname||d.src_ip||'Unknown') : (d.dname||''))}</td>` +
       `<td>${dispSub}</td>` +
+      `<td>${vendorCell}</td>` +
       `<td>${esc(d.detail||'')}</td>` +
       `<td class="evt-td-dur">${durStr}</td>`;
     tbody.appendChild(tr);
@@ -333,7 +372,8 @@ function _renderEvtView() {
     evtFDevice: EVT_FILTER.device,  evtFType: EVT_FILTER.type,
     evtFSev: EVT_FILTER.severity,   evtFSearch: EVT_FILTER.search,
     evtFFrom: _fmtLocal(EVT_FILTER.fromTs),
-    evtFTo:   _fmtLocal(EVT_FILTER.toTs)
+    evtFTo:   _fmtLocal(EVT_FILTER.toTs),
+    evtFVendor: EVT_FILTER.vendor,  evtFCat: EVT_FILTER.category
   };
   Object.entries(_syncMap).forEach(([id, val]) => {
     const el = document.getElementById(id);
@@ -393,6 +433,40 @@ function _openEvtDetail(d) {
   set('evtDtlSensor', esc(sensor));
   set('evtDtlType',   esc(typeLabel));
   set('evtDtlMsg',    esc(d.detail||d.community||'—'));
+
+  // ── Trap-specific enrichment rows ─────────────────────────────
+  const trapExtra = document.getElementById('evtDtlTrapExtra');
+  if (trapExtra) {
+    if (isTrap) {
+      let html = '';
+      if (d.vendor && d.vendor !== 'Unknown')
+        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Vendor</span><span>${_vendorBadge(d)}${esc(d.product_family||'')}</span></div>`;
+      if (d.trap_name)
+        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Trap Name</span><span style="font-family:monospace">${esc(d.trap_name)}</span></div>`;
+      if (d.category)
+        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Category</span><span class="evt-cat-badge">${esc(d.category)}</span></div>`;
+      if (d.probable_cause)
+        html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px"><span class="evt-dtl-label">Probable Cause</span><span style="color:var(--text2);font-size:12px">${esc(d.probable_cause)}</span></div>`;
+      if (d.recommended_action)
+        html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px"><span class="evt-dtl-label">Action</span><span style="color:var(--text2);font-size:12px">${esc(d.recommended_action)}</span></div>`;
+      if (d.raw_varbinds && d.raw_varbinds !== '[]') {
+        let vbHtml = '';
+        try {
+          const vbs = JSON.parse(d.raw_varbinds);
+          vbHtml = vbs.map(v => `<div>${esc(v.oid)} = ${esc(String(v.value))}</div>`).join('');
+        } catch { vbHtml = esc(d.raw_varbinds); }
+        html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px">` +
+          `<span class="evt-dtl-label">Varbinds</span>` +
+          `<div class="evt-trap-raw-block">${vbHtml}</div></div>`;
+      }
+      if (!d.enriched)
+        html += `<div class="evt-dtl-row"><span style="color:var(--text3);font-size:11px;font-style:italic">Unknown trap — no matching definition found</span></div>`;
+      trapExtra.innerHTML = html;
+      trapExtra.style.display = '';
+    } else {
+      trapExtra.style.display = 'none';
+    }
+  }
 
   const modal = document.getElementById('evtDetailModal');
   if (modal) { modal.style.display = 'flex'; }

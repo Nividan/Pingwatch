@@ -7,19 +7,19 @@ POST   /api/tls/upload    → upload and validate a new cert+key pair
 POST   /api/tls/generate  → generate a new self-signed certificate
 """
 
-import settings as _settings
-import app_state
+import core.settings as _settings
+import core.app_state as app_state
 
-from config import _RE_TLS, _RE_TLS_UPLOAD, _RE_TLS_GENERATE, TLS_PORT_DEFAULT
-from db     import _db_enqueue, db_log_audit, db_save_settings
-from logger import log
+from core.config import _RE_TLS, _RE_TLS_UPLOAD, _RE_TLS_GENERATE, TLS_PORT_DEFAULT
+from db          import _db_enqueue, db_log_audit, db_save_settings
+from core.logger import log
 
 
 # ── Shared helper: build the cert-info dict ───────────────────────────────────
 
 def _cert_info() -> dict:
     """Return parsed cert metadata from the current DB cert, or {}."""
-    from tls import parse_cert_info
+    from core.tls import parse_cert_info
     cert_pem = _settings.get("tls_cert_pem", "")
     info = parse_cert_info(cert_pem) if cert_pem else {}
     if info:
@@ -94,7 +94,7 @@ def handle(h, method, path, body):
             h._json(400, {"error": "cert_pem and key_pem are required"})
             return True
 
-        from tls import validate_cert_key_pair, parse_cert_info
+        from core.tls import validate_cert_key_pair, parse_cert_info
         from db.backups import encrypt_pw
 
         err = validate_cert_key_pair(cert_pem, key_pem)
@@ -128,7 +128,7 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
 
-        from tls import generate_self_signed_cert, parse_cert_info
+        from core.tls import generate_self_signed_cert, parse_cert_info
         from db.backups import encrypt_pw
         import socket as _sock
 

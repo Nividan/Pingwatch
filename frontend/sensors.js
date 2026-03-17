@@ -571,11 +571,8 @@ async function clearSensorLog(did,sid){
 
 function dmSwitchTab(did, sid, tab) {
   ['overview','history'].forEach(t => {
-    const panel = document.getElementById(`dm-tab-${t}-${did}-${sid}`);
-    const showing = t === tab;
-    panel.style.display = showing ? '' : 'none';
-    if (showing) { panel.classList.remove('stab-in'); void panel.offsetWidth; panel.classList.add('stab-in'); }
-    document.getElementById(`dm-tabn-${t}-${did}-${sid}`).classList.toggle('active', showing);
+    document.getElementById(`dm-tab-${t}-${did}-${sid}`).style.display = t===tab?'':'none';
+    document.getElementById(`dm-tabn-${t}-${did}-${sid}`).classList.toggle('active', t===tab);
   });
   if (tab==='history') loadDmHistory(did, sid, 1440);
 }
@@ -583,9 +580,6 @@ function dmSwitchTab(did, sid, tab) {
 function dmHistPick(did, sid, minutes) {
   document.querySelectorAll(`#dm-tab-history-${did}-${sid} .dm-hist-pill`)
     .forEach(b => b.classList.toggle('active', +b.dataset.m === minutes));
-  const canvas = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
-  const sum    = document.getElementById(`dm-hist-summary-${did}-${sid}`);
-  [canvas, sum].forEach(el => { if(!el) return; el.classList.remove('stab-in'); void el.offsetWidth; el.classList.add('stab-in'); });
   loadDmHistory(did, sid, minutes);
 }
 

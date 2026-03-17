@@ -6,17 +6,19 @@ import os
 import re
 import platform
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 PORT           = 7070
 BIND           = "0.0.0.0"
 SNMP_TRAP_PORT = 162
 SYS            = platform.system()
 
-DB_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pingwatch.db")
+DB_PATH     = os.path.join(_ROOT, "pingwatch.db")
 SESSION_TTL = 86400   # 24 hours
 
-FRONTEND_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
-CONFIGS_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
-CERTS_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
+FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
+CONFIGS_DIR      = os.path.join(_ROOT, "configs")
+CERTS_DIR        = os.path.join(_ROOT, "certs")
 TLS_PORT_DEFAULT = 8443
 
 # Pre-compiled HTTP route patterns

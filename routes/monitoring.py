@@ -10,10 +10,10 @@ import queue
 import sqlite3
 import time
 
-import app_state
-from config import DB_PATH
+import core.app_state as app_state
+from core.config import DB_PATH
 from db import db_load_flaps, db_load_traps
-from logger import log
+from core.logger import log
 
 
 def handle(h, method, path, body):
@@ -58,7 +58,30 @@ def handle(h, method, path, body):
     if path == "/api/traps" and method == "GET":
         user, _ = h._require("viewer")
         if not user: return True
-        h._json(200, {"traps": db_load_traps()})
+        from urllib.parse import parse_qs, urlparse as _urlparse
+        qs = parse_qs(_urlparse(h.path).query)
+        vendor   = qs.get("vendor",   [None])[0]
+        category = qs.get("category", [None])[0]
+        severity = qs.get("severity", [None])[0]
+        h._json(200, {"traps": db_load_traps(
+            vendor=vendor, category=category, severity=severity
+        )})
+        return True
+
+    # ── /api/traps/vendors GET ────────────────────────────────────
+    if path == "/api/traps/vendors" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db.trap_defs import db_get_trap_vendors
+        h._json(200, {"vendors": db_get_trap_vendors()})
+        return True
+
+    # ── /api/traps/categories GET ─────────────────────────────────
+    if path == "/api/traps/categories" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db.trap_defs import db_get_trap_categories
+        h._json(200, {"categories": db_get_trap_categories()})
         return True
 
     # ── /api/events/summary GET ───────────────────────────────────
@@ -98,7 +121,7 @@ def handle(h, method, path, body):
     # ── /api/snmp/catalog GET ─────────────────────────────────────
     if path == "/api/snmp/catalog" and method == "GET":
         if not h._auth(): return True
-        from snmp_catalog import SNMP_CATALOG
+        from snmp.catalog import SNMP_CATALOG
         h._json(200, {"catalog": SNMP_CATALOG})
         return True
 
@@ -106,7 +129,7 @@ def handle(h, method, path, body):
     if path == "/api/snmp/interfaces" and method == "POST":
         user, _ = h._require("operator")
         if not user: return True
-        from probes import snmpwalk_interfaces
+        from monitoring.probes import snmpwalk_interfaces
         _host = (body.get("host")      or "").strip()
         _comm = (body.get("community") or "public").strip()
         _port = int(body.get("port")   or 161)

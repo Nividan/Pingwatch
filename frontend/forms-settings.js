@@ -124,13 +124,13 @@ async function openSettings(){
         </div>
       </div>
     </div>
-    <div class="mbdy" id="stab-users" style="display:none;padding-top:8px;max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-users" style="display:none;padding-top:8px">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
       <div style="margin-top:14px">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
       </div>
     </div>
-    <div class="mbdy" id="stab-alerts" style="display:none;max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-alerts" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
       <div class="fgrid">
         <div class="fr"><label class="fl">SMTP Host</label>
@@ -180,7 +180,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
     </div>
-    <div class="mbdy" id="stab-database" style="display:none;max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-database" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Backup &amp; Restore</div>
       <div class="fr">
         <label class="fl">Export Database</label>
@@ -329,12 +329,9 @@ async function openSettings(){
 
 function switchSettingsTab(tab){
   ['general','users','alerts','database','audit','sensors','networking','backup'].forEach(t=>{
-    const panel = document.getElementById(`stab-${t}`);
-    const showing = t === tab;
-    panel.style.display = showing ? '' : 'none';
-    if(showing){ panel.classList.remove('stab-in'); void panel.offsetWidth; panel.classList.add('stab-in'); }
-    document.getElementById(`stab-btn-${t}`).classList.toggle('active', showing);
-    document.getElementById(`stab-footer-${t}`).style.display = showing ? '' : 'none';
+    document.getElementById(`stab-${t}`).style.display = t===tab ? '' : 'none';
+    document.getElementById(`stab-btn-${t}`).classList.toggle('active', t===tab);
+    document.getElementById(`stab-footer-${t}`).style.display = t===tab ? '' : 'none';
   });
   if(tab==='audit')   loadAuditLog();
   if(tab==='sensors') loadSensorsDefaultsTab();

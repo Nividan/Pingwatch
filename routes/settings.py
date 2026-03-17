@@ -9,11 +9,11 @@ import json
 import os
 import time
 
-import app_state
-from config import DB_PATH, BIND, PORT
-from db     import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
-from logger import log
-import settings as _settings
+import core.app_state as app_state
+from core.config import DB_PATH, BIND, PORT
+from db          import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
+from core.logger import log
+import core.settings as _settings
 
 
 def handle(h, method, path, body):

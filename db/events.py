@@ -4,9 +4,9 @@ db/events.py — Flap log, SNMP trap log, and sensor error log helpers.
 
 import sqlite3
 
-from config  import DB_PATH
-from logger  import log
-import settings as _settings
+from core.config  import DB_PATH
+from core.logger  import log
+import core.settings as _settings
 
 
 # ── Error log ────────────────────────────────────────────────────
@@ -123,15 +123,27 @@ def db_load_flaps():
 # ── SNMP trap log ────────────────────────────────────────────────
 
 def db_log_trap(t):
-    """Append one SNMP trap; keep at most 500."""
+    """Append one SNMP trap (with enrichment fields); keep at most max_trap_entries."""
     con = None
     try:
         con = sqlite3.connect(DB_PATH, timeout=15)
         con.execute(
-            "INSERT INTO snmp_traps (ts,src_ip,dname,community,trap_oid,detail) "
-            "VALUES (?,?,?,?,?,?)",
-            (t.get("ts", ""), t.get("src_ip", ""), t.get("dname", ""),
-             t.get("community", ""), t.get("trap_oid", ""), t.get("detail", ""))
+            "INSERT INTO snmp_traps "
+            "(ts,src_ip,dname,community,trap_oid,detail,"
+            " vendor,product_family,trap_name,severity,category,"
+            " probable_cause,recommended_action,raw_varbinds,enriched) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                t.get("ts", ""),          t.get("src_ip", ""),
+                t.get("dname", ""),       t.get("community", ""),
+                t.get("trap_oid", ""),    t.get("detail", ""),
+                t.get("vendor", ""),      t.get("product_family", ""),
+                t.get("trap_name", ""),   t.get("severity", "info"),
+                t.get("category", ""),    t.get("probable_cause", ""),
+                t.get("recommended_action", ""),
+                t.get("raw_varbinds", "[]"),
+                int(t.get("enriched", 0)),
+            )
         )
         _trap_limit = max(50, int(_settings.get('max_trap_entries', 500)))
         con.execute(
@@ -147,19 +159,36 @@ def db_log_trap(t):
             con.close()
 
 
-def db_load_traps():
-    """Return last 500 SNMP traps, newest first."""
+def db_load_traps(limit=500, vendor=None, category=None, severity=None):
+    """Return SNMP traps newest first with optional filters."""
     try:
         con = sqlite3.connect(DB_PATH)
-        rows = con.execute(
-            "SELECT ts,src_ip,dname,community,trap_oid,detail "
-            "FROM snmp_traps ORDER BY id DESC LIMIT 500"
-        ).fetchall()
+        where, params = [], []
+        if vendor:
+            where.append("vendor=?");   params.append(vendor)
+        if category:
+            where.append("category=?"); params.append(category)
+        if severity:
+            where.append("severity=?"); params.append(severity)
+        sql = (
+            "SELECT ts,src_ip,dname,community,trap_oid,detail,"
+            "vendor,product_family,trap_name,severity,category,"
+            "probable_cause,recommended_action,raw_varbinds,enriched "
+            "FROM snmp_traps"
+            + (" WHERE " + " AND ".join(where) if where else "")
+            + " ORDER BY id DESC LIMIT ?"
+        )
+        params.append(limit)
+        rows = con.execute(sql, params).fetchall()
         con.close()
-        return [{"ts": r[0], "src_ip": r[1], "dname": r[2],
-                 "community": r[3], "trap_oid": r[4], "detail": r[5],
-                 "_direction": "trap"}
-                for r in rows]
+        return [{
+            "ts": r[0], "src_ip": r[1], "dname": r[2], "community": r[3],
+            "trap_oid": r[4], "detail": r[5],
+            "vendor": r[6], "product_family": r[7], "trap_name": r[8],
+            "severity": r[9], "category": r[10], "probable_cause": r[11],
+            "recommended_action": r[12], "raw_varbinds": r[13],
+            "enriched": r[14], "_direction": "trap",
+        } for r in rows]
     except Exception as e:
         log.error(f"DB load traps error: {e}")
         return []

@@ -5,8 +5,8 @@ db/audit.py — Audit log write and query helpers.
 import sqlite3
 import time
 
-from config  import DB_PATH
-from logger  import log, log_audit
+from core.config import DB_PATH
+from core.logger import log, log_audit
 from db.core import _db_enqueue
 
 

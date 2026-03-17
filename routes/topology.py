@@ -9,7 +9,7 @@ Handles: /api/pages, /api/nodes, /api/links, /api/groups (GET/POST),
 import re
 
 from db import db_log_audit
-from network_map import (
+from monitoring.network_map import (
     topo_get_pages, topo_insert_page, topo_update_page, topo_delete_page,
     topo_get_nodes, topo_insert_node, topo_update_node, topo_delete_node,
     topo_get_links, topo_insert_link, topo_update_link, topo_delete_link,

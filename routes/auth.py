@@ -9,13 +9,13 @@ Handles: /api/login, /api/logout, /api/me, /api/me/password,
 import threading
 import time
 
-from auth   import (auth_check, auth_check_role, auth_login, auth_logout,
-                    auth_revoke_user_sessions, auth_verify_current)
-from config import _RE_USER, _RE_USER_PW, _RE_ME_PW
-from db     import (db_log_audit, db_list_users, db_add_user,
-                    db_delete_user, db_set_password)
-from logger import log
-import settings as _settings
+from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
+                         auth_revoke_user_sessions, auth_verify_current)
+from core.config import _RE_USER, _RE_USER_PW, _RE_ME_PW
+from db          import (db_log_audit, db_list_users, db_add_user,
+                         db_delete_user, db_set_password)
+from core.logger import log
+import core.settings as _settings
 
 # ── Login rate-limiting state ─────────────────────────────────────
 _FAIL_LOCK   = threading.Lock()

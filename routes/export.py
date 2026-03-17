@@ -11,9 +11,9 @@ import tempfile
 import threading
 import time
 
-from config import DB_PATH, _RE_DB_EXPORT, _RE_DB_IMPORT, _RE_AUDIT
-from db     import db_log_audit, db_get_audit
-from logger import log
+from core.config import DB_PATH, _RE_DB_EXPORT, _RE_DB_IMPORT, _RE_AUDIT
+from db          import db_log_audit, db_get_audit
+from core.logger import log
 
 
 def handle(h, method, path, body):
@@ -168,7 +168,7 @@ def handle(h, method, path, body):
                 db_flush_samples()
             except Exception as _fe:
                 log.warning(f"DB import: sample flush before restart failed — {_fe}")
-            import app_state as _as
+            import core.app_state as _as
             if _as.tray_icon is not None:
                 try: _as.tray_icon.stop()
                 except Exception: pass

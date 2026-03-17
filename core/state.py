@@ -9,11 +9,11 @@ import queue
 import threading
 import time
 
-from probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
-from probes import probe_tls, probe_http_keyword, probe_banner
-from smtp_alert import send_alert_email
-from settings import get as _cfg
-from logger import log_sensors
+from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
+from monitoring.probes import probe_tls, probe_http_keyword, probe_banner
+from monitoring.smtp_alert import send_alert_email
+from .settings import get as _cfg
+from .logger import log_sensors
 
 def _smtp_down_delayed(sensor, data):
     """Sleep smtp_down_delay seconds, then send alert only if sensor is still down."""
@@ -206,7 +206,7 @@ class Device:
 
 def _send_webhook(url: str, payload: dict):
     """POST a flap event to a webhook URL. Runs in a daemon thread."""
-    from logger import log
+    from core.logger import log
     import ipaddress as _ip, socket as _sock, urllib.parse as _up
 
     # ── Scheme check: only http/https are allowed ─────────────────────

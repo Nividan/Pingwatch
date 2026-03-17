@@ -26,8 +26,8 @@ import sys
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
-from config import DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
-import app_state
+from core.config import DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
+import core.app_state as app_state
 
 # ── ANSI colour helpers ───────────────────────────────────────────────────────
 def _enable_ansi_windows() -> bool:
@@ -253,10 +253,7 @@ def step1_packages():
                 _tag("ok", f"{pkg['name']} installed successfully")
             else:
                 _tag("error", f"Failed to install {pkg['name']}.")
-                _tag("info",  "Manual installation guide:")
-                _tag("info",  "  1. Open Command Prompt as Administrator")
-                _tag("info",  f"  2. Run: pip install {pkg['install']}")
-                _tag("info",  "  3. Re-run start.bat when done")
+                _tag("info",  f"Fix manually: pip install {pkg['install']}")
                 if pkg["required"]:
                     all_ok = False
         else:
@@ -271,41 +268,18 @@ def step1_packages():
         _tag("info",  "This enables SNMP OID polling sensors.")
         install_snmp = _ask_yn("Install net-snmp now?", default=False)
         if install_snmp:
-            choco_ok = False
-            try:
-                _tag("info", "Trying Chocolatey ...")
-                r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
-                if r.returncode == 0:
-                    _tag("ok", "net-snmp installed via Chocolatey")
-                    choco_ok = True
+            _tag("info", "Trying Chocolatey ...")
+            r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
+            if r.returncode == 0:
+                _tag("ok", "net-snmp installed via Chocolatey")
+            else:
+                _tag("info", "Trying winget ...")
+                r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
+                if r2.returncode == 0:
+                    _tag("ok", "net-snmp installed via winget")
                 else:
-                    _tag("warn", "Chocolatey install failed (exit code {})".format(r.returncode))
-            except FileNotFoundError:
-                _tag("warn", "Chocolatey (choco) is not installed on this system.")
-            except Exception as _e:
-                _tag("warn", f"Chocolatey error: {_e}")
-
-            if not choco_ok:
-                winget_ok = False
-                try:
-                    _tag("info", "Trying winget ...")
-                    r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
-                    if r2.returncode == 0:
-                        _tag("ok", "net-snmp installed via winget")
-                        winget_ok = True
-                    else:
-                        _tag("warn", "winget install also failed.")
-                except FileNotFoundError:
-                    _tag("warn", "winget is not available on this system.")
-                except Exception as _e:
-                    _tag("warn", f"winget error: {_e}")
-
-                if not winget_ok:
-                    _tag("warn", "Automatic install failed. Manual installation guide:")
-                    _tag("info", "  1. Go to: https://sourceforge.net/projects/net-snmp/")
-                    _tag("info", "  2. Download the Windows installer (net-snmp-X.X.X-win64.exe)")
-                    _tag("info", "  3. Run the installer — tick 'Add to PATH' if prompted")
-                    _tag("info", "  4. Reboot or open a new terminal, then re-run start.bat")
+                    _tag("warn", "Automatic install failed.")
+                    _tag("info",  "Download manually from: https://sourceforge.net/projects/net-snmp/")
         else:
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
 
@@ -460,13 +434,11 @@ def _step3_generate():
 
     # Ensure cryptography is available before calling
     try:
-        from tls import generate_self_signed_cert
+        from core.tls import generate_self_signed_cert
     except ImportError:
         _tag("error", "The 'cryptography' package is required for certificate generation.")
         _tag("info",  "Install it first: pip install cryptography>=41.0.0")
-        _tag("warn",  "Falling back to HTTP-only mode — enable HTTPS later in Settings.")
-        _step3_http_only()
-        return
+        sys.exit(1)
 
     _tag("info", "Generating certificate ...")
     try:
@@ -482,31 +454,20 @@ def _step3_generate():
         )
     except Exception as e:
         _tag("error", f"Certificate generation failed: {e}")
-        _tag("warn",  "Falling back to HTTP-only mode — enable HTTPS later in Settings.")
-        _step3_http_only()
-        return
+        sys.exit(1)
 
-    try:
-        from tls import parse_cert_info
-        info = parse_cert_info(cert_pem)
-    except Exception:
-        info = {}
+    from core.tls import parse_cert_info
+    info = parse_cert_info(cert_pem)
     _tag("ok", "Certificate generated:")
     _tag("info", f"  CN      : {info.get('subject', cn)}")
     _tag("info", f"  Issuer  : {info.get('issuer', org)}")
     _tag("info", f"  Expires : {info.get('not_after', '?')}  ({info.get('days_left', days)} days)")
 
-    try:
-        from db.backups import encrypt_pw
-        key_enc = encrypt_pw(key_pem)
-    except Exception as _e:
-        _tag("warn", f"Could not encrypt private key ({_e}) — storing unencrypted.")
-        key_enc = key_pem
-
+    from db.backups import encrypt_pw
     _state["tls_enabled"]     = True
     _state["tls_port"]        = tls_port
     _state["tls_cert_pem"]    = cert_pem
-    _state["tls_key_pem_enc"] = key_enc
+    _state["tls_key_pem_enc"] = encrypt_pw(key_pem)
     _state["tls_cert_source"] = "generated"
     _state["tls_cn"]          = cn
     _state["org_name"]        = org
@@ -533,15 +494,8 @@ def _step3_import():
         _step3_generate()
         return
 
-    try:
-        from tls import validate_cert_key_pair, parse_cert_info
-        err = validate_cert_key_pair(cert_pem, key_pem)
-    except Exception as _e:
-        _tag("error", f"TLS module error: {_e}")
-        _tag("info",  "Falling back to self-signed certificate generation.")
-        _step3_generate()
-        return
-
+    from core.tls import validate_cert_key_pair, parse_cert_info
+    err = validate_cert_key_pair(cert_pem, key_pem)
     if err:
         _tag("error", f"Certificate validation failed: {err}")
         _tag("info",  "Fix the certificate files and run start.bat --setup again,")
@@ -549,10 +503,7 @@ def _step3_import():
         _step3_generate()
         return
 
-    try:
-        info = parse_cert_info(cert_pem)
-    except Exception:
-        info = {}
+    info = parse_cert_info(cert_pem)
     _tag("ok", "Certificate validated:")
     _tag("info", f"  CN      : {info.get('subject', '?')}")
     _tag("info", f"  Expires : {info.get('not_after', '?')}  ({info.get('days_left', '?')} days)")
@@ -565,17 +516,11 @@ def _step3_import():
 
     tls_port = _ask_port("HTTPS port", TLS_PORT_DEFAULT)
 
-    try:
-        from db.backups import encrypt_pw
-        key_enc = encrypt_pw(key_pem)
-    except Exception as _e:
-        _tag("warn", f"Could not encrypt private key ({_e}) — storing unencrypted.")
-        key_enc = key_pem
-
+    from db.backups import encrypt_pw
     _state["tls_enabled"]     = True
     _state["tls_port"]        = tls_port
     _state["tls_cert_pem"]    = cert_pem
-    _state["tls_key_pem_enc"] = key_enc
+    _state["tls_key_pem_enc"] = encrypt_pw(key_pem)
     _state["tls_cert_source"] = "imported"
     _state["tls_cn"]          = info.get("subject", "")
     _tag("ok", "Certificate imported.")
@@ -622,34 +567,9 @@ def step5_firewall():
         rules.append(("TCP", _state["tls_port"], "PingWatch HTTPS"))
     rules.append(("UDP", _state["snmp_port"],  "PingWatch SNMP traps"))
 
-    # Pre-check which rules already exist
-    def _rule_exists(name):
-        try:
-            chk = subprocess.run(
-                ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
-                capture_output=True,
-            )
-            return chk.returncode == 0
-        except Exception:
-            return False
-
-    existing  = [(proto, port, name) for proto, port, name in rules if     _rule_exists(name)]
-    missing   = [(proto, port, name) for proto, port, name in rules if not _rule_exists(name)]
-
-    if existing:
-        _tag("info", "Rules already present:")
-        for proto, port, name in existing:
-            _tag("ok", f"  {proto} {port:5d}  — {name}")
-        print()
-
-    if not missing:
-        _tag("ok", "All firewall rules already exist — nothing to add.")
-        print()
-        return
-
-    _tag("info", "The following rules need to be added:")
-    for proto, port, name in missing:
-        _tag("info", f"  {proto} {port:5d}  — {name}")
+    _tag("info", "The following firewall rules will be added:")
+    for proto, port, desc in rules:
+        _tag("info", f"  {proto} {port:5d}  — {desc}")
     print()
 
     if not _ask_yn("Add these firewall rules now?", default=True):
@@ -657,22 +577,25 @@ def step5_firewall():
         print()
         return
 
-    for proto, port, name in missing:
-        try:
-            r = subprocess.run(
-                ["netsh", "advfirewall", "firewall", "add", "rule",
-                 f"name={name}", "dir=in", "action=allow",
-                 f"protocol={proto}", f"localport={port}"],
-                capture_output=True,
-            )
-            if r.returncode == 0:
-                _tag("ok", f"Firewall rule added: {proto} {port} ({name})")
-            else:
-                _tag("warn", f"Could not add rule for {proto} {port} — add manually if needed")
-        except FileNotFoundError:
-            _tag("warn", f"netsh not found — add firewall rule manually: {proto} {port} ({name})")
-        except Exception as _e:
-            _tag("warn", f"Firewall rule error for {proto} {port}: {_e}")
+    for proto, port, name in rules:
+        # Check if rule already exists
+        chk = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
+            capture_output=True,
+        )
+        if chk.returncode == 0:
+            _tag("ok", f"Rule already exists: {name}")
+            continue
+        r = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={name}", "dir=in", "action=allow",
+             f"protocol={proto}", f"localport={port}"],
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            _tag("ok", f"Firewall rule added: {proto} {port} ({name})")
+        else:
+            _tag("warn", f"Could not add rule for {proto} {port} — add manually if needed")
     print()
 
 
@@ -695,43 +618,22 @@ def step6_shortcut():
         print()
         return
 
-    target   = os.path.join(_BASE, "pingwatch.pyw")
-    icon_loc = ""
-    ico_path = os.path.join(_BASE, "pingwatch-icon.ico")
-    png_path = os.path.join(_BASE, "pingwatch-icon.png")
-    if os.path.isfile(ico_path):
-        icon_loc = ico_path
-    elif os.path.isfile(png_path):
-        # Convert PNG → ICO using Pillow so Windows can use it as a shortcut icon
-        try:
-            from PIL import Image
-            img = Image.open(png_path)
-            img.save(ico_path, format="ICO", sizes=[(256, 256), (64, 64), (32, 32), (16, 16)])
-            icon_loc = ico_path
-            _tag("ok", "Icon converted: pingwatch-icon.png → pingwatch-icon.ico")
-        except Exception as _e:
-            _tag("warn", f"Could not convert icon: {_e}")
+    target = os.path.join(_BASE, "start.bat")
     ps_cmd = (
         f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
         f'$s.TargetPath="{target}";'
         f'$s.WorkingDirectory="{_BASE}";'
         f'$s.Description="PingWatch Network Monitor";'
-        + (f'$s.IconLocation="{icon_loc}";' if icon_loc else "")
-        + f'$s.Save()'
+        f'$s.Save()'
     )
-    try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
-            capture_output=True,
-        )
-        if r.returncode == 0:
-            _tag("ok", f"Desktop shortcut created: {shortcut_path}")
-        else:
-            _tag("warn", "Could not create desktop shortcut — create it manually if needed")
-    except FileNotFoundError:
-        _tag("warn", "PowerShell not found — desktop shortcut not created")
-    except Exception as _e:
-        _tag("warn", f"Desktop shortcut error: {_e}")
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_cmd],
+        capture_output=True,
+    )
+    if r.returncode == 0:
+        _tag("ok", f"Desktop shortcut created: {shortcut_path}")
+    else:
+        _tag("warn", "Could not create desktop shortcut — create it manually if needed")
     print()
 
 

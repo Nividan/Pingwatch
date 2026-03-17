@@ -1,5 +1,5 @@
 """
-backup_scheduler.py — Global backup scheduler background thread.
+backup/scheduler.py — Global backup scheduler background thread.
 
 Reads global schedule settings from app_settings every 30 seconds,
 and triggers do_backup() for all devices with in_schedule=True when
@@ -10,7 +10,7 @@ import datetime
 import threading
 import time
 
-from logger import log_backup as log
+from core.logger import log_backup as log
 
 
 def _should_fire(last_fired: datetime.datetime | None,
@@ -47,9 +47,9 @@ def _should_fire(last_fired: datetime.datetime | None,
 
 
 def _scheduler_loop():
-    from settings import get as _cfg
+    from core.settings import get as _cfg
     from db.backups import db_get_backup_list
-    from backup_engine import do_backup
+    from .engine import do_backup
 
     log.info("Backup scheduler started")
     last_fired: datetime.datetime | None = None

@@ -25,19 +25,19 @@ try:
 except ImportError:
     _TRAY = False
 
-import settings as _settings
-from auth        import auth_check, auth_check_role
-from config      import BIND, DB_PATH, FRONTEND_DIR, PORT, SYS, TLS_PORT_DEFAULT, _RE_DB_IMPORT
-from logger      import log
-from network_map import init_topo_db, migrate_topo_from_file
-from db          import (
+import core.settings as _settings
+from core.auth       import auth_check, auth_check_role
+from core.config     import BIND, DB_PATH, FRONTEND_DIR, PORT, SYS, TLS_PORT_DEFAULT, _RE_DB_IMPORT
+from core.logger     import log
+from monitoring.network_map import init_topo_db, migrate_topo_from_file
+from db              import (
     _db_enqueue, autosave_loop,
     db_init, db_load, db_seed_users,
     db_load_settings, db_save,
 )
 
-import app_state
-from app_state import STATE
+import core.app_state as app_state
+from core.app_state import STATE
 
 # ── RBAC role ranking ─────────────────────────────────────────────
 _ROLE_RANK = {"viewer": 0, "operator": 1, "admin": 2}
@@ -213,21 +213,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, monitoring, settings, topology, export, backups
         p = urlparse(self.path).path
 
-        # ── Favicon ───────────────────────────────────────────────
-        if p in ("/favicon.ico", "/pingwatch-icon.png"):
-            _ico = os.path.join(os.path.dirname(__file__), "pingwatch-icon.png")
-            if os.path.isfile(_ico):
-                with open(_ico, "rb") as _f:
-                    _data = _f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(_data)))
-                self.end_headers()
-                self.wfile.write(_data)
-            else:
-                self.send_response(404); self.end_headers()
-            return
-
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
         if p in ("/", "/index.html"):
             body = _load_html()
@@ -372,7 +357,7 @@ def _start_http_redirect(http_port: int, https_port: int):
         def log_message(self, *_): pass   # suppress access log noise
 
     try:
-        _rsrv = QuietServer((BIND, http_port), _RedirectHandler)
+        _rsrv = _hs.ThreadingHTTPServer((BIND, http_port), _RedirectHandler)
         threading.Thread(target=_rsrv.serve_forever, daemon=True,
                          name="http-redirect").start()
         log.info(f"HTTP→HTTPS redirect active: http://:{http_port} → https://:{https_port}")
@@ -410,6 +395,11 @@ def main():
     except Exception as _e:
         log.error(f"migrate_topo_from_file failed: {_e}", exc_info=True)
     db_seed_users()
+    try:
+        from snmp.seeds.loader import load_all_seeds
+        load_all_seeds()
+    except Exception as _se:
+        log.error(f"SNMP seed load failed: {_se}")
     _settings.load(db_load_settings())
 
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
@@ -432,8 +422,8 @@ def main():
     if not _tls_enabled:
         log.info("TLS disabled — serving plain HTTP")
     if _tls_enabled:
-        from tls import (discover_or_generate_cert, build_ssl_context,
-                         check_cert_expiry_warn)
+        from core.tls import (discover_or_generate_cert, build_ssl_context,
+                              check_cert_expiry_warn)
         from db.backups import encrypt_pw
         from db import db_save_settings
         _tls_port = int(_settings.get("tls_port", TLS_PORT_DEFAULT))
@@ -488,13 +478,13 @@ def main():
     db_load(STATE)
     log.info(f"State loaded in {time.time()-_t0:.2f}s — {len(STATE.devices)} device(s)")
     threading.Thread(target=autosave_loop, args=(STATE,), daemon=True).start()
-    from trap_receiver import trap_receiver_loop
+    from snmp.receiver import trap_receiver_loop
     threading.Thread(
         target=trap_receiver_loop,
         args=(STATE, app_state.effective_snmp_port),
         daemon=True,
     ).start()
-    from backup_scheduler import start_scheduler
+    from backup.scheduler import start_scheduler
     start_scheduler()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
@@ -504,7 +494,7 @@ def main():
 
     # ── GUI ────────────────────────────────────────────────────────
     from gui    import StatusWindow
-    from logger import log_buffer
+    from core.logger import log_buffer
 
     if _TRAY:
         def _open(*_):

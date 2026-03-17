@@ -13,9 +13,9 @@ def _hash_token(token: str) -> str:
     """SHA-256 of the session token — stored in DB so a DB leak ≠ valid session."""
     return hashlib.sha256(token.encode()).hexdigest()
 
-import settings as _settings
-from config import DB_PATH
-from logger import log
+from . import settings as _settings
+from .config import DB_PATH
+from .logger import log
 
 _SESSIONS: dict      = {}   # token -> {username, expires}
 _SESSIONS_LOCK       = threading.Lock()

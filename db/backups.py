@@ -12,8 +12,8 @@ import re
 import sqlite3
 from pathlib import Path
 
-from config import DB_PATH
-from logger import log
+from core.config import DB_PATH
+from core.logger import log
 
 # ── Fernet encryption ────────────────────────────────────────────────
 _fernet_instance = None
@@ -271,7 +271,7 @@ def db_save_backup_run(did: str, result: dict) -> int:
     the global 'backup_keep' setting (default 3).
     Returns the new run's id.
     """
-    from settings import get as _cfg
+    from core.settings import get as _cfg
     keep = max(1, int(_cfg('backup_keep', 3)))
 
     con = _con()
@@ -308,8 +308,8 @@ def db_write_config_file(did: str, device_name: str, ts_str: str, config_text: s
     Write config to configs/{device_name}/config_{ts}.txt and prune old files
     to match the backup_keep retention setting.
     """
-    from config import CONFIGS_DIR
-    from settings import get as _cfg
+    from core.config import CONFIGS_DIR
+    from core.settings import get as _cfg
 
     safe_name = re.sub(r'[^\w\-]', '_', device_name) or did
     dev_dir = os.path.join(CONFIGS_DIR, safe_name)
