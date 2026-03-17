@@ -90,6 +90,8 @@ def parse_trap(data):
         # Parse varbinds from inside the PDU bytes
         varbinds = []
         p2 = 0
+        v1_enterprise    = ''
+        v1_generic       = -1
         if pdu_tag == 0xA7:
             # v2c: skip request-id, error-status, error-index (3 integers)
             for _ in range(3):
@@ -97,10 +99,15 @@ def parse_trap(data):
             # then VarBindList SEQUENCE
             _, vbl_b, _ = _tlv(pdu_b, p2)
         else:
-            # v1: skip enterprise OID, agent-addr, generic-trap, specific-trap, time-stamp
-            for _ in range(5):
-                _, _, p2 = _tlv(pdu_b, p2)
-            _, vbl_b, _ = _tlv(pdu_b, p2)
+            # v1: extract enterprise OID and generic-trap type; skip the rest
+            tag1, b1, p2 = _tlv(pdu_b, p2)         # enterprise OID (0x06)
+            v1_enterprise = _decode_oid(b1) if tag1 == 0x06 else ''
+            _, _, p2      = _tlv(pdu_b, p2)         # agent-addr (skip)
+            tag3, b3, p2  = _tlv(pdu_b, p2)         # generic-trap INTEGER (0x02)
+            v1_generic    = int.from_bytes(b3, 'big', signed=True) if tag3 == 0x02 else -1
+            _, _, p2      = _tlv(pdu_b, p2)         # specific-trap (skip)
+            _, _, p2      = _tlv(pdu_b, p2)         # time-stamp (skip)
+            _, vbl_b, _   = _tlv(pdu_b, p2)
 
         # Each varbind is SEQUENCE { OID, value }
         vp = 0
@@ -131,10 +138,12 @@ def parse_trap(data):
             detail = varbinds[0].get('value', '')
 
         return {
-            'community': community,
-            'trap_oid':  trap_oid,
-            'varbinds':  varbinds,
-            'detail':    detail[:300],
+            'community':       community,
+            'trap_oid':        trap_oid,
+            'varbinds':        varbinds,
+            'detail':          detail[:300],
+            'enterprise_oid':  v1_enterprise,   # populated for v1; '' for v2c
+            'generic_trap_type': v1_generic,    # 0-6 for v1; -1 for v2c
         }
 
     except Exception as e:
@@ -206,14 +215,16 @@ def _recv_loop(sock, state):
                     break
 
         evt = {
-            'ts':         ts,
-            'src_ip':     src_ip,
-            'dname':      dname,
-            'community':  parsed['community'],
-            'trap_oid':   parsed['trap_oid'],
-            'detail':     parsed['detail'],
-            'varbinds':   parsed.get('varbinds', []),
-            '_direction': 'trap',
+            'ts':               ts,
+            'src_ip':           src_ip,
+            'dname':            dname,
+            'community':        parsed['community'],
+            'trap_oid':         parsed['trap_oid'],
+            'detail':           parsed['detail'],
+            'varbinds':         parsed.get('varbinds', []),
+            'enterprise_oid':   parsed.get('enterprise_oid', ''),
+            'generic_trap_type': parsed.get('generic_trap_type', -1),
+            '_direction':       'trap',
         }
 
         # Enrich trap with vendor/name/severity/description

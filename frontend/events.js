@@ -443,18 +443,26 @@ function _openEvtDetail(d) {
         html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Vendor</span><span>${_vendorBadge(d)}${esc(d.product_family||'')}</span></div>`;
       if (d.trap_name)
         html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Trap Name</span><span style="font-family:monospace">${esc(d.trap_name)}</span></div>`;
+      if (d.enterprise_oid)
+        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Enterprise OID</span><span style="font-family:monospace;font-size:11px">${esc(d.enterprise_oid)}</span></div>`;
       if (d.category)
         html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Category</span><span class="evt-cat-badge">${esc(d.category)}</span></div>`;
       if (d.probable_cause)
         html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px"><span class="evt-dtl-label">Probable Cause</span><span style="color:var(--text2);font-size:12px">${esc(d.probable_cause)}</span></div>`;
       if (d.recommended_action)
         html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px"><span class="evt-dtl-label">Action</span><span style="color:var(--text2);font-size:12px">${esc(d.recommended_action)}</span></div>`;
-      if (d.raw_varbinds && d.raw_varbinds !== '[]') {
+      const _vbSrc = (d.enriched_varbinds && d.enriched_varbinds !== '[]') ? d.enriched_varbinds : d.raw_varbinds;
+      if (_vbSrc && _vbSrc !== '[]') {
         let vbHtml = '';
         try {
-          const vbs = JSON.parse(d.raw_varbinds);
-          vbHtml = vbs.map(v => `<div>${esc(v.oid)} = ${esc(String(v.value))}</div>`).join('');
-        } catch { vbHtml = esc(d.raw_varbinds); }
+          const vbs = JSON.parse(_vbSrc);
+          vbHtml = vbs.map(v => {
+            const label = v.name
+              ? `${esc(v.name)} <span class="evt-oid-hint">(${esc(v.oid)})</span>`
+              : esc(v.oid);
+            return `<div>${label} = ${esc(String(v.value))}</div>`;
+          }).join('');
+        } catch { vbHtml = esc(_vbSrc); }
         html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px">` +
           `<span class="evt-dtl-label">Varbinds</span>` +
           `<div class="evt-trap-raw-block">${vbHtml}</div></div>`;
