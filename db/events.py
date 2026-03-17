@@ -131,8 +131,9 @@ def db_log_trap(t):
             "INSERT INTO snmp_traps "
             "(ts,src_ip,dname,community,trap_oid,detail,"
             " vendor,product_family,trap_name,severity,category,"
-            " probable_cause,recommended_action,raw_varbinds,enriched) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " probable_cause,recommended_action,raw_varbinds,enriched,"
+            " enterprise_oid,generic_trap_type,enriched_varbinds) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 t.get("ts", ""),          t.get("src_ip", ""),
                 t.get("dname", ""),       t.get("community", ""),
@@ -143,6 +144,9 @@ def db_log_trap(t):
                 t.get("recommended_action", ""),
                 t.get("raw_varbinds", "[]"),
                 int(t.get("enriched", 0)),
+                t.get("enterprise_oid", ""),
+                int(t.get("generic_trap_type", -1)),
+                t.get("enriched_varbinds", "[]"),
             )
         )
         _trap_limit = max(50, int(_settings.get('max_trap_entries', 500)))
@@ -173,7 +177,8 @@ def db_load_traps(limit=500, vendor=None, category=None, severity=None):
         sql = (
             "SELECT ts,src_ip,dname,community,trap_oid,detail,"
             "vendor,product_family,trap_name,severity,category,"
-            "probable_cause,recommended_action,raw_varbinds,enriched "
+            "probable_cause,recommended_action,raw_varbinds,enriched,"
+            "enterprise_oid,generic_trap_type,enriched_varbinds "
             "FROM snmp_traps"
             + (" WHERE " + " AND ".join(where) if where else "")
             + " ORDER BY id DESC LIMIT ?"
@@ -187,7 +192,10 @@ def db_load_traps(limit=500, vendor=None, category=None, severity=None):
             "vendor": r[6], "product_family": r[7], "trap_name": r[8],
             "severity": r[9], "category": r[10], "probable_cause": r[11],
             "recommended_action": r[12], "raw_varbinds": r[13],
-            "enriched": r[14], "_direction": "trap",
+            "enriched": r[14], "enterprise_oid": r[15] or "",
+            "generic_trap_type": r[16] if r[16] is not None else -1,
+            "enriched_varbinds": r[17] or "[]",
+            "_direction": "trap",
         } for r in rows]
     except Exception as e:
         log.error(f"DB load traps error: {e}")
