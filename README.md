@@ -122,7 +122,7 @@ The first-run password is printed to the console — change it immediately in **
 
 ## HTTPS / TLS
 
-PingWatch v0.6 ships with native HTTPS support enabled by default on fresh installs.
+PingWatch v0.7 ships with native HTTPS support enabled by default on fresh installs.
 
 ### How it works
 
@@ -282,15 +282,32 @@ Browser / Desktop GUI
         ▼
   server.py  ──  routes/          ← HTTP dispatcher + route modules
         │
-        ├── tls.py                ← TLS certificate management
-        ├── state.py              ← In-memory runtime state (devices, sensors)
-        ├── probes.py             ← Sensor engine (ICMP, HTTP, TCP, …)
-        ├── backup_engine.py      ← SSH / Telnet config backup engine
-        ├── db/                   ← SQLite persistence package
-        ├── auth.py               ← Session management & RBAC
-        ├── network_map.py        ← Topology (NTM) data layer
-        ├── smtp_alert.py         ← Email notifications
-        └── trap_receiver.py      ← SNMP trap ingestion
+        ├── core/                 ← Config, state, auth, TLS, logging
+        │   ├── config.py         ← Constants & route regexes
+        │   ├── state.py          ← In-memory runtime state
+        │   ├── app_state.py      ← Shared runtime globals
+        │   ├── auth.py           ← Session management & RBAC
+        │   ├── tls.py            ← TLS certificate management
+        │   ├── logger.py         ← Central logging
+        │   └── settings.py       ← Runtime settings cache
+        │
+        ├── monitoring/           ← Probes, alerting, topology
+        │   ├── probes.py         ← Sensor engine
+        │   ├── smtp_alert.py     ← Email notifications
+        │   └── network_map.py    ← NTM topology data layer
+        │
+        ├── backup/               ← Config backup engine
+        │   ├── engine.py         ← SSH / Telnet backup engine
+        │   └── scheduler.py      ← Backup schedule runner
+        │
+        ├── snmp/                 ← SNMP trap pipeline
+        │   ├── receiver.py       ← UDP trap listener
+        │   ├── enricher.py       ← Trap enrichment & OID lookup
+        │   ├── vendor.py         ← Vendor fingerprinting
+        │   ├── catalog.py        ← OID catalog queries
+        │   └── seeds/            ← Built-in trap definitions
+        │
+        └── db/                   ← SQLite persistence package
 ```
 
 This design keeps each layer independently testable and allows new sensor types or route groups to be added without touching unrelated code.
@@ -303,40 +320,43 @@ This design keeps each layer independently testable and allows new sensor types 
 - **`server.py`** — HTTP dispatcher and application entry point.
   Serves static files, delegates every API route to a `routes/` module, and starts background threads. Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled.
 
-- **`tls.py`** — TLS certificate management module.
+- **`core/tls.py`** — TLS certificate management module.
   Handles RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` folder → auto-generate), SSL context construction, certificate metadata parsing, pair validation, and expiry warnings.
 
 - **`setup_wizard.py`** — Interactive first-run setup wizard.
   Guides new installs through package checks, HTTP/HTTPS port selection, TLS certificate setup, SNMP port configuration, firewall rules, and desktop shortcut creation. Writes all choices to the database and exits cleanly so `start.bat` can launch `server.py`.
 
-- **`app_state.py`** — Shared runtime globals (`STATE`, effective ports, TLS active flag, tray-icon reference).
+- **`core/app_state.py`** — Shared runtime globals (`STATE`, effective ports, TLS active flag, tray-icon reference).
   Prevents circular imports between `server.py` and `routes/`.
 
-- **`state.py`** — In-memory runtime state manager.
+- **`core/state.py`** — In-memory runtime state manager.
   Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to connected clients.
 
-- **`probes.py`** — Sensor engine.
+- **`monitoring/probes.py`** — Sensor engine.
   Implements every monitoring probe type: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner.
 
-- **`backup_engine.py`** — Configuration backup engine.
+- **`backup/engine.py`** — Configuration backup engine.
   Opens SSH (paramiko) or Telnet connections to network devices, sends user-defined commands, collects output, and returns the result for storage. Supports TOFU SSH host key verification, password auth, keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable, and configurable per-command idle timeouts.
 
-- **`auth.py`** — Authentication and session management.
+- **`core/auth.py`** — Authentication and session management.
   Handles login, password hashing (bcrypt-style), RBAC roles (`viewer` / `operator` / `admin`), and active sessions.
 
-- **`network_map.py`** — Network Topology Manager (NTM) backend.
+- **`monitoring/network_map.py`** — Network Topology Manager (NTM) backend.
   Manages topology pages, nodes, links, groups, and map settings stored in the database.
 
-- **`trap_receiver.py`** — SNMP trap listener.
+- **`snmp/receiver.py`** — SNMP trap listener.
   Binds a UDP socket on the configured SNMP port and injects incoming traps into the event pipeline.
 
-- **`smtp_alert.py`** — Email alerting.
+- **`snmp/enricher.py`** — SNMP trap enrichment.
+  Resolves OIDs to human-readable names, identifies the sending vendor, and annotates trap events with category and severity.
+
+- **`monitoring/smtp_alert.py`** — Email alerting.
   Sends down/up notifications via SMTP when sensor states change.
 
-- **`logger.py`** — Central logging.
+- **`core/logger.py`** — Central logging.
   Provides the application logger, audit logger, and an in-memory log buffer used by the desktop GUI.
 
-- **`settings.py` / `config.py`** — Configuration layer.
+- **`core/settings.py` / `core/config.py`** — Configuration layer.
   `config.py` holds file paths, compiled route regexes, and startup constants.
   `settings.py` provides a thread-safe runtime settings cache backed by the database.
 
@@ -372,7 +392,7 @@ This design keeps each layer independently testable and allows new sensor types 
 ### Database Package (`db/`)
 
 | Module | Responsibility |
-|--------|---------------|
+|--------|----------------|
 | `core.py` | Write-queue, schema init & migrations, user seeding |
 | `persistence.py` | Device/sensor save, load, autosave loop |
 | `samples.py` | Buffered probe writes, history & summary queries |
@@ -380,6 +400,7 @@ This design keeps each layer independently testable and allows new sensor types 
 | `users.py` | User management, app settings |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (encrypted), run history, 3-run retention |
+| `trap_defs.py` | SNMP trap definition queries |
 | `__init__.py` | Re-exports all public symbols (callers unchanged) |
 
 
@@ -413,13 +434,13 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 
 1. User opens the **web dashboard** in a browser or the **desktop GUI**.
 2. **`server.py`** receives every HTTP request and dispatches it to the matching `routes/` module. When HTTPS is enabled the socket is wrapped with `ssl.SSLContext`; a second lightweight HTTP server optionally redirects plain-HTTP traffic to HTTPS.
-3. Route handlers read/update runtime objects in **`state.py`** and call **`db/`** for persistence.
-4. Monitoring probes run on per-sensor background threads via **`probes.py`**.
+3. Route handlers read/update runtime objects in **`core/state.py`** and call **`db/`** for persistence.
+4. Monitoring probes run on per-sensor background threads via **`monitoring/probes.py`**.
 5. Probe results are pushed to connected browsers over **SSE** (`/events`).
 6. State changes persist automatically through the autosave loop (every 60 s) and an immediate write-queue for high-priority operations.
-7. **`smtp_alert.py`** sends email alerts when sensors transition between up/down states.
-8. **`trap_receiver.py`** ingests asynchronous SNMP traps and routes them into the event pipeline.
-9. **`backup_engine.py`** connects to devices on demand or on schedule, retrieves configuration, and stores it encrypted in the database via `db/backups.py`.
+7. **`monitoring/smtp_alert.py`** sends email alerts when sensors transition between up/down states.
+8. **`snmp/receiver.py`** ingests asynchronous SNMP traps and routes them into the event pipeline via **`snmp/enricher.py`**.
+9. **`backup/engine.py`** connects to devices on demand or on schedule, retrieves configuration, and stores it encrypted in the database via `db/backups.py`.
 
 
 ## Project Structure
@@ -427,25 +448,48 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 ```
 pingwatch/
 ├── server.py               ← HTTP/HTTPS dispatcher + entry point
-├── tls.py                  ← TLS certificate management
 ├── setup_wizard.py         ← First-run interactive setup wizard
-├── app_state.py            ← Shared runtime globals
-├── state.py                ← In-memory device/sensor state
-├── probes.py               ← Sensor engine
-├── backup_engine.py        ← SSH / Telnet config backup engine
-├── auth.py                 ← Authentication & RBAC
-├── network_map.py          ← NTM topology data layer
-├── trap_receiver.py        ← SNMP trap listener
-├── smtp_alert.py           ← Email alerting
-├── logger.py               ← Logging
-├── settings.py             ← Runtime settings cache
-├── config.py               ← Constants & route regexes
-├── snmp_catalog.py         ← SNMP OID catalog
 ├── gui.py                  ← Desktop status window
 ├── pingwatch.pyw           ← Windowless launcher
 ├── start.bat               ← Thin console launcher (first-run detection)
 ├── requirements.txt        ← Python dependencies
 ├── ssh_known_hosts.txt     ← SSH TOFU host key store (auto-created)
+│
+├── core/                   ← Application core
+│   ├── __init__.py
+│   ├── config.py           ← Constants & route regexes
+│   ├── settings.py         ← Runtime settings cache (DB-backed)
+│   ├── logger.py           ← Central logging & in-memory buffer
+│   ├── auth.py             ← Authentication & RBAC
+│   ├── app_state.py        ← Shared runtime globals
+│   ├── state.py            ← In-memory device/sensor state
+│   └── tls.py              ← TLS certificate management
+│
+├── monitoring/             ← Active monitoring subsystem
+│   ├── __init__.py
+│   ├── probes.py           ← Sensor engine (ICMP, HTTP, TCP, …)
+│   ├── smtp_alert.py       ← Email alerting
+│   └── network_map.py      ← NTM topology data layer
+│
+├── backup/                 ← Device configuration backup
+│   ├── __init__.py
+│   ├── engine.py           ← SSH / Telnet backup engine
+│   └── scheduler.py        ← Backup schedule runner
+│
+├── snmp/                   ← SNMP trap pipeline
+│   ├── __init__.py
+│   ├── receiver.py         ← UDP trap listener
+│   ├── enricher.py         ← Trap enrichment & OID lookup
+│   ├── vendor.py           ← Vendor fingerprinting
+│   ├── catalog.py          ← OID catalog queries
+│   └── seeds/              ← Built-in trap definitions
+│       ├── __init__.py
+│       ├── loader.py
+│       ├── generic.py
+│       ├── cisco.py
+│       ├── fortinet.py
+│       ├── juniper.py
+│       └── apc.py
 │
 ├── db/                     ← SQLite persistence package
 │   ├── __init__.py         ← Re-exports all public symbols
@@ -455,7 +499,8 @@ pingwatch/
 │   ├── events.py           ← Flap, trap, error logs
 │   ├── users.py            ← User management & settings
 │   ├── audit.py            ← Audit log
-│   └── backups.py          ← Backup settings & run history
+│   ├── backups.py          ← Backup settings & run history
+│   └── trap_defs.py        ← SNMP trap definition queries
 │
 ├── routes/                 ← HTTP route handlers
 │   ├── auth.py             ← Login, logout, users
