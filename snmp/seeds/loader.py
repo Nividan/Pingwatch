@@ -40,3 +40,16 @@ def load_all_seeds():
 
     except Exception as e:
         log.error(f"SNMP seed load error: {e}")
+
+    # Load any user-supplied MIB files from snmp/mibs/
+    try:
+        import os
+        from core.config import _ROOT
+        from snmp.mib_loader import load_mibs_from_dir
+        mibs_dir = os.path.join(_ROOT, "snmp", "mibs")
+        if os.path.isdir(mibs_dir):
+            n = load_mibs_from_dir(mibs_dir)
+            if n:
+                log.info(f"MIB loader: {n} trap definitions loaded from snmp/mibs/")
+    except Exception as e:
+        log.warning(f"MIB loader error (non-fatal): {e}")

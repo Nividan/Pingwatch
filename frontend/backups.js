@@ -82,12 +82,12 @@ function _bkRenderTable(devices) {
         <tr>
           <th>Device Name</th>
           <th>IP Address</th>
-          <th>Scheduled</th>
+          <th style="text-align:center">Scheduled</th>
           <th>Last Backup</th>
           <th>Last Status</th>
-          <th>Saved</th>
-          <th>Config</th>
-          <th>Run</th>
+          <th style="text-align:center">Saved</th>
+          <th style="text-align:center">Config</th>
+          <th style="text-align:center">Run</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -104,14 +104,17 @@ function _bkStatusCell(dev, isRunning) {
 /** Safely parse ISO timestamps — appends 'Z' only if no timezone info present. */
 function _bkParseTs(isoStr) {
   if (!isoStr) return null;
-  return new Date(/[Z+\-]\d*$/.test(isoStr) ? isoStr : isoStr + 'Z');
+  // Match Z, +HH:MM, or -HH:MM (Python isoformat produces the +HH:MM form)
+  return new Date(/Z$|[+\-]\d{2}:\d{2}$/.test(isoStr) ? isoStr : isoStr + 'Z');
 }
 
 function _bkRelTime(isoStr) {
   if (!isoStr) return '—';
-  const diff = (Date.now() - (_bkParseTs(isoStr)?.getTime() ?? 0)) / 1000;
-  if (diff < 60)   return `${Math.round(diff)}s ago`;
-  if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+  const t = _bkParseTs(isoStr)?.getTime();
+  if (!t || isNaN(t)) return '—';
+  const diff = (Date.now() - t) / 1000;
+  if (diff < 60)    return `${Math.round(diff)}s ago`;
+  if (diff < 3600)  return `${Math.round(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
   return `${Math.round(diff / 86400)}d ago`;
 }
