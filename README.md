@@ -167,89 +167,42 @@ PingWatch logs a **WARNING** at startup when the active certificate expires with
 All ports are configurable in **Settings → Networking** or during the first-run wizard.
 
 
-## 📸 Screenshots
+## Screenshots
 
----
+### 📡 Network Dashboard
+Real-time monitoring of all devices with live status, latency, and connectivity.
+<img width="800" alt="Network Dashboard" src="https://github.com/user-attachments/assets/91e2237f-a3c8-447c-adbc-5d91e950f63a" />
+<img width="800" alt="Network Dashboard 2" src="https://github.com/user-attachments/assets/276fc670-1425-4150-ae9d-21ee33da8565" />
 
-### 📡 Dashboard
+### 🖥 Device Information
+View detailed information for every device including IP address, latency, uptime, and custom notes.
+<img width="800" alt="Device List" src="https://github.com/user-attachments/assets/06a38bfa-3dd1-431e-8dd1-60873d9624e8" />
+<img width="800" alt="Device Detail" src="https://github.com/user-attachments/assets/3a027022-4a46-4fc2-b2e3-9f017b06a2e8" />
+<img width="480" alt="Device Panel" src="https://github.com/user-attachments/assets/131ceef8-bb9c-4abb-9346-f993f409365f" />
+<img width="480" alt="Device Panel 2" src="https://github.com/user-attachments/assets/c456c19b-348b-44f8-b68c-3ae9c48438af" />
 
-<p align="center">
-  <img src="screenshots/dashboard1.png" width="1000"/>
-</p>
+### 📜 Event Logs
+Centralized event logging with timestamps, severity levels, and device filtering.
+<img width="800" alt="Event Log" src="https://github.com/user-attachments/assets/210e31ec-6367-4e60-bcbd-5257f36f5a5d" />
+<img width="500" alt="Event Filter" src="https://github.com/user-attachments/assets/a9a1e8ef-6da1-40c2-b31c-e5a4548f5cbb" />
+<img width="800" alt="Event Log 2" src="https://github.com/user-attachments/assets/3a26e38d-6f12-46db-9d46-11f27561d001" />
+<img width="800" alt="Event Log 3" src="https://github.com/user-attachments/assets/c5ac9a0e-b959-458c-a568-74af1b8f24cd" />
 
-<p align="center">
-  <img src="screenshots/dashboard2.png" width="1000"/>
-</p>
+### 🗺 Network Topology Visualization
+NTM provides an interactive topology map where devices, switches, and servers are displayed visually with their connections.
 
----
+**Monitor Live Device NTM**
+<img width="800" alt="Live Topology Map" src="https://github.com/user-attachments/assets/2eff647b-befd-4c4c-b0e6-ee43adb1c713" />
 
-### 🖥 Devices
+**Draw.io style NTM**
+<img width="800" alt="Topology Editor" src="https://github.com/user-attachments/assets/f42cb4f3-4167-4c91-b6d2-df635ad7c4ef" />
 
-<p align="center">
-  <img src="screenshots/devices1.png" width="1000"/>
-</p>
+### Device Configuration Backup
+PingWatch includes a built-in **Configuration Backup** system that connects to network devices over SSH or Telnet, retrieves their running configuration, stores it encrypted in the database, and tracks a full revision history.
 
-<p align="center">
-  <img src="screenshots/devices2.png" width="1000"/>
-</p>
-
----
-
-### 📜 Events
-
-<p align="center">
-  <img src="screenshots/events1.png" width="1000"/>
-</p>
-
----
-
-### 🗺 Network Topology (NTM)
-
-<p align="center">
-  <img src="screenshots/live-ntm.png" width="1000"/>
-</p>
-
-<p align="center">
-  <img src="screenshots/example_draw-ntm.png" width="1000"/>
-</p>
-
----
-
-### 📊 Sensors
-
-<p align="center">
-  <img src="screenshots/sensor1.png" width="320"/>
-  <img src="screenshots/sensor2.png" width="320"/>
-  <img src="screenshots/sensor3.png" width="320"/>
-</p>
-
----
-
-### ⚙️ Settings
-
-<p align="center">
-  <img src="screenshots/settings1.png" width="1000"/>
-</p>
-
-<p align="center">
-  <img src="screenshots/settings2.png" width="1000"/>
-</p>
-
----
-
-### 💾 Config Backup
-
-<p align="center">
-  <img src="screenshots/backup1.png" width="1000"/>
-</p>
-
-<p align="center">
-  <img src="screenshots/backup2.png" width="1000"/>
-</p>
-
-<p align="center">
-  <img src="screenshots/backup3.png" width="1000"/>
-</p>
+<img width="800" alt="Backup Table" src="https://github.com/user-attachments/assets/0f94bfcd-d5e7-40aa-b950-c711c72f325b" />
+<img width="480" alt="Backup Settings" src="https://github.com/user-attachments/assets/886afeb8-e44d-487d-92b9-7ab3dbddab04" />
+<img width="480" alt="Config Viewer" src="https://github.com/user-attachments/assets/5026650f-be34-44aa-a017-c813cf75880d" />
 
 ---
 
