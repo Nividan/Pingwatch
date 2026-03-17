@@ -205,7 +205,6 @@ PingWatch includes a built-in **Configuration Backup** system that connects to n
 <img width="480" alt="Config Viewer" src="https://github.com/user-attachments/assets/5026650f-be34-44aa-a017-c813cf75880d" />
 
 ---
-
 ## Device Configuration Backup
 ### How It Works
 
