@@ -213,6 +213,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, monitoring, settings, topology, export, backups
         p = urlparse(self.path).path
 
+        # ── Favicon ───────────────────────────────────────────────
+        if p in ("/favicon.ico", "/pingwatch-icon.png"):
+            _ico = os.path.join(os.path.dirname(__file__), "pingwatch-icon.png")
+            if os.path.isfile(_ico):
+                with open(_ico, "rb") as _f:
+                    _data = _f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(_data)))
+                self.end_headers()
+                self.wfile.write(_data)
+            else:
+                self.send_response(404); self.end_headers()
+            return
+
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
         if p in ("/", "/index.html"):
             body = _load_html()
