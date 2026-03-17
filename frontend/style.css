@@ -14,7 +14,7 @@
   --info:  #388bfd;
   --text:  #e6edf3;
   --text2: #8b949e;
-  --text3: #484f58;
+  --text3: #8b949e;
   --accent:#2f81f7;
   --accent-glow: rgba(47,129,247,.35);
   --accent-hover:#388bfd;
@@ -1397,6 +1397,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .evt-cat-badge{font-size:10px;padding:2px 6px;border-radius:8px;background:rgba(35,209,139,.08);color:var(--up);border:1px solid rgba(35,209,139,.2);white-space:nowrap;flex-shrink:0;}
 .evt-trap-unknown{opacity:.7;font-style:italic;}
 .evt-trap-raw-block{font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--bg);border-radius:5px;padding:8px;max-height:120px;overflow-y:auto;border:1px solid var(--border);white-space:pre-wrap;word-break:break-all;}
+.evt-oid-hint{opacity:.5;font-size:10px;}
 
 /* Card view enhancements */
 #evtList{flex:1;overflow-y:auto;padding:0;}

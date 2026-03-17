@@ -13,7 +13,7 @@ Takes a raw parsed trap dict and enriches it with:
 import json
 
 from db.trap_defs import db_lookup_trap, db_lookup_enterprise
-from .vendor import identify_vendor
+from .vendor import identify_vendor, extract_enterprise_oid
 
 
 def enrich_trap(raw: dict) -> dict:
@@ -33,10 +33,15 @@ def enrich_trap(raw: dict) -> dict:
     # Serialize raw varbinds to JSON
     raw_varbinds_json = json.dumps(varbinds) if varbinds else "[]"
 
+    # Resolve enterprise OID: use receiver-extracted value (v1), or derive from trap_oid (v2c)
+    enterprise_oid = raw.get("enterprise_oid") or extract_enterprise_oid(trap_oid) or ""
+
     # Step 1: exact trap OID lookup
     defn = db_lookup_trap(trap_oid) if trap_oid else None
 
     if defn:
+        hints = defn.get("varbind_hints") or {}
+        enriched_varbinds = _apply_hints(varbinds, hints)
         enriched = {
             **raw,
             "vendor":             defn["vendor"],
@@ -47,8 +52,10 @@ def enrich_trap(raw: dict) -> dict:
             "probable_cause":     defn["probable_cause"],
             "recommended_action": defn["recommended_action"],
             "description":        defn.get("description", ""),
-            "varbind_hints":      defn.get("varbind_hints", {}),
+            "varbind_hints":      hints,
             "raw_varbinds":       raw_varbinds_json,
+            "enriched_varbinds":  json.dumps(enriched_varbinds),
+            "enterprise_oid":     enterprise_oid,
             "enriched":           1,
         }
         return enriched
@@ -68,5 +75,19 @@ def enrich_trap(raw: dict) -> dict:
         "description":        "",
         "varbind_hints":      {},
         "raw_varbinds":       raw_varbinds_json,
+        "enriched_varbinds":  json.dumps(_apply_hints(varbinds, {})),
+        "enterprise_oid":     enterprise_oid,
         "enriched":           0,
     }
+
+
+def _apply_hints(varbinds: list, hints: dict) -> list:
+    """
+    Return a new list of varbind dicts enriched with a human-readable 'name'
+    field looked up from varbind_hints (OID → name).  The 'name' key is empty
+    string when no hint is available.
+    """
+    return [
+        {"oid": vb["oid"], "name": hints.get(vb["oid"], ""), "value": vb["value"]}
+        for vb in varbinds
+    ]

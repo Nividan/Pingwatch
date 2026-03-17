@@ -330,8 +330,11 @@ def db_init():
             "ALTER TABLE snmp_traps ADD COLUMN category        TEXT DEFAULT ''",
             "ALTER TABLE snmp_traps ADD COLUMN probable_cause  TEXT DEFAULT ''",
             "ALTER TABLE snmp_traps ADD COLUMN recommended_action TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN raw_varbinds    TEXT DEFAULT '[]'",
-            "ALTER TABLE snmp_traps ADD COLUMN enriched        INTEGER DEFAULT 0",
+            "ALTER TABLE snmp_traps ADD COLUMN raw_varbinds         TEXT DEFAULT '[]'",
+            "ALTER TABLE snmp_traps ADD COLUMN enriched             INTEGER DEFAULT 0",
+            "ALTER TABLE snmp_traps ADD COLUMN enterprise_oid       TEXT DEFAULT ''",
+            "ALTER TABLE snmp_traps ADD COLUMN generic_trap_type    INTEGER DEFAULT -1",
+            "ALTER TABLE snmp_traps ADD COLUMN enriched_varbinds    TEXT DEFAULT '[]'",
         ]:
             try:
                 con.execute(_col)
