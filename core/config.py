@@ -17,7 +17,7 @@ DB_PATH     = os.path.join(_ROOT, "pingwatch.db")
 SESSION_TTL = 86400   # 24 hours
 
 FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
-CONFIGS_DIR      = os.path.join(_ROOT, "configs")
+CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
 CERTS_DIR        = os.path.join(_ROOT, "certs")
 TLS_PORT_DEFAULT = 8443
 

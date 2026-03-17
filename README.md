@@ -474,7 +474,9 @@ pingwatch/
 ├── backup/                 ← Device configuration backup
 │   ├── __init__.py
 │   ├── engine.py           ← SSH / Telnet backup engine
-│   └── scheduler.py        ← Backup schedule runner
+│   ├── scheduler.py        ← Backup schedule runner
+│   └── configs/            ← Exported config files per device (auto-created)
+│       └── <Device Name>/  ← One subfolder per device
 │
 ├── snmp/                   ← SNMP trap pipeline
 │   ├── __init__.py
