@@ -174,9 +174,11 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### 📡 Dashboard
 
 <p align="center">
-  <img src="screenshots/dashboard1.png" width="800"/>
-  <br><br>
-  <img src="screenshots/dashboard2.png" width="800"/>
+  <img src="screenshots/dashboard1.png" width="1000"/>
+</p>
+
+<p align="center">
+  <img src="screenshots/dashboard2.png" width="1000"/>
 </p>
 
 ---
@@ -184,9 +186,11 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### 🖥 Devices
 
 <p align="center">
-  <img src="screenshots/devices1.png" width="800"/>
-  <br><br>
-  <img src="screenshots/devices2.png" width="800"/>
+  <img src="screenshots/devices1.png" width="1000"/>
+</p>
+
+<p align="center">
+  <img src="screenshots/devices2.png" width="1000"/>
 </p>
 
 ---
@@ -194,7 +198,7 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### 📜 Events
 
 <p align="center">
-  <img src="screenshots/events1.png" width="800"/>
+  <img src="screenshots/events1.png" width="1000"/>
 </p>
 
 ---
@@ -202,9 +206,11 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### 🗺 Network Topology (NTM)
 
 <p align="center">
-  <img src="screenshots/live-ntm.png" width="800"/>
-  <br><br>
-  <img src="screenshots/example_draw-ntm.png" width="800"/>
+  <img src="screenshots/live-ntm.png" width="1000"/>
+</p>
+
+<p align="center">
+  <img src="screenshots/example_draw-ntm.png" width="1000"/>
 </p>
 
 ---
@@ -212,9 +218,9 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### 📊 Sensors
 
 <p align="center">
-  <img src="screenshots/sensor1.png" width="260"/>
-  <img src="screenshots/sensor2.png" width="260"/>
-  <img src="screenshots/sensor3.png" width="260"/>
+  <img src="screenshots/sensor1.png" width="320"/>
+  <img src="screenshots/sensor2.png" width="320"/>
+  <img src="screenshots/sensor3.png" width="320"/>
 </p>
 
 ---
@@ -222,8 +228,11 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### ⚙️ Settings
 
 <p align="center">
-  <img src="screenshots/settings1.png" width="400"/>
-  <img src="screenshots/settings2.png" width="400"/>
+  <img src="screenshots/settings1.png" width="1000"/>
+</p>
+
+<p align="center">
+  <img src="screenshots/settings2.png" width="1000"/>
 </p>
 
 ---
@@ -231,10 +240,15 @@ All ports are configurable in **Settings → Networking** or during the first-ru
 ### 💾 Config Backup
 
 <p align="center">
-  <img src="screenshots/backup1.png" width="800"/>
-  <br><br>
-  <img src="screenshots/backup2.png" width="400"/>
-  <img src="screenshots/backup3.png" width="400"/>
+  <img src="screenshots/backup1.png" width="1000"/>
+</p>
+
+<p align="center">
+  <img src="screenshots/backup2.png" width="1000"/>
+</p>
+
+<p align="center">
+  <img src="screenshots/backup3.png" width="1000"/>
 </p>
 
 ---
