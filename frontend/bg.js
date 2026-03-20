@@ -148,9 +148,15 @@
     }
     for(let i=0;i<5;i++)addBlip();
 
-    function frame(){
-      // Stop rendering when the radar canvas is not visible (emptyMain hidden)
-      if(!cvs.offsetParent){ requestAnimationFrame(frame); return; }
+    // Throttle radar to 30 FPS — was unthrottled at 60 FPS (40 arc fills/frame)
+    const RADAR_MS = 1000 / 30;
+    let _radarLast = 0;
+
+    function frame(ts){
+      // When hidden, poll slowly instead of burning 60 RAF/s on a visibility check
+      if(!cvs.offsetParent){ setTimeout(()=>requestAnimationFrame(frame), 500); return; }
+      if(ts - _radarLast < RADAR_MS){ requestAnimationFrame(frame); return; }
+      _radarLast = ts;
       ctx.clearRect(0,0,W,H);
 
       // outer glow ring
@@ -226,10 +232,10 @@
       ctx.beginPath();ctx.arc(CX,CY,8,0,Math.PI*2);ctx.fillStyle=cg;ctx.fill();
       ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle='#60a5fa';ctx.fill();
 
-      angle=(angle+.018)%(Math.PI*2);
+      angle=(angle+.036)%(Math.PI*2); // .018*2 — compensate for 30 FPS vs 60 FPS
       requestAnimationFrame(frame);
     }
-    frame();
+    frame(0);
   }
   // init when DOM ready
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initRadar);

@@ -5,7 +5,7 @@ let _sseFirstConnect = true;  // false after first successful open → reconnect
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
 
 // ── Clock ────────────────────────────────────────────────────────
-setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),500);
+setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),1000);
 
 // ── SSE helpers ──────────────────────────────────────────────────
 function _parseSSE(e){
