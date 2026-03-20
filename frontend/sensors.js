@@ -545,7 +545,8 @@ function openDetail(did,sid,initialTab){
         <label><input type="checkbox" id="tog-band-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Min/Max</label>
         <label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>
         <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
-        <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto</button>
+        <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto-Refresh</button>
+        <button class="dm-ar-btn" id="fs-${did}-${sid}" data-did="${did}" data-sid="${sid}" onclick="dmToggleFullscreen('${did}','${sid}')" title="Full screen">⤢</button>
       </div>
       <div style="position:relative">
         <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
@@ -854,7 +855,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, H - BOT); ctx.stroke();
     const d = new Date(ts * 1000);
     const lbl = _gInt < 86400
-      ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
+      ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false})
       : d.toLocaleDateString([], {month:'short',day:'numeric'});
     ctx.fillStyle = 'rgba(200,210,220,.85)'; ctx.font = '11px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(lbl, x, H - 3);
@@ -1076,10 +1077,10 @@ function dmToggleAutoRefresh(did, sid) {
   if (S._arTimers[key]) {
     clearInterval(S._arTimers[key]);
     delete S._arTimers[key];
-    if (btn) { btn.textContent = 'Auto'; btn.classList.remove('active'); }
+    if (btn) { btn.textContent = 'Auto-Refresh'; btn.classList.remove('active'); }
   } else {
     S._arTimers[key] = setInterval(() => dmHistReload(did, sid), 30000);
-    if (btn) { btn.textContent = 'Auto ●'; btn.classList.add('active'); }
+    if (btn) { btn.textContent = 'Auto-Refresh ●'; btn.classList.add('active'); }
   }
 }
 
@@ -1088,6 +1089,34 @@ function _dmStopAR(did, sid) {
   const key = `${did}/${sid}`;
   if (S._arTimers[key]) { clearInterval(S._arTimers[key]); delete S._arTimers[key]; }
 }
+
+function dmToggleFullscreen(did, sid) {
+  const box = document.querySelector('#dm .dmbox');
+  if (!box) return;
+  if (!document.fullscreenElement) {
+    box.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const fsBtn = document.querySelector('.dmbox [id^="fs-"]');
+  if (!fsBtn) return;
+  const did = fsBtn.dataset.did, sid = fsBtn.dataset.sid;
+  const canvas = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
+  if (document.fullscreenElement) {
+    fsBtn.textContent = '⊠';
+    fsBtn.title = 'Exit full screen';
+    setTimeout(() => {
+      if (canvas) { canvas.height = canvas.offsetHeight || 620; dmHistRedraw(did, sid); }
+    }, 80);
+  } else {
+    fsBtn.textContent = '⤢';
+    fsBtn.title = 'Full screen';
+    if (canvas) { canvas.height = 320; dmHistRedraw(did, sid); }
+  }
+});
 
 function dmHistReload(did, sid) {
   const histTab = document.getElementById(`dm-tab-history-${did}-${sid}`);

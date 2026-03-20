@@ -994,6 +994,18 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .dm-ar-btn:hover   {border-color:var(--border2);color:var(--text);}
 .dm-ar-btn.active  {border-color:var(--accent);color:var(--accent);background:rgba(47,129,247,.12);}
 
+/* ── History fullscreen ── */
+.dmbox:fullscreen,
+.dmbox:-webkit-full-screen {
+  border-radius:0;border:none;
+  width:100vw;height:100vh;max-width:100vw;max-height:100vh;
+  display:flex;flex-direction:column;background:var(--bg);overflow:hidden;
+}
+.dmbox:fullscreen .dm-body,
+.dmbox:-webkit-full-screen .dm-body { flex:1;overflow-y:auto; }
+.dmbox:fullscreen canvas.dm-hist-canvas,
+.dmbox:-webkit-full-screen canvas.dm-hist-canvas { width:100%;height:100%; }
+
 /* ── Toast & banners ── */
 #toast{position:fixed;bottom:20px;right:20px;z-index:2000;display:flex;flex-direction:column;gap:6px}
 .ti{
