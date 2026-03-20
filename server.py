@@ -508,30 +508,41 @@ def main():
 
     # ── GUI ────────────────────────────────────────────────────────
     from core.logger import log_buffer
-    try:
-        from gui import StatusWindow
-        _GUI = True
-    except ImportError:
-        _GUI = False
-        log.warning(
-            "tkinter not available — status window disabled. "
-            "Install python3-tk (Linux) or python-tk (macOS) to enable."
-        )
-
     _headless_stop = threading.Event()
+    _headless_mode = int(_settings.get("headless", "0"))
 
-    if _TRAY:
+    if _headless_mode:
+        # User explicitly chose server/headless mode during setup — skip all GUI
+        _GUI = False
+        _use_tray = False
+    else:
+        _use_tray = _TRAY
+        try:
+            from gui import StatusWindow
+            _GUI = True
+        except ImportError:
+            _GUI = False
+            log.warning(
+                "tkinter not available — status window disabled. "
+                "Install python3-tk (Linux) or python-tk (macOS) to enable."
+            )
+        if not _use_tray:
+            log.warning("pystray/Pillow not found — no tray icon. Use the Status Window to quit.")
+
+    def _quit(*_):
+        if app_state.tray_icon is not None:
+            try: app_state.tray_icon.stop()
+            except Exception: pass
+        if _GUI:
+            win.destroy()
+        else:
+            _headless_stop.set()
+
+    signal.signal(signal.SIGINT, lambda *_: _quit())
+
+    if _use_tray:
         def _open(*_):
             webbrowser.open(_local_url)
-
-        def _quit(*_):
-            if app_state.tray_icon is not None:
-                try: app_state.tray_icon.stop()
-                except Exception: pass
-            if _GUI:
-                win.destroy()
-            else:
-                _headless_stop.set()
 
         def _show(*_):
             if _GUI: win.show()
@@ -546,22 +557,13 @@ def main():
         )
 
         app_state.tray_icon = pystray.Icon("PingWatch", _make_tray_icon(), "PingWatch", menu)
-        signal.signal(signal.SIGINT, lambda *_: _quit())
         threading.Thread(target=app_state.tray_icon.run, daemon=True).start()
-    else:
-        log.warning("pystray/Pillow not found — no tray icon. Use the Status Window to quit.")
-        def _quit(*_):
-            if _GUI:
-                win.destroy()
-            else:
-                _headless_stop.set()
-        signal.signal(signal.SIGINT, lambda *_: _quit())
 
     if _GUI:
         win = StatusWindow(STATE, log_buffer, PORT, quit_fn=_quit)
         win.build_and_show()
     else:
-        log.info("Running headlessly — press Ctrl+C to stop.")
+        log.info("Running in server mode — press Ctrl+C to stop.")
         _headless_stop.wait()
 
     # ── Graceful shutdown ─────────────────────────────────────────

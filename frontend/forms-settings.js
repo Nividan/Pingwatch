@@ -124,6 +124,14 @@ async function openSettings(){
           <span class="st-info-key">Database</span><span class="st-info-val">${esc(sr.db_path||'')}</span>
         </div>
       </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Server Controls</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="serverRestart()">&#x21BA; Restart Server</button>
+          <button class="btn-d" style="font-size:12px;padding:7px 16px" onclick="serverShutdown()">&#x23FB; Shutdown Server</button>
+        </div>
+        <div class="fh" style="margin-top:8px">Restart applies pending settings changes. Shutdown stops the server process entirely.</div>
+      </div>
     </div>
     <div class="mbdy" id="stab-users" style="display:none;padding-top:8px">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
@@ -932,4 +940,44 @@ async function testSmtp(){
   if(btn){btn.disabled=false;btn.textContent='Send Test Email';}
   if(res) res.style.color=r.ok?'var(--up)':'var(--down)';
   if(res) res.textContent=r.msg||'Unknown error';
+}
+
+async function serverRestart(){
+  if(!confirm('Restart the server now?\n\nThe dashboard will reconnect automatically.')) return;
+  const btn=document.querySelector('[onclick="serverRestart()"]');
+  if(btn){btn.disabled=true;btn.textContent='Restarting…';}
+  try{
+    await api('POST','/api/server/restart',{});
+    toast('Server restarting — reconnecting…','ok');
+    closeM('mset');
+    // Poll until the server is back up
+    setTimeout(async()=>{
+      for(let i=0;i<30;i++){
+        await new Promise(r=>setTimeout(r,2000));
+        try{
+          const r=await fetch('/api/server_info',{credentials:'include'});
+          if(r.ok){ toast('Server is back online','ok'); location.reload(); return; }
+        }catch(_){}
+      }
+      toast('Server may still be restarting — refresh manually','warn');
+    },2000);
+  }catch(e){
+    toast('Restart failed: '+e,'error');
+    if(btn){btn.disabled=false;btn.textContent='↺ Restart Server';}
+  }
+}
+
+async function serverShutdown(){
+  if(!confirm('Shut down the server?\n\nYou will need to restart it manually from the command line.')) return;
+  const btn=document.querySelector('[onclick="serverShutdown()"]');
+  if(btn){btn.disabled=true;btn.textContent='Shutting down…';}
+  try{
+    await api('POST','/api/server/shutdown',{});
+    toast('Server is shutting down…','warn');
+    closeM('mset');
+  }catch(e){
+    // A network error here just means the server already stopped — that's fine
+    toast('Server shut down','warn');
+    closeM('mset');
+  }
 }
