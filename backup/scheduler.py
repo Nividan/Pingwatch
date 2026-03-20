@@ -13,8 +13,7 @@ import time
 from core.logger import log_backup as log
 
 
-def _should_fire(last_fired: datetime.datetime | None,
-                 freq: str, time_str: str, days_str: str) -> bool:
+def _should_fire(last_fired, freq: str, time_str: str, days_str: str) -> bool:
     """
     Return True if:
     - Current HH:MM matches time_str
@@ -25,13 +24,18 @@ def _should_fire(last_fired: datetime.datetime | None,
     try:
         h, m = map(int, time_str.split(':'))
     except Exception:
+        log.warning(f"Backup scheduler: invalid time_str {time_str!r}")
         return False
 
     if now.hour != h or now.minute != m:
         return False
 
+    # Time window matched — log so we know the scheduler reached this point
+    log.debug(f"Backup scheduler: time matched {time_str!r}, checking other conditions")
+
     # Avoid double-fire within the same minute
     if last_fired and (now - last_fired).total_seconds() < 90:
+        log.debug("Backup scheduler: suppressed (fired within last 90 s)")
         return False
 
     if freq == 'weekly':
@@ -39,8 +43,11 @@ def _should_fire(last_fired: datetime.datetime | None,
         try:
             days = {int(d) for d in days_str.split(',') if d.strip()}
         except Exception:
+            log.warning(f"Backup scheduler: invalid days_str {days_str!r}")
             return False
-        if (now.weekday() + 1) not in days:   # weekday() returns 0=Mon
+        today = now.weekday() + 1  # weekday() returns 0=Mon; we use 1=Mon…7=Sun
+        if today not in days:
+            log.debug(f"Backup scheduler: today={today} not in scheduled days={days}")
             return False
 
     return True
@@ -52,17 +59,29 @@ def _scheduler_loop():
     from .engine import do_backup
 
     log.info("Backup scheduler started")
-    last_fired: datetime.datetime | None = None
+    last_fired = None
+    _poll = 0  # poll counter — used to emit a periodic heartbeat
 
     while True:
-        time.sleep(30)   # check every 30 seconds
         try:
-            if not int(_cfg('backup_sched_enabled', 0)):
-                continue
+            time.sleep(30)   # check every 30 seconds
+            _poll += 1
 
+            enabled  = int(_cfg('backup_sched_enabled', 0))
             freq     = str(_cfg('backup_sched_freq',  'daily'))
             time_str = str(_cfg('backup_sched_time',  '02:00'))
             days_str = str(_cfg('backup_sched_days',  '1,2,3,4,5,6,7'))
+
+            # Heartbeat every ~30 min so we can confirm the scheduler is alive
+            if _poll % 60 == 0:
+                log.debug(
+                    f"Scheduler heartbeat — enabled={enabled} freq={freq!r} "
+                    f"time={time_str!r} days={days_str!r} "
+                    f"last_fired={last_fired.strftime('%H:%M:%S') if last_fired else 'never'}"
+                )
+
+            if not enabled:
+                continue
 
             if not _should_fire(last_fired, freq, time_str, days_str):
                 continue
