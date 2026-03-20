@@ -153,7 +153,7 @@ _PACKAGES = [
         "install":  None,   # stdlib — cannot be pip-installed
         "pip":      None,
         "desc":     "status window GUI",
-        "required": True,
+        "required": False,  # server runs headlessly without it
     },
     {
         "import":   "pystray",
@@ -235,34 +235,46 @@ def step1_packages():
 
         if pkg["pip"] is None:
             # stdlib — cannot be pip-installed (tkinter)
-            _tag("error", "tkinter is part of the Python standard library but was not found.")
             import platform as _plat
             _sys = _plat.system()
             if _sys == "Windows":
+                _tag("error", "tkinter is part of the Python standard library but was not found.")
                 _tag("info", "Re-install Python from python.org and tick 'tcl/tk and IDLE'.")
-            elif _sys == "Linux":
-                _tag("info", "Install with:")
-                _tag("info", "  Debian/Ubuntu: sudo apt-get install -y python3-tk")
-                _tag("info", "  RHEL/Fedora:   sudo dnf install python3-tkinter")
-                if _ask_yn("Try to install python3-tk via apt-get now?", default=True):
-                    r = subprocess.run(["sudo", "apt-get", "install", "-y", "python3-tk"],
-                                       capture_output=False)
-                    if r.returncode == 0:
-                        _tag("ok", "python3-tk installed — restart the wizard to confirm")
-                    else:
-                        _tag("warn", "Install failed — try manually, then re-run setup")
-            elif _sys == "Darwin":
-                _tag("info", "Install with: brew install python-tk")
-                if _ask_yn("Try to install python-tk via brew now?", default=True):
-                    r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
-                    if r.returncode == 0:
-                        _tag("ok", "python-tk installed — restart the wizard to confirm")
-                    else:
-                        _tag("warn", "Install failed — try manually, then re-run setup")
-            _tag("warn", "The GUI status window will be unavailable without tkinter.")
-            _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
-            if pkg["required"]:
-                all_ok = False
+                _tag("warn", "The GUI status window will be unavailable without tkinter.")
+                _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
+            else:
+                # On Linux/macOS ask first — servers don't need a GUI at all
+                _tag("info", "tkinter enables the native status window (desktop GUI).")
+                _tag("info", "Server/headless deployments do not need it — the web")
+                _tag("info", "dashboard is the primary interface.")
+                print()
+                _needs_gui = _ask_yn("Do you need the desktop GUI status window?", default=False)
+                if not _needs_gui:
+                    _tag("ok", "Skipping tkinter — running in headless/server mode.")
+                    _tag("info", "Access PingWatch via the web dashboard in your browser.")
+                    continue
+                # User wants GUI — offer to install
+                if _sys == "Linux":
+                    _tag("info", "Install with:")
+                    _tag("info", "  Debian/Ubuntu: sudo apt-get install -y python3-tk")
+                    _tag("info", "  RHEL/Fedora:   sudo dnf install python3-tkinter")
+                    if _ask_yn("Try to install python3-tk via apt-get now?", default=True):
+                        r = subprocess.run(["sudo", "apt-get", "install", "-y", "python3-tk"],
+                                           capture_output=False)
+                        if r.returncode == 0:
+                            _tag("ok", "python3-tk installed — restart the wizard to confirm")
+                        else:
+                            _tag("warn", "Install failed — try manually, then re-run setup")
+                elif _sys == "Darwin":
+                    _tag("info", "Install with: brew install python-tk")
+                    if _ask_yn("Try to install python-tk via brew now?", default=True):
+                        r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
+                        if r.returncode == 0:
+                            _tag("ok", "python-tk installed — restart the wizard to confirm")
+                        else:
+                            _tag("warn", "Install failed — try manually, then re-run setup")
+                _tag("warn", "The GUI status window will be unavailable until tkinter is installed.")
+                _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
             continue
 
         install_now = _ask_yn(f"Install '{pkg['name']}' now?", default=True)
