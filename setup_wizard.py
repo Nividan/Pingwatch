@@ -136,6 +136,7 @@ _state = {
     "tls_cn":          "",
     "org_name":        "PingWatch",
     "http_redirect":   True,
+    "headless":        False,   # True when user opts out of desktop GUI
 }
 
 # Track whether the DB was partially created (for Ctrl+C cleanup)
@@ -298,7 +299,8 @@ def step1_packages():
                 print()
                 _needs_gui = _ask_yn("Do you need the desktop GUI status window?", default=False)
                 if not _needs_gui:
-                    _headless = True   # also skip pystray / Pillow below
+                    _headless = True           # also skip pystray / Pillow below
+                    _state["headless"] = True  # persisted to DB → server skips GUI
                     _tag("ok", "Skipping tkinter — running in headless/server mode.")
                     _tag("info", "Access PingWatch via the web dashboard in your browser.")
                     continue
@@ -983,6 +985,7 @@ def step7_init_db():
         "tls_cn":      _state["tls_cn"],
         "org_name":    _state["org_name"],
         "http_redirect": "1" if _state["http_redirect"] else "0",
+        "headless":    "1" if _state["headless"] else "0",
     }
     if _state["tls_cert_pem"]:
         settings["tls_cert_pem"]    = _state["tls_cert_pem"]

@@ -7,6 +7,8 @@ Handles: /api/settings (GET/PATCH), /api/server_info (GET),
 
 import json
 import os
+import sys
+import threading
 import time
 
 import core.app_state as app_state
@@ -226,6 +228,53 @@ def handle(h, method, path, body):
         widgets_json = json.dumps(widgets)
         _db_enqueue(lambda _u=user, _j=widgets_json: db_save_dashboard(_u, _j))
         h._json(200, {"ok": True})
+        return True
+
+    # ── /api/server/restart POST ──────────────────────────────────
+    if path == "/api/server/restart" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        log.info(f"Server restart requested by '{user}'")
+        h._json(200, {"ok": True, "msg": "Server is restarting…"})
+        try: h.wfile.flush()
+        except Exception: pass
+        def _do_restart():
+            time.sleep(1.5)
+            from db import db_flush_samples
+            try: db_flush_samples()
+            except Exception: pass
+            if app_state.tray_icon is not None:
+                try: app_state.tray_icon.stop()
+                except Exception: pass
+                time.sleep(0.2)
+            _cmd = [sys.executable] + sys.argv
+            if os.name == "nt":
+                import subprocess as _sp
+                _sp.Popen(_cmd, creationflags=_sp.CREATE_NEW_CONSOLE)
+                os._exit(0)
+            else:
+                os.execv(sys.executable, _cmd)
+        threading.Thread(target=_do_restart, daemon=True).start()
+        return True
+
+    # ── /api/server/shutdown POST ─────────────────────────────────
+    if path == "/api/server/shutdown" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        log.info(f"Server shutdown requested by '{user}'")
+        h._json(200, {"ok": True, "msg": "Server is shutting down…"})
+        try: h.wfile.flush()
+        except Exception: pass
+        def _do_shutdown():
+            time.sleep(1.0)
+            from db import db_flush_samples
+            try: db_flush_samples()
+            except Exception: pass
+            if app_state.tray_icon is not None:
+                try: app_state.tray_icon.stop()
+                except Exception: pass
+            os._exit(0)
+        threading.Thread(target=_do_shutdown, daemon=True).start()
         return True
 
     return False
