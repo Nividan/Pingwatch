@@ -937,36 +937,40 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     }
   }
 
-  // ── 7. Avg line — main focus, break at failure gaps ───────────
+  // ── 7. Avg line — main focus ──────────────────────────────────
   if (togAvg) {
     const okSamples = samples.filter(p => p.ok && p.ms != null);
     if (okSamples.length > 1) {
       // Downsample if more samples than pixels
-      const pixPerPt = plotW / okSamples.length;
-      const stride = pixPerPt < 1.0 ? Math.ceil(1.0 / pixPerPt) : 1;
+      const stride = okSamples.length > plotW ? Math.ceil(okSamples.length / plotW) : 1;
       const ds = stride > 1 ? okSamples.filter((_, i) => i % stride === 0) : okSamples;
       const pts = ds.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
 
-      // Avg line with gap detection (break at failure periods)
-      const expectedInterval = tsRange / (okSamples.length || 1);
-      const gapThresh = expectedInterval * 3;
-      ctx.beginPath();
-      let penDown = false;
-      pts.forEach((p, i) => {
-        const isGap = i > 0 && (p.ts - pts[i-1].ts) > gapThresh;
-        if (!penDown || isGap) {
-          ctx.moveTo(p.x, p.y); penDown = true;
-        } else if (i < pts.length - 1) {
-          const cpx = (pts[i].x + pts[i+1].x) / 2;
-          const cpy = (pts[i].y + pts[i+1].y) / 2;
-          ctx.quadraticCurveTo(pts[i].x, pts[i].y, cpx, cpy);
-        } else {
-          ctx.lineTo(p.x, p.y);
+      // Draw with bezier smoothing, breaking line at large gaps only
+      const gapThresh = (tsRange / pts.length) * 4;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#7ec8ff';
+      ctx.shadowColor = 'rgba(126,200,255,.5)';
+      ctx.shadowBlur = 3;
+      let segStart = 0;
+      for (let i = 1; i <= pts.length; i++) {
+        const isEnd = i === pts.length;
+        const isGap = !isEnd && (pts[i].ts - pts[i-1].ts) > gapThresh;
+        if (isEnd || isGap) {
+          const seg = pts.slice(segStart, i);
+          if (seg.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(seg[0].x, seg[0].y);
+            for (let j = 1; j < seg.length - 1; j++) {
+              ctx.quadraticCurveTo(seg[j].x, seg[j].y,
+                (seg[j].x + seg[j+1].x) / 2, (seg[j].y + seg[j+1].y) / 2);
+            }
+            ctx.lineTo(seg[seg.length-1].x, seg[seg.length-1].y);
+            ctx.stroke();
+          }
+          segStart = i;
         }
-      });
-      ctx.shadowColor = 'rgba(100,180,255,.6)';
-      ctx.shadowBlur = 4;
-      ctx.strokeStyle = '#7ec8ff'; ctx.lineWidth = 2.5; ctx.stroke();
+      }
       ctx.shadowBlur = 0;
     }
   }
