@@ -947,16 +947,6 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
       const ds = stride > 1 ? okSamples.filter((_, i) => i % stride === 0) : okSamples;
       const pts = ds.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
 
-      // Subtle fill under avg (drawn before the line)
-      const fillG = ctx.createLinearGradient(0, TOP, 0, H - BOT);
-      fillG.addColorStop(0,   'rgba(77,163,255,.10)');
-      fillG.addColorStop(1,   'rgba(77,163,255,.02)');
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, H - BOT);
-      pts.forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.lineTo(pts[pts.length-1].x, H - BOT);
-      ctx.fillStyle = fillG; ctx.fill();
-
       // Avg line with gap detection (break at failure periods)
       const expectedInterval = tsRange / (okSamples.length || 1);
       const gapThresh = expectedInterval * 3;
@@ -974,7 +964,10 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
           ctx.lineTo(p.x, p.y);
         }
       });
-      ctx.strokeStyle = '#4da3ff'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.shadowColor = 'rgba(100,180,255,.6)';
+      ctx.shadowBlur = 4;
+      ctx.strokeStyle = '#7ec8ff'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.shadowBlur = 0;
     }
   }
 
