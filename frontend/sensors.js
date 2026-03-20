@@ -549,7 +549,7 @@ function openDetail(did,sid,initialTab){
       </div>
       <div style="position:relative">
         <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
-        <div class="dm-hist-tip" id="tip-${did}-${sid}" style="display:none"></div>
+        <div class="dm-hist-tip" id="tip-${did}-${sid}"></div>
       </div>
       <div id="dm-hist-summary-${did}-${sid}" class="dm-hist-summary"></div>
     </div>
@@ -658,8 +658,17 @@ function _buildKpiBar(summary, did, sid) {
   _set(`kpi-avg-${did}-${sid}`,    avg != null ? avg + 'ms' : '—');
   _set(`kpi-min-${did}-${sid}`,    minMs !== Infinity  ? minMs + 'ms' : '—');
   _set(`kpi-max-${did}-${sid}`,    maxMs !== -Infinity ? maxMs + 'ms' : '—');
-  _set(`kpi-loss-${did}-${sid}`,   (lossSum / summary.length).toFixed(1) + '%');
+  const avgLoss = lossSum / summary.length;
+  _set(`kpi-loss-${did}-${sid}`,   avgLoss.toFixed(1) + '%');
   _set(`kpi-jitter-${did}-${sid}`, (jitterSum / summary.length).toFixed(1) + 'ms');
+  // Color-variant classes
+  const _kpiColor = (id, cls) => {
+    const el = document.getElementById(id);
+    if (el) el.className = 'dm-kpi-item' + (cls ? ' ' + cls : '');
+  };
+  _kpiColor(`kpi-avail-${did}-${sid}`, avail < 80 ? 'dm-kpi-crit' : avail < 95 ? 'dm-kpi-warn' : avail === 100 ? 'dm-kpi-good' : '');
+  _kpiColor(`kpi-loss-${did}-${sid}`,  avgLoss >= 20 ? 'dm-kpi-crit' : avgLoss >= 5 ? 'dm-kpi-warn' : avgLoss === 0 ? 'dm-kpi-good' : '');
+  _kpiColor(`kpi-jitter-${did}-${sid}`, 'dm-kpi-info');
 }
 
 function _setupHistTooltip(canvas, summary, did, sid, minutes) {
@@ -682,26 +691,42 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
       const d = Math.abs(r.ts + 1800 - hoverTs);
       if (d < bestDist) { bestDist = d; nearest = r; }
     }
-    if (!nearest) { tip.style.display = 'none'; return; }
+    if (!nearest) { tip.classList.remove('tip-visible'); return; }
     const d = new Date(nearest.ts * 1000);
     const lbl = d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' +
                 d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-    const status = nearest.ok === 0 && nearest.fail > 0 ? '🔴 DOWN' : '🟢 UP';
+    const isDown = nearest.ok === 0 && nearest.fail > 0;
+    const statusColor = isDown ? 'var(--down)' : 'var(--up)';
+    const statusText  = isDown ? '● DOWN' : '● UP';
+    const lossColor   = (nearest.loss_pct || 0) > 5 ? 'var(--warn)' : 'var(--text)';
     tip.innerHTML =
-      `<b>${lbl}</b><br>` +
-      `Avg: ${nearest.avg_ms != null ? nearest.avg_ms + ' ms' : '—'}<br>` +
-      `Min: ${nearest.min_ms != null ? nearest.min_ms + ' ms' : '—'}<br>` +
-      `Max: ${nearest.max_ms != null ? nearest.max_ms + ' ms' : '—'}<br>` +
-      `Loss: ${(nearest.loss_pct || 0).toFixed(1)}%<br>` +
-      `Jitter: ${(nearest.jitter_ms || 0).toFixed(1)} ms<br>${status}`;
+      `<div style="font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:7px;` +
+      `padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.1)">${lbl}</div>` +
+      `<table style="border-collapse:collapse;font-size:.76rem">` +
+      `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Avg</td>` +
+      `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+      `${nearest.avg_ms != null ? nearest.avg_ms + ' ms' : '—'}</td></tr>` +
+      `<tr><td style="color:var(--text3);padding-bottom:3px">Min</td>` +
+      `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+      `${nearest.min_ms != null ? nearest.min_ms + ' ms' : '—'}</td></tr>` +
+      `<tr><td style="color:var(--text3);padding-bottom:3px">Max</td>` +
+      `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+      `${nearest.max_ms != null ? nearest.max_ms + ' ms' : '—'}</td></tr>` +
+      `<tr><td style="color:var(--text3);padding-bottom:3px">Loss</td>` +
+      `<td style="color:${lossColor};text-align:right">${(nearest.loss_pct || 0).toFixed(1)}%</td></tr>` +
+      `<tr><td style="color:var(--text3)">Jitter</td>` +
+      `<td style="color:rgba(188,130,255,.9);text-align:right">${(nearest.jitter_ms || 0).toFixed(1)} ms</td></tr>` +
+      `</table>` +
+      `<div style="margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,.1);` +
+      `font-size:.76rem;color:${statusColor}">${statusText}</div>`;
     const cssMx = e.clientX - rect.left;
     let tx = cssMx + 12, ty = e.clientY - rect.top - 70;
     if (tx + 175 > rect.width) tx = cssMx - 180;
     if (ty < 4) ty = 4;
     tip.style.left = tx + 'px';
     tip.style.top  = ty + 'px';
-    tip.style.display = 'block';
-    // Redraw chart then overdraw crosshair
+    tip.classList.add('tip-visible');
+    // Redraw chart then overdraw crosshair + highlight point
     dmHistRedraw(did, sid);
     const cctx = canvas.getContext('2d');
     cctx.strokeStyle = 'rgba(255,255,255,.22)';
@@ -709,9 +734,28 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
     cctx.setLineDash([3, 3]);
     cctx.beginPath(); cctx.moveTo(mx, TOP); cctx.lineTo(mx, canvas.height - BOT); cctx.stroke();
     cctx.setLineDash([]);
+    // Highlight circle at nearest avg point
+    if (nearest.avg_ms != null) {
+      const cache = _histCache[`${did}/${sid}`];
+      if (cache) {
+        const { summary: _s, samples: _sp } = cache;
+        const _sMaxMs = _s.reduce((m, r) => Math.max(m, r.max_ms || 0), 0);
+        const _msV = _sp.filter(p => p.ok && p.ms != null).map(p => p.ms);
+        const _rawMax = Math.max(_sMaxMs, _msV.length ? Math.max(..._msV) : 0);
+        const _sen2 = S.sensors[`${did}/${sid}`];
+        const _maxY = Math.max((_sen2?.crit_ms || 0) * 1.1, _rawMax * 1.2, 10);
+        const _plotH = canvas.height - BOT - TOP;
+        const _pyOf = ms => (canvas.height - BOT) - (ms / _maxY) * _plotH;
+        const _px = LEFT + (nearest.ts + 1800 - (Date.now() / 1000 - minutes * 60)) / (minutes * 60) * (canvas.width - LEFT - RIGHT);
+        const _py = _pyOf(nearest.avg_ms);
+        cctx.beginPath(); cctx.arc(_px, _py, 4.5, 0, Math.PI * 2);
+        cctx.fillStyle = '#3b9eff'; cctx.fill();
+        cctx.strokeStyle = 'rgba(255,255,255,.85)'; cctx.lineWidth = 1.5; cctx.stroke();
+      }
+    }
   }, { signal });
   canvas.addEventListener('mouseleave', () => {
-    tip.style.display = 'none';
+    tip.classList.remove('tip-visible');
     dmHistRedraw(did, sid);
   }, { signal });
 }
@@ -725,7 +769,10 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   const plotH = H - BOT - TOP;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, W, H);
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#0d1520');
+  bgGrad.addColorStop(1, '#060c16');
+  ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
   if (!samples.length && !summary.length) {
     ctx.fillStyle = '#8b949e'; ctx.font = '13px Inter,sans-serif'; ctx.textAlign = 'center';
@@ -760,7 +807,13 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     if (r.ok === 0 && r.fail > 0) {
       const x1 = Math.max(LEFT, xOf(r.ts));
       const x2 = Math.min(W - RIGHT, xOf(r.ts + 3600));
-      if (x2 > x1) ctx.fillRect(x1, TOP, x2 - x1, plotH);
+      if (x2 > x1) {
+        ctx.fillRect(x1, TOP, x2 - x1, plotH);
+        // Thin top accent line
+        ctx.strokeStyle = 'rgba(248,81,73,.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x1, TOP + 1); ctx.lineTo(x2, TOP + 1); ctx.stroke();
+      }
     }
   }
 
@@ -789,8 +842,17 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
       if ((r.loss_pct || 0) === 0) continue;
       const x = xOf(r.ts + 1800) - barW / 2;
       const yTop = yLoss(r.loss_pct);
-      ctx.fillStyle = 'rgba(240,165,0,.4)';
-      ctx.fillRect(x, yTop, barW, (H - BOT) - yTop);
+      ctx.fillStyle = 'rgba(240,165,0,.45)';
+      ctx.shadowColor = 'rgba(240,165,0,.4)';
+      ctx.shadowBlur = 5;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(x, yTop, barW, (H - BOT) - yTop, [2, 2, 0, 0]);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x, yTop, barW, (H - BOT) - yTop);
+      }
+      ctx.shadowBlur = 0;
     }
   }
 
@@ -816,22 +878,37 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     const pts = samples.filter(p => p.ok && p.ms != null).map(p => ({ x: xOf(p.ts), y: yOf(p.ms) }));
     if (pts.length > 1) {
       const g = ctx.createLinearGradient(0, TOP, 0, H - BOT);
-      g.addColorStop(0, 'rgba(47,129,247,.28)');
-      g.addColorStop(1, 'rgba(47,129,247,0)');
+      g.addColorStop(0,    'rgba(60,140,255,.38)');
+      g.addColorStop(0.55, 'rgba(47,129,247,.12)');
+      g.addColorStop(1,    'rgba(47,129,247,.02)');
       ctx.beginPath();
       ctx.moveTo(pts[0].x, H - BOT);
-      pts.forEach(p => ctx.lineTo(p.x, p.y));
+      // bezier fill path (follows smooth curve)
+      ctx.lineTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const cpx = (pts[i].x + pts[i+1].x) / 2;
+        const cpy = (pts[i].y + pts[i+1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, cpx, cpy);
+      }
+      ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
       ctx.lineTo(pts[pts.length - 1].x, H - BOT);
       ctx.closePath();
       ctx.fillStyle = g; ctx.fill();
+      // Smooth bezier line
       ctx.beginPath();
-      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-      ctx.strokeStyle = '#2f81f7'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const cpx = (pts[i].x + pts[i+1].x) / 2;
+        const cpy = (pts[i].y + pts[i+1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, cpx, cpy);
+      }
+      ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+      ctx.strokeStyle = '#3b9eff'; ctx.lineWidth = 2; ctx.stroke();
     }
   }
 
   // ── 6. Threshold lines ────────────────────────────────────────
-  ctx.font = '9px Inter,sans-serif';
+  ctx.font = '10px Inter,sans-serif';
   if (_sen?.warn_ms > 0 && _sen.warn_ms < maxY) {
     const wy = yOf(_sen.warn_ms);
     ctx.strokeStyle = 'rgba(240,165,0,.5)'; ctx.lineWidth = 1;
@@ -860,11 +937,11 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
 
   // ── 8. Y-axis gridlines + labels ─────────────────────────────
   ctx.lineWidth = 1;
-  ctx.font = '9px Inter,sans-serif';
+  ctx.font = '10px Inter,sans-serif';
   [0.25, 0.5, 0.75, 1].forEach(f => {
     const y = (H - BOT) - f * plotH;
     const msLbl = Math.round(maxY * f);
-    ctx.strokeStyle = 'rgba(255,255,255,.07)';
+    ctx.strokeStyle = 'rgba(255,255,255,.04)';
     ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
     ctx.fillStyle = 'rgba(139,148,158,.75)'; ctx.textAlign = 'right';
     ctx.fillText(msLbl >= 1000 ? (msLbl / 1000).toFixed(1) + 's' : msLbl + 'ms', LEFT - 4, y + 3);
