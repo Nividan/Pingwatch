@@ -14,15 +14,14 @@
   const ORBS = [
     {xr:.18, yr:.25, r:.38, h:220, s:.8, spd:.00008},
     {xr:.75, yr:.65, r:.32, h:255, s:.7, spd:.00012},
-    {xr:.50, yr:.10, r:.22, h:190, s:.6, spd:.00015},
-    {xr:.85, yr:.15, r:.20, h:280, s:.5, spd:.0001},
+    {xr:.55, yr:.12, r:.25, h:190, s:.6, spd:.00015},
   ];
 
   function resize(){
     W = cvs.width  = window.innerWidth;
     H = cvs.height = window.innerHeight;
     nodes = [];
-    const STEP = 66; // was 44 — fewer nodes reduces O(n²) pair checks by ~55%
+    const STEP = 88; // was 66 — further reduces O(n²) pair checks by ~67% total vs original
     const cols = Math.ceil(W/STEP)+2, rows = Math.ceil(H/STEP)+2;
     for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
       nodes.push({
