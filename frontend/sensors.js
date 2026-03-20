@@ -769,6 +769,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   const plotH = H - BOT - TOP;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
+
+  // ── Background ────────────────────────────────────────────────
   const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
   bgGrad.addColorStop(0, '#0d1520');
   bgGrad.addColorStop(1, '#060c16');
@@ -792,159 +794,48 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   const windowEnd = windowStart + tsRange;
   const xOf = ts => LEFT + (ts - windowStart) / tsRange * plotW;
 
-  // Y scales
+  // ── Y-axis scaling — p95 of ok samples to prevent spike-flattening ──
   const msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
-  const summaryMaxMs = summary.reduce((m, r) => Math.max(m, r.max_ms || 0), 0);
-  const rawMax = Math.max(summaryMaxMs, msVals.length ? Math.max(...msVals) : 0);
+  const summaryAvgMax = summary.reduce((m, r) => Math.max(m, r.avg_ms || 0), 0);
+  const sortedMs = [...msVals].sort((a, b) => a - b);
+  const p95 = sortedMs.length ? (sortedMs[Math.floor(sortedMs.length * 0.95)] ?? sortedMs[sortedMs.length - 1]) : 0;
+  const rawMax = sortedMs.length ? sortedMs[sortedMs.length - 1] : 0;
   const _sen = S.sensors[`${did}/${sid}`];
-  const maxY = Math.max((_sen?.crit_ms || 0) * 1.1, rawMax * 1.2, 10);
-  const yOf   = ms  => (H - BOT) - (ms / maxY) * plotH;
+  const maxY = Math.max(
+    Math.max(summaryAvgMax, p95) * 1.4,
+    (_sen?.warn_ms || 0) * 1.2,
+    10
+  );
+  // Clamp ms to maxY so spikes beyond scale don't draw outside plot area
+  const yOf   = ms  => Math.max(TOP, (H - BOT) - (Math.min(ms, maxY) / maxY) * plotH);
   const yLoss = pct => (H - BOT) - (pct / 100) * plotH;
 
-  // ── 1. Downtime spans ─────────────────────────────────────────
-  ctx.fillStyle = 'rgba(248,81,73,.12)';
-  for (const r of summary) {
-    if (r.ok === 0 && r.fail > 0) {
-      const x1 = Math.max(LEFT, xOf(r.ts));
-      const x2 = Math.min(W - RIGHT, xOf(r.ts + 3600));
-      if (x2 > x1) {
-        ctx.fillRect(x1, TOP, x2 - x1, plotH);
-        // Thin top accent line
-        ctx.strokeStyle = 'rgba(248,81,73,.4)';
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(x1, TOP + 1); ctx.lineTo(x2, TOP + 1); ctx.stroke();
-      }
-    }
-  }
-
-  // ── 2. Min/Max lines ──────────────────────────────────────────
-  if (togBand) {
-    const bandPts = summary.filter(r => r.min_ms != null && r.max_ms != null);
-    if (bandPts.length > 1) {
-      // Max line — pink/magenta
-      ctx.beginPath();
-      bandPts.forEach((r, i) => {
-        const x = xOf(r.ts + 1800);
-        i === 0 ? ctx.moveTo(x, yOf(r.max_ms)) : ctx.lineTo(x, yOf(r.max_ms));
-      });
-      ctx.strokeStyle = 'rgba(244,114,182,.8)'; ctx.lineWidth = 1.5; ctx.stroke();
-      // Min line — teal/green
-      ctx.beginPath();
-      bandPts.forEach((r, i) => {
-        const x = xOf(r.ts + 1800);
-        i === 0 ? ctx.moveTo(x, yOf(r.min_ms)) : ctx.lineTo(x, yOf(r.min_ms));
-      });
-      ctx.strokeStyle = 'rgba(35,209,139,.7)'; ctx.lineWidth = 1.5; ctx.stroke();
-    }
-  }
-
-  // ── 3. Loss% bars ─────────────────────────────────────────────
-  if (togLoss && summary.length) {
-    const barW = Math.max(2, plotW / summary.length * 0.65);
-    for (const r of summary) {
-      if ((r.loss_pct || 0) === 0) continue;
-      const x = xOf(r.ts + 1800) - barW / 2;
-      const yTop = yLoss(r.loss_pct);
-      ctx.fillStyle = 'rgba(240,165,0,.45)';
-      ctx.shadowColor = 'rgba(240,165,0,.4)';
-      ctx.shadowBlur = 5;
-      if (ctx.roundRect) {
-        ctx.beginPath();
-        ctx.roundRect(x, yTop, barW, (H - BOT) - yTop, [2, 2, 0, 0]);
-        ctx.fill();
-      } else {
-        ctx.fillRect(x, yTop, barW, (H - BOT) - yTop);
-      }
-      ctx.shadowBlur = 0;
-    }
-  }
-
-  // ── 4. Jitter line ────────────────────────────────────────────
-  if (togJitter) {
-    const jPts = summary.filter(r => (r.jitter_ms || 0) > 0);
-    if (jPts.length > 1) {
-      ctx.beginPath();
-      jPts.forEach((r, i) => {
-        const x = xOf(r.ts + 1800), y = yOf(r.jitter_ms);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      });
-      ctx.strokeStyle = 'rgba(188,130,255,.7)';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
-
-  // ── 5. Avg latency line ───────────────────────────────────────
-  if (togAvg) {
-    const pts = samples.filter(p => p.ok && p.ms != null).map(p => ({ x: xOf(p.ts), y: yOf(p.ms) }));
-    if (pts.length > 1) {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const cpx = (pts[i].x + pts[i+1].x) / 2;
-        const cpy = (pts[i].y + pts[i+1].y) / 2;
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, cpx, cpy);
-      }
-      ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
-      ctx.strokeStyle = '#3b9eff'; ctx.lineWidth = 2; ctx.stroke();
-    }
-  }
-
-  // ── 6. Threshold lines ────────────────────────────────────────
-  ctx.font = '10px Inter,sans-serif';
-  if (_sen?.warn_ms > 0 && _sen.warn_ms < maxY) {
-    const wy = yOf(_sen.warn_ms);
-    ctx.strokeStyle = 'rgba(240,165,0,.5)'; ctx.lineWidth = 1;
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(240,165,0,.8)'; ctx.textAlign = 'left';
-    ctx.fillText('warn ' + _sen.warn_ms + 'ms', LEFT + 4, wy - 3);
-  }
-  if (_sen?.crit_ms > 0 && _sen.crit_ms < maxY) {
-    const cy = yOf(_sen.crit_ms);
-    ctx.strokeStyle = 'rgba(248,81,73,.5)'; ctx.lineWidth = 1;
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(248,81,73,.8)'; ctx.textAlign = 'left';
-    ctx.fillText('crit ' + _sen.crit_ms + 'ms', LEFT + 4, cy - 3);
-  }
-
-  // ── 7. Failed ticks ───────────────────────────────────────────
-  ctx.strokeStyle = 'rgba(248,81,73,.6)'; ctx.lineWidth = 1.5;
-  samples.filter(p => !p.ok).forEach(p => {
-    const x = xOf(p.ts);
-    ctx.beginPath(); ctx.moveTo(x, H - BOT); ctx.lineTo(x, H - BOT - 10); ctx.stroke();
-  });
-
-  // ── 8. Y-axis gridlines + labels ─────────────────────────────
+  // ── 1. Grid — horizontal lines + Y labels (drawn FIRST, behind all data) ──
   ctx.lineWidth = 1;
   ctx.font = '10px Inter,sans-serif';
-  [0.25, 0.5, 0.75, 1].forEach(f => {
+  [0.2, 0.4, 0.6, 0.8, 1.0].forEach(f => {
     const y = (H - BOT) - f * plotH;
     const msLbl = Math.round(maxY * f);
-    ctx.strokeStyle = 'rgba(255,255,255,.04)';
+    ctx.strokeStyle = 'rgba(255,255,255,.08)';
     ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(139,148,158,.75)'; ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(139,148,158,.8)'; ctx.textAlign = 'right';
     ctx.fillText(msLbl >= 1000 ? (msLbl / 1000).toFixed(1) + 's' : msLbl + 'ms', LEFT - 4, y + 3);
     if (togLoss) {
-      ctx.fillStyle = 'rgba(240,165,0,.55)'; ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(240,165,0,.6)'; ctx.textAlign = 'left';
       ctx.fillText(Math.round(100 * f) + '%', W - RIGHT + 4, y + 3);
     }
   });
-  ctx.fillStyle = 'rgba(139,148,158,.4)'; ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(139,148,158,.5)'; ctx.textAlign = 'right';
   ctx.fillText('0', LEFT - 4, H - BOT + 3);
-  ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.lineWidth = 1;
+  // Y/X axis border lines
+  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(LEFT, TOP); ctx.lineTo(LEFT, H - BOT); ctx.stroke();
   if (togLoss) {
-    ctx.strokeStyle = 'rgba(240,165,0,.18)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(240,165,0,.2)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(W - RIGHT, TOP); ctx.lineTo(W - RIGHT, H - BOT); ctx.stroke();
   }
 
-  // ── 9. Time labels (X-axis) ───────────────────────────────────
+  // ── 2. X-axis time grid + labels (drawn FIRST) ────────────────
   let _gInt;
   if      (tsRange <=  2*3600)   _gInt =  15*60;
   else if (tsRange <=  6*3600)   _gInt =   3600;
@@ -959,15 +850,161 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   for (let ts = _firstGrid; ts < windowEnd; ts += _gInt) {
     const x = xOf(ts);
     if (x < LEFT + 14) continue;
-    ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, H - BOT); ctx.stroke();
     const d = new Date(ts * 1000);
     const lbl = _gInt < 86400
       ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
       : d.toLocaleDateString([], {month:'short',day:'numeric'});
-    ctx.fillStyle = 'rgba(139,148,158,.65)'; ctx.font = '9px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(139,148,158,.7)'; ctx.font = '9px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(lbl, x, H - 4);
   }
+
+  // ── 3. Downtime spans ─────────────────────────────────────────
+  ctx.fillStyle = 'rgba(248,81,73,.10)';
+  for (const r of summary) {
+    if (r.ok === 0 && r.fail > 0) {
+      const x1 = Math.max(LEFT, xOf(r.ts));
+      const x2 = Math.min(W - RIGHT, xOf(r.ts + 3600));
+      if (x2 > x1) {
+        ctx.fillRect(x1, TOP, x2 - x1, plotH);
+        ctx.strokeStyle = 'rgba(248,81,73,.35)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x1, TOP + 1); ctx.lineTo(x2, TOP + 1); ctx.stroke();
+      }
+    }
+  }
+
+  // ── 4. Loss% bars ─────────────────────────────────────────────
+  if (togLoss && summary.length) {
+    const barW = Math.max(2, plotW / summary.length * 0.6);
+    for (const r of summary) {
+      if ((r.loss_pct || 0) === 0) continue;
+      const x = xOf(r.ts + 1800) - barW / 2;
+      const yTop = yLoss(r.loss_pct);
+      ctx.fillStyle = 'rgba(240,165,0,.4)';
+      ctx.shadowColor = 'rgba(240,165,0,.35)';
+      ctx.shadowBlur = 4;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(x, yTop, barW, (H - BOT) - yTop, [2, 2, 0, 0]);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x, yTop, barW, (H - BOT) - yTop);
+      }
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // ── 5. Min/Max lines (secondary — 50% opacity, thinner) ───────
+  if (togBand) {
+    const bandPts = summary.filter(r => r.min_ms != null && r.max_ms != null);
+    if (bandPts.length > 1) {
+      ctx.globalAlpha = 0.5;
+      // Max line — pink
+      ctx.beginPath();
+      bandPts.forEach((r, i) => {
+        const x = xOf(r.ts + 1800);
+        i === 0 ? ctx.moveTo(x, yOf(r.max_ms)) : ctx.lineTo(x, yOf(r.max_ms));
+      });
+      ctx.strokeStyle = 'rgba(244,114,182,1)'; ctx.lineWidth = 1; ctx.stroke();
+      // Min line — teal/green
+      ctx.beginPath();
+      bandPts.forEach((r, i) => {
+        const x = xOf(r.ts + 1800);
+        i === 0 ? ctx.moveTo(x, yOf(r.min_ms)) : ctx.lineTo(x, yOf(r.min_ms));
+      });
+      ctx.strokeStyle = 'rgba(35,209,139,1)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.globalAlpha = 1.0;
+    }
+  }
+
+  // ── 6. Jitter line (dashed purple, 50% opacity) ───────────────
+  if (togJitter) {
+    const jPts = summary.filter(r => (r.jitter_ms || 0) > 0);
+    if (jPts.length > 1) {
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      jPts.forEach((r, i) => {
+        const x = xOf(r.ts + 1800), y = yOf(r.jitter_ms);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = 'rgba(188,130,255,1)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1.0;
+    }
+  }
+
+  // ── 7. Avg line — main focus, break at failure gaps ───────────
+  if (togAvg) {
+    const okSamples = samples.filter(p => p.ok && p.ms != null);
+    if (okSamples.length > 1) {
+      // Downsample if more samples than pixels
+      const pixPerPt = plotW / okSamples.length;
+      const stride = pixPerPt < 1.0 ? Math.ceil(1.0 / pixPerPt) : 1;
+      const ds = stride > 1 ? okSamples.filter((_, i) => i % stride === 0) : okSamples;
+      const pts = ds.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
+
+      // Subtle fill under avg (drawn before the line)
+      const fillG = ctx.createLinearGradient(0, TOP, 0, H - BOT);
+      fillG.addColorStop(0,   'rgba(77,163,255,.10)');
+      fillG.addColorStop(1,   'rgba(77,163,255,.02)');
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, H - BOT);
+      pts.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(pts[pts.length-1].x, H - BOT);
+      ctx.fillStyle = fillG; ctx.fill();
+
+      // Avg line with gap detection (break at failure periods)
+      const expectedInterval = tsRange / (okSamples.length || 1);
+      const gapThresh = expectedInterval * 3;
+      ctx.beginPath();
+      let penDown = false;
+      pts.forEach((p, i) => {
+        const isGap = i > 0 && (p.ts - pts[i-1].ts) > gapThresh;
+        if (!penDown || isGap) {
+          ctx.moveTo(p.x, p.y); penDown = true;
+        } else if (i < pts.length - 1) {
+          const cpx = (pts[i].x + pts[i+1].x) / 2;
+          const cpy = (pts[i].y + pts[i+1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, cpx, cpy);
+        } else {
+          ctx.lineTo(p.x, p.y);
+        }
+      });
+      ctx.strokeStyle = '#4da3ff'; ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+
+  // ── 8. Threshold lines ────────────────────────────────────────
+  ctx.font = '10px Inter,sans-serif';
+  if (_sen?.warn_ms > 0 && _sen.warn_ms <= maxY) {
+    const wy = yOf(_sen.warn_ms);
+    ctx.strokeStyle = 'rgba(240,165,0,.5)'; ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(240,165,0,.85)'; ctx.textAlign = 'left';
+    ctx.fillText('warn ' + _sen.warn_ms + 'ms', LEFT + 4, wy - 3);
+  }
+  if (_sen?.crit_ms > 0 && _sen.crit_ms <= maxY) {
+    const cy = yOf(_sen.crit_ms);
+    ctx.strokeStyle = 'rgba(248,81,73,.5)'; ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(248,81,73,.85)'; ctx.textAlign = 'left';
+    ctx.fillText('crit ' + _sen.crit_ms + 'ms', LEFT + 4, cy - 3);
+  }
+
+  // ── 9. Failed ticks ───────────────────────────────────────────
+  ctx.strokeStyle = 'rgba(248,81,73,.55)'; ctx.lineWidth = 1;
+  samples.filter(p => !p.ok).forEach(p => {
+    const x = xOf(p.ts);
+    ctx.beginPath(); ctx.moveTo(x, H - BOT); ctx.lineTo(x, H - BOT - 8); ctx.stroke();
+  });
 
   // ── Stats bar ─────────────────────────────────────────────────
   if (statsEl) {
