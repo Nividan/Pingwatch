@@ -42,7 +42,7 @@ function tileHTML(s){
     </div>
     <div class="ub" id="ub-${s.device_id}_${s.sensor_id}">${ub}</div>
   </div>
-  <div class="stl-spark"><canvas class="spk" height="28"></canvas></div>
+  <div class="stl-spark"><canvas class="spk" height="38"></canvas></div>
   <div class="stl-stats">
     ${(isSnmp||isTls)?`
     <div class="stl-stat"><div class="stl-sv" id="sa-${s.device_id}_${s.sensor_id}">—</div><div class="stl-sk">Avg</div></div>
@@ -548,7 +548,7 @@ function openDetail(did,sid,initialTab){
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto</button>
       </div>
       <div style="position:relative">
-        <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="420"></canvas>
+        <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
         <div class="dm-hist-tip" id="tip-${did}-${sid}"></div>
       </div>
       <div id="dm-hist-summary-${did}-${sid}" class="dm-hist-summary"></div>
@@ -763,7 +763,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
 function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   if (!canvas) return;
   canvas.width = canvas.offsetWidth || 660;
-  const W = canvas.width, H = canvas.height || 420;
+  const W = canvas.width, H = canvas.height || 320;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
   const plotW = W - LEFT - RIGHT;
   const plotH = H - BOT - TOP;
