@@ -1,4 +1,23 @@
+# Core requirements (all platforms)
 pystray>=0.19.5
 Pillow>=10.0.0
 paramiko>=3.0.0
 cryptography>=41.0.0
+
+# ── Platform-specific system packages (not pip-installable) ──────────────────
+#
+# Linux (Debian/Ubuntu):
+#   sudo apt-get install python3-tk python3-dev iputils-ping snmp
+#   sudo apt-get install python3-xlib   # optional: pystray system tray on Linux
+#
+# Linux (RHEL/Fedora):
+#   sudo dnf install python3-tkinter net-snmp-utils
+#
+# macOS (Homebrew):
+#   brew install python-tk net-snmp
+#
+# SNMP trap port 162 (Linux — choose one):
+#   Option A: sudo python3 server.py                  (run as root)
+#   Option B: sudo iptables -t nat -A PREROUTING \
+#               -p udp --dport 162 -j REDIRECT --to-ports 1162
+#   Option C: Set SNMP port to 1162 in Settings → Networking

@@ -20,7 +20,7 @@ async function openSettings(){
     '<input type="checkbox" id="st-bk-d' + v + '" value="' + v + '"' + (_bkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
   ).join('');
   o.innerHTML=`
-  <div class="mbox" style="width:640px;max-width:96vw">
+  <div class="mbox" style="width:900px;max-width:96vw">
     <div class="mhd">
       <div class="mttl">⚙ Settings</div>
       <button class="mclose" onclick="closeM('mset')">✕</button>
@@ -34,8 +34,9 @@ async function openSettings(){
       <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">Sensors</button>
       <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">Networking</button>
       <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">Config Backup</button>
+      <button class="dw-tab" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">Syslog</button>
     </div>
-    <div class="mbdy" id="stab-general" style="max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-general" style="max-height:72vh;overflow-y:auto">
       <div class="fr">
         <label class="fl">Session Timeout (seconds)</label>
         <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
@@ -200,21 +201,21 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
     <div class="mbdy" id="stab-audit" style="display:none;padding:0">
-      <div id="auditLogBody" style="max-height:65vh;overflow-y:auto">
+      <div id="auditLogBody" style="max-height:72vh;overflow-y:auto">
         <div style="color:var(--text3);font-size:12px;padding:16px">Loading…</div>
       </div>
     </div>
     <div class="mft" id="stab-footer-audit" style="display:none">
       <span style="font-size:11px;color:var(--text3)">Last 200 entries · admin only</span>
     </div>
-    <div class="mbdy" id="stab-sensors" style="display:none;max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
-    <div class="mbdy" id="stab-networking" style="display:none;max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-networking" style="display:none;max-height:72vh;overflow-y:auto">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Ports</div>
       <div class="fr">
         <label class="fl">HTTP Port</label>
@@ -280,7 +281,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
     </div>
-    <div class="mbdy" id="stab-backup" style="display:none;max-height:65vh;overflow-y:auto">
+    <div class="mbdy" id="stab-backup" style="display:none;max-height:72vh;overflow-y:auto">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Global Backup Schedule</div>
       <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="flex:1">
@@ -323,12 +324,58 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
     </div>
+    <div class="mbdy" id="stab-syslog" style="display:none;max-height:72vh;overflow-y:auto">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Syslog Forwarding</div>
+      <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="flex:1">
+          <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Syslog Forwarding</div>
+          <div class="fh" style="margin:0">Send events (device down/up, SNMP traps) to an external syslog or SIEM server in real time</div>
+        </div>
+        <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-sl-enabled" ${sr.syslog_enabled?'checked':''}><span class="tsl"></span></label>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Server IP / Hostname</label>
+        <input type="text" id="st-sl-host" value="${esc(sr.syslog_host||'')}" placeholder="192.168.1.100 or syslog.example.com" style="max-width:280px"/>
+        <div class="fh">Syslog or SIEM server address</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Port</label>
+        <input type="number" id="st-sl-port" value="${sr.syslog_port||514}" min="1" max="65535" style="max-width:120px"/>
+        <div class="fh">Default: 514</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Protocol</label>
+        <select id="st-sl-proto" style="max-width:120px">
+          <option value="udp" ${(sr.syslog_proto||'udp')==='udp'?'selected':''}>UDP</option>
+          <option value="tcp" ${(sr.syslog_proto||'udp')==='tcp'?'selected':''}>TCP</option>
+        </select>
+        <div class="fh">UDP is standard for syslog; use TCP for reliable delivery</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Minimum Severity</label>
+        <select id="st-sl-minsev" style="max-width:160px">
+          <option value="critical" ${(sr.syslog_min_severity||'warning')==='critical'?'selected':''}>Critical only</option>
+          <option value="warning"  ${(sr.syslog_min_severity||'warning')==='warning'?'selected':''}>Warning and above</option>
+          <option value="info"     ${(sr.syslog_min_severity||'warning')==='info'?'selected':''}>All events</option>
+        </select>
+        <div class="fh">Events below this severity are not forwarded</div>
+      </div>
+      <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
+        Messages are sent in <strong style="color:var(--text2)">RFC 5424</strong> format with facility LOCAL0.
+        Forwarding is non-blocking — syslog errors will not affect monitoring.
+      </div>
+    </div>
+    <div class="mft" id="stab-footer-syslog" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-s" onclick="testSyslog()">Send Test Message</button>
+      <button class="btn-p" onclick="saveSyslogSettings()">Save Syslog</button>
+    </div>
   </div>`;
   document.body.appendChild(o);
 }
 
 function switchSettingsTab(tab){
-  ['general','users','alerts','database','audit','sensors','networking','backup'].forEach(t=>{
+  ['general','users','alerts','database','audit','sensors','networking','backup','syslog'].forEach(t=>{
     document.getElementById(`stab-${t}`).style.display = t===tab ? '' : 'none';
     document.getElementById(`stab-btn-${t}`).classList.toggle('active', t===tab);
     document.getElementById(`stab-footer-${t}`).style.display = t===tab ? '' : 'none';
@@ -824,6 +871,46 @@ async function saveBackupScheduleSettings(){
     toast('Failed to save backup settings','err');
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
+  }
+}
+
+async function saveSyslogSettings(){
+  const enabled  = document.getElementById('st-sl-enabled')?.checked ? 1 : 0;
+  const host     = (document.getElementById('st-sl-host')?.value   || '').trim();
+  const port     = parseInt(document.getElementById('st-sl-port')?.value) || 514;
+  const proto    = document.getElementById('st-sl-proto')?.value   || 'udp';
+  const minSev   = document.getElementById('st-sl-minsev')?.value  || 'warning';
+  if(enabled && !host){ toast('Enter a syslog server address','err'); return; }
+  const btn = document.querySelector('#stab-footer-syslog .btn-p');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      syslog_enabled:      enabled,
+      syslog_host:         host,
+      syslog_port:         port,
+      syslog_proto:        proto,
+      syslog_min_severity: minSev,
+    });
+    if(!r?.ok){ toast('Failed to save syslog settings','err'); return; }
+    toast('Syslog settings saved','ok');
+  } catch(e) {
+    toast('Failed to save syslog settings','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Save Syslog'; }
+  }
+}
+
+async function testSyslog(){
+  const btn = document.querySelector('[onclick="testSyslog()"]');
+  if(btn){ btn.disabled=true; btn.textContent='Sending...'; }
+  try {
+    const r = await api('POST', '/api/settings/syslog_test', {});
+    toast(r?.ok ? r.msg || 'Test message sent' : `Failed: ${r?.msg||'Unknown error'}`,
+          r?.ok ? 'ok' : 'err');
+  } catch(e) {
+    toast('Syslog test failed','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Send Test Message'; }
   }
 }
 

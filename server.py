@@ -493,8 +493,18 @@ def main():
     log.info(f"PingWatch ready -> {_local_url}")
 
     # ── GUI ────────────────────────────────────────────────────────
-    from gui    import StatusWindow
     from core.logger import log_buffer
+    try:
+        from gui import StatusWindow
+        _GUI = True
+    except ImportError:
+        _GUI = False
+        log.warning(
+            "tkinter not available — status window disabled. "
+            "Install python3-tk (Linux) or python-tk (macOS) to enable."
+        )
+
+    _headless_stop = threading.Event()
 
     if _TRAY:
         def _open(*_):
@@ -504,10 +514,13 @@ def main():
             if app_state.tray_icon is not None:
                 try: app_state.tray_icon.stop()
                 except Exception: pass
-            win.destroy()
+            if _GUI:
+                win.destroy()
+            else:
+                _headless_stop.set()
 
         def _show(*_):
-            win.show()
+            if _GUI: win.show()
 
         menu = pystray.Menu(
             pystray.MenuItem("PingWatch  ·  Network Monitor", None, enabled=False),
@@ -524,11 +537,18 @@ def main():
     else:
         log.warning("pystray/Pillow not found — no tray icon. Use the Status Window to quit.")
         def _quit(*_):
-            win.destroy()
+            if _GUI:
+                win.destroy()
+            else:
+                _headless_stop.set()
         signal.signal(signal.SIGINT, lambda *_: _quit())
 
-    win = StatusWindow(STATE, log_buffer, PORT, quit_fn=_quit)
-    win.build_and_show()
+    if _GUI:
+        win = StatusWindow(STATE, log_buffer, PORT, quit_fn=_quit)
+        win.build_and_show()
+    else:
+        log.info("Running headlessly — press Ctrl+C to stop.")
+        _headless_stop.wait()
 
     # ── Graceful shutdown ─────────────────────────────────────────
     log.info("Shutting down...")

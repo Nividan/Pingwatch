@@ -173,7 +173,14 @@ def handle(h, method, path, body):
                 try: _as.tray_icon.stop()
                 except Exception: pass
                 time.sleep(0.3)
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            _cmd = [sys.executable] + sys.argv
+            if os.name == 'nt':
+                # Windows: os.execv is unreliable — spawn a new process then exit
+                import subprocess as _sp
+                _sp.Popen(_cmd, creationflags=_sp.CREATE_NEW_CONSOLE)
+                os._exit(0)
+            else:
+                os.execv(sys.executable, _cmd)
         threading.Thread(target=_restart, daemon=True).start()
         return True
 
