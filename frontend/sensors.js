@@ -685,7 +685,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
     const scaleX = canvas.width / rect.width;
     const mx = (e.clientX - rect.left) * scaleX;
     const plotW = canvas.width - LEFT - RIGHT;
-    if (mx < LEFT || mx > canvas.width - RIGHT) { tip.style.display = 'none'; return; }
+    if (mx < LEFT || mx > canvas.width - RIGHT) { tip.classList.remove('tip-visible'); return; }
     const hoverTs = (Date.now() / 1000 - minutes * 60) + (mx - LEFT) / plotW * (minutes * 60);
     let nearest = null, bestDist = Infinity;
     for (const r of summary) {
@@ -759,13 +759,15 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
       const _plotH = canvas.height - BOT - TOP;
       const _yOf = ms => Math.max(TOP, (canvas.height - BOT) - (Math.min(ms, _maxY) / _maxY) * _plotH);
 
+      // Inject exact raw sample ms into tooltip
       if (nearestSample) {
-        // Inject exact sample ms into tooltip
         const exactEl = tip.querySelector('.tip-exact');
         if (exactEl) exactEl.textContent = nearestSample.ms + ' ms';
+      }
 
-        // Draw dot at mouse X, actual sample Y
-        const dotY = _yOf(nearestSample.ms);
+      // Draw dot on the avg line (use nearest hourly avg_ms for Y, mouse X for X)
+      if (nearest.avg_ms != null) {
+        const dotY = _yOf(nearest.avg_ms);
         cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
         cctx.fillStyle = '#7ec8ff'; cctx.fill();
         cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
@@ -956,16 +958,12 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   }
 
   // ── 7. Avg line — main focus ──────────────────────────────────
+  // >2h: draw from hourly summary avg_ms (clean trend line, no spike noise)
+  // ≤2h: draw from raw samples (high-resolution detail)
   if (togAvg) {
-    const okSamples = samples.filter(p => p.ok && p.ms != null);
-    if (okSamples.length > 1) {
-      // Downsample if more samples than pixels
-      const stride = okSamples.length > plotW ? Math.ceil(okSamples.length / plotW) : 1;
-      const ds = stride > 1 ? okSamples.filter((_, i) => i % stride === 0) : okSamples;
-      const pts = ds.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
-
-      // Draw with bezier smoothing, breaking line at large gaps only
-      const gapThresh = (tsRange / pts.length) * 4;
+    const _drawLine = (pts, gapMult) => {
+      if (pts.length < 2) return;
+      const gapThresh = (tsRange / pts.length) * gapMult;
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#7ec8ff';
       ctx.shadowColor = 'rgba(126,200,255,.5)';
@@ -990,6 +988,27 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
         }
       }
       ctx.shadowBlur = 0;
+    };
+
+    if (minutes > 120) {
+      // Long window: hourly summary avg — clean, readable
+      let pts = summary
+        .filter(r => r.avg_ms != null)
+        .map(r => ({ x: xOf(r.ts + 1800), y: yOf(r.avg_ms), ts: r.ts + 1800 }));
+      // Downsample summary for very long windows (7d/30d → 168/720 hourly pts)
+      if (pts.length > plotW) {
+        const stride = Math.ceil(pts.length / plotW);
+        pts = pts.filter((_, i) => i % stride === 0);
+      }
+      _drawLine(pts, 3);
+    } else {
+      // Short window: raw samples with downsampling
+      const okSamples = samples.filter(p => p.ok && p.ms != null);
+      if (okSamples.length > 1) {
+        const stride = okSamples.length > plotW ? Math.ceil(okSamples.length / plotW) : 1;
+        const ds = stride > 1 ? okSamples.filter((_, i) => i % stride === 0) : okSamples;
+        _drawLine(ds.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts })), 4);
+      }
     }
   }
 
@@ -1014,12 +1033,14 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     ctx.fillText('crit ' + _sen.crit_ms + 'ms', LEFT + 4, cy - 3);
   }
 
-  // ── 9. Failed ticks ───────────────────────────────────────────
-  ctx.strokeStyle = 'rgba(248,81,73,.55)'; ctx.lineWidth = 1;
-  samples.filter(p => !p.ok).forEach(p => {
-    const x = xOf(p.ts);
-    ctx.beginPath(); ctx.moveTo(x, H - BOT); ctx.lineTo(x, H - BOT - 8); ctx.stroke();
-  });
+  // ── 9. Failed ticks (only for short windows — too dense at >2h) ──
+  if (minutes <= 120) {
+    ctx.strokeStyle = 'rgba(248,81,73,.55)'; ctx.lineWidth = 1;
+    samples.filter(p => !p.ok).forEach(p => {
+      const x = xOf(p.ts);
+      ctx.beginPath(); ctx.moveTo(x, H - BOT); ctx.lineTo(x, H - BOT - 8); ctx.stroke();
+    });
+  }
 
   // ── Stats bar ─────────────────────────────────────────────────
   if (statsEl) {
