@@ -333,30 +333,76 @@ def step1_packages():
             if ok:
                 _tag("ok", f"{pkg['name']} installed successfully")
             else:
-                _tag("error", f"Could not install '{pkg['name']}' automatically.")
-                if err:
-                    # Show the last meaningful pip error line (skip full traceback)
-                    err_lines = [l.strip() for l in err.splitlines() if l.strip()]
-                    if err_lines:
-                        _tag("info", f"  pip: {err_lines[-1]}")
-                import platform as _plat
+                import platform as _plat, shutil as _sh
                 _sys = _plat.system()
-                _tag("info", "Install manually:")
-                _tag("info", f"  pip install {pkg['install']}")
-                if _sys == "Linux":
-                    _apt_map = {
-                        "pystray":      ("python3-pystray", "also needs: sudo apt install python3-xlib"),
-                        "Pillow":       ("python3-pil",     None),
-                        "paramiko":     ("python3-paramiko", None),
-                        "cryptography": ("python3-cryptography", None),
-                    }
-                    _apt = _apt_map.get(pkg["name"])
-                    if _apt:
-                        _tag("info", f"  or: sudo apt install {_apt[0]}")
-                        if _apt[1]:
-                            _tag("info", f"  note: {_apt[1]}")
-                if pkg["required"]:
-                    all_ok = False
+
+                # Map pip package name → (apt pkg, optional extra note)
+                _apt_map = {
+                    "pystray":      ("python3-pystray", "also needs: sudo apt install python3-xlib"),
+                    "Pillow":       ("python3-pil",     None),
+                    "paramiko":     ("python3-paramiko", None),
+                    "cryptography": ("python3-cryptography", None),
+                }
+                _apt_entry = _apt_map.get(pkg["name"])
+
+                _sys_ok = False
+                if _sys == "Linux" and _apt_entry:
+                    # pip missing entirely or pip failed — try system package manager
+                    _no_pip = "No module named pip" in err
+                    if _no_pip:
+                        _tag("warn", "pip is not installed — trying system package manager ...")
+                    else:
+                        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                        if err_lines:
+                            _tag("info", f"  pip: {err_lines[-1]}")
+                        _tag("info", "pip failed — trying system package manager ...")
+
+                    _apt_pkg = _apt_entry[0]
+                    _mgr = ("apt-get" if _sh.which("apt-get") else
+                            "dnf"     if _sh.which("dnf")     else
+                            "yum"     if _sh.which("yum")     else None)
+                    if _mgr == "apt-get":
+                        r = subprocess.run(
+                            ["sudo", "apt-get", "install", "-y", _apt_pkg],
+                            capture_output=False,
+                        )
+                        _sys_ok = r.returncode == 0
+                    elif _mgr in ("dnf", "yum"):
+                        # dnf/yum package names differ — map if known
+                        _dnf_map = {
+                            "python3-pystray":      "python3-pystray",
+                            "python3-pil":          "python3-pillow",
+                            "python3-paramiko":     "python3-paramiko",
+                            "python3-cryptography": "python3-cryptography",
+                        }
+                        _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
+                        r = subprocess.run(
+                            ["sudo", _mgr, "install", "-y", _dnf_pkg],
+                            capture_output=False,
+                        )
+                        _sys_ok = r.returncode == 0
+
+                    if _sys_ok:
+                        _tag("ok", f"{pkg['name']} installed via system package manager")
+                    else:
+                        _tag("error", f"Could not install '{pkg['name']}' automatically.")
+                        _tag("info", "Install manually:")
+                        _tag("info", f"  pip install {pkg['install']}  (requires pip: sudo apt install python3-pip)")
+                        _tag("info", f"  or: sudo apt install {_apt_pkg}")
+                        if _apt_entry[1]:
+                            _tag("info", f"  note: {_apt_entry[1]}")
+                        if pkg["required"]:
+                            all_ok = False
+                else:
+                    # Non-Linux or unknown package — show pip error + hint
+                    if err:
+                        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                        if err_lines:
+                            _tag("info", f"  pip: {err_lines[-1]}")
+                    _tag("error", f"Could not install '{pkg['name']}' automatically.")
+                    _tag("info", f"  pip install {pkg['install']}")
+                    if pkg["required"]:
+                        all_ok = False
         else:
             _tag("warn", f"Skipping {pkg['name']} — some features may be unavailable")
 
@@ -429,8 +475,12 @@ def _port_in_use(port: int) -> "int | None":
         try:
             s.bind(('127.0.0.1', port))
             return None   # bind succeeded → port is free
+        except PermissionError:
+            # Cannot bind privileged port (<1024) without root — port may be free.
+            # Let the server attempt it; it will report a clear error if it fails.
+            return None
         except OSError:
-            return 1      # bind failed → port is in use
+            return 1      # address already in use → port is occupied
 
 
 def _pid_name(pid: int) -> str:
