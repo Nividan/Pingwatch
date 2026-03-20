@@ -759,15 +759,28 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
       const _plotH = canvas.height - BOT - TOP;
       const _yOf = ms => Math.max(TOP, (canvas.height - BOT) - (Math.min(ms, _maxY) / _maxY) * _plotH);
 
+      // Compute bucket average at cursor position — same logic as _drawHistCanvas
+      const TARGET = 300;
+      const _winStart = Date.now() / 1000 - minutes * 60;
+      const _bucketSec = (minutes * 60) / TARGET;
+      const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
+      let _bSum = 0, _bN = 0;
+      for (const p of okSp) {
+        const bi = Math.min(TARGET - 1, Math.floor((p.ts - _winStart) / _bucketSec));
+        if (bi === _cursorBi) { _bSum += p.ms; _bN++; }
+      }
+      const bucketAvg = _bN > 0 ? _bSum / _bN : null;
+
       // Inject exact raw sample ms into tooltip
       if (nearestSample) {
         const exactEl = tip.querySelector('.tip-exact');
-        if (exactEl) exactEl.textContent = nearestSample.ms + ' ms';
+        if (exactEl) exactEl.textContent = Math.round(nearestSample.ms) + ' ms';
       }
 
-      // Draw dot on the avg line (use nearest hourly avg_ms for Y, mouse X for X)
-      if (nearest.avg_ms != null) {
-        const dotY = _yOf(nearest.avg_ms);
+      // Draw dot on the drawn line (bucket-average Y, mouse X)
+      const dotMs = bucketAvg ?? (nearestSample ? nearestSample.ms : null);
+      if (dotMs != null) {
+        const dotY = _yOf(dotMs);
         cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
         cctx.fillStyle = '#7ec8ff'; cctx.fill();
         cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
@@ -1008,11 +1021,19 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
           const bi = Math.min(TARGET - 1, Math.floor((p.ts - windowStart) / bucketSec));
           if (bi >= 0) { acc[bi].sum += p.ms; acc[bi].n++; }
         }
-        pts = [];
+        // Find range of buckets that have data
+        let firstBi = -1, lastBi = -1;
         for (let i = 0; i < TARGET; i++) {
-          if (!acc[i].n) continue;
-          const ts = windowStart + (i + 0.5) * bucketSec;
-          pts.push({ x: xOf(ts), y: yOf(acc[i].sum / acc[i].n), ts });
+          if (acc[i].n > 0) { if (firstBi < 0) firstBi = i; lastBi = i; }
+        }
+        pts = [];
+        if (firstBi >= 0) {
+          for (let i = firstBi; i <= lastBi; i++) {
+            const ts = windowStart + (i + 0.5) * bucketSec;
+            // Empty bucket = downtime → connect at 0ms baseline
+            const ms = acc[i].n > 0 ? acc[i].sum / acc[i].n : 0;
+            pts.push({ x: xOf(ts), y: yOf(ms), ts });
+          }
         }
       }
       _drawLine(pts, 4);
