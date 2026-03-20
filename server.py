@@ -89,7 +89,7 @@ def _load_html() -> bytes:
 class QuietServer(http.server.ThreadingHTTPServer):
     """ThreadingHTTPServer that suppresses noisy browser-disconnect errors."""
 
-    _IGNORED = ('ConnectionAbortedError', 'ConnectionResetError', 'BrokenPipeError')
+    _IGNORED = ('ConnectionAbortedError', 'ConnectionResetError', 'BrokenPipeError', 'SSLEOFError')
 
     def handle_error(self, request, client_address):
         if any(e in traceback.format_exc() for e in self._IGNORED):
