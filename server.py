@@ -409,6 +409,13 @@ def main():
     # ── Bind HTTP port FIRST — fail fast before loading state ──────
     try:
         server = QuietServer((BIND, app_state.effective_port), Handler)
+    except PermissionError:
+        _p = app_state.effective_port
+        log.error(
+            f"Cannot bind to port {_p} — permission denied (privileged port). "
+            f"Run with sudo, or change the HTTP port to a value ≥1024 in Settings → Networking."
+        )
+        return
     except OSError:
         log.error(
             f"Cannot bind to port {app_state.effective_port} — port may be in use. "
@@ -451,6 +458,13 @@ def main():
             server.server_close()
             try:
                 server = QuietServer((BIND, _tls_port), Handler)
+            except PermissionError:
+                log.error(
+                    f"Cannot bind to TLS port {_tls_port} — permission denied (privileged port). "
+                    f"Run with sudo or use a port ≥1024. Falling back to HTTP on port {app_state.effective_port}."
+                )
+                server = QuietServer((BIND, app_state.effective_port), Handler)
+                _tls_enabled = 0
             except OSError:
                 log.error(
                     f"Cannot bind to TLS port {_tls_port} — port may be in use or requires admin. "
