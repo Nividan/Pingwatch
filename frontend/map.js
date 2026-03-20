@@ -3368,7 +3368,7 @@ function initDashBg() {
   let pts = [], scanY = 0;
 
   // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
-  const DB_FPS = 10, DB_MS = 1000 / DB_FPS;
+  const DB_FPS = 6, DB_MS = 1000 / DB_FPS;
   let _dbLast = 0, _rafId = null;
 
   function resize() {
