@@ -22,6 +22,13 @@ import socket
 import subprocess
 import sys
 
+# ── readline (enables backspace / line editing in input() on Linux/macOS) ─────
+if sys.platform != "win32":
+    try:
+        import readline  # noqa: F401
+    except ImportError:
+        pass
+
 # ── Paths (resolve relative to this script's directory) ──────────────────────
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
@@ -104,6 +111,15 @@ def _ask_yn(prompt: str, default: bool = True) -> bool:
         raise
 
 
+def _launcher_hint(setup: bool = False) -> str:
+    """Return the right command to (re-)launch PingWatch for the current platform."""
+    import platform as _plat
+    suffix = " --setup" if setup else ""
+    if _plat.system() == "Windows":
+        return f"start.bat{suffix}"
+    return f"bash {os.path.join(_BASE, 'start.sh')}{suffix}"
+
+
 def _separator(char: str = "─", width: int = 56):
     print(_C["bold"] + char * width + _C["reset"])
 
@@ -133,7 +149,7 @@ def _cleanup_on_abort():
         try:
             os.unlink(DB_PATH)
             print(f"\n{_C['yellow']}[WARN]  Setup aborted — partial database removed.{_C['reset']}")
-            print(       "        Run start.bat again to restart setup.")
+            print(f"        Run '{_launcher_hint()}' again to restart setup.")
         except OSError:
             pass
 
@@ -156,20 +172,22 @@ _PACKAGES = [
         "required": False,  # server runs headlessly without it
     },
     {
-        "import":   "pystray",
-        "name":     "pystray",
-        "install":  "pystray>=0.19.5",
-        "pip":      True,
-        "desc":     "system tray icon",
-        "required": False,
+        "import":       "pystray",
+        "name":         "pystray",
+        "install":      "pystray>=0.19.5",
+        "pip":          True,
+        "desc":         "system tray icon",
+        "required":     False,
+        "desktop_only": True,   # skip automatically in headless mode
     },
     {
-        "import":   "PIL",
-        "name":     "Pillow",
-        "install":  "Pillow>=10.0.0",
-        "pip":      True,
-        "desc":     "image support (tray icon)",
-        "required": False,
+        "import":       "PIL",
+        "name":         "Pillow",
+        "install":      "Pillow>=10.0.0",
+        "pip":          True,
+        "desc":         "image support (tray icon)",
+        "required":     False,
+        "desktop_only": True,   # skip automatically in headless mode
     },
     {
         "import":   "paramiko",
@@ -200,16 +218,40 @@ def _check_import(module_name: str) -> bool:
         return False
 
 
-def _pip_install(package_spec: str) -> bool:
-    """Run pip install; return True on success."""
+def _pip_install(package_spec: str) -> "tuple[bool, str]":
+    """Try pip install. Returns (success, error_snippet).
+
+    Attempts the current interpreter's pip first, then --user flag on
+    non-Windows (avoids permission errors when not running in a venv).
+    """
+    last_err = ""
+
+    # Try 1: standard pip via current interpreter
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", package_spec, "--quiet"],
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package_spec],
             capture_output=True, text=True,
         )
-        return result.returncode == 0
-    except Exception:
-        return False
+        if r.returncode == 0:
+            return True, ""
+        last_err = (r.stderr or r.stdout or "").strip()
+    except Exception as e:
+        last_err = str(e)
+
+    # Try 2: --user flag (avoids permission errors outside a venv on Linux/macOS)
+    if sys.platform != "win32":
+        try:
+            r2 = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--user", package_spec],
+                capture_output=True, text=True,
+            )
+            if r2.returncode == 0:
+                return True, ""
+            last_err = (r2.stderr or r2.stdout or last_err).strip()
+        except Exception:
+            pass
+
+    return False, last_err
 
 
 def _check_snmpget() -> bool:
@@ -224,9 +266,15 @@ def step1_packages():
     print()
 
     all_ok = True
+    _headless = False   # set True when user opts out of desktop GUI
     for pkg in _PACKAGES:
         if _check_import(pkg["import"]):
             _tag("ok", f"{pkg['name']} — {pkg['desc']}")
+            continue
+
+        # Skip desktop-only packages silently if user chose headless mode
+        if _headless and pkg.get("desktop_only"):
+            _tag("info", f"Skipping '{pkg['name']}' — not needed in headless/server mode.")
             continue
 
         severity = "error" if pkg["required"] else "warn"
@@ -250,6 +298,7 @@ def step1_packages():
                 print()
                 _needs_gui = _ask_yn("Do you need the desktop GUI status window?", default=False)
                 if not _needs_gui:
+                    _headless = True   # also skip pystray / Pillow below
                     _tag("ok", "Skipping tkinter — running in headless/server mode.")
                     _tag("info", "Access PingWatch via the web dashboard in your browser.")
                     continue
@@ -280,12 +329,32 @@ def step1_packages():
         install_now = _ask_yn(f"Install '{pkg['name']}' now?", default=True)
         if install_now:
             _tag("info", f"Installing {pkg['install']} ...")
-            ok = _pip_install(pkg["install"])
+            ok, err = _pip_install(pkg["install"])
             if ok:
                 _tag("ok", f"{pkg['name']} installed successfully")
             else:
-                _tag("error", f"Failed to install {pkg['name']}.")
-                _tag("info",  f"Fix manually: pip install {pkg['install']}")
+                _tag("error", f"Could not install '{pkg['name']}' automatically.")
+                if err:
+                    # Show the last meaningful pip error line (skip full traceback)
+                    err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                    if err_lines:
+                        _tag("info", f"  pip: {err_lines[-1]}")
+                import platform as _plat
+                _sys = _plat.system()
+                _tag("info", "Install manually:")
+                _tag("info", f"  pip install {pkg['install']}")
+                if _sys == "Linux":
+                    _apt_map = {
+                        "pystray":      ("python3-pystray", "also needs: sudo apt install python3-xlib"),
+                        "Pillow":       ("python3-pil",     None),
+                        "paramiko":     ("python3-paramiko", None),
+                        "cryptography": ("python3-cryptography", None),
+                    }
+                    _apt = _apt_map.get(pkg["name"])
+                    if _apt:
+                        _tag("info", f"  or: sudo apt install {_apt[0]}")
+                        if _apt[1]:
+                            _tag("info", f"  note: {_apt[1]}")
                 if pkg["required"]:
                     all_ok = False
         else:
@@ -344,7 +413,7 @@ def step1_packages():
     print()
     if not all_ok:
         _tag("error", "One or more required packages could not be installed.")
-        _tag("info",  "Fix the issues above and run start.bat again.")
+        _tag("info",  f"Fix the issues above and run '{_launcher_hint()}' again.")
         sys.exit(1)
 
 
@@ -577,7 +646,7 @@ def _step3_import():
     if not os.path.isfile(cert_file) or not os.path.isfile(key_file):
         _tag("error", "cert.pem or key.pem not found in the certs/ folder.")
         _tag("info",  f"Place both files in: {CERTS_DIR}")
-        _tag("info",  "Then run start.bat --setup to try again.")
+        _tag("info",  f"Then run '{_launcher_hint(setup=True)}' to try again.")
         _tag("info",  "Falling back to self-signed certificate generation.")
         _step3_generate()
         return
@@ -594,7 +663,7 @@ def _step3_import():
     err = validate_cert_key_pair(cert_pem, key_pem)
     if err:
         _tag("error", f"Certificate validation failed: {err}")
-        _tag("info",  "Fix the certificate files and run start.bat --setup again,")
+        _tag("info",  f"Fix the certificate files and run '{_launcher_hint(setup=True)}' again,")
         _tag("info",  "or choose option 1 to generate a new self-signed certificate.")
         _step3_generate()
         return
@@ -633,8 +702,17 @@ def step4_snmp_port():
     _separator()
     _tag("setup", f"{_C['bold']}Step 4 — SNMP Trap Port{_C['reset']}")
     _separator()
+    import platform as _plat
+    _sys = _plat.system()
     _tag("info", "UDP port to receive SNMP traps from network devices.")
-    _tag("info", "Port 162 is the standard — requires admin privileges (already elevated).")
+    _tag("info", "Port 162 is the standard SNMP trap port.")
+    if _sys == "Windows":
+        _tag("info", "  Requires admin privileges (already elevated on Windows).")
+    elif _sys in ("Linux", "Darwin"):
+        _tag("info", "  Requires root on Linux/macOS. Options:")
+        _tag("info", "    sudo bash start.sh          (run the server as root)")
+        _tag("info", "    Use port 1162 (no root) + redirect:")
+        _tag("info", "      sudo iptables -t nat -A PREROUTING -p udp --dport 162 -j REDIRECT --to-ports 1162")
     _tag("info", "PingWatch auto-falls back to 1162 then 2162 if 162 cannot be bound.")
     print()
     # SNMP uses UDP so skip TCP conflict detection
