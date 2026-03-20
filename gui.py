@@ -12,8 +12,13 @@ import webbrowser
 
 try:
     import tkinter as tk
-except ImportError:
-    tk = None   # server.py guards import with try/except; this prevents a hard crash
+except ImportError as _tk_err:
+    # Re-raise so `from gui import StatusWindow` in server.py triggers its
+    # `except ImportError` block and sets _GUI = False correctly.
+    raise ImportError(
+        "tkinter is not installed — GUI status window unavailable. "
+        "Install python3-tk (Linux) or python-tk (macOS)."
+    ) from _tk_err
 
 # ── Platform-adaptive fonts ────────────────────────────────────
 _UI_FONT   = ("Segoe UI"       if sys.platform == "win32" else
