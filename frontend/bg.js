@@ -6,6 +6,10 @@
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
+  // Throttle to 8fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
+  const _BG_MS = 1000 / 8;
+  let _bgLast = 0;
+
   // Aurora orbs
   const ORBS = [
     {xr:.18, yr:.25, r:.38, h:220, s:.8, spd:.00008},
@@ -18,7 +22,7 @@
     W = cvs.width  = window.innerWidth;
     H = cvs.height = window.innerHeight;
     nodes = [];
-    const STEP = 44;
+    const STEP = 66; // was 44 — fewer nodes reduces O(n²) pair checks by ~55%
     const cols = Math.ceil(W/STEP)+2, rows = Math.ceil(H/STEP)+2;
     for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
       nodes.push({
@@ -109,7 +113,10 @@
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
 
-  function frame(){
+  function frame(ts){
+    requestAnimationFrame(frame);
+    if(ts - _bgLast < _BG_MS) return;
+    _bgLast = ts;
     t++;
     ctx.clearRect(0,0,W,H);
     drawAurora();
@@ -120,11 +127,10 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
-    requestAnimationFrame(frame);
   }
 
   window.addEventListener('resize', resize);
-  resize(); frame();
+  resize(); requestAnimationFrame(frame);
 })();
 
 // ── Hero radar canvas ────────────────────────────────────────────
@@ -143,6 +149,8 @@
     for(let i=0;i<5;i++)addBlip();
 
     function frame(){
+      // Stop rendering when the radar canvas is not visible (emptyMain hidden)
+      if(!cvs.offsetParent){ requestAnimationFrame(frame); return; }
       ctx.clearRect(0,0,W,H);
 
       // outer glow ring

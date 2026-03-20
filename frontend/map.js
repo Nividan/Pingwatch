@@ -512,10 +512,19 @@ function _pwFindPath(fromDid, toDid) {
   return null;
 }
 
-const PW_MAX_TRACES = 6;
+// ── Trace animation performance limits ───────────────────────────────────────
+// Max 3 concurrent dots (was 6) — each runs its own rAF loop at 30fps
+const PW_MAX_TRACES = 3;
+// Per-device cooldown: only one trace per device per 4 seconds.
+// With 38 devices probing every 5s, this was firing ~22 traces/second.
+const _pwTraceCooldown = 4000;
+const _pwTraceLastFired = new Map();
 
 function _pwFireTrace(toDid, alive) {
   if (_pwActiveTraces >= PW_MAX_TRACES) return;
+  const now = Date.now();
+  if ((now - (_pwTraceLastFired.get(toDid) || 0)) < _pwTraceCooldown) return;
+  _pwTraceLastFired.set(toDid, now);
   const srcDid = _pwGetTraceSrc();
   if (!srcDid || String(srcDid) === String(toDid)) return;
   const path = _pwFindPath(srcDid, String(toDid));
@@ -540,8 +549,12 @@ function _pwAnimateTrace(pathDids, color) {
   dot.style.pointerEvents = 'none';
   layer.appendChild(dot);
   const segDur = 250;
-  let segIdx = 0, startTs = null;
+  // Throttle trace rAF to 30fps (was 60fps) — halves SVG write rate
+  const _TRACE_MS = 1000 / 30;
+  let segIdx = 0, startTs = null, lastFrame = 0;
   function step(ts) {
+    if (ts - lastFrame < _TRACE_MS) { requestAnimationFrame(step); return; }
+    lastFrame = ts;
     if (!startTs) startTs = ts;
     const t = Math.min((ts - startTs) / segDur, 1);
     const p0 = pts[segIdx], p1 = pts[segIdx + 1];
@@ -568,9 +581,11 @@ function _pwBurstAt(pt, color, layer) {
   ring.setAttribute('stroke', color); ring.setAttribute('stroke-width', '2');
   ring.style.pointerEvents = 'none';
   layer.appendChild(ring);
-  let t0 = null;
-  const dur = 400;
+  let t0 = null, lastBurst = 0;
+  const dur = 400, _BURST_MS = 1000 / 30; // 30fps burst
   function expand(ts) {
+    if (ts - lastBurst < _BURST_MS) { requestAnimationFrame(expand); return; }
+    lastBurst = ts;
     if (!t0) t0 = ts;
     const t = (ts - t0) / dur;
     if (t >= 1) { ring.remove(); return; }
@@ -3527,8 +3542,8 @@ function initMainBg() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
-  // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
-  const BG_FPS = 10, BG_MS = 1000 / BG_FPS;
+  // ── Performance: throttle to 6 fps — reduces fillText load by ~40% ──────
+  const BG_FPS = 6, BG_MS = 1000 / BG_FPS;
   let _bgLast = 0, _bgRafId = null;
 
   let pts = [], rings = [], streams = [], scanY = 0;
@@ -3592,15 +3607,15 @@ function initMainBg() {
   }
 
   function spawnStreams() {
-    // Cap at 28 streams regardless of window width (was canvas.width/22 ≈ 58)
-    const cols = Math.min(Math.floor(canvas.width / 36), 28);
+    // Cap at 10 streams — reduces fillText calls by ~65% vs previous 28
+    const cols = Math.min(Math.floor(canvas.width / 36), 10);
     streams = Array.from({ length: cols }, (_, i) => ({
-      x: i * 22 + 11,
+      x: i * (canvas.width / cols) + (canvas.width / cols) / 2,
       y: Math.random() * canvas.height,
       speed: 0.6 + Math.random() * 1.2,
-      chars: Array.from({ length: 18 }, () => CHARS[Math.floor(Math.random() * CHARS.length)]),
+      chars: Array.from({ length: 10 }, () => CHARS[Math.floor(Math.random() * CHARS.length)]),
       opacity: 0.018 + Math.random() * 0.022,
-      len: 6 + Math.floor(Math.random() * 10),
+      len: 4 + Math.floor(Math.random() * 5),
       tick: 0,
     }));
   }

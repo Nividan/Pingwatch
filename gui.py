@@ -7,8 +7,19 @@ Closing the window hides it to the tray; only Quit actually exits.
 
 import datetime
 import os
-import tkinter as tk
+import sys
 import webbrowser
+
+try:
+    import tkinter as tk
+except ImportError:
+    tk = None   # server.py guards import with try/except; this prevents a hard crash
+
+# ── Platform-adaptive fonts ────────────────────────────────────
+_UI_FONT   = ("Segoe UI"       if sys.platform == "win32" else
+              "Helvetica Neue" if sys.platform == "darwin" else "DejaVu Sans")
+_MONO_FONT = ("Consolas"       if sys.platform == "win32" else
+              "Menlo"          if sys.platform == "darwin" else "DejaVu Sans Mono")
 
 # ── Colour palette (matches web UI) ───────────────────────────────
 BG     = "#0d1117"
@@ -145,19 +156,19 @@ class StatusWindow:
         logo = tk.Frame(hdr, bg=BG2)
         logo.pack(side="left", padx=(16, 0))
         tk.Label(logo, text="●", fg=GREEN, bg=BG2,
-                 font=("Segoe UI", 17)).pack(side="left", padx=(0, 6))
+                 font=(_UI_FONT, 17)).pack(side="left", padx=(0, 6))
         tk.Label(logo, text="Ping", fg=TEXT, bg=BG2,
-                 font=("Segoe UI", 19, "bold")).pack(side="left")
+                 font=(_UI_FONT, 19, "bold")).pack(side="left")
         tk.Label(logo, text="Watch", fg=ACCENT, bg=BG2,
-                 font=("Segoe UI", 19, "bold")).pack(side="left")
+                 font=(_UI_FONT, 19, "bold")).pack(side="left")
         tk.Label(logo, text="  Network Monitor", fg=TEXT2, bg=BG2,
-                 font=("Segoe UI", 11)).pack(side="left")
+                 font=(_UI_FONT, 11)).pack(side="left")
 
         # Right side: uptime
         right = tk.Frame(hdr, bg=BG2)
         right.pack(side="right", padx=16)
         self._lbl_uptime = tk.Label(right, text="", fg=TEXT3, bg=BG2,
-                                     font=("Consolas", 13))
+                                     font=(_MONO_FONT, 13))
         self._lbl_uptime.pack(anchor="e")
 
     # ── thin status strip (green / yellow / red) ──────────────────
@@ -186,17 +197,17 @@ class StatusWindow:
             row = tk.Frame(df, bg=BG)
             row.pack(fill="x", padx=10, pady=2)
             tk.Label(row, text=sym, fg=color, bg=BG,
-                     font=("Segoe UI", 16), width=2).pack(side="left")
+                     font=(_UI_FONT, 16), width=2).pack(side="left")
             lbl = tk.Label(row, text="0", fg=color, bg=BG,
-                           font=("Segoe UI", 21, "bold"), width=3)
+                           font=(_UI_FONT, 21, "bold"), width=3)
             lbl.pack(side="left")
             tk.Label(row, text=name, fg=TEXT2, bg=BG,
-                     font=("Segoe UI", 13)).pack(side="left", padx=(4, 0))
+                     font=(_UI_FONT, 13)).pack(side="left", padx=(4, 0))
             self._dev_labels[key] = lbl
 
         # Total devices count
         self._lbl_dev_total = tk.Label(df, text="", fg=TEXT3, bg=BG,
-                                        font=("Segoe UI", 12))
+                                        font=(_UI_FONT, 12))
         self._lbl_dev_total.pack(anchor="e", padx=10, pady=(0, 4))
 
         # ── Sensors panel ──────────────────────────────────────────
@@ -206,7 +217,7 @@ class StatusWindow:
         # Total / running
         self._lbl_snr_tot = tk.Label(sf, text="Total: 0   Running: 0",
                                       fg=TEXT, bg=BG,
-                                      font=("Segoe UI", 14, "bold"))
+                                      font=(_UI_FONT, 14, "bold"))
         self._lbl_snr_tot.pack(anchor="w", padx=10, pady=(6, 2))
 
         # Health bar canvas
@@ -221,15 +232,15 @@ class StatusWindow:
         alive_row = tk.Frame(sf, bg=BG)
         alive_row.pack(fill="x", padx=10, pady=(0, 4))
         self._lbl_snr_alive = tk.Label(alive_row, text="", fg=TEXT2, bg=BG,
-                                        font=("Segoe UI", 13))
+                                        font=(_UI_FONT, 13))
         self._lbl_snr_alive.pack(side="left")
         self._lbl_health_pct = tk.Label(alive_row, text="", fg=TEXT3, bg=BG,
-                                         font=("Segoe UI", 13))
+                                         font=(_UI_FONT, 13))
         self._lbl_health_pct.pack(side="right")
 
         # Type breakdown
         self._lbl_snr_typ = tk.Label(sf, text="—", fg=TEXT2, bg=BG,
-                                      font=("Consolas", 13), justify="left")
+                                      font=(_MONO_FONT, 13), justify="left")
         self._lbl_snr_typ.pack(anchor="w", padx=10, pady=(0, 6))
 
         # ── System Status row (full width, below Devices + Sensors) ──
@@ -249,16 +260,16 @@ class StatusWindow:
             cell = tk.Frame(inner, bg=BG)
             cell.grid(row=0, column=col, padx=8, sticky="w")
             tk.Label(cell, text=label, fg=TEXT3, bg=BG,
-                     font=("Segoe UI", 10)).pack(anchor="w")
+                     font=(_UI_FONT, 10)).pack(anchor="w")
             lbl = tk.Label(cell, text="—", fg=fg, bg=BG,
-                           font=("Consolas", 12, "bold"))
+                           font=(_MONO_FONT, 12, "bold"))
             lbl.pack(anchor="w")
             setattr(self, f"_lbl_sys_{attr}", lbl)
 
     def _panel(self, parent, title):
         """Return a styled LabelFrame."""
         return tk.LabelFrame(parent, text=f"  {title}  ", bg=BG,
-                             fg=TEXT3, font=("Segoe UI", 12, "bold"),
+                             fg=TEXT3, font=(_UI_FONT, 12, "bold"),
                              bd=1, relief="groove",
                              highlightbackground=BORDER,
                              highlightthickness=1)
@@ -273,14 +284,14 @@ class StatusWindow:
         lhdr = tk.Frame(outer, bg=BG)
         lhdr.pack(fill="x")
         tk.Label(lhdr, text="LOG", fg=TEXT3, bg=BG,
-                 font=("Segoe UI", 11, "bold")).pack(side="left")
+                 font=(_UI_FONT, 11, "bold")).pack(side="left")
 
         # Source selector buttons
         for src, label in [("app", "App"), ("sensors", "Sensors"), ("audit", "Audit"), ("backup", "Backup")]:
             _src = src
             btn = tk.Button(
                 lhdr, text=label, relief="flat", bd=0, cursor="hand2",
-                font=("Segoe UI", 11), bg=BG, padx=6,
+                font=(_UI_FONT, 11), bg=BG, padx=6,
                 activebackground=BG2,
                 command=lambda s=_src: self._switch_log_source(s),
             )
@@ -289,7 +300,7 @@ class StatusWindow:
 
         self._btn_clear = tk.Button(
             lhdr, text="✕ Clear", bg=BG3, fg=TEXT2, relief="flat",
-            font=("Segoe UI", 11), cursor="hand2", bd=0,
+            font=(_UI_FONT, 11), cursor="hand2", bd=0,
             activebackground=BG3, activeforeground=TEXT,
             command=self._clear_log,
         )
@@ -302,7 +313,7 @@ class StatusWindow:
 
         self._log_text = tk.Text(
             frame, bg=BG2, fg=TEXT2,
-            font=("Consolas", 14),
+            font=(_MONO_FONT, 14),
             relief="flat", bd=0, wrap="none",
             selectbackground="#2f81f7",
             selectforeground="#ffffff",
@@ -335,7 +346,7 @@ class StatusWindow:
         tk.Button(
             ft, text="Open Dashboard",
             bg=ACCENT, fg="white", relief="flat",
-            font=("Segoe UI", 13, "bold"), padx=16, cursor="hand2",
+            font=(_UI_FONT, 13, "bold"), padx=16, cursor="hand2",
             activebackground="#1a6ed4", activeforeground="white", bd=0,
             command=lambda: webbrowser.open(f"http://127.0.0.1:{self._port}"),
         ).pack(side="left", padx=14)
@@ -343,7 +354,7 @@ class StatusWindow:
         tk.Button(
             ft, text="Network Map",
             bg=PURPLE, fg="white", relief="flat",
-            font=("Segoe UI", 13, "bold"), padx=16, cursor="hand2",
+            font=(_UI_FONT, 13, "bold"), padx=16, cursor="hand2",
             activebackground="#6c3483", activeforeground="white", bd=0,
             command=lambda: webbrowser.open(f"http://127.0.0.1:{self._port}/map"),
         ).pack(side="left", padx=4)
@@ -351,7 +362,7 @@ class StatusWindow:
         tk.Button(
             ft, text="Quit PingWatch",
             bg=BG3, fg=RED, relief="flat",
-            font=("Segoe UI", 13), padx=16, cursor="hand2",
+            font=(_UI_FONT, 13), padx=16, cursor="hand2",
             activebackground=BG3, activeforeground=RED, bd=0,
             command=self._do_quit,
         ).pack(side="right", padx=(4, 14))
@@ -359,7 +370,7 @@ class StatusWindow:
         tk.Button(
             ft, text="↺ Restart",
             bg=BG3, fg=YELLOW, relief="flat",
-            font=("Segoe UI", 13), padx=16, cursor="hand2",
+            font=(_UI_FONT, 13), padx=16, cursor="hand2",
             activebackground=BG3, activeforeground=YELLOW, bd=0,
             command=self._do_restart,
         ).pack(side="right", padx=4)
@@ -586,10 +597,10 @@ class StatusWindow:
         """Highlight the active source button; dim/enable clear button."""
         for s, btn in self._src_btns.items():
             if s == self._log_source:
-                btn.config(fg=ACCENT, font=("Segoe UI", 11, "bold"),
+                btn.config(fg=ACCENT, font=(_UI_FONT, 11, "bold"),
                            activeforeground=ACCENT)
             else:
-                btn.config(fg=TEXT3, font=("Segoe UI", 11),
+                btn.config(fg=TEXT3, font=(_UI_FONT, 11),
                            activeforeground=TEXT2)
         if self._btn_clear:
             if self._log_source == "app":

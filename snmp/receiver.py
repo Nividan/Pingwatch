@@ -8,6 +8,7 @@ them to all SSE clients via STATE._broadcast('snmp_trap', ...).
 
 import datetime
 import json
+import os
 import socket
 
 from core.config import SNMP_TRAP_PORT
@@ -168,6 +169,14 @@ def trap_receiver_loop(state, port=None):
             return
         except OSError as e:
             log.warning(f"SNMP trap: cannot bind port {try_port}: {e}")
+            if try_port == 162 and os.name != 'nt':
+                log.warning(
+                    "Port 162 requires root on Linux/macOS. Fix with one of:\n"
+                    "  1) sudo python3 server.py\n"
+                    "  2) sudo iptables -t nat -A PREROUTING -p udp --dport 162"
+                    " -j REDIRECT --to-ports 1162\n"
+                    "  3) Set SNMP port to 1162 in Settings → Networking"
+                )
     log.error("SNMP trap receiver disabled — ports 162, 1162, 2162 all unavailable.")
 
 

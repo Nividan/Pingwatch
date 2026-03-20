@@ -64,6 +64,12 @@ def handle(h, method, path, body):
             "backup_sched_time":    _settings.get("backup_sched_time",  "02:00"),
             "backup_sched_days":    str(_settings.get("backup_sched_days",  "1,2,3,4,5,6,7")),
             "backup_keep":          int(_settings.get("backup_keep", 3)),
+            # Group H — syslog forwarding
+            "syslog_enabled":      int(_settings.get("syslog_enabled",      0)),
+            "syslog_host":         _settings.get("syslog_host",         ""),
+            "syslog_port":         int(_settings.get("syslog_port",         514) or 514),
+            "syslog_proto":        _settings.get("syslog_proto",        "udp"),
+            "syslog_min_severity": _settings.get("syslog_min_severity", "warning"),
         })
         return True
 
@@ -109,6 +115,10 @@ def handle(h, method, path, body):
             _settings.load({"snr_type_defaults": _raw})
             _db_enqueue(lambda _v=_raw: db_save_settings({"snr_type_defaults": _v}))
         # Backup scheduler settings
+        if "syslog_enabled" in body:
+            _sye = "1" if body["syslog_enabled"] else "0"
+            _settings.load({"syslog_enabled": _sye})
+            _db_enqueue(lambda _v=_sye: db_save_settings({"syslog_enabled": _v}))
         if "backup_sched_enabled" in body:
             _bse = "1" if body["backup_sched_enabled"] else "0"
             _settings.load({"backup_sched_enabled": _bse})
@@ -131,6 +141,7 @@ def handle(h, method, path, body):
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window",
             "org_name", "latency_good_ms", "latency_warn_ms",
+            "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):
             if _k in body:
                 _val = str(body[_k]).strip()
@@ -144,11 +155,20 @@ def handle(h, method, path, body):
         h._json(200, {"ok": True})
         return True
 
+    # ── /api/settings/syslog_test POST ───────────────────────────
+    if path == "/api/settings/syslog_test" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from monitoring.syslog_client import send_test_syslog
+        ok, msg = send_test_syslog()
+        h._json(200 if ok else 500, {"ok": ok, "msg": msg})
+        return True
+
     # ── /api/settings/smtp_test POST ─────────────────────────────
     if path == "/api/settings/smtp_test" and method == "POST":
         user, _ = h._require("admin")
         if not user: return True
-        from smtp_alert import test_smtp
+        from monitoring.smtp_alert import test_smtp
         cfg = {
             "host":      (body.get("smtp_host") or "").strip(),
             "port":      body.get("smtp_port", 587),
