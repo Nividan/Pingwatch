@@ -14,9 +14,10 @@ RestartSec=5
 # Group=pingwatch
 
 # Allow binding to privileged ports (80, 443, 162) without full root
-# If running as root, remove these lines
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# CAP_NET_RAW   — required for ICMP ping (raw socket)
+# CAP_NET_BIND_SERVICE — required for ports < 1024
+AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
 
 # Suppress console output — logs go to journald (journalctl -u pingwatch)
 StandardOutput=journal
