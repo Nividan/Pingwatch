@@ -532,7 +532,25 @@ function openDetail(did,sid,initialTab){
         </div>
         <span id="dm-hist-stats-${did}-${sid}" class="dm-hist-stats"></span>
       </div>
-      <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="260"></canvas>
+      <div class="dm-kpi-bar" id="kpi-${did}-${sid}">
+        <div class="dm-kpi-item" id="kpi-avail-${did}-${sid}">Avail<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-avg-${did}-${sid}">Avg ms<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-min-${did}-${sid}">Min ms<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-max-${did}-${sid}">Max ms<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-loss-${did}-${sid}">Loss %<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-jitter-${did}-${sid}">Jitter<br><span>—</span></div>
+      </div>
+      <div class="dm-metric-toggles">
+        <label><input type="checkbox" id="tog-avg-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Avg</label>
+        <label><input type="checkbox" id="tog-band-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Min/Max</label>
+        <label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>
+        <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
+        <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto</button>
+      </div>
+      <div style="position:relative">
+        <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
+        <div class="dm-hist-tip" id="tip-${did}-${sid}" style="display:none"></div>
+      </div>
       <div id="dm-hist-summary-${did}-${sid}" class="dm-hist-summary"></div>
     </div>
     <div class="dm-ft">
@@ -583,189 +601,404 @@ function dmHistPick(did, sid, minutes) {
   loadDmHistory(did, sid, minutes);
 }
 
+// Per-sensor history data cache keyed by "did/sid"
+const _histCache = {};
+
 // Shared chart renderer — callable from both the sensor detail modal and dashboard widgets
 async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   if (!canvas) return;
   if (statsEl) statsEl.textContent = 'Loading…';
   const dynamicLimit = Math.min(10000, Math.max(500, Math.round(minutes * 60 / 10)));
   const [hr, sr] = await Promise.all([
-  fetch(`/api/device/${did}/sensor/${sid}/history?minutes=${minutes}&limit=${dynamicLimit}`)
- 	 .then(r => r.json()).catch(() => ({})),
-  fetch(`/api/device/${did}/sensor/${sid}/summary?minutes=${minutes}`)
- 	 .then(r => r.json()).catch(() => ({})),
+    fetch(`/api/device/${did}/sensor/${sid}/history?minutes=${minutes}&limit=${dynamicLimit}`)
+      .then(r => r.json()).catch(() => ({})),
+    fetch(`/api/device/${did}/sensor/${sid}/summary?minutes=${minutes}`)
+      .then(r => r.json()).catch(() => ({})),
   ]);
   const samples = hr.samples || [];
   const summary = sr.summary || [];
+  _histCache[`${did}/${sid}`] = { samples, summary, minutes };
+  _buildKpiBar(summary, did, sid);
+  _setupHistTooltip(canvas, summary, did, sid, minutes);
+  // canvas may have been re-looked-up inside _setupHistTooltip; re-fetch by id to be safe
+  const c = document.getElementById(`dm-hist-canvas-${did}-${sid}`) || canvas;
+  _drawHistCanvas(c, statsEl, did, sid, summary, samples, minutes);
+  if (sumEl) _buildSummaryTable(sumEl, summary, minutes);
+}
+
+function dmHistRedraw(did, sid) {
+  const cache = _histCache[`${did}/${sid}`];
+  if (!cache) return;
+  const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
+  const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
+  if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples, cache.minutes);
+}
+
+function _buildKpiBar(summary, did, sid) {
+  if (!summary.length) return;
+  let totalOk = 0, totalFail = 0, wsum = 0, wcnt = 0;
+  let minMs = Infinity, maxMs = -Infinity, lossSum = 0, jitterSum = 0;
+  for (const r of summary) {
+    totalOk   += r.ok;
+    totalFail += r.fail;
+    if (r.avg_ms != null) { wsum += r.avg_ms * r.ok; wcnt += r.ok; }
+    if (r.min_ms != null) minMs = Math.min(minMs, r.min_ms);
+    if (r.max_ms != null) maxMs = Math.max(maxMs, r.max_ms);
+    lossSum   += r.loss_pct   || 0;
+    jitterSum += r.jitter_ms  || 0;
+  }
+  const total = totalOk + totalFail;
+  const avail = total > 0 ? (totalOk / total * 100) : 100;
+  const avg   = wcnt > 0 ? Math.round(wsum / wcnt * 10) / 10 : null;
+  const _set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) { const sp = el.querySelector('span'); if (sp) sp.textContent = val; }
+  };
+  _set(`kpi-avail-${did}-${sid}`,  avail.toFixed(1) + '%');
+  _set(`kpi-avg-${did}-${sid}`,    avg != null ? avg + 'ms' : '—');
+  _set(`kpi-min-${did}-${sid}`,    minMs !== Infinity  ? minMs + 'ms' : '—');
+  _set(`kpi-max-${did}-${sid}`,    maxMs !== -Infinity ? maxMs + 'ms' : '—');
+  _set(`kpi-loss-${did}-${sid}`,   (lossSum / summary.length).toFixed(1) + '%');
+  _set(`kpi-jitter-${did}-${sid}`, (jitterSum / summary.length).toFixed(1) + 'ms');
+}
+
+function _setupHistTooltip(canvas, summary, did, sid, minutes) {
+  const tip = document.getElementById(`tip-${did}-${sid}`);
+  if (!tip || !canvas) return;
+  if (canvas._tipAC) canvas._tipAC.abort();
+  const ac = new AbortController();
+  canvas._tipAC = ac;
+  const { signal } = ac;
+  const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const plotW = canvas.width - LEFT - RIGHT;
+    if (mx < LEFT || mx > canvas.width - RIGHT) { tip.style.display = 'none'; return; }
+    const hoverTs = (Date.now() / 1000 - minutes * 60) + (mx - LEFT) / plotW * (minutes * 60);
+    let nearest = null, bestDist = Infinity;
+    for (const r of summary) {
+      const d = Math.abs(r.ts + 1800 - hoverTs);
+      if (d < bestDist) { bestDist = d; nearest = r; }
+    }
+    if (!nearest) { tip.style.display = 'none'; return; }
+    const d = new Date(nearest.ts * 1000);
+    const lbl = d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' +
+                d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    const status = nearest.ok === 0 && nearest.fail > 0 ? '🔴 DOWN' : '🟢 UP';
+    tip.innerHTML =
+      `<b>${lbl}</b><br>` +
+      `Avg: ${nearest.avg_ms != null ? nearest.avg_ms + ' ms' : '—'}<br>` +
+      `Min: ${nearest.min_ms != null ? nearest.min_ms + ' ms' : '—'}<br>` +
+      `Max: ${nearest.max_ms != null ? nearest.max_ms + ' ms' : '—'}<br>` +
+      `Loss: ${(nearest.loss_pct || 0).toFixed(1)}%<br>` +
+      `Jitter: ${(nearest.jitter_ms || 0).toFixed(1)} ms<br>${status}`;
+    const cssMx = e.clientX - rect.left;
+    let tx = cssMx + 12, ty = e.clientY - rect.top - 70;
+    if (tx + 175 > rect.width) tx = cssMx - 180;
+    if (ty < 4) ty = 4;
+    tip.style.left = tx + 'px';
+    tip.style.top  = ty + 'px';
+    tip.style.display = 'block';
+    // Redraw chart then overdraw crosshair
+    dmHistRedraw(did, sid);
+    const cctx = canvas.getContext('2d');
+    cctx.strokeStyle = 'rgba(255,255,255,.22)';
+    cctx.lineWidth = 1;
+    cctx.setLineDash([3, 3]);
+    cctx.beginPath(); cctx.moveTo(mx, TOP); cctx.lineTo(mx, canvas.height - BOT); cctx.stroke();
+    cctx.setLineDash([]);
+  }, { signal });
+  canvas.addEventListener('mouseleave', () => {
+    tip.style.display = 'none';
+    dmHistRedraw(did, sid);
+  }, { signal });
+}
+
+function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
+  if (!canvas) return;
   canvas.width = canvas.offsetWidth || 660;
-  const W = canvas.width, H = canvas.height || 260;
-  const LEFT = 46;   // reserved for Y-axis labels
-  const BOT  = 18;   // reserved for X-axis labels
+  const W = canvas.width, H = canvas.height || 320;
+  const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
+  const plotW = W - LEFT - RIGHT;
+  const plotH = H - BOT - TOP;
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#161b22'; ctx.fillRect(0,0,W,H);
-  if (!samples.length) {
-    ctx.fillStyle='#8b949e'; ctx.font='13px Inter,sans-serif'; ctx.textAlign='center';
-    ctx.fillText('No data for this period', W/2, H/2);
-    if (statsEl) statsEl.textContent='No data';
-    if (sumEl) sumEl.innerHTML='';
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, W, H);
+
+  if (!samples.length && !summary.length) {
+    ctx.fillStyle = '#8b949e'; ctx.font = '13px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('No data for this period', W / 2, H / 2);
+    if (statsEl) statsEl.textContent = 'No data';
     return;
   }
-  const msVals = samples.filter(p=>p.ok&&p.ms!==null).map(p=>p.ms);
-  const rawMax = msVals.length ? Math.max(...msVals) : 200;
-  const maxMs  = rawMax * 1.15;
-  // Anchor X-axis to the requested window, not the data extent
+
+  // Read toggle states
+  const togAvg    = document.getElementById(`tog-avg-${did}-${sid}`)?.checked ?? true;
+  const togBand   = document.getElementById(`tog-band-${did}-${sid}`)?.checked ?? true;
+  const togLoss   = document.getElementById(`tog-loss-${did}-${sid}`)?.checked ?? true;
+  const togJitter = document.getElementById(`tog-jitter-${did}-${sid}`)?.checked ?? false;
+
   const windowStart = Date.now() / 1000 - minutes * 60;
   const tsRange = minutes * 60;
-  // chart area: x from LEFT to W-4, y from 12 to H-BOT
-  const plotH = H - BOT - 12;
-  const xOf = ts  => LEFT + (ts - windowStart) / tsRange * (W-LEFT-4);
-  const yOf = ms  => (H-BOT) - (ms/maxMs)*plotH;
-
-  // ── Y-axis labels + horizontal grid lines ─────────────────────
-  ctx.font='9px Inter,sans-serif';
-  ctx.lineWidth=1;
-  [0.25, 0.5, 0.75, 1].forEach(f => {
-    const y      = (H-BOT) - f*plotH;
-    const msLbl  = Math.round(maxMs * f);
-    // grid line (starts at LEFT)
-    ctx.strokeStyle='rgba(255,255,255,.07)';
-    ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W, y); ctx.stroke();
-    // label right-aligned before LEFT
-    ctx.fillStyle='rgba(139,148,158,.75)'; ctx.textAlign='right';
-    ctx.fillText(msLbl >= 1000 ? (msLbl/1000).toFixed(1)+'s' : msLbl+'ms', LEFT-4, y+3);
-  });
-  // 0ms baseline label
-  ctx.fillStyle='rgba(139,148,158,.4)'; ctx.textAlign='right';
-  ctx.fillText('0', LEFT-4, H-BOT+3);
-  // Y-axis border line
-  ctx.strokeStyle='rgba(255,255,255,.1)'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(LEFT, 10); ctx.lineTo(LEFT, H-BOT); ctx.stroke();
-
-  // ── Calendar-aligned vertical grid lines ───────────────────────
-  // Pick a grid interval that naturally fits the requested range
-  let _gInt; // seconds
-  if      (tsRange <=  2*3600)   _gInt =   15*60;  // 15 min  (≤2h)
-  else if (tsRange <=  6*3600)   _gInt =   60*60;  // 1 hour  (≤6h)
-  else if (tsRange <= 24*3600)   _gInt =  4*3600;  // 4 hours (≤24h)
-  else if (tsRange <=  4*86400)  _gInt = 12*3600;  // 12 hours (≤4d)
-  else if (tsRange <= 14*86400)  _gInt =  86400;   // 1 day   (≤14d)
-  else if (tsRange <= 45*86400)  _gInt =  7*86400; // 1 week  (≤45d)
-  else if (tsRange <= 200*86400) _gInt = 30*86400; // ~1 month (≤200d)
-  else                           _gInt = 91*86400; // ~3 months (>200d)
-  // Snap first label to a local-timezone boundary
-  const _tzOff = new Date().getTimezoneOffset() * 60; // seconds west of UTC
-  const _firstGrid = Math.ceil((windowStart + _tzOff) / _gInt) * _gInt - _tzOff;
   const windowEnd = windowStart + tsRange;
+  const xOf = ts => LEFT + (ts - windowStart) / tsRange * plotW;
+
+  // Y scales
+  const msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
+  const summaryMaxMs = summary.reduce((m, r) => Math.max(m, r.max_ms || 0), 0);
+  const rawMax = Math.max(summaryMaxMs, msVals.length ? Math.max(...msVals) : 0);
+  const _sen = S.sensors[`${did}/${sid}`];
+  const maxY = Math.max((_sen?.crit_ms || 0) * 1.1, rawMax * 1.2, 10);
+  const yOf   = ms  => (H - BOT) - (ms / maxY) * plotH;
+  const yLoss = pct => (H - BOT) - (pct / 100) * plotH;
+
+  // ── 1. Downtime spans ─────────────────────────────────────────
+  ctx.fillStyle = 'rgba(248,81,73,.12)';
+  for (const r of summary) {
+    if (r.ok === 0 && r.fail > 0) {
+      const x1 = Math.max(LEFT, xOf(r.ts));
+      const x2 = Math.min(W - RIGHT, xOf(r.ts + 3600));
+      if (x2 > x1) ctx.fillRect(x1, TOP, x2 - x1, plotH);
+    }
+  }
+
+  // ── 2. Min/Max band ───────────────────────────────────────────
+  if (togBand) {
+    const bandPts = summary.filter(r => r.min_ms != null && r.max_ms != null);
+    if (bandPts.length > 1) {
+      ctx.beginPath();
+      bandPts.forEach((r, i) => {
+        const x = xOf(r.ts + 1800);
+        if (i === 0) ctx.moveTo(x, yOf(r.max_ms));
+        else ctx.lineTo(x, yOf(r.max_ms));
+      });
+      for (let i = bandPts.length - 1; i >= 0; i--)
+        ctx.lineTo(xOf(bandPts[i].ts + 1800), yOf(bandPts[i].min_ms));
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(47,129,247,.10)';
+      ctx.fill();
+    }
+  }
+
+  // ── 3. Loss% bars ─────────────────────────────────────────────
+  if (togLoss && summary.length) {
+    const barW = Math.max(2, plotW / summary.length * 0.65);
+    for (const r of summary) {
+      if ((r.loss_pct || 0) === 0) continue;
+      const x = xOf(r.ts + 1800) - barW / 2;
+      const yTop = yLoss(r.loss_pct);
+      ctx.fillStyle = 'rgba(240,165,0,.4)';
+      ctx.fillRect(x, yTop, barW, (H - BOT) - yTop);
+    }
+  }
+
+  // ── 4. Jitter line ────────────────────────────────────────────
+  if (togJitter) {
+    const jPts = summary.filter(r => (r.jitter_ms || 0) > 0);
+    if (jPts.length > 1) {
+      ctx.beginPath();
+      jPts.forEach((r, i) => {
+        const x = xOf(r.ts + 1800), y = yOf(r.jitter_ms);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = 'rgba(188,130,255,.7)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // ── 5. Avg latency line + gradient fill ───────────────────────
+  if (togAvg) {
+    const pts = samples.filter(p => p.ok && p.ms != null).map(p => ({ x: xOf(p.ts), y: yOf(p.ms) }));
+    if (pts.length > 1) {
+      const g = ctx.createLinearGradient(0, TOP, 0, H - BOT);
+      g.addColorStop(0, 'rgba(47,129,247,.28)');
+      g.addColorStop(1, 'rgba(47,129,247,0)');
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, H - BOT);
+      pts.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(pts[pts.length - 1].x, H - BOT);
+      ctx.closePath();
+      ctx.fillStyle = g; ctx.fill();
+      ctx.beginPath();
+      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+      ctx.strokeStyle = '#2f81f7'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+
+  // ── 6. Threshold lines ────────────────────────────────────────
+  ctx.font = '9px Inter,sans-serif';
+  if (_sen?.warn_ms > 0 && _sen.warn_ms < maxY) {
+    const wy = yOf(_sen.warn_ms);
+    ctx.strokeStyle = 'rgba(240,165,0,.5)'; ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(240,165,0,.8)'; ctx.textAlign = 'left';
+    ctx.fillText('warn ' + _sen.warn_ms + 'ms', LEFT + 4, wy - 3);
+  }
+  if (_sen?.crit_ms > 0 && _sen.crit_ms < maxY) {
+    const cy = yOf(_sen.crit_ms);
+    ctx.strokeStyle = 'rgba(248,81,73,.5)'; ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(248,81,73,.8)'; ctx.textAlign = 'left';
+    ctx.fillText('crit ' + _sen.crit_ms + 'ms', LEFT + 4, cy - 3);
+  }
+
+  // ── 7. Failed ticks ───────────────────────────────────────────
+  ctx.strokeStyle = 'rgba(248,81,73,.6)'; ctx.lineWidth = 1.5;
+  samples.filter(p => !p.ok).forEach(p => {
+    const x = xOf(p.ts);
+    ctx.beginPath(); ctx.moveTo(x, H - BOT); ctx.lineTo(x, H - BOT - 10); ctx.stroke();
+  });
+
+  // ── 8. Y-axis gridlines + labels ─────────────────────────────
+  ctx.lineWidth = 1;
+  ctx.font = '9px Inter,sans-serif';
+  [0.25, 0.5, 0.75, 1].forEach(f => {
+    const y = (H - BOT) - f * plotH;
+    const msLbl = Math.round(maxY * f);
+    ctx.strokeStyle = 'rgba(255,255,255,.07)';
+    ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(139,148,158,.75)'; ctx.textAlign = 'right';
+    ctx.fillText(msLbl >= 1000 ? (msLbl / 1000).toFixed(1) + 's' : msLbl + 'ms', LEFT - 4, y + 3);
+    if (togLoss) {
+      ctx.fillStyle = 'rgba(240,165,0,.55)'; ctx.textAlign = 'left';
+      ctx.fillText(Math.round(100 * f) + '%', W - RIGHT + 4, y + 3);
+    }
+  });
+  ctx.fillStyle = 'rgba(139,148,158,.4)'; ctx.textAlign = 'right';
+  ctx.fillText('0', LEFT - 4, H - BOT + 3);
+  ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(LEFT, TOP); ctx.lineTo(LEFT, H - BOT); ctx.stroke();
+  if (togLoss) {
+    ctx.strokeStyle = 'rgba(240,165,0,.18)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(W - RIGHT, TOP); ctx.lineTo(W - RIGHT, H - BOT); ctx.stroke();
+  }
+
+  // ── 9. Time labels (X-axis) ───────────────────────────────────
+  let _gInt;
+  if      (tsRange <=  2*3600)   _gInt =  15*60;
+  else if (tsRange <=  6*3600)   _gInt =   3600;
+  else if (tsRange <= 24*3600)   _gInt =  4*3600;
+  else if (tsRange <=  4*86400)  _gInt = 12*3600;
+  else if (tsRange <= 14*86400)  _gInt =  86400;
+  else if (tsRange <= 45*86400)  _gInt =  7*86400;
+  else if (tsRange <= 200*86400) _gInt = 30*86400;
+  else                           _gInt = 91*86400;
+  const _tzOff = new Date().getTimezoneOffset() * 60;
+  const _firstGrid = Math.ceil((windowStart + _tzOff) / _gInt) * _gInt - _tzOff;
   for (let ts = _firstGrid; ts < windowEnd; ts += _gInt) {
     const x = xOf(ts);
-    if (x < LEFT + 14) continue; // skip labels too close to Y-axis
-    ctx.strokeStyle='rgba(255,255,255,.04)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(x, 10); ctx.lineTo(x, H-BOT); ctx.stroke();
+    if (x < LEFT + 14) continue;
+    ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, H - BOT); ctx.stroke();
     const d = new Date(ts * 1000);
-    let lbl;
-    if (_gInt < 86400)  lbl = d.toLocaleDateString([],{month:'short',day:'numeric'})
-                            + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    else                lbl = d.toLocaleDateString([],{month:'short',day:'numeric'});
-    ctx.fillStyle='rgba(139,148,158,.65)'; ctx.font='9px Inter,sans-serif'; ctx.textAlign='center';
-    ctx.fillText(lbl, x, H-2);
-  }
-
-  // ── Threshold lines (warn / crit) ─────────────────────────────
-  const _sen = S.sensors[`${did}/${sid}`];
-  if (_sen?.warn_ms > 0 && _sen.warn_ms < maxMs) {
-    const wy = yOf(_sen.warn_ms);
-    ctx.strokeStyle='rgba(240,165,0,.5)'; ctx.lineWidth=1;
-    ctx.setLineDash([5,4]);
-    ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W, wy); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle='rgba(240,165,0,.8)'; ctx.font='9px Inter,sans-serif'; ctx.textAlign='left';
-    ctx.fillText('warn '+_sen.warn_ms+'ms', LEFT+4, wy-3);
-  }
-  if (_sen?.crit_ms > 0 && _sen.crit_ms < maxMs) {
-    const cy = yOf(_sen.crit_ms);
-    ctx.strokeStyle='rgba(248,81,73,.5)'; ctx.lineWidth=1;
-    ctx.setLineDash([5,4]);
-    ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W, cy); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle='rgba(248,81,73,.8)'; ctx.font='9px Inter,sans-serif'; ctx.textAlign='left';
-    ctx.fillText('crit '+_sen.crit_ms+'ms', LEFT+4, cy-3);
-  }
-
-  // ── Failed probes — red ticks ──────────────────────────────────
-  samples.filter(p=>!p.ok).forEach(p=>{
-    const x=xOf(p.ts);
-    ctx.strokeStyle='rgba(248,81,73,.6)'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.moveTo(x,H-BOT); ctx.lineTo(x,H-BOT-12); ctx.stroke();
-  });
-
-  // ── Latency line + area fill ───────────────────────────────────
-  const pts = samples.filter(p=>p.ok&&p.ms!==null).map(p=>({x:xOf(p.ts),y:yOf(p.ms)}));
-  if (pts.length>1) {
-    const g = ctx.createLinearGradient(0,12,0,H-BOT);
-    g.addColorStop(0,'rgba(47,129,247,.3)'); g.addColorStop(1,'rgba(47,129,247,0)');
-    ctx.beginPath(); ctx.moveTo(pts[0].x,H-BOT);
-    pts.forEach(p=>ctx.lineTo(p.x,p.y));
-    ctx.lineTo(pts[pts.length-1].x,H-BOT); ctx.closePath();
-    ctx.fillStyle=g; ctx.fill();
-    ctx.beginPath(); pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-    ctx.strokeStyle='#2f81f7'; ctx.lineWidth=1.5; ctx.stroke();
+    const lbl = _gInt < 86400
+      ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
+      : d.toLocaleDateString([], {month:'short',day:'numeric'});
+    ctx.fillStyle = 'rgba(139,148,158,.65)'; ctx.font = '9px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(lbl, x, H - 4);
   }
 
   // ── Stats bar ─────────────────────────────────────────────────
-  const total=samples.length, okCt=samples.filter(p=>p.ok).length;
-  const upPct=total?Math.round(okCt/total*1000)/10:0;
-  const avgMs=msVals.length?Math.round(msVals.reduce((a,b)=>a+b,0)/msVals.length):null;
-  const minMs=msVals.length?Math.round(Math.min(...msVals)):null;
-  if (statsEl) statsEl.textContent=
-    `${total} probes · ${upPct}% up · avg ${avgMs!==null?avgMs+'ms':'—'} · min ${minMs!==null?minMs+'ms':'—'} · max ${Math.round(rawMax)}ms`;
+  if (statsEl) {
+    const total = samples.length, okCt = samples.filter(p => p.ok).length;
+    const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
+    const avgMs = msVals.length ? Math.round(msVals.reduce((a, b) => a + b, 0) / msVals.length) : null;
+    const minMs = msVals.length ? Math.round(Math.min(...msVals)) : null;
+    statsEl.textContent =
+      `${total} probes · ${upPct}% up · avg ${avgMs != null ? avgMs + 'ms' : '—'} · min ${minMs != null ? minMs + 'ms' : '—'} · max ${Math.round(rawMax)}ms`;
+  }
+}
 
-  // ── Summary table — adaptive bucketing ────────────────────────
-  if (sumEl && summary.length) {
-    // Pick bucket size based on selected range
-    let _bSec;
-    if      (minutes <= 5760)   _bSec = 3600;       // hourly  (≤4d)
-    else if (minutes <= 64800)  _bSec = 86400;      // daily   (≤45d)
-    else if (minutes <= 288000) _bSec = 7 * 86400;  // weekly  (≤200d)
-    else                        _bSec = 30 * 86400; // monthly (>200d)
-    // Re-aggregate hourly API rows into chosen buckets (timezone-aligned)
-    const _tzOff = new Date().getTimezoneOffset() * 60;
-    const _buckets = {};
-    for (const r of summary) {
-      const _bKey = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
-      if (!_buckets[_bKey]) _buckets[_bKey] = {ts: _bKey, ok: 0, fail: 0, wsum: 0, wcnt: 0, min_ms: Infinity, max_ms: -Infinity};
-      const _b = _buckets[_bKey];
-      _b.ok   += r.ok;
-      _b.fail += r.fail;
-      if (r.avg_ms != null) { _b.wsum += r.avg_ms * r.ok; _b.wcnt += r.ok; }
-      if (r.min_ms != null) _b.min_ms = Math.min(_b.min_ms, r.min_ms);
-      if (r.max_ms != null) _b.max_ms = Math.max(_b.max_ms, r.max_ms);
-    }
-    const _bRows = Object.values(_buckets).sort((a, b) => a.ts - b.ts);
-    const rows = _bRows.map(_b => {
-      const d = new Date(_b.ts * 1000);
-      let lbl;
-      if (_bSec < 86400)       lbl = d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-      else if (_bSec < 604800) lbl = d.toLocaleDateString([],{month:'short',day:'numeric'});
-      else                     lbl = d.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
-      const upPct = _b.ok + _b.fail > 0 ? Math.round(_b.ok / (_b.ok + _b.fail) * 100) : 100;
-      const avg   = _b.wcnt > 0 ? Math.round(_b.wsum / _b.wcnt * 10) / 10 : null;
-      const minMs = _b.min_ms === Infinity  ? null : _b.min_ms;
-      const maxMs = _b.max_ms === -Infinity ? null : _b.max_ms;
-      return `<tr>
-        <td>${lbl}</td>
-        <td style="color:var(--up)">${_b.ok}↑</td>
-        <td style="color:${_b.fail?'var(--down)':'var(--text3)'}">${_b.fail}↓</td>
-        <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
-        <td>${avg!=null?avg+'ms':'—'}</td>
-        <td>${minMs!=null?minMs+'ms':'—'}</td>
-        <td>${maxMs!=null?maxMs+'ms':'—'}</td>
-      </tr>`;
-    }).join('');
-    sumEl.innerHTML = `<table class="dm-hist-tbl">
-      <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  } else if (sumEl) { sumEl.innerHTML = ''; }
+function _buildSummaryTable(sumEl, summary, minutes) {
+  if (!sumEl) return;
+  if (!summary.length) { sumEl.innerHTML = ''; return; }
+  let _bSec;
+  if      (minutes <= 5760)   _bSec = 3600;
+  else if (minutes <= 64800)  _bSec = 86400;
+  else if (minutes <= 288000) _bSec = 7 * 86400;
+  else                        _bSec = 30 * 86400;
+  const _tzOff = new Date().getTimezoneOffset() * 60;
+  const _buckets = {};
+  for (const r of summary) {
+    const _bKey = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+    if (!_buckets[_bKey]) _buckets[_bKey] = {ts:_bKey, ok:0, fail:0, wsum:0, wcnt:0, min_ms:Infinity, max_ms:-Infinity, lsum:0, jsum:0, cnt:0};
+    const _b = _buckets[_bKey];
+    _b.ok   += r.ok;
+    _b.fail += r.fail;
+    if (r.avg_ms != null) { _b.wsum += r.avg_ms * r.ok; _b.wcnt += r.ok; }
+    if (r.min_ms != null) _b.min_ms = Math.min(_b.min_ms, r.min_ms);
+    if (r.max_ms != null) _b.max_ms = Math.max(_b.max_ms, r.max_ms);
+    _b.lsum += r.loss_pct  || 0;
+    _b.jsum += r.jitter_ms || 0;
+    _b.cnt++;
+  }
+  const rows = Object.values(_buckets).sort((a, b) => a.ts - b.ts).map(_b => {
+    const d = new Date(_b.ts * 1000);
+    let lbl;
+    if      (_bSec < 86400)  lbl = d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    else if (_bSec < 604800) lbl = d.toLocaleDateString([],{month:'short',day:'numeric'});
+    else                     lbl = d.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+    const upPct  = _b.ok + _b.fail > 0 ? Math.round(_b.ok / (_b.ok + _b.fail) * 100) : 100;
+    const avg    = _b.wcnt > 0 ? Math.round(_b.wsum / _b.wcnt * 10) / 10 : null;
+    const minMs  = _b.min_ms ===  Infinity ? null : _b.min_ms;
+    const maxMs  = _b.max_ms === -Infinity ? null : _b.max_ms;
+    const loss   = _b.cnt > 0 ? (_b.lsum / _b.cnt).toFixed(1) : '0.0';
+    const jitter = _b.cnt > 0 ? (_b.jsum / _b.cnt).toFixed(1) : '0.0';
+    const lossPct = parseFloat(loss);
+    const rowCls = lossPct > 20 ? 'hrow-crit' : lossPct > 5 ? 'hrow-warn' : '';
+    return `<tr class="${rowCls}">
+      <td>${lbl}</td>
+      <td style="color:var(--up)">${_b.ok}↑</td>
+      <td style="color:${_b.fail?'var(--down)':'var(--text3)'}">${_b.fail}↓</td>
+      <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
+      <td>${avg!=null?avg+'ms':'—'}</td>
+      <td>${minMs!=null?minMs+'ms':'—'}</td>
+      <td>${maxMs!=null?maxMs+'ms':'—'}</td>
+      <td style="color:${lossPct>5?'var(--warn)':'var(--text2)'}">${loss}%</td>
+      <td style="color:rgba(188,130,255,.85)">${jitter}ms</td>
+    </tr>`;
+  }).join('');
+  sumEl.innerHTML = `<table class="dm-hist-tbl">
+    <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th><th>Loss</th><th>Jitter</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function dmToggleAutoRefresh(did, sid) {
+  if (!S._arTimers) S._arTimers = {};
+  const key = `${did}/${sid}`;
+  const btn = document.getElementById(`ar-${did}-${sid}`);
+  if (S._arTimers[key]) {
+    clearInterval(S._arTimers[key]);
+    delete S._arTimers[key];
+    if (btn) { btn.textContent = 'Auto'; btn.classList.remove('active'); }
+  } else {
+    S._arTimers[key] = setInterval(() => dmHistReload(did, sid), 30000);
+    if (btn) { btn.textContent = 'Auto ●'; btn.classList.add('active'); }
+  }
+}
+
+function _dmStopAR(did, sid) {
+  if (!S._arTimers) return;
+  const key = `${did}/${sid}`;
+  if (S._arTimers[key]) { clearInterval(S._arTimers[key]); delete S._arTimers[key]; }
+}
+
+function dmHistReload(did, sid) {
+  const histTab = document.getElementById(`dm-tab-history-${did}-${sid}`);
+  if (!histTab) { _dmStopAR(did, sid); return; }
+  const activePill = histTab.querySelector('.dm-hist-pill.active');
+  const minutes = activePill ? +activePill.dataset.m : 1440;
+  loadDmHistory(did, sid, minutes);
 }
 
 // Thin wrapper used by sensor detail modal (preserves existing call sites)
