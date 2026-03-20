@@ -548,7 +548,7 @@ function openDetail(did,sid,initialTab){
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto</button>
       </div>
       <div style="position:relative">
-        <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
+        <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="420"></canvas>
         <div class="dm-hist-tip" id="tip-${did}-${sid}"></div>
       </div>
       <div id="dm-hist-summary-${did}-${sid}" class="dm-hist-summary"></div>
@@ -763,7 +763,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
 function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   if (!canvas) return;
   canvas.width = canvas.offsetWidth || 660;
-  const W = canvas.width, H = canvas.height || 320;
+  const W = canvas.width, H = canvas.height || 420;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
   const plotW = W - LEFT - RIGHT;
   const plotH = H - BOT - TOP;
@@ -817,21 +817,24 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     }
   }
 
-  // ── 2. Min/Max band ───────────────────────────────────────────
+  // ── 2. Min/Max lines ──────────────────────────────────────────
   if (togBand) {
     const bandPts = summary.filter(r => r.min_ms != null && r.max_ms != null);
     if (bandPts.length > 1) {
+      // Max line — pink/magenta
       ctx.beginPath();
       bandPts.forEach((r, i) => {
         const x = xOf(r.ts + 1800);
-        if (i === 0) ctx.moveTo(x, yOf(r.max_ms));
-        else ctx.lineTo(x, yOf(r.max_ms));
+        i === 0 ? ctx.moveTo(x, yOf(r.max_ms)) : ctx.lineTo(x, yOf(r.max_ms));
       });
-      for (let i = bandPts.length - 1; i >= 0; i--)
-        ctx.lineTo(xOf(bandPts[i].ts + 1800), yOf(bandPts[i].min_ms));
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(47,129,247,.10)';
-      ctx.fill();
+      ctx.strokeStyle = 'rgba(244,114,182,.8)'; ctx.lineWidth = 1.5; ctx.stroke();
+      // Min line — teal/green
+      ctx.beginPath();
+      bandPts.forEach((r, i) => {
+        const x = xOf(r.ts + 1800);
+        i === 0 ? ctx.moveTo(x, yOf(r.min_ms)) : ctx.lineTo(x, yOf(r.min_ms));
+      });
+      ctx.strokeStyle = 'rgba(35,209,139,.7)'; ctx.lineWidth = 1.5; ctx.stroke();
     }
   }
 
@@ -873,28 +876,10 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     }
   }
 
-  // ── 5. Avg latency line + gradient fill ───────────────────────
+  // ── 5. Avg latency line ───────────────────────────────────────
   if (togAvg) {
     const pts = samples.filter(p => p.ok && p.ms != null).map(p => ({ x: xOf(p.ts), y: yOf(p.ms) }));
     if (pts.length > 1) {
-      const g = ctx.createLinearGradient(0, TOP, 0, H - BOT);
-      g.addColorStop(0,    'rgba(60,140,255,.38)');
-      g.addColorStop(0.55, 'rgba(47,129,247,.12)');
-      g.addColorStop(1,    'rgba(47,129,247,.02)');
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, H - BOT);
-      // bezier fill path (follows smooth curve)
-      ctx.lineTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const cpx = (pts[i].x + pts[i+1].x) / 2;
-        const cpy = (pts[i].y + pts[i+1].y) / 2;
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, cpx, cpy);
-      }
-      ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
-      ctx.lineTo(pts[pts.length - 1].x, H - BOT);
-      ctx.closePath();
-      ctx.fillStyle = g; ctx.fill();
-      // Smooth bezier line
       ctx.beginPath();
       ctx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length - 1; i++) {
