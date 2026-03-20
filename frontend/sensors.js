@@ -618,12 +618,13 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   ]);
   const samples = hr.samples || [];
   const summary = sr.summary || [];
-  _histCache[`${did}/${sid}`] = { samples, summary, minutes };
+  const windowStart = Date.now() / 1000 - minutes * 60;
+  _histCache[`${did}/${sid}`] = { samples, summary, minutes, windowStart };
   _buildKpiBar(summary, did, sid);
   _setupHistTooltip(canvas, summary, did, sid, minutes);
   // canvas may have been re-looked-up inside _setupHistTooltip; re-fetch by id to be safe
   const c = document.getElementById(`dm-hist-canvas-${did}-${sid}`) || canvas;
-  _drawHistCanvas(c, statsEl, did, sid, summary, samples, minutes);
+  _drawHistCanvas(c, statsEl, did, sid, summary, samples, minutes, windowStart);
   if (sumEl) _buildSummaryTable(sumEl, summary, minutes);
 }
 
@@ -632,7 +633,7 @@ function dmHistRedraw(did, sid) {
   if (!cache) return;
   const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
   const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
-  if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples, cache.minutes);
+  if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples, cache.minutes, cache.windowStart);
 }
 
 function _buildKpiBar(summary, did, sid) {
@@ -686,16 +687,22 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
     const mx = (e.clientX - rect.left) * scaleX;
     const plotW = canvas.width - LEFT - RIGHT;
     if (mx < LEFT || mx > canvas.width - RIGHT) { tip.classList.remove('tip-visible'); return; }
-    const hoverTs = (Date.now() / 1000 - minutes * 60) + (mx - LEFT) / plotW * (minutes * 60);
+    const _cachedWS = (_histCache[`${did}/${sid}`] || {}).windowStart;
+    const _winRef = _cachedWS ?? (Date.now() / 1000 - minutes * 60);
+    const hoverTs = _winRef + (mx - LEFT) / plotW * (minutes * 60);
     let nearest = null, bestDist = Infinity;
     for (const r of summary) {
       const d = Math.abs(r.ts + 1800 - hoverTs);
       if (d < bestDist) { bestDist = d; nearest = r; }
     }
     if (!nearest) { tip.classList.remove('tip-visible'); return; }
-    const d = new Date(nearest.ts * 1000);
-    const lbl = d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' +
-                d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    // Use actual cursor timestamp (hoverTs), not the hourly bucket boundary
+    const _hd = new Date(hoverTs * 1000);
+    const _datePart = _hd.toLocaleDateString([], {month:'short', day:'numeric'});
+    const _timePart = minutes <= 60
+      ? _hd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false})
+      : _hd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false});
+    const lbl = _datePart + ' ' + _timePart;
     const isDown = nearest.ok === 0 && nearest.fail > 0;
     const statusColor = isDown ? 'var(--down)' : 'var(--up)';
     const statusText  = isDown ? '● DOWN' : '● UP';
@@ -761,7 +768,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
 
       // Compute bucket average at cursor position — same logic as _drawHistCanvas
       const TARGET = 300;
-      const _winStart = Date.now() / 1000 - minutes * 60;
+      const _winStart = cache.windowStart ?? (Date.now() / 1000 - minutes * 60);
       const _bucketSec = (minutes * 60) / TARGET;
       const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
       let _bSum = 0, _bN = 0;
@@ -805,7 +812,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
   }, { signal });
 }
 
-function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
+function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, windowStart) {
   if (!canvas) return;
   canvas.width = canvas.offsetWidth || 660;
   const W = canvas.width, H = canvas.height || 320;
@@ -834,7 +841,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   const togLoss   = document.getElementById(`tog-loss-${did}-${sid}`)?.checked ?? true;
   const togJitter = document.getElementById(`tog-jitter-${did}-${sid}`)?.checked ?? false;
 
-  const windowStart = Date.now() / 1000 - minutes * 60;
+  // Use fixed windowStart from cache (set at fetch time) so redraws don't shift the chart
+  if (!windowStart) windowStart = Date.now() / 1000 - minutes * 60;
   const tsRange = minutes * 60;
   const windowEnd = windowStart + tsRange;
   const xOf = ts => LEFT + (ts - windowStart) / tsRange * plotW;
