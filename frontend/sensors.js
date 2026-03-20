@@ -812,21 +812,21 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
 
   // ── 1. Grid — horizontal lines + Y labels (drawn FIRST, behind all data) ──
   ctx.lineWidth = 1;
-  ctx.font = '10px Inter,sans-serif';
+  ctx.font = 'bold 11px Inter,sans-serif';
   [0.2, 0.4, 0.6, 0.8, 1.0].forEach(f => {
     const y = (H - BOT) - f * plotH;
     const msLbl = Math.round(maxY * f);
     ctx.strokeStyle = 'rgba(255,255,255,.08)';
     ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(139,148,158,.8)'; ctx.textAlign = 'right';
-    ctx.fillText(msLbl >= 1000 ? (msLbl / 1000).toFixed(1) + 's' : msLbl + 'ms', LEFT - 4, y + 3);
+    ctx.fillStyle = 'rgba(200,210,220,.92)'; ctx.textAlign = 'right';
+    ctx.fillText(msLbl >= 1000 ? (msLbl / 1000).toFixed(1) + 's' : msLbl + 'ms', LEFT - 4, y + 4);
     if (togLoss) {
-      ctx.fillStyle = 'rgba(240,165,0,.6)'; ctx.textAlign = 'left';
-      ctx.fillText(Math.round(100 * f) + '%', W - RIGHT + 4, y + 3);
+      ctx.fillStyle = 'rgba(240,165,0,.9)'; ctx.textAlign = 'left';
+      ctx.fillText(Math.round(100 * f) + '%', W - RIGHT + 4, y + 4);
     }
   });
-  ctx.fillStyle = 'rgba(139,148,158,.5)'; ctx.textAlign = 'right';
-  ctx.fillText('0', LEFT - 4, H - BOT + 3);
+  ctx.fillStyle = 'rgba(200,210,220,.6)'; ctx.textAlign = 'right';
+  ctx.fillText('0', LEFT - 4, H - BOT + 4);
   // Y/X axis border lines
   ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(LEFT, TOP); ctx.lineTo(LEFT, H - BOT); ctx.stroke();
@@ -856,8 +856,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     const lbl = _gInt < 86400
       ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
       : d.toLocaleDateString([], {month:'short',day:'numeric'});
-    ctx.fillStyle = 'rgba(139,148,158,.7)'; ctx.font = '9px Inter,sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(lbl, x, H - 4);
+    ctx.fillStyle = 'rgba(200,210,220,.85)'; ctx.font = '11px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(lbl, x, H - 3);
   }
 
   // ── 3. Downtime spans ─────────────────────────────────────────
@@ -976,7 +976,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
   }
 
   // ── 8. Threshold lines ────────────────────────────────────────
-  ctx.font = '10px Inter,sans-serif';
+  ctx.font = 'bold 11px Inter,sans-serif';
   if (_sen?.warn_ms > 0 && _sen.warn_ms <= maxY) {
     const wy = yOf(_sen.warn_ms);
     ctx.strokeStyle = 'rgba(240,165,0,.5)'; ctx.lineWidth = 1;
