@@ -9,7 +9,7 @@ ExecStart=/usr/bin/python3 /opt/pingwatch/server.py
 Restart=on-failure
 RestartSec=5
 
-# Run as a dedicated user for security (optional — see install note below)
+# Run as the installing user — patched automatically by start.sh --install-service
 # User=pingwatch
 # Group=pingwatch
 

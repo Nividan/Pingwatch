@@ -32,11 +32,18 @@ if [ "${1:-}" = "--install-service" ]; then
         echo "[ERROR] pingwatch.service not found in $SCRIPT_DIR"
         exit 1
     fi
+    # Determine the actual user who invoked sudo (fall back to current user)
+    ACTUAL_USER="${SUDO_USER:-$(whoami)}"
+    ACTUAL_GROUP="$(id -gn "$ACTUAL_USER" 2>/dev/null || echo "$ACTUAL_USER")"
     # Patch WorkingDirectory and ExecStart to the actual install path
     sed "s|/opt/pingwatch|$SCRIPT_DIR|g" "$SERVICE_SRC" > "$SERVICE_DST"
     # Replace python path with the actual python3 on this system
     PYPATH="$(command -v python3)"
     sed -i "s|/usr/bin/python3|$PYPATH|g" "$SERVICE_DST"
+    # Set User/Group so the service runs as the file owner, not root
+    # (CapabilityBoundingSet=CAP_NET_BIND_SERVICE would strip root's DAC_OVERRIDE)
+    sed -i "s|^# User=pingwatch|User=$ACTUAL_USER|" "$SERVICE_DST"
+    sed -i "s|^# Group=pingwatch|Group=$ACTUAL_GROUP|" "$SERVICE_DST"
     systemctl daemon-reload
     systemctl enable pingwatch
     systemctl start  pingwatch

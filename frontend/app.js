@@ -174,6 +174,7 @@ async function submitLogin(){
     clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
+    S.role=d.role||'viewer';
     hideLogin();
     onAuthenticated(d.username);
   }catch(e){
