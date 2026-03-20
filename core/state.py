@@ -540,6 +540,13 @@ class MonitorState:
                 for d in dead:
                     try: self._sse.remove(d)
                     except ValueError: pass
+        if event in ('flap_down', 'flap_recovered', 'snmp_trap',
+                     'threshold_critical', 'threshold_warning'):
+            try:
+                from monitoring.syslog_client import syslog_send
+                syslog_send(event, data)
+            except Exception:
+                pass
 
     def all_devices(self):
         with self._lock:

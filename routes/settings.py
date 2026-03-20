@@ -7,6 +7,8 @@ Handles: /api/settings (GET/PATCH), /api/server_info (GET),
 
 import json
 import os
+import sys
+import threading
 import time
 
 import core.app_state as app_state
@@ -64,6 +66,12 @@ def handle(h, method, path, body):
             "backup_sched_time":    _settings.get("backup_sched_time",  "02:00"),
             "backup_sched_days":    str(_settings.get("backup_sched_days",  "1,2,3,4,5,6,7")),
             "backup_keep":          int(_settings.get("backup_keep", 3)),
+            # Group H — syslog forwarding
+            "syslog_enabled":      int(_settings.get("syslog_enabled",      0)),
+            "syslog_host":         _settings.get("syslog_host",         ""),
+            "syslog_port":         int(_settings.get("syslog_port",         514) or 514),
+            "syslog_proto":        _settings.get("syslog_proto",        "udp"),
+            "syslog_min_severity": _settings.get("syslog_min_severity", "warning"),
         })
         return True
 
@@ -109,6 +117,10 @@ def handle(h, method, path, body):
             _settings.load({"snr_type_defaults": _raw})
             _db_enqueue(lambda _v=_raw: db_save_settings({"snr_type_defaults": _v}))
         # Backup scheduler settings
+        if "syslog_enabled" in body:
+            _sye = "1" if body["syslog_enabled"] else "0"
+            _settings.load({"syslog_enabled": _sye})
+            _db_enqueue(lambda _v=_sye: db_save_settings({"syslog_enabled": _v}))
         if "backup_sched_enabled" in body:
             _bse = "1" if body["backup_sched_enabled"] else "0"
             _settings.load({"backup_sched_enabled": _bse})
@@ -131,6 +143,7 @@ def handle(h, method, path, body):
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window",
             "org_name", "latency_good_ms", "latency_warn_ms",
+            "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):
             if _k in body:
                 _val = str(body[_k]).strip()
@@ -144,11 +157,20 @@ def handle(h, method, path, body):
         h._json(200, {"ok": True})
         return True
 
+    # ── /api/settings/syslog_test POST ───────────────────────────
+    if path == "/api/settings/syslog_test" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from monitoring.syslog_client import send_test_syslog
+        ok, msg = send_test_syslog()
+        h._json(200 if ok else 500, {"ok": ok, "msg": msg})
+        return True
+
     # ── /api/settings/smtp_test POST ─────────────────────────────
     if path == "/api/settings/smtp_test" and method == "POST":
         user, _ = h._require("admin")
         if not user: return True
-        from smtp_alert import test_smtp
+        from monitoring.smtp_alert import test_smtp
         cfg = {
             "host":      (body.get("smtp_host") or "").strip(),
             "port":      body.get("smtp_port", 587),
@@ -206,6 +228,53 @@ def handle(h, method, path, body):
         widgets_json = json.dumps(widgets)
         _db_enqueue(lambda _u=user, _j=widgets_json: db_save_dashboard(_u, _j))
         h._json(200, {"ok": True})
+        return True
+
+    # ── /api/server/restart POST ──────────────────────────────────
+    if path == "/api/server/restart" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        log.info(f"Server restart requested by '{user}'")
+        h._json(200, {"ok": True, "msg": "Server is restarting…"})
+        try: h.wfile.flush()
+        except Exception: pass
+        def _do_restart():
+            time.sleep(1.5)
+            from db import db_flush_samples
+            try: db_flush_samples()
+            except Exception: pass
+            if app_state.tray_icon is not None:
+                try: app_state.tray_icon.stop()
+                except Exception: pass
+                time.sleep(0.2)
+            _cmd = [sys.executable] + sys.argv
+            if os.name == "nt":
+                import subprocess as _sp
+                _sp.Popen(_cmd, creationflags=_sp.CREATE_NEW_CONSOLE)
+                os._exit(0)
+            else:
+                os.execv(sys.executable, _cmd)
+        threading.Thread(target=_do_restart, daemon=True).start()
+        return True
+
+    # ── /api/server/shutdown POST ─────────────────────────────────
+    if path == "/api/server/shutdown" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        log.info(f"Server shutdown requested by '{user}'")
+        h._json(200, {"ok": True, "msg": "Server is shutting down…"})
+        try: h.wfile.flush()
+        except Exception: pass
+        def _do_shutdown():
+            time.sleep(1.0)
+            from db import db_flush_samples
+            try: db_flush_samples()
+            except Exception: pass
+            if app_state.tray_icon is not None:
+                try: app_state.tray_icon.stop()
+                except Exception: pass
+            os._exit(0)
+        threading.Thread(target=_do_shutdown, daemon=True).start()
         return True
 
     return False

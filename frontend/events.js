@@ -527,21 +527,6 @@ function _evtExportJson() {
   _evtDownload('pingwatch-events.json', JSON.stringify(out, null, 2), 'application/json');
 }
 
-function _evtExportSyslog() {
-  // RFC 3164 style: <priority> timestamp hostname appname: message
-  const SEV_PRI = { critical: 2, warning: 4, recovery: 5, info: 6 };
-  const events = _applyEvtFilters();
-  const lines = events.map(d => {
-    const pri = SEV_PRI[evtSeverity(d)] || 6;
-    const isTrap = d._direction === 'trap';
-    const host = isTrap ? (d.src_ip||'unknown') : (d.host||'unknown');
-    const device = isTrap ? (d.dname||d.src_ip||'unknown') : (d.dname||'unknown');
-    const sensor = isTrap ? (d.trap_oid||'') : (d.sname||'');
-    const msg = `[${(d._direction||'').toUpperCase()}] ${device}${sensor?' '+sensor:''} ${d.detail||''}`.trim();
-    return `<${pri}>${d.ts||''} ${host} PingWatch: ${msg}`;
-  });
-  _evtDownload('pingwatch-events.log', lines.join('\n'), 'text/plain');
-}
 
 function _evtDownload(filename, content, mime) {
   const a = document.createElement('a');

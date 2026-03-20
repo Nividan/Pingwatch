@@ -2,7 +2,9 @@
 db/core.py — Single-writer queue, schema init, and user seeding.
 """
 
+import os
 import queue
+import shutil
 import sqlite3
 import threading
 import time
@@ -38,6 +40,15 @@ def _db_enqueue(fn):
 # ── Schema init ──────────────────────────────────────────────────
 
 def db_init():
+    # ── Pre-migration safety backup (runs once per DB file) ──────────────
+    _bak = str(DB_PATH) + ".pre_migrate.bak"
+    if not os.path.exists(_bak) and os.path.exists(DB_PATH):
+        try:
+            shutil.copy2(DB_PATH, _bak)
+            log.info(f"DB backup created: {_bak}")
+        except Exception as _be:
+            log.warning(f"DB pre-migration backup failed (non-fatal): {_be}")
+
     con = sqlite3.connect(DB_PATH)
     try:
         con.execute("PRAGMA journal_mode=WAL")   # safe concurrent reads while probes write
@@ -178,6 +189,18 @@ def db_init():
             "ON backup_runs(did, ts DESC)"
         )
         con.commit()
+        # ── Schema version table (added in v0.7) ─────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied TEXT NOT NULL,
+                notes   TEXT DEFAULT ''
+            )""")
+        # Seed version 1 if empty — covers both fresh installs and old DBs
+        if not con.execute("SELECT 1 FROM schema_version").fetchone():
+            con.execute("INSERT INTO schema_version VALUES (1, datetime('now'), 'baseline — cross-platform release')")
+        con.commit()
+
         # Seed defaults in app_settings if not present
         for _k, _v in [
             ("session_ttl",        "86400"),
@@ -208,6 +231,12 @@ def db_init():
             ("tls_cert_source",      ""),    # "generated" | "imported" | "uploaded"
             ("tls_cn",               ""),    # CN/hostname used when generating self-signed cert
             ("http_redirect",        "1"),   # 0=off, 1=redirect HTTP→HTTPS (default on for fresh installs)
+            # Syslog forwarding
+            ("syslog_enabled",      "0"),
+            ("syslog_host",         ""),
+            ("syslog_port",         "514"),
+            ("syslog_proto",        "udp"),
+            ("syslog_min_severity", "warning"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))

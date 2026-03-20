@@ -1,0 +1,28 @@
+[Unit]
+Description=PingWatch Network Monitor
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pingwatch
+ExecStart=/usr/bin/python3 /opt/pingwatch/server.py
+Restart=on-failure
+RestartSec=5
+
+# Run as the installing user — patched automatically by start.sh --install-service
+# User=pingwatch
+# Group=pingwatch
+
+# Allow binding to privileged ports (80, 443, 162) without full root
+# CAP_NET_RAW   — required for ICMP ping (raw socket)
+# CAP_NET_BIND_SERVICE — required for ports < 1024
+AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
+
+# Suppress console output — logs go to journald (journalctl -u pingwatch)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pingwatch
+
+[Install]
+WantedBy=multi-user.target
