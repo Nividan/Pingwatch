@@ -96,12 +96,12 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 
    **Windows:**
    ```bat
-   start.bat
+   start.bat (with admin priv)
    ```
 
    **Linux / macOS:**
    ```bash
-   bash start.sh
+   sudo bash start.sh
    ```
 
 The first-run wizard checks required packages, configures HTTP/HTTPS ports, generates a TLS certificate, sets firewall rules, and initialises the database — all interactively. Subsequent launches skip the wizard and go straight to the server.
