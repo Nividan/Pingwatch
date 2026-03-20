@@ -990,25 +990,32 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
       ctx.shadowBlur = 0;
     };
 
-    if (minutes > 120) {
-      // Long window: hourly summary avg — clean, readable
-      let pts = summary
-        .filter(r => r.avg_ms != null)
-        .map(r => ({ x: xOf(r.ts + 1800), y: yOf(r.avg_ms), ts: r.ts + 1800 }));
-      // Downsample summary for very long windows (7d/30d → 168/720 hourly pts)
-      if (pts.length > plotW) {
-        const stride = Math.ceil(pts.length / plotW);
-        pts = pts.filter((_, i) => i % stride === 0);
+    const okSamples = samples.filter(p => p.ok && p.ms != null);
+    if (okSamples.length > 1) {
+      // Bucket-average into at most 300 points — naturally adapts to every time frame:
+      //   1h  (~120 raw)  → drawn as-is, full per-probe detail
+      //   6h  (~720 raw)  → 300 buckets of ~72 s each, 2–3 samples averaged → shape preserved
+      //   24h (~2880 raw) → 300 buckets of ~288 s, ~10 samples/bucket → smooth trend
+      //   7d+ (≤10k raw)  → 300 buckets, 30+ samples/bucket → clean trend line
+      const TARGET = 300;
+      let pts;
+      if (okSamples.length <= TARGET) {
+        pts = okSamples.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
+      } else {
+        const bucketSec = tsRange / TARGET;
+        const acc = Array.from({ length: TARGET }, () => ({ sum: 0, n: 0 }));
+        for (const p of okSamples) {
+          const bi = Math.min(TARGET - 1, Math.floor((p.ts - windowStart) / bucketSec));
+          if (bi >= 0) { acc[bi].sum += p.ms; acc[bi].n++; }
+        }
+        pts = [];
+        for (let i = 0; i < TARGET; i++) {
+          if (!acc[i].n) continue;
+          const ts = windowStart + (i + 0.5) * bucketSec;
+          pts.push({ x: xOf(ts), y: yOf(acc[i].sum / acc[i].n), ts });
+        }
       }
-      _drawLine(pts, 3);
-    } else {
-      // Short window: raw samples with downsampling
-      const okSamples = samples.filter(p => p.ok && p.ms != null);
-      if (okSamples.length > 1) {
-        const stride = okSamples.length > plotW ? Math.ceil(okSamples.length / plotW) : 1;
-        const ds = stride > 1 ? okSamples.filter((_, i) => i % stride === 0) : okSamples;
-        _drawLine(ds.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts })), 4);
-      }
+      _drawLine(pts, 4);
     }
   }
 
@@ -1033,8 +1040,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes) {
     ctx.fillText('crit ' + _sen.crit_ms + 'ms', LEFT + 4, cy - 3);
   }
 
-  // ── 9. Failed ticks (only for short windows — too dense at >2h) ──
-  if (minutes <= 120) {
+  // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──
+  if (minutes <= 60) {
     ctx.strokeStyle = 'rgba(248,81,73,.55)'; ctx.lineWidth = 1;
     samples.filter(p => !p.ok).forEach(p => {
       const x = xOf(p.ts);
