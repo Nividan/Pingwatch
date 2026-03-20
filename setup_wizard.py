@@ -793,8 +793,60 @@ def step5_firewall():
         rules.append(("TCP", _state["tls_port"], "PingWatch HTTPS"))
     rules.append(("UDP", _state["snmp_port"],  "PingWatch SNMP traps"))
 
-    _tag("info", "The following firewall rules will be added:")
-    for proto, port, desc in rules:
+    # ── Check which rules already exist ──────────────────────
+    def _win_has(name):
+        r = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
+            capture_output=True,
+        )
+        return r.returncode == 0
+
+    def _ufw_status():
+        """Return ufw status text, or '' if unavailable."""
+        try:
+            r = subprocess.run(["sudo", "ufw", "status"], capture_output=True, text=True)
+            return r.stdout if r.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    def _fcmd_ports():
+        """Return firewall-cmd --list-ports text, or '' if unavailable."""
+        try:
+            r = subprocess.run(["sudo", "firewall-cmd", "--list-ports"],
+                               capture_output=True, text=True)
+            return r.stdout if r.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    # Classify each rule as existing or missing
+    existing, missing = [], []
+    if _sys == "Windows":
+        for rule in rules:
+            (existing if _win_has(rule[2]) else missing).append(rule)
+    elif _sys == "Linux" and _sh.which("ufw"):
+        _ufw = _ufw_status()
+        for rule in rules:
+            proto, port, name = rule
+            (existing if f"{port}/{proto.lower()}" in _ufw else missing).append(rule)
+    elif _sys == "Linux" and _sh.which("firewall-cmd"):
+        _fcmd = _fcmd_ports()
+        for rule in rules:
+            proto, port, name = rule
+            (existing if f"{port}/{proto.lower()}" in _fcmd else missing).append(rule)
+    else:
+        missing = list(rules)   # can't check — assume all missing
+
+    for proto, port, desc in existing:
+        _tag("ok", f"Rule already in place: {proto} {port} — {desc}")
+
+    if not missing:
+        _tag("ok", "All firewall rules already configured — nothing to do")
+        print()
+        return
+
+    print()
+    _tag("info", "The following rules still need to be added:")
+    for proto, port, desc in missing:
         _tag("info", f"  {proto} {port:5d}  — {desc}")
     print()
 
@@ -803,15 +855,9 @@ def step5_firewall():
         print()
         return
 
+    # ── Add only the missing rules ────────────────────────────
     if _sys == "Windows":
-        for proto, port, name in rules:
-            chk = subprocess.run(
-                ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
-                capture_output=True,
-            )
-            if chk.returncode == 0:
-                _tag("ok", f"Rule already exists: {name}")
-                continue
+        for proto, port, name in missing:
             r = subprocess.run(
                 ["netsh", "advfirewall", "firewall", "add", "rule",
                  f"name={name}", "dir=in", "action=allow",
@@ -825,20 +871,18 @@ def step5_firewall():
 
     elif _sys == "Linux":
         if _sh.which("ufw"):
-            for proto, port, name in rules:
-                _proto = proto.lower()
-                r = subprocess.run(["sudo", "ufw", "allow", f"{port}/{_proto}"],
+            for proto, port, name in missing:
+                r = subprocess.run(["sudo", "ufw", "allow", f"{port}/{proto.lower()}"],
                                    capture_output=True)
                 if r.returncode == 0:
                     _tag("ok", f"ufw rule added: {proto} {port}")
                 else:
                     _tag("warn", f"ufw failed for {proto} {port} — add manually if needed")
         elif _sh.which("firewall-cmd"):
-            for proto, port, name in rules:
-                _proto = proto.lower()
+            for proto, port, name in missing:
                 r = subprocess.run(
                     ["sudo", "firewall-cmd", "--permanent",
-                     f"--add-port={port}/{_proto}"],
+                     f"--add-port={port}/{proto.lower()}"],
                     capture_output=True,
                 )
                 if r.returncode == 0:
@@ -847,12 +891,12 @@ def step5_firewall():
         else:
             _tag("warn", "No recognised firewall tool found (ufw / firewall-cmd).")
             _tag("info", "Add rules manually:")
-            for proto, port, _ in rules:
+            for proto, port, _ in missing:
                 _tag("info", f"  sudo iptables -A INPUT -p {proto.lower()} --dport {port} -j ACCEPT")
 
     elif _sys == "Darwin":
         _tag("info", "macOS: add rules in System Settings → Network → Firewall, or use pfctl.")
-        for proto, port, _ in rules:
+        for proto, port, _ in missing:
             _tag("info", f"  Port {port}/{proto} — allow incoming")
 
     else:
