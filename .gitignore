@@ -1,24 +1,36 @@
-# Database
+# ── Database ──────────────────────────────────────────────────
 pingwatch.db
 pingwatch.db-wal
 pingwatch.db-shm
+pingwatch.db.pre_migrate.bak
+pingwatch.db.pending_import
 
-# Logs
+# ── Device configuration backups (sensitive — never commit) ───
+backup/configs/
+
+# ── TLS certificates (generated or imported at runtime) ───────
+*.pem
+*.key
+*.crt
+*.csr
+certs/
+
+# ── Logs ──────────────────────────────────────────────────────
 logs/
 
-# Python
+# ── Python ────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 *.pyw.bak
 
-# OS
+# ── OS ────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# IDE
+# ── IDE ───────────────────────────────────────────────────────
 .vscode/
 .idea/
 
-# Claude Code — ephemeral tool files
+# ── Claude Code — ephemeral tool files ────────────────────────
 .claude/
