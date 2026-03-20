@@ -128,7 +128,7 @@ async function openSettings(){
         <div class="fl" style="margin-bottom:10px">Server Controls</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="serverRestart()">&#x21BA; Restart Server</button>
-          <button class="btn-d" style="font-size:12px;padding:7px 16px" onclick="serverShutdown()">&#x23FB; Shutdown Server</button>
+          <button class="btn-danger" style="font-size:12px;padding:7px 16px" onclick="serverShutdown()">&#x23FB; Shutdown Server</button>
         </div>
         <div class="fh" style="margin-top:8px">Restart applies pending settings changes. Shutdown stops the server process entirely.</div>
       </div>

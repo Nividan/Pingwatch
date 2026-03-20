@@ -1,7 +1,7 @@
 # PingWatch – Real-Time Network Monitoring Platform
 
 ![Python](https://img.shields.io/badge/python-3.x-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
 ![License](https://img.shields.io/github/license/Nividan/Pingwatch)
 ![Stars](https://img.shields.io/github/stars/Nividan/Pingwatch?style=social)
 [![Built with Claude](https://img.shields.io/badge/Built%20with-Claude%20AI-orange?logo=anthropic)](https://claude.ai)
@@ -15,6 +15,7 @@
 - [Installation](#installation)
 - [Usage](#usage)
 - [HTTPS / TLS](#https--tls)
+- [Syslog Forwarding](#syslog-forwarding)
 - [Screenshots](#screenshots)
 - [Device Configuration Backup](#device-configuration-backup)
 - [Architecture](#architecture)
@@ -49,7 +50,10 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - 📤 Database export and import (SQLite backup/restore, up to 2 GB)
 - 🖥 Native desktop status window with optional system-tray icon
 - 💾 Automated device configuration backup via SSH and Telnet with encrypted credential storage
-- 🧙 Interactive first-run setup wizard (`start.bat` → `setup_wizard.py`)
+- 🧙 Interactive first-run setup wizard (`start.bat` on Windows, `bash start.sh` on Linux/macOS → `setup_wizard.py`)
+- 🐧 Native Linux / macOS support — headless server mode, systemd service, auto package-manager detection
+- 📨 Syslog forwarding — RFC 5424 UDP/TCP forwarding of events to any syslog server
+- 🔁 Server restart & shutdown from the web UI (Settings → General)
 
 ### Supported Sensor Types
 
@@ -89,40 +93,62 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
    cd Pingwatch
    ```
 3. **Run the launcher — the setup wizard starts automatically on first launch:**
-   ```bash
+
+   **Windows:**
+   ```bat
    start.bat
+   ```
+
+   **Linux / macOS:**
+   ```bash
+   bash start.sh
    ```
 
 The first-run wizard checks required packages, configures HTTP/HTTPS ports, generates a TLS certificate, sets firewall rules, and initialises the database — all interactively. Subsequent launches skip the wizard and go straight to the server.
 
 To re-run the wizard on an existing install:
+
+```bat
+start.bat --setup          # Windows
+```
 ```bash
-start.bat --setup
+bash start.sh --setup      # Linux / macOS
+```
+
+**Background service (Linux — equivalent of `pingwatch.pyw`):**
+```bash
+sudo bash start.sh --install-service     # install + start systemd service
+sudo systemctl start pingwatch           # start
+sudo systemctl stop pingwatch            # stop
+sudo systemctl restart pingwatch         # restart
+sudo systemctl status pingwatch          # check status
+journalctl -u pingwatch -f               # live logs
+sudo bash start.sh --uninstall-service   # remove service
 ```
 
 
 ## Usage
 
-```bash
-# With console window (shows log output)
-start.bat
-
-# Without console window (runs as a background desktop app)
-pythonw pingwatch.pyw
-```
+| Mode | Windows | Linux / macOS |
+|------|---------|---------------|
+| Foreground (console visible) | `start.bat` | `sudo bash start.sh` |
+| Background / no console | `pythonw pingwatch.pyw` | `sudo bash start.sh --install-service` |
+| Re-run setup wizard | `start.bat --setup` | `bash start.sh --setup` |
 
 After startup, PingWatch is available at **https://localhost:8443** by default (HTTPS enabled on fresh installs).
 The first-run password is printed to the console — change it immediately in **Settings → Users**.
 
-> **Linux / macOS:** ICMP ping requires root privileges.
-> ```bash
-> sudo python3 server.py
-> ```
+### Linux / macOS Notes
+
+- **Privileged ports** (< 1024) require root. The wizard warns at startup listing all affected ports (HTTP, HTTPS, SNMP). Use `sudo`, reconfigure to ports ≥ 1024, or use the systemd service with `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
+- **Headless mode** — the wizard asks whether a desktop GUI is needed. Selecting "no" skips tkinter / pystray / Pillow entirely. The server runs as a pure background process with no GUI warnings.
+- **SNMP port 162** — requires root. Alternatively redirect with `iptables -t nat -A PREROUTING -p udp --dport 162 -j REDIRECT --to-port 1162` and use port 1162.
+- **Package managers** — the wizard auto-detects `apt` / `dnf` / `yum` / `brew` and falls back to the system package manager when `pip` is unavailable or permissions are denied.
 
 
 ## HTTPS / TLS
 
-PingWatch v0.7 ships with native HTTPS support enabled by default on fresh installs.
+PingWatch v0.7.1 ships with native HTTPS support enabled by default on fresh installs.
 
 ### How it works
 
@@ -165,6 +191,34 @@ PingWatch logs a **WARNING** at startup when the active certificate expires with
 | 1162 | UDP | SNMP trap reception |
 
 All ports are configurable in **Settings → Networking** or during the first-run wizard.
+
+
+## Syslog Forwarding
+
+PingWatch can forward events to any syslog server in **RFC 5424** format over UDP or TCP.
+
+Configure in **Settings → Syslog**:
+
+| Setting | Description |
+|---------|-------------|
+| **Host / Port** | Remote syslog server address (default port 514) |
+| **Protocol** | UDP (default) or TCP |
+| **Min Severity** | Filter threshold — only events at or above this level are forwarded: `critical` / `warning` / `down` / `recovered` / `info` |
+
+### Event mapping
+
+| PingWatch event | Syslog severity |
+|-----------------|-----------------|
+| `flap_down` | WARNING |
+| `flap_recovered` | NOTICE |
+| `snmp_trap` | Mapped from trap severity |
+
+### Implementation notes
+
+- **Format:** RFC 5424, facility LOCAL0
+- **Non-blocking:** daemon queue thread with a 500-entry bounded queue — monitor threads are never stalled
+- **Zero-restart reconfiguration:** settings are re-read on every send; toggling or reconfiguring syslog takes effect immediately
+- **Test button:** Settings → Syslog → **Send Test Message**
 
 
 ## Screenshots
@@ -294,6 +348,7 @@ Browser / Desktop GUI
         ├── monitoring/           ← Probes, alerting, topology
         │   ├── probes.py         ← Sensor engine
         │   ├── smtp_alert.py     ← Email notifications
+        │   ├── syslog_client.py  ← RFC 5424 syslog forwarding
         │   └── network_map.py    ← NTM topology data layer
         │
         ├── backup/               ← Config backup engine
@@ -324,7 +379,7 @@ This design keeps each layer independently testable and allows new sensor types 
   Handles RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` folder → auto-generate), SSL context construction, certificate metadata parsing, pair validation, and expiry warnings.
 
 - **`setup_wizard.py`** — Interactive first-run setup wizard.
-  Guides new installs through package checks, HTTP/HTTPS port selection, TLS certificate setup, SNMP port configuration, firewall rules, and desktop shortcut creation. Writes all choices to the database and exits cleanly so `start.bat` can launch `server.py`.
+  Now cross-platform (Windows / Linux / macOS). Guides new installs through package checks, HTTP/HTTPS port selection, TLS certificate setup, SNMP port configuration, firewall rules, and desktop shortcut creation. On Linux/macOS asks whether a desktop GUI is needed — if not, skips tkinter/pystray/Pillow entirely (headless server mode). Auto-detects system package manager (apt/dnf/yum/brew). Checks existing firewall rules before adding new ones. Writes all choices to the database and exits cleanly so the launcher can start `server.py`.
 
 - **`core/app_state.py`** — Shared runtime globals (`STATE`, effective ports, TLS active flag, tray-icon reference).
   Prevents circular imports between `server.py` and `routes/`.
@@ -351,7 +406,10 @@ This design keeps each layer independently testable and allows new sensor types 
   Resolves OIDs to human-readable names, identifies the sending vendor, and annotates trap events with category and severity.
 
 - **`monitoring/smtp_alert.py`** — Email alerting.
-  Sends down/up notifications via SMTP when sensor states change.
+  Sends down/up notifications via SMTP when sensor states change. Rate-limits repeated SMTP failure logs (5-minute suppression per host).
+
+- **`monitoring/syslog_client.py`** — RFC 5424 syslog forwarding client.
+  Non-blocking daemon queue thread forwards PingWatch events to any syslog server via UDP or TCP. Severity filter, no-restart reconfiguration (settings re-read on every send), bounded queue (500 entries) so monitor threads are never blocked.
 
 - **`core/logger.py`** — Central logging.
   Provides the application logger, audit logger, and an in-memory log buffer used by the desktop GUI.
@@ -363,9 +421,13 @@ This design keeps each layer independently testable and allows new sensor types 
 - **`gui.py`** — Desktop status window.
   Lightweight tkinter window with a live log view, quick-launch button, and quit control.
 
-- **`start.bat`** — Thin launcher. Elevates to admin, checks Python 3.8+, detects first run (or `--setup` flag), invokes `setup_wizard.py` when needed, then starts `server.py`.
+- **`start.bat`** — Windows launcher. Elevates to admin, checks Python 3.8+, detects first run (or `--setup` flag), invokes `setup_wizard.py` when needed, then starts `server.py`.
 
-- **`pingwatch.pyw`** — Windowless launcher (no console window).
+- **`start.sh`** — Linux/macOS launcher. Python version check, first-run wizard detection, privileged-port warning (reads configured ports from DB). Flags: `--setup` (re-run wizard), `--install-service` (patch and install `pingwatch.service` via systemd, `CAP_NET_BIND_SERVICE`), `--uninstall-service`.
+
+- **`pingwatch.pyw`** — Windows windowless launcher (no console window). Linux/macOS equivalent: `sudo bash start.sh --install-service`.
+
+- **`pingwatch.service`** — systemd unit file. Patched and installed to `/etc/systemd/system/` by `start.sh --install-service`. Uses `AmbientCapabilities=CAP_NET_BIND_SERVICE` to bind privileged ports without running the process as root.
 
 ### Route Modules (`routes/`)
 
@@ -374,7 +436,7 @@ This design keeps each layer independently testable and allows new sensor types 
 | `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/dashboard` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/import`, `/api/audit` |
@@ -439,8 +501,9 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 5. Probe results are pushed to connected browsers over **SSE** (`/events`).
 6. State changes persist automatically through the autosave loop (every 60 s) and an immediate write-queue for high-priority operations.
 7. **`monitoring/smtp_alert.py`** sends email alerts when sensors transition between up/down states.
-8. **`snmp/receiver.py`** ingests asynchronous SNMP traps and routes them into the event pipeline via **`snmp/enricher.py`**.
-9. **`backup/engine.py`** connects to devices on demand or on schedule, retrieves configuration, and stores it encrypted in the database via `db/backups.py`.
+8. **`monitoring/syslog_client.py`** forwards events to configured syslog server(s) via a non-blocking daemon queue.
+9. **`snmp/receiver.py`** ingests asynchronous SNMP traps and routes them into the event pipeline via **`snmp/enricher.py`**.
+10. **`backup/engine.py`** connects to devices on demand or on schedule, retrieves configuration, and stores it encrypted in the database via `db/backups.py`.
 
 
 ## Project Structure
@@ -449,9 +512,12 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 pingwatch/
 ├── server.py               ← HTTP/HTTPS dispatcher + entry point
 ├── setup_wizard.py         ← First-run interactive setup wizard
-├── gui.py                  ← Desktop status window
-├── pingwatch.pyw           ← Windowless launcher
-├── start.bat               ← Thin console launcher (first-run detection)
+├── gui.py                  ← Desktop status window (Windows/macOS)
+├── pingwatch.pyw           ← Windows windowless launcher
+├── start.bat               ← Windows console launcher (first-run detection)
+├── start.sh                ← Linux/macOS launcher (foreground + service install)
+├── pingwatch.service       ← systemd unit file for background service
+├── .gitattributes          ← Line-ending enforcement (start.sh → LF)
 ├── requirements.txt        ← Python dependencies
 ├── ssh_known_hosts.txt     ← SSH TOFU host key store (auto-created)
 │
@@ -469,6 +535,7 @@ pingwatch/
 │   ├── __init__.py
 │   ├── probes.py           ← Sensor engine (ICMP, HTTP, TCP, …)
 │   ├── smtp_alert.py       ← Email alerting
+│   ├── syslog_client.py    ← RFC 5424 syslog forwarding client
 │   └── network_map.py      ← NTM topology data layer
 │
 ├── backup/                 ← Device configuration backup

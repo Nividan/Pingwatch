@@ -869,6 +869,10 @@ select{cursor:pointer;appearance:none;
   transform:translateY(-1px);
 }
 .btn-p:active{transform:translateY(0)}
+.btn-danger{background:transparent;color:var(--down,#ff4444);border:1px solid var(--down,#ff4444);
+  padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-danger:hover{background:rgba(255,68,68,.12);box-shadow:0 0 14px rgba(255,68,68,.25);transform:translateY(-1px)}
+.btn-danger:active{transform:translateY(0)}
 .btn-s{background:var(--bg3);color:var(--text2);border:1px solid var(--border);padding:8px 16px;border-radius:4px;font-size:13px;font-weight:500;cursor:pointer;transition:all .12s}
 .btn-s:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
 .btn-sm{padding:5px 12px;border-radius:5px;font-size:12px;font-weight:500;cursor:pointer;
