@@ -703,6 +703,8 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
     tip.innerHTML =
       `<div style="font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:7px;` +
       `padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.1)">${lbl}</div>` +
+      `<div style="font-size:1.1rem;font-weight:700;color:#7ec8ff;text-align:center;` +
+      `margin-bottom:8px;font-variant-numeric:tabular-nums" class="tip-exact">— ms</div>` +
       `<table style="border-collapse:collapse;font-size:.76rem">` +
       `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Avg</td>` +
       `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
@@ -735,23 +737,38 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
     cctx.setLineDash([3, 3]);
     cctx.beginPath(); cctx.moveTo(mx, TOP); cctx.lineTo(mx, canvas.height - BOT); cctx.stroke();
     cctx.setLineDash([]);
-    // Highlight circle at nearest avg point
-    if (nearest.avg_ms != null) {
-      const cache = _histCache[`${did}/${sid}`];
-      if (cache) {
-        const { summary: _s, samples: _sp } = cache;
-        const _sMaxMs = _s.reduce((m, r) => Math.max(m, r.max_ms || 0), 0);
-        const _msV = _sp.filter(p => p.ok && p.ms != null).map(p => p.ms);
-        const _rawMax = Math.max(_sMaxMs, _msV.length ? Math.max(..._msV) : 0);
-        const _sen2 = S.sensors[`${did}/${sid}`];
-        const _maxY = Math.max((_sen2?.crit_ms || 0) * 1.1, _rawMax * 1.2, 10);
-        const _plotH = canvas.height - BOT - TOP;
-        const _pyOf = ms => (canvas.height - BOT) - (ms / _maxY) * _plotH;
-        const _px = LEFT + (nearest.ts + 1800 - (Date.now() / 1000 - minutes * 60)) / (minutes * 60) * (canvas.width - LEFT - RIGHT);
-        const _py = _pyOf(nearest.avg_ms);
-        cctx.beginPath(); cctx.arc(_px, _py, 4.5, 0, Math.PI * 2);
-        cctx.fillStyle = '#3b9eff'; cctx.fill();
-        cctx.strokeStyle = 'rgba(255,255,255,.85)'; cctx.lineWidth = 1.5; cctx.stroke();
+    // Find nearest raw sample and compute dot position using same scale as _drawHistCanvas
+    const cache = _histCache[`${did}/${sid}`];
+    if (cache) {
+      const { samples: _sp, summary: _s } = cache;
+      const okSp = _sp.filter(p => p.ok && p.ms != null);
+
+      // Find nearest raw sample to hover timestamp
+      let nearestSample = null, bestSampleDist = Infinity;
+      for (const p of okSp) {
+        const d = Math.abs(p.ts - hoverTs);
+        if (d < bestSampleDist) { bestSampleDist = d; nearestSample = p; }
+      }
+
+      // Compute maxY using same p95 formula as _drawHistCanvas
+      const _sorted = [...okSp.map(p => p.ms)].sort((a, b) => a - b);
+      const _p95 = _sorted[Math.floor(_sorted.length * 0.95)] ?? (_sorted[_sorted.length - 1] ?? 0);
+      const _avgMax = _s.reduce((m, r) => Math.max(m, r.avg_ms || 0), 0);
+      const _sen2 = S.sensors[`${did}/${sid}`];
+      const _maxY = Math.max(Math.max(_avgMax, _p95) * 1.4, (_sen2?.warn_ms || 0) * 1.2, 10);
+      const _plotH = canvas.height - BOT - TOP;
+      const _yOf = ms => Math.max(TOP, (canvas.height - BOT) - (Math.min(ms, _maxY) / _maxY) * _plotH);
+
+      if (nearestSample) {
+        // Inject exact sample ms into tooltip
+        const exactEl = tip.querySelector('.tip-exact');
+        if (exactEl) exactEl.textContent = nearestSample.ms + ' ms';
+
+        // Draw dot at mouse X, actual sample Y
+        const dotY = _yOf(nearestSample.ms);
+        cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
+        cctx.fillStyle = '#7ec8ff'; cctx.fill();
+        cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
       }
     }
   }, { signal });
