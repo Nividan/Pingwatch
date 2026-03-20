@@ -22,6 +22,13 @@ import socket
 import subprocess
 import sys
 
+# ── readline (enables backspace / line editing in input() on Linux/macOS) ─────
+if sys.platform != "win32":
+    try:
+        import readline  # noqa: F401
+    except ImportError:
+        pass
+
 # ── Paths (resolve relative to this script's directory) ──────────────────────
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
@@ -31,27 +38,26 @@ import core.app_state as app_state
 
 # ── ANSI colour helpers ───────────────────────────────────────────────────────
 def _enable_ansi_windows() -> bool:
-    """Enable Virtual Terminal Processing on Windows; return True if supported."""
+    """Enable Virtual Terminal Processing on Windows 10+; return True if supported."""
+    if sys.platform != "win32":
+        return True
     try:
         import ctypes, ctypes.wintypes
         kernel32 = ctypes.windll.kernel32
         ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-        INVALID_HANDLE_VALUE = ctypes.wintypes.HANDLE(-1).value
         handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-        if handle == INVALID_HANDLE_VALUE or handle == 0:
+        if not handle:
             return False
         mode = ctypes.wintypes.DWORD()
         if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
             return False
         if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
-            return True  # already on
+            return True
         return bool(kernel32.SetConsoleMode(handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
     except Exception:
         return False
 
-_COLOUR = sys.stdout.isatty() and (
-    sys.platform != "win32" or _enable_ansi_windows()
-)
+_COLOUR = sys.stdout.isatty() and _enable_ansi_windows()
 
 _C = {
     "green":  "\033[92m" if _COLOUR else "",
@@ -105,6 +111,15 @@ def _ask_yn(prompt: str, default: bool = True) -> bool:
         raise
 
 
+def _launcher_hint(setup: bool = False) -> str:
+    """Return the right command to (re-)launch PingWatch for the current platform."""
+    import platform as _plat
+    suffix = " --setup" if setup else ""
+    if _plat.system() == "Windows":
+        return f"start.bat{suffix}"
+    return f"bash {os.path.join(_BASE, 'start.sh')}{suffix}"
+
+
 def _separator(char: str = "─", width: int = 56):
     print(_C["bold"] + char * width + _C["reset"])
 
@@ -121,6 +136,7 @@ _state = {
     "tls_cn":          "",
     "org_name":        "PingWatch",
     "http_redirect":   True,
+    "headless":        False,   # True when user opts out of desktop GUI
 }
 
 # Track whether the DB was partially created (for Ctrl+C cleanup)
@@ -134,7 +150,7 @@ def _cleanup_on_abort():
         try:
             os.unlink(DB_PATH)
             print(f"\n{_C['yellow']}[WARN]  Setup aborted — partial database removed.{_C['reset']}")
-            print(       "        Run start.bat again to restart setup.")
+            print(f"        Run '{_launcher_hint()}' again to restart setup.")
         except OSError:
             pass
 
@@ -154,23 +170,25 @@ _PACKAGES = [
         "install":  None,   # stdlib — cannot be pip-installed
         "pip":      None,
         "desc":     "status window GUI",
-        "required": True,
+        "required": False,  # server runs headlessly without it
     },
     {
-        "import":   "pystray",
-        "name":     "pystray",
-        "install":  "pystray>=0.19.5",
-        "pip":      True,
-        "desc":     "system tray icon",
-        "required": False,
+        "import":       "pystray",
+        "name":         "pystray",
+        "install":      "pystray>=0.19.5",
+        "pip":          True,
+        "desc":         "system tray icon",
+        "required":     False,
+        "desktop_only": True,   # skip automatically in headless mode
     },
     {
-        "import":   "PIL",
-        "name":     "Pillow",
-        "install":  "Pillow>=10.0.0",
-        "pip":      True,
-        "desc":     "image support (tray icon)",
-        "required": False,
+        "import":       "PIL",
+        "name":         "Pillow",
+        "install":      "Pillow>=10.0.0",
+        "pip":          True,
+        "desc":         "image support (tray icon)",
+        "required":     False,
+        "desktop_only": True,   # skip automatically in headless mode
     },
     {
         "import":   "paramiko",
@@ -201,24 +219,45 @@ def _check_import(module_name: str) -> bool:
         return False
 
 
-def _pip_install(package_spec: str) -> bool:
-    """Run pip install; return True on success."""
+def _pip_install(package_spec: str) -> "tuple[bool, str]":
+    """Try pip install. Returns (success, error_snippet).
+
+    Attempts the current interpreter's pip first, then --user flag on
+    non-Windows (avoids permission errors when not running in a venv).
+    """
+    last_err = ""
+
+    # Try 1: standard pip via current interpreter
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", package_spec, "--quiet"],
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package_spec],
             capture_output=True, text=True,
         )
-        return result.returncode == 0
-    except Exception:
-        return False
+        if r.returncode == 0:
+            return True, ""
+        last_err = (r.stderr or r.stdout or "").strip()
+    except Exception as e:
+        last_err = str(e)
+
+    # Try 2: --user flag (avoids permission errors outside a venv on Linux/macOS)
+    if sys.platform != "win32":
+        try:
+            r2 = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--user", package_spec],
+                capture_output=True, text=True,
+            )
+            if r2.returncode == 0:
+                return True, ""
+            last_err = (r2.stderr or r2.stdout or last_err).strip()
+        except Exception:
+            pass
+
+    return False, last_err
 
 
 def _check_snmpget() -> bool:
-    try:
-        result = subprocess.run(["where", "snmpget"], capture_output=True)
-        return result.returncode == 0
-    except Exception:
-        return False
+    import shutil
+    return shutil.which("snmpget") is not None
 
 
 def step1_packages():
@@ -228,9 +267,15 @@ def step1_packages():
     print()
 
     all_ok = True
+    _headless = False   # set True when user opts out of desktop GUI
     for pkg in _PACKAGES:
         if _check_import(pkg["import"]):
             _tag("ok", f"{pkg['name']} — {pkg['desc']}")
+            continue
+
+        # Skip desktop-only packages silently if user chose headless mode
+        if _headless and pkg.get("desktop_only"):
+            _tag("info", f"Skipping '{pkg['name']}' — not needed in headless/server mode.")
             continue
 
         severity = "error" if pkg["required"] else "warn"
@@ -239,23 +284,127 @@ def step1_packages():
 
         if pkg["pip"] is None:
             # stdlib — cannot be pip-installed (tkinter)
-            _tag("error", "tkinter is part of the Python standard library but was not found.")
-            _tag("info",  "Re-install Python and tick 'tcl/tk and IDLE' during setup.")
-            if pkg["required"]:
-                all_ok = False
+            import platform as _plat
+            _sys = _plat.system()
+            if _sys == "Windows":
+                _tag("error", "tkinter is part of the Python standard library but was not found.")
+                _tag("info", "Re-install Python from python.org and tick 'tcl/tk and IDLE'.")
+                _tag("warn", "The GUI status window will be unavailable without tkinter.")
+                _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
+            else:
+                # On Linux/macOS ask first — servers don't need a GUI at all
+                _tag("info", "tkinter enables the native status window (desktop GUI).")
+                _tag("info", "Server/headless deployments do not need it — the web")
+                _tag("info", "dashboard is the primary interface.")
+                print()
+                _needs_gui = _ask_yn("Do you need the desktop GUI status window?", default=False)
+                if not _needs_gui:
+                    _headless = True           # also skip pystray / Pillow below
+                    _state["headless"] = True  # persisted to DB → server skips GUI
+                    _tag("ok", "Skipping tkinter — running in headless/server mode.")
+                    _tag("info", "Access PingWatch via the web dashboard in your browser.")
+                    continue
+                # User wants GUI — offer to install
+                if _sys == "Linux":
+                    _tag("info", "Install with:")
+                    _tag("info", "  Debian/Ubuntu: sudo apt-get install -y python3-tk")
+                    _tag("info", "  RHEL/Fedora:   sudo dnf install python3-tkinter")
+                    if _ask_yn("Try to install python3-tk via apt-get now?", default=True):
+                        r = subprocess.run(["sudo", "apt-get", "install", "-y", "python3-tk"],
+                                           capture_output=False)
+                        if r.returncode == 0:
+                            _tag("ok", "python3-tk installed — restart the wizard to confirm")
+                        else:
+                            _tag("warn", "Install failed — try manually, then re-run setup")
+                elif _sys == "Darwin":
+                    _tag("info", "Install with: brew install python-tk")
+                    if _ask_yn("Try to install python-tk via brew now?", default=True):
+                        r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
+                        if r.returncode == 0:
+                            _tag("ok", "python-tk installed — restart the wizard to confirm")
+                        else:
+                            _tag("warn", "Install failed — try manually, then re-run setup")
+                _tag("warn", "The GUI status window will be unavailable until tkinter is installed.")
+                _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
             continue
 
         install_now = _ask_yn(f"Install '{pkg['name']}' now?", default=True)
         if install_now:
             _tag("info", f"Installing {pkg['install']} ...")
-            ok = _pip_install(pkg["install"])
+            ok, err = _pip_install(pkg["install"])
             if ok:
                 _tag("ok", f"{pkg['name']} installed successfully")
             else:
-                _tag("error", f"Failed to install {pkg['name']}.")
-                _tag("info",  f"Fix manually: pip install {pkg['install']}")
-                if pkg["required"]:
-                    all_ok = False
+                import platform as _plat, shutil as _sh
+                _sys = _plat.system()
+
+                # Map pip package name → (apt pkg, optional extra note)
+                _apt_map = {
+                    "pystray":      ("python3-pystray", "also needs: sudo apt install python3-xlib"),
+                    "Pillow":       ("python3-pil",     None),
+                    "paramiko":     ("python3-paramiko", None),
+                    "cryptography": ("python3-cryptography", None),
+                }
+                _apt_entry = _apt_map.get(pkg["name"])
+
+                _sys_ok = False
+                if _sys == "Linux" and _apt_entry:
+                    # pip missing entirely or pip failed — try system package manager
+                    _no_pip = "No module named pip" in err
+                    if _no_pip:
+                        _tag("warn", "pip is not installed — trying system package manager ...")
+                    else:
+                        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                        if err_lines:
+                            _tag("info", f"  pip: {err_lines[-1]}")
+                        _tag("info", "pip failed — trying system package manager ...")
+
+                    _apt_pkg = _apt_entry[0]
+                    _mgr = ("apt-get" if _sh.which("apt-get") else
+                            "dnf"     if _sh.which("dnf")     else
+                            "yum"     if _sh.which("yum")     else None)
+                    if _mgr == "apt-get":
+                        r = subprocess.run(
+                            ["sudo", "apt-get", "install", "-y", _apt_pkg],
+                            capture_output=False,
+                        )
+                        _sys_ok = r.returncode == 0
+                    elif _mgr in ("dnf", "yum"):
+                        # dnf/yum package names differ — map if known
+                        _dnf_map = {
+                            "python3-pystray":      "python3-pystray",
+                            "python3-pil":          "python3-pillow",
+                            "python3-paramiko":     "python3-paramiko",
+                            "python3-cryptography": "python3-cryptography",
+                        }
+                        _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
+                        r = subprocess.run(
+                            ["sudo", _mgr, "install", "-y", _dnf_pkg],
+                            capture_output=False,
+                        )
+                        _sys_ok = r.returncode == 0
+
+                    if _sys_ok:
+                        _tag("ok", f"{pkg['name']} installed via system package manager")
+                    else:
+                        _tag("error", f"Could not install '{pkg['name']}' automatically.")
+                        _tag("info", "Install manually:")
+                        _tag("info", f"  pip install {pkg['install']}  (requires pip: sudo apt install python3-pip)")
+                        _tag("info", f"  or: sudo apt install {_apt_pkg}")
+                        if _apt_entry[1]:
+                            _tag("info", f"  note: {_apt_entry[1]}")
+                        if pkg["required"]:
+                            all_ok = False
+                else:
+                    # Non-Linux or unknown package — show pip error + hint
+                    if err:
+                        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                        if err_lines:
+                            _tag("info", f"  pip: {err_lines[-1]}")
+                    _tag("error", f"Could not install '{pkg['name']}' automatically.")
+                    _tag("info", f"  pip install {pkg['install']}")
+                    if pkg["required"]:
+                        all_ok = False
         else:
             _tag("warn", f"Skipping {pkg['name']} — some features may be unavailable")
 
@@ -268,65 +417,110 @@ def step1_packages():
         _tag("info",  "This enables SNMP OID polling sensors.")
         install_snmp = _ask_yn("Install net-snmp now?", default=False)
         if install_snmp:
-            _tag("info", "Trying Chocolatey ...")
-            r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
-            if r.returncode == 0:
-                _tag("ok", "net-snmp installed via Chocolatey")
-            else:
-                _tag("info", "Trying winget ...")
-                r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
-                if r2.returncode == 0:
-                    _tag("ok", "net-snmp installed via winget")
+            import platform as _plat, shutil as _sh
+            _sys = _plat.system()
+            _ok_snmp = False
+            if _sys == "Windows":
+                _tag("info", "Trying Chocolatey ...")
+                r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
+                if r.returncode == 0:
+                    _tag("ok", "net-snmp installed via Chocolatey")
+                    _ok_snmp = True
                 else:
-                    _tag("warn", "Automatic install failed.")
-                    _tag("info",  "Download manually from: https://sourceforge.net/projects/net-snmp/")
+                    _tag("info", "Trying winget ...")
+                    r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
+                    if r2.returncode == 0:
+                        _tag("ok", "net-snmp installed via winget")
+                        _ok_snmp = True
+            elif _sys == "Linux":
+                if _sh.which("apt-get"):
+                    r = subprocess.run(["sudo", "apt-get", "install", "-y", "snmp"], capture_output=True)
+                    _ok_snmp = r.returncode == 0
+                elif _sh.which("dnf"):
+                    r = subprocess.run(["sudo", "dnf", "install", "-y", "net-snmp-utils"], capture_output=True)
+                    _ok_snmp = r.returncode == 0
+                elif _sh.which("yum"):
+                    r = subprocess.run(["sudo", "yum", "install", "-y", "net-snmp-utils"], capture_output=True)
+                    _ok_snmp = r.returncode == 0
+                if _ok_snmp:
+                    _tag("ok", "net-snmp installed")
+            elif _sys == "Darwin":
+                if _sh.which("brew"):
+                    r = subprocess.run(["brew", "install", "net-snmp"], capture_output=True)
+                    _ok_snmp = r.returncode == 0
+                    if _ok_snmp:
+                        _tag("ok", "net-snmp installed via Homebrew")
+            if not _ok_snmp:
+                _tag("warn", "Automatic install failed.")
+                _tag("info",  "Windows: choco install net-snmp  OR  winget install net-snmp.net-snmp")
+                _tag("info",  "Linux:   sudo apt install snmp  OR  sudo dnf install net-snmp-utils")
+                _tag("info",  "macOS:   brew install net-snmp")
         else:
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
 
     print()
     if not all_ok:
         _tag("error", "One or more required packages could not be installed.")
-        _tag("info",  "Fix the issues above and run start.bat again.")
+        _tag("info",  f"Fix the issues above and run '{_launcher_hint()}' again.")
         sys.exit(1)
 
 
 # ── Port helpers ──────────────────────────────────────────────────────────────
 
 def _port_in_use(port: int) -> "int | None":
-    """Return PID using the port, or None if free."""
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"(Get-NetTCPConnection -LocalPort {port} -State Listen -EA SilentlyContinue)"
-             f".OwningProcess | Select-Object -First 1"],
-            capture_output=True, text=True,
-        )
-        pid_str = result.stdout.strip()
-        return int(pid_str) if pid_str.isdigit() else None
-    except Exception:
-        return None
+    """Return a truthy value if the port is in use, None if free.
+    Uses a pure-Python socket bind test — works on all platforms without
+    PowerShell, lsof, or ss.  Returns 1 (dummy PID) when the port is busy
+    so callers can distinguish busy vs free while keeping the same API."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(('127.0.0.1', port))
+            return None   # bind succeeded → port is free
+        except PermissionError:
+            # Cannot bind privileged port (<1024) without root — port may be free.
+            # Let the server attempt it; it will report a clear error if it fails.
+            return None
+        except OSError:
+            return 1      # address already in use → port is occupied
 
 
 def _pid_name(pid: int) -> str:
+    """Best-effort process name for the given PID (or 'unknown')."""
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"(Get-Process -Id {pid} -EA SilentlyContinue).Name"],
-            capture_output=True, text=True,
-        )
-        return r.stdout.strip() or "unknown"
+        if sys.platform == "win32":
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-Process -Id {pid} -EA SilentlyContinue).Name"],
+                capture_output=True, text=True,
+            )
+            return r.stdout.strip() or "unknown"
+        else:
+            # /proc/PID/comm on Linux; ps on macOS
+            import shutil as _sh
+            if _sh.which("ps"):
+                r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="],
+                                   capture_output=True, text=True)
+                return r.stdout.strip() or "unknown"
     except Exception:
-        return "unknown"
+        pass
+    return "unknown"
 
 
 def _kill_pid(pid: int) -> bool:
+    """Attempt to kill the given PID. Cross-platform."""
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"Stop-Process -Id {pid} -Force -EA SilentlyContinue"],
-            capture_output=True,
-        )
-        return r.returncode == 0
+        if sys.platform == "win32":
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"Stop-Process -Id {pid} -Force -EA SilentlyContinue"],
+                capture_output=True,
+            )
+            return r.returncode == 0
+        else:
+            import signal
+            os.kill(pid, signal.SIGTERM)
+            return True
     except Exception:
         return False
 
@@ -347,22 +541,45 @@ def _ask_port(label: str, default: int, protocol: str = "TCP") -> int:
         if pid is None:
             return port
 
-        proc = _pid_name(pid)
-        _tag("warn", f"Port {port} is already in use by PID {pid} ({proc}).")
+        _tag("warn", f"Port {port} is already in use by another process.")
         print()
         print("       Options:")
-        print(f"         [1] Stop PID {pid} ({proc}) and use port {port}")
+        print(f"         [1] Try to free port {port} and use it")
         print(f"         [2] Enter a different port")
         print(f"         [3] Keep port {port} anyway (may fail at startup)")
         print()
-        choice = _ask("Choose", "1")
+        choice = _ask("Choose", "2")
         if choice == "1":
-            ok = _kill_pid(pid)
+            ok = False
+            if sys.platform == "win32":
+                # On Windows we still have PowerShell available for kill
+                try:
+                    r = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         f"(Get-NetTCPConnection -LocalPort {port} -State Listen -EA SilentlyContinue)"
+                         f".OwningProcess | ForEach-Object {{ Stop-Process -Id $_ -Force -EA SilentlyContinue }}"],
+                        capture_output=True,
+                    )
+                    ok = r.returncode == 0
+                except Exception:
+                    ok = False
+            else:
+                # On Unix use lsof/fuser if available
+                import shutil as _sh
+                if _sh.which("fuser"):
+                    r = subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True)
+                    ok = r.returncode == 0
+                elif _sh.which("lsof"):
+                    r = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True)
+                    for _pid in r.stdout.strip().splitlines():
+                        try: os.kill(int(_pid), 15)
+                        except Exception: pass
+                    ok = True
             if ok:
-                _tag("ok", f"Process {pid} stopped — port {port} is now free")
+                _tag("ok", f"Process on port {port} signalled — port {port} may now be free")
                 return port
             else:
-                _tag("error", f"Could not stop PID {pid}. Try option 2.")
+                _tag("error", f"Could not free port {port}. Try option 2.")
         elif choice == "3":
             _tag("warn", f"Keeping port {port} — may fail if the process is still running")
             return port
@@ -481,7 +698,7 @@ def _step3_import():
     if not os.path.isfile(cert_file) or not os.path.isfile(key_file):
         _tag("error", "cert.pem or key.pem not found in the certs/ folder.")
         _tag("info",  f"Place both files in: {CERTS_DIR}")
-        _tag("info",  "Then run start.bat --setup to try again.")
+        _tag("info",  f"Then run '{_launcher_hint(setup=True)}' to try again.")
         _tag("info",  "Falling back to self-signed certificate generation.")
         _step3_generate()
         return
@@ -498,7 +715,7 @@ def _step3_import():
     err = validate_cert_key_pair(cert_pem, key_pem)
     if err:
         _tag("error", f"Certificate validation failed: {err}")
-        _tag("info",  "Fix the certificate files and run start.bat --setup again,")
+        _tag("info",  f"Fix the certificate files and run '{_launcher_hint(setup=True)}' again,")
         _tag("info",  "or choose option 1 to generate a new self-signed certificate.")
         _step3_generate()
         return
@@ -537,8 +754,17 @@ def step4_snmp_port():
     _separator()
     _tag("setup", f"{_C['bold']}Step 4 — SNMP Trap Port{_C['reset']}")
     _separator()
+    import platform as _plat
+    _sys = _plat.system()
     _tag("info", "UDP port to receive SNMP traps from network devices.")
-    _tag("info", "Port 162 is the standard — requires admin privileges (already elevated).")
+    _tag("info", "Port 162 is the standard SNMP trap port.")
+    if _sys == "Windows":
+        _tag("info", "  Requires admin privileges (already elevated on Windows).")
+    elif _sys in ("Linux", "Darwin"):
+        _tag("info", "  Requires root on Linux/macOS. Options:")
+        _tag("info", "    sudo bash start.sh          (run the server as root)")
+        _tag("info", "    Use port 1162 (no root) + redirect:")
+        _tag("info", "      sudo iptables -t nat -A PREROUTING -p udp --dport 162 -j REDIRECT --to-ports 1162")
     _tag("info", "PingWatch auto-falls back to 1162 then 2162 if 162 cannot be bound.")
     print()
     # SNMP uses UDP so skip TCP conflict detection
@@ -556,8 +782,10 @@ def step4_snmp_port():
 
 
 def step5_firewall():
+    import platform as _plat, shutil as _sh
+    _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 5 — Windows Firewall Rules{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 5 — Firewall Rules{_C['reset']}")
     _separator()
     print()
 
@@ -567,8 +795,60 @@ def step5_firewall():
         rules.append(("TCP", _state["tls_port"], "PingWatch HTTPS"))
     rules.append(("UDP", _state["snmp_port"],  "PingWatch SNMP traps"))
 
-    _tag("info", "The following firewall rules will be added:")
-    for proto, port, desc in rules:
+    # ── Check which rules already exist ──────────────────────
+    def _win_has(name):
+        r = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
+            capture_output=True,
+        )
+        return r.returncode == 0
+
+    def _ufw_status():
+        """Return ufw status text, or '' if unavailable."""
+        try:
+            r = subprocess.run(["sudo", "ufw", "status"], capture_output=True, text=True)
+            return r.stdout if r.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    def _fcmd_ports():
+        """Return firewall-cmd --list-ports text, or '' if unavailable."""
+        try:
+            r = subprocess.run(["sudo", "firewall-cmd", "--list-ports"],
+                               capture_output=True, text=True)
+            return r.stdout if r.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    # Classify each rule as existing or missing
+    existing, missing = [], []
+    if _sys == "Windows":
+        for rule in rules:
+            (existing if _win_has(rule[2]) else missing).append(rule)
+    elif _sys == "Linux" and _sh.which("ufw"):
+        _ufw = _ufw_status()
+        for rule in rules:
+            proto, port, name = rule
+            (existing if f"{port}/{proto.lower()}" in _ufw else missing).append(rule)
+    elif _sys == "Linux" and _sh.which("firewall-cmd"):
+        _fcmd = _fcmd_ports()
+        for rule in rules:
+            proto, port, name = rule
+            (existing if f"{port}/{proto.lower()}" in _fcmd else missing).append(rule)
+    else:
+        missing = list(rules)   # can't check — assume all missing
+
+    for proto, port, desc in existing:
+        _tag("ok", f"Rule already in place: {proto} {port} — {desc}")
+
+    if not missing:
+        _tag("ok", "All firewall rules already configured — nothing to do")
+        print()
+        return
+
+    print()
+    _tag("info", "The following rules still need to be added:")
+    for proto, port, desc in missing:
         _tag("info", f"  {proto} {port:5d}  — {desc}")
     print()
 
@@ -577,33 +857,73 @@ def step5_firewall():
         print()
         return
 
-    for proto, port, name in rules:
-        # Check if rule already exists
-        chk = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
-            capture_output=True,
-        )
-        if chk.returncode == 0:
-            _tag("ok", f"Rule already exists: {name}")
-            continue
-        r = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "add", "rule",
-             f"name={name}", "dir=in", "action=allow",
-             f"protocol={proto}", f"localport={port}"],
-            capture_output=True,
-        )
-        if r.returncode == 0:
-            _tag("ok", f"Firewall rule added: {proto} {port} ({name})")
+    # ── Add only the missing rules ────────────────────────────
+    if _sys == "Windows":
+        for proto, port, name in missing:
+            r = subprocess.run(
+                ["netsh", "advfirewall", "firewall", "add", "rule",
+                 f"name={name}", "dir=in", "action=allow",
+                 f"protocol={proto}", f"localport={port}"],
+                capture_output=True,
+            )
+            if r.returncode == 0:
+                _tag("ok", f"Firewall rule added: {proto} {port} ({name})")
+            else:
+                _tag("warn", f"Could not add rule for {proto} {port} — add manually if needed")
+
+    elif _sys == "Linux":
+        if _sh.which("ufw"):
+            for proto, port, name in missing:
+                r = subprocess.run(["sudo", "ufw", "allow", f"{port}/{proto.lower()}"],
+                                   capture_output=True)
+                if r.returncode == 0:
+                    _tag("ok", f"ufw rule added: {proto} {port}")
+                else:
+                    _tag("warn", f"ufw failed for {proto} {port} — add manually if needed")
+        elif _sh.which("firewall-cmd"):
+            for proto, port, name in missing:
+                r = subprocess.run(
+                    ["sudo", "firewall-cmd", "--permanent",
+                     f"--add-port={port}/{proto.lower()}"],
+                    capture_output=True,
+                )
+                if r.returncode == 0:
+                    _tag("ok", f"firewall-cmd rule added: {proto} {port}")
+            subprocess.run(["sudo", "firewall-cmd", "--reload"], capture_output=True)
         else:
-            _tag("warn", f"Could not add rule for {proto} {port} — add manually if needed")
+            _tag("warn", "No recognised firewall tool found (ufw / firewall-cmd).")
+            _tag("info", "Add rules manually:")
+            for proto, port, _ in missing:
+                _tag("info", f"  sudo iptables -A INPUT -p {proto.lower()} --dport {port} -j ACCEPT")
+
+    elif _sys == "Darwin":
+        _tag("info", "macOS: add rules in System Settings → Network → Firewall, or use pfctl.")
+        for proto, port, _ in missing:
+            _tag("info", f"  Port {port}/{proto} — allow incoming")
+
+    else:
+        _tag("warn", f"Firewall configuration not supported on {_sys}. Add rules manually.")
+
     print()
 
 
 def step6_shortcut():
+    import platform as _plat
+    _sys = _plat.system()
     _separator()
     _tag("setup", f"{_C['bold']}Step 6 — Desktop Shortcut{_C['reset']}")
     _separator()
     print()
+
+    if _sys != "Windows":
+        _tag("info", "Desktop shortcut creation is only supported on Windows.")
+        _tag("info", f"To start PingWatch on {_sys}, run:")
+        if _sys == "Linux" or _sys == "Darwin":
+            _tag("info", f"  bash {os.path.join(_BASE, 'start.sh')}")
+        else:
+            _tag("info", f"  python3 {os.path.join(_BASE, 'server.py')}")
+        print()
+        return
 
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     shortcut_path = os.path.join(desktop, "PingWatch.lnk")
@@ -665,6 +985,7 @@ def step7_init_db():
         "tls_cn":      _state["tls_cn"],
         "org_name":    _state["org_name"],
         "http_redirect": "1" if _state["http_redirect"] else "0",
+        "headless":    "1" if _state["headless"] else "0",
     }
     if _state["tls_cert_pem"]:
         settings["tls_cert_pem"]    = _state["tls_cert_pem"]

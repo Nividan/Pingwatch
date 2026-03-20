@@ -5,7 +5,7 @@ let _sseFirstConnect = true;  // false after first successful open → reconnect
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
 
 // ── Clock ────────────────────────────────────────────────────────
-setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),500);
+setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),1000);
 
 // ── SSE helpers ──────────────────────────────────────────────────
 function _parseSSE(e){
@@ -174,6 +174,7 @@ async function submitLogin(){
     clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
+    S.role=d.role||'viewer';
     hideLogin();
     onAuthenticated(d.username);
   }catch(e){
@@ -402,11 +403,12 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   document.getElementById('devActBar').style.display='none';
+  const _mf=document.getElementById('map-frame');
   if(tab==='dashboard'){
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
-    if(typeof stopMap==='function') stopMap();
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _dwInit==='function') _dwInit();
   } else if(tab==='events'){
     eventsView.style.display='flex';
@@ -415,30 +417,27 @@ function switchMainTab(tab){
     unseenFlaps=0;
     const badge=document.getElementById('evtBadge');
     if(badge) badge.style.display='none';
-    if(typeof stopMap==='function') stopMap();
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshEvents();
   } else if(tab==='map'){
     emptyMain.style.display='none';
     dpanels.style.display='none';
     mapView.style.display='flex';
-    const mf=document.getElementById('map-frame');
-    if(mf&&!mf.src&&mf.dataset.src) mf.src=mf.dataset.src;
-    else if(mf&&mf.contentWindow) mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
-    mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
-    if(typeof startMap==='function') startMap();
+    if(_mf&&!_mf.src&&_mf.dataset.src) _mf.src=_mf.dataset.src;
+    else if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
+    _mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
   } else if(tab==='backups'){
     backupsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
-    if(typeof stopMap==='function') stopMap();
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _bkInit==='function') _bkInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
     emptyMain.style.display=hasDevices?'none':'flex';
     dpanels.style.display=hasDevices?'':'none';
-    if(typeof stopMap==='function') stopMap();
-    document.getElementById('map-frame')?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshDevices();
   }
 }

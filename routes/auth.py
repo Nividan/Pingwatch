@@ -160,8 +160,9 @@ def handle(h, method, path, body):
             _FAIL_LOG.pop(ip, None)
         db_log_audit(username, ip, 'login_ok', username)
         log.info(f"Login OK: {username!r} from {ip}")
+        role = auth_check_role(token) or "viewer"
         h._send_with_cookie(
-            200, {"ok": True, "username": username},
+            200, {"ok": True, "username": username, "role": role},
             f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}"
         )
         return True

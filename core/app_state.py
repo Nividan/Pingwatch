@@ -12,8 +12,8 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "0.7.0"
-APP_VERSION_NAME = "file-structure"
+APP_VERSION      = "0.7.1"
+APP_VERSION_NAME = "linux-support"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─

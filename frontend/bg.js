@@ -6,19 +6,22 @@
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
+  // Throttle to 8fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
+  const _BG_MS = 1000 / 8;
+  let _bgLast = 0;
+
   // Aurora orbs
   const ORBS = [
     {xr:.18, yr:.25, r:.38, h:220, s:.8, spd:.00008},
     {xr:.75, yr:.65, r:.32, h:255, s:.7, spd:.00012},
-    {xr:.50, yr:.10, r:.22, h:190, s:.6, spd:.00015},
-    {xr:.85, yr:.15, r:.20, h:280, s:.5, spd:.0001},
+    {xr:.55, yr:.12, r:.25, h:190, s:.6, spd:.00015},
   ];
 
   function resize(){
     W = cvs.width  = window.innerWidth;
     H = cvs.height = window.innerHeight;
     nodes = [];
-    const STEP = 44;
+    const STEP = 88; // was 66 — further reduces O(n²) pair checks by ~67% total vs original
     const cols = Math.ceil(W/STEP)+2, rows = Math.ceil(H/STEP)+2;
     for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
       nodes.push({
@@ -109,7 +112,10 @@
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
 
-  function frame(){
+  function frame(ts){
+    requestAnimationFrame(frame);
+    if(ts - _bgLast < _BG_MS) return;
+    _bgLast = ts;
     t++;
     ctx.clearRect(0,0,W,H);
     drawAurora();
@@ -120,11 +126,10 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
-    requestAnimationFrame(frame);
   }
 
   window.addEventListener('resize', resize);
-  resize(); frame();
+  resize(); requestAnimationFrame(frame);
 })();
 
 // ── Hero radar canvas ────────────────────────────────────────────
@@ -142,7 +147,15 @@
     }
     for(let i=0;i<5;i++)addBlip();
 
-    function frame(){
+    // Throttle radar to 30 FPS — was unthrottled at 60 FPS (40 arc fills/frame)
+    const RADAR_MS = 1000 / 30;
+    let _radarLast = 0;
+
+    function frame(ts){
+      // When hidden, poll slowly instead of burning 60 RAF/s on a visibility check
+      if(!cvs.offsetParent){ setTimeout(()=>requestAnimationFrame(frame), 500); return; }
+      if(ts - _radarLast < RADAR_MS){ requestAnimationFrame(frame); return; }
+      _radarLast = ts;
       ctx.clearRect(0,0,W,H);
 
       // outer glow ring
@@ -218,10 +231,10 @@
       ctx.beginPath();ctx.arc(CX,CY,8,0,Math.PI*2);ctx.fillStyle=cg;ctx.fill();
       ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle='#60a5fa';ctx.fill();
 
-      angle=(angle+.018)%(Math.PI*2);
+      angle=(angle+.036)%(Math.PI*2); // .018*2 — compensate for 30 FPS vs 60 FPS
       requestAnimationFrame(frame);
     }
-    frame();
+    frame(0);
   }
   // init when DOM ready
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initRadar);

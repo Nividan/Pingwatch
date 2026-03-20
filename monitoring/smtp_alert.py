@@ -1,9 +1,14 @@
 """smtp_alert.py — stdlib SMTP email alerting for PingWatch."""
 import smtplib
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from core.logger import log
 from core.settings import get as _cfg
+
+# Rate-limit repeated SMTP failures: suppress duplicate errors for 5 minutes
+_last_error: dict = {}          # host -> (error_str, timestamp)
+_ERROR_SUPPRESS_S = 300         # seconds between identical error logs
 
 
 def _build_msg(subject, body, from_addr, to_addr):
@@ -64,9 +69,16 @@ def send_alert_email(direction, evt):
         srv = _connect(host, port, tls, user, password)
         srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr).as_string())
         srv.quit(); srv = None
+        _last_error.pop(host, None)   # clear suppression on success
         log.info(f"Alert email sent ({label}): {evt.get('dname')}/{evt.get('sname')}")
     except Exception as e:
-        log.error(f"SMTP alert failed: {e}")
+        err_str = str(e)
+        now = time.monotonic()
+        last_err, last_ts = _last_error.get(host, (None, 0))
+        if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
+            log.error(f"SMTP alert failed (host={host}:{port}): {e}")
+            _last_error[host] = (err_str, now)
+        # else: suppress repeated identical error
     finally:
         if srv:
             try: srv.quit()
