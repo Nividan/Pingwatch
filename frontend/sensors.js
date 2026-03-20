@@ -771,14 +771,26 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
       }
       const bucketAvg = _bN > 0 ? _bSum / _bN : null;
 
-      // Inject exact raw sample ms into tooltip
-      if (nearestSample) {
-        const exactEl = tip.querySelector('.tip-exact');
-        if (exactEl) exactEl.textContent = Math.round(nearestSample.ms) + ' ms';
+      // In bucket mode (>300 raw samples) the drawn line uses bucket averages and fills
+      // empty buckets with 0ms. In raw mode (≤300) it draws each sample directly.
+      const usingBuckets = okSp.length > TARGET;
+
+      // dotMs must match what _drawHistCanvas actually drew at the cursor X:
+      //   bucket mode + data  → bucket average
+      //   bucket mode + gap   → 0 (line is at baseline)
+      //   raw mode            → nearest raw sample (bezier interpolated, close enough)
+      const dotMs = usingBuckets
+        ? (bucketAvg !== null ? bucketAvg : 0)
+        : (nearestSample ? nearestSample.ms : null);
+
+      // Exact ms tooltip: same source as the dot
+      const exactEl = tip.querySelector('.tip-exact');
+      if (exactEl) {
+        if (dotMs != null) exactEl.textContent = Math.round(dotMs) + ' ms';
+        else exactEl.textContent = '— ms';
       }
 
-      // Draw dot on the drawn line (bucket-average Y, mouse X)
-      const dotMs = bucketAvg ?? (nearestSample ? nearestSample.ms : null);
+      // Draw dot on the drawn line (dotMs Y, mouse X)
       if (dotMs != null) {
         const dotY = _yOf(dotMs);
         cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
