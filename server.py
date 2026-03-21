@@ -498,6 +498,7 @@ def main():
         args=(STATE, app_state.effective_snmp_port),
         daemon=True,
     ).start()
+    log.info(f"SNMP trap receiver started on port {app_state.effective_snmp_port}")
     from backup.scheduler import start_scheduler
     start_scheduler()
     threading.Thread(target=server.serve_forever, daemon=True).start()

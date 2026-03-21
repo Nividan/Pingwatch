@@ -148,7 +148,7 @@ The first-run password is printed to the console — change it immediately in **
 
 ## HTTPS / TLS
 
-PingWatch v0.7.1 ships with native HTTPS support enabled by default on fresh installs.
+PingWatch ships with native HTTPS support enabled by default on fresh installs.
 
 ### How it works
 

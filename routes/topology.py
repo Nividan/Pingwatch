@@ -106,6 +106,7 @@ def handle(h, method, path, body):
             body.get('x', 200), body.get('y', 200),
             body.get('properties', {}), body.get('page_id', 1),
         )
+        db_log_audit(user, h.client_address[0], 'ntm_node_create', body['name'])
         h._json(201, node)
         return True
 
@@ -118,6 +119,7 @@ def handle(h, method, path, body):
             body.get('label', ''), body.get('link_type', 'trunk'),
             body.get('page_id', 1),
         )
+        db_log_audit(user, h.client_address[0], 'ntm_link_create', f"{body['source_id']}\u2192{body['target_id']}")
         h._json(201, link)
         return True
 
@@ -133,6 +135,7 @@ def handle(h, method, path, body):
             body.get('w', 300), body.get('h', 200),
             body.get('page_id', 1),
         )
+        db_log_audit(user, h.client_address[0], 'ntm_group_create', body['name'])
         h._json(201, grp)
         return True
 
@@ -143,7 +146,11 @@ def handle(h, method, path, body):
             user, _ = h._require("operator")
             if not user: return True
             page = topo_update_page(int(m.group(1)), body.get('name', ''))
-            h._json(200, page) if page else h._json(404, {'error': 'not found'})
+            if page:
+                db_log_audit(user, h.client_address[0], 'ntm_page_update', body.get('name', ''))
+                h._json(200, page)
+            else:
+                h._json(404, {'error': 'not found'})
             return True
 
         m = _RE_TOPO_NODE.match(path)
@@ -154,7 +161,11 @@ def handle(h, method, path, body):
                 int(m.group(1)), body.get('name'), body.get('type'),
                 body.get('x'), body.get('y'), body.get('properties'),
             )
-            h._json(200, node) if node else h._json(404, {'error': 'not found'})
+            if node:
+                db_log_audit(user, h.client_address[0], 'ntm_node_update', str(m.group(1)))
+                h._json(200, node)
+            else:
+                h._json(404, {'error': 'not found'})
             return True
 
         m = _RE_TOPO_LINK.match(path)
@@ -164,7 +175,11 @@ def handle(h, method, path, body):
             link = topo_update_link(
                 int(m.group(1)), body.get('label', ''), body.get('link_type', 'trunk'),
             )
-            h._json(200, link) if link else h._json(404, {'error': 'not found'})
+            if link:
+                db_log_audit(user, h.client_address[0], 'ntm_link_update', str(m.group(1)))
+                h._json(200, link)
+            else:
+                h._json(404, {'error': 'not found'})
             return True
 
         m = _RE_TOPO_GROUP.match(path)
@@ -175,7 +190,11 @@ def handle(h, method, path, body):
                 int(m.group(1)), body.get('name'), body.get('color'),
                 body.get('x'), body.get('y'), body.get('w'), body.get('h'),
             )
-            h._json(200, grp) if grp else h._json(404, {'error': 'not found'})
+            if grp:
+                db_log_audit(user, h.client_address[0], 'ntm_group_update', str(m.group(1)))
+                h._json(200, grp)
+            else:
+                h._json(404, {'error': 'not found'})
             return True
 
         m = _RE_TOPO_SETTING.match(path)
@@ -216,7 +235,9 @@ def handle(h, method, path, body):
         if m:
             user, _ = h._require("operator")
             if not user: return True
-            topo_delete_node(int(m.group(1)))
+            _node_id = int(m.group(1))
+            topo_delete_node(_node_id)
+            db_log_audit(user, h.client_address[0], 'ntm_node_delete', str(_node_id))
             h._json(200, {'ok': True})
             return True
 
@@ -224,7 +245,9 @@ def handle(h, method, path, body):
         if m:
             user, _ = h._require("operator")
             if not user: return True
-            topo_delete_link(int(m.group(1)))
+            _link_id = int(m.group(1))
+            topo_delete_link(_link_id)
+            db_log_audit(user, h.client_address[0], 'ntm_link_delete', str(_link_id))
             h._json(200, {'ok': True})
             return True
 
@@ -232,7 +255,9 @@ def handle(h, method, path, body):
         if m:
             user, _ = h._require("operator")
             if not user: return True
-            topo_delete_group(int(m.group(1)))
+            _grp_id = int(m.group(1))
+            topo_delete_group(_grp_id)
+            db_log_audit(user, h.client_address[0], 'ntm_group_delete', str(_grp_id))
             h._json(200, {'ok': True})
             return True
 

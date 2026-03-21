@@ -46,11 +46,17 @@ def db_flush_samples():
             return
         rows = _SAMPLE_BUF[:]
         _SAMPLE_BUF.clear()
-    _do_insert_samples(rows)
+    try:
+        _do_insert_samples(rows)
+    except Exception:
+        # Re-prepend rows so they are retried on the next flush
+        with _SAMPLE_BUF_LOCK:
+            for r in reversed(rows):
+                _SAMPLE_BUF.insert(0, r)
 
 
 def _sample_flush_loop():
-    """Every 5 s drain the buffer and enqueue the write on the single writer thread."""
+    """Every 5 s drain the buffer and write directly (retries on failure)."""
     while True:
         time.sleep(5)
         with _SAMPLE_BUF_LOCK:
@@ -58,27 +64,15 @@ def _sample_flush_loop():
                 continue
             rows = _SAMPLE_BUF[:]
             _SAMPLE_BUF.clear()
-        _db_enqueue(lambda r=rows: _do_insert_samples(r))
+        try:
+            _do_insert_samples(rows)
+        except Exception:
+            with _SAMPLE_BUF_LOCK:
+                for r in reversed(rows):
+                    _SAMPLE_BUF.insert(0, r)
 
 
 threading.Thread(target=_sample_flush_loop, daemon=True).start()
-
-
-def db_log_sample(did, sid, ok, ms, value, ts):
-    """Insert one probe result into sensor_samples. Always call via _db_enqueue."""
-    con = None
-    try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
-        con.execute(
-            "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES (?,?,?,?,?,?)",
-            (ts, did, sid, int(ok), ms, value)
-        )
-        con.commit()
-    except Exception as e:
-        log.error(f"DB log sample error: {e}")
-    finally:
-        if con:
-            con.close()
 
 
 def db_clean_samples(retention_days=365):
