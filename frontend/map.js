@@ -38,27 +38,18 @@ let _ntmVisible = true;
 // immediately when coming back from a paused state.
 let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
-  if (e.data?.type === 'ntm_pause') {
-    _ntmVisible = false;
-    if (_ledTimer) { clearInterval(_ledTimer); _ledTimer = null; }
-  }
+  if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
   if (e.data?.type === 'ntm_resume') {
     _ntmVisible = true;
     _resumeDashBg?.();
     _resumeMainBg?.();
-    _startLedBlink();
   }
 });
 // Also pause when this document's own visibility changes (e.g. OS switch)
 let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
   _bgPaused = document.hidden;
-  if (document.hidden) {
-    if (_ledTimer) { clearInterval(_ledTimer); _ledTimer = null; }
-  } else {
-    _resumeDashBg?.(); _resumeMainBg?.();
-    _startLedBlink();
-  }
+  if (!document.hidden) { _resumeDashBg?.(); _resumeMainBg?.(); }
 });
 
 // ── Performance: batch _pwLiveUpdate calls — one DOM pass per rAF ─────────
@@ -69,22 +60,8 @@ function _schedulePwLiveUpdate(did) {
   if (!_liveUpdateRaf) {
     _liveUpdateRaf = requestAnimationFrame(() => {
       _liveUpdateRaf = null;
-      const batch = new Set(_pendingLiveUpdates);
+      _pendingLiveUpdates.forEach(id => _pwLiveUpdate(id));
       _pendingLiveUpdates.clear();
-      batch.forEach(id => _pwLiveUpdate(id));
-      // Once-per-batch ops — previously called N times inside _pwLiveUpdate:
-      updateHeaderStats();
-      const dot = document.getElementById('pw-tab-dot');
-      if (dot) {
-        const anyDown = pwDevices.some(d => d.status === 'down');
-        dot.style.background = anyDown ? '#ff3333' : '#00ff9d';
-        dot.style.boxShadow  = anyDown ? '0 0 5px #ff3333' : '0 0 5px #00ff9d';
-      }
-      if (_selectedPwDid && batch.has(_selectedPwDid) && !_pwInputFocused()) {
-        showPwNodePanel(_selectedPwDid);
-      } else if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) {
-        showPwDashboardPanel();
-      }
     });
   }
 }
@@ -536,10 +513,8 @@ function _pwFindPath(fromDid, toDid) {
 }
 
 // ── Trace animation performance limits ───────────────────────────────────────
-// Disabled (was 3): each trace dot mutates SVG attributes at 30fps, triggering
-// full-SVG repaint of 75 feGaussianBlur-filtered nodes. 3 traces × 30fps × 75
-// blur filters = catastrophic main-thread load. Set to 0 to disable.
-const PW_MAX_TRACES = 0;
+// Max 3 concurrent dots (was 6) — each runs its own rAF loop at 30fps
+const PW_MAX_TRACES = 3;
 // Per-device cooldown: only one trace per device per 4 seconds.
 // With 38 devices probing every 5s, this was firing ~22 traces/second.
 const _pwTraceCooldown = 4000;
@@ -574,20 +549,22 @@ function _pwAnimateTrace(pathDids, color) {
   dot.style.pointerEvents = 'none';
   layer.appendChild(dot);
   const segDur = 250;
-  // True 30fps via setTimeout+RAF — old pattern called RAF at 60fps just for a throttle check
+  // Throttle trace rAF to 30fps (was 60fps) — halves SVG write rate
   const _TRACE_MS = 1000 / 30;
-  let segIdx = 0, startTs = null;
+  let segIdx = 0, startTs = null, lastFrame = 0;
   function step(ts) {
+    if (ts - lastFrame < _TRACE_MS) { requestAnimationFrame(step); return; }
+    lastFrame = ts;
     if (!startTs) startTs = ts;
     const t = Math.min((ts - startTs) / segDur, 1);
     const p0 = pts[segIdx], p1 = pts[segIdx + 1];
     dot.setAttribute('cx', (p0.x + (p1.x - p0.x) * t).toFixed(1));
     dot.setAttribute('cy', (p0.y + (p1.y - p0.y) * t).toFixed(1));
     if (t < 1) {
-      setTimeout(() => requestAnimationFrame(step), _TRACE_MS);
+      requestAnimationFrame(step);
     } else if (segIdx + 2 < pts.length) {
-      segIdx++; startTs = null;
-      setTimeout(() => requestAnimationFrame(step), _TRACE_MS);
+      segIdx++; startTs = ts;
+      requestAnimationFrame(step);
     } else {
       dot.remove();
       _pwBurstAt(pts[pts.length - 1], color, layer);
@@ -604,16 +581,17 @@ function _pwBurstAt(pt, color, layer) {
   ring.setAttribute('stroke', color); ring.setAttribute('stroke-width', '2');
   ring.style.pointerEvents = 'none';
   layer.appendChild(ring);
-  let t0 = null;
+  let t0 = null, lastBurst = 0;
   const dur = 400, _BURST_MS = 1000 / 30; // 30fps burst
   function expand(ts) {
+    if (ts - lastBurst < _BURST_MS) { requestAnimationFrame(expand); return; }
+    lastBurst = ts;
     if (!t0) t0 = ts;
     const t = (ts - t0) / dur;
     if (t >= 1) { ring.remove(); return; }
     ring.setAttribute('r', (6 + t * 15).toFixed(1));
     ring.style.opacity = (1 - t).toFixed(2);
-    // True 30fps via setTimeout+RAF — old pattern called RAF at 60fps just for a throttle check
-    setTimeout(() => requestAnimationFrame(expand), _BURST_MS);
+    requestAnimationFrame(expand);
   }
   requestAnimationFrame(expand);
 }
@@ -628,39 +606,48 @@ function _pwLiveUpdate(did) {
   // Update node color properties in-memory
   const node = nodeMap['pw_' + did];
   const dev  = pwDevices.find(d => d.device_id === did);
-  if (!node || !dev) return;
-  // Skip SVG rebuild when status hasn't changed — avoids re-rasterizing GPU filters
-  if (node._lastPwStatus === dev.status) return;
-  node._lastPwStatus = dev.status;
-  const col = pwStatusColor(dev.status);
-  const nameColor = dev.status === 'down'    ? '#ff9999'
-                  : dev.status === 'unknown' ? '#888888' : undefined;
-  const ovr = pwOverrides[did];
-  node.properties.ip_color   = col;
-  node.properties.name_color = nameColor;
-  if (!ovr?.color) {
-    node.properties.color = dev.status === 'down'    ? '#ff3333'
-                          : dev.status === 'unknown' ? '#888888' : undefined;
+  if (node && dev) {
+    const col = pwStatusColor(dev.status);
+    const nameColor = dev.status === 'down'    ? '#ff9999'
+                    : dev.status === 'unknown' ? '#888888' : undefined;
+    const ovr = pwOverrides[did];
+    node.properties.ip_color   = col;
+    node.properties.name_color = nameColor;
+    if (!ovr?.color) {
+      node.properties.color = dev.status === 'down'    ? '#ff3333'
+                            : dev.status === 'unknown' ? '#888888' : undefined;
+    }
+    // Rebuild only this one node's SVG element in-place
+    const el = document.getElementById('node-' + node.id);
+    if (el) {
+      const sel = selectedEl?.type === 'node' && selectedEl?.data.id === node.id;
+      // Redirect outside-labels to the labels layer so they stay on top
+      const _ll = document.getElementById('node-labels-layer');
+      document.getElementById('node-label-' + node.id)?.remove();
+      if (_ll) _labelLayerTarget = _ll;
+      el.innerHTML = buildNode(node, sel);
+      _labelLayerTarget = null;
+      _applyNodeColorFilter(el, node);
+      el.addEventListener('mousedown', e => startDrag(e, node));
+      el.addEventListener('click', e => {
+        e.stopPropagation();
+        if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
+        if (e.shiftKey) { toggleMultiSelect(node); }
+        else { multiSelect.clear(); selectNode(node); }
+      });
+      el.addEventListener('touchstart', e => startDrag(e, node), { passive: false });
+    }
   }
-  // Rebuild only this one node's SVG element in-place
-  const el = document.getElementById('node-' + node.id);
-  if (el) {
-    const sel = selectedEl?.type === 'node' && selectedEl?.data.id === node.id;
-    // Redirect outside-labels to the labels layer so they stay on top
-    const _ll = document.getElementById('node-labels-layer');
-    document.getElementById('node-label-' + node.id)?.remove();
-    if (_ll) _labelLayerTarget = _ll;
-    el.innerHTML = buildNode(node, sel);
-    _labelLayerTarget = null;
-    _applyNodeColorFilter(el, node);
-    el.addEventListener('mousedown', e => startDrag(e, node));
-    el.addEventListener('click', e => {
-      e.stopPropagation();
-      if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
-      if (e.shiftKey) { toggleMultiSelect(node); }
-      else { multiSelect.clear(); selectNode(node); }
-    });
-    el.addEventListener('touchstart', e => startDrag(e, node), { passive: false });
+
+  // Update header stats
+  updateHeaderStats();
+
+  // Update PW tab dot color
+  const dot = document.getElementById('pw-tab-dot');
+  if (dot) {
+    const anyDown = pwDevices.some(d => d.status === 'down');
+    dot.style.background = anyDown ? '#ff3333' : '#00ff9d';
+    dot.style.boxShadow  = anyDown ? '0 0 5px #ff3333' : '0 0 5px #00ff9d';
   }
 
   // Update connected link stroke colors to reflect device status
@@ -676,8 +663,13 @@ function _pwLiveUpdate(did) {
                         ? '#ff3333' : lkCfg.stroke;
       lineEl.setAttribute('stroke', newStroke);
     });
-  // Header stats, tab dot, and panel update are handled once per batch
-  // by _schedulePwLiveUpdate to avoid N redundant DOM rebuilds per update cycle.
+
+  // Update right panel only if relevant and no input is focused
+  if (_selectedPwDid === did && !_pwInputFocused()) {
+    showPwNodePanel(did);
+  } else if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) {
+    showPwDashboardPanel();
+  }
 }
 
 // ═══════════════════════════ API ═══════════════════════════
@@ -1112,13 +1104,11 @@ function clearLedIntervals() {
 
 function _startLedBlink() {
   if (_ledTimer) return; // already running
-  // Slowed from 700ms → 2000ms: 67 LED opacity changes trigger SVG repaint
-  // of feGaussianBlur-filtered nodes. 2s is still visually alive, much cheaper.
   _ledTimer = setInterval(() => {
     document.querySelectorAll('.led-blink').forEach(led => {
       led.style.opacity = Math.random() > 0.3 ? '1' : '0.2';
     });
-  }, 2000);
+  }, 700);
 }
 
 // ═══════════════════════════ NODE RENDERERS ═══════════════════════════
@@ -3372,8 +3362,6 @@ function getHue(hex) {
 
 // ═══════════════════════════ DASHBOARD BG CANVAS ═══════════════════════════
 function initDashBg() {
-  // Animated bg disabled — static CSS grid background used instead (perf fix)
-  return;
   const canvas = document.getElementById('dash-bg-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -3381,7 +3369,7 @@ function initDashBg() {
 
   // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
   const DB_FPS = 6, DB_MS = 1000 / DB_FPS;
-  let _rafId = null;
+  let _dbLast = 0, _rafId = null;
 
   function resize() {
     canvas.width  = canvas.offsetWidth  || 300;
@@ -3400,10 +3388,12 @@ function initDashBg() {
     }));
   }
 
-  function frame() {
-    _rafId = null;
+  function frame(ts) {
     // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
-    if (_bgPaused || !_ntmVisible) return;
+    if (_bgPaused || !_ntmVisible) { _rafId = null; return; }
+    _rafId = requestAnimationFrame(frame);
+    if (ts - _dbLast < DB_MS) return; // throttle to 10 fps
+    _dbLast = ts;
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
@@ -3447,15 +3437,9 @@ function initDashBg() {
     ctx.fillRect(0, scanY - 18, W, 22);
     ctx.fillStyle = 'rgba(0,212,255,0.10)';
     ctx.fillRect(0, scanY, W, 1);
-
-    // True 10fps throttle via setTimeout+RAF — eliminates 50 wasted RAF callbacks/s
-    _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
   }
 
-  function start() {
-    if (!_rafId && !_bgPaused && _ntmVisible)
-      _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
-  }
+  function start() { if (!_rafId) _rafId = requestAnimationFrame(frame); }
 
   resize(); spawn(); start();
   _resumeDashBg = start;
@@ -3554,15 +3538,13 @@ function updateHeaderStats() {
 
 // ═══════════════════════════ MAIN CANVAS BACKGROUND ═══════════════════════════
 function initMainBg() {
-  // Animated bg disabled — static CSS grid background used instead (perf fix)
-  return;
   const canvas = document.getElementById('main-bg-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
   // ── Performance: throttle to 6 fps — reduces fillText load by ~40% ──────
   const BG_FPS = 6, BG_MS = 1000 / BG_FPS;
-  let _bgRafId = null;
+  let _bgLast = 0, _bgRafId = null;
 
   let pts = [], rings = [], streams = [], scanY = 0;
   const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ';
@@ -3674,10 +3656,12 @@ function initMainBg() {
   }
 
   let lastRing = 0;
-  function frame() {
-    _bgRafId = null;
+  function frame(ts) {
     // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
-    if (_bgPaused || !_ntmVisible) return;
+    if (_bgPaused || !_ntmVisible) { _bgRafId = null; return; }
+    _bgRafId = requestAnimationFrame(frame);
+    if (ts - _bgLast < BG_MS) return; // throttle to 10 fps
+    _bgLast = ts;
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
@@ -3754,15 +3738,9 @@ function initMainBg() {
 
     // Corner HUD
     drawCorners(W, H);
-
-    // True 10fps throttle via setTimeout+RAF — eliminates 50 wasted RAF callbacks/s
-    _bgRafId = setTimeout(() => requestAnimationFrame(frame), BG_MS);
   }
 
-  function startMainBg() {
-    if (!_bgRafId && !_bgPaused && _ntmVisible)
-      _bgRafId = setTimeout(() => requestAnimationFrame(frame), BG_MS);
-  }
+  function startMainBg() { if (!_bgRafId) _bgRafId = requestAnimationFrame(frame); }
 
   resize();
   startMainBg();

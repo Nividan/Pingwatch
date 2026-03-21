@@ -6,9 +6,9 @@
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
-  // True 8fps throttle via setTimeout+RAF
+  // Throttle to 8fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
   const _BG_MS = 1000 / 8;
-  let _bgRafId = null;
+  let _bgLast = 0;
 
   // Aurora orbs
   const ORBS = [
@@ -59,16 +59,14 @@
   }
 
   function drawMesh(){
-    const DIST = 110, DIST2 = DIST*DIST; // compare squared — skips sqrt for ~90% of pairs
+    const DIST = 110;
     for(let i=0;i<nodes.length;i++){
       const a = nodes[i];
       const ax = a.bx+a.ox, ay = a.by+a.oy;
       for(let j=i+1;j<nodes.length;j++){
         const b = nodes[j];
         const bx = b.bx+b.ox, by = b.by+b.oy;
-        const dx=ax-bx, dy=ay-by;
-        if(dx*dx+dy*dy > DIST2) continue; // fast reject — no sqrt needed
-        const d=Math.sqrt(dx*dx+dy*dy);
+        const dx=ax-bx, dy=ay-by, d=Math.sqrt(dx*dx+dy*dy);
         if(d > DIST) continue;
         const fade = (1-d/DIST);
         // scan glow on edges
@@ -114,11 +112,10 @@
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
 
-  function frame(){
-    _bgRafId = null;
-    // Pause entirely when browser tab is hidden OR the Map tab is active
-    // (the NTM iframe covers the canvas on the Map tab — rendering is wasted)
-    if(document.hidden || window._bgMapActive) return;
+  function frame(ts){
+    requestAnimationFrame(frame);
+    if(ts - _bgLast < _BG_MS) return;
+    _bgLast = ts;
     t++;
     ctx.clearRect(0,0,W,H);
     drawAurora();
@@ -129,19 +126,10 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
-    _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
   }
 
-  function startBg(){
-    if(!_bgRafId && !document.hidden && !window._bgMapActive)
-      _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
-  }
-
-  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startBg(); });
-  // Expose resume hook — called by app.js when leaving the Map tab
-  window._bgResume = startBg;
   window.addEventListener('resize', resize);
-  resize(); startBg();
+  resize(); requestAnimationFrame(frame);
 })();
 
 // ── Hero radar canvas ────────────────────────────────────────────
@@ -159,15 +147,15 @@
     }
     for(let i=0;i<5;i++)addBlip();
 
-    // 15fps — halved from 30fps to reduce GPU composite pressure.
-    // The sweep animation is smooth enough at 15fps and saves significant GPU bandwidth.
-    const RADAR_MS = 1000 / 15;
-    let _radarRafId = null;
+    // Throttle radar to 30 FPS — was unthrottled at 60 FPS (40 arc fills/frame)
+    const RADAR_MS = 1000 / 30;
+    let _radarLast = 0;
 
-    function frame(){
-      _radarRafId = null;
-      // Stop when browser tab hidden OR when #emptyMain is hidden (devices exist, radar not shown)
-      if(document.hidden || !cvs.offsetParent) return;
+    function frame(ts){
+      // When hidden, poll slowly instead of burning 60 RAF/s on a visibility check
+      if(!cvs.offsetParent){ setTimeout(()=>requestAnimationFrame(frame), 500); return; }
+      if(ts - _radarLast < RADAR_MS){ requestAnimationFrame(frame); return; }
+      _radarLast = ts;
       ctx.clearRect(0,0,W,H);
 
       // outer glow ring
@@ -243,16 +231,10 @@
       ctx.beginPath();ctx.arc(CX,CY,8,0,Math.PI*2);ctx.fillStyle=cg;ctx.fill();
       ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle='#60a5fa';ctx.fill();
 
-      angle=(angle+.072)%(Math.PI*2); // .018*4 — compensate for 15 FPS vs 60 FPS
-      _radarRafId = setTimeout(()=>requestAnimationFrame(frame), RADAR_MS);
+      angle=(angle+.036)%(Math.PI*2); // .018*2 — compensate for 30 FPS vs 60 FPS
+      requestAnimationFrame(frame);
     }
-
-    function startRadar(){
-      if(!_radarRafId && !document.hidden && cvs.offsetParent)
-        _radarRafId = setTimeout(()=>requestAnimationFrame(frame), RADAR_MS);
-    }
-    document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startRadar(); });
-    startRadar();
+    frame(0);
   }
   // init when DOM ready
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initRadar);

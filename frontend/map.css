@@ -49,7 +49,7 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 
 /* ── Canvas ── */
 #canvas-wrap { flex:1; overflow:hidden; position:relative; }
-#main-bg-canvas { display:none; /* animated bg disabled — static CSS grid used instead */ }
+#main-bg-canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:0; }
 #topo-svg { position:relative; z-index:1; display:block; cursor:default; width:100%; height:100%; overflow:visible; }
 
 
@@ -60,7 +60,10 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
   overflow:hidden; transition:width 0.3s; position:relative;
 }
 #side-panel.collapsed { width:0; border-left:none; }
-#dash-bg-canvas { display:none; /* animated bg disabled — static CSS panel bg used instead */ }
+#dash-bg-canvas {
+  position:absolute; inset:0; width:100%; height:100%;
+  pointer-events:none; z-index:0; opacity:0.45;
+}
 .panel-header, #panel-body, .panel-actions { position:relative; z-index:1; }
 .panel-header {
   padding:14px 16px; border-bottom:1px solid var(--panel-border);
@@ -178,23 +181,20 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
   line-height:1.35;
 }
 
-/* ── SVG link styles — static dashes (dashFlow/tunnelFlow animations removed:
-   stroke-dashoffset is non-compositable, 42 animated lines × 60fps = main-thread
-   repaint storm that lagged the entire browser) ── */
-.link-trunk   { stroke-dasharray:8,8;  }
-.link-access  { stroke-dasharray:8,8;  }
-.link-ha      { stroke-dasharray:4,4;  }
-.link-internet{ stroke-dasharray:6,6;  }
-.link-wifi    { stroke-dasharray:6,6;  }
-.link-tunnel  { stroke-dasharray:3,11; }
-.link-tunnel2 { stroke-dasharray:3,11; }
+/* ── SVG animations ── */
+.link-trunk   { stroke-dasharray:8,8;  animation:dashFlow 1.2s linear infinite; }
+.link-access  { stroke-dasharray:8,8;  animation:dashFlow 1.4s linear infinite; }
+.link-ha      { stroke-dasharray:4,4;  animation:dashFlow 0.8s linear infinite; }
+.link-internet{ stroke-dasharray:6,6;  animation:dashFlow 2s   linear infinite; }
+.link-wifi    { stroke-dasharray:6,6;  animation:dashFlow 2.2s linear infinite; }
+.link-tunnel  { stroke-dasharray:3,11; animation:tunnelFlow 3s linear infinite; }
+.link-tunnel2 { stroke-dasharray:3,11; animation:tunnelFlow 3s linear infinite; animation-delay:-1.5s; }
+@keyframes dashFlow   { to { stroke-dashoffset:-16; } }
+@keyframes tunnelFlow { to { stroke-dashoffset:-28; } }
 
 .node-g { cursor:grab; }
 .node-g:active { cursor:grabbing; }
 .node-g.selected rect:first-child, .node-g.selected circle:first-child { filter:brightness(1.5); }
-/* Disable SVG feGaussianBlur glow filters — 75 filter textures saturate Chrome's
-   shared GPU compositor, blocking hardware video decode on other tabs (YouTube). */
-[filter*="glow"] { filter: none !important; }
 .link-g { cursor:pointer; }
 .link-g:hover .link-hit { stroke:rgba(255,255,255,0.15); }
 

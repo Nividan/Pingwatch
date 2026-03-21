@@ -404,16 +404,13 @@ function switchMainTab(tab){
   backupsView.style.display  ='none';
   document.getElementById('devActBar').style.display='none';
   const _mf=document.getElementById('map-frame');
-  const _nb = document.getElementById('netbg');
   if(tab==='dashboard'){
-    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _dwInit==='function') _dwInit();
   } else if(tab==='events'){
-    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     eventsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
@@ -426,30 +423,16 @@ function switchMainTab(tab){
     emptyMain.style.display='none';
     dpanels.style.display='none';
     mapView.style.display='flex';
-    // Pause + hide the bg canvas — the NTM iframe covers it entirely on this tab,
-    // so rendering it wastes CPU (O(n²) mesh) and GPU (texture upload every frame).
-    window._bgMapActive = true;
-    const _nb = document.getElementById('netbg');
-    if (_nb) _nb.style.visibility = 'hidden';
-    if(_mf&&!_mf.src&&_mf.dataset.src){
-      _mf.addEventListener('load',()=>{
-        _mf.contentWindow?.postMessage({type:'pw_reload_pages'},window.location.origin);
-        _mf.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
-      },{once:true});
-      _mf.src=_mf.dataset.src;
-    } else if(_mf&&_mf.contentWindow){
-      _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
-      _mf.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
-    }
+    if(_mf&&!_mf.src&&_mf.dataset.src) _mf.src=_mf.dataset.src;
+    else if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
+    _mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
   } else if(tab==='backups'){
-    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     backupsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _bkInit==='function') _bkInit();
   } else {
-    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
     emptyMain.style.display=hasDevices?'none':'flex';
@@ -474,12 +457,11 @@ async function _refreshDevices(){
 
 async function _refreshEvents(){
   try{
+    FLAPS.length=0; _FLAP_SEEN.clear();
     const [fd,td]=await Promise.all([
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
     ]);
-    // Clear only after both fetches succeed — prevents empty state if server is temporarily busy
-    FLAPS.length=0; _FLAP_SEEN.clear();
     (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
     (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
