@@ -1170,6 +1170,17 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .audit-detail{color:var(--text3)!important;font-size:10px;max-width:200px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
+/* ── Log viewer (Settings → Logs tab) ──────────────────────────────────── */
+.log-subtab-bar{display:flex;align-items:center;gap:4px;padding:8px 12px;
+  border-bottom:1px solid var(--border);background:var(--bg2);}
+.log-stab{background:transparent;border:1px solid transparent;border-radius:4px;
+  color:var(--text3);cursor:pointer;font-size:12px;padding:4px 10px;transition:all .15s;}
+.log-stab:hover{color:var(--text);background:rgba(255,255,255,.06);}
+.log-stab.active{color:var(--accent);border-color:var(--accent);background:rgba(99,102,241,.1);}
+.log-viewer{margin:0;padding:12px 14px;font-family:'Courier New',monospace;font-size:11px;
+  line-height:1.55;color:var(--text2);background:var(--bg);
+  max-height:65vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}
+
 /* ── Sensor-type defaults cards (Settings → Sensors tab) ──────────────── */
 .sdr-card          {border:1px solid var(--border);border-left:3px solid var(--sdr-color,var(--accent));
                     border-radius:6px;background:var(--bg2);margin-bottom:10px;padding:12px 14px;}
