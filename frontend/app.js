@@ -1,8 +1,46 @@
 // ── App state ────────────────────────────────────────────────────
-const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer'};
+const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{}};
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
+
+// ── SSE batching: coalesce events into 250ms windows to reduce DOM mutations ──
+const _sseBatch={sensors:{},devStatuses:{},timer:null,INTERVAL:250};
+let _sseHidden=false;
+
+function _sseFlush(){
+  _sseBatch.timer=null;
+  const devIds=new Set();
+  // Per-sensor DOM updates
+  for(const key in _sseBatch.sensors){
+    const d=_sseBatch.sensors[key];
+    updateTile(d); updateCardSensor(d); updateSbSensorDot(d);
+    devIds.add(d.device_id);
+  }
+  // Per-device-status DOM updates
+  for(const did in _sseBatch.devStatuses){
+    const st=_sseBatch.devStatuses[did];
+    updateCardStatus(did,st); updateSbDevDot(did,st);
+    devIds.add(did);
+  }
+  // Once per batch (not per event)
+  devIds.forEach(did=>recalcDevStatus(did));
+  if(devIds.size) updatePills();
+  // Dashboard hooks (once per batch)
+  if(typeof _dwOnSensorUpdate==='function'){
+    for(const key in _sseBatch.sensors){
+      const d=_sseBatch.sensors[key];
+      _dwOnSensorUpdate(d.device_id,d.sensor_id);
+    }
+  }
+  if(typeof _dwOnDeviceUpdate==='function'&&Object.keys(_sseBatch.devStatuses).length)
+    _dwOnDeviceUpdate();
+  _sseBatch.sensors={};
+  _sseBatch.devStatuses={};
+}
+function _sseSchedule(){
+  if(!_sseBatch.timer) _sseBatch.timer=setTimeout(_sseFlush,_sseBatch.INTERVAL);
+}
 
 // ── Clock ────────────────────────────────────────────────────────
 setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),1000);
@@ -26,22 +64,21 @@ function connectSSE(){
   sse.addEventListener('sensor',e=>{
     const d=_parseSSE(e); if(!d) return;
     const _key=`${d.device_id}/${d.sensor_id}`;
-    if(!S.sensors[_key]) return;  // sensor was deleted — ignore stale probe event
+    if(!S.sensors[_key]) return;
     S.sensors[_key]=d;
-    updateTile(d);
-    updateCardSensor(d);
-    recalcDevStatus(d.device_id);
-    updatePills();
-    updateSbSensorDot(d);
-    if(typeof _dwOnSensorUpdate==='function') _dwOnSensorUpdate(d.device_id, d.sensor_id);
+    // Maintain device→sensor index
+    if(!S._devSensors[d.device_id]) S._devSensors[d.device_id]=new Set();
+    S._devSensors[d.device_id].add(_key);
+    if(_sseHidden) return;  // skip DOM work when tab hidden
+    _sseBatch.sensors[_key]=d;
+    _sseSchedule();
   });
   sse.addEventListener('device_status',e=>{
     const d=_parseSSE(e); if(!d) return;
-    if(S.devices[d.did])S.devices[d.did].status=d.status;
-    updateCardStatus(d.did,d.status);
-    updateSbDevDot(d.did,d.status);
-    updatePills();
-    if(typeof _dwOnDeviceUpdate==='function') _dwOnDeviceUpdate();
+    if(S.devices[d.did]) S.devices[d.did].status=d.status;
+    if(_sseHidden) return;
+    _sseBatch.devStatuses[d.did]=d.status;
+    _sseSchedule();
   });
   sse.addEventListener('log',e=>{
     const d=_parseSSE(e); if(!d) return;
@@ -103,7 +140,10 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
     data.devices.forEach(dev => {
       S.devices[dev.device_id] = dev;
       dev.sensors.forEach(s => {
-        S.sensors[`${dev.device_id}/${s.sensor_id}`] = s;
+        const _k=`${dev.device_id}/${s.sensor_id}`;
+        S.sensors[_k] = s;
+        if(!S._devSensors[dev.device_id]) S._devSensors[dev.device_id]=new Set();
+        S._devSensors[dev.device_id].add(_k);
       });
     });
     updatePills();
@@ -124,14 +164,18 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
 
 // ── Resync when user returns to tab after being away ─────────────
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  // If SSE dropped while the tab was hidden, reconnect (resync fires via onopen)
-  if (!sse || sse.readyState === EventSource.CLOSED) {
-    _sseFirstConnect = false;  // treat as reconnect so resync runs on open
-    connectSSE();
+  if (document.visibilityState === 'visible') {
+    _sseHidden = false;
+    // Flush any pending batch immediately
+    if (_sseBatch.timer) { clearTimeout(_sseBatch.timer); _sseBatch.timer=null; _sseFlush(); }
+    if (!sse || sse.readyState === EventSource.CLOSED) {
+      _sseFirstConnect = false;
+      connectSSE();
+    } else {
+      _sseResync();
+    }
   } else {
-    // SSE still open but data may be stale — full state refresh immediately
-    _sseResync();
+    _sseHidden = true;
   }
 });
 
@@ -445,9 +489,15 @@ function switchMainTab(tab){
 async function _refreshDevices(){
   try{
     const data=await (await fetch('/api/devices')).json();
+    S._devSensors={};
     data.devices.forEach(dev=>{
       S.devices[dev.device_id]=dev;
-      dev.sensors.forEach(s=>{ S.sensors[`${dev.device_id}/${s.sensor_id}`]=s; });
+      dev.sensors.forEach(s=>{
+        const _k=`${dev.device_id}/${s.sensor_id}`;
+        S.sensors[_k]=s;
+        if(!S._devSensors[dev.device_id]) S._devSensors[dev.device_id]=new Set();
+        S._devSensors[dev.device_id].add(_k);
+      });
       renderDp(dev);
     });
     updatePills();
@@ -571,11 +621,15 @@ async function loadAll(){
 
   const r=await fetch('/api/devices');
   const data=await r.json();
+  S._devSensors={};
   data.devices.forEach(dev=>{
     S.devices[dev.device_id]=dev;
     dev.sensors.forEach(s=>{
-      S.sensors[`${dev.device_id}/${s.sensor_id}`]=s;
-      S.logs[`${dev.device_id}/${s.sensor_id}`]=[];
+      const _k=`${dev.device_id}/${s.sensor_id}`;
+      S.sensors[_k]=s;
+      S.logs[_k]=[];
+      if(!S._devSensors[dev.device_id]) S._devSensors[dev.device_id]=new Set();
+      S._devSensors[dev.device_id].add(_k);
     });
     renderDp(dev);
   });

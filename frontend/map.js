@@ -27,6 +27,7 @@ let _pageGen = 0;
 // ═══════════════════════════ PINGWATCH LIVE TAB ═══════════════════════════
 let isPingWatchPage = true;   // true while PingWatch live tab is active
 let pwDevices = [];           // cached device list from /api/devices
+let _pwDevMap = {};           // device_id → device object (O(1) lookup)
 let pwSSE = null;             // SSE EventSource for live status updates
 let _selectedPwDid = null;   // device_id currently shown in panel
 let _pwTraceSrcDid = null;   // trace source override (null = auto-detect by name)
@@ -187,10 +188,11 @@ async function loadPingWatchPage() {
     ]);
     if (gen !== _pageGen) return; // superseded by a newer tab switch
     pwDevices = data.devices || [];
+    _pwDevMap = {}; pwDevices.forEach(d => _pwDevMap[d.device_id] = d);
     pwOverrides = ovrRes?.value || {};
     pwGroupOverrides = grpRes?.value || {};
     pwLinks = lnkRes?.value || [];
-  } catch(e) { if (gen !== _pageGen) return; pwDevices = []; }
+  } catch(e) { if (gen !== _pageGen) return; pwDevices = []; _pwDevMap = {}; }
   renderPingWatchCanvas();
   startPwSSE();
   fitToView();
@@ -458,13 +460,13 @@ function startPwSSE() {
     pwSSE.addEventListener('device_status', e => {
       if (!isPingWatchPage) return;
       const d = JSON.parse(e.data);
-      const dev = pwDevices.find(x => x.device_id === d.did);
+      const dev = _pwDevMap[d.did];
       if (dev) { dev.status = d.status; _schedulePwLiveUpdate(dev.device_id); }
     });
     pwSSE.addEventListener('sensor', e => {
       if (!isPingWatchPage) return;
       const s = JSON.parse(e.data);
-      const dev = pwDevices.find(x => x.device_id === s.device_id);
+      const dev = _pwDevMap[s.device_id];
       if (dev) {
         const idx = (dev.sensors||[]).findIndex(x => x.sensor_id === s.sensor_id);
         if (idx >= 0) dev.sensors[idx] = s; else (dev.sensors = dev.sensors||[]).push(s);
@@ -603,44 +605,50 @@ function _pwInputFocused() {
 }
 
 function _pwLiveUpdate(did) {
-  // Update node color properties in-memory
   const node = nodeMap['pw_' + did];
-  const dev  = pwDevices.find(d => d.device_id === did);
-  if (node && dev) {
-    const col = pwStatusColor(dev.status);
-    const nameColor = dev.status === 'down'    ? '#ff9999'
-                    : dev.status === 'unknown' ? '#888888' : undefined;
-    const ovr = pwOverrides[did];
-    node.properties.ip_color   = col;
-    node.properties.name_color = nameColor;
-    if (!ovr?.color) {
-      node.properties.color = dev.status === 'down'    ? '#ff3333'
-                            : dev.status === 'unknown' ? '#888888' : undefined;
-    }
-    // Rebuild only this one node's SVG element in-place
-    const el = document.getElementById('node-' + node.id);
-    if (el) {
-      const sel = selectedEl?.type === 'node' && selectedEl?.data.id === node.id;
-      // Redirect outside-labels to the labels layer so they stay on top
-      const _ll = document.getElementById('node-labels-layer');
-      document.getElementById('node-label-' + node.id)?.remove();
-      if (_ll) _labelLayerTarget = _ll;
-      el.innerHTML = buildNode(node, sel);
-      _labelLayerTarget = null;
-      _applyNodeColorFilter(el, node);
-      el.addEventListener('mousedown', e => startDrag(e, node));
-      el.addEventListener('click', e => {
-        e.stopPropagation();
-        if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
-        if (e.shiftKey) { toggleMultiSelect(node); }
-        else { multiSelect.clear(); selectNode(node); }
-      });
-      el.addEventListener('touchstart', e => startDrag(e, node), { passive: false });
-    }
+  const dev  = _pwDevMap[did];
+  if (!node || !dev) return;
+
+  // ── Status-change guard — skip DOM work if nothing changed ──
+  if (node._lastPwStatus === dev.status) return;
+  node._lastPwStatus = dev.status;
+
+  const col = pwStatusColor(dev.status);
+  const nameColor = dev.status === 'down'    ? '#ff9999'
+                  : dev.status === 'unknown' ? '#888888' : undefined;
+  const ovr = pwOverrides[did];
+  node.properties.ip_color   = col;
+  node.properties.name_color = nameColor;
+  if (!ovr?.color) {
+    node.properties.color = dev.status === 'down'    ? '#ff3333'
+                          : dev.status === 'unknown' ? '#888888' : undefined;
   }
 
-  // Update header stats
-  updateHeaderStats();
+  // ── In-place SVG attribute update (avoids full innerHTML rebuild) ──
+  const el = document.getElementById('node-' + node.id);
+  if (el) {
+    // Update IP text color
+    const ipEl = el.querySelector('[data-pw-ip]');
+    if (ipEl) ipEl.setAttribute('fill', col);
+
+    // Update name text color
+    const nameEl = el.querySelector('[data-pw-name]');
+    if (nameEl) nameEl.setAttribute('fill', nameColor || nameEl.getAttribute('data-pw-origfill') || '#e0e0e0');
+
+    // Update color filter (hue-rotate) on existing wrapper <g>
+    const innerG = el.firstElementChild;
+    if (innerG) {
+      const filterG = innerG.querySelector('g[style]');
+      if (node.properties.color) {
+        const deg = Math.round(getHue(node.properties.color) - 37);
+        const f = 'grayscale(1) sepia(1) hue-rotate('+deg+'deg) saturate(2.5) brightness(1.05)';
+        if (filterG) filterG.style.filter = f;
+      } else if (filterG) {
+        filterG.style.filter = '';
+      }
+    }
+    // No innerHTML rebuild, no event listener teardown/reattach
+  }
 
   // Update PW tab dot color
   const dot = document.getElementById('pw-tab-dot');
@@ -650,14 +658,14 @@ function _pwLiveUpdate(did) {
     dot.style.boxShadow  = anyDown ? '0 0 5px #ff3333' : '0 0 5px #00ff9d';
   }
 
-  // Update connected link stroke colors to reflect device status
+  // Update connected link stroke colors
   pwLinks
     .filter(lk => lk.src_did === did || lk.tgt_did === did)
     .forEach(lk => {
       const lineEl = document.querySelector(`[data-pwlid="${CSS.escape(lk.id)}"] .link-main`);
       if (!lineEl) return;
       const otherDid = lk.src_did === did ? lk.tgt_did : lk.src_did;
-      const otherDev = pwDevices.find(d => d.device_id === otherDid);
+      const otherDev = _pwDevMap[otherDid];
       const lkCfg    = lcfg(lk.link_type || 'trunk');
       const newStroke = (dev?.status === 'down' || otherDev?.status === 'down')
                         ? '#ff3333' : lkCfg.stroke;
@@ -1182,7 +1190,7 @@ function renderCloud(node, p, sf) {
       <line x1="-13" y1="0" x2="13" y2="0" stroke="#00d4ff" stroke-width="0.8" opacity="0.5"/>
       <circle cx="0" cy="0" r="2.5" fill="#00d4ff" opacity="0.9"/>
     </g>
-    <text x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Orbitron" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Orbitron" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(node.name)}</text>
   </g>`;
 }
 
@@ -1196,7 +1204,7 @@ function renderFirewall(node, p, sf) {
     <rect x="0" y="0" width="155" height="${H}" rx="4" fill="url(#scanlines)"/>
     <path d="M16,12 L30,8 L44,12 L44,28 Q37,38 30,40 Q23,38 16,28 Z" fill="none" stroke="#ff3366" stroke-width="1.5"/>
     <path d="M23,22 L28,27 L38,17" fill="none" stroke="#ff6b6b" stroke-width="1.5"/>
-    <text x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 52, 40, 50, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     <text x="52" y="66" fill="${statusColor}" font-family="Share Tech Mono" font-size="9">${statusText}</text>
     ${vlanBadge(p, 52, H - 19)}
@@ -1216,7 +1224,7 @@ function renderWanSwitch(node, p, sf) {
       <rect x="21" y="4" width="5" height="16" rx="1" fill="#00d4ff"/>
       <rect x="28" y="8" width="5" height="12" rx="1" fill="#00d4ff" opacity="0.8"/>
     </g>
-    <text x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 55, 38, 48, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
     <g transform="translate(8,${_vlanH(p) > 0 ? 52 : 44})">
       ${[0,11,22,33,44,55].map(x=>`<rect x="${x}" y="0" width="8" height="6" rx="1" fill="#00d4ff" opacity="${x<22?0.6:0.2}" class="led-blink"/>`).join('')}
@@ -1270,7 +1278,7 @@ function renderBBSwitch(node, p, sf) {
       `).join('')}
     </g>
 
-    <text x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(node.name)}</text>
 
     ${renderSubtitleAndIP(p, 62, 44, 57, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
 
@@ -1301,7 +1309,7 @@ function renderSwitch(node, p, sf) {
         fill="${i===3?'#ffd700':'#00ff9d'}" class="led-blink" opacity="${i%2===0?1:0.5}"/>`).join('')}
     </g>
 
-    <text x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="11.5" font-weight="600">
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="11.5" font-weight="600">
       ${escXml(node.name)}
     </text>
 
@@ -1321,7 +1329,7 @@ function renderConnector(node, p, sf) {
     <polygon points="28,10 44,26 28,42 12,26" fill="none" stroke="#ffd700" stroke-width="1.5"/>
     <polygon points="28,16 38,26 28,36 18,26" fill="rgba(255,215,0,0.15)" stroke="#ffd700" stroke-width="1"/>
     <circle cx="28" cy="26" r="3" fill="#ffd700"/>
-    <text x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Exo 2" font-size="12" font-weight="700">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Exo 2" font-size="12" font-weight="700">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 52, 37, 51, '#ffd700', 'rgba(255,255,255,0.6)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="163" height="2" rx="1" fill="rgba(255,215,0,0.3)"/>
@@ -1339,7 +1347,7 @@ function renderAP(node, p, sf) {
       <path d="M13,26 Q17,18 21,26" fill="none" stroke="#a855f7" stroke-width="2"/>
       <circle cx="17" cy="28" r="2.5" fill="#a855f7"/>
     </g>
-    <text x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="168" height="2" rx="1" fill="rgba(168,85,247,0.3)"/>
@@ -1426,7 +1434,7 @@ function renderInfoBox(node, p, sf) {
     <rect x="0" y="0" width="210" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
       stroke-width="1" stroke-dasharray="4,3"/>
-    <text x="10" y="16" fill="#ff6b6b" font-family="Orbitron" font-size="9" letter-spacing="1">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="16" fill="#ff6b6b" font-family="Orbitron" font-size="9" letter-spacing="1">${escXml(node.name)}</text>
     ${lines.map((l,i) => {
       const color = (l && l.color) ? String(l.color) : 'rgba(255,255,255,0.6)';
       const text  = (l && l.text)  ? String(l.text)  : '';
@@ -1442,7 +1450,7 @@ function renderGeneric(node, p, sf) {
   const H = 60 + _vlanH(p);
   return `<g ${sf}>
     <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(10,20,35,0.92)" stroke="#00d4ff" stroke-width="1.5"/>
-    <text x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
 	${p.subtitle ? svgTextLine(80, 45, p.subtitle, (p.subtitle_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && p.ip) ? svgTextLine(80, 45, p.ip, (p.ip_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && !p.ip) ? svgTextLine(80, 45, node.type, 'rgba(255,255,255,0.35)', 9) : ''}
@@ -1462,7 +1470,7 @@ function renderRouter(node, p, sf) {
       <line x1="15" y1="2" x2="15" y2="28" stroke="#00d4ff" stroke-width="0.7" opacity="0.5"/>
       <polygon points="28,12 34,15 28,18" fill="#00d4ff"/>
     </g>
-    <text x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(0,212,255,0.2)"/>
@@ -1480,7 +1488,7 @@ function renderVM(node, p, sf) {
       <rect x="6" y="2" width="16" height="12" rx="2" fill="rgba(45,212,191,0.07)" stroke="#2dd4bf" stroke-width="1" opacity="0.4"/>
       <circle cx="14" cy="23" r="2" fill="#2dd4bf" opacity="0.8"/>
     </g>
-    <text x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(45,212,191,0.2)"/>
@@ -1502,7 +1510,7 @@ function renderAppliance(node, p, sf) {
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#fb923c" stroke-width="1.5" opacity="0.7"/>`;
       }).join('')}
     </g>
-    <text x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(251,146,60,0.2)"/>
@@ -2239,19 +2247,20 @@ function renderOutsideLabel(node, p, cx, baseH, opts = {}) {
   // VLAN badge sits below the last text line
   const yBadge = (line3Text ? yLine3 : line2Text ? yLine2 : yName) + 8;
 
+  const origFill = opts.nameFill || '#93c5fd';
   const svgContent = `
-    <text x="${cx}" y="${yName}" text-anchor="middle"
+    <text data-pw-name data-pw-origfill="${origFill}" x="${cx}" y="${yName}" text-anchor="middle"
       fill="${nameFill}" font-family="Exo 2" font-size="${nameSize}"
       font-weight="700"${glow ? ` filter="${glow}"` : ''}>${escXml(node.name)}</text>
 
     ${line2Text ? `
-      <text x="${cx}" y="${yLine2}" text-anchor="middle"
+      <text${line2IsIP ? ' data-pw-ip' : ''} x="${cx}" y="${yLine2}" text-anchor="middle"
         fill="${line2Color}" font-family="Share Tech Mono"
         font-size="${line2Size}"${line2IsIP ? ' font-weight="700" filter="url(#glow-blue)"' : ' opacity="0.85"'}>${escXml(line2Text)}</text>
     ` : ''}
 
     ${line3Text ? `
-      <text x="${cx}" y="${yLine3}" text-anchor="middle"
+      <text data-pw-ip x="${cx}" y="${yLine3}" text-anchor="middle"
         fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono"
         font-size="${line2Size}" font-weight="700" filter="url(#glow-blue)">${escXml(line3Text)}</text>
     ` : ''}
@@ -2391,7 +2400,7 @@ function renderSubtitleAndIP(p, x, ySubtitle, yIP, subtitleFill, ipFill) {
     out += svgTextLine(x, ySubtitle, sub, subColor, 9);
 
   if (ip)
-    out += `<text x="${x}" y="${sub ? yIP : ySubtitle}" fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono" font-size="9" font-weight="700" filter="url(#glow-blue)">${String(ip).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}</text>`;
+    out += `<text data-pw-ip x="${x}" y="${sub ? yIP : ySubtitle}" fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono" font-size="9" font-weight="700" filter="url(#glow-blue)">${String(ip).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}</text>`;
 
   return out;
 }
@@ -3526,7 +3535,11 @@ function showDashboardPanel() {
 }
 
 // ═══════════════════════════ HEADER STATS ═══════════════════════════
+let _lastHeaderCounts = '';
 function updateHeaderStats() {
+  const c = `${nodes.length}|${links.length}|${groups.length}`;
+  if (c === _lastHeaderCounts) return;  // nothing changed — skip DOM write
+  _lastHeaderCounts = c;
   const el = document.getElementById('header-stats');
   if (!el) return;
   el.innerHTML = `
