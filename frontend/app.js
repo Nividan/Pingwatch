@@ -423,9 +423,16 @@ function switchMainTab(tab){
     emptyMain.style.display='none';
     dpanels.style.display='none';
     mapView.style.display='flex';
-    if(_mf&&!_mf.src&&_mf.dataset.src) _mf.src=_mf.dataset.src;
-    else if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
-    _mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
+    if(_mf&&!_mf.src&&_mf.dataset.src){
+      _mf.addEventListener('load',()=>{
+        _mf.contentWindow?.postMessage({type:'pw_reload_pages'},window.location.origin);
+        _mf.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
+      },{once:true});
+      _mf.src=_mf.dataset.src;
+    } else if(_mf&&_mf.contentWindow){
+      _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
+      _mf.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
+    }
   } else if(tab==='backups'){
     backupsView.style.display='flex';
     emptyMain.style.display='none';
