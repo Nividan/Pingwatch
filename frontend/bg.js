@@ -2,12 +2,18 @@
 // BACKGROUND ENGINE — aurora blobs + particle mesh + scan
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
 (()=>{
+  // #netbg is now display:none — background replaced by static CSS gradients in style.css.
+  // Expose stubs so app.js tab-switching references don't throw.
+  window._bgResume    = ()=>{};
+  window._bgMapActive = false;
+  // Nothing more to do — bail out immediately.
   const cvs = document.getElementById('netbg');
+  if (!cvs || getComputedStyle(cvs).display === 'none') return;
+
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
-  // True 8fps throttle via setTimeout+RAF — eliminates 52 wasted RAF callbacks/s
-  // (old pattern called requestAnimationFrame unconditionally before the throttle check)
+  // (unreachable — kept only so the rest of the block is syntactically valid)
   const _BG_MS = 1000 / 8;
   let _bgRafId = null;
 
@@ -168,7 +174,8 @@
 
     function frame(){
       _radarRafId = null;
-      if(document.hidden) return; // tab hidden — startRadar() resumes on visibilitychange
+      // Stop when browser tab hidden OR when #emptyMain is hidden (devices exist, radar not shown)
+      if(document.hidden || !cvs.offsetParent) return;
       ctx.clearRect(0,0,W,H);
 
       // outer glow ring
@@ -249,7 +256,7 @@
     }
 
     function startRadar(){
-      if(!_radarRafId && !document.hidden)
+      if(!_radarRafId && !document.hidden && cvs.offsetParent)
         _radarRafId = setTimeout(()=>requestAnimationFrame(frame), RADAR_MS);
     }
     document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startRadar(); });
