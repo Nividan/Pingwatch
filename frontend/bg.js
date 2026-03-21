@@ -60,14 +60,16 @@
   }
 
   function drawMesh(){
-    const DIST = 110;
+    const DIST = 110, DIST2 = DIST*DIST; // compare squared — skips sqrt for ~90% of pairs
     for(let i=0;i<nodes.length;i++){
       const a = nodes[i];
       const ax = a.bx+a.ox, ay = a.by+a.oy;
       for(let j=i+1;j<nodes.length;j++){
         const b = nodes[j];
         const bx = b.bx+b.ox, by = b.by+b.oy;
-        const dx=ax-bx, dy=ay-by, d=Math.sqrt(dx*dx+dy*dy);
+        const dx=ax-bx, dy=ay-by;
+        if(dx*dx+dy*dy > DIST2) continue; // fast reject — no sqrt needed
+        const d=Math.sqrt(dx*dx+dy*dy);
         if(d > DIST) continue;
         const fade = (1-d/DIST);
         // scan glow on edges
@@ -126,8 +128,10 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
-    // setTimeout provides the 8fps cap; RAF aligns the actual paint to vsync
-    _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
+    // When map tab is active, the iframe covers most of the bg canvas —
+    // drop to 4fps to free GPU bandwidth for the iframe's own canvases.
+    const delay = window._bgMapActive ? _BG_MS * 2 : _BG_MS;
+    _bgRafId = setTimeout(()=>requestAnimationFrame(frame), delay);
   }
 
   function startBg(){
@@ -136,6 +140,8 @@
   }
 
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startBg(); });
+  // Expose resume hook so app.js can restart bg when leaving the map tab
+  window._bgResume = startBg;
   window.addEventListener('resize', resize);
   resize(); startBg();
 })();
@@ -155,9 +161,9 @@
     }
     for(let i=0;i<5;i++)addBlip();
 
-    // True 30fps via setTimeout+RAF — eliminates the 60 RAF/s spin from the old
-    // throttle-check pattern. visibilitychange pauses when the tab is hidden.
-    const RADAR_MS = 1000 / 30;
+    // 15fps — halved from 30fps to reduce GPU composite pressure.
+    // The sweep animation is smooth enough at 15fps and saves significant GPU bandwidth.
+    const RADAR_MS = 1000 / 15;
     let _radarRafId = null;
 
     function frame(){
@@ -238,7 +244,7 @@
       ctx.beginPath();ctx.arc(CX,CY,8,0,Math.PI*2);ctx.fillStyle=cg;ctx.fill();
       ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle='#60a5fa';ctx.fill();
 
-      angle=(angle+.036)%(Math.PI*2); // .018*2 — compensate for 30 FPS vs 60 FPS
+      angle=(angle+.072)%(Math.PI*2); // .018*4 — compensate for 15 FPS vs 60 FPS
       _radarRafId = setTimeout(()=>requestAnimationFrame(frame), RADAR_MS);
     }
 

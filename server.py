@@ -250,6 +250,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', _STATIC_TYPES[ext])
                 self.send_header('Content-Length', len(data))
+                # Prevent browsers from serving stale JS/CSS after a server restart.
+                # Without this, browsers apply heuristic caching and can serve old
+                # code for hours even after git pull + restart.
+                if ext in ('.js', '.css'):
+                    self.send_header('Cache-Control', 'no-cache, must-revalidate')
+                    self.send_header('Pragma', 'no-cache')
                 self._sec_headers()
                 self.end_headers()
                 self.wfile.write(data)
