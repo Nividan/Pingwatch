@@ -1,3 +1,14 @@
+// ── Availability fetch — shared promise prevents request storms ───
+let _availFetchPromise = null;
+function _fetchAvailability() {
+  if (_availFetchPromise) return _availFetchPromise;
+  _availFetchPromise = fetch('/api/availability?minutes=1440')
+    .then(r => r.json())
+    .catch(() => ({ availability: [] }))
+    .finally(() => { _availFetchPromise = null; });
+  return _availFetchPromise;
+}
+
 // ── Dashboard widget system ───────────────────────────────────────
 // Widget registry — add entries here to support new widget types
 const _DW_REG = {
@@ -727,6 +738,11 @@ function _dwRefreshNetAvail(wid) {
     <span class="dw-ds-pill down">${down} Down</span>
     ${idle ? `<span class="dw-ds-pill idle">${idle} Idle</span>` : ''}`;
   if (totalEl) totalEl.textContent = `${total} sensor${total !== 1 ? 's' : ''} monitored`;
+  // Throttle: only redraw chart once per 30s regardless of SSE event rate.
+  // Text stats (pct, pills, total) update every call above; only the fetch+canvas is throttled.
+  const _now = Date.now();
+  if (_now - (_dwRefreshNetAvail._last || 0) < 30000) return;
+  _dwRefreshNetAvail._last = _now;
   _dwDrawNetAvailChart(wid); // fire-and-forget
 }
 
@@ -735,8 +751,7 @@ async function _dwDrawNetAvailChart(wid) {
   if (!canvas) return;
   let availability = [];
   try {
-    const r = await fetch('/api/availability?minutes=1440');
-    const d = await r.json();
+    const d = await _fetchAvailability();
     availability = d.availability || [];
   } catch { return; }
   canvas.width = canvas.offsetWidth || 340;
@@ -824,7 +839,9 @@ function _dwRefreshFlapEvents(wid, cfg) {
       dotColor = isCrit ? '#e74c3c' : '#f39c12';
       label = isCrit ? 'CRIT' : 'WARN';
     }
-    const ts   = (d.ts||'').split(' ')[1] || d.ts || '';
+    const _dtRaw = new Date(d.ts || '');
+    const ts = isNaN(_dtRaw.getTime()) ? (d.ts || '').slice(11, 19) :
+        `${String(_dtRaw.getUTCMonth()+1).padStart(2,'0')}-${String(_dtRaw.getUTCDate()).padStart(2,'0')} ${String(_dtRaw.getUTCHours()).padStart(2,'0')}:${String(_dtRaw.getUTCMinutes()).padStart(2,'0')}`;
     const name = d.sname || d.dname || '';
     return `<div class="dw-fe-row">
       <span class="dw-fe-dot" style="background:${dotColor}"></span>

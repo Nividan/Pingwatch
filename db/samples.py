@@ -2,6 +2,7 @@
 db/samples.py — Sample write buffer, flush, clean, and query helpers.
 """
 
+import math
 import sqlite3
 import threading
 import time
@@ -45,11 +46,17 @@ def db_flush_samples():
             return
         rows = _SAMPLE_BUF[:]
         _SAMPLE_BUF.clear()
-    _do_insert_samples(rows)
+    try:
+        _do_insert_samples(rows)
+    except Exception:
+        # Re-prepend rows so they are retried on the next flush
+        with _SAMPLE_BUF_LOCK:
+            for r in reversed(rows):
+                _SAMPLE_BUF.insert(0, r)
 
 
 def _sample_flush_loop():
-    """Every 5 s drain the buffer and enqueue the write on the single writer thread."""
+    """Every 5 s drain the buffer and write directly (retries on failure)."""
     while True:
         time.sleep(5)
         with _SAMPLE_BUF_LOCK:
@@ -57,27 +64,15 @@ def _sample_flush_loop():
                 continue
             rows = _SAMPLE_BUF[:]
             _SAMPLE_BUF.clear()
-        _db_enqueue(lambda r=rows: _do_insert_samples(r))
+        try:
+            _do_insert_samples(rows)
+        except Exception:
+            with _SAMPLE_BUF_LOCK:
+                for r in reversed(rows):
+                    _SAMPLE_BUF.insert(0, r)
 
 
 threading.Thread(target=_sample_flush_loop, daemon=True).start()
-
-
-def db_log_sample(did, sid, ok, ms, value, ts):
-    """Insert one probe result into sensor_samples. Always call via _db_enqueue."""
-    con = None
-    try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
-        con.execute(
-            "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES (?,?,?,?,?,?)",
-            (ts, did, sid, int(ok), ms, value)
-        )
-        con.commit()
-    except Exception as e:
-        log.error(f"DB log sample error: {e}")
-    finally:
-        if con:
-            con.close()
 
 
 def db_clean_samples(retention_days=365):
@@ -189,16 +184,32 @@ def db_load_summary(did, sid, minutes=1440):
         rows = con.execute("""
             SELECT CAST(ts/3600 AS INTEGER)*3600 AS hour_ts,
                    SUM(ok), COUNT(*)-SUM(ok),
-                   AVG(ms), MIN(ms), MAX(ms)
+                   AVG(ms), MIN(ms), MAX(ms), AVG(ms*ms)
             FROM sensor_samples
             WHERE did=? AND sid=? AND ts>=?
             GROUP BY hour_ts ORDER BY hour_ts ASC
         """, (did, sid, cutoff)).fetchall()
-        return [{"ts": r[0], "ok": int(r[1] or 0), "fail": int(r[2] or 0),
-                 "avg_ms": round(r[3], 1) if r[3] is not None else None,
-                 "min_ms": round(r[4], 1) if r[4] is not None else None,
-                 "max_ms": round(r[5], 1) if r[5] is not None else None}
-                for r in rows]
+        result = []
+        for r in rows:
+            ok   = int(r[1] or 0)
+            fail = int(r[2] or 0)
+            avg_ms    = round(r[3], 1) if r[3] is not None else None
+            avg_ms_sq = r[6] or 0.0
+            avg_ms_v  = r[3] or 0.0
+            jitter_ms = round(math.sqrt(max(0.0, avg_ms_sq - avg_ms_v ** 2)), 1)
+            total     = ok + fail
+            loss_pct  = round(fail / total * 100, 1) if total > 0 else 0.0
+            result.append({
+                "ts":       r[0],
+                "ok":       ok,
+                "fail":     fail,
+                "avg_ms":   avg_ms,
+                "min_ms":   round(r[4], 1) if r[4] is not None else None,
+                "max_ms":   round(r[5], 1) if r[5] is not None else None,
+                "jitter_ms": jitter_ms,
+                "loss_pct":  loss_pct,
+            })
+        return result
     except Exception as e:
         log.error(f"DB load summary error: {e}")
         return []

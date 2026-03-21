@@ -261,7 +261,11 @@ def parse_cert_info(cert_pem: str) -> dict:
                     return attr.value
             return ", ".join(parts) or "(unknown)"
 
-        not_after = cert.not_valid_after_utc
+        # not_valid_after_utc added in cryptography 42; fall back to naive attr
+        not_after = getattr(cert, "not_valid_after_utc", None) or \
+            datetime.datetime.combine(cert.not_valid_after.date(),
+                                      datetime.time.min,
+                                      tzinfo=datetime.timezone.utc)
         days_left = (not_after - datetime.datetime.now(datetime.timezone.utc)).days
 
         subject_str = _name_str(cert.subject)
@@ -312,7 +316,10 @@ def validate_cert_key_pair(cert_pem: str, key_pem: str) -> "str | None":
             return "Certificate and private key do not match"
 
         # Check cert is not expired
-        not_after = cert.not_valid_after_utc
+        not_after = getattr(cert, "not_valid_after_utc", None) or \
+            datetime.datetime.combine(cert.not_valid_after.date(),
+                                      datetime.time.min,
+                                      tzinfo=datetime.timezone.utc)
         if not_after < datetime.datetime.now(datetime.timezone.utc):
             return f"Certificate expired on {not_after.strftime('%Y-%m-%d')}"
 

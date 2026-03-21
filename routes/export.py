@@ -11,9 +11,9 @@ import tempfile
 import threading
 import time
 
-from core.config import DB_PATH, _RE_DB_EXPORT, _RE_DB_IMPORT, _RE_AUDIT
+from core.config import DB_PATH, _RE_DB_EXPORT, _RE_DB_IMPORT, _RE_AUDIT, _RE_LOGS
 from db          import db_log_audit, db_get_audit
-from core.logger import log
+from core.logger import log, LOG_FILES
 
 
 def handle(h, method, path, body):
@@ -189,6 +189,24 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         h._json(200, {"entries": db_get_audit(200)})
+        return True
+
+    # ── /api/logs/{logname} GET ───────────────────────────────────
+    m = _RE_LOGS.match(path)
+    if m and method == "GET":
+        user, _ = h._require("admin")
+        if not user: return True
+        key   = m.group(1)
+        fpath = LOG_FILES.get(key)
+        if not fpath:
+            h._json(404, {"error": "unknown log"}); return True
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='replace') as _lf:
+                lines = _lf.readlines()
+            tail = ''.join(lines[-500:])
+        except FileNotFoundError:
+            tail = ''
+        h._json(200, {"log": key, "lines": tail})
         return True
 
     return False

@@ -29,6 +29,14 @@ async function _bkInit() {
   }
 }
 
+// ── Eligibility heuristic ─────────────────────────────────────────────
+// Returns false for internet monitors that can never have SSH credentials.
+function _bkIsEligible(dev) {
+  if (dev.enabled || dev.username) return true; // explicitly configured
+  const h = dev.host || '';
+  return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)/.test(h);
+}
+
 // ── Table ─────────────────────────────────────────────────────────────
 function _bkRenderTable(devices) {
   const wrap = document.getElementById('bk-table-wrap');
@@ -41,14 +49,17 @@ function _bkRenderTable(devices) {
 
   const rows = devices.map(dev => {
     const isRunning  = _bkRunning.has(dev.did);
+    const eligible   = _bkIsEligible(dev);
     const scheduled  = dev.enabled && dev.in_schedule
       ? '<span class="bk-dot-on" title="In schedule">✓</span>'
       : '<span class="bk-never">—</span>';
     const timeCell   = dev.last_ts ? _bkRelTime(dev.last_ts) : '<span class="bk-never">—</span>';
     const statusCell = _bkStatusCell(dev, isRunning);
-    const enabledDot = dev.enabled
-      ? '<span class="bk-dot-on" title="Backup enabled">●</span>'
-      : '<span class="bk-dot-off" title="Backup disabled">○</span>';
+    const enabledDot = !eligible
+      ? '<span class="bk-never" title="Internet monitor — not SSH-accessible">N/A</span>'
+      : dev.enabled
+        ? '<span class="bk-dot-on" title="Backup enabled">●</span>'
+        : '<span class="bk-dot-off" title="Backup disabled">○</span>';
     const cnt = dev.run_count || 0;
     const cntCell = dev.enabled
       ? `<span class="bk-cnt ${cnt >= _bkKeepMax ? 'bk-cnt-full' : ''}" title="${cnt} saved, max ${_bkKeepMax}">${cnt}/${_bkKeepMax}</span>`
@@ -67,11 +78,13 @@ function _bkRenderTable(devices) {
           : `<button class="btn-sm" disabled title="No backups yet">📄</button>`}
       </td>
       <td onclick="event.stopPropagation()" style="text-align:center">
-        <button class="btn-sm ${isRunning ? 'bk-btn-spin' : ''}"
+        ${eligible
+          ? `<button class="btn-sm ${isRunning ? 'bk-btn-spin' : ''}"
                 onclick="_bkTriggerRun('${esc(dev.did)}')"
                 ${isRunning ? 'disabled' : ''} title="Run backup now">
-          ${isRunning ? '⟳' : '▶'}
-        </button>
+              ${isRunning ? '⟳' : '▶'}
+            </button>`
+          : '<span class="bk-never" title="Not SSH-accessible">—</span>'}
       </td>
     </tr>`;
   }).join('');
