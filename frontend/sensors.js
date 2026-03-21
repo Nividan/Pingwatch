@@ -766,38 +766,75 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
       const _plotH = canvas.height - BOT - TOP;
       const _yOf = ms => Math.max(TOP, (canvas.height - BOT) - (Math.min(ms, _maxY) / _maxY) * _plotH);
 
-      // Compute bucket average at cursor position — same logic as _drawHistCanvas
+      // Read bucket data from cache (computed once in _drawHistCanvas, not per-mousemove)
       const TARGET = 300;
       const _winStart = cache.windowStart ?? (Date.now() / 1000 - minutes * 60);
-      const _bucketSec = (minutes * 60) / TARGET;
+      const _bucketSec = cache.bucketSec ?? (minutes * 60) / TARGET;
+      const _allBuckets = cache.buckets;   // null in raw mode (≤300 samples)
       const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
-      let _bSum = 0, _bN = 0;
-      for (const p of okSp) {
-        const bi = Math.min(TARGET - 1, Math.floor((p.ts - _winStart) / _bucketSec));
-        if (bi === _cursorBi) { _bSum += p.ms; _bN++; }
-      }
-      const bucketAvg = _bN > 0 ? _bSum / _bN : null;
+      const bucketAvg = (_allBuckets && _allBuckets[_cursorBi].n > 0)
+        ? _allBuckets[_cursorBi].sum / _allBuckets[_cursorBi].n : null;
 
-      // In bucket mode (>300 raw samples) the drawn line uses bucket averages and fills
-      // empty buckets with 0ms. In raw mode (≤300) it draws each sample directly.
+      // In bucket mode (>300 raw samples) the drawn line uses bucket averages.
+      // In raw mode (≤300) it draws each sample directly.
       const usingBuckets = okSp.length > TARGET;
+      const _plotW2 = canvas.width - LEFT - RIGHT;
+      const _xOf2 = ts => LEFT + (ts - _winStart) / (minutes * 60) * _plotW2;
 
-      // dotMs must match what _drawHistCanvas actually drew at the cursor X:
-      //   bucket mode + data  → bucket average
-      //   bucket mode + gap   → 0 (line is at baseline)
-      //   raw mode            → nearest raw sample (bezier interpolated, close enough)
-      const dotMs = usingBuckets
-        ? (bucketAvg !== null ? bucketAvg : 0)
-        : (nearestSample ? nearestSample.ms : null);
+      // Interpolate the line's Y at cursor X so the dot tracks the actual drawn curve.
+      // Linear interpolation between the two adjacent drawn data points gives a close
+      // match to the quadratic bezier without needing full bezier math.
+      let dotMs = null;
+      if (usingBuckets) {
+        // Bucket mode: interpolate between cursor bucket center and adjacent non-empty bucket
+        const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
+        if (bucketAvg !== null) {
+          // Find the adjacent non-empty bucket to interpolate with (O(1) lookup)
+          let adjMs = null, adjX = null;
+          if (mx >= _bcX) {
+            for (let i = _cursorBi + 1; i < TARGET; i++) {
+              if (_allBuckets[i].n > 0) { adjMs = _allBuckets[i].sum / _allBuckets[i].n; adjX = _xOf2(_winStart + (i + 0.5) * _bucketSec); break; }
+            }
+          } else {
+            for (let i = _cursorBi - 1; i >= 0; i--) {
+              if (_allBuckets[i].n > 0) { adjMs = _allBuckets[i].sum / _allBuckets[i].n; adjX = _xOf2(_winStart + (i + 0.5) * _bucketSec); break; }
+            }
+          }
+          if (adjMs !== null && adjX !== null && Math.abs(adjX - _bcX) > 0) {
+            const t = (mx - _bcX) / (adjX - _bcX);
+            dotMs = bucketAvg + t * (adjMs - bucketAvg);
+          } else {
+            dotMs = bucketAvg;
+          }
+        } else {
+          dotMs = 0; // downtime bucket → line is at baseline
+        }
+      } else {
+        // Raw mode: linear interpolation between the two samples straddling cursor X
+        // Use cached sorted array (computed once in _drawHistCanvas, not per-mousemove)
+        const sorted = cache.sortedOkSamples || [...okSp].sort((a, b) => a.ts - b.ts);
+        let p1 = null, p2 = null;
+        for (const p of sorted) {
+          if (_xOf2(p.ts) <= mx) p1 = p;
+          else if (!p2) { p2 = p; break; }
+        }
+        if (p1 && p2) {
+          const x1 = _xOf2(p1.ts), x2 = _xOf2(p2.ts);
+          const t = (mx - x1) / (x2 - x1);
+          dotMs = p1.ms + t * (p2.ms - p1.ms);
+        } else {
+          dotMs = (p1 || p2)?.ms ?? null;
+        }
+      }
 
-      // Exact ms tooltip: same source as the dot
+      // Exact ms tooltip: show interpolated value at cursor
       const exactEl = tip.querySelector('.tip-exact');
       if (exactEl) {
         if (dotMs != null) exactEl.textContent = Math.round(dotMs) + ' ms';
         else exactEl.textContent = '— ms';
       }
 
-      // Draw dot on the drawn line (dotMs Y, mouse X)
+      // Draw dot on the drawn line
       if (dotMs != null) {
         const dotY = _yOf(dotMs);
         cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
@@ -842,10 +879,10 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   const togJitter = document.getElementById(`tog-jitter-${did}-${sid}`)?.checked ?? false;
 
   // Use fixed windowStart from cache (set at fetch time) so redraws don't shift the chart
-  if (!windowStart) windowStart = Date.now() / 1000 - minutes * 60;
+  const _ws = windowStart ?? (Date.now() / 1000 - minutes * 60);
   const tsRange = minutes * 60;
-  const windowEnd = windowStart + tsRange;
-  const xOf = ts => LEFT + (ts - windowStart) / tsRange * plotW;
+  const windowEnd = _ws + tsRange;
+  const xOf = ts => LEFT + (ts - _ws) / tsRange * plotW;
 
   // ── Y-axis scaling — p95 of ok samples to prevent spike-flattening ──
   const msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
@@ -899,7 +936,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   else if (tsRange <= 200*86400) _gInt = 30*86400;
   else                           _gInt = 91*86400;
   const _tzOff = new Date().getTimezoneOffset() * 60;
-  const _firstGrid = Math.ceil((windowStart + _tzOff) / _gInt) * _gInt - _tzOff;
+  const _firstGrid = Math.ceil((_ws + _tzOff) / _gInt) * _gInt - _tzOff;
   for (let ts = _firstGrid; ts < windowEnd; ts += _gInt) {
     const x = xOf(ts);
     if (x < LEFT + 14) continue;
@@ -1032,14 +1069,27 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       //   7d+ (≤10k raw)  → 300 buckets, 30+ samples/bucket → clean trend line
       const TARGET = 300;
       let pts;
+      const _ckey = `${did}/${sid}`;
       if (okSamples.length <= TARGET) {
         pts = okSamples.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
+        // Cache sorted raw samples for tooltip linear interpolation (computed once here)
+        if (_histCache[_ckey]) {
+          _histCache[_ckey].sortedOkSamples = [...okSamples].sort((a, b) => a.ts - b.ts);
+          _histCache[_ckey].buckets = null;
+          _histCache[_ckey].bucketSec = null;
+        }
       } else {
         const bucketSec = tsRange / TARGET;
         const acc = Array.from({ length: TARGET }, () => ({ sum: 0, n: 0 }));
         for (const p of okSamples) {
-          const bi = Math.min(TARGET - 1, Math.floor((p.ts - windowStart) / bucketSec));
+          const bi = Math.min(TARGET - 1, Math.floor((p.ts - _ws) / bucketSec));
           if (bi >= 0) { acc[bi].sum += p.ms; acc[bi].n++; }
+        }
+        // Cache bucket data so tooltip can look up O(1) instead of recomputing O(n)
+        if (_histCache[_ckey]) {
+          _histCache[_ckey].buckets = acc;
+          _histCache[_ckey].bucketSec = bucketSec;
+          _histCache[_ckey].sortedOkSamples = null;
         }
         // Find range of buckets that have data
         let firstBi = -1, lastBi = -1;
@@ -1049,7 +1099,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
         pts = [];
         if (firstBi >= 0) {
           for (let i = firstBi; i <= lastBi; i++) {
-            const ts = windowStart + (i + 0.5) * bucketSec;
+            const ts = _ws + (i + 0.5) * bucketSec;
             // Empty bucket = downtime → connect at 0ms baseline
             const ms = acc[i].n > 0 ? acc[i].sum / acc[i].n : 0;
             pts.push({ x: xOf(ts), y: yOf(ms), ts });
