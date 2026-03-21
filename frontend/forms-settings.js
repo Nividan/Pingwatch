@@ -30,7 +30,7 @@ async function openSettings(){
       <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">Users</button>
       <button class="dw-tab" id="stab-btn-alerts" onclick="switchSettingsTab('alerts')">Alerts</button>
       <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">Database</button>
-      <button class="dw-tab" id="stab-btn-audit" onclick="switchSettingsTab('audit')">Audit</button>
+      <button class="dw-tab" id="stab-btn-logs" onclick="switchSettingsTab('logs')">Logs</button>
       <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">Sensors</button>
       <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">Networking</button>
       <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">Config Backup</button>
@@ -208,13 +208,18 @@ async function openSettings(){
     <div class="mft" id="stab-footer-database" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
-    <div class="mbdy" id="stab-audit" style="display:none;padding:0">
-      <div id="auditLogBody" style="max-height:72vh;overflow-y:auto">
-        <div style="color:var(--text3);font-size:12px;padding:16px">Loading…</div>
+    <div class="mbdy" id="stab-logs" style="display:none;padding:0">
+      <div class="log-subtab-bar">
+        <button class="log-stab active" id="lstab-btn-app"     onclick="_switchLogTab('app')">Application</button>
+        <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
+        <button class="log-stab"        id="lstab-btn-audit"   onclick="_switchLogTab('audit')">Audit</button>
+        <button class="log-stab"        id="lstab-btn-backup"  onclick="_switchLogTab('backup')">Backup</button>
+        <button class="btn-s" onclick="_loadLogTab()" style="margin-left:auto;font-size:11px">↻ Refresh</button>
       </div>
+      <pre id="log-body" class="log-viewer">Loading…</pre>
     </div>
-    <div class="mft" id="stab-footer-audit" style="display:none">
-      <span style="font-size:11px;color:var(--text3)">Last 200 entries · admin only</span>
+    <div class="mft" id="stab-footer-logs" style="display:none">
+      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
     </div>
     <div class="mbdy" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
@@ -383,12 +388,12 @@ async function openSettings(){
 }
 
 function switchSettingsTab(tab){
-  ['general','users','alerts','database','audit','sensors','networking','backup','syslog'].forEach(t=>{
+  ['general','users','alerts','database','logs','sensors','networking','backup','syslog'].forEach(t=>{
     document.getElementById(`stab-${t}`).style.display = t===tab ? '' : 'none';
     document.getElementById(`stab-btn-${t}`).classList.toggle('active', t===tab);
     document.getElementById(`stab-footer-${t}`).style.display = t===tab ? '' : 'none';
   });
-  if(tab==='audit')   loadAuditLog();
+  if(tab==='logs')    _loadLogTab();
   if(tab==='sensors') loadSensorsDefaultsTab();
   if(tab==='backup')  _loadBackupScheduleSettings();
 }
@@ -532,30 +537,33 @@ async function submitGenerateCert(){
   toast('New self-signed certificate generated — restart the server to apply','ok');
 }
 
-async function loadAuditLog(){
-  const el=document.getElementById('auditLogBody');
-  if(!el) return;
-  const r=await fetch('/api/audit');
-  if(!r.ok){ el.innerHTML='<div style="color:var(--down);padding:12px">Access denied</div>'; return; }
-  const {entries}=await r.json();
-  if(!entries.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:12px">No audit entries yet.</div>'; return; }
-  el.innerHTML=`<table class="audit-tbl"><thead><tr>
-    <th>Time</th><th>User</th><th>IP</th><th>Action</th><th>Target</th><th>Detail</th>
-  </tr></thead><tbody>${entries.map(e=>`<tr>
-    <td class="audit-ts">${new Date(e.ts*1000).toLocaleString()}</td>
-    <td class="audit-actor">${e.actor}</td>
-    <td class="audit-ip">${e.ip}</td>
-    <td class="audit-action ${_auditCls(e.action)}">${e.action}</td>
-    <td class="audit-target">${e.target||'—'}</td>
-    <td class="audit-detail">${e.detail||''}</td>
-  </tr>`).join('')}</tbody></table>`;
+let _activeLogTab = 'app';
+
+function _switchLogTab(key) {
+  _activeLogTab = key;
+  ['app','sensors','audit','backup'].forEach(k => {
+    document.getElementById(`lstab-btn-${k}`)?.classList.toggle('active', k === key);
+  });
+  _loadLogTab();
 }
 
-function _auditCls(a){
-  if(a.includes('delete')||a==='db_import') return 'aud-danger';
-  if(a.includes('fail')||a.includes('pass')) return 'aud-warn';
-  if(a==='login_ok'||a.includes('create')) return 'aud-ok';
-  return '';
+async function _loadLogTab() {
+  const el  = document.getElementById('log-body');
+  const lbl = document.getElementById('log-footer-label');
+  if (!el) return;
+  el.textContent = 'Loading…';
+  try {
+    const r = await fetch(`/api/logs/${_activeLogTab}`);
+    if (!r.ok) { el.textContent = 'Access denied'; return; }
+    const d = await r.json();
+    el.textContent = d.lines || '(empty)';
+    el.scrollTop = el.scrollHeight;
+    const names = { app:'pingwatch.log', sensors:'pingwatchsensors.log',
+                    audit:'pingwatchaudit.log', backup:'pingwatchbackup.log' };
+    if (lbl) lbl.textContent = `Last 500 lines · admin only · ${names[_activeLogTab] || ''}`;
+  } catch(e) {
+    el.textContent = `Failed to load: ${String(e)}`;
+  }
 }
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────

@@ -84,3 +84,11 @@ class _MemoryHandler(logging.Handler):
 
 log_buffer = _MemoryHandler()
 log.addHandler(log_buffer)
+
+# ── Public map consumed by the log-viewer API (/api/logs/{key}) ───────────
+LOG_FILES = {
+    'app':     _LOG_PATH,
+    'sensors': os.path.join(_LOG_DIR, 'pingwatchsensors.log'),
+    'audit':   os.path.join(_LOG_DIR, 'pingwatchaudit.log'),
+    'backup':  os.path.join(_LOG_DIR, 'pingwatchbackup.log'),
+}
