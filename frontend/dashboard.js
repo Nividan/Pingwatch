@@ -824,7 +824,9 @@ function _dwRefreshFlapEvents(wid, cfg) {
       dotColor = isCrit ? '#e74c3c' : '#f39c12';
       label = isCrit ? 'CRIT' : 'WARN';
     }
-    const ts   = (d.ts||'').split(' ')[1] || d.ts || '';
+    const _dtRaw = new Date(d.ts || '');
+    const ts = isNaN(_dtRaw.getTime()) ? (d.ts || '').slice(11, 19) :
+        `${String(_dtRaw.getUTCMonth()+1).padStart(2,'0')}-${String(_dtRaw.getUTCDate()).padStart(2,'0')} ${String(_dtRaw.getUTCHours()).padStart(2,'0')}:${String(_dtRaw.getUTCMinutes()).padStart(2,'0')}`;
     const name = d.sname || d.dname || '';
     return `<div class="dw-fe-row">
       <span class="dw-fe-dot" style="background:${dotColor}"></span>
