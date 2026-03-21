@@ -178,16 +178,16 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
   line-height:1.35;
 }
 
-/* ── SVG animations ── */
-.link-trunk   { stroke-dasharray:8,8;  animation:dashFlow 1.2s linear infinite; }
-.link-access  { stroke-dasharray:8,8;  animation:dashFlow 1.4s linear infinite; }
-.link-ha      { stroke-dasharray:4,4;  animation:dashFlow 0.8s linear infinite; }
-.link-internet{ stroke-dasharray:6,6;  animation:dashFlow 2s   linear infinite; }
-.link-wifi    { stroke-dasharray:6,6;  animation:dashFlow 2.2s linear infinite; }
-.link-tunnel  { stroke-dasharray:3,11; animation:tunnelFlow 3s linear infinite; }
-.link-tunnel2 { stroke-dasharray:3,11; animation:tunnelFlow 3s linear infinite; animation-delay:-1.5s; }
-@keyframes dashFlow   { to { stroke-dashoffset:-16; } }
-@keyframes tunnelFlow { to { stroke-dashoffset:-28; } }
+/* ── SVG link styles — static dashes (dashFlow/tunnelFlow animations removed:
+   stroke-dashoffset is non-compositable, 42 animated lines × 60fps = main-thread
+   repaint storm that lagged the entire browser) ── */
+.link-trunk   { stroke-dasharray:8,8;  }
+.link-access  { stroke-dasharray:8,8;  }
+.link-ha      { stroke-dasharray:4,4;  }
+.link-internet{ stroke-dasharray:6,6;  }
+.link-wifi    { stroke-dasharray:6,6;  }
+.link-tunnel  { stroke-dasharray:3,11; }
+.link-tunnel2 { stroke-dasharray:3,11; }
 
 .node-g { cursor:grab; }
 .node-g:active { cursor:grabbing; }
