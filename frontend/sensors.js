@@ -318,13 +318,21 @@ async function openScanModal(did){
     </div>
   </div>`;
   document.body.appendChild(o);
+  const ctrl=new AbortController();
+  const tid=setTimeout(()=>ctrl.abort(),30000);
   try{
-    const r=await api('POST',`/api/device/${did}/scan`,{});
-    _scanServices=r.services||[];
+    const r=await fetch(`/api/device/${did}/scan`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:'{}',signal:ctrl.signal,
+    });
+    clearTimeout(tid);
+    _scanServices=(await r.json()).services||[];
     _renderScanResults(did,host,_scanServices);
   }catch(e){
+    clearTimeout(tid);
     const b=document.getElementById('scan-body');
-    if(b)b.innerHTML=`<div class="scan-spin" style="color:var(--down)">Scan failed: ${esc(String(e))}</div>`;
+    const msg=e.name==='AbortError'?'Scan timed out (30s)':`Scan failed: ${esc(String(e))}`;
+    if(b)b.innerHTML=`<div class="scan-spin" style="color:var(--down)">${msg}</div>`;
   }
 }
 
@@ -622,10 +630,12 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   _histCache[`${did}/${sid}`] = { samples, summary, minutes, windowStart };
   // Re-fetch elements by ID after the await: the modal may have been closed/reopened
   // while the fetch was in-flight, making the captured references stale (detached DOM).
-  const c       = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
-  const _statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
-  const _sumEl   = document.getElementById(`dm-hist-summary-${did}-${sid}`);
-  if (!c) return; // modal was closed — abandon this render
+  // Fall back to the originally-passed elements for callers that use their own IDs
+  // (e.g. dashboard widgets use dw-canvas-${wid}, not dm-hist-canvas-${did}-${sid}).
+  const c       = document.getElementById(`dm-hist-canvas-${did}-${sid}`) || canvas;
+  const _statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`) || statsEl;
+  const _sumEl   = document.getElementById(`dm-hist-summary-${did}-${sid}`) || sumEl;
+  if (!c) return; // genuinely not found (modal closed mid-flight)
   _buildKpiBar(summary, did, sid);
   _setupHistTooltip(c, summary, did, sid, minutes);
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart);

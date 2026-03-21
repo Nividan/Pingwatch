@@ -12,6 +12,7 @@ Handles: /api/devices (GET), /api/device (POST), /api/devices/{did} (GET/PATCH/D
 
 import re
 import threading
+import time as _time
 from urllib.parse import urlparse, parse_qs
 
 import core.app_state as app_state
@@ -171,8 +172,11 @@ def handle(h, method, path, body):
 
         threads = [threading.Thread(target=_scan_one, args=(t,), daemon=True)
                    for t in _SCAN_TARGETS]
+        deadline = _time.monotonic() + 8  # 8s total for all probes
         for th in threads: th.start()
-        for th in threads: th.join(timeout=7)
+        for th in threads:
+            remaining = deadline - _time.monotonic()
+            if remaining > 0: th.join(timeout=remaining)
         h._json(200, {"did": did, "host": host, "services": results})
         return True
 
