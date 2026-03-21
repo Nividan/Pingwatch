@@ -38,18 +38,27 @@ let _ntmVisible = true;
 // immediately when coming back from a paused state.
 let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
-  if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
+  if (e.data?.type === 'ntm_pause') {
+    _ntmVisible = false;
+    if (_ledTimer) { clearInterval(_ledTimer); _ledTimer = null; }
+  }
   if (e.data?.type === 'ntm_resume') {
     _ntmVisible = true;
     _resumeDashBg?.();
     _resumeMainBg?.();
+    _startLedBlink();
   }
 });
 // Also pause when this document's own visibility changes (e.g. OS switch)
 let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
   _bgPaused = document.hidden;
-  if (!document.hidden) { _resumeDashBg?.(); _resumeMainBg?.(); }
+  if (document.hidden) {
+    if (_ledTimer) { clearInterval(_ledTimer); _ledTimer = null; }
+  } else {
+    _resumeDashBg?.(); _resumeMainBg?.();
+    _startLedBlink();
+  }
 });
 
 // ── Performance: batch _pwLiveUpdate calls — one DOM pass per rAF ─────────
@@ -60,8 +69,22 @@ function _schedulePwLiveUpdate(did) {
   if (!_liveUpdateRaf) {
     _liveUpdateRaf = requestAnimationFrame(() => {
       _liveUpdateRaf = null;
-      _pendingLiveUpdates.forEach(id => _pwLiveUpdate(id));
+      const batch = new Set(_pendingLiveUpdates);
       _pendingLiveUpdates.clear();
+      batch.forEach(id => _pwLiveUpdate(id));
+      // Once-per-batch ops — previously called N times inside _pwLiveUpdate:
+      updateHeaderStats();
+      const dot = document.getElementById('pw-tab-dot');
+      if (dot) {
+        const anyDown = pwDevices.some(d => d.status === 'down');
+        dot.style.background = anyDown ? '#ff3333' : '#00ff9d';
+        dot.style.boxShadow  = anyDown ? '0 0 5px #ff3333' : '0 0 5px #00ff9d';
+      }
+      if (_selectedPwDid && batch.has(_selectedPwDid) && !_pwInputFocused()) {
+        showPwNodePanel(_selectedPwDid);
+      } else if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) {
+        showPwDashboardPanel();
+      }
     });
   }
 }
@@ -606,48 +629,39 @@ function _pwLiveUpdate(did) {
   // Update node color properties in-memory
   const node = nodeMap['pw_' + did];
   const dev  = pwDevices.find(d => d.device_id === did);
-  if (node && dev) {
-    const col = pwStatusColor(dev.status);
-    const nameColor = dev.status === 'down'    ? '#ff9999'
-                    : dev.status === 'unknown' ? '#888888' : undefined;
-    const ovr = pwOverrides[did];
-    node.properties.ip_color   = col;
-    node.properties.name_color = nameColor;
-    if (!ovr?.color) {
-      node.properties.color = dev.status === 'down'    ? '#ff3333'
-                            : dev.status === 'unknown' ? '#888888' : undefined;
-    }
-    // Rebuild only this one node's SVG element in-place
-    const el = document.getElementById('node-' + node.id);
-    if (el) {
-      const sel = selectedEl?.type === 'node' && selectedEl?.data.id === node.id;
-      // Redirect outside-labels to the labels layer so they stay on top
-      const _ll = document.getElementById('node-labels-layer');
-      document.getElementById('node-label-' + node.id)?.remove();
-      if (_ll) _labelLayerTarget = _ll;
-      el.innerHTML = buildNode(node, sel);
-      _labelLayerTarget = null;
-      _applyNodeColorFilter(el, node);
-      el.addEventListener('mousedown', e => startDrag(e, node));
-      el.addEventListener('click', e => {
-        e.stopPropagation();
-        if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
-        if (e.shiftKey) { toggleMultiSelect(node); }
-        else { multiSelect.clear(); selectNode(node); }
-      });
-      el.addEventListener('touchstart', e => startDrag(e, node), { passive: false });
-    }
+  if (!node || !dev) return;
+  // Skip SVG rebuild when status hasn't changed — avoids re-rasterizing GPU filters
+  if (node._lastPwStatus === dev.status) return;
+  node._lastPwStatus = dev.status;
+  const col = pwStatusColor(dev.status);
+  const nameColor = dev.status === 'down'    ? '#ff9999'
+                  : dev.status === 'unknown' ? '#888888' : undefined;
+  const ovr = pwOverrides[did];
+  node.properties.ip_color   = col;
+  node.properties.name_color = nameColor;
+  if (!ovr?.color) {
+    node.properties.color = dev.status === 'down'    ? '#ff3333'
+                          : dev.status === 'unknown' ? '#888888' : undefined;
   }
-
-  // Update header stats
-  updateHeaderStats();
-
-  // Update PW tab dot color
-  const dot = document.getElementById('pw-tab-dot');
-  if (dot) {
-    const anyDown = pwDevices.some(d => d.status === 'down');
-    dot.style.background = anyDown ? '#ff3333' : '#00ff9d';
-    dot.style.boxShadow  = anyDown ? '0 0 5px #ff3333' : '0 0 5px #00ff9d';
+  // Rebuild only this one node's SVG element in-place
+  const el = document.getElementById('node-' + node.id);
+  if (el) {
+    const sel = selectedEl?.type === 'node' && selectedEl?.data.id === node.id;
+    // Redirect outside-labels to the labels layer so they stay on top
+    const _ll = document.getElementById('node-labels-layer');
+    document.getElementById('node-label-' + node.id)?.remove();
+    if (_ll) _labelLayerTarget = _ll;
+    el.innerHTML = buildNode(node, sel);
+    _labelLayerTarget = null;
+    _applyNodeColorFilter(el, node);
+    el.addEventListener('mousedown', e => startDrag(e, node));
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
+      if (e.shiftKey) { toggleMultiSelect(node); }
+      else { multiSelect.clear(); selectNode(node); }
+    });
+    el.addEventListener('touchstart', e => startDrag(e, node), { passive: false });
   }
 
   // Update connected link stroke colors to reflect device status
@@ -663,13 +677,8 @@ function _pwLiveUpdate(did) {
                         ? '#ff3333' : lkCfg.stroke;
       lineEl.setAttribute('stroke', newStroke);
     });
-
-  // Update right panel only if relevant and no input is focused
-  if (_selectedPwDid === did && !_pwInputFocused()) {
-    showPwNodePanel(did);
-  } else if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) {
-    showPwDashboardPanel();
-  }
+  // Header stats, tab dot, and panel update are handled once per batch
+  // by _schedulePwLiveUpdate to avoid N redundant DOM rebuilds per update cycle.
 }
 
 // ═══════════════════════════ API ═══════════════════════════
