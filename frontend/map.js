@@ -3368,6 +3368,8 @@ function getHue(hex) {
 
 // ═══════════════════════════ DASHBOARD BG CANVAS ═══════════════════════════
 function initDashBg() {
+  // Animated bg disabled — static CSS grid background used instead (perf fix)
+  return;
   const canvas = document.getElementById('dash-bg-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -3548,6 +3550,8 @@ function updateHeaderStats() {
 
 // ═══════════════════════════ MAIN CANVAS BACKGROUND ═══════════════════════════
 function initMainBg() {
+  // Animated bg disabled — static CSS grid background used instead (perf fix)
+  return;
   const canvas = document.getElementById('main-bg-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
