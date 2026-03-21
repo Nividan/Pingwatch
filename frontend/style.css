@@ -611,9 +611,9 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .dc-snr-ico.http_keyword{background:rgba(234,179,8,.2); color:#fde047}
 .dc-snr-ico.banner      {background:rgba(251,146,60,.2);color:#fb923c}
 /* History button on tile */
-.stl-hist{background:transparent;border:none;cursor:pointer;color:var(--accent);font-size:13px;
-          padding:1px 3px;border-radius:3px;flex-shrink:0;line-height:1;transition:color .15s;opacity:.7}
-.stl-hist:hover{color:var(--accent);opacity:1}
+.stl-hist{background:transparent;border:none;cursor:pointer;font-size:13px;
+          padding:1px 3px;border-radius:3px;flex-shrink:0;line-height:1;opacity:.75;transition:opacity .15s}
+.stl-hist:hover{opacity:1}
 .stl-muted{font-size:11px;opacity:.75;cursor:default;flex-shrink:0;line-height:1}
 
 /* Scan modal */
