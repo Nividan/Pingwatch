@@ -404,15 +404,16 @@ function switchMainTab(tab){
   backupsView.style.display  ='none';
   document.getElementById('devActBar').style.display='none';
   const _mf=document.getElementById('map-frame');
+  const _nb = document.getElementById('netbg');
   if(tab==='dashboard'){
-    window._bgMapActive = false; window._bgResume?.();
+    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _dwInit==='function') _dwInit();
   } else if(tab==='events'){
-    window._bgMapActive = false; window._bgResume?.();
+    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     eventsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
@@ -425,9 +426,11 @@ function switchMainTab(tab){
     emptyMain.style.display='none';
     dpanels.style.display='none';
     mapView.style.display='flex';
-    // Signal bg.js to halve its mesh FPS — the map iframe covers most of the
-    // background canvas, so high-FPS rendering there is wasted GPU bandwidth.
+    // Pause + hide the bg canvas — the NTM iframe covers it entirely on this tab,
+    // so rendering it wastes CPU (O(n²) mesh) and GPU (texture upload every frame).
     window._bgMapActive = true;
+    const _nb = document.getElementById('netbg');
+    if (_nb) _nb.style.visibility = 'hidden';
     if(_mf&&!_mf.src&&_mf.dataset.src){
       _mf.addEventListener('load',()=>{
         _mf.contentWindow?.postMessage({type:'pw_reload_pages'},window.location.origin);
@@ -439,14 +442,14 @@ function switchMainTab(tab){
       _mf.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
     }
   } else if(tab==='backups'){
-    window._bgMapActive = false; window._bgResume?.();
+    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     backupsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _bkInit==='function') _bkInit();
   } else {
-    window._bgMapActive = false; window._bgResume?.();
+    window._bgMapActive = false; if(_nb) _nb.style.visibility=''; window._bgResume?.();
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
     emptyMain.style.display=hasDevices?'none':'flex';

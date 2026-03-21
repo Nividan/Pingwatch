@@ -2,18 +2,11 @@
 // BACKGROUND ENGINE — aurora blobs + particle mesh + scan
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
 (()=>{
-  // #netbg is now display:none — background replaced by static CSS gradients in style.css.
-  // Expose stubs so app.js tab-switching references don't throw.
-  window._bgResume    = ()=>{};
-  window._bgMapActive = false;
-  // Nothing more to do — bail out immediately.
   const cvs = document.getElementById('netbg');
-  if (!cvs || getComputedStyle(cvs).display === 'none') return;
-
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
-  // (unreachable — kept only so the rest of the block is syntactically valid)
+  // True 8fps throttle via setTimeout+RAF
   const _BG_MS = 1000 / 8;
   let _bgRafId = null;
 
@@ -123,7 +116,9 @@
 
   function frame(){
     _bgRafId = null;
-    if(document.hidden) return; // tab hidden — visibilitychange will restart
+    // Pause entirely when browser tab is hidden OR the Map tab is active
+    // (the NTM iframe covers the canvas on the Map tab — rendering is wasted)
+    if(document.hidden || window._bgMapActive) return;
     t++;
     ctx.clearRect(0,0,W,H);
     drawAurora();
@@ -134,19 +129,16 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
-    // When map tab is active, the iframe covers most of the bg canvas —
-    // drop to 4fps to free GPU bandwidth for the iframe's own canvases.
-    const delay = window._bgMapActive ? _BG_MS * 2 : _BG_MS;
-    _bgRafId = setTimeout(()=>requestAnimationFrame(frame), delay);
+    _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
   }
 
   function startBg(){
-    if(!_bgRafId && !document.hidden)
+    if(!_bgRafId && !document.hidden && !window._bgMapActive)
       _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
   }
 
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startBg(); });
-  // Expose resume hook so app.js can restart bg when leaving the map tab
+  // Expose resume hook — called by app.js when leaving the Map tab
   window._bgResume = startBg;
   window.addEventListener('resize', resize);
   resize(); startBg();
