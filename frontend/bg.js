@@ -6,9 +6,10 @@
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
-  // Throttle to 8fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
+  // True 8fps throttle via setTimeout+RAF — eliminates 52 wasted RAF callbacks/s
+  // (old pattern called requestAnimationFrame unconditionally before the throttle check)
   const _BG_MS = 1000 / 8;
-  let _bgLast = 0;
+  let _bgRafId = null;
 
   // Aurora orbs
   const ORBS = [
@@ -112,10 +113,9 @@
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
 
-  function frame(ts){
-    requestAnimationFrame(frame);
-    if(ts - _bgLast < _BG_MS) return;
-    _bgLast = ts;
+  function frame(){
+    _bgRafId = null;
+    if(document.hidden) return; // tab hidden — visibilitychange will restart
     t++;
     ctx.clearRect(0,0,W,H);
     drawAurora();
@@ -126,10 +126,18 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
+    // setTimeout provides the 8fps cap; RAF aligns the actual paint to vsync
+    _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
   }
 
+  function startBg(){
+    if(!_bgRafId && !document.hidden)
+      _bgRafId = setTimeout(()=>requestAnimationFrame(frame), _BG_MS);
+  }
+
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startBg(); });
   window.addEventListener('resize', resize);
-  resize(); requestAnimationFrame(frame);
+  resize(); startBg();
 })();
 
 // ── Hero radar canvas ────────────────────────────────────────────
@@ -147,15 +155,14 @@
     }
     for(let i=0;i<5;i++)addBlip();
 
-    // Throttle radar to 30 FPS — was unthrottled at 60 FPS (40 arc fills/frame)
+    // True 30fps via setTimeout+RAF — eliminates the 60 RAF/s spin from the old
+    // throttle-check pattern. visibilitychange pauses when the tab is hidden.
     const RADAR_MS = 1000 / 30;
-    let _radarLast = 0;
+    let _radarRafId = null;
 
-    function frame(ts){
-      // When hidden, poll slowly instead of burning 60 RAF/s on a visibility check
-      if(!cvs.offsetParent){ setTimeout(()=>requestAnimationFrame(frame), 500); return; }
-      if(ts - _radarLast < RADAR_MS){ requestAnimationFrame(frame); return; }
-      _radarLast = ts;
+    function frame(){
+      _radarRafId = null;
+      if(document.hidden) return; // tab hidden — startRadar() resumes on visibilitychange
       ctx.clearRect(0,0,W,H);
 
       // outer glow ring
@@ -232,9 +239,15 @@
       ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle='#60a5fa';ctx.fill();
 
       angle=(angle+.036)%(Math.PI*2); // .018*2 — compensate for 30 FPS vs 60 FPS
-      requestAnimationFrame(frame);
+      _radarRafId = setTimeout(()=>requestAnimationFrame(frame), RADAR_MS);
     }
-    frame(0);
+
+    function startRadar(){
+      if(!_radarRafId && !document.hidden)
+        _radarRafId = setTimeout(()=>requestAnimationFrame(frame), RADAR_MS);
+    }
+    document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) startRadar(); });
+    startRadar();
   }
   // init when DOM ready
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',initRadar);

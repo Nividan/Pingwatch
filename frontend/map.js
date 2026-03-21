@@ -3378,7 +3378,7 @@ function initDashBg() {
 
   // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
   const DB_FPS = 6, DB_MS = 1000 / DB_FPS;
-  let _dbLast = 0, _rafId = null;
+  let _rafId = null;
 
   function resize() {
     canvas.width  = canvas.offsetWidth  || 300;
@@ -3397,12 +3397,10 @@ function initDashBg() {
     }));
   }
 
-  function frame(ts) {
+  function frame() {
+    _rafId = null;
     // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
-    if (_bgPaused || !_ntmVisible) { _rafId = null; return; }
-    _rafId = requestAnimationFrame(frame);
-    if (ts - _dbLast < DB_MS) return; // throttle to 10 fps
-    _dbLast = ts;
+    if (_bgPaused || !_ntmVisible) return;
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
@@ -3446,9 +3444,15 @@ function initDashBg() {
     ctx.fillRect(0, scanY - 18, W, 22);
     ctx.fillStyle = 'rgba(0,212,255,0.10)';
     ctx.fillRect(0, scanY, W, 1);
+
+    // True 10fps throttle via setTimeout+RAF — eliminates 50 wasted RAF callbacks/s
+    _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
   }
 
-  function start() { if (!_rafId) _rafId = requestAnimationFrame(frame); }
+  function start() {
+    if (!_rafId && !_bgPaused && _ntmVisible)
+      _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
+  }
 
   resize(); spawn(); start();
   _resumeDashBg = start;
@@ -3553,7 +3557,7 @@ function initMainBg() {
 
   // ── Performance: throttle to 6 fps — reduces fillText load by ~40% ──────
   const BG_FPS = 6, BG_MS = 1000 / BG_FPS;
-  let _bgLast = 0, _bgRafId = null;
+  let _bgRafId = null;
 
   let pts = [], rings = [], streams = [], scanY = 0;
   const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ';
@@ -3665,12 +3669,10 @@ function initMainBg() {
   }
 
   let lastRing = 0;
-  function frame(ts) {
+  function frame() {
+    _bgRafId = null;
     // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
-    if (_bgPaused || !_ntmVisible) { _bgRafId = null; return; }
-    _bgRafId = requestAnimationFrame(frame);
-    if (ts - _bgLast < BG_MS) return; // throttle to 10 fps
-    _bgLast = ts;
+    if (_bgPaused || !_ntmVisible) return;
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
@@ -3747,9 +3749,15 @@ function initMainBg() {
 
     // Corner HUD
     drawCorners(W, H);
+
+    // True 10fps throttle via setTimeout+RAF — eliminates 50 wasted RAF callbacks/s
+    _bgRafId = setTimeout(() => requestAnimationFrame(frame), BG_MS);
   }
 
-  function startMainBg() { if (!_bgRafId) _bgRafId = requestAnimationFrame(frame); }
+  function startMainBg() {
+    if (!_bgRafId && !_bgPaused && _ntmVisible)
+      _bgRafId = setTimeout(() => requestAnimationFrame(frame), BG_MS);
+  }
 
   resize();
   startMainBg();
