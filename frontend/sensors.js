@@ -620,12 +620,19 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   const summary = sr.summary || [];
   const windowStart = Date.now() / 1000 - minutes * 60;
   _histCache[`${did}/${sid}`] = { samples, summary, minutes, windowStart };
+  // Re-fetch elements by ID after the await: the modal may have been closed/reopened
+  // while the fetch was in-flight, making the captured references stale (detached DOM).
+  const c       = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
+  const _statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
+  const _sumEl   = document.getElementById(`dm-hist-summary-${did}-${sid}`);
+  if (!c) return; // modal was closed — abandon this render
   _buildKpiBar(summary, did, sid);
-  _setupHistTooltip(canvas, summary, did, sid, minutes);
-  // canvas may have been re-looked-up inside _setupHistTooltip; re-fetch by id to be safe
-  const c = document.getElementById(`dm-hist-canvas-${did}-${sid}`) || canvas;
-  _drawHistCanvas(c, statsEl, did, sid, summary, samples, minutes, windowStart);
-  if (sumEl) _buildSummaryTable(sumEl, summary, minutes);
+  _setupHistTooltip(c, summary, did, sid, minutes);
+  _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart);
+  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes);
+  // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
+  // the next animation frame will have correct dimensions — redraw from cache.
+  requestAnimationFrame(() => dmHistRedraw(did, sid));
 }
 
 function dmHistRedraw(did, sid) {
