@@ -536,8 +536,10 @@ function _pwFindPath(fromDid, toDid) {
 }
 
 // ── Trace animation performance limits ───────────────────────────────────────
-// Max 3 concurrent dots (was 6) — each runs its own rAF loop at 30fps
-const PW_MAX_TRACES = 3;
+// Disabled (was 3): each trace dot mutates SVG attributes at 30fps, triggering
+// full-SVG repaint of 75 feGaussianBlur-filtered nodes. 3 traces × 30fps × 75
+// blur filters = catastrophic main-thread load. Set to 0 to disable.
+const PW_MAX_TRACES = 0;
 // Per-device cooldown: only one trace per device per 4 seconds.
 // With 38 devices probing every 5s, this was firing ~22 traces/second.
 const _pwTraceCooldown = 4000;
@@ -1110,11 +1112,13 @@ function clearLedIntervals() {
 
 function _startLedBlink() {
   if (_ledTimer) return; // already running
+  // Slowed from 700ms → 2000ms: 67 LED opacity changes trigger SVG repaint
+  // of feGaussianBlur-filtered nodes. 2s is still visually alive, much cheaper.
   _ledTimer = setInterval(() => {
     document.querySelectorAll('.led-blink').forEach(led => {
       led.style.opacity = Math.random() > 0.3 ? '1' : '0.2';
     });
-  }, 700);
+  }, 2000);
 }
 
 // ═══════════════════════════ NODE RENDERERS ═══════════════════════════
