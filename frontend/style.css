@@ -579,7 +579,10 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .stl-sdot{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--text3);transition:all .4s}
 .stl-sdot.up  {background:var(--up);  animation:pulse-up 2s ease-in-out infinite}
 .stl-sdot.down{background:var(--down);animation:pulse-down 1.5s ease-in-out infinite}
-@keyframes pulse-up{0%{box-shadow:0 0 0 0 rgba(35,209,139,.6)}70%{box-shadow:0 0 0 6px rgba(35,209,139,0)}100%{box-shadow:0 0 0 0 rgba(35,209,139,0)}}
+/* pulse-up: changed from box-shadow (non-compositable, 76 elements × 60fps =
+   4560 paint ops/s) to opacity (GPU-compositable, zero main-thread cost).
+   Static box-shadow glow from .dev-sdot.up still shows; opacity gives the pulse. */
+@keyframes pulse-up{0%,100%{opacity:1}50%{opacity:.45}}
 @keyframes pulse-down{0%,100%{opacity:1}50%{opacity:.5}}
 .stl-body{padding:14px 14px 10px}
 .stl-val{
