@@ -572,22 +572,20 @@ function _pwAnimateTrace(pathDids, color) {
   dot.style.pointerEvents = 'none';
   layer.appendChild(dot);
   const segDur = 250;
-  // Throttle trace rAF to 30fps (was 60fps) — halves SVG write rate
+  // True 30fps via setTimeout+RAF — old pattern called RAF at 60fps just for a throttle check
   const _TRACE_MS = 1000 / 30;
-  let segIdx = 0, startTs = null, lastFrame = 0;
+  let segIdx = 0, startTs = null;
   function step(ts) {
-    if (ts - lastFrame < _TRACE_MS) { requestAnimationFrame(step); return; }
-    lastFrame = ts;
     if (!startTs) startTs = ts;
     const t = Math.min((ts - startTs) / segDur, 1);
     const p0 = pts[segIdx], p1 = pts[segIdx + 1];
     dot.setAttribute('cx', (p0.x + (p1.x - p0.x) * t).toFixed(1));
     dot.setAttribute('cy', (p0.y + (p1.y - p0.y) * t).toFixed(1));
     if (t < 1) {
-      requestAnimationFrame(step);
+      setTimeout(() => requestAnimationFrame(step), _TRACE_MS);
     } else if (segIdx + 2 < pts.length) {
-      segIdx++; startTs = ts;
-      requestAnimationFrame(step);
+      segIdx++; startTs = null;
+      setTimeout(() => requestAnimationFrame(step), _TRACE_MS);
     } else {
       dot.remove();
       _pwBurstAt(pts[pts.length - 1], color, layer);
@@ -604,17 +602,16 @@ function _pwBurstAt(pt, color, layer) {
   ring.setAttribute('stroke', color); ring.setAttribute('stroke-width', '2');
   ring.style.pointerEvents = 'none';
   layer.appendChild(ring);
-  let t0 = null, lastBurst = 0;
+  let t0 = null;
   const dur = 400, _BURST_MS = 1000 / 30; // 30fps burst
   function expand(ts) {
-    if (ts - lastBurst < _BURST_MS) { requestAnimationFrame(expand); return; }
-    lastBurst = ts;
     if (!t0) t0 = ts;
     const t = (ts - t0) / dur;
     if (t >= 1) { ring.remove(); return; }
     ring.setAttribute('r', (6 + t * 15).toFixed(1));
     ring.style.opacity = (1 - t).toFixed(2);
-    requestAnimationFrame(expand);
+    // True 30fps via setTimeout+RAF — old pattern called RAF at 60fps just for a throttle check
+    setTimeout(() => requestAnimationFrame(expand), _BURST_MS);
   }
   requestAnimationFrame(expand);
 }
