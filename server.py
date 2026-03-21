@@ -372,6 +372,18 @@ def main():
         log.warning("ICMP ping may need root on this OS.")
         log.warning("If pings fail: sudo python3 server.py")
 
+    # ── Startup: validate ICMP capability ────────────────────────────
+    if SYS in ("Linux", "Darwin"):
+        import socket as _socket
+        try:
+            _s = _socket.socket(_socket.AF_INET, _socket.SOCK_RAW, _socket.IPPROTO_ICMP)
+            _s.close()
+        except PermissionError:
+            log.warning(
+                "ICMP raw socket unavailable — ping sensors will fail. "
+                "Fix: sudo setcap cap_net_raw+ep $(which python3)"
+            )
+
     # ── Apply pending DB import (Windows-safe two-step swap) ─────────
     _pending = str(DB_PATH) + ".pending_import"
     if os.path.exists(_pending):

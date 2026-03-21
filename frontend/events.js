@@ -93,7 +93,8 @@ function _applyEvtFilters() {
 
   // Time range
   if (EVT_FILTER.timeRange !== 'all') {
-    const cutoffs = { '5m': 5*60*1000, '1h': 3600*1000, '24h': 86400*1000 };
+    const cutoffs = { '5m': 5*60*1000, '1h': 3600*1000, '24h': 86400*1000,
+                      '7d': 7*86400*1000, '30d': 30*86400*1000 };
     const now = Date.now();
     if (EVT_FILTER.timeRange === 'custom') {
       if (EVT_FILTER.fromTs) {
@@ -104,7 +105,10 @@ function _applyEvtFilters() {
       }
     } else {
       const ms = cutoffs[EVT_FILTER.timeRange];
-      if (ms) result = result.filter(d => (now - new Date(d.ts).getTime()) < ms);
+      if (ms != null) result = result.filter(d => {
+        const t = new Date(d.ts).getTime();
+        return !isNaN(t) && (now - t) < ms;
+      });
     }
   }
 

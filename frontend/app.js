@@ -464,11 +464,12 @@ async function _refreshDevices(){
 
 async function _refreshEvents(){
   try{
-    FLAPS.length=0; _FLAP_SEEN.clear();
     const [fd,td]=await Promise.all([
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
     ]);
+    // Clear only after both fetches succeed — prevents empty state if server is temporarily busy
+    FLAPS.length=0; _FLAP_SEEN.clear();
     (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
     (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
