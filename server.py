@@ -250,6 +250,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', _STATIC_TYPES[ext])
                 self.send_header('Content-Length', len(data))
+                # Prevent browsers from serving stale JS/CSS after a server restart.
+                # Without this, browsers apply heuristic caching and can serve old
+                # code for hours even after git pull + restart.
+                if ext in ('.js', '.css'):
+                    self.send_header('Cache-Control', 'no-cache, must-revalidate')
+                    self.send_header('Pragma', 'no-cache')
                 self._sec_headers()
                 self.end_headers()
                 self.wfile.write(data)
@@ -371,6 +377,18 @@ def main():
     if SYS in ("Linux", "Darwin") and os.geteuid() != 0:
         log.warning("ICMP ping may need root on this OS.")
         log.warning("If pings fail: sudo python3 server.py")
+
+    # ── Startup: validate ICMP capability ────────────────────────────
+    if SYS in ("Linux", "Darwin"):
+        import socket as _socket
+        try:
+            _s = _socket.socket(_socket.AF_INET, _socket.SOCK_RAW, _socket.IPPROTO_ICMP)
+            _s.close()
+        except PermissionError:
+            log.warning(
+                "ICMP raw socket unavailable — ping sensors will fail. "
+                "Fix: sudo setcap cap_net_raw+ep $(which python3)"
+            )
 
     # ── Apply pending DB import (Windows-safe two-step swap) ─────────
     _pending = str(DB_PATH) + ".pending_import"
@@ -498,6 +516,7 @@ def main():
         args=(STATE, app_state.effective_snmp_port),
         daemon=True,
     ).start()
+    log.info(f"SNMP trap receiver started on port {app_state.effective_snmp_port}")
     from backup.scheduler import start_scheduler
     start_scheduler()
     threading.Thread(target=server.serve_forever, daemon=True).start()

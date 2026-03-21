@@ -14,7 +14,6 @@ from db.persistence import db_load, db_save, autosave_loop
 from db.samples     import (
     db_buffer_sample,
     db_flush_samples,
-    db_log_sample,
     db_load_history,
     db_load_summary,
     db_load_availability,
@@ -70,7 +69,7 @@ __all__ = [
     # persistence
     "db_load", "db_save", "autosave_loop",
     # samples
-    "db_buffer_sample", "db_flush_samples", "db_log_sample",
+    "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
     # events
     "db_log_flap", "db_load_flaps",
