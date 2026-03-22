@@ -6,8 +6,8 @@
   const ctx  = cvs.getContext('2d');
   let W, H, nodes = [], scan = 0, t = 0;
 
-  // Throttle to 12fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
-  const _BG_MS = 1000 / 12;
+  // Throttle to 30fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
+  const _BG_MS = 1000 / 30;
   let _bgRafId = null;
 
   // Aurora orbs
