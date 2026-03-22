@@ -182,13 +182,13 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 }
 
 /* ── SVG animations ── */
-.link-trunk   { stroke-dasharray:8,8;  animation:dashFlow 1.2s steps(10) infinite; }
-.link-access  { stroke-dasharray:8,8;  animation:dashFlow 1.4s steps(12) infinite; }
-.link-ha      { stroke-dasharray:4,4;  animation:dashFlow 0.8s steps(8) infinite; }
-.link-internet{ stroke-dasharray:6,6;  animation:dashFlow 2s   steps(16) infinite; }
-.link-wifi    { stroke-dasharray:6,6;  animation:dashFlow 2.2s steps(16) infinite; }
-.link-tunnel  { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(20) infinite; }
-.link-tunnel2 { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(20) infinite; animation-delay:-1.5s; }
+.link-trunk   { stroke-dasharray:8,8;  animation:dashFlow 1.2s steps(15) infinite; }
+.link-access  { stroke-dasharray:8,8;  animation:dashFlow 1.4s steps(18) infinite; }
+.link-ha      { stroke-dasharray:4,4;  animation:dashFlow 0.8s steps(12) infinite; }
+.link-internet{ stroke-dasharray:6,6;  animation:dashFlow 2s   steps(24) infinite; }
+.link-wifi    { stroke-dasharray:6,6;  animation:dashFlow 2.2s steps(24) infinite; }
+.link-tunnel  { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(30) infinite; }
+.link-tunnel2 { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(30) infinite; animation-delay:-1.5s; }
 @keyframes dashFlow   { to { stroke-dashoffset:-16; } }
 @keyframes tunnelFlow { to { stroke-dashoffset:-28; } }
 
