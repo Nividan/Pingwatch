@@ -818,6 +818,9 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 }
 .mclose:hover{background:var(--down-bg);border-color:var(--down-border);color:var(--down)}
 .mbdy{padding:20px}
+/* Settings tab crossfade */
+.mbdy.stab-fade{transition:opacity .15s ease}
+.mbdy.stab-out{opacity:0}
 .mft {display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
 
 /* Forms */
