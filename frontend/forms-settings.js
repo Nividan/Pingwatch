@@ -402,13 +402,19 @@ function switchSettingsTab(tab){
 
   const curEl  = cur ? document.getElementById(`stab-${cur}`) : null;
   const nextEl = document.getElementById(`stab-${tab}`);
+  const mbox   = nextEl.closest('.mbox');
 
   _stabSwitching = true;
   if (curEl) {
+    // Lock current height so the box doesn't jump
+    const startH = mbox.offsetHeight;
+    mbox.style.height = startH + 'px';
+    mbox.classList.add('stab-anim');
+
     // Phase 1: fade out current tab
     curEl.classList.add('stab-out');
     setTimeout(() => {
-      // Phase 2: swap display + fade in
+      // Phase 2: swap content
       curEl.style.display = 'none';
       curEl.classList.remove('stab-out');
       if (cur) document.getElementById(`stab-footer-${cur}`).style.display = 'none';
@@ -421,12 +427,23 @@ function switchSettingsTab(tab){
       if (tab === 'sensors') loadSensorsDefaultsTab();
       if (tab === 'backup')  _loadBackupScheduleSettings();
 
-      // Trigger reflow then fade in
+      // Measure target height
+      mbox.style.height = 'auto';
+      const endH = mbox.offsetHeight;
+      mbox.style.height = startH + 'px';
+
+      // Animate height + fade in
       requestAnimationFrame(() => {
+        mbox.style.height = endH + 'px';
         nextEl.classList.remove('stab-out');
-        setTimeout(() => { _stabSwitching = false; }, 150);
+        // Clean up after transitions finish
+        setTimeout(() => {
+          mbox.style.height = '';
+          mbox.classList.remove('stab-anim');
+          _stabSwitching = false;
+        }, 280);
       });
-    }, 150);
+    }, 200);
   } else {
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
