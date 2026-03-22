@@ -818,9 +818,10 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 }
 .mclose:hover{background:var(--down-bg);border-color:var(--down-border);color:var(--down)}
 .mbdy{padding:20px}
-/* Settings tab crossfade */
-.mbdy.stab-fade{transition:opacity .15s ease}
+/* Settings tab crossfade + height animation */
+.mbdy.stab-fade{transition:opacity .2s ease}
 .mbdy.stab-out{opacity:0}
+.mbox.stab-anim{transition:height .25s ease;overflow:hidden}
 .mft {display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
 
 /* Forms */
