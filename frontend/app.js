@@ -448,6 +448,11 @@ function switchMainTab(tab){
   backupsView.style.display  ='none';
   document.getElementById('devActBar').style.display='none';
   const _mf=document.getElementById('map-frame');
+  // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
+  const _isMap = tab === 'map';
+  window._bgMapActive = _isMap;
+  document.getElementById('netbg').style.visibility = _isMap ? 'hidden' : '';
+  if (!_isMap) window._bgResume?.();
   if(tab==='dashboard'){
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
