@@ -1,6 +1,6 @@
-// �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
+// ─────────────────────────────────────────────────────────────────
 // BACKGROUND ENGINE — aurora blobs + particle mesh + scan
-// �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
+// ─────────────────────────────────────────────────────────────────
 (()=>{
   const cvs = document.getElementById('netbg');
   const ctx  = cvs.getContext('2d');
@@ -8,7 +8,7 @@
 
   // Throttle to 8fps — bg mesh has O(n²) nodes; 60fps was consuming ~7% CPU
   const _BG_MS = 1000 / 8;
-  let _bgLast = 0;
+  let _bgRafId = null;
 
   // Aurora orbs
   const ORBS = [
@@ -112,10 +112,9 @@
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
 
-  function frame(ts){
-    requestAnimationFrame(frame);
-    if(ts - _bgLast < _BG_MS) return;
-    _bgLast = ts;
+  function frame(){
+    _bgRafId = null;
+    if(document.hidden || window._bgMapActive) return;
     t++;
     ctx.clearRect(0,0,W,H);
     drawAurora();
@@ -126,10 +125,27 @@
       if(Math.abs(n.ox)>16) n.vx*=-1;
       if(Math.abs(n.oy)>16) n.vy*=-1;
     });
+    _bgRafId = setTimeout(() => requestAnimationFrame(frame), _BG_MS);
   }
 
+  function startBg(){
+    if(!_bgRafId && !document.hidden && !window._bgMapActive)
+      _bgRafId = setTimeout(() => requestAnimationFrame(frame), _BG_MS);
+  }
+  window._bgResume = startBg;
+
+  // Pause when browser tab is hidden, resume when visible
+  document.addEventListener('visibilitychange', () => {
+    if(document.hidden){
+      if(_bgRafId){ clearTimeout(_bgRafId); _bgRafId = null; }
+    } else {
+      startBg();
+    }
+  });
+
   window.addEventListener('resize', resize);
-  resize(); requestAnimationFrame(frame);
+  resize();
+  startBg();
 })();
 
 // ── Hero radar canvas ────────────────────────────────────────────
