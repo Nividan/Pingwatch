@@ -153,7 +153,8 @@ function drawSpk(key,history){
 
 // ── Device status recalc ─────────────────────────────────────────
 function recalcDevStatus(did){
-  const sensors=Object.values(S.sensors).filter(s=>s.device_id===did);
+  const keys=S._devSensors?.[did]||new Set();
+  const sensors=[...keys].map(k=>S.sensors[k]).filter(Boolean);
   const alives=sensors.map(s=>s.alive);
   let st='unknown';
   if(alives.some(a=>a===false))st='down';
@@ -278,6 +279,7 @@ async function delDev(did){
   closeM('dwo');
   delete S.devices[did];
   Object.keys(S.sensors).filter(k=>k.startsWith(did+'/')).forEach(k=>{delete S.sensors[k];delete S.charts[k];delete S.logs[k];});
+  delete S._devSensors[did];
   pruneEmptyGroups();
   refreshGroupCounts();
   renderSidebar();updatePills();
@@ -441,6 +443,7 @@ async function delSensor(did,sid){
   document.getElementById(`t-${key.replace('/','_')}`)?.remove();
   document.getElementById(`sbsr-${did}_${sid}`)?.remove();
   delete S.sensors[key];delete S.charts[key];delete S.logs[key];
+  S._devSensors?.[did]?.delete(key);
   // Keep S.devices in sync so reopening device window doesn't re-render the deleted tile
   if(S.devices[did]) S.devices[did].sensors=(S.devices[did].sensors||[]).filter(s=>s.sensor_id!==sid);
   recalcDevStatus(did);updatePills();

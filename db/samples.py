@@ -56,7 +56,7 @@ def db_flush_samples():
 
 
 def _sample_flush_loop():
-    """Every 5 s drain the buffer and write directly (retries on failure)."""
+    """Every 5 s drain the buffer and enqueue a write (serialised with VACUUM)."""
     while True:
         time.sleep(5)
         with _SAMPLE_BUF_LOCK:
@@ -64,12 +64,7 @@ def _sample_flush_loop():
                 continue
             rows = _SAMPLE_BUF[:]
             _SAMPLE_BUF.clear()
-        try:
-            _do_insert_samples(rows)
-        except Exception:
-            with _SAMPLE_BUF_LOCK:
-                for r in reversed(rows):
-                    _SAMPLE_BUF.insert(0, r)
+        _db_enqueue(lambda r=rows: _do_insert_samples(r))
 
 
 threading.Thread(target=_sample_flush_loop, daemon=True).start()
