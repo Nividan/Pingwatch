@@ -83,9 +83,9 @@ def _open_connection(srv, bind_dn: str, bind_pass: str, ssl_mode: int, timeout: 
         receive_timeout=timeout,
         auto_bind=False,
     )
+    _dn_label = repr(bind_dn) if bind_dn else "'<anonymous>'"
     log.debug(f"LDAP _open_connection: opening TCP to {srv.host}:{srv.port} "
-              f"(ssl={_SSL_LABELS.get(ssl_mode, ssl_mode)}, "
-              f"bind_dn={bind_dn!r or '<anonymous>'})")
+              f"(ssl={_SSL_LABELS.get(ssl_mode, ssl_mode)}, bind_dn={_dn_label})")
     conn.open()
     log.debug(f"LDAP _open_connection: TCP open OK — {srv.host}:{srv.port}")
 
@@ -94,14 +94,14 @@ def _open_connection(srv, bind_dn: str, bind_pass: str, ssl_mode: int, timeout: 
         conn.start_tls()
         log.debug(f"LDAP _open_connection: StartTLS upgrade OK — {srv.host}:{srv.port}")
 
-    log.debug(f"LDAP _open_connection: sending BIND for {bind_dn!r or '<anonymous>'}")
+    log.debug(f"LDAP _open_connection: sending BIND for {_dn_label}")
     conn.bind()
     if not conn.bound:
         raise RuntimeError(
             f"LDAP BIND returned success=False for bind_dn={bind_dn!r} "
             f"(result: {conn.result})"
         )
-    log.debug(f"LDAP _open_connection: BIND OK for {bind_dn!r or '<anonymous>'}")
+    log.debug(f"LDAP _open_connection: BIND OK for {_dn_label}")
     return conn
 
 
@@ -128,7 +128,7 @@ def ldap_test_connection(cfg: dict | None = None) -> tuple:
 
     ssl_label = _SSL_LABELS.get(cfg['ssl'], cfg['ssl'])
     log.debug(f"LDAP test_connection: attempting {cfg['server']}:{cfg['port']} "
-              f"ssl={ssl_label} bind_dn={cfg['bind_dn']!r or '<anonymous>'} "
+              f"ssl={ssl_label} bind_dn={repr(cfg['bind_dn']) if cfg['bind_dn'] else \"'<anonymous>'\"} "
               f"timeout={cfg['timeout']}s")
     try:
         srv = _build_server(cfg)
