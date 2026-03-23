@@ -107,8 +107,9 @@ function _bkRenderTable(devices) {
       <tbody id="bk-grp-${key}"${bodyAttr}>${buildRows(devList)}</tbody>`;
   }
 
-  const enabledDevs  = devices.filter(d => d.in_schedule === true);
-  const disabledDevs = devices.filter(d => d.in_schedule !== true);
+  const eligible     = devices.filter(_bkIsEligible);
+  const enabledDevs  = eligible.filter(d => d.in_schedule === true);
+  const disabledDevs = eligible.filter(d => d.in_schedule !== true);
 
   wrap.innerHTML = `
     <table class="bk-table">
