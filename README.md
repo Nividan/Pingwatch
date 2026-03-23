@@ -374,8 +374,8 @@ PingWatch includes a built-in **Configuration Backup** system that connects to n
 
 ### IP-Address Manager
 Track and manage IP allocations across subnets — view utilisation at a glance, assign names to individual IPs, and see which addresses are linked to monitored devices.
-<img width="681" height="492" alt="image" src="https://github.com/user-attachments/assets/42864325-72b5-4e7b-80ea-16637beb0d5f" />
-<img width="2166" height="364" alt="image" src="https://github.com/user-attachments/assets/2397d53a-8891-4a96-a5f3-865dcb859f6c" />
+<img width="500" height="492" alt="image" src="https://github.com/user-attachments/assets/42864325-72b5-4e7b-80ea-16637beb0d5f" />
+<img width="800" height="364" alt="image" src="https://github.com/user-attachments/assets/2397d53a-8891-4a96-a5f3-865dcb859f6c" />
 
 
 
