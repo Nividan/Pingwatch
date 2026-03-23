@@ -127,9 +127,9 @@ def ldap_test_connection(cfg: dict | None = None) -> tuple:
         return False, "LDAP server address not configured"
 
     ssl_label = _SSL_LABELS.get(cfg['ssl'], cfg['ssl'])
+    _dn_label = repr(cfg['bind_dn']) if cfg['bind_dn'] else "'<anonymous>'"
     log.debug(f"LDAP test_connection: attempting {cfg['server']}:{cfg['port']} "
-              f"ssl={ssl_label} bind_dn={repr(cfg['bind_dn']) if cfg['bind_dn'] else \"'<anonymous>'\"} "
-              f"timeout={cfg['timeout']}s")
+              f"ssl={ssl_label} bind_dn={_dn_label} timeout={cfg['timeout']}s")
     try:
         srv = _build_server(cfg)
         conn = _open_connection(
