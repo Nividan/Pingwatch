@@ -16,6 +16,12 @@ from core.logger import log
 _SSL_LABELS = {0: 'none', 1: 'LDAPS', 2: 'StartTLS'}
 
 
+def _ldap_dbg(msg: str) -> None:
+    """Emit a debug log only when ldap_debug is enabled in settings."""
+    if int(_settings.get('ldap_debug', 0) or 0):
+        log.debug(msg)
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _get_cfg() -> dict:
@@ -84,24 +90,24 @@ def _open_connection(srv, bind_dn: str, bind_pass: str, ssl_mode: int, timeout: 
         auto_bind=False,
     )
     _dn_label = repr(bind_dn) if bind_dn else "'<anonymous>'"
-    log.debug(f"LDAP _open_connection: opening TCP to {srv.host}:{srv.port} "
+    _ldap_dbg(f"LDAP _open_connection: opening TCP to {srv.host}:{srv.port} "
               f"(ssl={_SSL_LABELS.get(ssl_mode, ssl_mode)}, bind_dn={_dn_label})")
     conn.open()
-    log.debug(f"LDAP _open_connection: TCP open OK — {srv.host}:{srv.port}")
+    _ldap_dbg(f"LDAP _open_connection: TCP open OK — {srv.host}:{srv.port}")
 
     if ssl_mode == 2:
-        log.debug(f"LDAP _open_connection: upgrading to TLS (StartTLS) — {srv.host}:{srv.port}")
+        _ldap_dbg(f"LDAP _open_connection: upgrading to TLS (StartTLS) — {srv.host}:{srv.port}")
         conn.start_tls()
-        log.debug(f"LDAP _open_connection: StartTLS upgrade OK — {srv.host}:{srv.port}")
+        _ldap_dbg(f"LDAP _open_connection: StartTLS upgrade OK — {srv.host}:{srv.port}")
 
-    log.debug(f"LDAP _open_connection: sending BIND for {_dn_label}")
+    _ldap_dbg(f"LDAP _open_connection: sending BIND for {_dn_label}")
     conn.bind()
     if not conn.bound:
         raise RuntimeError(
             f"LDAP BIND returned success=False for bind_dn={bind_dn!r} "
             f"(result: {conn.result})"
         )
-    log.debug(f"LDAP _open_connection: BIND OK for {_dn_label}")
+    _ldap_dbg(f"LDAP _open_connection: BIND OK for {_dn_label}")
     return conn
 
 
@@ -128,7 +134,7 @@ def ldap_test_connection(cfg: dict | None = None) -> tuple:
 
     ssl_label = _SSL_LABELS.get(cfg['ssl'], cfg['ssl'])
     _dn_label = repr(cfg['bind_dn']) if cfg['bind_dn'] else "'<anonymous>'"
-    log.debug(f"LDAP test_connection: attempting {cfg['server']}:{cfg['port']} "
+    _ldap_dbg(f"LDAP test_connection: attempting {cfg['server']}:{cfg['port']} "
               f"ssl={ssl_label} bind_dn={_dn_label} timeout={cfg['timeout']}s")
     try:
         srv = _build_server(cfg)
@@ -178,7 +184,7 @@ def ldap_test_auth_user(username: str, password: str,
         return False, "Base DN not configured"
 
     ssl_label = _SSL_LABELS.get(cfg['ssl'], cfg['ssl'])
-    log.debug(f"LDAP test_auth_user: starting auth for {username!r} — "
+    _ldap_dbg(f"LDAP test_auth_user: starting auth for {username!r} — "
               f"server={cfg['server']}:{cfg['port']} ssl={ssl_label} "
               f"base_dn={cfg['base_dn']!r}")
 
@@ -197,7 +203,7 @@ def ldap_test_auth_user(username: str, password: str,
     try:
         safe_user = _escape(username)
         search_filter = cfg['user_filter'].format(username=safe_user)
-        log.debug(f"LDAP test_auth_user: searching base_dn={cfg['base_dn']!r} "
+        _ldap_dbg(f"LDAP test_auth_user: searching base_dn={cfg['base_dn']!r} "
                   f"filter={search_filter!r}")
         svc.search(cfg['base_dn'], search_filter, attributes=['distinguishedName'])
 
@@ -214,7 +220,7 @@ def ldap_test_auth_user(username: str, password: str,
             log.warning(f"LDAP test_auth_user: search for {username!r} returned "
                         f"{result_count} entries — using first: {user_dn!r}")
         else:
-            log.debug(f"LDAP test_auth_user: found DN for {username!r}: {user_dn!r}")
+            _ldap_dbg(f"LDAP test_auth_user: found DN for {username!r}: {user_dn!r}")
     except Exception as e:
         try: svc.unbind()
         except Exception: pass
@@ -226,7 +232,7 @@ def ldap_test_auth_user(username: str, password: str,
     try:
         user_conn = _open_connection(srv, user_dn, password, cfg['ssl'], cfg['timeout'])
         user_conn.unbind()
-        log.debug(f"LDAP test_auth_user: user bind OK for {username!r} ({user_dn!r})")
+        _ldap_dbg(f"LDAP test_auth_user: user bind OK for {username!r} ({user_dn!r})")
         return True, f"Authentication successful for {username}"
     except Exception as e:
         log.warning(f"LDAP test_auth_user: user bind FAILED for {username!r} "
@@ -264,7 +270,7 @@ def ldap_authenticate(username: str, password: str) -> bool:
         log.warning(f"LDAP authenticate: no bind DN configured for {username!r} — "
                     "attempting anonymous service bind")
 
-    log.debug(f"LDAP authenticate: starting for {username!r} via {cfg['server']}:{cfg['port']}")
+    _ldap_dbg(f"LDAP authenticate: starting for {username!r} via {cfg['server']}:{cfg['port']}")
     try:
         ok, msg = ldap_test_auth_user(username, password, cfg)
         if ok:

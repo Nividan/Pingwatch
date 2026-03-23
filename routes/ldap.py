@@ -32,6 +32,7 @@ def handle(h, method, path, body):
             'ldap_user_filter':   _settings.get('ldap_user_filter', '(sAMAccountName={username})'),
             'ldap_domain':        _settings.get('ldap_domain', ''),
             'ldap_timeout':       int(_settings.get('ldap_timeout', 10) or 10),
+            'ldap_debug':         int(_settings.get('ldap_debug', 0) or 0),
         })
         return True
 
@@ -43,6 +44,9 @@ def handle(h, method, path, body):
 
         if 'ldap_enabled' in body:
             save['ldap_enabled'] = '1' if body['ldap_enabled'] else '0'
+
+        if 'ldap_debug' in body:
+            save['ldap_debug'] = '1' if body['ldap_debug'] else '0'
 
         for k in ('ldap_server', 'ldap_base_dn', 'ldap_bind_dn',
                   'ldap_user_filter', 'ldap_domain'):
