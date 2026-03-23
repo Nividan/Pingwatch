@@ -406,6 +406,19 @@ def db_init():
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_ip_alloc_subnet ON ip_allocations(subnet_id)"
         )
+        # Migration: device_id column (links auto-populated entries to a device)
+        try:
+            con.execute("ALTER TABLE ip_allocations ADD COLUMN device_id TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        try:
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ip_alloc_device ON ip_allocations(device_id)"
+            )
+            con.commit()
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
