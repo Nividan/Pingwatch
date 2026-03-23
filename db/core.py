@@ -237,6 +237,17 @@ def db_init():
             ("syslog_port",         "514"),
             ("syslog_proto",        "udp"),
             ("syslog_min_severity", "warning"),
+            # LDAP / Active Directory authentication
+            ("ldap_enabled",        "0"),
+            ("ldap_server",         ""),
+            ("ldap_port",           "389"),
+            ("ldap_ssl",            "0"),   # 0=none, 1=LDAPS, 2=StartTLS
+            ("ldap_base_dn",        ""),
+            ("ldap_bind_dn",        ""),
+            ("ldap_bind_pass",      ""),    # Fernet-encrypted
+            ("ldap_user_filter",    "(sAMAccountName={username})"),
+            ("ldap_domain",         ""),
+            ("ldap_timeout",        "10"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -419,6 +430,17 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Migration: LDAP domain-user support
+        try:
+            con.execute("ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'local'")
+            con.commit()
+        except Exception:
+            pass
+        try:
+            con.execute("ALTER TABLE users ADD COLUMN domain TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -432,7 +454,10 @@ def db_seed_users():
     try:
         if not con.execute("SELECT 1 FROM users WHERE username='admin'").fetchone():
             pw = _sec.token_urlsafe(9)
-            con.execute("INSERT INTO users VALUES (?,?,?)", ("admin", _hash_pw(pw), "admin"))
+            con.execute(
+                "INSERT INTO users (username, pw_hash, role) VALUES (?,?,?)",
+                ("admin", _hash_pw(pw), "admin")
+            )
             con.commit()
             # Print to terminal only — never write the plaintext password to the log file
             print("=" * 51, flush=True)

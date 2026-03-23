@@ -3,6 +3,7 @@ pystray>=0.19.5
 Pillow>=10.0.0
 paramiko>=3.0.0
 cryptography>=41.0.0
+ldap3>=2.9
 
 # ── Platform-specific system packages (not pip-installable) ──────────────────
 #

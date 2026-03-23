@@ -57,7 +57,7 @@ _STATIC_TYPES = {
 _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js",
-    "forms-settings.js", "forms-io.js", "forms-users.js",
+    "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "app.js",
 ]
 
@@ -262,8 +262,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _tls_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -281,8 +281,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         body = self._body()
 
-        from routes import ipam
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _tls_mod):
+        from routes import ipam, ldap as _ldap_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -290,11 +290,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod
         p    = urlparse(self.path).path
         body = self._body()
 
-        for mod in (auth, devices, settings, topology, _tls_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 

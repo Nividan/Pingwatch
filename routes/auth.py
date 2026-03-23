@@ -12,7 +12,7 @@ import time
 from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
                          auth_revoke_user_sessions, auth_verify_current)
 from core.config import _RE_USER, _RE_USER_PW, _RE_ME_PW
-from db          import (db_log_audit, db_list_users, db_add_user,
+from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
                          db_delete_user, db_set_password)
 from core.logger import log
 import core.settings as _settings
@@ -49,20 +49,31 @@ def handle(h, method, path, body):
     if path == "/api/users" and method == "POST":
         user, role = h._require("admin")
         if not user: return True
-        username = body.get("username", "").strip()
-        password = body.get("password", "")
-        new_role = body.get("role", "admin")
+        username  = body.get("username", "").strip()
+        password  = body.get("password", "")
+        new_role  = body.get("role", "admin")
+        auth_type = body.get("auth_type", "local")
+        domain    = (body.get("domain") or "").strip()[:100]
         if new_role not in ("viewer", "operator", "admin"):
             new_role = "admin"
-        if not username or not password:
-            h._json(400, {"error": "username and password required"})
+        if auth_type not in ("local", "ldap"):
+            auth_type = "local"
+        if not username:
+            h._json(400, {"error": "username is required"})
             return True
-        ok = db_add_user(username, password, new_role)
+        if auth_type == "ldap":
+            ok = db_add_ldap_user(username, domain, new_role)
+        else:
+            if not password:
+                h._json(400, {"error": "username and password required"})
+                return True
+            ok = db_add_user(username, password, new_role)
         if not ok:
             h._json(409, {"error": "username already exists"})
             return True
-        log.info(f"User created: {username} (role={new_role})")
-        db_log_audit(user, h.client_address[0], 'user_create', username, f"role={new_role}")
+        log.info(f"User created: {username} (role={new_role}, auth_type={auth_type})")
+        db_log_audit(user, h.client_address[0], 'user_create', username,
+                     f"role={new_role},auth_type={auth_type}")
         h._json(200, {"ok": True})
         return True
 

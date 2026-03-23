@@ -37,6 +37,8 @@ from db.events      import (
 from db.users       import (
     db_list_users,
     db_add_user,
+    db_add_ldap_user,
+    db_get_user_auth_type,
     db_delete_user,
     db_set_password,
     db_load_settings,
@@ -92,7 +94,8 @@ __all__ = [
     "db_log_err", "db_load_err_logs", "db_clear_err_logs",
     "db_clear_sensor_err_logs",
     # users & settings
-    "db_list_users", "db_add_user", "db_delete_user", "db_set_password",
+    "db_list_users", "db_add_user", "db_add_ldap_user", "db_get_user_auth_type",
+    "db_delete_user", "db_set_password",
     "db_load_settings", "db_save_settings",
     "db_get_dashboard", "db_save_dashboard",
     # audit
