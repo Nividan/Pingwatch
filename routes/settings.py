@@ -7,6 +7,7 @@ Handles: /api/settings (GET/PATCH), /api/server_info (GET),
 
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -16,6 +17,22 @@ from core.config import DB_PATH, BIND, PORT
 from db          import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
 from core.logger import log
 import core.settings as _settings
+
+
+def _local_ip() -> str:
+    """Return the LAN IP used to reach the outside world.
+    Falls back to BIND if detection fails."""
+    if BIND and BIND != '0.0.0.0':
+        return BIND          # server is bound to a specific interface
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return BIND
 
 
 def handle(h, method, path, body):
@@ -31,7 +48,7 @@ def handle(h, method, path, body):
             "port":           app_state.effective_port,
             "http_port":      int(_settings.get("http_port", PORT)),
             "snmp_port":      app_state.effective_snmp_port,
-            "bind":           BIND,
+            "bind":           _local_ip(),
             "db_path":        str(DB_PATH),
             "smtp_host":       _settings.get("smtp_host", ""),
             "smtp_port":       _settings.get("smtp_port", 587),
