@@ -36,7 +36,7 @@ async function openSettings(){
       <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">Config Backup</button>
       <button class="dw-tab" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">Syslog</button>
     </div>
-    <div class="mbdy" id="stab-general" style="max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-general" style="max-height:72vh;overflow-y:auto">
       <div class="fr">
         <label class="fl">Session Timeout (seconds)</label>
         <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
@@ -133,13 +133,13 @@ async function openSettings(){
         <div class="fh" style="margin-top:8px">Restart applies pending settings changes. Shutdown stops the server process entirely.</div>
       </div>
     </div>
-    <div class="mbdy" id="stab-users" style="display:none;padding-top:8px">
+    <div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
       <div style="margin-top:14px">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
       </div>
     </div>
-    <div class="mbdy" id="stab-alerts" style="display:none">
+    <div class="mbdy stab-fade" id="stab-alerts" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
       <div class="fgrid">
         <div class="fr"><label class="fl">SMTP Host</label>
@@ -189,7 +189,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
     </div>
-    <div class="mbdy" id="stab-database" style="display:none">
+    <div class="mbdy stab-fade" id="stab-database" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Backup &amp; Restore</div>
       <div class="fr">
         <label class="fl">Export Database</label>
@@ -208,7 +208,7 @@ async function openSettings(){
     <div class="mft" id="stab-footer-database" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
-    <div class="mbdy" id="stab-logs" style="display:none;padding:0">
+    <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0">
       <div class="log-subtab-bar">
         <button class="log-stab active" id="lstab-btn-app"     onclick="_switchLogTab('app')">Application</button>
         <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
@@ -221,14 +221,14 @@ async function openSettings(){
     <div class="mft" id="stab-footer-logs" style="display:none">
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
     </div>
-    <div class="mbdy" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
-    <div class="mbdy" id="stab-networking" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-networking" style="display:none;max-height:72vh;overflow-y:auto">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Ports</div>
       <div class="fr">
         <label class="fl">HTTP Port</label>
@@ -294,7 +294,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
     </div>
-    <div class="mbdy" id="stab-backup" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-backup" style="display:none;max-height:72vh;overflow-y:auto">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Global Backup Schedule</div>
       <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="flex:1">
@@ -337,7 +337,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
     </div>
-    <div class="mbdy" id="stab-syslog" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-syslog" style="display:none;max-height:72vh;overflow-y:auto">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Syslog Forwarding</div>
       <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="flex:1">
@@ -387,15 +387,71 @@ async function openSettings(){
   document.body.appendChild(o);
 }
 
+let _stabSwitching = false;
 function switchSettingsTab(tab){
-  ['general','users','alerts','database','logs','sensors','networking','backup','syslog'].forEach(t=>{
-    document.getElementById(`stab-${t}`).style.display = t===tab ? '' : 'none';
-    document.getElementById(`stab-btn-${t}`).classList.toggle('active', t===tab);
-    document.getElementById(`stab-footer-${t}`).style.display = t===tab ? '' : 'none';
-  });
-  if(tab==='logs')    _loadLogTab();
-  if(tab==='sensors') loadSensorsDefaultsTab();
-  if(tab==='backup')  _loadBackupScheduleSettings();
+  if (_stabSwitching) return;
+  const tabs = ['general','users','alerts','database','logs','sensors','networking','backup','syslog'];
+
+  // Find currently visible tab
+  let cur = null;
+  tabs.forEach(t => { if (document.getElementById(`stab-${t}`).style.display !== 'none') cur = t; });
+  if (cur === tab) return;
+
+  // Update tab buttons immediately (feels responsive)
+  tabs.forEach(t => document.getElementById(`stab-btn-${t}`).classList.toggle('active', t === tab));
+
+  const curEl  = cur ? document.getElementById(`stab-${cur}`) : null;
+  const nextEl = document.getElementById(`stab-${tab}`);
+  const mbox   = nextEl.closest('.mbox');
+
+  _stabSwitching = true;
+  if (curEl) {
+    // Lock current height so the box doesn't jump
+    const startH = mbox.offsetHeight;
+    mbox.style.height = startH + 'px';
+    mbox.classList.add('stab-anim');
+
+    // Phase 1: fade out current tab
+    curEl.classList.add('stab-out');
+    setTimeout(() => {
+      // Phase 2: swap content
+      curEl.style.display = 'none';
+      curEl.classList.remove('stab-out');
+      if (cur) document.getElementById(`stab-footer-${cur}`).style.display = 'none';
+
+      nextEl.style.display = '';
+      nextEl.classList.add('stab-out');
+      document.getElementById(`stab-footer-${tab}`).style.display = '';
+
+      if (tab === 'logs')    _loadLogTab();
+      if (tab === 'sensors') loadSensorsDefaultsTab();
+      if (tab === 'backup')  _loadBackupScheduleSettings();
+
+      // Measure target height
+      mbox.style.height = 'auto';
+      const endH = mbox.offsetHeight;
+      mbox.style.height = startH + 'px';
+
+      // Animate height + fade in
+      requestAnimationFrame(() => {
+        mbox.style.height = endH + 'px';
+        nextEl.classList.remove('stab-out');
+        // Clean up after transitions finish
+        setTimeout(() => {
+          mbox.style.height = '';
+          mbox.classList.remove('stab-anim');
+          _stabSwitching = false;
+        }, 280);
+      });
+    }, 200);
+  } else {
+    nextEl.style.display = '';
+    document.getElementById(`stab-footer-${tab}`).style.display = '';
+    if (tab === 'logs')    _loadLogTab();
+    if (tab === 'sensors') loadSensorsDefaultsTab();
+    if (tab === 'backup')  _loadBackupScheduleSettings();
+    _stabSwitching = false;
+  }
 }
 
 async function saveNetworkingSettings(){
