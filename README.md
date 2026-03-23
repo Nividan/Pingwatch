@@ -16,6 +16,8 @@
 - [Usage](#usage)
 - [HTTPS / TLS](#https--tls)
 - [Syslog Forwarding](#syslog-forwarding)
+- [LDAP / Active Directory Authentication](#ldap--active-directory-authentication)
+- [IP Address Management (IPAM)](#ip-address-management-ipam)
 - [Screenshots](#screenshots)
 - [Device Configuration Backup](#device-configuration-backup)
 - [Architecture](#architecture)
@@ -54,6 +56,8 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - 🐧 Native Linux / macOS support — headless server mode, systemd service, auto package-manager detection
 - 📨 Syslog forwarding — RFC 5424 UDP/TCP forwarding of events to any syslog server
 - 🔁 Server restart & shutdown from the web UI (Settings → General)
+- 🏢 LDAP / Active Directory authentication — domain users log in with AD credentials; bind password encrypted at rest
+- 🗂 IP Address Management (IPAM) — subnet tracking with per-IP name/allocation management and live ping-sweep integration
 
 ### Supported Sensor Types
 
@@ -80,6 +84,7 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - **Network probes:** `socket`, `urllib`, `subprocess`, `pysnmp`
 - **SSH backup:** `paramiko` *(required for backup feature)*
 - **Credential encryption:** `cryptography` (Fernet) *(required for backup feature)*
+- **LDAP / AD authentication:** `ldap3` *(optional — required only when LDAP auth is enabled)*
 
 
 ## Installation
@@ -221,6 +226,115 @@ Configure in **Settings → Syslog**:
 - **Test button:** Settings → Syslog → **Send Test Message**
 
 
+## LDAP / Active Directory Authentication
+
+PingWatch supports optional LDAP/AD authentication so domain users can log in with their Active Directory credentials. Local users are unaffected — disabling or misconfiguring LDAP never locks out the local `admin` account.
+
+### How it works
+
+1. Admin enables LDAP in **Settings → Users → LDAP Settings** and saves the connection details.
+2. Admin creates a **domain user** in **Settings → Users → Add User** by selecting *Auth type: Domain* and entering the AD username, domain, and role.
+3. When the domain user logs in, PingWatch:
+   - Binds as the service account to locate the user's full DN.
+   - Binds again as the user with their supplied password to verify credentials.
+   - Creates a session on success; returns 401 on any failure.
+4. Local users continue to authenticate via PBKDF2-SHA256 password hash — the LDAP path is only taken for users whose `auth_type` is `ldap`.
+
+### Login formats accepted
+
+All three formats resolve to the same local username in the database:
+
+| Format | Example |
+|--------|---------|
+| Plain username | `jsmith` |
+| `DOMAIN\username` | `CORP\jsmith` |
+| `username@domain` | `jsmith@corp.local` |
+
+### Configuration (Settings → Users → LDAP Settings)
+
+| Field | Description |
+|-------|-------------|
+| **Enable LDAP Authentication** | Master toggle — off by default |
+| **Server** | LDAP/AD server hostname or IP |
+| **Port** | 389 (plain/StartTLS) or 636 (LDAPS); auto-switches when security mode changes |
+| **Security** | `None` / `LDAPS` (TLS-wrapped) / `StartTLS` (upgrade after connect) |
+| **Base DN** | Root search base, e.g. `DC=corp,DC=local` |
+| **Bind DN** | Service account DN, e.g. `CN=svc,OU=SvcAccounts,DC=corp,DC=local` |
+| **Bind Password** | Service account password — encrypted with Fernet at rest, never returned by the API |
+| **User Search Filter** | LDAP filter to locate the user; `{username}` is substituted with the RFC 4515-escaped username. Default: `(sAMAccountName={username})` |
+| **NetBIOS Domain** | Optional — used as label when displaying domain users |
+| **Timeout** | Connection timeout in seconds (default 10) |
+
+### Test buttons
+
+| Button | What it does |
+|--------|-------------|
+| **Test Connection** | Binds as the service account and reports success/failure inline — accepts unsaved form values so you can test before saving |
+| **Test User Auth** | Opens a mini dialog to enter AD credentials and runs the full bind+search+user-bind flow |
+
+### Security notes
+
+- The bind password is Fernet-encrypted before being written to the database and decrypted in-memory only.
+- The API never returns the bind password — only `ldap_bind_pass_set: true/false`.
+- Usernames are RFC 4515-escaped before substitution into LDAP filter strings.
+- An empty password is rejected immediately (prevents anonymous bind from succeeding).
+- If the LDAP server is unreachable, domain users cannot log in; local users are unaffected.
+- The `pw_hash` column stores the sentinel value `__ldap__` for domain users, which fails `_verify_pw` cleanly as defense-in-depth.
+
+### Dependencies
+
+```
+ldap3>=2.9
+```
+
+`ldap3` is a pure-Python library with no OS-level dependencies. On Debian/Ubuntu with Python's PEP 668 "externally-managed" restriction:
+
+```bash
+pip install ldap3 --break-system-packages
+# or inside a virtualenv: pip install ldap3
+```
+
+### LDAP API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/ldap/settings` | LDAP configuration (bind password never returned) |
+| `PATCH` | `/api/ldap/settings` | Save LDAP configuration |
+| `POST` | `/api/ldap/test_connection` | Test service-account bind (accepts unsaved overrides) |
+| `POST` | `/api/ldap/test_auth` | Test full user authentication flow |
+
+
+## IP Address Management (IPAM)
+
+PingWatch includes a built-in IPAM module for tracking IP address allocations across subnets.
+
+### How it works
+
+1. Navigate to the **IPAM** tab in the dashboard.
+2. Add a subnet in CIDR notation (e.g. `192.168.1.0/24`).
+3. PingWatch expands the subnet and pre-populates every host IP.
+4. Click any IP row to assign a name/label (hostname, device, or description).
+5. Monitored PingWatch devices are automatically linked to their IPAM entries — their device name populates the IP label when the device is created.
+
+### Features
+
+- Subnet list with allocation counts and utilisation percentage
+- Per-subnet IP table with used/free visual distinction (green accent on allocated rows)
+- Inline editing — click an IP to assign or clear its name
+- Automatic sync — adding a device updates the matching IPAM entry if the IP falls in a managed subnet
+- Subnets up to `/9` supported (larger subnets are rejected to prevent accidental expansion)
+
+### IPAM API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/ipam/subnets` | List all subnets with allocation summary |
+| `POST` | `/api/ipam/subnets` | Add a new subnet `{cidr, name}` |
+| `DELETE` | `/api/ipam/subnets/<id>` | Remove subnet and all its allocations |
+| `GET` | `/api/ipam/subnets/<id>/ips` | Get all IP allocations for a subnet |
+| `PUT` | `/api/ipam/ips/<subnet_id>/<ip>` | Set or clear the name for an IP |
+
+
 ## Screenshots
 
 ### 📡 Network Dashboard
@@ -342,6 +456,7 @@ Browser / Desktop GUI
         │   ├── app_state.py      ← Shared runtime globals
         │   ├── auth.py           ← Session management & RBAC
         │   ├── tls.py            ← TLS certificate management
+        │   ├── ldap_auth.py      ← LDAP/AD authentication helpers
         │   ├── logger.py         ← Central logging
         │   └── settings.py       ← Runtime settings cache
         │
@@ -394,7 +509,10 @@ This design keeps each layer independently testable and allows new sensor types 
   Opens SSH (paramiko) or Telnet connections to network devices, sends user-defined commands, collects output, and returns the result for storage. Supports TOFU SSH host key verification, password auth, keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable, and configurable per-command idle timeouts.
 
 - **`core/auth.py`** — Authentication and session management.
-  Handles login, password hashing (bcrypt-style), RBAC roles (`viewer` / `operator` / `admin`), and active sessions.
+  Handles login, password hashing (PBKDF2-SHA256), RBAC roles (`viewer` / `operator` / `admin`), active sessions, and domain-prefix stripping (`DOMAIN\user`, `user@domain`). Branches on `auth_type` to delegate LDAP users to `core/ldap_auth.py`.
+
+- **`core/ldap_auth.py`** — LDAP / Active Directory authentication helpers.
+  Provides `ldap_authenticate` (called at login for domain users), `ldap_test_connection` (admin connectivity test), and `ldap_test_auth_user` (full bind+search+user-bind flow). Supports plain LDAP, LDAPS, and StartTLS. Bind password decrypted in-memory only; never logged. `ldap3` import deferred inside functions so the library is optional — local users are unaffected if it is absent.
 
 - **`monitoring/network_map.py`** — Network Topology Manager (NTM) backend.
   Manages topology pages, nodes, links, groups, and map settings stored in the database.
@@ -441,6 +559,8 @@ This design keeps each layer independently testable and allows new sensor types 
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
+| `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
+| `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 
 ### TLS API Endpoints
 
@@ -459,10 +579,11 @@ This design keeps each layer independently testable and allows new sensor types 
 | `persistence.py` | Device/sensor save, load, autosave loop |
 | `samples.py` | Buffered probe writes, history & summary queries |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management, app settings |
+| `users.py` | User management (local + LDAP domain users), app settings |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (encrypted), run history, 3-run retention |
 | `trap_defs.py` | SNMP trap definition queries |
+| `ipam.py` | Subnet and IP allocation management |
 | `__init__.py` | Re-exports all public symbols (callers unchanged) |
 
 
@@ -482,9 +603,11 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 | `backups.js` | Backup table, settings modal, config viewer |
 | `forms-device.js` | Add/edit device form |
 | `forms-sensor.js` | Add/edit sensor form |
-| `forms-settings.js` | Application settings form (including TLS/Networking tab) |
-| `forms-users.js` | User management form |
+| `forms-settings.js` | Application settings form (including TLS/Networking and Users tabs) |
+| `forms-users.js` | User management form — local and domain (LDAP) user creation with auth-type badge |
+| `forms-ldap.js` | LDAP/AD settings modal — connection config, Test Connection, Test User Auth |
 | `forms-io.js` | DB export/import form |
+| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline name editing |
 | `forms-utils.js` | Shared form helpers |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.html` | Network Topology Manager shell |
@@ -526,7 +649,8 @@ pingwatch/
 │   ├── config.py           ← Constants & route regexes
 │   ├── settings.py         ← Runtime settings cache (DB-backed)
 │   ├── logger.py           ← Central logging & in-memory buffer
-│   ├── auth.py             ← Authentication & RBAC
+│   ├── auth.py             ← Authentication & RBAC (local + LDAP branch)
+│   ├── ldap_auth.py        ← LDAP/AD authentication helpers
 │   ├── app_state.py        ← Shared runtime globals
 │   ├── state.py            ← In-memory device/sensor state
 │   └── tls.py              ← TLS certificate management
@@ -566,10 +690,11 @@ pingwatch/
 │   ├── persistence.py      ← Device/sensor save & load
 │   ├── samples.py          ← Probe sample buffer & queries
 │   ├── events.py           ← Flap, trap, error logs
-│   ├── users.py            ← User management & settings
+│   ├── users.py            ← User management (local + LDAP) & settings
 │   ├── audit.py            ← Audit log
 │   ├── backups.py          ← Backup settings & run history
-│   └── trap_defs.py        ← SNMP trap definition queries
+│   ├── trap_defs.py        ← SNMP trap definition queries
+│   └── ipam.py             ← Subnet & IP allocation management
 │
 ├── routes/                 ← HTTP route handlers
 │   ├── auth.py             ← Login, logout, users
@@ -579,7 +704,9 @@ pingwatch/
 │   ├── tls.py              ← TLS certificate management API
 │   ├── topology.py         ← NTM pages/nodes/links/groups
 │   ├── export.py           ← DB export/import, audit
-│   └── backups.py          ← Device config backup API
+│   ├── backups.py          ← Device config backup API
+│   ├── ldap.py             ← LDAP/AD settings & test endpoints
+│   └── ipam.py             ← IPAM subnet & IP allocation API
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -596,8 +723,10 @@ pingwatch/
     ├── forms-sensor.js
     ├── forms-settings.js
     ├── forms-users.js
+    ├── forms-ldap.js
     ├── forms-io.js
     ├── forms-utils.js
+    ├── ipam.js
     ├── bg.js
     ├── map.html
     ├── map.css
