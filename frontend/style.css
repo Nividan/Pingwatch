@@ -1459,6 +1459,19 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .bk-cnt    {font-size:11px;font-weight:600;color:var(--text2);}
 .bk-cnt-full{color:var(--up);}
 
+/* ── Backup group section headers ───────────────────────────────── */
+.bk-grp-hdr tr{cursor:pointer;background:var(--bg3);user-select:none;}
+.bk-grp-hdr tr:hover{background:var(--bg4);}
+.bk-grp-hdr td{padding:7px 14px;font-size:11px;font-weight:700;letter-spacing:1px;
+  text-transform:uppercase;color:var(--text2);border-bottom:1px solid var(--border);}
+.bk-grp-arr{display:inline-block;margin-right:8px;font-size:10px;
+  transition:transform .2s;color:var(--text3);}
+.bk-grp-arr.open{transform:rotate(90deg);}
+.bk-grp-title{margin-right:8px;}
+.bk-grp-cnt{background:var(--bg4);border-radius:20px;padding:1px 8px;
+  font-size:10px;font-weight:600;color:var(--text3);}
+tbody.bk-grp-collapsed{display:none;}
+
 /* ── Toggle switch (used in settings forms) ─────────────────────── */
 label.toggle{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0;vertical-align:middle;}
 label.toggle input{opacity:0;width:0;height:0;position:absolute;}
