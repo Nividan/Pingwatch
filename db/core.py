@@ -381,6 +381,32 @@ def db_init():
             except Exception:
                 pass
         con.commit()
+        # ── IPAM tables ───────────────────────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS ipam_subnets (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                cidr       TEXT UNIQUE NOT NULL,
+                name       TEXT DEFAULT '',
+                created_by TEXT DEFAULT '',
+                created_at REAL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ipam_subnets_cidr ON ipam_subnets(cidr)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS ip_allocations (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                subnet_id   INTEGER NOT NULL REFERENCES ipam_subnets(id),
+                ip          TEXT NOT NULL,
+                name        TEXT DEFAULT '',
+                modified_by TEXT DEFAULT '',
+                modified_at REAL DEFAULT 0,
+                UNIQUE(subnet_id, ip)
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ip_alloc_subnet ON ip_allocations(subnet_id)"
+        )
+        con.commit()
     finally:
         con.close()
     log.info("DB init: schema ready")

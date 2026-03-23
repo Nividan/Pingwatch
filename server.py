@@ -58,7 +58,7 @@ _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js",
     "forms-settings.js", "forms-io.js", "forms-users.js",
-    "dashboard.js", "events.js", "backups.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "app.js",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
@@ -262,8 +262,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, _tls_mod):
+        from routes import tls as _tls_mod, ipam
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _tls_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -281,7 +281,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         body = self._body()
 
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, _tls_mod):
+        from routes import ipam
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _tls_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -301,7 +302,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology, settings, backups
+        from routes import topology, settings, backups, ipam
         p    = urlparse(self.path).path
         body = self._body()
 
@@ -311,6 +312,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if backups.handle(self, 'PUT', p, body):
             return
+        if ipam.handle(self, 'PUT', p, body):
+            return
 
         self._json(404, {"error": "not found"})
 
@@ -319,7 +322,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        for mod in (auth, devices, topology, backups):
+        from routes import ipam
+        for mod in (auth, devices, topology, backups, ipam):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 

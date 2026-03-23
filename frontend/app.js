@@ -436,16 +436,19 @@ function switchMainTab(tab){
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
+  document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
+  const ipamView     =document.getElementById('ipamView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
   eventsView.style.display   ='none';
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
+  ipamView.style.display     ='none';
   document.getElementById('devActBar').style.display='none';
   const _mf=document.getElementById('map-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
@@ -481,6 +484,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _bkInit==='function') _bkInit();
+  } else if(tab==='ipam'){
+    ipamView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _ipamInit==='function') _ipamInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';

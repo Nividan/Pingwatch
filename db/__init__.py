@@ -48,6 +48,17 @@ from db.users       import (
 # audit
 from db.audit       import db_log_audit, db_get_audit
 
+# ipam
+from db.ipam        import (
+    db_list_subnets,
+    db_get_subnet,
+    db_add_subnet,
+    db_delete_subnet,
+    db_get_allocations,
+    db_upsert_allocation,
+    db_clear_allocation,
+)
+
 # backups
 from db.backups     import (
     db_get_backup_list,
@@ -82,6 +93,9 @@ __all__ = [
     "db_get_dashboard", "db_save_dashboard",
     # audit
     "db_log_audit", "db_get_audit",
+    # ipam
+    "db_list_subnets", "db_get_subnet", "db_add_subnet", "db_delete_subnet",
+    "db_get_allocations", "db_upsert_allocation", "db_clear_allocation",
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",
