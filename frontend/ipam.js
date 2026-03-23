@@ -204,7 +204,7 @@ function _ipamRenderTable() {
     const nameCell = canEdit
       ? `<td class="ipam-name-cell" onclick="_ipamEditCell(this,'${esc(e.ip)}')">${nameText}</td>`
       : `<td>${nameText}</td>`;
-    return `<tr>
+    return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
       <td class="ipam-ip">${esc(e.ip)}</td>
       ${nameCell}
       <td>${badge}</td>
