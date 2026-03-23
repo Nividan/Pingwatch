@@ -19,6 +19,13 @@ async function openSettings(){
     '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
     '<input type="checkbox" id="st-bk-d' + v + '" value="' + v + '"' + (_bkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
   ).join('');
+  const _dbkFreq = sr.db_backup_freq || 'daily';
+  const _dbkDaysActive = (_dbkFreq === 'weekly') ? '' : 'none';
+  const _dbkDaysSaved = String(sr.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  const _dbkDaysHtml = _bkDayLabels.map(([v,l]) =>
+    '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
+    '<input type="checkbox" id="st-dbk-d' + v + '" value="' + v + '"' + (_dbkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
+  ).join('');
   o.innerHTML=`
   <div class="mbox" style="width:900px;max-width:96vw">
     <div class="mhd">
@@ -191,9 +198,50 @@ async function openSettings(){
         </div>
         <div class="fh" style="color:var(--down);margin-top:6px">Warning: this replaces ALL current data and restarts the server.</div>
       </div>
+      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Scheduled Database Backup</div>
+        <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div style="flex:1">
+            <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Scheduled Backup</div>
+            <div class="fh" style="margin:0">Automatically backup the database on a schedule — saved to backup/database/</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-dbk-enabled" ${sr.db_backup_enabled?'checked':''}><span class="tsl"></span></label>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Frequency</label>
+          <select id="st-dbk-freq" style="max-width:160px" onchange="_dbkFreqChange()">
+            <option value="daily" ${_dbkFreq==='daily'?'selected':''}>Daily</option>
+            <option value="weekly" ${_dbkFreq==='weekly'?'selected':''}>Weekly</option>
+          </select>
+        </div>
+        <div class="fr" style="margin-top:14px;display:${_dbkDaysActive}" id="st-dbk-days-row">
+          <label class="fl">Days</label>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">${_dbkDaysHtml}</div>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Backup Time</label>
+          <input type="time" id="st-dbk-time" value="${sr.db_backup_time||'03:00'}" style="max-width:140px"/>
+          <div class="fh">Server local time (24h)</div>
+        </div>
+        <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+          <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="flex:1">
+              <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Backups to Keep</div>
+              <div class="fh" style="margin:0">Oldest backup files are deleted when limit is exceeded</div>
+            </div>
+            <input type="number" id="st-dbk-keep" min="1" max="50" value="${sr.db_backup_keep!=null?sr.db_backup_keep:7}" style="width:70px;flex-shrink:0;text-align:center"/>
+          </div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="runDbBackupNow()">&#x25B6; Run Backup Now</button>
+          <span id="dbk-run-result" style="font-size:12px;color:var(--text3)"></span>
+        </div>
+        <div id="dbk-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_last_ts?`Last backup: ${esc(sr.db_backup_last_ts)} \u2014 ${esc(sr.db_backup_last_result)}`:''}</div>
+      </div>
     </div>
     <div class="mft" id="stab-footer-database" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
     </div>
     <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0">
       <div class="log-subtab-bar">
@@ -441,9 +489,10 @@ function switchSettingsTab(tab){
             mbox.style.height = '';
             mbox.classList.remove('stab-anim');
             _stabSwitching = false;
-            if (tab === 'logs')    _loadLogTab();
-            if (tab === 'sensors') loadSensorsDefaultsTab();
-            if (tab === 'backup')  _loadBackupScheduleSettings();
+            if (tab === 'logs')     _loadLogTab();
+            if (tab === 'sensors')  loadSensorsDefaultsTab();
+            if (tab === 'backup')   _loadBackupScheduleSettings();
+            if (tab === 'database') _loadDbBackupSettings();
           }, 280);
         });
       });
@@ -452,9 +501,10 @@ function switchSettingsTab(tab){
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
     _stabSwitching = false;
-    if (tab === 'logs')    _loadLogTab();
-    if (tab === 'sensors') loadSensorsDefaultsTab();
-    if (tab === 'backup')  _loadBackupScheduleSettings();
+    if (tab === 'logs')     _loadLogTab();
+    if (tab === 'sensors')  loadSensorsDefaultsTab();
+    if (tab === 'backup')   _loadBackupScheduleSettings();
+    if (tab === 'database') _loadDbBackupSettings();
   }
 }
 
@@ -962,6 +1012,82 @@ async function saveBackupScheduleSettings(){
     toast('Failed to save backup settings','err');
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
+  }
+}
+
+function _dbkFreqChange(){
+  const freq = document.getElementById('st-dbk-freq')?.value;
+  const daysRow = document.getElementById('st-dbk-days-row');
+  if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
+}
+
+async function _loadDbBackupSettings(){
+  const r = await api('GET', '/api/settings');
+  const en   = document.getElementById('st-dbk-enabled');
+  const freq = document.getElementById('st-dbk-freq');
+  const time = document.getElementById('st-dbk-time');
+  const keep = document.getElementById('st-dbk-keep');
+  if(en)   en.checked = !!r.db_backup_enabled;
+  if(freq) freq.value = r.db_backup_freq || 'daily';
+  if(time) time.value = r.db_backup_time || '03:00';
+  if(keep) keep.value = r.db_backup_keep != null ? r.db_backup_keep : 7;
+  const days = String(r.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  for(let i=1; i<=7; i++){
+    const cb = document.getElementById(`st-dbk-d${i}`);
+    if(cb) cb.checked = days.includes(String(i));
+  }
+  _dbkFreqChange();
+  const lastInfo = document.getElementById('dbk-last-info');
+  if(lastInfo) lastInfo.textContent = r.db_backup_last_ts
+    ? `Last backup: ${r.db_backup_last_ts} \u2014 ${r.db_backup_last_result}` : '';
+}
+
+async function saveDbBackupSettings(){
+  const enabled = document.getElementById('st-dbk-enabled')?.checked ? 1 : 0;
+  const freq    = document.getElementById('st-dbk-freq')?.value || 'daily';
+  const time    = document.getElementById('st-dbk-time')?.value || '03:00';
+  const keep    = parseInt(document.getElementById('st-dbk-keep')?.value) || 7;
+  const days = [];
+  for(let i=1; i<=7; i++){
+    if(document.getElementById(`st-dbk-d${i}`)?.checked) days.push(i);
+  }
+  if(freq === 'weekly' && !days.length){
+    toast('Select at least one day for weekly schedule','err'); return;
+  }
+  const btn = document.querySelector('#stab-footer-database .btn-p');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      db_backup_enabled: enabled,
+      db_backup_freq:    freq,
+      db_backup_time:    time,
+      db_backup_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
+      db_backup_keep:    keep,
+    });
+    if(!r?.ok){ toast('Failed to save DB backup settings','err'); return; }
+    toast('Database backup settings saved','ok');
+  } catch(e) {
+    toast('Failed to save DB backup settings','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Save DB Backup'; }
+  }
+}
+
+async function runDbBackupNow(){
+  const btn = document.querySelector('[onclick="runDbBackupNow()"]');
+  const res = document.getElementById('dbk-run-result');
+  if(btn){ btn.disabled=true; btn.textContent='Running...'; }
+  if(res) res.textContent = '';
+  try {
+    const r = await api('POST', '/api/db/backup/run', {});
+    if(res) res.innerHTML = r.ok
+      ? `<span style="color:var(--up)">\u2714 ${esc(r.msg||'Backup complete')}</span>`
+      : `<span style="color:var(--down)">\u2718 ${esc(r.msg||'Backup failed')}</span>`;
+    if(r.ok) _loadDbBackupSettings();
+  } catch(e) {
+    if(res) res.innerHTML = `<span style="color:var(--down)">\u2718 Request failed</span>`;
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='\u25B6 Run Backup Now'; }
   }
 }
 
