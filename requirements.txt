@@ -11,6 +11,11 @@ ldap3>=2.9
 #   sudo apt-get install python3-tk python3-dev iputils-ping snmp
 #   sudo apt-get install python3-xlib   # optional: pystray system tray on Linux
 #
+#   On Debian/Ubuntu 12+ (PEP 668 "externally managed"), pip refuses to install
+#   packages system-wide. Use one of:
+#     pip install -r requirements.txt --break-system-packages
+#     python3 -m pip install ldap3 --break-system-packages
+#
 # Linux (RHEL/Fedora):
 #   sudo dnf install python3-tkinter net-snmp-utils
 #
