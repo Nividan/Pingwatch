@@ -2,10 +2,11 @@
 // Manages device configuration backup listing, settings, triggering,
 // and config viewing. All state is server-side; this file is pure UI.
 
-let _bkDevices  = [];           // cached device list from /api/backups
-let _bkRunning  = new Set();    // device IDs currently backing up
-let _bkInited   = false;
-let _bkKeepMax  = 3;            // backup_keep from settings (configs to keep per device)
+let _bkDevices     = [];           // cached device list from /api/backups
+let _bkRunning     = new Set();    // device IDs currently backing up
+let _bkInited      = false;
+let _bkKeepMax     = 3;            // backup_keep from settings (configs to keep per device)
+let _bkGrpExpanded = { enabled: true, disabled: false }; // section collapse state
 
 // ── Init / refresh ───────────────────────────────────────────────────
 async function _bkInit() {
@@ -47,47 +48,68 @@ function _bkRenderTable(devices) {
     return;
   }
 
-  const rows = devices.map(dev => {
-    const isRunning  = _bkRunning.has(dev.did);
-    const eligible   = _bkIsEligible(dev);
-    const scheduled  = dev.enabled && dev.in_schedule
-      ? '<span class="bk-dot-on" title="In schedule">✓</span>'
-      : '<span class="bk-never">—</span>';
-    const timeCell   = dev.last_ts ? _bkRelTime(dev.last_ts) : '<span class="bk-never">—</span>';
-    const statusCell = _bkStatusCell(dev, isRunning);
-    const enabledDot = !eligible
-      ? '<span class="bk-never" title="Internet monitor — not SSH-accessible">N/A</span>'
-      : dev.enabled
-        ? '<span class="bk-dot-on" title="Backup enabled">●</span>'
-        : '<span class="bk-dot-off" title="Backup disabled">○</span>';
-    const cnt = dev.run_count || 0;
-    const cntCell = dev.enabled
-      ? `<span class="bk-cnt ${cnt >= _bkKeepMax ? 'bk-cnt-full' : ''}" title="${cnt} saved, max ${_bkKeepMax}">${cnt}/${_bkKeepMax}</span>`
-      : '<span class="bk-never">—</span>';
+  function buildRows(devList) {
+    return devList.map(dev => {
+      const isRunning  = _bkRunning.has(dev.did);
+      const eligible   = _bkIsEligible(dev);
+      const scheduled  = dev.enabled && dev.in_schedule
+        ? '<span class="bk-dot-on" title="In schedule">✓</span>'
+        : '<span class="bk-never">—</span>';
+      const timeCell   = dev.last_ts ? _bkRelTime(dev.last_ts) : '<span class="bk-never">—</span>';
+      const statusCell = _bkStatusCell(dev, isRunning);
+      const enabledDot = !eligible
+        ? '<span class="bk-never" title="Internet monitor — not SSH-accessible">N/A</span>'
+        : dev.enabled
+          ? '<span class="bk-dot-on" title="Backup enabled">●</span>'
+          : '<span class="bk-dot-off" title="Backup disabled">○</span>';
+      const cnt = dev.run_count || 0;
+      const cntCell = dev.enabled
+        ? `<span class="bk-cnt ${cnt >= _bkKeepMax ? 'bk-cnt-full' : ''}" title="${cnt} saved, max ${_bkKeepMax}">${cnt}/${_bkKeepMax}</span>`
+        : '<span class="bk-never">—</span>';
 
-    return `<tr onclick="_bkOpenSettings('${esc(dev.did)}')" title="Click to configure">
-      <td>${enabledDot} <strong>${esc(dev.name || dev.did)}</strong></td>
-      <td class="bk-mono">${esc(dev.host || '—')}</td>
-      <td style="text-align:center">${scheduled}</td>
-      <td>${timeCell}</td>
-      <td>${statusCell}</td>
-      <td style="text-align:center">${cntCell}</td>
-      <td onclick="event.stopPropagation()" style="text-align:center">
-        ${dev.last_run_id
-          ? `<button class="btn-sm" onclick="_bkOpenViewer(${dev.last_run_id}, '${esc(dev.did)}')" title="View latest config">📄</button>`
-          : `<button class="btn-sm" disabled title="No backups yet">📄</button>`}
-      </td>
-      <td onclick="event.stopPropagation()" style="text-align:center">
-        ${eligible
-          ? `<button class="btn-sm ${isRunning ? 'bk-btn-spin' : ''}"
-                onclick="_bkTriggerRun('${esc(dev.did)}')"
-                ${isRunning ? 'disabled' : ''} title="Run backup now">
-              ${isRunning ? '⟳' : '▶'}
-            </button>`
-          : '<span class="bk-never" title="Not SSH-accessible">—</span>'}
-      </td>
-    </tr>`;
-  }).join('');
+      return `<tr onclick="_bkOpenSettings('${esc(dev.did)}')" title="Click to configure">
+        <td>${enabledDot} <strong>${esc(dev.name || dev.did)}</strong></td>
+        <td class="bk-mono">${esc(dev.host || '—')}</td>
+        <td style="text-align:center">${scheduled}</td>
+        <td>${timeCell}</td>
+        <td>${statusCell}</td>
+        <td style="text-align:center">${cntCell}</td>
+        <td onclick="event.stopPropagation()" style="text-align:center">
+          ${dev.last_run_id
+            ? `<button class="btn-sm" onclick="_bkOpenViewer(${dev.last_run_id}, '${esc(dev.did)}')" title="View latest config">📄</button>`
+            : `<button class="btn-sm" disabled title="No backups yet">📄</button>`}
+        </td>
+        <td onclick="event.stopPropagation()" style="text-align:center">
+          ${eligible
+            ? `<button class="btn-sm ${isRunning ? 'bk-btn-spin' : ''}"
+                  onclick="_bkTriggerRun('${esc(dev.did)}')"
+                  ${isRunning ? 'disabled' : ''} title="Run backup now">
+                ${isRunning ? '⟳' : '▶'}
+              </button>`
+            : '<span class="bk-never" title="Not SSH-accessible">—</span>'}
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function buildSection(label, key, devList) {
+    const expanded = _bkGrpExpanded[key] !== false;
+    const arrClass = expanded ? 'bk-grp-arr open' : 'bk-grp-arr';
+    const bodyAttr = expanded ? '' : ' class="bk-grp-collapsed"';
+    return `
+      <tbody class="bk-grp-hdr" onclick="_bkToggleGroup('${key}')">
+        <tr><td colspan="8">
+          <span class="${arrClass}" id="bk-arr-${key}">▶</span>
+          <span class="bk-grp-title">${label}</span>
+          <span class="bk-grp-cnt">${devList.length}</span>
+        </td></tr>
+      </tbody>
+      <tbody id="bk-grp-${key}"${bodyAttr}>${buildRows(devList)}</tbody>`;
+  }
+
+  const eligible     = devices.filter(_bkIsEligible);
+  const enabledDevs  = eligible.filter(d => d.in_schedule === true);
+  const disabledDevs = eligible.filter(d => d.in_schedule !== true);
 
   wrap.innerHTML = `
     <table class="bk-table">
@@ -103,8 +125,18 @@ function _bkRenderTable(devices) {
           <th style="text-align:center">Run</th>
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      ${buildSection('Backup Enabled',  'enabled',  enabledDevs)}
+      ${buildSection('Backup Disabled', 'disabled', disabledDevs)}
     </table>`;
+}
+
+function _bkToggleGroup(key) {
+  const body = document.getElementById('bk-grp-' + key);
+  const arr  = document.getElementById('bk-arr-' + key);
+  if (!body) return;
+  const nowCollapsed = body.classList.toggle('bk-grp-collapsed');
+  _bkGrpExpanded[key] = !nowCollapsed;
+  if (arr) arr.classList.toggle('open', !nowCollapsed);
 }
 
 function _bkStatusCell(dev, isRunning) {

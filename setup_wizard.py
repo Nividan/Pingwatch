@@ -206,6 +206,14 @@ _PACKAGES = [
         "desc":     "TLS certificate generation & encryption",
         "required": True,
     },
+    {
+        "import":   "ldap3",
+        "name":     "ldap3",
+        "install":  "ldap3>=2.9.0",
+        "pip":      True,
+        "desc":     "LDAP / Active Directory authentication",
+        "required": False,
+    },
 ]
 
 _SNMP_TOOL = "snmpget"
@@ -344,6 +352,7 @@ def step1_packages():
                     "Pillow":       ("python3-pil",     None),
                     "paramiko":     ("python3-paramiko", None),
                     "cryptography": ("python3-cryptography", None),
+                    "ldap3":        ("python3-ldap3",   None),
                 }
                 _apt_entry = _apt_map.get(pkg["name"])
 
@@ -376,6 +385,7 @@ def step1_packages():
                             "python3-pil":          "python3-pillow",
                             "python3-paramiko":     "python3-paramiko",
                             "python3-cryptography": "python3-cryptography",
+                            "python3-ldap3":        "python3-ldap3",
                         }
                         _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
                         r = subprocess.run(
@@ -463,6 +473,91 @@ def step1_packages():
         _tag("error", "One or more required packages could not be installed.")
         _tag("info",  f"Fix the issues above and run '{_launcher_hint()}' again.")
         sys.exit(1)
+
+
+# ── File ownership fix (sudo root → real user) ───────────────────────────────
+
+def _fix_file_ownership():
+    """When the wizard runs as root via sudo, chown DB and cert files back to
+    the invoking user so the service (which runs as that user) can write them."""
+    if sys.platform == "win32" or os.geteuid() != 0:
+        return
+    sudo_user = os.environ.get("SUDO_USER", "")
+    if not sudo_user:
+        return
+    try:
+        import pwd as _pwd
+        pw = _pwd.getpwnam(sudo_user)
+        uid, gid = pw.pw_uid, pw.pw_gid
+    except Exception:
+        return
+    targets = [
+        str(DB_PATH),
+        str(DB_PATH) + "-wal",
+        str(DB_PATH) + "-shm",
+        str(DB_PATH) + ".pre_migrate.bak",
+        str(DB_PATH) + ".pending_import",
+        str(CERTS_DIR),
+    ]
+    # Also chown any cert files inside CERTS_DIR
+    try:
+        for _f in os.listdir(str(CERTS_DIR)):
+            targets.append(os.path.join(str(CERTS_DIR), _f))
+    except Exception:
+        pass
+    changed = 0
+    for path in targets:
+        if os.path.exists(path):
+            try:
+                os.chown(path, uid, gid)
+                changed += 1
+            except Exception:
+                pass
+    if changed:
+        _tag("ok", f"File ownership set to '{sudo_user}' ({changed} item(s))")
+
+
+# ── Service management (Linux/systemd) ───────────────────────────────────────
+
+def _is_service_active() -> bool:
+    """Return True if the pingwatch systemd service is currently running."""
+    if sys.platform == "win32":
+        return False
+    import shutil as _sh
+    if not _sh.which("systemctl"):
+        return False
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "pingwatch"],
+            capture_output=True, text=True,
+        )
+        return r.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def _stop_service() -> bool:
+    """Stop the pingwatch systemd service. Returns True on success."""
+    try:
+        r = subprocess.run(
+            ["sudo", "systemctl", "stop", "pingwatch"],
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _restart_service() -> bool:
+    """Start the pingwatch systemd service. Returns True on success."""
+    try:
+        r = subprocess.run(
+            ["sudo", "systemctl", "start", "pingwatch"],
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 # ── Port helpers ──────────────────────────────────────────────────────────────
@@ -1051,6 +1146,25 @@ def main():
         _tag("info", "later in Settings once the server is running.")
     print()
 
+    # ── Stop the service before touching the DB ───────────────────────────────
+    # Two concurrent writers sharing the same SQLite WAL will race and can leave
+    # the service's connection in a "readonly database" state.  Stop the service
+    # first; we'll restart it (with the new config) when the wizard finishes.
+    _svc_stopped = False
+    if _is_service_active():
+        _tag("warn", "The PingWatch service is currently running.")
+        _tag("info", "It must be stopped before the wizard modifies the database.")
+        if _ask_yn("Stop the service now? (recommended)", default=True):
+            if _stop_service():
+                _svc_stopped = True
+                _tag("ok", "Service stopped.")
+            else:
+                _tag("warn", "Could not stop service — proceeding anyway.")
+                _tag("warn", "You may see database errors. Restart the service after setup.")
+        else:
+            _tag("warn", "Proceeding with service running — database conflicts may occur.")
+        print()
+
     # Initialise DB schema before any step so encrypt_pw / db helpers work
     try:
         from db.core import db_init
@@ -1058,6 +1172,7 @@ def main():
     except Exception as _e:
         _tag("error", f"Failed to initialise database schema: {_e}")
         sys.exit(1)
+    _fix_file_ownership()   # chown DB back to SUDO_USER if running as root
 
     try:
         step1_packages()
@@ -1072,10 +1187,24 @@ def main():
         _tag("warn", "Setup aborted by user.")
         sys.exit(1)
 
+    _fix_file_ownership()   # chown certs + DB again after step3 may have written certs
+
     _separator("═")
     _tag("ok", f"{_C['bold']}Setup complete — starting PingWatch...{_C['reset']}")
     _separator("═")
     print()
+
+    # ── Restart the service if we stopped it ──────────────────────────────────
+    if _svc_stopped:
+        _tag("info", "Restarting service with updated configuration...")
+        if _restart_service():
+            _tag("ok", "Service restarted — settings are now live.")
+            _tag("info", "Follow logs: journalctl -u pingwatch -f")
+        else:
+            _tag("warn", "Could not restart service automatically.")
+            _tag("info", "Start it manually: sudo systemctl start pingwatch")
+        print()
+
     sys.exit(0)
 
 

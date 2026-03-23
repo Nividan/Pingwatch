@@ -57,8 +57,8 @@ _STATIC_TYPES = {
 _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js",
-    "forms-settings.js", "forms-io.js", "forms-users.js",
-    "dashboard.js", "events.js", "backups.js", "app.js",
+    "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "app.js",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
@@ -262,8 +262,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, _tls_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -281,7 +281,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         body = self._body()
 
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, _tls_mod):
+        from routes import ipam, ldap as _ldap_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -289,11 +290,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod
         p    = urlparse(self.path).path
         body = self._body()
 
-        for mod in (auth, devices, settings, topology, _tls_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -301,7 +302,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology, settings, backups
+        from routes import topology, settings, backups, ipam
         p    = urlparse(self.path).path
         body = self._body()
 
@@ -311,6 +312,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if backups.handle(self, 'PUT', p, body):
             return
+        if ipam.handle(self, 'PUT', p, body):
+            return
 
         self._json(404, {"error": "not found"})
 
@@ -319,7 +322,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        for mod in (auth, devices, topology, backups):
+        from routes import ipam
+        for mod in (auth, devices, topology, backups, ipam):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -390,16 +394,22 @@ def main():
                 "Fix: sudo setcap cap_net_raw+ep $(which python3)"
             )
 
-    # ── Apply pending DB import (Windows-safe two-step swap) ─────────
+    # ── Apply pending DB import ───────────────────────────────────────
+    # IMPORTANT: os.replace() first (atomic, no data loss on failure),
+    # then clean up WAL/SHM.  Never unlink the live DB before the replace —
+    # if replace fails after unlink the database is permanently gone.
     _pending = str(DB_PATH) + ".pending_import"
     if os.path.exists(_pending):
         try:
-            for _ext in ('', '-wal', '-shm'):
-                _cur = str(DB_PATH) + _ext
-                if os.path.exists(_cur):
-                    os.unlink(_cur)
             os.replace(_pending, str(DB_PATH))
             log.info("DB import: applied pending import → live DB")
+            for _ext in ('-wal', '-shm'):
+                _cur = str(DB_PATH) + _ext
+                try:
+                    if os.path.exists(_cur):
+                        os.unlink(_cur)
+                except OSError:
+                    pass
         except Exception as _pe:
             log.error(f"DB import: failed to apply pending import — {_pe}")
 

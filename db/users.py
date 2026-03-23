@@ -43,12 +43,15 @@ def db_save_settings(d: dict):
 # ── User management ───────────────────────────────────────────────
 
 def db_list_users() -> list:
-    """Return all users as [{username, role}]."""
+    """Return all users as [{username, role, auth_type, domain}]."""
     try:
         con = sqlite3.connect(DB_PATH)
-        rows = con.execute("SELECT username, role FROM users ORDER BY username").fetchall()
+        rows = con.execute(
+            "SELECT username, role, auth_type, domain FROM users ORDER BY username"
+        ).fetchall()
         con.close()
-        return [{"username": r[0], "role": r[1]} for r in rows]
+        return [{"username": r[0], "role": r[1],
+                 "auth_type": r[2] or "local", "domain": r[3] or ""} for r in rows]
     except Exception as e:
         log.error(f"DB list users error: {e}")
         return []
@@ -59,7 +62,10 @@ def db_add_user(username: str, password: str, role: str = "admin") -> bool:
     from core.auth import _hash_pw
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("INSERT INTO users VALUES (?,?,?)", (username, _hash_pw(password), role))
+        con.execute(
+            "INSERT INTO users (username, pw_hash, role) VALUES (?,?,?)",
+            (username, _hash_pw(password), role)
+        )
         con.commit()
         con.close()
         return True
@@ -81,6 +87,37 @@ def db_delete_user(username: str) -> bool:
     except Exception as e:
         log.error(f"DB delete user error: {e}")
         return False
+
+
+def db_add_ldap_user(username: str, domain: str, role: str = 'viewer') -> bool:
+    """Insert a domain/LDAP user (no local password). Returns False if username exists."""
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute(
+            "INSERT INTO users (username, pw_hash, role, auth_type, domain) VALUES (?,?,?,?,?)",
+            (username, '__ldap__', role, 'ldap', domain)
+        )
+        con.commit()
+        con.close()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    except Exception as e:
+        log.error(f"DB add LDAP user error: {e}")
+        return False
+
+
+def db_get_user_auth_type(username: str) -> str:
+    """Return 'local' or 'ldap' for username, defaulting to 'local' if not found."""
+    try:
+        con = sqlite3.connect(DB_PATH)
+        row = con.execute(
+            "SELECT auth_type FROM users WHERE username=?", (username,)
+        ).fetchone()
+        con.close()
+        return (row[0] or 'local') if row else 'local'
+    except Exception:
+        return 'local'
 
 
 def db_set_password(username: str, password: str):
