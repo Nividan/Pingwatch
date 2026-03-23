@@ -13,6 +13,8 @@ ssl setting values:
 import core.settings as _settings
 from core.logger import log
 
+_SSL_LABELS = {0: 'none', 1: 'LDAPS', 2: 'StartTLS'}
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -24,6 +26,9 @@ def _get_cfg() -> dict:
         try:
             from db import decrypt_pw
             bind_pass = decrypt_pw(encrypted) or ''
+            if not bind_pass:
+                log.warning("LDAP: bind password is set but decrypted to empty — "
+                            "Fernet key may have changed")
         except Exception as e:
             log.warning(f"LDAP: could not decrypt bind password: {e}")
     return {
@@ -66,8 +71,8 @@ def _build_server(cfg: dict):
 def _open_connection(srv, bind_dn: str, bind_pass: str, ssl_mode: int, timeout: int):
     """
     Open and return a bound ldap3 Connection.
-    For ssl_mode=2 (StartTLS) the upgrade is applied after connect.
-    Raises ldap3 exceptions on failure.
+    For ssl_mode=2 (StartTLS) the TLS upgrade is applied after connect.
+    Raises ldap3 exceptions on failure — caller is responsible for logging.
     """
     from ldap3 import Connection, SIMPLE
     conn = Connection(
@@ -78,10 +83,25 @@ def _open_connection(srv, bind_dn: str, bind_pass: str, ssl_mode: int, timeout: 
         receive_timeout=timeout,
         auto_bind=False,
     )
+    log.debug(f"LDAP _open_connection: opening TCP to {srv.host}:{srv.port} "
+              f"(ssl={_SSL_LABELS.get(ssl_mode, ssl_mode)}, "
+              f"bind_dn={bind_dn!r or '<anonymous>'})")
     conn.open()
+    log.debug(f"LDAP _open_connection: TCP open OK — {srv.host}:{srv.port}")
+
     if ssl_mode == 2:
+        log.debug(f"LDAP _open_connection: upgrading to TLS (StartTLS) — {srv.host}:{srv.port}")
         conn.start_tls()
+        log.debug(f"LDAP _open_connection: StartTLS upgrade OK — {srv.host}:{srv.port}")
+
+    log.debug(f"LDAP _open_connection: sending BIND for {bind_dn!r or '<anonymous>'}")
     conn.bind()
+    if not conn.bound:
+        raise RuntimeError(
+            f"LDAP BIND returned success=False for bind_dn={bind_dn!r} "
+            f"(result: {conn.result})"
+        )
+    log.debug(f"LDAP _open_connection: BIND OK for {bind_dn!r or '<anonymous>'}")
     return conn
 
 
@@ -96,22 +116,32 @@ def ldap_test_connection(cfg: dict | None = None) -> tuple:
     try:
         from ldap3 import Server  # noqa: F401 — just checking import
     except ImportError:
+        log.warning("LDAP test_connection: ldap3 library not installed")
         return False, "ldap3 library not installed — run: pip install ldap3"
 
     if cfg is None:
         cfg = _get_cfg()
+
     if not cfg.get('server'):
+        log.warning("LDAP test_connection: no server configured — cannot test")
         return False, "LDAP server address not configured"
+
+    ssl_label = _SSL_LABELS.get(cfg['ssl'], cfg['ssl'])
+    log.debug(f"LDAP test_connection: attempting {cfg['server']}:{cfg['port']} "
+              f"ssl={ssl_label} bind_dn={cfg['bind_dn']!r or '<anonymous>'} "
+              f"timeout={cfg['timeout']}s")
     try:
         srv = _build_server(cfg)
         conn = _open_connection(
             srv, cfg['bind_dn'], cfg['bind_pass'], cfg['ssl'], cfg['timeout']
         )
         conn.unbind()
-        log.debug(f"LDAP test_connection OK: server={cfg['server']}:{cfg['port']}")
+        log.info(f"LDAP test_connection: OK — {cfg['server']}:{cfg['port']} "
+                 f"ssl={ssl_label}")
         return True, "Connection successful"
     except Exception as e:
-        log.warning(f"LDAP test_connection failed ({cfg.get('server')}): {e}")
+        log.warning(f"LDAP test_connection: FAILED — {cfg['server']}:{cfg['port']} "
+                    f"ssl={ssl_label}: {e}")
         return False, str(e)
 
 
@@ -128,48 +158,80 @@ def ldap_test_auth_user(username: str, password: str,
     try:
         from ldap3 import Server  # noqa: F401
     except ImportError:
+        log.warning("LDAP test_auth_user: ldap3 library not installed")
         return False, "ldap3 library not installed — run: pip install ldap3"
 
     if not password:
+        log.warning(f"LDAP test_auth_user: called with empty password for {username!r}")
         return False, "Password is required"
+
     if cfg is None:
         cfg = _get_cfg()
+
     if not cfg.get('server'):
+        log.warning(f"LDAP test_auth_user: no server configured "
+                    f"(user={username!r})")
         return False, "LDAP server address not configured"
     if not cfg.get('base_dn'):
+        log.warning(f"LDAP test_auth_user: no base DN configured "
+                    f"(user={username!r}, server={cfg['server']})")
         return False, "Base DN not configured"
 
+    ssl_label = _SSL_LABELS.get(cfg['ssl'], cfg['ssl'])
+    log.debug(f"LDAP test_auth_user: starting auth for {username!r} — "
+              f"server={cfg['server']}:{cfg['port']} ssl={ssl_label} "
+              f"base_dn={cfg['base_dn']!r}")
+
+    # ── Step 1: Bind as service account ──────────────────────────
     try:
         srv = _build_server(cfg)
-
-        # Step 1: Bind as service account
         svc = _open_connection(
             srv, cfg['bind_dn'], cfg['bind_pass'], cfg['ssl'], cfg['timeout']
         )
+    except Exception as e:
+        log.warning(f"LDAP test_auth_user: service-account bind FAILED "
+                    f"(bind_dn={cfg['bind_dn']!r}, server={cfg['server']}:{cfg['port']}): {e}")
+        return False, f"Service account bind failed: {e}"
 
-        # Step 2: Search for user DN
+    # ── Step 2: Search for user DN ────────────────────────────────
+    try:
         safe_user = _escape(username)
         search_filter = cfg['user_filter'].format(username=safe_user)
+        log.debug(f"LDAP test_auth_user: searching base_dn={cfg['base_dn']!r} "
+                  f"filter={search_filter!r}")
         svc.search(cfg['base_dn'], search_filter, attributes=['distinguishedName'])
 
         if not svc.entries:
             svc.unbind()
-            log.debug(f"LDAP test_auth_user: user {username!r} not found in {cfg['base_dn']!r}")
+            log.warning(f"LDAP test_auth_user: user {username!r} not found — "
+                        f"base_dn={cfg['base_dn']!r} filter={search_filter!r}")
             return False, f"User '{username}' not found in directory"
 
         user_dn = str(svc.entries[0].entry_dn)
+        result_count = len(svc.entries)
         svc.unbind()
-        log.debug(f"LDAP test_auth_user: found DN for {username!r}")
+        if result_count > 1:
+            log.warning(f"LDAP test_auth_user: search for {username!r} returned "
+                        f"{result_count} entries — using first: {user_dn!r}")
+        else:
+            log.debug(f"LDAP test_auth_user: found DN for {username!r}: {user_dn!r}")
+    except Exception as e:
+        try: svc.unbind()
+        except Exception: pass
+        log.warning(f"LDAP test_auth_user: user search FAILED "
+                    f"(user={username!r}, base_dn={cfg['base_dn']!r}): {e}")
+        return False, f"Directory search failed: {e}"
 
-        # Step 3: Bind as the user
+    # ── Step 3: Bind as the user ──────────────────────────────────
+    try:
         user_conn = _open_connection(srv, user_dn, password, cfg['ssl'], cfg['timeout'])
         user_conn.unbind()
-        log.debug(f"LDAP test_auth_user: bind succeeded for {username!r}")
+        log.debug(f"LDAP test_auth_user: user bind OK for {username!r} ({user_dn!r})")
         return True, f"Authentication successful for {username}"
-
     except Exception as e:
-        log.warning(f"LDAP test_auth_user for {username!r} failed: {e}")
-        return False, str(e)
+        log.warning(f"LDAP test_auth_user: user bind FAILED for {username!r} "
+                    f"(dn={user_dn!r}): {e}")
+        return False, f"Authentication failed: {e}"
 
 
 def ldap_authenticate(username: str, password: str) -> bool:
@@ -180,21 +242,36 @@ def ldap_authenticate(username: str, password: str) -> bool:
     Only called for users with auth_type='ldap'.
     """
     if not password:
+        log.warning(f"LDAP authenticate: called with empty password for {username!r} — rejected")
         return False
+
     cfg = _get_cfg()
+
     if not cfg['enabled']:
-        log.warning(f"LDAP auth attempted for {username!r} but LDAP is disabled")
+        log.warning(f"LDAP authenticate: LDAP is disabled — rejecting login for {username!r}")
         return False
+
     if not cfg['server']:
-        log.warning(f"LDAP auth attempted for {username!r} but no server configured")
+        log.error(f"LDAP authenticate: no server configured — cannot authenticate {username!r}. "
+                  "Configure LDAP server in Settings → Users → LDAP Settings")
         return False
+
+    if not cfg['base_dn']:
+        log.error(f"LDAP authenticate: no base DN configured — cannot authenticate {username!r}")
+        return False
+
+    if not cfg['bind_dn']:
+        log.warning(f"LDAP authenticate: no bind DN configured for {username!r} — "
+                    "attempting anonymous service bind")
+
+    log.debug(f"LDAP authenticate: starting for {username!r} via {cfg['server']}:{cfg['port']}")
     try:
         ok, msg = ldap_test_auth_user(username, password, cfg)
         if ok:
-            log.debug(f"LDAP authenticate OK: {username!r}")
+            log.info(f"LDAP authenticate: SUCCESS for {username!r}")
         else:
-            log.debug(f"LDAP authenticate failed: {username!r} — {msg}")
+            log.info(f"LDAP authenticate: FAILED for {username!r} — {msg}")
         return ok
     except Exception as e:
-        log.error(f"LDAP authenticate error for {username!r}: {e}")
+        log.error(f"LDAP authenticate: unexpected error for {username!r}: {e}")
         return False

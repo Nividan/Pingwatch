@@ -79,10 +79,31 @@ def handle(h, method, path, body):
                 h._json(500, {'error': 'Failed to encrypt bind password'}); return True
 
         if save:
+            # Log what changed at a meaningful level
+            if 'ldap_enabled' in save:
+                state = 'enabled' if save['ldap_enabled'] == '1' else 'disabled'
+                log.info(f"LDAP authentication {state} by {user!r}")
+            if 'ldap_server' in save:
+                log.info(f"LDAP server changed to {save['ldap_server']!r} by {user!r}")
+            if 'ldap_port' in save or 'ldap_ssl' in save:
+                ssl_labels = {'0': 'none', '1': 'LDAPS', '2': 'StartTLS'}
+                ssl_val = save.get('ldap_ssl', str(_settings.get('ldap_ssl', 0)))
+                log.info(f"LDAP connection parameters updated by {user!r}: "
+                         f"port={save.get('ldap_port', _settings.get('ldap_port', 389))} "
+                         f"ssl={ssl_labels.get(ssl_val, ssl_val)}")
+            if 'ldap_bind_dn' in save:
+                log.info(f"LDAP bind DN changed to {save['ldap_bind_dn']!r} by {user!r}")
+            if 'ldap_bind_pass' in save:
+                log.info(f"LDAP bind password updated by {user!r}")
+            if 'ldap_base_dn' in save:
+                log.info(f"LDAP base DN changed to {save['ldap_base_dn']!r} by {user!r}")
+            if 'ldap_user_filter' in save:
+                log.info(f"LDAP user filter changed to {save['ldap_user_filter']!r} by {user!r}")
             _settings.load(save)
             _db_enqueue(lambda s=save: db_save_settings(s))
             db_log_audit(user, h.client_address[0], 'ldap_settings_update', '')
-            log.info(f"LDAP settings updated by {user!r}")
+        else:
+            log.debug(f"LDAP settings PATCH by {user!r}: no recognised fields — no-op")
 
         h._json(200, {'ok': True})
         return True
@@ -110,9 +131,17 @@ def handle(h, method, path, body):
             if body.get('ldap_timeout'):
                 try: cfg['timeout'] = int(body['ldap_timeout'])
                 except (ValueError, TypeError): pass
+            log.info(f"LDAP test_connection initiated by {user!r}: "
+                     f"server={cfg['server']}:{cfg['port']}")
             ok, msg = ldap_test_connection(cfg)
+            if ok:
+                log.info(f"LDAP test_connection result: OK "
+                         f"(initiated by {user!r}, server={cfg['server']}:{cfg['port']})")
+            else:
+                log.warning(f"LDAP test_connection result: FAILED "
+                            f"(initiated by {user!r}, server={cfg['server']}:{cfg['port']}): {msg}")
         except Exception as e:
-            log.error(f"LDAP test_connection route error: {e}")
+            log.error(f"LDAP test_connection route error (initiated by {user!r}): {e}")
             ok, msg = False, str(e)
         h._json(200, {'ok': ok, 'message': msg})
         return True
@@ -124,12 +153,22 @@ def handle(h, method, path, body):
         test_user = (body.get('username') or '').strip()
         test_pass = body.get('password', '')
         if not test_user or not test_pass:
+            log.warning(f"LDAP test_auth: missing username or password "
+                        f"(initiated by {user!r})")
             h._json(400, {'error': 'username and password required'}); return True
+        log.info(f"LDAP test_auth initiated by {user!r}: testing {test_user!r}")
         try:
             from core.ldap_auth import ldap_test_auth_user
             ok, msg = ldap_test_auth_user(test_user, test_pass)
+            if ok:
+                log.info(f"LDAP test_auth result: OK for {test_user!r} "
+                         f"(initiated by {user!r})")
+            else:
+                log.warning(f"LDAP test_auth result: FAILED for {test_user!r} "
+                            f"(initiated by {user!r}): {msg}")
         except Exception as e:
-            log.error(f"LDAP test_auth route error: {e}")
+            log.error(f"LDAP test_auth route error for {test_user!r} "
+                      f"(initiated by {user!r}): {e}")
             ok, msg = False, str(e)
         h._json(200, {'ok': ok, 'message': msg})
         return True
