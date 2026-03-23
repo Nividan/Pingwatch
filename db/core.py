@@ -223,6 +223,14 @@ def db_init():
             ("backup_sched_time",    "02:00"),
             ("backup_sched_days",    "1,2,3,4,5,6,7"),
             ("backup_keep",          "3"),
+            # Scheduled database backup
+            ("db_backup_enabled",     "0"),
+            ("db_backup_freq",        "daily"),
+            ("db_backup_time",        "03:00"),
+            ("db_backup_days",        "1,2,3,4,5,6,7"),
+            ("db_backup_keep",        "7"),
+            ("db_backup_last_ts",     ""),
+            ("db_backup_last_result", ""),
             # TLS / HTTPS settings
             ("tls_enabled",          "1"),   # 0=HTTP only, 1=HTTPS enabled (default on for fresh installs)
             ("tls_port",             "8443"), # HTTPS listening port

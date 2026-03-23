@@ -59,7 +59,8 @@ def _scheduler_loop():
     from .engine import do_backup
 
     log.info("Backup scheduler started")
-    last_fired = None
+    last_fired    = None
+    last_db_fired = None
     _poll = 0  # poll counter — used to emit a periodic heartbeat
 
     while True:
@@ -67,51 +68,62 @@ def _scheduler_loop():
             time.sleep(30)   # check every 30 seconds
             _poll += 1
 
+            # ── Device config backup ──────────────────────────────────────
             enabled  = int(_cfg('backup_sched_enabled', 0))
             freq     = str(_cfg('backup_sched_freq',  'daily'))
             time_str = str(_cfg('backup_sched_time',  '02:00'))
             days_str = str(_cfg('backup_sched_days',  '1,2,3,4,5,6,7'))
 
+            # ── Database backup settings ──────────────────────────────────
+            db_en   = int(_cfg('db_backup_enabled', 0) or 0)
+            db_freq = str(_cfg('db_backup_freq',  'daily'))
+            db_time = str(_cfg('db_backup_time',  '03:00'))
+            db_days = str(_cfg('db_backup_days',  '1,2,3,4,5,6,7'))
+
             # Heartbeat every ~30 min so we can confirm the scheduler is alive
             if _poll % 60 == 0:
                 log.debug(
-                    f"Scheduler heartbeat — enabled={enabled} freq={freq!r} "
-                    f"time={time_str!r} days={days_str!r} "
-                    f"last_fired={last_fired.strftime('%H:%M:%S') if last_fired else 'never'}"
+                    f"Scheduler heartbeat — cfg_enabled={enabled} cfg_freq={freq!r} "
+                    f"cfg_time={time_str!r} "
+                    f"db_enabled={db_en} db_freq={db_freq!r} db_time={db_time!r} "
+                    f"last_fired={last_fired.strftime('%H:%M:%S') if last_fired else 'never'} "
+                    f"last_db_fired={last_db_fired.strftime('%H:%M:%S') if last_db_fired else 'never'}"
                 )
 
-            if not enabled:
-                continue
+            # ── Fire device config backups ────────────────────────────────
+            if enabled and _should_fire(last_fired, freq, time_str, days_str):
+                last_fired = datetime.datetime.now()
 
-            if not _should_fire(last_fired, freq, time_str, days_str):
-                continue
+                devices = db_get_backup_list()
+                scheduled = [d for d in devices
+                             if d.get('in_schedule') and d.get('enabled')]
+                if not scheduled:
+                    log.info("Backup scheduler: no devices with 'Add to schedule' enabled")
+                else:
+                    log.info(f"Backup scheduler firing — {len(scheduled)} device(s)")
 
-            last_fired = datetime.datetime.now()
+                    def _run_backup(device_id):
+                        try:
+                            do_backup(device_id)
+                        except Exception as e:
+                            log.error(f"Scheduled backup crashed for device {device_id!r}: {e}", exc_info=True)
 
-            devices = db_get_backup_list()
-            scheduled = [d for d in devices
-                         if d.get('in_schedule') and d.get('enabled')]
-            if not scheduled:
-                log.info("Backup scheduler: no devices with 'Add to schedule' enabled")
-                continue
+                    for dev in scheduled:
+                        t = threading.Thread(
+                            target=_run_backup,
+                            args=(dev['did'],),
+                            daemon=True,
+                            name=f"sched-bk-{dev['did']}",
+                        )
+                        t.start()
+                        time.sleep(1)   # 1-second stagger to avoid connection storms
 
-            log.info(f"Backup scheduler firing — {len(scheduled)} device(s)")
-
-            def _run_backup(device_id):
-                try:
-                    do_backup(device_id)
-                except Exception as e:
-                    log.error(f"Scheduled backup crashed for device {device_id!r}: {e}", exc_info=True)
-
-            for dev in scheduled:
-                t = threading.Thread(
-                    target=_run_backup,
-                    args=(dev['did'],),
-                    daemon=True,
-                    name=f"sched-bk-{dev['did']}",
-                )
-                t.start()
-                time.sleep(1)   # 1-second stagger to avoid connection storms
+            # ── Fire database backup ──────────────────────────────────────
+            if db_en and _should_fire(last_db_fired, db_freq, db_time, db_days):
+                last_db_fired = datetime.datetime.now()
+                log.info("Backup scheduler: firing database backup")
+                from .db_backup import do_db_backup
+                threading.Thread(target=do_db_backup, daemon=True, name='sched-db-bk').start()
 
         except Exception as e:
             log.error(f"Backup scheduler error: {e}")
