@@ -426,11 +426,7 @@ function switchSettingsTab(tab){
       nextEl.classList.add('stab-out');
       document.getElementById(`stab-footer-${tab}`).style.display = '';
 
-      if (tab === 'logs')    _loadLogTab();
-      if (tab === 'sensors') loadSensorsDefaultsTab();
-      if (tab === 'backup')  _loadBackupScheduleSettings();
-
-      // Measure target height
+      // Measure target height against placeholder ("Loading…") state — before content loads
       mbox.style.height = 'auto';
       const endH = mbox.offsetHeight;
       mbox.style.height = startH + 'px';
@@ -440,11 +436,14 @@ function switchSettingsTab(tab){
         mbox.style.height = endH + 'px';
         requestAnimationFrame(() => {
           nextEl.classList.remove('stab-out');
-          // Clean up after transitions finish
+          // Load content AFTER animation so it never races with the height transition
           setTimeout(() => {
             mbox.style.height = '';
             mbox.classList.remove('stab-anim');
             _stabSwitching = false;
+            if (tab === 'logs')    _loadLogTab();
+            if (tab === 'sensors') loadSensorsDefaultsTab();
+            if (tab === 'backup')  _loadBackupScheduleSettings();
           }, 280);
         });
       });
@@ -452,10 +451,10 @@ function switchSettingsTab(tab){
   } else {
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
+    _stabSwitching = false;
     if (tab === 'logs')    _loadLogTab();
     if (tab === 'sensors') loadSensorsDefaultsTab();
     if (tab === 'backup')  _loadBackupScheduleSettings();
-    _stabSwitching = false;
   }
 }
 
