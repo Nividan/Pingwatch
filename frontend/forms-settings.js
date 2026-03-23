@@ -77,19 +77,6 @@ async function openSettings(){
         </div>
         <div class="fh">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
       </div>
-      <div class="fr" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:12px">Change Password</div>
-        <div class="fr"><label class="fl">Current Password</label>
-          <input type="password" id="st-cpw" placeholder="current password"/></div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">New Password</label>
-            <input type="password" id="st-npw" placeholder="min 8 characters"/></div>
-          <div class="fr"><label class="fl">Confirm</label>
-            <input type="password" id="st-npw2" placeholder="confirm"/></div>
-        </div>
-        <button class="btn-p" id="btnChgPw" style="margin-top:10px;font-size:12px;padding:7px 14px"
-                onclick="changeOwnPassword()">Update Password</button>
-      </div>
       <div class="fr" style="margin-top:16px">
         <div class="fl" style="margin-bottom:10px">Server Info</div>
         <div class="st-info-grid">
@@ -112,6 +99,19 @@ async function openSettings(){
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
         <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="openLdapSettings()">🔐 LDAP Settings</button>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:12px">Change Password</div>
+        <div class="fr"><label class="fl">Current Password</label>
+          <input type="password" id="st-cpw" placeholder="current password"/></div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">New Password</label>
+            <input type="password" id="st-npw" placeholder="min 8 characters"/></div>
+          <div class="fr"><label class="fl">Confirm</label>
+            <input type="password" id="st-npw2" placeholder="confirm"/></div>
+        </div>
+        <button class="btn-p" id="btnChgPw" style="margin-top:10px;font-size:12px;padding:7px 14px"
+                onclick="changeOwnPassword()">Update Password</button>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Login Security</div>
