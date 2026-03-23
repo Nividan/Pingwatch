@@ -135,8 +135,9 @@ async function openSettings(){
     </div>
     <div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
-      <div style="margin-top:14px">
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
+        <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="openLdapSettings()">🔐 LDAP Settings</button>
       </div>
     </div>
     <div class="mbdy stab-fade" id="stab-alerts" style="display:none">
@@ -805,17 +806,25 @@ async function saveSensorTypeDefaults(){
 
 function renderUserTable(users){
   if(!users||!users.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No users found.</div>';
-  const rows=users.map(u=>`
+  const rows=users.map(u=>{
+    const isLdap=u.auth_type==='ldap';
+    const badge=isLdap
+      ?`<span class="usr-badge-ldap">🌐 Domain</span>`
+      :`<span class="usr-badge-local">🔑 Local</span>`;
+    const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Password</button>`;
+    return `
     <tr>
       <td><strong>${esc(u.username)}</strong></td>
       <td><span style="color:var(--text2)">${esc(u.role)}</span></td>
+      <td>${badge}</td>
       <td><div class="usr-act">
-        <button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Password</button>
+        ${resetBtn}
         <button class="del" onclick="deleteUser('${esc(u.username)}')">🗑 Delete</button>
       </div></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `<table class="usr-table">
-    <thead><tr><th>Username</th><th>Role</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Username</th><th>Role</th><th>Auth</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }

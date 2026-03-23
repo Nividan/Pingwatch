@@ -36,36 +36,55 @@ def _verify_pw(password: str, stored: str) -> bool:
         return False
 
 
+def _strip_domain(username: str) -> str:
+    """Normalize domain\\user or user@domain to plain username."""
+    if '\\' in username:
+        return username.split('\\', 1)[1]
+    if '@' in username:
+        return username.split('@')[0]
+    return username
+
+
 def auth_login(username: str, password: str):
     """Return a session token on success, None on failure."""
+    clean = _strip_domain(username)
     try:
         con = sqlite3.connect(DB_PATH)
         row = con.execute(
-            "SELECT pw_hash FROM users WHERE username=?", (username,)
+            "SELECT pw_hash, role, auth_type FROM users WHERE username=?", (clean,)
         ).fetchone()
         con.close()
     except Exception:
         return None
-    if not row or not _verify_pw(password, row[0]):
+    if not row:
         return None
+
+    pw_hash   = row[0]
+    _role     = row[1] or "viewer"
+    auth_type = row[2] if len(row) > 2 else 'local'
+
+    if auth_type == 'ldap':
+        # Domain user — authenticate against LDAP directory
+        try:
+            from core.ldap_auth import ldap_authenticate
+            if not ldap_authenticate(clean, password):
+                return None
+        except Exception as e:
+            log.error(f"LDAP auth error for {clean!r}: {e}")
+            return None
+    else:
+        # Local user — verify password hash
+        if not _verify_pw(password, pw_hash):
+            return None
+
     token   = secrets.token_hex(32)
     expires = time.time() + _settings.get("session_ttl", 86400)
-    # Load role for this user at login time (cached in session)
-    _role = "viewer"
-    try:
-        _rc = sqlite3.connect(DB_PATH)
-        _rr = _rc.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
-        _rc.close()
-        if _rr:
-            _role = _rr[0]
-    except Exception as _re:
-        log.warning(f"auth: role lookup failed for {username!r}, defaulting to viewer: {_re}")
     with _SESSIONS_LOCK:
-        _SESSIONS[token] = {"username": username, "expires": expires, "role": _role}
+        _SESSIONS[token] = {"username": clean, "expires": expires, "role": _role}
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("DELETE FROM sessions WHERE username=?", (username,))  # clear old sessions for this user
-        con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), username, expires))
+        con.execute("DELETE FROM sessions WHERE username=?", (clean,))
+        con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
         con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
         con.commit()
         con.close()
