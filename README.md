@@ -339,11 +339,13 @@ PingWatch includes a built-in IPAM module for tracking IP address allocations ac
 
 ### 📡 Network Dashboard
 Real-time monitoring of all devices with live status, latency, and connectivity.
+
 <img width="800" alt="Network Dashboard" src="https://github.com/user-attachments/assets/91e2237f-a3c8-447c-adbc-5d91e950f63a" />
 <img width="800" alt="Network Dashboard 2" src="https://github.com/user-attachments/assets/276fc670-1425-4150-ae9d-21ee33da8565" />
 
 ### 🖥 Device Information
 View detailed information for every device including IP address, latency, uptime, and custom notes.
+
 <img width="800" alt="Device List" src="https://github.com/user-attachments/assets/06a38bfa-3dd1-431e-8dd1-60873d9624e8" />
 <img width="800" alt="Device Detail" src="https://github.com/user-attachments/assets/3a027022-4a46-4fc2-b2e3-9f017b06a2e8" />
 <img width="480" alt="Device Panel" src="https://github.com/user-attachments/assets/131ceef8-bb9c-4abb-9346-f993f409365f" />
@@ -351,6 +353,7 @@ View detailed information for every device including IP address, latency, uptime
 
 ### 📜 Event Logs
 Centralized event logging with timestamps, severity levels, and device filtering.
+
 <img width="800" alt="Event Log" src="https://github.com/user-attachments/assets/210e31ec-6367-4e60-bcbd-5257f36f5a5d" />
 <img width="500" alt="Event Filter" src="https://github.com/user-attachments/assets/a9a1e8ef-6da1-40c2-b31c-e5a4548f5cbb" />
 <img width="800" alt="Event Log 2" src="https://github.com/user-attachments/assets/3a26e38d-6f12-46db-9d46-11f27561d001" />
@@ -374,6 +377,7 @@ PingWatch includes a built-in **Configuration Backup** system that connects to n
 
 ### IP-Address Manager
 Track and manage IP allocations across subnets — view utilisation at a glance, assign names to individual IPs, and see which addresses are linked to monitored devices.
+
 <img width="500" height="492" alt="image" src="https://github.com/user-attachments/assets/42864325-72b5-4e7b-80ea-16637beb0d5f" />
 <img width="800" height="364" alt="image" src="https://github.com/user-attachments/assets/2397d53a-8891-4a96-a5f3-865dcb859f6c" />
 
