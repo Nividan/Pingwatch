@@ -155,9 +155,9 @@ async function openSettings(){
       </div>
       <div class="fgrid" style="margin-top:8px">
         <div class="fr"><label class="fl">From</label>
-          <input type="email" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
+          <input type="text" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
         <div class="fr"><label class="fl">To</label>
-          <input type="email" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
+          <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
       </div>
       <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
         <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>

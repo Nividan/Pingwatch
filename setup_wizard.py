@@ -475,6 +475,49 @@ def step1_packages():
         sys.exit(1)
 
 
+# ── Service management (Linux/systemd) ───────────────────────────────────────
+
+def _is_service_active() -> bool:
+    """Return True if the pingwatch systemd service is currently running."""
+    if sys.platform == "win32":
+        return False
+    import shutil as _sh
+    if not _sh.which("systemctl"):
+        return False
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "pingwatch"],
+            capture_output=True, text=True,
+        )
+        return r.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def _stop_service() -> bool:
+    """Stop the pingwatch systemd service. Returns True on success."""
+    try:
+        r = subprocess.run(
+            ["sudo", "systemctl", "stop", "pingwatch"],
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _restart_service() -> bool:
+    """Start the pingwatch systemd service. Returns True on success."""
+    try:
+        r = subprocess.run(
+            ["sudo", "systemctl", "start", "pingwatch"],
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 # ── Port helpers ──────────────────────────────────────────────────────────────
 
 def _port_in_use(port: int) -> "int | None":
@@ -1061,6 +1104,25 @@ def main():
         _tag("info", "later in Settings once the server is running.")
     print()
 
+    # ── Stop the service before touching the DB ───────────────────────────────
+    # Two concurrent writers sharing the same SQLite WAL will race and can leave
+    # the service's connection in a "readonly database" state.  Stop the service
+    # first; we'll restart it (with the new config) when the wizard finishes.
+    _svc_stopped = False
+    if _is_service_active():
+        _tag("warn", "The PingWatch service is currently running.")
+        _tag("info", "It must be stopped before the wizard modifies the database.")
+        if _ask_yn("Stop the service now? (recommended)", default=True):
+            if _stop_service():
+                _svc_stopped = True
+                _tag("ok", "Service stopped.")
+            else:
+                _tag("warn", "Could not stop service — proceeding anyway.")
+                _tag("warn", "You may see database errors. Restart the service after setup.")
+        else:
+            _tag("warn", "Proceeding with service running — database conflicts may occur.")
+        print()
+
     # Initialise DB schema before any step so encrypt_pw / db helpers work
     try:
         from db.core import db_init
@@ -1086,6 +1148,18 @@ def main():
     _tag("ok", f"{_C['bold']}Setup complete — starting PingWatch...{_C['reset']}")
     _separator("═")
     print()
+
+    # ── Restart the service if we stopped it ──────────────────────────────────
+    if _svc_stopped:
+        _tag("info", "Restarting service with updated configuration...")
+        if _restart_service():
+            _tag("ok", "Service restarted — settings are now live.")
+            _tag("info", "Follow logs: journalctl -u pingwatch -f")
+        else:
+            _tag("warn", "Could not restart service automatically.")
+            _tag("info", "Start it manually: sudo systemctl start pingwatch")
+        print()
+
     sys.exit(0)
 
 
