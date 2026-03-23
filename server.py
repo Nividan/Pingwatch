@@ -394,16 +394,22 @@ def main():
                 "Fix: sudo setcap cap_net_raw+ep $(which python3)"
             )
 
-    # ── Apply pending DB import (Windows-safe two-step swap) ─────────
+    # ── Apply pending DB import ───────────────────────────────────────
+    # IMPORTANT: os.replace() first (atomic, no data loss on failure),
+    # then clean up WAL/SHM.  Never unlink the live DB before the replace —
+    # if replace fails after unlink the database is permanently gone.
     _pending = str(DB_PATH) + ".pending_import"
     if os.path.exists(_pending):
         try:
-            for _ext in ('', '-wal', '-shm'):
-                _cur = str(DB_PATH) + _ext
-                if os.path.exists(_cur):
-                    os.unlink(_cur)
             os.replace(_pending, str(DB_PATH))
             log.info("DB import: applied pending import → live DB")
+            for _ext in ('-wal', '-shm'):
+                _cur = str(DB_PATH) + _ext
+                try:
+                    if os.path.exists(_cur):
+                        os.unlink(_cur)
+                except OSError:
+                    pass
         except Exception as _pe:
             log.error(f"DB import: failed to apply pending import — {_pe}")
 
