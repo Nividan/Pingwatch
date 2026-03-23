@@ -206,6 +206,14 @@ _PACKAGES = [
         "desc":     "TLS certificate generation & encryption",
         "required": True,
     },
+    {
+        "import":   "ldap3",
+        "name":     "ldap3",
+        "install":  "ldap3>=2.9.0",
+        "pip":      True,
+        "desc":     "LDAP / Active Directory authentication",
+        "required": False,
+    },
 ]
 
 _SNMP_TOOL = "snmpget"
@@ -344,6 +352,7 @@ def step1_packages():
                     "Pillow":       ("python3-pil",     None),
                     "paramiko":     ("python3-paramiko", None),
                     "cryptography": ("python3-cryptography", None),
+                    "ldap3":        ("python3-ldap3",   None),
                 }
                 _apt_entry = _apt_map.get(pkg["name"])
 
@@ -376,6 +385,7 @@ def step1_packages():
                             "python3-pil":          "python3-pillow",
                             "python3-paramiko":     "python3-paramiko",
                             "python3-cryptography": "python3-cryptography",
+                            "python3-ldap3":        "python3-ldap3",
                         }
                         _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
                         r = subprocess.run(
