@@ -48,21 +48,6 @@ async function openSettings(){
         <div style="font-size:11px;color:var(--text3);margin-top:5px">How long to keep latency history samples (default: 365 days)</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">New Sensor Defaults</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Interval (s)</label>
-            <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl">Timeout (s)</label>
-            <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
-        </div>
-        <div class="fgrid" style="margin-top:6px">
-          <div class="fr"><label class="fl">Fail After (probes)</label>
-            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||1}" min="1" max="60" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl">Recover After (probes)</label>
-            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="60" style="max-width:100px"/></div>
-        </div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Events shown</label>
@@ -75,17 +60,6 @@ async function openSettings(){
         <div class="fr" style="margin-top:6px"><label class="fl">SNMP Traps in DB</label>
           <input type="number" id="st-trap-db" value="${sr.max_trap_entries||500}" min="50" max="10000" style="max-width:100px"/>
           <div class="fh">Max SNMP trap entries kept in database</div></div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Security</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Max login attempts</label>
-            <input type="number" id="st-fail-max" value="${sr.login_fail_max||5}" min="1" max="100" style="max-width:100px"/>
-            <div class="fh">Attempts before lockout</div></div>
-          <div class="fr"><label class="fl">Lockout window (s)</label>
-            <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
-            <div class="fh">Window to count failed attempts</div></div>
-        </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Appearance</div>
@@ -139,6 +113,17 @@ async function openSettings(){
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
         <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="openLdapSettings()">🔐 LDAP Settings</button>
       </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Login Security</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Max login attempts</label>
+            <input type="number" id="st-fail-max" value="${sr.login_fail_max||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Attempts before lockout</div></div>
+          <div class="fr"><label class="fl">Lockout window (s)</label>
+            <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
+            <div class="fh">Window to count failed attempts</div></div>
+        </div>
+      </div>
     </div>
     <div class="mbdy stab-fade" id="stab-alerts" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
@@ -185,6 +170,7 @@ async function openSettings(){
     </div>
     <div class="mft" id="stab-footer-users" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
     </div>
     <div class="mft" id="stab-footer-alerts" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -223,6 +209,22 @@ async function openSettings(){
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
     </div>
     <div class="mbdy stab-fade" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
+      <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:6px">Global Defaults</div>
+        <div class="fh" style="margin-bottom:10px">Fallback values applied to all new sensors — override per type below.</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Interval (s)</label>
+            <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
+        </div>
+        <div class="fgrid" style="margin-top:6px">
+          <div class="fr"><label class="fl">Fail After (probes)</label>
+            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||1}" min="1" max="60" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Recover After (probes)</label>
+            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="60" style="max-width:100px"/></div>
+        </div>
+      </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
@@ -798,9 +800,23 @@ async function saveSensorTypeDefaults(){
                             const kc=_b('sdr_http_keyword_keyword_case'); if(kc!=null) d.keyword_case=kc; }
     result[t] = d;
   });
-  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result});
+  const snrIv  = parseInt(document.getElementById('st-snr-iv')?.value);
+  const snrTmo = parseInt(document.getElementById('st-snr-tmo')?.value);
+  const snrFa  = parseInt(document.getElementById('st-snr-fa')?.value);
+  const snrRa  = parseInt(document.getElementById('st-snr-ra')?.value);
+  const globalDefaults = {};
+  if(snrIv  >= 1) globalDefaults.snr_interval     = snrIv;
+  if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
+  if(snrFa  >= 1) globalDefaults.snr_fail_after    = snrFa;
+  if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
+  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result, ...globalDefaults});
   if(!r.ok){ toast('Save failed','err'); return; }
   window._snrTypeDefaults = result;
+  window._snrDef = window._snrDef || {};
+  if(globalDefaults.snr_interval)     window._snrDef.interval     = globalDefaults.snr_interval;
+  if(globalDefaults.snr_timeout)      window._snrDef.timeout      = globalDefaults.snr_timeout;
+  if(globalDefaults.snr_fail_after)   window._snrDef.fail_after   = globalDefaults.snr_fail_after;
+  if(globalDefaults.snr_recover_after)window._snrDef.recover_after = globalDefaults.snr_recover_after;
   toast('Sensor defaults saved','ok');
 }
 
@@ -837,24 +853,12 @@ async function saveSettings(){
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const body={session_ttl:ttl};
   if(ret&&ret>=1)body.retention_days=ret;
-  const snrIv =parseInt(document.getElementById('st-snr-iv')?.value);
-  const snrTmo=parseInt(document.getElementById('st-snr-tmo')?.value);
-  const snrFa =parseInt(document.getElementById('st-snr-fa')?.value);
-  const snrRa =parseInt(document.getElementById('st-snr-ra')?.value);
-  if(snrIv>=1)  body.snr_interval=snrIv;
-  if(snrTmo>=1) body.snr_timeout=snrTmo;
-  if(snrFa>=1)  body.snr_fail_after=snrFa;
-  if(snrRa>=1)  body.snr_recover_after=snrRa;
   const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
   const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
   const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);
   if(flapDisp>=5)  body.max_flaps_display=flapDisp;
   if(flapDb>=50)   body.max_flap_entries=flapDb;
   if(trapDb>=50)   body.max_trap_entries=trapDb;
-  const failMax=parseInt(document.getElementById('st-fail-max')?.value);
-  const failWin=parseInt(document.getElementById('st-fail-win')?.value);
-  if(failMax>=1)  body.login_fail_max=failMax;
-  if(failWin>=10) body.login_fail_window=failWin;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
   const lGood=parseInt(document.getElementById('st-lgood')?.value);
   const lWarn=parseInt(document.getElementById('st-lwarn')?.value);
@@ -891,12 +895,18 @@ async function saveSettings(){
     if(el) el.textContent=body.org_name||'Network Monitor v3';
     document.title='PingWatch \u2014 '+(body.org_name||'Network Monitor');
   }
-  window._snrDef=window._snrDef||{};
-  if(body.snr_interval)     window._snrDef.interval=body.snr_interval;
-  if(body.snr_timeout)      window._snrDef.timeout=body.snr_timeout;
-  if(body.snr_fail_after)   window._snrDef.fail_after=body.snr_fail_after;
-  if(body.snr_recover_after)window._snrDef.recover_after=body.snr_recover_after;
   toast('Settings saved','ok');
+}
+
+async function saveSecuritySettings(){
+  const failMax = parseInt(document.getElementById('st-fail-max')?.value);
+  const failWin = parseInt(document.getElementById('st-fail-win')?.value);
+  const body = {};
+  if(failMax >= 1)  body.login_fail_max    = failMax;
+  if(failWin >= 10) body.login_fail_window = failWin;
+  const r = await api('PATCH', '/api/settings', body);
+  if(!r.ok){ toast('Failed to save security settings','err'); return; }
+  toast('Security settings saved','ok');
 }
 
 function _bkFreqChange(){
