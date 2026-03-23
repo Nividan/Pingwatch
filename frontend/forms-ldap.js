@@ -21,7 +21,8 @@ async function openLdapSettings() {
 }
 
 function _ldapRenderModal(s) {
-  const checked = s.ldap_enabled ? 'checked' : '';
+  const checked      = s.ldap_enabled ? 'checked' : '';
+  const dbgChecked   = s.ldap_debug   ? 'checked' : '';
   const sslVal  = s.ldap_ssl ?? 0;
   const passPlaceholder = s.ldap_bind_pass_set ? '●●●●●●●● (set — leave blank to keep)' : 'bind password';
   return `
@@ -92,6 +93,13 @@ function _ldapRenderModal(s) {
         <div id="ldap-test-result" style="font-size:12px;flex:1"></div>
       </div>
 
+      <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+          <input type="checkbox" id="ldap-debug" ${dbgChecked} style="width:14px;height:14px;cursor:pointer"/>
+          Enable debug logging — logs TCP, BIND, and search steps for each authentication attempt
+        </label>
+      </div>
+
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('mldap')">Cancel</button>
@@ -111,6 +119,7 @@ function _ldapSslChange() {
 function _ldapCollectForm() {
   return {
     ldap_enabled:     document.getElementById('ldap-enabled')?.checked ? 1 : 0,
+    ldap_debug:       document.getElementById('ldap-debug')?.checked   ? 1 : 0,
     ldap_server:      (document.getElementById('ldap-server')?.value || '').trim(),
     ldap_port:        parseInt(document.getElementById('ldap-port')?.value || '389'),
     ldap_ssl:         parseInt(document.getElementById('ldap-ssl')?.value || '0'),

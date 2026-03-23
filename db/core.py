@@ -248,6 +248,7 @@ def db_init():
             ("ldap_user_filter",    "(sAMAccountName={username})"),
             ("ldap_domain",         ""),
             ("ldap_timeout",        "10"),
+            ("ldap_debug",          "0"),   # 0=login events only, 1=full debug trace
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
