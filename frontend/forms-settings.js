@@ -435,16 +435,18 @@ function switchSettingsTab(tab){
       const endH = mbox.offsetHeight;
       mbox.style.height = startH + 'px';
 
-      // Animate height + fade in
+      // Animate height + fade in (double-rAF ensures browser paints opacity:0 before transitioning)
       requestAnimationFrame(() => {
         mbox.style.height = endH + 'px';
-        nextEl.classList.remove('stab-out');
-        // Clean up after transitions finish
-        setTimeout(() => {
-          mbox.style.height = '';
-          mbox.classList.remove('stab-anim');
-          _stabSwitching = false;
-        }, 280);
+        requestAnimationFrame(() => {
+          nextEl.classList.remove('stab-out');
+          // Clean up after transitions finish
+          setTimeout(() => {
+            mbox.style.height = '';
+            mbox.classList.remove('stab-anim');
+            _stabSwitching = false;
+          }, 280);
+        });
       });
     }, 200);
   } else {
