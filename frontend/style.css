@@ -1204,6 +1204,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-name-inp{background:var(--bg2);border:1px solid var(--accent);border-radius:3px;
   color:var(--text);padding:2px 6px;font-size:12px;width:100%;box-sizing:border-box;outline:none;}
 .ipam-ts{color:var(--text3)!important;font-size:10px;white-space:nowrap;}
+.ipam-dev-badge{font-size:10px;opacity:.65;margin-right:3px;vertical-align:middle;}
 
 /* ── Log viewer (Settings → Logs tab) ──────────────────────────────────── */
 .log-subtab-bar{display:flex;align-items:center;gap:4px;padding:8px 12px;

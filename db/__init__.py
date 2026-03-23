@@ -57,6 +57,10 @@ from db.ipam        import (
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
+    ipam_sync_device_add,
+    ipam_sync_device_update,
+    ipam_sync_device_delete,
+    ipam_sync_subnet_add,
 )
 
 # backups
@@ -96,6 +100,8 @@ __all__ = [
     # ipam
     "db_list_subnets", "db_get_subnet", "db_add_subnet", "db_delete_subnet",
     "db_get_allocations", "db_upsert_allocation", "db_clear_allocation",
+    "ipam_sync_device_add", "ipam_sync_device_update",
+    "ipam_sync_device_delete", "ipam_sync_subnet_add",
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",

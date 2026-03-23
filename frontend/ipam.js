@@ -4,17 +4,19 @@
 
 let _ipamSubnets      = [];     // [{id, cidr, name, created_by, created_at}]
 let _ipamSelectedId   = null;   // currently selected subnet id
-let _ipamAllIps       = [];     // full merged list [{ip, name, modified_by, modified_at}]
+let _ipamAllIps       = [];     // full merged list [{ip, name, modified_by, modified_at, device_id}]
 let _ipamFiltered     = [];     // search-filtered view of _ipamAllIps
 let _ipamPage         = 0;      // current page (0-based)
-let _ipamInited       = false;
+let _ipamShellInited  = false;  // shell HTML built once; data always refreshed on tab switch
 const _IPAM_PAGE_SIZE = 200;
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function _ipamInit() {
-  if (_ipamInited) return;
-  _ipamInited = true;
-  _ipamRenderShell();
+  // Build the toolbar/shell only once; always re-fetch data on tab switch
+  if (!_ipamShellInited) {
+    _ipamShellInited = true;
+    _ipamRenderShell();
+  }
   await _ipamLoadSubnets();
 }
 
@@ -106,8 +108,9 @@ async function _ipamOnSubnetChange(idVal) {
   _ipamAllIps = ips.map(ip => {
     const a = allocs[ip];
     return a
-      ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at }
-      : { ip, name: '', modified_by: '', modified_at: 0 };
+      ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
+          device_id: a.device_id || '' }
+      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '' };
   });
   // Sort: Used (named) first, then Free, both groups sorted numerically by IP
   _ipamAllIps.sort((a, b) => {
@@ -192,9 +195,15 @@ function _ipamRenderTable() {
     const dateStr = e.modified_at
       ? new Date(e.modified_at * 1000).toLocaleString()
       : '—';
+    const devBadge = e.device_id
+      ? `<span class="ipam-dev-badge" title="Auto-populated from device">🔗</span>`
+      : '';
+    const nameText = e.name
+      ? devBadge + esc(e.name)
+      : (canEdit ? '<span style="color:var(--text3);font-style:italic">click to assign…</span>' : '<span style="color:var(--text3)">—</span>');
     const nameCell = canEdit
-      ? `<td class="ipam-name-cell" onclick="_ipamEditCell(this,'${esc(e.ip)}')">${esc(e.name) || '<span style="color:var(--text3);font-style:italic">click to assign…</span>'}</td>`
-      : `<td>${esc(e.name) || '<span style="color:var(--text3)">—</span>'}</td>`;
+      ? `<td class="ipam-name-cell" onclick="_ipamEditCell(this,'${esc(e.ip)}')">${nameText}</td>`
+      : `<td>${nameText}</td>`;
     return `<tr>
       <td class="ipam-ip">${esc(e.ip)}</td>
       ${nameCell}
@@ -263,11 +272,12 @@ function _ipamEditCell(td, ip) {
       body: JSON.stringify({name: newName}),
     });
     if (!r.ok) { toast('Failed to save', 'err'); _ipamRenderTable(); return; }
-    // Update in-memory record
+    // Update in-memory record; manual edit clears device link
     if (entry) {
       entry.name        = newName;
       entry.modified_by = S.username || '';
       entry.modified_at = Date.now() / 1000;
+      entry.device_id   = '';   // user took ownership
     }
     // Re-sort (named IPs float to top)
     const search = document.getElementById('ipam-search')?.value || '';

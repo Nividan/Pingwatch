@@ -18,6 +18,7 @@ from core.config import (
 )
 from core.logger import log
 from db import (
+    _db_enqueue,
     db_log_audit,
     db_list_subnets,
     db_get_subnet,
@@ -27,6 +28,7 @@ from db import (
     db_upsert_allocation,
     db_clear_allocation,
 )
+from db.ipam import ipam_sync_subnet_add
 
 # Largest subnet allowed: /9 = 8,388,606 hosts is already impractical;
 # cap at /9 to prevent accidents (prefix must be >= 9).
@@ -50,12 +52,16 @@ def handle(h, method, path, body):
         cidr = (body.get('cidr') or '').strip()
         name = (body.get('name') or '').strip()[:80]
         if not cidr:
+            log.warning(f"IPAM add subnet rejected: empty CIDR (user={user!r})")
             h._json(400, {'error': 'cidr is required'}); return True
         try:
             net = ipaddress.ip_network(cidr, strict=False)
         except ValueError:
+            log.warning(f"IPAM add subnet rejected: invalid CIDR {cidr!r} (user={user!r})")
             h._json(400, {'error': f'Invalid CIDR: {cidr!r}'}); return True
         if net.prefixlen < _MIN_PREFIX:
+            log.warning(f"IPAM add subnet rejected: prefix too large /{net.prefixlen} "
+                        f"for {cidr!r} (user={user!r})")
             h._json(400, {
                 'error': f'Prefix /{net.prefixlen} is too large (minimum /{_MIN_PREFIX})'
             }); return True
@@ -65,6 +71,8 @@ def handle(h, method, path, body):
             new_id = db_add_subnet(canonical, name, user)
         except ValueError as e:
             h._json(409, {'error': str(e)}); return True
+        _sid, _cidr = new_id, canonical
+        _db_enqueue(lambda: ipam_sync_subnet_add(_sid, _cidr))
         db_log_audit(user, h.client_address[0], 'ipam_subnet_add', canonical)
         log.info(f"IPAM: subnet {canonical!r} added by {user!r}")
         h._json(201, {'ok': True, 'id': new_id, 'cidr': canonical})
@@ -78,6 +86,7 @@ def handle(h, method, path, body):
         subnet_id = int(m.group(1))
         sub = db_get_subnet(subnet_id)
         if not sub:
+            log.warning(f"IPAM delete subnet: id={subnet_id} not found (user={user!r})")
             h._json(404, {'error': 'Subnet not found'}); return True
         db_delete_subnet(subnet_id)
         db_log_audit(user, h.client_address[0], 'ipam_subnet_delete', sub['cidr'])
@@ -93,6 +102,7 @@ def handle(h, method, path, body):
         subnet_id = int(m.group(1))
         sub = db_get_subnet(subnet_id)
         if not sub:
+            log.warning(f"IPAM get IPs: subnet id={subnet_id} not found (user={user!r})")
             h._json(404, {'error': 'Subnet not found'}); return True
         allocs = db_get_allocations(subnet_id)
         h._json(200, {'subnet': sub, 'allocations': allocs})
@@ -110,6 +120,7 @@ def handle(h, method, path, body):
         # Validate subnet exists and IP belongs to it
         sub = db_get_subnet(subnet_id)
         if not sub:
+            log.warning(f"IPAM assign IP: subnet id={subnet_id} not found (user={user!r}, ip={ip_str!r})")
             h._json(404, {'error': 'Subnet not found'}); return True
         try:
             ip_obj  = ipaddress.ip_address(ip_str)
@@ -117,11 +128,14 @@ def handle(h, method, path, body):
             if ip_obj not in net_obj:
                 raise ValueError
         except ValueError:
+            log.warning(f"IPAM assign IP rejected: {ip_str!r} not in subnet {sub['cidr']!r} (user={user!r})")
             h._json(400, {'error': f'{ip_str!r} is not in subnet {sub["cidr"]!r}'}); return True
 
         if name:
-            db_upsert_allocation(subnet_id, ip_str, name, user)
+            log.debug(f"IPAM: {user!r} assigned {ip_str} → {name!r} (subnet={sub['cidr']!r})")
+            db_upsert_allocation(subnet_id, ip_str, name, user, device_id='')
         else:
+            log.debug(f"IPAM: {user!r} cleared {ip_str} (subnet={sub['cidr']!r})")
             db_clear_allocation(subnet_id, ip_str)
         h._json(200, {'ok': True})
         return True

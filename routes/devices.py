@@ -27,6 +27,7 @@ from db     import (
     db_load_err_logs, db_clear_err_logs, db_clear_sensor_err_logs,
     db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
 )
+from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete
 from core.logger import log
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
 
@@ -103,6 +104,8 @@ def handle(h, method, path, body):
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url
         _db_enqueue(lambda: db_save(STATE))
+        _did, _name, _host = did, name, host
+        _db_enqueue(lambda: ipam_sync_device_add(_did, _name, _host))
         db_log_audit(user, h.client_address[0], 'device_create', name)
         h._json(200, {"did": did})
         return True
@@ -210,6 +213,8 @@ def handle(h, method, path, body):
             dev = STATE.devices.get(did)
             if not dev:
                 h._json(404, {"error": "device not found"}); return True
+            _old_host = dev.host
+            _old_name = dev.name
             if "group" in body: dev.group = body["group"]
             if "name" in body:
                 _n = str(body["name"]).strip()
@@ -230,7 +235,11 @@ def handle(h, method, path, body):
                     h._json(400, {"error": "invalid host"}); return True
                 dev.host = h2
             _dev_edit_name = dev.name
+            _new_host = dev.host
+            _new_name = dev.name
         _db_enqueue(lambda: db_save(STATE))
+        _d = did
+        _db_enqueue(lambda: ipam_sync_device_update(_d, _old_host, _new_host, _new_name))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
         h._json(200, {"status": "updated"})
         return True
@@ -245,6 +254,8 @@ def handle(h, method, path, body):
             ddname = dd.name if dd else ddid
         STATE.remove_device(ddid)
         _db_enqueue(lambda: db_save(STATE))
+        _dd = ddid
+        _db_enqueue(lambda: ipam_sync_device_delete(_dd))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
         h._json(200, {"status": "ok"})
         return True
