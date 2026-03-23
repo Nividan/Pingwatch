@@ -7,6 +7,7 @@ Handles: /api/settings (GET/PATCH), /api/server_info (GET),
 
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -16,6 +17,22 @@ from core.config import DB_PATH, BIND, PORT
 from db          import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
 from core.logger import log
 import core.settings as _settings
+
+
+def _local_ip() -> str:
+    """Return the LAN IP used to reach the outside world.
+    Falls back to BIND if detection fails."""
+    if BIND and BIND != '0.0.0.0':
+        return BIND          # server is bound to a specific interface
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return BIND
 
 
 def handle(h, method, path, body):
@@ -31,7 +48,7 @@ def handle(h, method, path, body):
             "port":           app_state.effective_port,
             "http_port":      int(_settings.get("http_port", PORT)),
             "snmp_port":      app_state.effective_snmp_port,
-            "bind":           BIND,
+            "bind":           _local_ip(),
             "db_path":        str(DB_PATH),
             "smtp_host":       _settings.get("smtp_host", ""),
             "smtp_port":       _settings.get("smtp_port", 587),
@@ -66,6 +83,14 @@ def handle(h, method, path, body):
             "backup_sched_time":    _settings.get("backup_sched_time",  "02:00"),
             "backup_sched_days":    str(_settings.get("backup_sched_days",  "1,2,3,4,5,6,7")),
             "backup_keep":          int(_settings.get("backup_keep", 3)),
+            # Group I — scheduled database backup
+            "db_backup_enabled":     int(_settings.get("db_backup_enabled",     0) or 0),
+            "db_backup_freq":        _settings.get("db_backup_freq",        "daily"),
+            "db_backup_time":        _settings.get("db_backup_time",        "03:00"),
+            "db_backup_days":        str(_settings.get("db_backup_days",    "1,2,3,4,5,6,7")),
+            "db_backup_keep":        int(_settings.get("db_backup_keep",    7) or 7),
+            "db_backup_last_ts":     _settings.get("db_backup_last_ts",     ""),
+            "db_backup_last_result": _settings.get("db_backup_last_result", ""),
             # Group H — syslog forwarding
             "syslog_enabled":      int(_settings.get("syslog_enabled",      0)),
             "syslog_host":         _settings.get("syslog_host",         ""),
@@ -133,6 +158,23 @@ def handle(h, method, path, body):
             _settings.load({"backup_keep": _bk})
             _db_enqueue(lambda _v=_bk: db_save_settings({"backup_keep": _v}))
         for _k in ("backup_sched_freq", "backup_sched_time", "backup_sched_days"):
+            if _k in body:
+                _val = str(body[_k]).strip()
+                _settings.load({_k: _val})
+                _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
+        # Scheduled database backup settings
+        if "db_backup_enabled" in body:
+            _v = "1" if body["db_backup_enabled"] else "0"
+            _settings.load({"db_backup_enabled": _v})
+            _db_enqueue(lambda v=_v: db_save_settings({"db_backup_enabled": v}))
+        if "db_backup_keep" in body:
+            try:
+                _v = str(max(1, min(50, int(body["db_backup_keep"]))))
+            except (ValueError, TypeError):
+                h._json(400, {"error": "db_backup_keep must be an integer"}); return True
+            _settings.load({"db_backup_keep": _v})
+            _db_enqueue(lambda v=_v: db_save_settings({"db_backup_keep": v}))
+        for _k in ("db_backup_freq", "db_backup_time", "db_backup_days"):
             if _k in body:
                 _val = str(body[_k]).strip()
                 _settings.load({_k: _val})
@@ -275,6 +317,15 @@ def handle(h, method, path, body):
                 except Exception: pass
             os._exit(0)
         threading.Thread(target=_do_shutdown, daemon=True).start()
+        return True
+
+    # ── /api/db/backup/run POST ───────────────────────────────────────
+    if path == "/api/db/backup/run" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from backup.db_backup import do_db_backup
+        ok, msg = do_db_backup()
+        h._json(200 if ok else 500, {"ok": ok, "msg": msg})
         return True
 
     return False

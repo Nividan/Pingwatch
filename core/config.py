@@ -18,6 +18,7 @@ SESSION_TTL = 86400   # 24 hours
 
 FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
 CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
+DB_BACKUP_DIR    = os.path.join(_ROOT, "backup", "database")
 CERTS_DIR        = os.path.join(_ROOT, "certs")
 TLS_PORT_DEFAULT = 8443
 
@@ -49,3 +50,7 @@ _RE_TLS_UPLOAD      = re.compile(r'^/api/tls/upload$')
 _RE_TLS_GENERATE    = re.compile(r'^/api/tls/generate$')
 _RE_SYSLOG_TEST     = re.compile(r'^/api/settings/syslog_test$')
 _RE_LOGS            = re.compile(r'^/api/logs/([^/]+)$')
+_RE_IPAM_SUBNETS    = re.compile(r'^/api/ipam/subnets$')
+_RE_IPAM_SUBNET     = re.compile(r'^/api/ipam/subnets/(\d+)$')
+_RE_IPAM_SUBNET_IPS = re.compile(r'^/api/ipam/subnets/(\d+)/ips$')
+_RE_IPAM_IP         = re.compile(r'^/api/ipam/ips/(\d+)/([^/]+)$')

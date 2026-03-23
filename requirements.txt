@@ -3,12 +3,18 @@ pystray>=0.19.5
 Pillow>=10.0.0
 paramiko>=3.0.0
 cryptography>=41.0.0
+ldap3>=2.9
 
 # ── Platform-specific system packages (not pip-installable) ──────────────────
 #
 # Linux (Debian/Ubuntu):
 #   sudo apt-get install python3-tk python3-dev iputils-ping snmp
 #   sudo apt-get install python3-xlib   # optional: pystray system tray on Linux
+#
+#   On Debian/Ubuntu 12+ (PEP 668 "externally managed"), pip refuses to install
+#   packages system-wide. Use one of:
+#     pip install -r requirements.txt --break-system-packages
+#     python3 -m pip install ldap3 --break-system-packages
 #
 # Linux (RHEL/Fedora):
 #   sudo dnf install python3-tkinter net-snmp-utils

@@ -19,6 +19,13 @@ async function openSettings(){
     '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
     '<input type="checkbox" id="st-bk-d' + v + '" value="' + v + '"' + (_bkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
   ).join('');
+  const _dbkFreq = sr.db_backup_freq || 'daily';
+  const _dbkDaysActive = (_dbkFreq === 'weekly') ? '' : 'none';
+  const _dbkDaysSaved = String(sr.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  const _dbkDaysHtml = _bkDayLabels.map(([v,l]) =>
+    '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
+    '<input type="checkbox" id="st-dbk-d' + v + '" value="' + v + '"' + (_dbkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
+  ).join('');
   o.innerHTML=`
   <div class="mbox" style="width:900px;max-width:96vw">
     <div class="mhd">
@@ -48,21 +55,6 @@ async function openSettings(){
         <div style="font-size:11px;color:var(--text3);margin-top:5px">How long to keep latency history samples (default: 365 days)</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">New Sensor Defaults</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Interval (s)</label>
-            <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl">Timeout (s)</label>
-            <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
-        </div>
-        <div class="fgrid" style="margin-top:6px">
-          <div class="fr"><label class="fl">Fail After (probes)</label>
-            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||1}" min="1" max="60" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl">Recover After (probes)</label>
-            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="60" style="max-width:100px"/></div>
-        </div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Events shown</label>
@@ -75,17 +67,6 @@ async function openSettings(){
         <div class="fr" style="margin-top:6px"><label class="fl">SNMP Traps in DB</label>
           <input type="number" id="st-trap-db" value="${sr.max_trap_entries||500}" min="50" max="10000" style="max-width:100px"/>
           <div class="fh">Max SNMP trap entries kept in database</div></div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Security</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Max login attempts</label>
-            <input type="number" id="st-fail-max" value="${sr.login_fail_max||5}" min="1" max="100" style="max-width:100px"/>
-            <div class="fh">Attempts before lockout</div></div>
-          <div class="fr"><label class="fl">Lockout window (s)</label>
-            <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
-            <div class="fh">Window to count failed attempts</div></div>
-        </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Appearance</div>
@@ -102,19 +83,6 @@ async function openSettings(){
             <input type="number" id="st-lwarn" value="${sr.latency_warn_ms||300}" min="1" max="10000" style="max-width:100px"/></div>
         </div>
         <div class="fh">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
-      </div>
-      <div class="fr" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:12px">Change Password</div>
-        <div class="fr"><label class="fl">Current Password</label>
-          <input type="password" id="st-cpw" placeholder="current password"/></div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">New Password</label>
-            <input type="password" id="st-npw" placeholder="min 8 characters"/></div>
-          <div class="fr"><label class="fl">Confirm</label>
-            <input type="password" id="st-npw2" placeholder="confirm"/></div>
-        </div>
-        <button class="btn-p" id="btnChgPw" style="margin-top:10px;font-size:12px;padding:7px 14px"
-                onclick="changeOwnPassword()">Update Password</button>
       </div>
       <div class="fr" style="margin-top:16px">
         <div class="fl" style="margin-bottom:10px">Server Info</div>
@@ -135,8 +103,33 @@ async function openSettings(){
     </div>
     <div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
-      <div style="margin-top:14px">
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
+        <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="openLdapSettings()">🔐 LDAP Settings</button>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:12px">Change Password</div>
+        <div class="fr"><label class="fl">Current Password</label>
+          <input type="password" id="st-cpw" placeholder="current password"/></div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">New Password</label>
+            <input type="password" id="st-npw" placeholder="min 8 characters"/></div>
+          <div class="fr"><label class="fl">Confirm</label>
+            <input type="password" id="st-npw2" placeholder="confirm"/></div>
+        </div>
+        <button class="btn-p" id="btnChgPw" style="margin-top:10px;font-size:12px;padding:7px 14px"
+                onclick="changeOwnPassword()">Update Password</button>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Login Security</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Max login attempts</label>
+            <input type="number" id="st-fail-max" value="${sr.login_fail_max||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Attempts before lockout</div></div>
+          <div class="fr"><label class="fl">Lockout window (s)</label>
+            <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
+            <div class="fh">Window to count failed attempts</div></div>
+        </div>
       </div>
     </div>
     <div class="mbdy stab-fade" id="stab-alerts" style="display:none">
@@ -162,9 +155,9 @@ async function openSettings(){
       </div>
       <div class="fgrid" style="margin-top:8px">
         <div class="fr"><label class="fl">From</label>
-          <input type="email" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
+          <input type="text" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
         <div class="fr"><label class="fl">To</label>
-          <input type="email" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
+          <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
       </div>
       <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
         <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>
@@ -184,6 +177,7 @@ async function openSettings(){
     </div>
     <div class="mft" id="stab-footer-users" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
     </div>
     <div class="mft" id="stab-footer-alerts" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -204,9 +198,50 @@ async function openSettings(){
         </div>
         <div class="fh" style="color:var(--down);margin-top:6px">Warning: this replaces ALL current data and restarts the server.</div>
       </div>
+      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Scheduled Database Backup</div>
+        <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div style="flex:1">
+            <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Scheduled Backup</div>
+            <div class="fh" style="margin:0">Automatically backup the database on a schedule — saved to backup/database/</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-dbk-enabled" ${sr.db_backup_enabled?'checked':''}><span class="tsl"></span></label>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Frequency</label>
+          <select id="st-dbk-freq" style="max-width:160px" onchange="_dbkFreqChange()">
+            <option value="daily" ${_dbkFreq==='daily'?'selected':''}>Daily</option>
+            <option value="weekly" ${_dbkFreq==='weekly'?'selected':''}>Weekly</option>
+          </select>
+        </div>
+        <div class="fr" style="margin-top:14px;display:${_dbkDaysActive}" id="st-dbk-days-row">
+          <label class="fl">Days</label>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">${_dbkDaysHtml}</div>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Backup Time</label>
+          <input type="time" id="st-dbk-time" value="${sr.db_backup_time||'03:00'}" style="max-width:140px"/>
+          <div class="fh">Server local time (24h)</div>
+        </div>
+        <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+          <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="flex:1">
+              <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Backups to Keep</div>
+              <div class="fh" style="margin:0">Oldest backup files are deleted when limit is exceeded</div>
+            </div>
+            <input type="number" id="st-dbk-keep" min="1" max="50" value="${sr.db_backup_keep!=null?sr.db_backup_keep:7}" style="width:70px;flex-shrink:0;text-align:center"/>
+          </div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="runDbBackupNow()">&#x25B6; Run Backup Now</button>
+          <span id="dbk-run-result" style="font-size:12px;color:var(--text3)"></span>
+        </div>
+        <div id="dbk-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_last_ts?`Last backup: ${esc(sr.db_backup_last_ts)} \u2014 ${esc(sr.db_backup_last_result)}`:''}</div>
+      </div>
     </div>
     <div class="mft" id="stab-footer-database" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
     </div>
     <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0">
       <div class="log-subtab-bar">
@@ -222,6 +257,22 @@ async function openSettings(){
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
     </div>
     <div class="mbdy stab-fade" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
+      <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:6px">Global Defaults</div>
+        <div class="fh" style="margin-bottom:10px">Fallback values applied to all new sensors — override per type below.</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Interval (s)</label>
+            <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
+        </div>
+        <div class="fgrid" style="margin-top:6px">
+          <div class="fr"><label class="fl">Fail After (probes)</label>
+            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||1}" min="1" max="60" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Recover After (probes)</label>
+            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="60" style="max-width:100px"/></div>
+        </div>
+      </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
@@ -423,34 +474,37 @@ function switchSettingsTab(tab){
       nextEl.classList.add('stab-out');
       document.getElementById(`stab-footer-${tab}`).style.display = '';
 
-      if (tab === 'logs')    _loadLogTab();
-      if (tab === 'sensors') loadSensorsDefaultsTab();
-      if (tab === 'backup')  _loadBackupScheduleSettings();
-
-      // Measure target height
+      // Measure target height against placeholder ("Loading…") state — before content loads
       mbox.style.height = 'auto';
       const endH = mbox.offsetHeight;
       mbox.style.height = startH + 'px';
 
-      // Animate height + fade in
+      // Animate height + fade in (double-rAF ensures browser paints opacity:0 before transitioning)
       requestAnimationFrame(() => {
         mbox.style.height = endH + 'px';
-        nextEl.classList.remove('stab-out');
-        // Clean up after transitions finish
-        setTimeout(() => {
-          mbox.style.height = '';
-          mbox.classList.remove('stab-anim');
-          _stabSwitching = false;
-        }, 280);
+        requestAnimationFrame(() => {
+          nextEl.classList.remove('stab-out');
+          // Load content AFTER animation so it never races with the height transition
+          setTimeout(() => {
+            mbox.style.height = '';
+            mbox.classList.remove('stab-anim');
+            _stabSwitching = false;
+            if (tab === 'logs')     _loadLogTab();
+            if (tab === 'sensors')  loadSensorsDefaultsTab();
+            if (tab === 'backup')   _loadBackupScheduleSettings();
+            if (tab === 'database') _loadDbBackupSettings();
+          }, 280);
+        });
       });
     }, 200);
   } else {
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
-    if (tab === 'logs')    _loadLogTab();
-    if (tab === 'sensors') loadSensorsDefaultsTab();
-    if (tab === 'backup')  _loadBackupScheduleSettings();
     _stabSwitching = false;
+    if (tab === 'logs')     _loadLogTab();
+    if (tab === 'sensors')  loadSensorsDefaultsTab();
+    if (tab === 'backup')   _loadBackupScheduleSettings();
+    if (tab === 'database') _loadDbBackupSettings();
   }
 }
 
@@ -607,7 +661,6 @@ async function _loadLogTab() {
   const el  = document.getElementById('log-body');
   const lbl = document.getElementById('log-footer-label');
   if (!el) return;
-  el.textContent = 'Loading…';
   try {
     const r = await fetch(`/api/logs/${_activeLogTab}`);
     if (!r.ok) { el.textContent = 'Access denied'; return; }
@@ -797,25 +850,47 @@ async function saveSensorTypeDefaults(){
                             const kc=_b('sdr_http_keyword_keyword_case'); if(kc!=null) d.keyword_case=kc; }
     result[t] = d;
   });
-  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result});
+  const snrIv  = parseInt(document.getElementById('st-snr-iv')?.value);
+  const snrTmo = parseInt(document.getElementById('st-snr-tmo')?.value);
+  const snrFa  = parseInt(document.getElementById('st-snr-fa')?.value);
+  const snrRa  = parseInt(document.getElementById('st-snr-ra')?.value);
+  const globalDefaults = {};
+  if(snrIv  >= 1) globalDefaults.snr_interval     = snrIv;
+  if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
+  if(snrFa  >= 1) globalDefaults.snr_fail_after    = snrFa;
+  if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
+  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result, ...globalDefaults});
   if(!r.ok){ toast('Save failed','err'); return; }
   window._snrTypeDefaults = result;
+  window._snrDef = window._snrDef || {};
+  if(globalDefaults.snr_interval)     window._snrDef.interval     = globalDefaults.snr_interval;
+  if(globalDefaults.snr_timeout)      window._snrDef.timeout      = globalDefaults.snr_timeout;
+  if(globalDefaults.snr_fail_after)   window._snrDef.fail_after   = globalDefaults.snr_fail_after;
+  if(globalDefaults.snr_recover_after)window._snrDef.recover_after = globalDefaults.snr_recover_after;
   toast('Sensor defaults saved','ok');
 }
 
 function renderUserTable(users){
   if(!users||!users.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No users found.</div>';
-  const rows=users.map(u=>`
+  const rows=users.map(u=>{
+    const isLdap=u.auth_type==='ldap';
+    const badge=isLdap
+      ?`<span class="usr-badge-ldap">🌐 Domain</span>`
+      :`<span class="usr-badge-local">🔑 Local</span>`;
+    const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Password</button>`;
+    return `
     <tr>
       <td><strong>${esc(u.username)}</strong></td>
       <td><span style="color:var(--text2)">${esc(u.role)}</span></td>
+      <td>${badge}</td>
       <td><div class="usr-act">
-        <button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Password</button>
+        ${resetBtn}
         <button class="del" onclick="deleteUser('${esc(u.username)}')">🗑 Delete</button>
       </div></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `<table class="usr-table">
-    <thead><tr><th>Username</th><th>Role</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Username</th><th>Role</th><th>Auth</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -828,24 +903,12 @@ async function saveSettings(){
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const body={session_ttl:ttl};
   if(ret&&ret>=1)body.retention_days=ret;
-  const snrIv =parseInt(document.getElementById('st-snr-iv')?.value);
-  const snrTmo=parseInt(document.getElementById('st-snr-tmo')?.value);
-  const snrFa =parseInt(document.getElementById('st-snr-fa')?.value);
-  const snrRa =parseInt(document.getElementById('st-snr-ra')?.value);
-  if(snrIv>=1)  body.snr_interval=snrIv;
-  if(snrTmo>=1) body.snr_timeout=snrTmo;
-  if(snrFa>=1)  body.snr_fail_after=snrFa;
-  if(snrRa>=1)  body.snr_recover_after=snrRa;
   const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
   const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
   const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);
   if(flapDisp>=5)  body.max_flaps_display=flapDisp;
   if(flapDb>=50)   body.max_flap_entries=flapDb;
   if(trapDb>=50)   body.max_trap_entries=trapDb;
-  const failMax=parseInt(document.getElementById('st-fail-max')?.value);
-  const failWin=parseInt(document.getElementById('st-fail-win')?.value);
-  if(failMax>=1)  body.login_fail_max=failMax;
-  if(failWin>=10) body.login_fail_window=failWin;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
   const lGood=parseInt(document.getElementById('st-lgood')?.value);
   const lWarn=parseInt(document.getElementById('st-lwarn')?.value);
@@ -882,12 +945,18 @@ async function saveSettings(){
     if(el) el.textContent=body.org_name||'Network Monitor v3';
     document.title='PingWatch \u2014 '+(body.org_name||'Network Monitor');
   }
-  window._snrDef=window._snrDef||{};
-  if(body.snr_interval)     window._snrDef.interval=body.snr_interval;
-  if(body.snr_timeout)      window._snrDef.timeout=body.snr_timeout;
-  if(body.snr_fail_after)   window._snrDef.fail_after=body.snr_fail_after;
-  if(body.snr_recover_after)window._snrDef.recover_after=body.snr_recover_after;
   toast('Settings saved','ok');
+}
+
+async function saveSecuritySettings(){
+  const failMax = parseInt(document.getElementById('st-fail-max')?.value);
+  const failWin = parseInt(document.getElementById('st-fail-win')?.value);
+  const body = {};
+  if(failMax >= 1)  body.login_fail_max    = failMax;
+  if(failWin >= 10) body.login_fail_window = failWin;
+  const r = await api('PATCH', '/api/settings', body);
+  if(!r.ok){ toast('Failed to save security settings','err'); return; }
+  toast('Security settings saved','ok');
 }
 
 function _bkFreqChange(){
@@ -943,6 +1012,82 @@ async function saveBackupScheduleSettings(){
     toast('Failed to save backup settings','err');
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
+  }
+}
+
+function _dbkFreqChange(){
+  const freq = document.getElementById('st-dbk-freq')?.value;
+  const daysRow = document.getElementById('st-dbk-days-row');
+  if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
+}
+
+async function _loadDbBackupSettings(){
+  const r = await api('GET', '/api/settings');
+  const en   = document.getElementById('st-dbk-enabled');
+  const freq = document.getElementById('st-dbk-freq');
+  const time = document.getElementById('st-dbk-time');
+  const keep = document.getElementById('st-dbk-keep');
+  if(en)   en.checked = !!r.db_backup_enabled;
+  if(freq) freq.value = r.db_backup_freq || 'daily';
+  if(time) time.value = r.db_backup_time || '03:00';
+  if(keep) keep.value = r.db_backup_keep != null ? r.db_backup_keep : 7;
+  const days = String(r.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  for(let i=1; i<=7; i++){
+    const cb = document.getElementById(`st-dbk-d${i}`);
+    if(cb) cb.checked = days.includes(String(i));
+  }
+  _dbkFreqChange();
+  const lastInfo = document.getElementById('dbk-last-info');
+  if(lastInfo) lastInfo.textContent = r.db_backup_last_ts
+    ? `Last backup: ${r.db_backup_last_ts} \u2014 ${r.db_backup_last_result}` : '';
+}
+
+async function saveDbBackupSettings(){
+  const enabled = document.getElementById('st-dbk-enabled')?.checked ? 1 : 0;
+  const freq    = document.getElementById('st-dbk-freq')?.value || 'daily';
+  const time    = document.getElementById('st-dbk-time')?.value || '03:00';
+  const keep    = parseInt(document.getElementById('st-dbk-keep')?.value) || 7;
+  const days = [];
+  for(let i=1; i<=7; i++){
+    if(document.getElementById(`st-dbk-d${i}`)?.checked) days.push(i);
+  }
+  if(freq === 'weekly' && !days.length){
+    toast('Select at least one day for weekly schedule','err'); return;
+  }
+  const btn = document.querySelector('#stab-footer-database .btn-p');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      db_backup_enabled: enabled,
+      db_backup_freq:    freq,
+      db_backup_time:    time,
+      db_backup_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
+      db_backup_keep:    keep,
+    });
+    if(!r?.ok){ toast('Failed to save DB backup settings','err'); return; }
+    toast('Database backup settings saved','ok');
+  } catch(e) {
+    toast('Failed to save DB backup settings','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Save DB Backup'; }
+  }
+}
+
+async function runDbBackupNow(){
+  const btn = document.querySelector('[onclick="runDbBackupNow()"]');
+  const res = document.getElementById('dbk-run-result');
+  if(btn){ btn.disabled=true; btn.textContent='Running...'; }
+  if(res) res.textContent = '';
+  try {
+    const r = await api('POST', '/api/db/backup/run', {});
+    if(res) res.innerHTML = r.ok
+      ? `<span style="color:var(--up)">\u2714 ${esc(r.msg||'Backup complete')}</span>`
+      : `<span style="color:var(--down)">\u2718 ${esc(r.msg||'Backup failed')}</span>`;
+    if(r.ok) _loadDbBackupSettings();
+  } catch(e) {
+    if(res) res.innerHTML = `<span style="color:var(--down)">\u2718 Request failed</span>`;
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='\u25B6 Run Backup Now'; }
   }
 }
 

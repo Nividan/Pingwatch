@@ -41,12 +41,25 @@ function openAddUser(){
       <button class="mclose" onclick="closeM('mau')">✕</button>
     </div>
     <div class="mbdy">
+      <div class="fr"><label class="fl">Authentication</label>
+        <select id="au-type" onchange="_auTypeChange()">
+          <option value="local">Local — password stored in PingWatch</option>
+          <option value="ldap">Domain — authenticated via LDAP / AD</option>
+        </select>
+      </div>
       <div class="fr"><label class="fl">Username</label>
         <input type="text" id="au-u" autocomplete="off" placeholder="username"/></div>
-      <div class="fr"><label class="fl">Password</label>
-        <input type="password" id="au-p" placeholder="password"/></div>
-      <div class="fr"><label class="fl">Confirm Password</label>
-        <input type="password" id="au-p2" placeholder="confirm password"/></div>
+      <div id="au-pw-fields">
+        <div class="fr"><label class="fl">Password</label>
+          <input type="password" id="au-p" placeholder="password"/></div>
+        <div class="fr"><label class="fl">Confirm Password</label>
+          <input type="password" id="au-p2" placeholder="confirm password"/></div>
+      </div>
+      <div id="au-domain-field" style="display:none">
+        <div class="fr"><label class="fl">Domain</label>
+          <input type="text" id="au-domain" placeholder="EXAMPLE (optional)" autocomplete="off"/></div>
+        <div class="fh">Password will be verified against your LDAP / AD server at login.</div>
+      </div>
       <div class="fr"><label class="fl">Role</label>
         <select id="au-r">
           <option value="viewer">Viewer — read-only dashboard access</option>
@@ -64,18 +77,34 @@ function openAddUser(){
   setTimeout(()=>document.getElementById('au-u')?.focus(),50);
 }
 
+function _auTypeChange(){
+  const isLdap=document.getElementById('au-type')?.value==='ldap';
+  const pwFields=document.getElementById('au-pw-fields');
+  const domainField=document.getElementById('au-domain-field');
+  if(pwFields) pwFields.style.display=isLdap?'none':'';
+  if(domainField) domainField.style.display=isLdap?'':'none';
+}
+
 async function submitAddUser(){
   const username=(document.getElementById('au-u')?.value||'').trim();
-  const pw=document.getElementById('au-p')?.value||'';
-  const pw2=document.getElementById('au-p2')?.value||'';
+  const auth_type=document.getElementById('au-type')?.value||'local';
   const role=document.getElementById('au-r')?.value||'admin';
-  if(!username||!pw){toast('Username and password are required','err');return;}
-  if(pw!==pw2){toast('Passwords do not match','err');return;}
+  if(!username){toast('Username is required','err');return;}
+  let body={username,role,auth_type};
+  if(auth_type==='ldap'){
+    body.domain=(document.getElementById('au-domain')?.value||'').trim();
+  }else{
+    const pw=document.getElementById('au-p')?.value||'';
+    const pw2=document.getElementById('au-p2')?.value||'';
+    if(!pw){toast('Password is required','err');return;}
+    if(pw!==pw2){toast('Passwords do not match','err');return;}
+    body.password=pw;
+  }
   const btn=document.querySelector('#mau .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Creating...';}
   let r;
   try{
-    r=await api('POST','/api/users',{username,password:pw,role});
+    r=await api('POST','/api/users',body);
   }catch(e){
     toast('Failed to create user','err');
     return;
