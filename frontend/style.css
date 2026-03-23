@@ -404,7 +404,7 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-host{
   font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text3);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:-6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:-2px;
 }
 
 /* Status badge */
