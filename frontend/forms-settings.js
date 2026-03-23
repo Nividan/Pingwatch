@@ -611,7 +611,6 @@ async function _loadLogTab() {
   const el  = document.getElementById('log-body');
   const lbl = document.getElementById('log-footer-label');
   if (!el) return;
-  el.textContent = 'Loading…';
   try {
     const r = await fetch(`/api/logs/${_activeLogTab}`);
     if (!r.ok) { el.textContent = 'Access denied'; return; }
