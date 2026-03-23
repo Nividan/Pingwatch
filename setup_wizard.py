@@ -475,6 +475,48 @@ def step1_packages():
         sys.exit(1)
 
 
+# ── File ownership fix (sudo root → real user) ───────────────────────────────
+
+def _fix_file_ownership():
+    """When the wizard runs as root via sudo, chown DB and cert files back to
+    the invoking user so the service (which runs as that user) can write them."""
+    if sys.platform == "win32" or os.geteuid() != 0:
+        return
+    sudo_user = os.environ.get("SUDO_USER", "")
+    if not sudo_user:
+        return
+    try:
+        import pwd as _pwd
+        pw = _pwd.getpwnam(sudo_user)
+        uid, gid = pw.pw_uid, pw.pw_gid
+    except Exception:
+        return
+    targets = [
+        str(DB_PATH),
+        str(DB_PATH) + "-wal",
+        str(DB_PATH) + "-shm",
+        str(DB_PATH) + ".pre_migrate.bak",
+        str(DB_PATH) + ".pending_import",
+        str(CERTS_DIR),
+    ]
+    # Also chown any cert files inside CERTS_DIR
+    try:
+        for _f in os.listdir(str(CERTS_DIR)):
+            targets.append(os.path.join(str(CERTS_DIR), _f))
+    except Exception:
+        pass
+    changed = 0
+    for path in targets:
+        if os.path.exists(path):
+            try:
+                os.chown(path, uid, gid)
+                changed += 1
+            except Exception:
+                pass
+    if changed:
+        _tag("ok", f"File ownership set to '{sudo_user}' ({changed} item(s))")
+
+
 # ── Service management (Linux/systemd) ───────────────────────────────────────
 
 def _is_service_active() -> bool:
@@ -1130,6 +1172,7 @@ def main():
     except Exception as _e:
         _tag("error", f"Failed to initialise database schema: {_e}")
         sys.exit(1)
+    _fix_file_ownership()   # chown DB back to SUDO_USER if running as root
 
     try:
         step1_packages()
@@ -1143,6 +1186,8 @@ def main():
         print()
         _tag("warn", "Setup aborted by user.")
         sys.exit(1)
+
+    _fix_file_ownership()   # chown certs + DB again after step3 may have written certs
 
     _separator("═")
     _tag("ok", f"{_C['bold']}Setup complete — starting PingWatch...{_C['reset']}")
