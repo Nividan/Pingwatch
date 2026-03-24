@@ -243,8 +243,9 @@ def handle(h, method, path, body):
             "uptime_s":       int(time.time() - app_state.SERVER_START),
             "devices":        len(STATE.devices),
             "sensors":        sum(len(d.sensors) for d in STATE.devices.values()),
-            "db_size_bytes":  os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0,
-            "log_size_bytes": _log_bytes,
+            "db_size_bytes":      os.path.getsize(DB_PATH)      if os.path.exists(DB_PATH)      else 0,
+            "logs_db_size_bytes": os.path.getsize(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else 0,
+            "log_size_bytes":     _log_bytes,
         })
         return True
 
