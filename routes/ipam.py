@@ -1,19 +1,22 @@
 """
 routes/ipam.py — IPAM (IP address management) API endpoints.
 
-GET    /api/ipam/subnets              → list all subnets (viewer)
-POST   /api/ipam/subnets              → add subnet  {cidr, name}  (operator)
-DELETE /api/ipam/subnets/<id>         → remove subnet + allocations (operator)
-GET    /api/ipam/subnets/<id>/ips     → get all allocations for subnet (viewer)
-PUT    /api/ipam/ips/<subnet_id>/<ip> → set IP name {name} (operator)
+GET    /api/ipam/subnets                    → list all subnets (viewer)
+POST   /api/ipam/subnets                    → add subnet  {cidr, name}  (operator)
+DELETE /api/ipam/subnets/<id>               → remove subnet + allocations (operator)
+GET    /api/ipam/subnets/<id>/ips           → get all allocations for subnet (viewer)
+POST   /api/ipam/subnets/<id>/dns/refresh   → trigger background DNS resolution (operator)
+PUT    /api/ipam/ips/<subnet_id>/<ip>       → set IP name {name} (operator)
 """
 
 import ipaddress
+import threading
 
 from core.config import (
     _RE_IPAM_SUBNETS,
     _RE_IPAM_SUBNET,
     _RE_IPAM_SUBNET_IPS,
+    _RE_IPAM_SUBNET_DNS,
     _RE_IPAM_IP,
 )
 from core.logger import log
@@ -33,6 +36,42 @@ from db.ipam import ipam_sync_subnet_add
 # Largest subnet allowed: /9 = 8,388,606 hosts is already impractical;
 # cap at /9 to prevent accidents (prefix must be >= 9).
 _MIN_PREFIX = 9
+
+# ── DNS resolution helpers ─────────────────────────────────────────────────
+
+_dns_refresh_lock       = {}   # subnet_id → True when refresh is running
+_dns_refresh_lock_mutex = threading.Lock()
+
+
+def _resolve_dns(ip_str, timeout=2):
+    """Reverse DNS lookup. Returns hostname string or '' on any failure."""
+    import socket
+    try:
+        socket.setdefaulttimeout(timeout)
+        return socket.gethostbyaddr(ip_str)[0]
+    except Exception:
+        return ''
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+def _dns_refresh_worker(subnet_id, ip_list):
+    """Background thread: resolves PTR for every IP and caches results in DB."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from db.ipam import db_update_dns
+    try:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = {ex.submit(_resolve_dns, ip): ip for ip in ip_list}
+            for fut in as_completed(futures):
+                ip = futures[fut]
+                try:
+                    dns = fut.result()
+                    db_update_dns(subnet_id, ip, dns)
+                except Exception:
+                    pass
+    finally:
+        with _dns_refresh_lock_mutex:
+            _dns_refresh_lock.pop(subnet_id, None)
 
 
 def handle(h, method, path, body):
@@ -106,6 +145,41 @@ def handle(h, method, path, body):
             h._json(404, {'error': 'Subnet not found'}); return True
         allocs = db_get_allocations(subnet_id)
         h._json(200, {'subnet': sub, 'allocations': allocs})
+        return True
+
+    # ── POST /api/ipam/subnets/<id>/dns/refresh ───────────────
+    m = _RE_IPAM_SUBNET_DNS.match(path)
+    if m and method == 'POST':
+        user, _ = h._require('operator')
+        if not user: return True
+        subnet_id = int(m.group(1))
+        sub = db_get_subnet(subnet_id)
+        if not sub:
+            h._json(404, {'error': 'Subnet not found'}); return True
+        with _dns_refresh_lock_mutex:
+            if _dns_refresh_lock.get(subnet_id):
+                h._json(409, {'error': 'refresh already in progress'}); return True
+            _dns_refresh_lock[subnet_id] = True
+        # Build host IP list from CIDR
+        try:
+            net = ipaddress.ip_network(sub['cidr'], strict=False)
+        except ValueError:
+            with _dns_refresh_lock_mutex:
+                _dns_refresh_lock.pop(subnet_id, None)
+            h._json(400, {'error': 'Invalid subnet CIDR'}); return True
+        prefix = net.prefixlen
+        if prefix == 32:
+            ip_list = [str(net.network_address)]
+        elif prefix == 31:
+            ip_list = [str(net.network_address), str(net.broadcast_address)]
+        else:
+            ip_list = [str(ip) for ip in net.hosts()]
+        t = threading.Thread(
+            target=_dns_refresh_worker, args=(subnet_id, ip_list), daemon=True
+        )
+        t.start()
+        log.info(f"IPAM DNS refresh started: subnet {sub['cidr']!r} ({len(ip_list)} IPs) by {user!r}")
+        h._json(202, {'ok': True, 'total': len(ip_list)})
         return True
 
     # ── PUT /api/ipam/ips/<subnet_id>/<ip> ───────────────────────

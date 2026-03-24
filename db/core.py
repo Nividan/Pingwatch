@@ -480,6 +480,16 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Migration: DNS cache columns
+        for _dns_col in [
+            "ALTER TABLE ip_allocations ADD COLUMN dns_name        TEXT DEFAULT ''",
+            "ALTER TABLE ip_allocations ADD COLUMN dns_resolved_at REAL DEFAULT 0",
+        ]:
+            try:
+                con.execute(_dns_col)
+                con.commit()
+            except Exception:
+                pass  # column already exists
         # Migration: LDAP domain-user support
         try:
             con.execute("ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'local'")
