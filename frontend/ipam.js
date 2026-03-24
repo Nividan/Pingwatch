@@ -4,7 +4,7 @@
 
 let _ipamSubnets      = [];     // [{id, cidr, name, created_by, created_at}]
 let _ipamSelectedId   = null;   // currently selected subnet id
-let _ipamAllIps       = [];     // full merged list [{ip, name, modified_by, modified_at, device_id}]
+let _ipamAllIps       = [];     // full merged list [{ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at}]
 let _ipamFiltered     = [];     // search-filtered view of _ipamAllIps
 let _ipamPage         = 0;      // current page (0-based)
 let _ipamShellInited  = false;  // shell HTML built once; data always refreshed on tab switch
@@ -30,8 +30,9 @@ function _ipamRenderShell() {
       </select>
       <button class="btn-sm btn-accent rbac-op" onclick="_ipamOpenAddSubnet()">＋ Add Subnet</button>
       <button class="btn-sm rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled style="color:var(--down)">✕ Remove</button>
+      <button class="btn-sm rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">Refresh DNS</button>
       <div style="width:1px;height:18px;background:var(--border);margin:0 4px"></div>
-      <input class="ipam-search" id="ipam-search" type="search" placeholder="🔍  Search IP or name…"
+      <input class="ipam-search" id="ipam-search" type="search" placeholder="🔍  Search IP, name or DNS…"
              oninput="_ipamOnSearch(this.value)" autocomplete="off"/>
       <div class="ipam-pg" id="ipam-pg"></div>
     </div>
@@ -103,14 +104,18 @@ async function _ipamOnSubnetChange(idVal) {
   const subnet = d.subnet;
   const allocs = d.allocations || {};   // {ip: {name, modified_by, modified_at}}
 
+  // Show Refresh DNS button for operators when a subnet is selected
+  const dnsBtn = document.getElementById('ipam-dns-btn');
+  if (dnsBtn) dnsBtn.style.display = '';
+
   // Generate all usable IPs from CIDR, merge with allocations
   const ips = _ipamExpandCidr(subnet.cidr);
   _ipamAllIps = ips.map(ip => {
     const a = allocs[ip];
     return a
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
-          device_id: a.device_id || '' }
-      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '' };
+          device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
+      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
   });
   // Sort: Used (named) first, then Free, both groups sorted numerically by IP
   _ipamAllIps.sort((a, b) => {
@@ -161,7 +166,8 @@ function _ipamApplyFilter(q) {
   const lq = (q || '').toLowerCase().trim();
   if (lq) {
     _ipamFiltered = _ipamAllIps.filter(e =>
-      e.ip.includes(lq) || e.name.toLowerCase().includes(lq)
+      e.ip.includes(lq) || e.name.toLowerCase().includes(lq) ||
+      (e.dns_name || '').toLowerCase().includes(lq)
     );
   } else {
     _ipamFiltered = _ipamAllIps;
@@ -204,9 +210,13 @@ function _ipamRenderTable() {
     const nameCell = canEdit
       ? `<td class="ipam-name-cell" onclick="_ipamEditCell(this,'${esc(e.ip)}')">${nameText}</td>`
       : `<td>${nameText}</td>`;
+    const dns = e.dns_name || '';
+    const dnsDisplay = dns.length > 35 ? dns.slice(0, 33) + '…' : dns;
+    const dnsCell = `<td class="ipam-dns" title="${esc(dns)}">${dnsDisplay ? esc(dnsDisplay) : '<span class="ipam-ts">—</span>'}</td>`;
     return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
       <td class="ipam-ip">${esc(e.ip)}</td>
       ${nameCell}
+      ${dnsCell}
       <td>${badge}</td>
       <td class="ipam-ts">${esc(e.modified_by || '—')}</td>
       <td class="ipam-ts">${dateStr}</td>
@@ -219,6 +229,7 @@ function _ipamRenderTable() {
         <tr>
           <th>IP Address</th>
           <th>Name / Description</th>
+          <th>DNS</th>
           <th>Status</th>
           <th>Modified By</th>
           <th>Last Modified</th>
@@ -411,4 +422,51 @@ async function _ipamConfirmRemove() {
   _ipamFiltered   = [];
   _ipamInited     = false;
   await _ipamLoadSubnets();
+}
+
+// ── DNS Refresh ────────────────────────────────────────────────────────────
+
+async function _ipamReloadCurrentSubnet() {
+  if (!_ipamSelectedId) return;
+  const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}/ips`);
+  if (!r.ok) return;
+  const d = await r.json();
+  const allocs = d.allocations || {};
+  const ips = _ipamExpandCidr(d.subnet.cidr);
+  _ipamAllIps = ips.map(ip => {
+    const a = allocs[ip];
+    return a
+      ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
+          device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
+      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
+  });
+  _ipamAllIps.sort((a, b) => {
+    if (!!a.name !== !!b.name) return a.name ? -1 : 1;
+    return _ipamIpCmp(a.ip, b.ip);
+  });
+  const search = document.getElementById('ipam-search')?.value || '';
+  _ipamApplyFilter(search);
+}
+
+async function _ipamRefreshDns() {
+  if (!_ipamSelectedId) return;
+  const btn = document.getElementById('ipam-dns-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}/dns/refresh`, {method: 'POST'});
+    if (r.status === 409) { toast('DNS refresh already in progress', 'warn'); return; }
+    if (!r.ok) { toast('DNS refresh failed', 'err'); return; }
+    let polls = 0;
+    const interval = setInterval(async () => {
+      polls++;
+      await _ipamReloadCurrentSubnet();
+      if (polls >= 20) {
+        clearInterval(interval);
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh DNS'; }
+      }
+    }, 3000);
+  } catch {
+    toast('DNS refresh failed', 'err');
+    if (btn) { btn.disabled = false; btn.textContent = 'Refresh DNS'; }
+  }
 }
