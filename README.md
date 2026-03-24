@@ -49,7 +49,7 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control (viewer / operator / admin)
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
-- 📤 Database export and import (SQLite backup/restore, up to 2 GB)
+- 📤 Database export and import — individual Main DB, Logs DB, or full ZIP bundle (Main + Logs)
 - 🖥 Native desktop status window with optional system-tray icon
 - 💾 Automated device configuration backup via SSH and Telnet with encrypted credential storage
 - 🧙 Interactive first-run setup wizard (`start.bat` on Windows, `bash start.sh` on Linux/macOS → `setup_wizard.py`)
@@ -76,7 +76,7 @@ Collected data is displayed in a web-based dashboard that provides real-time eve
 
 - **Backend:** Python 3.x (stdlib only — no third-party web framework)
 - **Web Server:** Python's built-in `http.server` (threading mode) + `ssl.SSLContext` for HTTPS
-- **Database:** SQLite with WAL mode and a single-writer queue
+- **Database:** SQLite with WAL mode; dual-database architecture — **Main DB** (`pingwatch.db`) for config/devices/users/IPAM, **Logs DB** (`pingwatch_logs.db`) for sensor samples, events, and SNMP traps; independent write-queue threads per DB
 - **Frontend:** Vanilla HTML, CSS, JavaScript (no build step)
 - **Real-time updates:** Server-Sent Events (SSE)
 - **TLS / HTTPS:** `cryptography` library (RSA-2048, X.509, Fernet key encryption)
@@ -489,7 +489,9 @@ Browser / Desktop GUI
         │   ├── catalog.py        ← OID catalog queries
         │   └── seeds/            ← Built-in trap definitions
         │
-        └── db/                   ← SQLite persistence package
+        └── db/                   ← SQLite persistence package (dual-DB)
+                                       Main DB: config, devices, users, IPAM, SNMP reference
+                                       Logs DB: sensor samples, flap log, SNMP traps, error log
 ```
 
 This design keeps each layer independently testable and allows new sensor types or route groups to be added without touching unrelated code.
@@ -506,7 +508,7 @@ This design keeps each layer independently testable and allows new sensor types 
   Handles RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` folder → auto-generate), SSL context construction, certificate metadata parsing, pair validation, and expiry warnings.
 
 - **`setup_wizard.py`** — Interactive first-run setup wizard.
-  Now cross-platform (Windows / Linux / macOS). Guides new installs through package checks, HTTP/HTTPS port selection, TLS certificate setup, SNMP port configuration, firewall rules, and desktop shortcut creation. On Linux/macOS asks whether a desktop GUI is needed — if not, skips tkinter/pystray/Pillow entirely (headless server mode). Auto-detects system package manager (apt/dnf/yum/brew). Checks existing firewall rules before adding new ones. Writes all choices to the database and exits cleanly so the launcher can start `server.py`.
+  Now cross-platform (Windows / Linux / macOS). Guides new installs through package checks (including `ldap3` for optional LDAP auth), HTTP/HTTPS port selection, TLS certificate setup, SNMP port configuration, firewall rules, and desktop shortcut creation. Stops the running PingWatch service before modifying the database (prevents WAL conflicts). Fixes file ownership when run as root via `sudo` (chowns DB and cert files back to the invoking user). On Linux/macOS asks whether a desktop GUI is needed — if not, skips tkinter/pystray/Pillow entirely (headless server mode). Auto-detects system package manager (apt/dnf/yum/brew). Checks existing firewall rules before adding new ones. Writes all choices to the database and exits cleanly so the launcher can start `server.py`.
 
 - **`core/app_state.py`** — Shared runtime globals (`STATE`, effective ports, TLS active flag, tray-icon reference).
   Prevents circular imports between `server.py` and `routes/`.
@@ -566,10 +568,10 @@ This design keeps each layer independently testable and allows new sensor types 
 | `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard`, `/api/db/stats` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
-| `export.py` | `/api/db/export`, `/api/db/import`, `/api/audit` |
+| `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
@@ -587,7 +589,8 @@ This design keeps each layer independently testable and allows new sensor types 
 
 | Module | Responsibility |
 |--------|----------------|
-| `core.py` | Write-queue, schema init & migrations, user seeding |
+| `core.py` | Dual write-queues (main + logs), schema init for both DBs, user seeding |
+| `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB |
 | `persistence.py` | Device/sensor save, load, autosave loop |
 | `samples.py` | Buffered probe writes, history & summary queries |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
@@ -634,7 +637,7 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 3. Route handlers read/update runtime objects in **`core/state.py`** and call **`db/`** for persistence.
 4. Monitoring probes run on per-sensor background threads via **`monitoring/probes.py`**.
 5. Probe results are pushed to connected browsers over **SSE** (`/events`).
-6. State changes persist automatically through the autosave loop (every 60 s) and an immediate write-queue for high-priority operations.
+6. State changes persist automatically through the autosave loop (every 60 s) and immediate write-queues — two independent queues: one for the Main DB (config/settings), one for the Logs DB (samples/events).
 7. **`monitoring/smtp_alert.py`** sends email alerts when sensors transition between up/down states.
 8. **`monitoring/syslog_client.py`** forwards events to configured syslog server(s) via a non-blocking daemon queue.
 9. **`snmp/receiver.py`** ingests asynchronous SNMP traps and routes them into the event pipeline via **`snmp/enricher.py`**.
@@ -647,6 +650,8 @@ The frontend lives in `frontend/` and is served as a single inlined HTML page fo
 pingwatch/
 ├── server.py               ← HTTP/HTTPS dispatcher + entry point
 ├── setup_wizard.py         ← First-run interactive setup wizard
+├── pingwatch.db            ← Main DB: config, devices, users (auto-created; gitignored)
+├── pingwatch_logs.db       ← Logs DB: sensor samples, events, traps (auto-created; gitignored)
 ├── gui.py                  ← Desktop status window (Windows/macOS)
 ├── pingwatch.pyw           ← Windows windowless launcher
 ├── start.bat               ← Windows console launcher (first-run detection)
@@ -698,7 +703,8 @@ pingwatch/
 │
 ├── db/                     ← SQLite persistence package
 │   ├── __init__.py         ← Re-exports all public symbols
-│   ├── core.py             ← Write-queue, schema, migrations
+│   ├── core.py             ← Dual write-queues (main + logs), schema, migrations
+│   ├── migration.py        ← One-time split: legacy single-DB → Main + Logs DB
 │   ├── persistence.py      ← Device/sensor save & load
 │   ├── samples.py          ← Probe sample buffer & queries
 │   ├── events.py           ← Flap, trap, error logs
