@@ -184,21 +184,35 @@ async function openSettings(){
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
     </div>
     <div class="mbdy stab-fade" id="stab-database" style="display:none">
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Backup &amp; Restore</div>
-      <div class="fr">
-        <label class="fl">Export Database</label>
-        <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="exportDb()">&#8681; Download Backup</button>
-        <div class="fh">Downloads a complete snapshot of all data (devices, sensors, history, network topology, settings, users).</div>
+
+      <!-- Main DB -->
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Main Database</div>
+        <div id="db-stats-main" style="font-size:12px;color:var(--text3);margin-bottom:10px">Loading…</div>
+        <button class="btn-p" style="font-size:12px;padding:6px 14px" onclick="exportDb()">&#8681; Download Main DB</button>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">Config, devices, sensors, users, settings</span>
       </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <label class="fl">Import Database</label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn-s" style="font-size:12px;padding:7px 16px" onclick="importDb()">&#8679; Restore from Backup</button>
+
+      <!-- Logs DB -->
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Sensor Logs Database</div>
+        <div id="db-stats-logs" style="font-size:12px;color:var(--text3);margin-bottom:10px">Loading…</div>
+        <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportLogsDb()">&#8681; Download Logs DB</button>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">Sensor samples, flap log, SNMP traps, errors</span>
+      </div>
+
+      <!-- Bundle Export + Import -->
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Export / Import</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportBundle()">&#8681; Export Full Bundle (ZIP)</button>
+          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="importDb()">&#8679; Import DB / Bundle</button>
           <span id="db-import-status" style="font-size:12px;color:var(--text3)"></span>
         </div>
-        <div class="fh" style="color:var(--down);margin-top:6px">Warning: this replaces ALL current data and restarts the server.</div>
+        <div class="fh" style="margin-top:8px">Bundle ZIP contains both DBs. Import accepts Main DB, Logs DB, or a bundle ZIP.<br><span style="color:var(--down)">Warning: import replaces the uploaded DB and restarts the server.</span></div>
       </div>
-      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+
+      <div style="margin-top:4px;padding-top:16px;border-top:1px solid var(--border)">
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Scheduled Database Backup</div>
         <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
           <div style="flex:1">
@@ -1021,7 +1035,27 @@ function _dbkFreqChange(){
   if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
 }
 
+async function _loadDbStats(){
+  const mainEl = document.getElementById('db-stats-main');
+  const logsEl = document.getElementById('db-stats-logs');
+  if(!mainEl && !logsEl) return;
+  try {
+    const s = await api('GET', '/api/db/stats');
+    const fmtSize = b => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : b >= 1024 ? (b/1024).toFixed(1)+' KB' : b+' B';
+    const fmtN   = n => n.toLocaleString();
+    if(mainEl) mainEl.innerHTML =
+      `<span style="color:var(--text2)">${esc(s.main.path)}</span> &nbsp;|&nbsp; <span style="color:var(--text)">${fmtSize(s.main.size)}</span>`;
+    if(logsEl) logsEl.innerHTML =
+      `<span style="color:var(--text2)">${esc(s.logs.path)}</span> &nbsp;|&nbsp; <span style="color:var(--text)">${fmtSize(s.logs.size)}</span><br>` +
+      `<span style="color:var(--text3)">Samples: ${fmtN(s.logs.samples)} &nbsp; Flaps: ${fmtN(s.logs.flaps)} &nbsp; Traps: ${fmtN(s.logs.traps)} &nbsp; Errors: ${fmtN(s.logs.errors)}</span>`;
+  } catch(e) {
+    if(mainEl) mainEl.textContent = 'Could not load DB info';
+    if(logsEl) logsEl.textContent = '';
+  }
+}
+
 async function _loadDbBackupSettings(){
+  _loadDbStats();
   const r = await api('GET', '/api/settings');
   const en   = document.getElementById('st-dbk-enabled');
   const freq = document.getElementById('st-dbk-freq');

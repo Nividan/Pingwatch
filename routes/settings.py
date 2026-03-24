@@ -13,7 +13,7 @@ import threading
 import time
 
 import core.app_state as app_state
-from core.config import DB_PATH, BIND, PORT
+from core.config import DB_PATH, LOGS_DB_PATH, BIND, PORT, _RE_DB_STATS
 from db          import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
 from core.logger import log
 import core.settings as _settings
@@ -326,6 +326,40 @@ def handle(h, method, path, body):
         from backup.db_backup import do_db_backup
         ok, msg = do_db_backup()
         h._json(200 if ok else 500, {"ok": ok, "msg": msg})
+        return True
+
+    # ── GET /api/db/stats ─────────────────────────────────────────
+    if _RE_DB_STATS.match(path) and method == "GET":
+        user, _ = h._require("admin")
+        if not user: return True
+        import sqlite3 as _sq3
+        def _db_size(p):
+            try:
+                return os.path.getsize(p) if os.path.exists(p) else 0
+            except Exception:
+                return 0
+        def _row_count(p, table):
+            try:
+                c = _sq3.connect(p)
+                n = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                c.close()
+                return n
+            except Exception:
+                return 0
+        h._json(200, {
+            "main": {
+                "path":     str(DB_PATH),
+                "size":     _db_size(DB_PATH),
+            },
+            "logs": {
+                "path":         str(LOGS_DB_PATH),
+                "size":         _db_size(LOGS_DB_PATH),
+                "samples":      _row_count(LOGS_DB_PATH, "sensor_samples"),
+                "flaps":        _row_count(LOGS_DB_PATH, "flap_log"),
+                "traps":        _row_count(LOGS_DB_PATH, "snmp_traps"),
+                "errors":       _row_count(LOGS_DB_PATH, "sensor_err_log"),
+            },
+        })
         return True
 
     return False

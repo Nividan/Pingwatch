@@ -4,7 +4,7 @@ db/events.py — Flap log, SNMP trap log, and sensor error log helpers.
 
 import sqlite3
 
-from core.config  import DB_PATH
+from core.config  import LOGS_DB_PATH
 from core.logger  import log
 import core.settings as _settings
 
@@ -15,7 +15,7 @@ def db_log_err(did, sid, sname, stype, msg, ts):
     """Append a sensor error entry; keep at most 1 000 per sensor."""
     con = None
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.execute(
             "INSERT INTO sensor_err_log (ts,did,sid,sname,stype,msg) VALUES (?,?,?,?,?,?)",
             (ts, did, sid, sname, stype, msg)
@@ -37,7 +37,7 @@ def db_log_err(did, sid, sname, stype, msg, ts):
 def db_load_err_logs(did):
     """Return last 200 error entries for a device's sensors, newest first."""
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute(
             "SELECT ts,did,sid,sname,stype,msg FROM sensor_err_log "
             "WHERE did=? ORDER BY id DESC LIMIT 200", (did,)
@@ -54,7 +54,7 @@ def db_load_err_logs(did):
 def db_clear_err_logs(did):
     """Delete all sensor error logs for a device."""
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         con.execute("DELETE FROM sensor_err_log WHERE did=?", (did,))
         con.commit()
         con.close()
@@ -65,7 +65,7 @@ def db_clear_err_logs(did):
 def db_clear_sensor_err_logs(did, sid):
     """Delete all sensor error logs for a specific sensor."""
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         con.execute("DELETE FROM sensor_err_log WHERE did=? AND sid=?", (did, sid))
         con.commit()
         con.close()
@@ -79,7 +79,7 @@ def db_log_flap(flap):
     """Append a flap/recovery event; keep at most 500 total."""
     con = None
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.execute(
             "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -105,7 +105,7 @@ def db_log_flap(flap):
 def db_load_flaps():
     """Return last 500 flap/recovery events, newest first."""
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute(
             "SELECT ts,did,sid,dname,sname,host,stype,detail,direction "
             "FROM flap_log ORDER BY id DESC LIMIT 500"
@@ -126,7 +126,7 @@ def db_log_trap(t):
     """Append one SNMP trap (with enrichment fields); keep at most max_trap_entries."""
     con = None
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.execute(
             "INSERT INTO snmp_traps "
             "(ts,src_ip,dname,community,trap_oid,detail,"
@@ -166,7 +166,7 @@ def db_log_trap(t):
 def db_load_traps(limit=500, vendor=None, category=None, severity=None):
     """Return SNMP traps newest first with optional filters."""
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         where, params = [], []
         if vendor:
             where.append("vendor=?");   params.append(vendor)
@@ -205,7 +205,7 @@ def db_load_traps(limit=500, vendor=None, category=None, severity=None):
 def db_clear_device_traps(src_ip):
     """Delete all SNMP traps from a device (matched by src_ip / host)."""
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         con.execute("DELETE FROM snmp_traps WHERE src_ip=?", (src_ip,))
         con.commit()
         con.close()
