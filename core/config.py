@@ -13,8 +13,9 @@ BIND           = "0.0.0.0"
 SNMP_TRAP_PORT = 162
 SYS            = platform.system()
 
-DB_PATH     = os.path.join(_ROOT, "pingwatch.db")
-SESSION_TTL = 86400   # 24 hours
+DB_PATH      = os.path.join(_ROOT, "pingwatch.db")
+LOGS_DB_PATH = os.path.join(_ROOT, "pingwatch_logs.db")
+SESSION_TTL  = 86400   # 24 hours
 
 FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
 CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
@@ -36,8 +37,11 @@ _RE_SENSOR_HISTORY  = re.compile(r'^/api/device/([^/]+)/sensor/([^/]+)/history$'
 _RE_SENSOR_SUMMARY  = re.compile(r'^/api/device/([^/]+)/sensor/([^/]+)/summary$')
 _RE_DEVICE_SCAN     = re.compile(r'^/api/device/([^/]+)/scan$')
 _RE_SENSOR_LOGS     = re.compile(r'^/api/device/([^/]+)/sensor/([^/]+)/logs$')
-_RE_DB_EXPORT       = re.compile(r'^/api/db/export$')
-_RE_DB_IMPORT       = re.compile(r'^/api/db/import$')
+_RE_DB_EXPORT        = re.compile(r'^/api/db/export$')
+_RE_DB_EXPORT_LOGS   = re.compile(r'^/api/db/export/logs$')
+_RE_DB_EXPORT_BUNDLE = re.compile(r'^/api/db/export/bundle$')
+_RE_DB_IMPORT        = re.compile(r'^/api/db/import$')
+_RE_DB_STATS         = re.compile(r'^/api/db/stats$')
 _RE_AUDIT           = re.compile(r'^/api/audit$')
 _RE_AVAILABILITY    = re.compile(r'^/api/availability$')
 _RE_BACKUPS         = re.compile(r'^/api/backups$')

@@ -10,11 +10,12 @@ import threading
 import time
 
 from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
-from core.config import DB_PATH
+from core.config import DB_PATH, LOGS_DB_PATH
 from core.logger import log
 
-# ── Single-writer queue ───────────────────────────────────────────
-_DB_QUEUE: queue.Queue = queue.Queue()
+# ── Single-writer queues (Main DB + Logs DB) ─────────────────────────────────
+_DB_QUEUE:   queue.Queue = queue.Queue()
+_LOGS_QUEUE: queue.Queue = queue.Queue()
 
 
 def _db_writer_loop():
@@ -29,12 +30,30 @@ def _db_writer_loop():
             log.error(f"DB writer error: {e}")
 
 
-threading.Thread(target=_db_writer_loop, daemon=True).start()
+def _logs_writer_loop():
+    """Drain _LOGS_QUEUE and execute each callable sequentially."""
+    while True:
+        fn = _LOGS_QUEUE.get()
+        if fn is None:   # sentinel for clean shutdown (not yet used)
+            break
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"Logs DB writer error: {e}")
+
+
+threading.Thread(target=_db_writer_loop,   daemon=True, name="db-main-writer").start()
+threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer").start()
 
 
 def _db_enqueue(fn):
-    """Queue a zero-argument callable for the single DB writer thread."""
+    """Queue a zero-argument callable for the Main DB writer thread."""
     _DB_QUEUE.put(fn)
+
+
+def _logs_enqueue(fn):
+    """Queue a zero-argument callable for the Logs DB writer thread."""
+    _LOGS_QUEUE.put(fn)
 
 
 # ── Schema init ──────────────────────────────────────────────────
@@ -52,6 +71,19 @@ def db_init():
     con = sqlite3.connect(DB_PATH)
     try:
         con.execute("PRAGMA journal_mode=WAL")   # safe concurrent reads while probes write
+
+        # Detect post-split installs early (migration already ran, or fresh install
+        # that will be seeded below).  When True, skip creating the four logs tables
+        # that now live in pingwatch_logs.db.
+        _post_split = False
+        try:
+            _ps = con.execute(
+                "SELECT value FROM app_settings WHERE key='db_split_complete'"
+            ).fetchone()
+            _post_split = _ps is not None and _ps[0] == '1'
+        except Exception:
+            pass   # app_settings doesn't exist yet on a brand-new DB
+
         con.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -84,65 +116,67 @@ def db_init():
                 dns_server TEXT DEFAULT '',
                 PRIMARY KEY (did, sid)
             )""")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS flap_log (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts        TEXT,
-                did       TEXT,
-                sid       TEXT,
-                dname     TEXT,
-                sname     TEXT,
-                host      TEXT,
-                stype     TEXT,
-                detail    TEXT,
-                direction TEXT DEFAULT 'down'
-            )""")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS sensor_err_log (
-                id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts      TEXT,
-                did     TEXT,
-                sid     TEXT,
-                sname   TEXT,
-                stype   TEXT,
-                msg     TEXT
-            )""")
+        if not _post_split:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS flap_log (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts        TEXT,
+                    did       TEXT,
+                    sid       TEXT,
+                    dname     TEXT,
+                    sname     TEXT,
+                    host      TEXT,
+                    stype     TEXT,
+                    detail    TEXT,
+                    direction TEXT DEFAULT 'down'
+                )""")
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS sensor_err_log (
+                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts      TEXT,
+                    did     TEXT,
+                    sid     TEXT,
+                    sname   TEXT,
+                    stype   TEXT,
+                    msg     TEXT
+                )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )""")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS sensor_samples (
-                id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts    REAL    NOT NULL,
-                did   TEXT    NOT NULL,
-                sid   TEXT    NOT NULL,
-                ok    INTEGER NOT NULL,
-                ms    REAL,
-                value TEXT
-            )""")
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_samples_ds "
-            "ON sensor_samples(did, sid, ts)"
-        )
-        # Covering index: includes ok and ms so startup history/count queries
-        # never need to touch the main-table heap pages.  Eliminates thousands
-        # of random-read I/Os and reduces startup from minutes to seconds.
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
-            "ON sensor_samples(did, sid, ts, ok, ms)"
-        )
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS snmp_traps (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts        TEXT,
-                src_ip    TEXT,
-                dname     TEXT,
-                community TEXT,
-                trap_oid  TEXT,
-                detail    TEXT
-            )""")
+        if not _post_split:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS sensor_samples (
+                    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts    REAL    NOT NULL,
+                    did   TEXT    NOT NULL,
+                    sid   TEXT    NOT NULL,
+                    ok    INTEGER NOT NULL,
+                    ms    REAL,
+                    value TEXT
+                )""")
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_ds "
+                "ON sensor_samples(did, sid, ts)"
+            )
+            # Covering index: includes ok and ms so startup history/count queries
+            # never need to touch the main-table heap pages.  Eliminates thousands
+            # of random-read I/Os and reduces startup from minutes to seconds.
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
+                "ON sensor_samples(did, sid, ts, ok, ms)"
+            )
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS snmp_traps (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts        TEXT,
+                    src_ip    TEXT,
+                    dname     TEXT,
+                    community TEXT,
+                    trap_oid  TEXT,
+                    detail    TEXT
+                )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,6 +291,9 @@ def db_init():
             ("ldap_domain",         ""),
             ("ldap_timeout",        "10"),
             ("ldap_debug",          "0"),   # 0=login events only, 1=full debug trace
+            # Dual-DB split: '1' means logs tables live in pingwatch_logs.db
+            # Seeded here so fresh installs never trigger an unnecessary migration
+            ("db_split_complete",   "1"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -284,11 +321,13 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        _flap_direction = [] if _post_split else [
+            "ALTER TABLE flap_log ADD COLUMN direction TEXT DEFAULT 'down'",
+        ]
         for stmt in [
             "ALTER TABLE devices ADD COLUMN webhook_url TEXT DEFAULT ''",
             "ALTER TABLE sensors ADD COLUMN http_expected_status INTEGER DEFAULT 0",
-            "ALTER TABLE flap_log ADD COLUMN direction TEXT DEFAULT 'down'",
-        ]:
+        ] + _flap_direction:
             try:
                 con.execute(stmt)
                 con.commit()
@@ -370,36 +409,38 @@ def db_init():
                 label TEXT NOT NULL,
                 color TEXT DEFAULT ''
             )""")
-        # ── snmp_traps enrichment columns (migration) ─────────────────
-        for _col in [
-            "ALTER TABLE snmp_traps ADD COLUMN vendor          TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN product_family  TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN trap_name       TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN severity        TEXT DEFAULT 'info'",
-            "ALTER TABLE snmp_traps ADD COLUMN category        TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN probable_cause  TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN recommended_action TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN raw_varbinds         TEXT DEFAULT '[]'",
-            "ALTER TABLE snmp_traps ADD COLUMN enriched             INTEGER DEFAULT 0",
-            "ALTER TABLE snmp_traps ADD COLUMN enterprise_oid       TEXT DEFAULT ''",
-            "ALTER TABLE snmp_traps ADD COLUMN generic_trap_type    INTEGER DEFAULT -1",
-            "ALTER TABLE snmp_traps ADD COLUMN enriched_varbinds    TEXT DEFAULT '[]'",
-        ]:
-            try:
-                con.execute(_col)
-                con.commit()
-            except Exception:
-                pass
-        # Fast lookup indexes on snmp_traps
-        for _idx in [
-            "CREATE INDEX IF NOT EXISTS idx_traps_src    ON snmp_traps(src_ip, ts)",
-            "CREATE INDEX IF NOT EXISTS idx_traps_vendor ON snmp_traps(vendor, ts)",
-            "CREATE INDEX IF NOT EXISTS idx_traps_oid    ON snmp_traps(trap_oid)",
-        ]:
-            try:
-                con.execute(_idx)
-            except Exception:
-                pass
+        # ── snmp_traps enrichment columns (migration — skipped in post-split mode) ──
+        if not _post_split:
+            for _col in [
+                "ALTER TABLE snmp_traps ADD COLUMN vendor          TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN product_family  TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN trap_name       TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN severity        TEXT DEFAULT 'info'",
+                "ALTER TABLE snmp_traps ADD COLUMN category        TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN probable_cause  TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN recommended_action TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN raw_varbinds         TEXT DEFAULT '[]'",
+                "ALTER TABLE snmp_traps ADD COLUMN enriched             INTEGER DEFAULT 0",
+                "ALTER TABLE snmp_traps ADD COLUMN enterprise_oid       TEXT DEFAULT ''",
+                "ALTER TABLE snmp_traps ADD COLUMN generic_trap_type    INTEGER DEFAULT -1",
+                "ALTER TABLE snmp_traps ADD COLUMN enriched_varbinds    TEXT DEFAULT '[]'",
+            ]:
+                try:
+                    con.execute(_col)
+                    con.commit()
+                except Exception:
+                    pass
+        # Fast lookup indexes on snmp_traps (skipped in post-split mode)
+        if not _post_split:
+            for _idx in [
+                "CREATE INDEX IF NOT EXISTS idx_traps_src    ON snmp_traps(src_ip, ts)",
+                "CREATE INDEX IF NOT EXISTS idx_traps_vendor ON snmp_traps(vendor, ts)",
+                "CREATE INDEX IF NOT EXISTS idx_traps_oid    ON snmp_traps(trap_oid)",
+            ]:
+                try:
+                    con.execute(_idx)
+                except Exception:
+                    pass
         con.commit()
         # ── IPAM tables ───────────────────────────────────────────────
         con.execute("""
@@ -480,3 +521,96 @@ def db_seed_users():
         log.info("DB seed: all sessions cleared (server restarted)")
     finally:
         con.close()
+
+
+def logs_db_init():
+    """Create the Logs DB schema (sensor_samples, flap_log, sensor_err_log, snmp_traps)."""
+    con = sqlite3.connect(LOGS_DB_PATH)
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_samples (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts    REAL    NOT NULL,
+                did   TEXT    NOT NULL,
+                sid   TEXT    NOT NULL,
+                ok    INTEGER NOT NULL,
+                ms    REAL,
+                value TEXT
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_ds "
+            "ON sensor_samples(did, sid, ts)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
+            "ON sensor_samples(did, sid, ts, ok, ms)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS flap_log (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts        TEXT,
+                did       TEXT,
+                sid       TEXT,
+                dname     TEXT,
+                sname     TEXT,
+                host      TEXT,
+                stype     TEXT,
+                detail    TEXT,
+                direction TEXT DEFAULT 'down'
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_err_log (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts    TEXT,
+                did   TEXT,
+                sid   TEXT,
+                sname TEXT,
+                stype TEXT,
+                msg   TEXT
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS snmp_traps (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts                 TEXT,
+                src_ip             TEXT,
+                dname              TEXT,
+                community          TEXT,
+                trap_oid           TEXT,
+                detail             TEXT,
+                vendor             TEXT DEFAULT '',
+                product_family     TEXT DEFAULT '',
+                trap_name          TEXT DEFAULT '',
+                severity           TEXT DEFAULT 'info',
+                category           TEXT DEFAULT '',
+                probable_cause     TEXT DEFAULT '',
+                recommended_action TEXT DEFAULT '',
+                raw_varbinds       TEXT DEFAULT '[]',
+                enriched           INTEGER DEFAULT 0,
+                enterprise_oid     TEXT DEFAULT '',
+                generic_trap_type  INTEGER DEFAULT -1,
+                enriched_varbinds  TEXT DEFAULT '[]'
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traps_src    ON snmp_traps(src_ip, ts)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traps_vendor ON snmp_traps(vendor, ts)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traps_oid    ON snmp_traps(trap_oid)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS logs_schema_version (
+                version INTEGER PRIMARY KEY,
+                applied TEXT    NOT NULL,
+                notes   TEXT    DEFAULT ''
+            )""")
+        if not con.execute("SELECT 1 FROM logs_schema_version").fetchone():
+            con.execute(
+                "INSERT INTO logs_schema_version VALUES (1, datetime('now'), 'initial split')"
+            )
+        con.commit()
+    finally:
+        con.close()
+    log.info("Logs DB init: schema ready")

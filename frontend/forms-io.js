@@ -1,25 +1,43 @@
 // ── IMPORT / EXPORT ───────────────────────────────────────────────────────────
-async function exportDb(){
-  const btn=document.querySelector('[onclick="exportDb()"]');
-  if(btn){btn.disabled=true;btn.textContent='Preparing…';}
+async function _exportFile(apiPath, defaultName, btnEl, btnLabel){
+  if(btnEl){btnEl.disabled=true;btnEl.textContent='Preparing…';}
   try{
-    const r=await fetch('/api/db/export');
+    const r=await fetch(apiPath);
     if(!r.ok){toast('Export failed: '+r.status,'err');return;}
     const blob=await r.blob();
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
     a.href=url;
-    const d=new Date();
-    const stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    a.download=`pingwatch-backup-${stamp}.db`;
+    a.download=defaultName;
     a.click();
     URL.revokeObjectURL(url);
-    toast('Backup downloaded','ok');
+    toast('Downloaded','ok');
   }catch(e){
     toast('Export error: '+e.message,'err');
   }finally{
-    if(btn){btn.disabled=false;btn.textContent='⬇ Download Backup';}
+    if(btnEl){btnEl.disabled=false;btnEl.textContent=btnLabel;}
   }
+}
+
+async function exportDb(){
+  const btn=document.querySelector('[onclick="exportDb()"]');
+  const d=new Date();
+  const stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  await _exportFile('/api/db/export', `pingwatch-main-${stamp}.db`, btn, '⬇ Download Main DB');
+}
+
+async function exportLogsDb(){
+  const btn=document.querySelector('[onclick="exportLogsDb()"]');
+  const d=new Date();
+  const stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  await _exportFile('/api/db/export/logs', `pingwatch-logs-${stamp}.db`, btn, '⬇ Download Logs DB');
+}
+
+async function exportBundle(){
+  const btn=document.querySelector('[onclick="exportBundle()"]');
+  const d=new Date();
+  const stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  await _exportFile('/api/db/export/bundle', `pingwatch-bundle-${stamp}.zip`, btn, '⬇ Export Full Bundle (ZIP)');
 }
 
 function _importConfirm(filename, onConfirm){
@@ -27,7 +45,7 @@ function _importConfirm(filename, onConfirm){
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML=`<div style="background:var(--card,#1e2533);border:1px solid var(--border,#2a3448);border-radius:10px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:15px;font-weight:600;margin-bottom:10px;color:var(--text,#e0e6f0);">Restore from Backup</div>
-    <div style="font-size:13px;color:var(--text2,#8899aa);margin-bottom:20px;">Import <b style="color:var(--text,#e0e6f0)">${filename}</b>?<br><br>This will <span style="color:var(--down,#ff4444);font-weight:600;">REPLACE ALL current data</span> and restart the server.</div>
+    <div style="font-size:13px;color:var(--text2,#8899aa);margin-bottom:20px;">Import <b style="color:var(--text,#e0e6f0)">${filename}</b>?<br><br>This will <span style="color:var(--down,#ff4444);font-weight:600;">replace the imported database(s)</span> and restart the server.<br><span style="color:var(--text2,#8899aa);font-size:12px">Accepts: Main DB, Logs DB, or full bundle (.zip).</span></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
       <button id="_imp_cancel" style="padding:8px 20px;border-radius:6px;border:1px solid var(--border,#2a3448);background:transparent;color:var(--text2,#8899aa);cursor:pointer;font-size:13px;">Cancel</button>
       <button id="_imp_ok" style="padding:8px 20px;border-radius:6px;border:none;background:var(--down,#ff4444);color:#fff;cursor:pointer;font-weight:600;font-size:13px;">Yes, Import</button>
@@ -41,7 +59,7 @@ function _importConfirm(filename, onConfirm){
 
 async function importDb(){
   const inp=document.createElement('input');
-  inp.type='file'; inp.accept='.db';
+  inp.type='file'; inp.accept='.db,.sqlite,.zip';
   inp.style.cssText='position:fixed;top:-9999px;left:-9999px;opacity:0;';
   document.body.appendChild(inp);
   const _cleanup=()=>{ try{document.body.removeChild(inp);}catch(_){} };
