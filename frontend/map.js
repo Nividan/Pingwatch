@@ -3372,8 +3372,8 @@ function initDashBg() {
   const ctx = canvas.getContext('2d');
   let pts = [], scanY = 0;
 
-  // ── Performance: throttle to 6 fps via setTimeout+RAF (not busy-RAF) ────────
-  const DB_FPS = 6, DB_MS = 1000 / DB_FPS;
+  // ── Performance: throttle to 15 fps via setTimeout+RAF (not busy-RAF) ────────
+  const DB_FPS = 15, DB_MS = 1000 / DB_FPS;
   let _rafId = null;
 
   function resize() {
@@ -3549,8 +3549,8 @@ function initMainBg() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
-  // ── Performance: throttle to 6 fps via setTimeout+RAF (not busy-RAF) ────────
-  const BG_FPS = 6, BG_MS = 1000 / BG_FPS;
+  // ── Performance: throttle to 15 fps via setTimeout+RAF (not busy-RAF) ────────
+  const BG_FPS = 15, BG_MS = 1000 / BG_FPS;
   let _bgRafId = null;
 
   let pts = [], rings = [], streams = [], scanY = 0;
