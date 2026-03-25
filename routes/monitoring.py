@@ -11,7 +11,7 @@ import sqlite3
 import time
 
 import core.app_state as app_state
-from core.config import DB_PATH
+from core.config import DB_PATH, LOGS_DB_PATH
 from db import db_load_flaps, db_load_traps
 from core.logger import log
 
@@ -92,7 +92,7 @@ def handle(h, method, path, body):
         periods = {"1h": 3600, "24h": 86400, "7d": 604800}
         con = None
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(LOGS_DB_PATH)
             result = {}
             for label, secs in periods.items():
                 cutoff = datetime.datetime.utcfromtimestamp(now - secs).strftime("%Y-%m-%dT%H:%M:%SZ")

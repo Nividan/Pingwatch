@@ -172,8 +172,12 @@ def handle(h, method, path, body):
         if m:
             user, _ = h._require("operator")
             if not user: return True
+            src = body.get('source_id')
+            tgt = body.get('target_id')
             link = topo_update_link(
                 int(m.group(1)), body.get('label', ''), body.get('link_type', 'trunk'),
+                source_id=int(src) if src is not None else None,
+                target_id=int(tgt) if tgt is not None else None,
             )
             if link:
                 db_log_audit(user, h.client_address[0], 'ntm_link_update', str(m.group(1)))

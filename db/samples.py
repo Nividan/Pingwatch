@@ -7,9 +7,9 @@ import sqlite3
 import threading
 import time
 
-from core.config import DB_PATH
+from core.config import LOGS_DB_PATH
 from core.logger import log
-from db.core   import _db_enqueue
+from db.core   import _logs_enqueue
 
 # ── Sample write buffer (batches per-probe inserts) ───────────────
 _SAMPLE_BUF: list    = []
@@ -26,7 +26,7 @@ def _do_insert_samples(rows):
     """Write a batch of sample rows (called on the writer thread)."""
     con = None
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.executemany(
             "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES (?,?,?,?,?,?)",
             rows,
@@ -64,7 +64,7 @@ def _sample_flush_loop():
                 continue
             rows = _SAMPLE_BUF[:]
             _SAMPLE_BUF.clear()
-        _db_enqueue(lambda r=rows: _do_insert_samples(r))
+        _logs_enqueue(lambda r=rows: _do_insert_samples(r))
 
 
 threading.Thread(target=_sample_flush_loop, daemon=True).start()
@@ -75,7 +75,7 @@ def db_clean_samples(retention_days=365):
     con = None
     try:
         cutoff = time.time() - retention_days * 86400
-        con = sqlite3.connect(DB_PATH, timeout=15)
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.execute("DELETE FROM sensor_samples WHERE ts < ?", (cutoff,))
         # Row-count cap: keep newest 10M rows (~600 MB) regardless of probe rate
         total = con.execute("SELECT COUNT(*) FROM sensor_samples").fetchone()[0]
@@ -91,8 +91,8 @@ def db_clean_samples(retention_days=365):
         if "malformed" in str(e).lower():
             log.error(
                 "DB CORRUPTION DETECTED — database disk image is malformed. "
-                "Stop PingWatch, run: sqlite3 pingwatch.db 'PRAGMA integrity_check' "
-                "to assess damage, or delete pingwatch.db to start fresh."
+                "Stop PingWatch, run: sqlite3 pingwatch_logs.db 'PRAGMA integrity_check' "
+                "to assess damage, or delete pingwatch_logs.db to start fresh."
             )
             # Force WAL checkpoint to release any pending WAL locks
             try:
@@ -106,7 +106,7 @@ def db_clean_samples(retention_days=365):
 
     # Reclaim free pages left by the DELETE (must be outside any transaction)
     try:
-        vac = sqlite3.connect(DB_PATH, timeout=30)
+        vac = sqlite3.connect(LOGS_DB_PATH, timeout=30)
         vac.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         vac.execute("VACUUM")
         vac.close()
@@ -120,7 +120,7 @@ def db_load_availability(minutes: int = 1440):
     con = None
     try:
         cutoff = time.time() - minutes * 60
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute(
             "SELECT CAST(ts/3600 AS INTEGER)*3600 AS h, SUM(ok), COUNT(*) "
             "FROM sensor_samples WHERE ts>=? GROUP BY h ORDER BY h ASC",
@@ -140,7 +140,7 @@ def db_load_history(did, sid, minutes=1440, limit=1000):
     con = None
     try:
         cutoff = time.time() - minutes * 60
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         total = con.execute(
             "SELECT COUNT(*) FROM sensor_samples WHERE did=? AND sid=? AND ts>=?",
             (did, sid, cutoff)
@@ -175,7 +175,7 @@ def db_load_summary(did, sid, minutes=1440):
     con = None
     try:
         cutoff = time.time() - minutes * 60
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute("""
             SELECT CAST(ts/3600 AS INTEGER)*3600 AS hour_ts,
                    SUM(ok), COUNT(*)-SUM(ok),

@@ -870,8 +870,10 @@ async function _dwFetchSystemStatus(wid) {
   const alreadyRendered = !!document.getElementById(`dw-ss-uptime-${wid}`);
   if (alreadyRendered && !hasData) return;
 
-  const dbMB  = info.db_size_bytes  ? (info.db_size_bytes  / 1048576).toFixed(2) + ' MB' : '—';
-  const logMB = info.log_size_bytes ? (info.log_size_bytes / 1048576).toFixed(2) + ' MB' : '—';
+  const _fmt  = b => b ? (b / 1048576).toFixed(2) + ' MB' : '—';
+  const dbMB     = _fmt(info.db_size_bytes);
+  const logsDbMB = _fmt(info.logs_db_size_bytes);
+  const logMB    = _fmt(info.log_size_bytes);
   const _fmtUp = s => {
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
@@ -889,8 +891,9 @@ async function _dwFetchSystemStatus(wid) {
     set(`dw-ss-ver-${wid}`,  `v${info.version || '—'}`);
     set(`dw-ss-devs-${wid}`, info.devices || 0);
     set(`dw-ss-sens-${wid}`, info.sensors  || 0);
-    set(`dw-ss-db-${wid}`,   dbMB);
-    set(`dw-ss-log-${wid}`,  logMB);
+    set(`dw-ss-db-${wid}`,     dbMB);
+    set(`dw-ss-logsdb-${wid}`, logsDbMB);
+    set(`dw-ss-log-${wid}`,    logMB);
     return;
   }
 
@@ -908,9 +911,11 @@ async function _dwFetchSystemStatus(wid) {
         <span class="dw-ss-val" id="dw-ss-devs-${wid}">${info.devices||0}</span></div>
       <div class="dw-ss-row"><span class="dw-ss-lbl">Sensors</span>
         <span class="dw-ss-val" id="dw-ss-sens-${wid}">${info.sensors||0}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">DB Size</span>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Main DB</span>
         <span class="dw-ss-val" id="dw-ss-db-${wid}">${dbMB}</span></div>
-      <div class="dw-ss-row"><span class="dw-ss-lbl">Log Size</span>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Logs DB</span>
+        <span class="dw-ss-val" id="dw-ss-logsdb-${wid}">${logsDbMB}</span></div>
+      <div class="dw-ss-row"><span class="dw-ss-lbl">Log Folder</span>
         <span class="dw-ss-val" id="dw-ss-log-${wid}">${logMB}</span></div>
     </div>`;
   // Live ticker — uptime counts up + date/time updates every second, no API calls needed

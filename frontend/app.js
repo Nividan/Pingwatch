@@ -228,17 +228,46 @@ async function submitLogin(){
 }
 async function doLogout(){
   await fetch('/api/logout',{method:'POST'});
-  document.getElementById('tb-user').style.display='none';
-  document.getElementById('btnLogout').style.display='none';
-  document.getElementById('btnSettings').style.display='none';
+  document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
   showLogin();
 }
+function _usrDdToggle(e){
+  e.stopPropagation();
+  const menu=document.getElementById('usrDdMenu');
+  const btn=document.getElementById('usrDdBtn');
+  const open=menu.classList.toggle('usr-dd-menu--open');
+  btn.setAttribute('aria-expanded',open);
+  if(open){const first=menu.querySelector('.usr-dd-item:not([disabled])');if(first)first.focus();}
+}
+function _usrDdClose(){
+  const menu=document.getElementById('usrDdMenu');
+  const btn=document.getElementById('usrDdBtn');
+  if(!menu)return;
+  menu.classList.remove('usr-dd-menu--open');
+  if(btn)btn.setAttribute('aria-expanded','false');
+}
+document.addEventListener('click',_usrDdClose);
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){_usrDdClose();return;}
+  const menu=document.getElementById('usrDdMenu');
+  if(!menu||!menu.classList.contains('usr-dd-menu--open'))return;
+  const items=[...menu.querySelectorAll('.usr-dd-item:not([disabled])')];
+  const idx=items.indexOf(document.activeElement);
+  if(e.key==='ArrowDown'){e.preventDefault();items[(idx+1)%items.length]?.focus();}
+  if(e.key==='ArrowUp'){e.preventDefault();items[(idx-1+items.length)%items.length]?.focus();}
+});
 function onAuthenticated(username){
-  const u=document.getElementById('tb-user');
-  u.textContent='👤 '+username; u.style.display='';
-  document.getElementById('btnLogout').style.display='';
-  document.getElementById('btnSettings').style.display='';
+  document.getElementById('tb-user').textContent=username;
+  document.getElementById('usrDd').style.display='';
+  const dn=document.getElementById('usr-dd-name');
+  if(dn)dn.textContent=username;
+  const db=document.getElementById('usr-dd-badge');
+  if(db){
+    const role=S.role||'';
+    db.textContent=role.charAt(0).toUpperCase()+role.slice(1).toLowerCase();
+    db.className='usr-dd-badge usr-dd-badge--'+role.toLowerCase();
+  }
   applyRbac();
   loadAll();
   connectSSE();
@@ -254,8 +283,7 @@ function applyRbac(){
 }
 async function checkAuth(){
   // Hide UI controls until we confirm auth
-  document.getElementById('btnSettings').style.display='none';
-  document.getElementById('btnLogout').style.display='none';
+  document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
     if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; onAuthenticated(d.username);}

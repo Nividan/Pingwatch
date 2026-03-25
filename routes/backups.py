@@ -44,9 +44,10 @@ def handle(h, method, path, body):
         dev_map = {did: d for did, d in STATE.devices.items()}
         for entry in devices:
             live = dev_map.get(entry['did'])
-            entry['name']  = live.name  if live else entry['did']
-            entry['host']  = live.host  if live else ''
-            entry['group'] = live.group if live else ''
+            entry['name']    = live.name  if live else None
+            entry['host']    = live.host  if live else ''
+            entry['group']   = live.group if live else ''
+            entry['orphaned'] = live is None
         # Also include devices not yet configured (enabled=False placeholder)
         configured = {e['did'] for e in devices}
         for did, d in dev_map.items():
@@ -67,7 +68,7 @@ def handle(h, method, path, body):
             pri = 3 if (e.get('enabled') and e.get('in_schedule')) else \
                   2 if e.get('enabled') else \
                   1 if e.get('username') else 0
-            return (-pri, e.get('name', '').lower())
+            return (-pri, (e.get('name') or '').lower())
         devices.sort(key=_sort_key)
         h._json(200, {'devices': devices})
         return True

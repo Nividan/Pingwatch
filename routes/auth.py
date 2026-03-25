@@ -13,7 +13,7 @@ from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
                          auth_revoke_user_sessions, auth_verify_current)
 from core.config import _RE_USER, _RE_USER_PW, _RE_ME_PW
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
-                         db_delete_user, db_set_password)
+                         db_delete_user, db_set_password, db_get_user_auth_type)
 from core.logger import log
 import core.settings as _settings
 
@@ -124,6 +124,9 @@ def handle(h, method, path, body):
         me = auth_check(h._get_token())
         if not me:
             h._json(401, {"error": "unauthorized"})
+            return True
+        if db_get_user_auth_type(me) == 'ldap':
+            h._json(400, {"error": "LDAP users cannot change their password here. Contact your LDAP administrator."})
             return True
         current = body.get("current_password", "")
         new_pw  = body.get("password", "")

@@ -27,12 +27,12 @@ except ImportError:
 
 import core.settings as _settings
 from core.auth       import auth_check, auth_check_role
-from core.config     import BIND, DB_PATH, FRONTEND_DIR, PORT, SYS, TLS_PORT_DEFAULT, _RE_DB_IMPORT
+from core.config     import BIND, DB_PATH, LOGS_DB_PATH, FRONTEND_DIR, PORT, SYS, TLS_PORT_DEFAULT, _RE_DB_IMPORT
 from core.logger     import log
 from monitoring.network_map import init_topo_db, migrate_topo_from_file
 from db              import (
     _db_enqueue, autosave_loop,
-    db_init, db_load, db_seed_users,
+    db_init, logs_db_init, db_load, db_seed_users,
     db_load_settings, db_save,
 )
 
@@ -394,7 +394,7 @@ def main():
                 "Fix: sudo setcap cap_net_raw+ep $(which python3)"
             )
 
-    # ── Apply pending DB import ───────────────────────────────────────
+    # ── Apply pending DB imports ──────────────────────────────────────
     # IMPORTANT: os.replace() first (atomic, no data loss on failure),
     # then clean up WAL/SHM.  Never unlink the live DB before the replace —
     # if replace fails after unlink the database is permanently gone.
@@ -402,7 +402,7 @@ def main():
     if os.path.exists(_pending):
         try:
             os.replace(_pending, str(DB_PATH))
-            log.info("DB import: applied pending import → live DB")
+            log.info("DB import: applied pending Main DB import → live DB")
             for _ext in ('-wal', '-shm'):
                 _cur = str(DB_PATH) + _ext
                 try:
@@ -411,9 +411,32 @@ def main():
                 except OSError:
                     pass
         except Exception as _pe:
-            log.error(f"DB import: failed to apply pending import — {_pe}")
+            log.error(f"DB import: failed to apply pending Main DB import — {_pe}")
+
+    _pending_logs = str(LOGS_DB_PATH) + ".pending_logs_import"
+    if os.path.exists(_pending_logs):
+        try:
+            os.replace(_pending_logs, str(LOGS_DB_PATH))
+            log.info("DB import: applied pending Logs DB import → live DB")
+            for _ext in ('-wal', '-shm'):
+                _cur = str(LOGS_DB_PATH) + _ext
+                try:
+                    if os.path.exists(_cur):
+                        os.unlink(_cur)
+                except OSError:
+                    pass
+        except Exception as _pe:
+            log.error(f"DB import: failed to apply pending Logs DB import — {_pe}")
+
+    # ── One-time migration: split legacy single-DB → dual-DB ─────────
+    try:
+        from db.migration import run_migration_if_needed
+        run_migration_if_needed()
+    except Exception as _me:
+        log.error(f"DB migration error (non-fatal): {_me}")
 
     db_init()
+    logs_db_init()
     try:
         init_topo_db()
     except Exception as _e:
@@ -433,6 +456,7 @@ def main():
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))
     log.info(f"Database: {DB_PATH}")
+    log.info(f"Logs DB:  {LOGS_DB_PATH}")
 
     # ── Bind HTTP port FIRST — fail fast before loading state ──────
     try:
