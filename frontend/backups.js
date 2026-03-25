@@ -352,31 +352,330 @@ async function _bkOpenHistory(did) {
 
   const rows = runs.map(run => `
     <tr>
+      <td><input type="checkbox" class="bk-sel" value="${run.id}" onchange="_bkSelChange()"/></td>
       <td>${(_bkParseTs(run.ts)?.toLocaleString() ?? run.ts)}</td>
       <td>${run.success ? '<span class="bk-ok">✓</span>' : '<span class="bk-fail">✗</span>'}</td>
       <td class="bk-mono">${run.size_bytes ? (run.size_bytes / 1024).toFixed(1) + ' KB' : '—'}</td>
       <td class="bk-mono" style="font-size:10px">${run.sha256 ? run.sha256.slice(0,8) + '…' : '—'}</td>
       <td><button class="btn-sm" onclick="closeM('bk-history');_bkOpenViewer(${run.id},'${esc(did)}')">📄 View</button></td>
-    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--text3);text-align:center">No backups yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text3);text-align:center">No backups yet</td></tr>';
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'bk-history';
   o.onclick = e => { if (e.target === o) closeM('bk-history'); };
   o.innerHTML = `
-    <div class="mbox" style="width:min(95vw,560px)">
+    <div class="mbox" style="width:min(95vw,600px)">
       <div class="mhd">
         <div class="mttl">📋 Backup History — ${esc(dev.name || did)}</div>
         <button class="mclose" onclick="closeM('bk-history')">✕</button>
       </div>
       <div class="mbdy" style="padding:0;overflow:auto">
         <table class="bk-table" style="margin:0">
-          <thead><tr><th>Time</th><th>Status</th><th>Size</th><th>SHA256</th><th></th></tr></thead>
+          <thead><tr>
+            <th style="width:32px" title="Select 2 runs to compare">⬌</th>
+            <th>Time</th><th>Status</th><th>Size</th><th>SHA256</th><th></th>
+          </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div class="mft"><button class="btn-s" onclick="closeM('bk-history')">Close</button></div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('bk-history')">Close</button>
+        <button class="btn-p" id="bk-cmp-btn" disabled onclick="_bkOpenDiff('${esc(did)}')">⬌ Compare Selected</button>
+      </div>
     </div>`;
   document.body.appendChild(o);
+}
+
+function _bkSelChange() {
+  const checked = document.querySelectorAll('.bk-sel:checked').length;
+  const btn = document.getElementById('bk-cmp-btn');
+  if (btn) btn.disabled = checked !== 2;
+}
+
+// ── Diff Viewer ───────────────────────────────────────────────────
+async function _bkOpenDiff(did) {
+  const ids = [...document.querySelectorAll('.bk-sel:checked')].map(c => +c.value);
+  if (ids.length !== 2) return;
+
+  const btn = document.getElementById('bk-cmp-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+
+  let ra, rb;
+  try {
+    [ra, rb] = await Promise.all(ids.map(id => api('GET', `/api/backups/run/${id}`)));
+  } catch {
+    toast('Failed to load runs for comparison', 'err');
+    if (btn) { btn.disabled = false; btn.textContent = '⬌ Compare Selected'; }
+    return;
+  }
+
+  // Older = A (base), newer = B (current)
+  const [runA, runB] = ra.run.ts <= rb.run.ts ? [ra.run, rb.run] : [rb.run, ra.run];
+  const dev = _bkDevices.find(x => x.did === did) || {};
+
+  if (!runA.config || !runB.config) {
+    toast('One or both selected runs have no config content', 'warn');
+    if (btn) { btn.disabled = false; btn.textContent = '⬌ Compare Selected'; }
+    return;
+  }
+
+  const linesA = runA.config.split('\n');
+  const linesB = runB.config.split('\n');
+
+  // Performance guard: skip LCS for very large configs
+  let diff;
+  if (linesA.length > 3000 || linesB.length > 3000) {
+    toast('Config too large for inline diff — showing summary only', 'warn');
+    diff = null;
+  } else {
+    diff = _bkComputeDiff(linesA, linesB);
+  }
+
+  closeM('bk-history');
+  _bkRenderDiffModal(runA, runB, diff, dev.name || did);
+}
+
+function _bkComputeDiff(linesA, linesB) {
+  // LCS-based line diff — returns [{type:'eq'|'add'|'del', line, lnA, lnB}]
+  const n = linesA.length, m = linesB.length;
+  const dp = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = linesA[i] === linesB[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0, lnA = 1, lnB = 1;
+  while (i < n || j < m) {
+    if (i < n && j < m && linesA[i] === linesB[j]) {
+      out.push({type: 'eq',  line: linesA[i], lnA: lnA++, lnB: lnB++}); i++; j++;
+    } else if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) {
+      out.push({type: 'add', line: linesB[j], lnA: null,  lnB: lnB++}); j++;
+    } else {
+      out.push({type: 'del', line: linesA[i], lnA: lnA++, lnB: null}); i++;
+    }
+  }
+  return out;
+}
+
+function _bkRenderDiffModal(runA, runB, diff, deviceName) {
+  closeM('bk-diff');
+  const tsA = _bkParseTs(runA.ts)?.toLocaleString() ?? runA.ts;
+  const tsB = _bkParseTs(runB.ts)?.toLocaleString() ?? runB.ts;
+
+  let adds = 0, dels = 0, diffHtml = '';
+  if (diff) {
+    adds = diff.filter(d => d.type === 'add').length;
+    dels = diff.filter(d => d.type === 'del').length;
+    diffHtml = _bkRenderDiffLines(diff);
+  } else {
+    // Large-file fallback: just show SHA comparison
+    const same = runA.sha256 === runB.sha256;
+    diffHtml = `<div style="padding:24px;text-align:center;color:var(--text2)">
+      ${same ? '✓ Configs are identical (same SHA256)' : '⚠ Configs differ (SHA256 mismatch) — file too large for inline diff'}
+    </div>`;
+  }
+
+  // Generate rollback commands
+  const rollback = diff ? _bkGenerateRollback(diff) : [];
+
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'bk-diff';
+  o.onclick = e => { if (e.target === o) closeM('bk-diff'); };
+  o.innerHTML = `
+    <div class="mbox" style="width:min(96vw,980px);max-height:92vh;display:flex;flex-direction:column">
+      <div class="mhd">
+        <div class="mttl">⬌ Config Diff — ${esc(deviceName)}</div>
+        <button class="mclose" onclick="closeM('bk-diff')">✕</button>
+      </div>
+      <div class="bk-diff-meta" style="flex-shrink:0">
+        <div class="bk-diff-meta-row">
+          <span class="bk-diff-lbl bk-dl-del-lbl">Base</span>
+          <span>${esc(tsA)}</span>
+          <span class="bk-mono" style="font-size:10px;color:var(--text3)">${runA.sha256 ? runA.sha256.slice(0,8) + '…' : '—'}</span>
+          <span style="color:var(--text3)">${runA.size_bytes ? (runA.size_bytes/1024).toFixed(1)+' KB' : '—'}</span>
+        </div>
+        <div class="bk-diff-meta-row">
+          <span class="bk-diff-lbl bk-dl-add-lbl">Current</span>
+          <span>${esc(tsB)}</span>
+          <span class="bk-mono" style="font-size:10px;color:var(--text3)">${runB.sha256 ? runB.sha256.slice(0,8) + '…' : '—'}</span>
+          <span style="color:var(--text3)">${runB.size_bytes ? (runB.size_bytes/1024).toFixed(1)+' KB' : '—'}</span>
+        </div>
+        ${diff ? `<div class="bk-diff-summary">
+          <span class="bk-diff-adds">+${adds} added</span>
+          <span class="bk-diff-dels">-${dels} removed</span>
+          ${adds === 0 && dels === 0 ? '<span style="color:var(--text3)">No changes</span>' : ''}
+        </div>` : ''}
+      </div>
+      <div id="bk-diff-srch-bar" class="bk-srch-bar" style="flex-shrink:0">
+        <input id="bk-diff-srch-inp" type="text" placeholder="Search diff…" oninput="_bkDiffSearch()" autocomplete="off"/>
+        <span id="bk-diff-srch-cnt" class="bk-srch-cnt"></span>
+        <button class="btn-sm" onclick="_bkDiffSearchNav(-1)" title="Previous">↑</button>
+        <button class="btn-sm" onclick="_bkDiffSearchNav(+1)" title="Next">↓</button>
+      </div>
+      <div class="bk-diff-wrap" style="flex:1" id="bk-diff-body">${diffHtml}</div>
+      ${rollback.length ? `
+      <details class="bk-rollback">
+        <summary>⚠ Rollback Command Preview (${rollback.length} commands)</summary>
+        <div class="bk-rollback-warn">Review carefully before applying. Auto-generated from line diff only — not all commands may be valid for your platform.</div>
+        <pre class="bk-cfg-pre" id="bk-rollback-pre">${esc(rollback.join('\n'))}</pre>
+        <div style="padding:6px 14px 10px"><button class="btn-sm" onclick="_bkCopyRollback()">📋 Copy Commands</button></div>
+      </details>` : ''}
+      <div class="mft"><button class="btn-s" onclick="closeM('bk-diff')">Close</button></div>
+    </div>`;
+  document.body.appendChild(o);
+  // Store diff for expand-collapsed-lines handler
+  if (diff) document.getElementById('bk-diff')._diffData = diff;
+}
+
+// ── Rollback command generator ────────────────────────────────────
+function _bkGenerateRollback(diff) {
+  const cmds = [];
+  for (const {type, line} of diff) {
+    const t = line.trim();
+    if (!t || t.startsWith('!') || t.startsWith('#')) continue;
+    if (type === 'del') {
+      // Line existed in old, gone in new → restore it
+      cmds.push(t);
+    } else if (type === 'add') {
+      // Line was added in new → remove it
+      cmds.push(t.startsWith('no ') ? t.slice(3) : `no ${t}`);
+    }
+  }
+  return cmds;
+}
+
+function _bkCopyRollback() {
+  const pre = document.getElementById('bk-rollback-pre');
+  if (!pre) return;
+  const text = pre.textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => toast('Rollback commands copied', 'ok'),
+      () => toast('Copy failed', 'err')
+    );
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok) toast('Rollback commands copied', 'ok');
+      else toast('Copy failed', 'err');
+    } catch { toast('Copy failed', 'err'); }
+  }
+}
+
+function _bkRenderDiffLines(diff) {
+  // Collapse long equal runs — show ±3 context lines around changes
+  const CONTEXT = 3;
+  // Mark which equal lines are near a change
+  const n = diff.length;
+  const show = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (diff[i].type !== 'eq') {
+      for (let k = Math.max(0, i - CONTEXT); k <= Math.min(n - 1, i + CONTEXT); k++) show[k] = 1;
+    }
+  }
+  let html = '';
+  let i = 0;
+  while (i < n) {
+    if (!show[i] && diff[i].type === 'eq') {
+      // Count collapsed run
+      let j = i;
+      while (j < n && !show[j] && diff[j].type === 'eq') j++;
+      const count = j - i;
+      html += `<div class="bk-dl bk-dl-ctx" onclick="_bkDiffExpand(this,${i},${j})" data-start="${i}" data-end="${j}">
+        <span class="bk-dl-pfx" style="width:100%;padding:0 10px;font-size:10px">▸ ${count} unchanged line${count > 1 ? 's' : ''}</span>
+      </div>`;
+      i = j;
+    } else {
+      const d = diff[i];
+      const ln = d.type === 'add' ? (d.lnB ?? '') : (d.lnA ?? '');
+      const pfx = d.type === 'add' ? '+' : d.type === 'del' ? '-' : ' ';
+      html += `<div class="bk-dl bk-dl-${d.type}">
+        <span class="bk-dl-ln">${ln}</span>
+        <span class="bk-dl-pfx">${pfx}</span>
+        <span class="bk-dl-txt">${esc(d.line)}</span>
+      </div>`;
+      i++;
+    }
+  }
+  return html || '<div style="padding:20px;text-align:center;color:var(--text3)">No changes between these two runs.</div>';
+}
+
+function _bkDiffExpand(el, start, end) {
+  // Replace the expander row with the actual lines
+  const body = document.getElementById('bk-diff-body');
+  if (!body) return;
+  // We need the diff stored somewhere — store it on the modal
+  const modal = document.getElementById('bk-diff');
+  if (!modal || !modal._diffData) return;
+  const diff = modal._diffData;
+  let html = '';
+  for (let i = start; i < end; i++) {
+    const d = diff[i];
+    const ln = d.lnA ?? d.lnB ?? '';
+    html += `<div class="bk-dl bk-dl-eq">
+      <span class="bk-dl-ln">${ln}</span>
+      <span class="bk-dl-pfx"> </span>
+      <span class="bk-dl-txt">${esc(d.line)}</span>
+    </div>`;
+  }
+  el.outerHTML = html;
+}
+
+// ── Diff search ───────────────────────────────────────────────────
+let _bkDiffMatches = [];
+let _bkDiffSrchIdx = 0;
+
+function _bkDiffSearch() {
+  const inp = document.getElementById('bk-diff-srch-inp');
+  const cnt = document.getElementById('bk-diff-srch-cnt');
+  const body = document.getElementById('bk-diff-body');
+  if (!inp || !body) return;
+  const q = inp.value;
+  // Remove previous highlights
+  body.querySelectorAll('.bk-srch-hl').forEach(m => {
+    m.replaceWith(document.createTextNode(m.textContent));
+  });
+  _bkDiffMatches = [];
+  if (q.length < 2) { if (cnt) cnt.textContent = ''; return; }
+  // Highlight in txt spans
+  body.querySelectorAll('.bk-dl-txt').forEach(span => {
+    const text = span.textContent;
+    const lower = text.toLowerCase();
+    const ql = q.toLowerCase();
+    let pos = 0, out = '';
+    while (pos < text.length) {
+      const idx = lower.indexOf(ql, pos);
+      if (idx < 0) { out += esc(text.slice(pos)); break; }
+      const mid = _bkDiffMatches.length;
+      out += esc(text.slice(pos, idx)) + `<mark class="bk-srch-hl" id="bk-dm${mid}">${esc(text.slice(idx, idx + q.length))}</mark>`;
+      _bkDiffMatches.push(mid);
+      pos = idx + q.length;
+    }
+    span.innerHTML = out;
+  });
+  _bkDiffSrchIdx = 0;
+  if (cnt) cnt.textContent = _bkDiffMatches.length ? `1/${_bkDiffMatches.length}` : 'no matches';
+  if (_bkDiffMatches.length) {
+    const el = document.getElementById('bk-dm0');
+    if (el) { el.classList.add('bk-srch-hl-cur'); el.scrollIntoView({block:'nearest'}); }
+  }
+}
+
+function _bkDiffSearchNav(dir) {
+  if (!_bkDiffMatches.length) return;
+  document.getElementById(`bk-dm${_bkDiffSrchIdx}`)?.classList.remove('bk-srch-hl-cur');
+  _bkDiffSrchIdx = (_bkDiffSrchIdx + dir + _bkDiffMatches.length) % _bkDiffMatches.length;
+  const cnt = document.getElementById('bk-diff-srch-cnt');
+  if (cnt) cnt.textContent = `${_bkDiffSrchIdx + 1}/${_bkDiffMatches.length}`;
+  const el = document.getElementById(`bk-dm${_bkDiffSrchIdx}`);
+  if (el) { el.classList.add('bk-srch-hl-cur'); el.scrollIntoView({block:'nearest', behavior:'smooth'}); }
 }
 
 // ── Config Viewer Modal ───────────────────────────────────────────────
@@ -408,6 +707,10 @@ async function _bkShowRun(runId, did) {
   const hasNext = _bkViewerIdx > 0;
   const totalRuns = _bkViewerHistory.length;
 
+  _bkSrchRaw = run.config || '';
+  _bkSrchMatches = [];
+  _bkSrchIdx = 0;
+
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'bk-viewer';
   o.onclick = e => { if (e.target === o) closeM('bk-viewer'); };
@@ -424,9 +727,16 @@ async function _bkShowRun(runId, did) {
         <span><strong>SHA256:</strong> <code style="font-size:10px">${run.sha256 ? run.sha256.slice(0, 12) + '…' : '—'}</code></span>
         ${totalRuns > 1 ? `<span style="margin-left:auto;color:var(--text3)">${_bkViewerIdx + 1}/${totalRuns}</span>` : ''}
       </div>
+      ${run.config ? `
+      <div class="bk-srch-bar" style="flex-shrink:0">
+        <input id="bk-srch-inp" type="text" placeholder="Search in config…" oninput="_bkViewSearch()" autocomplete="off"/>
+        <span id="bk-srch-cnt" class="bk-srch-cnt"></span>
+        <button class="btn-sm" onclick="_bkViewSearchNav(-1)" title="Previous match">↑</button>
+        <button class="btn-sm" onclick="_bkViewSearchNav(+1)" title="Next match">↓</button>
+      </div>` : ''}
       <div style="flex:1;overflow:auto;padding:12px 16px">
         ${run.config
-          ? `<pre class="bk-cfg-pre">${esc(run.config)}</pre>`
+          ? `<pre class="bk-cfg-pre" id="bk-cfg-body">${esc(run.config)}</pre>`
           : `<div style="color:var(--text3);font-style:italic;padding:20px;text-align:center">${esc(run.error_msg || 'No config content')}</div>`}
       </div>
       <div class="mft">
@@ -447,10 +757,71 @@ function _bkNavViewer(dir, did) {
   if (run) _bkShowRun(run.id, did);
 }
 
+// ── In-viewer search ──────────────────────────────────────────────
+let _bkSrchMatches = [];
+let _bkSrchIdx     = 0;
+let _bkSrchRaw     = '';   // raw config text, saved at render time
+
+function _bkViewSearch() {
+  const inp = document.getElementById('bk-srch-inp');
+  const cnt = document.getElementById('bk-srch-cnt');
+  const pre = document.getElementById('bk-cfg-body');
+  if (!inp || !pre) return;
+  const q = inp.value;
+  if (q.length < 2) {
+    // Restore plain text
+    pre.innerHTML = esc(_bkSrchRaw);
+    if (cnt) cnt.textContent = '';
+    _bkSrchMatches = [];
+    return;
+  }
+  const lower = q.toLowerCase();
+  const lines  = _bkSrchRaw.split('\n');
+  const parts  = [];
+  _bkSrchMatches = [];
+  lines.forEach((line, li) => {
+    let out = '';
+    let pos = 0;
+    const lo = line.toLowerCase();
+    while (pos < line.length) {
+      const idx = lo.indexOf(lower, pos);
+      if (idx < 0) { out += esc(line.slice(pos)); break; }
+      out += esc(line.slice(pos, idx));
+      out += `<mark class="bk-srch-hl" id="bk-m${_bkSrchMatches.length}">${esc(line.slice(idx, idx + q.length))}</mark>`;
+      _bkSrchMatches.push(_bkSrchMatches.length);
+      pos = idx + q.length;
+    }
+    parts.push(out);
+  });
+  pre.innerHTML = parts.join('\n');
+  _bkSrchIdx = 0;
+  if (cnt) cnt.textContent = _bkSrchMatches.length ? `${_bkSrchIdx + 1}/${_bkSrchMatches.length}` : 'no matches';
+  _bkSrchScrollTo(0);
+}
+
+function _bkViewSearchNav(dir) {
+  if (!_bkSrchMatches.length) return;
+  _bkSrchIdx = (_bkSrchIdx + dir + _bkSrchMatches.length) % _bkSrchMatches.length;
+  const cnt = document.getElementById('bk-srch-cnt');
+  if (cnt) cnt.textContent = `${_bkSrchIdx + 1}/${_bkSrchMatches.length}`;
+  _bkSrchScrollTo(_bkSrchIdx);
+}
+
+function _bkSrchScrollTo(idx) {
+  const el = document.getElementById(`bk-m${idx}`);
+  if (el) {
+    // Remove active highlight from previous
+    document.querySelectorAll('.bk-srch-hl-cur').forEach(e => e.classList.remove('bk-srch-hl-cur'));
+    el.classList.add('bk-srch-hl-cur');
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
 function _bkCopyConfig() {
   const pre = document.querySelector('#bk-viewer pre.bk-cfg-pre');
   if (!pre) return;
-  const text = pre.textContent;
+  // Use the raw stored text (avoids picking up HTML mark tags from search)
+  const text = _bkSrchRaw || pre.textContent;
   // navigator.clipboard requires a secure context (HTTPS / localhost).
   // Fall back to the legacy execCommand API for plain-HTTP deployments.
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -473,4 +844,108 @@ function _bkCopyConfig() {
       toast('Copy failed', 'err');
     }
   }
+}
+
+// ── Global config search ──────────────────────────────────────────
+let _bkGsrchTimer = null;
+
+function _bkGsrchInput() {
+  const inp = document.getElementById('bk-gsrch-inp');
+  const clr = document.getElementById('bk-gsrch-clear');
+  if (!inp) return;
+  const q = inp.value.trim();
+  if (clr) clr.style.display = q ? '' : 'none';
+  clearTimeout(_bkGsrchTimer);
+  if (q.length < 3) {
+    if (!q) _bkGsrchShowTable();  // restore device table if cleared
+    return;
+  }
+  _bkGsrchTimer = setTimeout(() => _bkGsrchRun(q), 400);
+}
+
+function _bkGsrchClear() {
+  const inp = document.getElementById('bk-gsrch-inp');
+  const clr = document.getElementById('bk-gsrch-clear');
+  if (inp) inp.value = '';
+  if (clr) clr.style.display = 'none';
+  clearTimeout(_bkGsrchTimer);
+  _bkGsrchShowTable();
+}
+
+function _bkGsrchShowTable() {
+  _bkRenderTable(_bkDevices);
+}
+
+async function _bkGsrchRun(q) {
+  const wrap = document.getElementById('bk-table-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="bk-loading">Searching…</div>';
+  try {
+    const r = await api('GET', `/api/backups/search?q=${encodeURIComponent(q)}`);
+    if (r.error) { wrap.innerHTML = `<div class="bk-err">${esc(r.error)}</div>`; return; }
+    _bkGsrchRender(r.results || [], r.query || q);
+  } catch (e) {
+    wrap.innerHTML = `<div class="bk-err">Search failed: ${esc(String(e))}</div>`;
+  }
+}
+
+function _bkGsrchRender(results, q) {
+  const wrap = document.getElementById('bk-table-wrap');
+  if (!wrap) return;
+  if (!results.length) {
+    wrap.innerHTML = `<div class="bk-empty">No matches found for "<strong>${esc(q)}</strong>"</div>`;
+    return;
+  }
+  // Group by device for readability
+  const byDev = {};
+  for (const r of results) {
+    (byDev[r.did] = byDev[r.did] || {name: r.device_name, rows: []}).rows.push(r);
+  }
+  const ql = q.toLowerCase();
+  function hlLine(text) {
+    // Highlight query term in result line
+    const lo = text.toLowerCase();
+    let out = '', pos = 0;
+    while (pos < text.length) {
+      const idx = lo.indexOf(ql, pos);
+      if (idx < 0) { out += esc(text.slice(pos)); break; }
+      out += esc(text.slice(pos, idx)) + `<mark class="bk-srch-hl">${esc(text.slice(idx, idx + q.length))}</mark>`;
+      pos = idx + q.length;
+    }
+    return out;
+  }
+  let html = `<div class="bk-gsrch-banner">${results.length} match${results.length > 1 ? 'es' : ''} for "<strong>${esc(q)}</strong>"
+    <button class="btn-sm" style="margin-left:12px" onclick="_bkGsrchClear()">✕ Clear</button></div>
+    <table class="bk-table">
+      <thead><tr><th>Device</th><th>Backup Time</th><th>Line</th><th>Content</th><th></th></tr></thead>
+      <tbody>`;
+  for (const [, {name, rows}] of Object.entries(byDev)) {
+    for (const r of rows) {
+      const ts = _bkParseTs(r.ts)?.toLocaleString() ?? r.ts;
+      html += `<tr>
+        <td><strong>${esc(name || r.did)}</strong></td>
+        <td style="white-space:nowrap;font-size:11px">${esc(ts)}</td>
+        <td class="bk-mono" style="color:var(--text3)">${r.line_no}</td>
+        <td class="bk-mono" style="font-size:10px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="${esc(r.line_text)}">${hlLine(r.line_text)}</td>
+        <td><button class="btn-sm" onclick="_bkGsrchOpenRun(${r.run_id},'${esc(r.did)}',${r.line_no})">📄 Open</button></td>
+      </tr>`;
+    }
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+async function _bkGsrchOpenRun(runId, did, lineNo) {
+  await _bkOpenViewer(runId, did);
+  // After viewer opens, pre-fill search with current query and jump to line
+  const q = document.getElementById('bk-gsrch-inp')?.value?.trim();
+  if (!q) return;
+  setTimeout(() => {
+    const inp = document.getElementById('bk-srch-inp');
+    if (inp) {
+      inp.value = q;
+      _bkViewSearch();
+    }
+  }, 100);
 }
