@@ -18,13 +18,32 @@ _running_lock = threading.Lock()
 
 
 def _backup_one(src_path, dest_path, label, log):
-    """Copy one SQLite DB to dest_path using the WAL-safe .backup() API."""
-    src = sqlite3.connect(str(src_path))
+    """
+    Copy one SQLite DB to dest_path for a consistent WAL-safe snapshot.
+
+    Primary:  VACUUM INTO (SQLite 3.27+) — single-connection, atomic, no temp dest file.
+    Fallback: Connection.backup() API   — used on older SQLite (<3.27).
+    """
+    src_str  = str(src_path)
+    dest_str = str(dest_path)
+    con = sqlite3.connect(src_str, timeout=30)
     try:
-        with sqlite3.connect(dest_path) as dst:
-            src.backup(dst)
+        try:
+            # Single-connection approach: SQLite writes directly to dest_str
+            safe = dest_str.replace("'", "''")
+            con.execute(f"VACUUM INTO '{safe}'")
+        except sqlite3.OperationalError as _ve:
+            if 'syntax error' not in str(_ve).lower():
+                raise  # real error, not a missing-feature error
+            # SQLite < 3.27 fallback
+            log.debug("DB backup: VACUUM INTO unsupported — falling back to backup() API")
+            dst = sqlite3.connect(dest_str, timeout=30)
+            try:
+                con.backup(dst)
+            finally:
+                dst.close()
     finally:
-        src.close()
+        con.close()
     size = os.path.getsize(dest_path)
     log.info(f"DB backup: {label} success — {os.path.basename(dest_path)} ({size:,} bytes)")
     return size
