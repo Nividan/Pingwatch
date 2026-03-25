@@ -21,31 +21,48 @@ def _backup_one(src_path, dest_path, label, log):
     """
     Copy one SQLite DB to dest_path for a consistent WAL-safe snapshot.
 
-    Primary:  VACUUM INTO (SQLite 3.27+) — single-connection, atomic, no temp dest file.
-    Fallback: Connection.backup() API   — used on older SQLite (<3.27).
+    Mirrors routes/export.py: backup() into a pre-created temp file, then
+    move it to the final path.  Connecting to a pre-existing file avoids the
+    SQLite CANTOPEN error that occurs when SQLite tries to create a new file
+    in a directory it cannot write to (e.g. owned by a different user).
     """
+    import shutil as _sh, tempfile as _tmp
     src_str  = str(src_path)
     dest_str = str(dest_path)
-    con = sqlite3.connect(src_str, timeout=30)
+    dest_dir = os.path.dirname(dest_str)
+
+    # Prefer a temp file in the same directory so os.replace() is atomic.
+    # Fall back to the system temp dir if dest_dir is not writable.
     try:
+        fd, tmp = _tmp.mkstemp(dir=dest_dir, suffix='.sqlite.tmp')
+        same_fs = True
+    except OSError:
+        fd, tmp = _tmp.mkstemp(suffix='.sqlite.tmp')
+        same_fs = False
+    os.close(fd)
+
+    moved = False
+    try:
+        src = sqlite3.connect(src_str, timeout=30)
         try:
-            # Single-connection approach: SQLite writes directly to dest_str
-            safe = dest_str.replace("'", "''")
-            con.execute(f"VACUUM INTO '{safe}'")
-        except sqlite3.OperationalError as _ve:
-            if 'syntax error' not in str(_ve).lower():
-                raise  # real error, not a missing-feature error
-            # SQLite < 3.27 fallback
-            log.debug("DB backup: VACUUM INTO unsupported — falling back to backup() API")
-            dst = sqlite3.connect(dest_str, timeout=30)
-            try:
-                con.backup(dst)
-            finally:
-                dst.close()
+            with sqlite3.connect(tmp) as dst:
+                src.backup(dst)
+        finally:
+            src.close()
+        if same_fs:
+            os.replace(tmp, dest_str)
+        else:
+            _sh.copy2(tmp, dest_str)
+        moved = True
     finally:
-        con.close()
-    size = os.path.getsize(dest_path)
-    log.info(f"DB backup: {label} success — {os.path.basename(dest_path)} ({size:,} bytes)")
+        if not moved or not same_fs:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    size = os.path.getsize(dest_str)
+    log.info(f"DB backup: {label} success — {os.path.basename(dest_str)} ({size:,} bytes)")
     return size
 
 
