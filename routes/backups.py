@@ -68,7 +68,7 @@ def handle(h, method, path, body):
             pri = 3 if (e.get('enabled') and e.get('in_schedule')) else \
                   2 if e.get('enabled') else \
                   1 if e.get('username') else 0
-            return (-pri, e.get('name', '').lower())
+            return (-pri, (e.get('name') or '').lower())
         devices.sort(key=_sort_key)
         h._json(200, {'devices': devices})
         return True
