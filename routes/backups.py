@@ -44,11 +44,10 @@ def handle(h, method, path, body):
         dev_map = {did: d for did, d in STATE.devices.items()}
         for entry in devices:
             live = dev_map.get(entry['did'])
-            entry['name']  = live.name  if live else None
-            entry['host']  = live.host  if live else ''
-            entry['group'] = live.group if live else ''
-        # Drop orphaned backup entries whose device no longer exists
-        devices = [e for e in devices if e['name'] is not None]
+            entry['name']    = live.name  if live else None
+            entry['host']    = live.host  if live else ''
+            entry['group']   = live.group if live else ''
+            entry['orphaned'] = live is None
         # Also include devices not yet configured (enabled=False placeholder)
         configured = {e['did'] for e in devices}
         for did, d in dev_map.items():

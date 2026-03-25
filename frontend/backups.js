@@ -67,8 +67,11 @@ function _bkRenderTable(devices) {
         ? `<span class="bk-cnt ${cnt >= _bkKeepMax ? 'bk-cnt-full' : ''}" title="${cnt} saved, max ${_bkKeepMax}">${cnt}/${_bkKeepMax}</span>`
         : '<span class="bk-never">—</span>';
 
+      const nameCell = dev.orphaned
+        ? `<span class="bk-orphaned" title="Device no longer exists — backup config is stale. Open settings to delete it.">⚠ Device not found (${esc(dev.did)})</span>`
+        : `<strong>${esc(dev.name || dev.did)}</strong>`;
       return `<tr onclick="_bkOpenSettings('${esc(dev.did)}')" title="Click to configure">
-        <td>${enabledDot} <strong>${esc(dev.name || dev.did)}</strong></td>
+        <td>${enabledDot} ${nameCell}</td>
         <td class="bk-mono">${esc(dev.host || '—')}</td>
         <td style="text-align:center">${scheduled}</td>
         <td>${timeCell}</td>
