@@ -742,6 +742,7 @@ async function _bkShowRun(runId, did) {
       <div class="mft">
         ${hasPrev ? `<button class="btn-s" onclick="_bkNavViewer(-1,'${esc(did||run.did)}')">← Older</button>` : '<button class="btn-s" disabled>← Older</button>'}
         ${hasNext ? `<button class="btn-s" onclick="_bkNavViewer(1,'${esc(did||run.did)}')">Newer →</button>` : '<button class="btn-s" disabled>Newer →</button>'}
+        ${totalRuns > 1 ? `<button class="btn-s" onclick="closeM('bk-viewer');_bkOpenHistory('${esc(did||run.did)}')" title="View all runs and compare two">⬌ History / Diff</button>` : ''}
         <button class="btn-s" onclick="_bkCopyConfig()">📋 Copy</button>
         <button class="btn-s" onclick="closeM('bk-viewer')">Close</button>
       </div>
