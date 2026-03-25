@@ -671,6 +671,15 @@ function _switchLogTab(key) {
   _loadLogTab();
 }
 
+function _colorLog(text) {
+  const e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return e(text).replace(
+    /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(\s+)(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)(\s+)/gm,
+    (_,ts,sp1,lvl,sp2) =>
+      `<span class="ll-ts">${ts}</span>${sp1}<span class="ll-${lvl.toLowerCase()}">${lvl}</span>${sp2}`
+  );
+}
+
 async function _loadLogTab() {
   const el  = document.getElementById('log-body');
   const lbl = document.getElementById('log-footer-label');
@@ -679,7 +688,7 @@ async function _loadLogTab() {
     const r = await fetch(`/api/logs/${_activeLogTab}`);
     if (!r.ok) { el.textContent = 'Access denied'; return; }
     const d = await r.json();
-    el.textContent = d.lines || '(empty)';
+    el.innerHTML = _colorLog(d.lines || '(empty)');
     el.scrollTop = el.scrollHeight;
     const names = { app:'pingwatch.log', sensors:'pingwatchsensors.log',
                     audit:'pingwatchaudit.log', backup:'pingwatchbackup.log' };
