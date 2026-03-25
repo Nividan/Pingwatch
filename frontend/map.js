@@ -1127,6 +1127,14 @@ function _vlanH(p) {
   const n = _vlanIds((p || {}).vlan).length;
   return n > 5 ? 30 : n > 0 ? 16 : 0;
 }
+// Truncate a device name to fit within availW pixels.
+// charPx: estimated pixels-per-character for the target font/size.
+function _truncName(name, availW, charPx) {
+  charPx = charPx || 7.0;
+  const max = Math.max(6, Math.floor(availW / charPx));
+  return name.length > max ? name.slice(0, max - 1) + '\u2026' : name;
+}
+
 function vlanBadge(p, lx, y) {
   const ids = _vlanIds(p.vlan);
   if (!ids.length) return '';
@@ -1186,7 +1194,7 @@ function renderCloud(node, p, sf) {
       <line x1="-13" y1="0" x2="13" y2="0" stroke="#00d4ff" stroke-width="0.8" opacity="0.5"/>
       <circle cx="0" cy="0" r="2.5" fill="#00d4ff" opacity="0.9"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Orbitron" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Orbitron" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(_truncName(node.name, 117, 10))}</text>
   </g>`;
 }
 
@@ -1200,7 +1208,7 @@ function renderFirewall(node, p, sf) {
     <rect x="0" y="0" width="155" height="${H}" rx="4" fill="url(#scanlines)"/>
     <path d="M16,12 L30,8 L44,12 L44,28 Q37,38 30,40 Q23,38 16,28 Z" fill="none" stroke="#ff3366" stroke-width="1.5"/>
     <path d="M23,22 L28,27 L38,17" fill="none" stroke="#ff6b6b" stroke-width="1.5"/>
-    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(_truncName(node.name, 95))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 50, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     <text x="52" y="66" fill="${statusColor}" font-family="Share Tech Mono" font-size="9">${statusText}</text>
     ${vlanBadge(p, 52, H - 19)}
@@ -1220,7 +1228,7 @@ function renderWanSwitch(node, p, sf) {
       <rect x="21" y="4" width="5" height="16" rx="1" fill="#00d4ff"/>
       <rect x="28" y="8" width="5" height="12" rx="1" fill="#00d4ff" opacity="0.8"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 157))}</text>
     ${renderSubtitleAndIP(p, 55, 38, 48, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
     <g transform="translate(8,${_vlanH(p) > 0 ? 52 : 44})">
       ${[0,11,22,33,44,55].map(x=>`<rect x="${x}" y="0" width="8" height="6" rx="1" fill="#00d4ff" opacity="${x<22?0.6:0.2}" class="led-blink"/>`).join('')}
@@ -1236,7 +1244,7 @@ function renderBBSwitch(node, p, sf) {
 
   // Parse all VLAN IDs from the vlan string field (e.g. "VLAN10 VLAN20 VLAN100")
   const rawVlan = String(p.vlan || '').trim();
-  const vlans = rawVlan ? (rawVlan.match(/\d+/g) || []) : ['10','20','30','40'];
+  const vlans = rawVlan ? (rawVlan.match(/\d+/g) || []) : [];
 
   // Dynamic badge width: min 28px, wider for longer labels (each char ~5.5px + 8px padding)
   const badges = vlans.map((v, i) => {
@@ -1274,7 +1282,7 @@ function renderBBSwitch(node, p, sf) {
       `).join('')}
     </g>
 
-    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(_truncName(node.name, 230, 8.5))}</text>
 
     ${renderSubtitleAndIP(p, 62, 44, 57, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
 
@@ -1306,7 +1314,7 @@ function renderSwitch(node, p, sf) {
     </g>
 
     <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="11.5" font-weight="600">
-      ${escXml(node.name)}
+      ${escXml(_truncName(node.name, w - 58, 6.5))}
     </text>
 
     ${renderSubtitleAndIP(p, 50, subY, ipY, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
@@ -1325,7 +1333,7 @@ function renderConnector(node, p, sf) {
     <polygon points="28,10 44,26 28,42 12,26" fill="none" stroke="#ffd700" stroke-width="1.5"/>
     <polygon points="28,16 38,26 28,36 18,26" fill="rgba(255,215,0,0.15)" stroke="#ffd700" stroke-width="1"/>
     <circle cx="28" cy="26" r="3" fill="#ffd700"/>
-    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Exo 2" font-size="12" font-weight="700">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Exo 2" font-size="12" font-weight="700">${escXml(_truncName(node.name, 105))}</text>
     ${renderSubtitleAndIP(p, 52, 37, 51, '#ffd700', 'rgba(255,255,255,0.6)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="163" height="2" rx="1" fill="rgba(255,215,0,0.3)"/>
@@ -1343,7 +1351,7 @@ function renderAP(node, p, sf) {
       <path d="M13,26 Q17,18 21,26" fill="none" stroke="#a855f7" stroke-width="2"/>
       <circle cx="17" cy="28" r="2.5" fill="#a855f7"/>
     </g>
-    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 110))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="168" height="2" rx="1" fill="rgba(168,85,247,0.3)"/>
@@ -1430,7 +1438,7 @@ function renderInfoBox(node, p, sf) {
     <rect x="0" y="0" width="210" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
       stroke-width="1" stroke-dasharray="4,3"/>
-    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="16" fill="#ff6b6b" font-family="Orbitron" font-size="9" letter-spacing="1">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="16" fill="#ff6b6b" font-family="Orbitron" font-size="9" letter-spacing="1">${escXml(_truncName(node.name, 192, 6.5))}</text>
     ${lines.map((l,i) => {
       const color = (l && l.color) ? String(l.color) : 'rgba(255,255,255,0.6)';
       const text  = (l && l.text)  ? String(l.text)  : '';
@@ -1446,7 +1454,7 @@ function renderGeneric(node, p, sf) {
   const H = 60 + _vlanH(p);
   return `<g ${sf}>
     <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(10,20,35,0.92)" stroke="#00d4ff" stroke-width="1.5"/>
-    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 160))}</text>
 	${p.subtitle ? svgTextLine(80, 45, p.subtitle, (p.subtitle_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && p.ip) ? svgTextLine(80, 45, p.ip, (p.ip_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && !p.ip) ? svgTextLine(80, 45, node.type, 'rgba(255,255,255,0.35)', 9) : ''}
@@ -1466,7 +1474,7 @@ function renderRouter(node, p, sf) {
       <line x1="15" y1="2" x2="15" y2="28" stroke="#00d4ff" stroke-width="0.7" opacity="0.5"/>
       <polygon points="28,12 34,15 28,18" fill="#00d4ff"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(0,212,255,0.2)"/>
@@ -1484,7 +1492,7 @@ function renderVM(node, p, sf) {
       <rect x="6" y="2" width="16" height="12" rx="2" fill="rgba(45,212,191,0.07)" stroke="#2dd4bf" stroke-width="1" opacity="0.4"/>
       <circle cx="14" cy="23" r="2" fill="#2dd4bf" opacity="0.8"/>
     </g>
-    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(45,212,191,0.2)"/>
@@ -1506,7 +1514,7 @@ function renderAppliance(node, p, sf) {
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#fb923c" stroke-width="1.5" opacity="0.7"/>`;
       }).join('')}
     </g>
-    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(node.name)}</text>
+    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(251,146,60,0.2)"/>
@@ -2243,11 +2251,17 @@ function renderOutsideLabel(node, p, cx, baseH, opts = {}) {
   // VLAN badge sits below the last text line
   const yBadge = (line3Text ? yLine3 : line2Text ? yLine2 : yName) + 8;
 
+  // Truncate name to fit within node width — Exo 2 bold 13px ≈ 7.5px/char
+  const nodeW    = opts.nodeW || (cx * 2);
+  const maxChars = Math.max(8, Math.floor(nodeW / 7.5));
+  const rawName  = node.name || '';
+  const dispName = rawName.length > maxChars ? rawName.slice(0, maxChars - 1) + '\u2026' : rawName;
+
   const origFill = opts.nameFill || '#93c5fd';
   const svgContent = `
     <text data-pw-name data-pw-origfill="${origFill}" x="${cx}" y="${yName}" text-anchor="middle"
       fill="${nameFill}" font-family="Exo 2" font-size="${nameSize}"
-      font-weight="700"${glow ? ` filter="${glow}"` : ''}>${escXml(node.name)}</text>
+      font-weight="700"${glow ? ` filter="${glow}"` : ''}>${escXml(dispName)}</text>
 
     ${line2Text ? `
       <text${line2IsIP ? ' data-pw-ip' : ''} x="${cx}" y="${yLine2}" text-anchor="middle"
