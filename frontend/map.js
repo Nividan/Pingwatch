@@ -2206,10 +2206,10 @@ async function saveLink() {
   try {
     if (editingLinkId) {
       const beforeLk = links.find(l=>l.id===editingLinkId);
-      await api('PUT',`/api/links/${editingLinkId}`, { label, link_type });
+      await api('PUT',`/api/links/${editingLinkId}`, { source_id, target_id, label, link_type });
       if (beforeLk) pushAction(
-        async () => { await api('PUT',`/api/links/${editingLinkId}`,{label:beforeLk.label,link_type:beforeLk.link_type}); await loadData(); },
-        async () => { await api('PUT',`/api/links/${editingLinkId}`,{label,link_type}); await loadData(); }
+        async () => { await api('PUT',`/api/links/${editingLinkId}`,{source_id:beforeLk.source_id,target_id:beforeLk.target_id,label:beforeLk.label,link_type:beforeLk.link_type}); await loadData(); },
+        async () => { await api('PUT',`/api/links/${editingLinkId}`,{source_id,target_id,label,link_type}); await loadData(); }
       );
       toast('Link updated');
     } else {
