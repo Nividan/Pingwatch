@@ -754,6 +754,16 @@ function _sdrExtraFields(type, d){
   }
 }
 
+function _sdrToggle(btn){
+  const row = btn.closest('tr');
+  const extraRow = row.nextElementSibling;
+  if(!extraRow) return;
+  const open = extraRow.style.display === '';
+  extraRow.style.display = open ? 'none' : '';
+  btn.classList.toggle('open', !open);
+  btn.textContent = open ? '▾' : '▴';
+}
+
 async function loadSensorsDefaultsTab(){
   const el = document.getElementById('sdrTabBody');
   if(!el) return;
@@ -765,7 +775,7 @@ async function loadSensorsDefaultsTab(){
   const types = Object.keys(typeCounts).sort();
   if(!types.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:8px">No sensors found.</div>'; return; }
   const td = window._snrTypeDefaults || {};
-  el.innerHTML = types.map(t => {
+  const rows = types.map(t => {
     const m   = _SDR_META[t] || {ico:'?', label:t, desc:''};
     const d   = td[t] || {};
     const cnt = typeCounts[t];
@@ -775,63 +785,29 @@ async function loadSensorsDefaultsTab(){
     const ra  = d.recover_after != null ? d.recover_after : (window._snrDef?.recover_after||1);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
     const cm  = d.crit_ms  != null ? d.crit_ms  : (_SDR_CRIT_DEF[t] || '');
+    const warnUnit = t==='tls'?'days':t==='snmp'?'val':'ms';
     const extra = _sdrExtraFields(t, d);
-    return `<div class="sdr-card" data-type="${t}">
-      <div class="sdr-card-hd">
-        <span class="sdr-icon">${m.ico}</span>
-        <div class="sdr-card-title">
-          <span class="sdr-lbl">${m.label}</span>
-          <span class="sdr-desc">${m.desc}</span>
-        </div>
-        <span class="sdr-cnt">${cnt} sensor${cnt>1?'s':''}</span>
-      </div>
-      <div class="sdr-fields">
-        <div class="sdr-field">
-          <label>Interval</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_interval" value="${iv}" min="1" max="300"/>
-            <span class="sdr-unit">s</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>Timeout</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/>
-            <span class="sdr-unit">s</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>Fail After</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_fail_after" value="${fa}" min="1" max="60"/>
-            <span class="sdr-unit">×</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>Recover After</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_recover_after" value="${ra}" min="1" max="60"/>
-            <span class="sdr-unit">×</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>${t==='tls'?'Warn Days':t==='snmp'?'Warn Val':'Warn (ms)'}</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/>
-            <span class="sdr-unit">${t==='snmp'||t==='tls'?'val':'ms'}</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>${t==='tls'?'Crit Days':t==='snmp'?'Crit Val':'Crit (ms)'}</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/>
-            <span class="sdr-unit">${t==='snmp'||t==='tls'?'val':'ms'}</span>
-          </div>
-        </div>
-      </div>
-      ${extra ? `<div class="sdr-extra">${extra}</div>` : ''}
-    </div>`;
+    return `<tr class="sdr-card sdr-row" data-type="${t}">
+      <td><div class="sdr-type-cell"><span class="sdr-icon" title="${m.desc}">${m.ico}</span><span class="sdr-lbl">${m.label}</span></div></td>
+      <td style="text-align:center"><span class="sdr-cnt">${cnt}</span></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_interval" value="${iv}" min="1" max="300"/><span class="sdr-unit">s</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/><span class="sdr-unit">s</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_fail_after" value="${fa}" min="1" max="60"/><span class="sdr-unit">×</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_recover_after" value="${ra}" min="1" max="60"/><span class="sdr-unit">×</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
+      <td style="text-align:center">${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
+    </tr>
+    ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="9"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
   }).join('');
+  el.innerHTML = `<table class="sdr-tbl">
+    <thead><tr>
+      <th>Type</th><th>#</th>
+      <th>Interval</th><th>Timeout</th><th>Fail After</th><th>Recover After</th>
+      <th>Warn</th><th>Crit</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 async function saveSensorTypeDefaults(){

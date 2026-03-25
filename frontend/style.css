@@ -1250,34 +1250,38 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   line-height:1.55;color:var(--text2);background:var(--bg);
   max-height:65vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}
 
-/* ── Sensor-type defaults cards (Settings → Sensors tab) ──────────────── */
-.sdr-card          {border:1px solid var(--border);border-left:3px solid var(--sdr-color,var(--accent));
-                    border-radius:6px;background:var(--bg2);margin-bottom:10px;padding:12px 14px;}
-.sdr-card:last-child{margin-bottom:0;}
-.sdr-card[data-type=ping]         {--sdr-color:#58a6ff;--sdr-icon-bg:rgba(88,166,255,.12);}
-.sdr-card[data-type=tcp]          {--sdr-color:#3fb950;--sdr-icon-bg:rgba(63,185,80,.12);}
-.sdr-card[data-type=http]         {--sdr-color:#56d364;--sdr-icon-bg:rgba(86,211,100,.12);}
-.sdr-card[data-type=snmp]         {--sdr-color:#d2a8ff;--sdr-icon-bg:rgba(210,168,255,.12);}
-.sdr-card[data-type=dns]          {--sdr-color:#ffa657;--sdr-icon-bg:rgba(255,166,87,.12);}
-.sdr-card[data-type=tls]          {--sdr-color:#e3b341;--sdr-icon-bg:rgba(227,179,65,.12);}
-.sdr-card[data-type=http_keyword] {--sdr-color:#f78166;--sdr-icon-bg:rgba(247,129,102,.12);}
-.sdr-card[data-type=banner]       {--sdr-color:#8b949e;--sdr-icon-bg:rgba(139,148,158,.12);}
-.sdr-card-hd       {display:flex;align-items:center;gap:10px;margin-bottom:10px;}
-.sdr-icon          {width:34px;height:34px;border-radius:8px;background:var(--sdr-icon-bg,var(--bg3));
-                    display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;}
-.sdr-card-title    {flex:1;display:flex;flex-direction:column;gap:1px;min-width:0;}
-.sdr-lbl           {font-size:13px;font-weight:600;color:var(--text);}
-.sdr-desc          {font-size:10px;color:var(--text3);}
-.sdr-cnt           {font-size:11px;color:var(--sdr-color,var(--accent));
-                    background:var(--sdr-icon-bg,var(--bg3));padding:2px 8px;border-radius:10px;
-                    white-space:nowrap;flex-shrink:0;}
-.sdr-fields        {display:grid;grid-template-columns:repeat(4,1fr);gap:8px 12px;}
-.sdr-field         {display:flex;flex-direction:column;gap:4px;}
-.sdr-field label   {font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;}
-.sdr-input-row     {display:flex;align-items:center;gap:4px;}
-.sdr-input-row input{width:100%;min-width:0;}
-.sdr-unit          {font-size:11px;color:var(--text3);flex-shrink:0;}
-.sdr-extra         {margin-top:10px;padding-top:10px;border-top:1px solid var(--border);}
+/* ── Sensor-type defaults table (Settings → Sensors tab) ──────────────── */
+.sdr-tbl                {width:100%;border-collapse:collapse;}
+.sdr-tbl thead th       {font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;
+                         letter-spacing:.04em;padding:7px 10px;text-align:left;
+                         border-bottom:1px solid var(--border);white-space:nowrap;}
+.sdr-tbl thead th:nth-child(n+3){text-align:center;}
+.sdr-row[data-type=ping]        {--sdr-color:#58a6ff;--sdr-icon-bg:rgba(88,166,255,.12);}
+.sdr-row[data-type=tcp]         {--sdr-color:#3fb950;--sdr-icon-bg:rgba(63,185,80,.12);}
+.sdr-row[data-type=http]        {--sdr-color:#56d364;--sdr-icon-bg:rgba(86,211,100,.12);}
+.sdr-row[data-type=snmp]        {--sdr-color:#d2a8ff;--sdr-icon-bg:rgba(210,168,255,.12);}
+.sdr-row[data-type=dns]         {--sdr-color:#ffa657;--sdr-icon-bg:rgba(255,166,87,.12);}
+.sdr-row[data-type=tls]         {--sdr-color:#e3b341;--sdr-icon-bg:rgba(227,179,65,.12);}
+.sdr-row[data-type=http_keyword]{--sdr-color:#f78166;--sdr-icon-bg:rgba(247,129,102,.12);}
+.sdr-row[data-type=banner]      {--sdr-color:#8b949e;--sdr-icon-bg:rgba(139,148,158,.12);}
+.sdr-row > td           {padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.sdr-row > td:first-child{border-left:3px solid var(--sdr-color,var(--accent));}
+.sdr-type-cell          {display:flex;align-items:center;gap:8px;white-space:nowrap;}
+.sdr-icon               {width:28px;height:28px;border-radius:6px;background:var(--sdr-icon-bg,var(--bg3));
+                         display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;}
+.sdr-lbl                {font-size:12px;font-weight:600;color:var(--text);}
+.sdr-cnt                {font-size:11px;color:var(--sdr-color,var(--accent));
+                         background:var(--sdr-icon-bg,var(--bg3));padding:2px 7px;border-radius:10px;
+                         white-space:nowrap;display:inline-block;}
+.sdr-num-cell           {display:flex;align-items:center;gap:4px;justify-content:center;}
+.sdr-num-cell input     {width:54px;text-align:center;}
+.sdr-unit               {font-size:11px;color:var(--text3);flex-shrink:0;}
+.sdr-expand-btn         {background:none;border:none;cursor:pointer;color:var(--text3);
+                         font-size:13px;padding:3px 7px;border-radius:4px;transition:all .15s;line-height:1;}
+.sdr-expand-btn:hover   {background:var(--bg3);color:var(--text);}
+.sdr-expand-btn.open    {color:var(--accent);}
+.sdr-extra-row > td     {padding:10px 16px 12px;background:var(--bg);border-bottom:1px solid var(--border);}
+.sdr-extra              {display:flex;flex-wrap:wrap;gap:10px 24px;align-items:flex-start;}
 
 /* ── Dashboard ──────────────────────────────────────────────────── */
 #dashboardView     {padding:16px;gap:0;}
