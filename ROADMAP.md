@@ -52,9 +52,29 @@
 - Home button — PingWatch logo navigates to Dashboard tab
 - Add filter arrows (events tab)
 
+## 🔴 High Priority
+- Advanced alerting rules engine
+  - Alert rules UI with condition builder
+  - Conditions: device group, sensor type, threshold state, flap count, packet loss %
+  - Multiple actions per rule: email, webhook, syslog, future Slack/Teams
+  - Alert ACK / resolve / suppress workflow
+  - Maintenance windows
+  - Alert cooldown / deduplication
+
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
 - Improve user box
+- Config backup evolution into NCM
+  - Config diff viewer — highlight changes between backups
+  - Search inside configs
+  - Rollback helper / command preview
+  - Backup success dashboard widget
 
 ## 🎨 Low Priority
 - Fix history icon
+- Theme support
+  - Dark / light theme toggle (stub already in user menu)
+  - Persist theme preference per user
+  - Compact mode
+  - Accessible contrast mode
+  - Spacing / alignment cleanup
