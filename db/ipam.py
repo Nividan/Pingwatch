@@ -106,27 +106,46 @@ def db_delete_subnet(subnet_id: int) -> None:
 def db_get_allocations(subnet_id: int) -> dict:
     """
     Return all allocations for a subnet as a dict:
-      { ip_str: {name, modified_by, modified_at, device_id} }
+      { ip_str: {name, modified_by, modified_at, device_id, dns_name, dns_resolved_at} }
     """
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         rows = con.execute(
-            """SELECT ip, name, modified_by, modified_at, device_id
+            """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at
                FROM ip_allocations WHERE subnet_id=?""",
             (subnet_id,)
         ).fetchall()
         return {
             r[0]: {
-                "name":        r[1],
-                "modified_by": r[2],
-                "modified_at": r[3],
-                "device_id":   r[4] or '',
+                "name":            r[1],
+                "modified_by":     r[2],
+                "modified_at":     r[3],
+                "device_id":       r[4] or '',
+                "dns_name":        r[5] or '',
+                "dns_resolved_at": r[6] or 0,
             }
             for r in rows
         }
     except Exception as e:
         log.error(f"IPAM get allocations error (subnet_id={subnet_id}): {e}")
         return {}
+    finally:
+        con.close()
+
+
+def db_update_dns(subnet_id: int, ip: str, dns_name: str) -> None:
+    """Update cached DNS hostname for a single IP allocation (direct write, no enqueue)."""
+    import time as _t
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        con.execute(
+            "UPDATE ip_allocations SET dns_name=?, dns_resolved_at=? "
+            "WHERE subnet_id=? AND ip=?",
+            (dns_name, _t.time(), subnet_id, ip)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"IPAM update DNS error ({ip} subnet={subnet_id}): {e}")
     finally:
         con.close()
 

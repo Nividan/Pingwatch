@@ -184,21 +184,35 @@ async function openSettings(){
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
     </div>
     <div class="mbdy stab-fade" id="stab-database" style="display:none">
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Backup &amp; Restore</div>
-      <div class="fr">
-        <label class="fl">Export Database</label>
-        <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="exportDb()">&#8681; Download Backup</button>
-        <div class="fh">Downloads a complete snapshot of all data (devices, sensors, history, network topology, settings, users).</div>
+
+      <!-- Main DB -->
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Main Database</div>
+        <div id="db-stats-main" style="font-size:12px;color:var(--text3);margin-bottom:10px">Loading…</div>
+        <button class="btn-p" style="font-size:12px;padding:6px 14px" onclick="exportDb()">&#8681; Download Main DB</button>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">Config, devices, sensors, users, settings</span>
       </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <label class="fl">Import Database</label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn-s" style="font-size:12px;padding:7px 16px" onclick="importDb()">&#8679; Restore from Backup</button>
+
+      <!-- Logs DB -->
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Sensor Logs Database</div>
+        <div id="db-stats-logs" style="font-size:12px;color:var(--text3);margin-bottom:10px">Loading…</div>
+        <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportLogsDb()">&#8681; Download Logs DB</button>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">Sensor samples, flap log, SNMP traps, errors</span>
+      </div>
+
+      <!-- Bundle Export + Import -->
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Export / Import</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportBundle()">&#8681; Export Full Bundle (ZIP)</button>
+          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="importDb()">&#8679; Import DB / Bundle</button>
           <span id="db-import-status" style="font-size:12px;color:var(--text3)"></span>
         </div>
-        <div class="fh" style="color:var(--down);margin-top:6px">Warning: this replaces ALL current data and restarts the server.</div>
+        <div class="fh" style="margin-top:8px">Bundle ZIP contains both DBs. Import accepts Main DB, Logs DB, or a bundle ZIP.<br><span style="color:var(--down)">Warning: import replaces the uploaded DB and restarts the server.</span></div>
       </div>
-      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+
+      <div style="margin-top:4px;padding-top:16px;border-top:1px solid var(--border)">
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Scheduled Database Backup</div>
         <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
           <div style="flex:1">
@@ -251,7 +265,7 @@ async function openSettings(){
         <button class="log-stab"        id="lstab-btn-backup"  onclick="_switchLogTab('backup')">Backup</button>
         <button class="btn-s" onclick="_loadLogTab()" style="margin-left:auto;font-size:11px">↻ Refresh</button>
       </div>
-      <pre id="log-body" class="log-viewer">Loading…</pre>
+      <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading…</span></div>
     </div>
     <div class="mft" id="stab-footer-logs" style="display:none">
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
@@ -657,6 +671,21 @@ function _switchLogTab(key) {
   _loadLogTab();
 }
 
+function _colorLog(text) {
+  if (!text) return '<span style="color:var(--text3)">(empty)</span>';
+  const e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
+  return text.split('\n').map(line => {
+    if (!line) return '<div class="ll-row ll-empty"></div>';
+    const m = line.match(RE);
+    if (m) {
+      const [,ts,lvl,msg] = m;
+      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${e(ts)}</span><span class="ll-${lvl.toLowerCase()}">${e(lvl)}</span></span><span class="ll-msg">${e(msg)}</span></div>`;
+    }
+    return `<div class="ll-row ll-cont"><span class="ll-msg">${e(line)}</span></div>`;
+  }).join('');
+}
+
 async function _loadLogTab() {
   const el  = document.getElementById('log-body');
   const lbl = document.getElementById('log-footer-label');
@@ -665,7 +694,7 @@ async function _loadLogTab() {
     const r = await fetch(`/api/logs/${_activeLogTab}`);
     if (!r.ok) { el.textContent = 'Access denied'; return; }
     const d = await r.json();
-    el.textContent = d.lines || '(empty)';
+    el.innerHTML = _colorLog(d.lines || '(empty)');
     el.scrollTop = el.scrollHeight;
     const names = { app:'pingwatch.log', sensors:'pingwatchsensors.log',
                     audit:'pingwatchaudit.log', backup:'pingwatchbackup.log' };
@@ -740,6 +769,16 @@ function _sdrExtraFields(type, d){
   }
 }
 
+function _sdrToggle(btn){
+  const row = btn.closest('tr');
+  const extraRow = row.nextElementSibling;
+  if(!extraRow) return;
+  const open = extraRow.style.display === '';
+  extraRow.style.display = open ? 'none' : '';
+  btn.classList.toggle('open', !open);
+  btn.textContent = open ? '▾' : '▴';
+}
+
 async function loadSensorsDefaultsTab(){
   const el = document.getElementById('sdrTabBody');
   if(!el) return;
@@ -751,7 +790,7 @@ async function loadSensorsDefaultsTab(){
   const types = Object.keys(typeCounts).sort();
   if(!types.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:8px">No sensors found.</div>'; return; }
   const td = window._snrTypeDefaults || {};
-  el.innerHTML = types.map(t => {
+  const rows = types.map(t => {
     const m   = _SDR_META[t] || {ico:'?', label:t, desc:''};
     const d   = td[t] || {};
     const cnt = typeCounts[t];
@@ -761,63 +800,29 @@ async function loadSensorsDefaultsTab(){
     const ra  = d.recover_after != null ? d.recover_after : (window._snrDef?.recover_after||1);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
     const cm  = d.crit_ms  != null ? d.crit_ms  : (_SDR_CRIT_DEF[t] || '');
+    const warnUnit = t==='tls'?'days':t==='snmp'?'val':'ms';
     const extra = _sdrExtraFields(t, d);
-    return `<div class="sdr-card" data-type="${t}">
-      <div class="sdr-card-hd">
-        <span class="sdr-icon">${m.ico}</span>
-        <div class="sdr-card-title">
-          <span class="sdr-lbl">${m.label}</span>
-          <span class="sdr-desc">${m.desc}</span>
-        </div>
-        <span class="sdr-cnt">${cnt} sensor${cnt>1?'s':''}</span>
-      </div>
-      <div class="sdr-fields">
-        <div class="sdr-field">
-          <label>Interval</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_interval" value="${iv}" min="1" max="300"/>
-            <span class="sdr-unit">s</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>Timeout</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/>
-            <span class="sdr-unit">s</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>Fail After</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_fail_after" value="${fa}" min="1" max="60"/>
-            <span class="sdr-unit">×</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>Recover After</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_recover_after" value="${ra}" min="1" max="60"/>
-            <span class="sdr-unit">×</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>${t==='tls'?'Warn Days':t==='snmp'?'Warn Val':'Warn (ms)'}</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/>
-            <span class="sdr-unit">${t==='snmp'||t==='tls'?'val':'ms'}</span>
-          </div>
-        </div>
-        <div class="sdr-field">
-          <label>${t==='tls'?'Crit Days':t==='snmp'?'Crit Val':'Crit (ms)'}</label>
-          <div class="sdr-input-row">
-            <input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/>
-            <span class="sdr-unit">${t==='snmp'||t==='tls'?'val':'ms'}</span>
-          </div>
-        </div>
-      </div>
-      ${extra ? `<div class="sdr-extra">${extra}</div>` : ''}
-    </div>`;
+    return `<tr class="sdr-card sdr-row" data-type="${t}">
+      <td><div class="sdr-type-cell"><span class="sdr-icon" title="${m.desc}">${m.ico}</span><span class="sdr-lbl">${m.label}</span></div></td>
+      <td style="text-align:center"><span class="sdr-cnt">${cnt}</span></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_interval" value="${iv}" min="1" max="300"/><span class="sdr-unit">s</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/><span class="sdr-unit">s</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_fail_after" value="${fa}" min="1" max="60"/><span class="sdr-unit">×</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_recover_after" value="${ra}" min="1" max="60"/><span class="sdr-unit">×</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
+      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
+      <td style="text-align:center">${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
+    </tr>
+    ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="9"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
   }).join('');
+  el.innerHTML = `<table class="sdr-tbl">
+    <thead><tr>
+      <th>Type</th><th>#</th>
+      <th>Interval</th><th>Timeout</th><th>Fail After</th><th>Recover After</th>
+      <th>Warn</th><th>Crit</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 async function saveSensorTypeDefaults(){
@@ -1021,7 +1026,27 @@ function _dbkFreqChange(){
   if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
 }
 
+async function _loadDbStats(){
+  const mainEl = document.getElementById('db-stats-main');
+  const logsEl = document.getElementById('db-stats-logs');
+  if(!mainEl && !logsEl) return;
+  try {
+    const s = await api('GET', '/api/db/stats');
+    const fmtSize = b => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : b >= 1024 ? (b/1024).toFixed(1)+' KB' : b+' B';
+    const fmtN   = n => n.toLocaleString();
+    if(mainEl) mainEl.innerHTML =
+      `<span style="color:var(--text2)">${esc(s.main.path)}</span> &nbsp;|&nbsp; <span style="color:var(--text)">${fmtSize(s.main.size)}</span>`;
+    if(logsEl) logsEl.innerHTML =
+      `<span style="color:var(--text2)">${esc(s.logs.path)}</span> &nbsp;|&nbsp; <span style="color:var(--text)">${fmtSize(s.logs.size)}</span><br>` +
+      `<span style="color:var(--text3)">Samples: ${fmtN(s.logs.samples)} &nbsp; Flaps: ${fmtN(s.logs.flaps)} &nbsp; Traps: ${fmtN(s.logs.traps)} &nbsp; Errors: ${fmtN(s.logs.errors)}</span>`;
+  } catch(e) {
+    if(mainEl) mainEl.textContent = 'Could not load DB info';
+    if(logsEl) logsEl.textContent = '';
+  }
+}
+
 async function _loadDbBackupSettings(){
+  _loadDbStats();
   const r = await api('GET', '/api/settings');
   const en   = document.getElementById('st-dbk-enabled');
   const freq = document.getElementById('st-dbk-freq');

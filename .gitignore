@@ -5,6 +5,12 @@ pingwatch.db-shm
 pingwatch.db.pre_migrate.bak
 pingwatch.db.pending_import
 
+# ── Logs Database (split from pingwatch.db in v0.8+) ──────────
+pingwatch_logs.db
+pingwatch_logs.db-wal
+pingwatch_logs.db-shm
+pingwatch_logs.db.pending_logs_import
+
 # ── Device configuration backups (sensitive — never commit) ───
 backup/configs/
 

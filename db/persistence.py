@@ -5,10 +5,10 @@ db/persistence.py — Device/sensor save, load, and autosave loop.
 import sqlite3
 import time
 
-from core.config  import DB_PATH
+from core.config  import DB_PATH, LOGS_DB_PATH
 from core.logger  import log
 from core.state   import Device, Sensor
-from db.core      import _db_enqueue
+from db.core      import _db_enqueue, _logs_enqueue
 import core.settings as _settings
 
 
@@ -160,7 +160,7 @@ def db_load(state):
         _count_window = min(int(_settings.get("retention_days", 30)), 30)
         _cutoff = time.time() - _count_window * 86400
         # Open read-only to avoid triggering a WAL checkpoint on close
-        _rcon = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        _rcon = sqlite3.connect(f"file:{LOGS_DB_PATH}?mode=ro", uri=True)
 
         for _dev in state.devices.values():
             for _s in _dev.sensors.values():
@@ -220,4 +220,4 @@ def autosave_loop(state):
         if _iter % 60 == 0:    # every ~hour
             _days = db_load_settings().get("retention_days", 365)
             _d = _days
-            _db_enqueue(lambda d=_d: db_clean_samples(d))
+            _logs_enqueue(lambda d=_d: db_clean_samples(d))

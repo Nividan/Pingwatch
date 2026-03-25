@@ -26,17 +26,55 @@
   - Per-IP name/allocation tracking with inline editing
   - Utilisation summary per subnet
   - Auto-sync with monitored devices
+  - Reverse-DNS lookup column with background batch resolution
+  - Per-subnet Refresh DNS button with live polling (operator role)
+  - DNS hostname search support
+- Dual-database architecture
+  - Main DB (`pingwatch.db`) — config, devices, users, IPAM, SNMP reference
+  - Logs DB (`pingwatch_logs.db`) — sensor samples, flap log, SNMP traps, errors
+  - Independent write-queue threads per DB
+  - One-time safe migration from legacy single-DB
+  - Split export/import (Main DB, Logs DB, ZIP bundle with manifest)
+  - DB stats API with row counts per table
+  - Dual-DB UI in Settings → Database tab
+  - Scheduled backup covers both DBs; fixed backup `CANTOPEN` error
+- Network Topology Map (NTM) improvements
+  - Device name overflow fix — all node types truncate long names with ellipsis
+  - Backbone Switch: fixed phantom default VLAN badges when no VLANs configured
+  - Firewall / Switch / Backbone Switch: optional Primary / Secondary role badge
+  - Edit Link: fixed source and target device changes not being saved
+- User profile dropdown (top bar)
+  - Username, role badge, green status dot
+  - Settings shortcut, Change Password modal, Theme stub, Sign Out
+  - Keyboard navigation, close on ESC / outside click
+- Settings → Sensors tab redesigned as compact table with expandable rows
+- Settings → Logs tab: improved fonts, structured rows, log-level colour coding
+- Home button — PingWatch logo navigates to Dashboard tab
+- Add filter arrows (events tab)
 
-## 🔥 High Priority
-- Separate database
-  - Main DB
-  - Sensor Logs DB
+## 🔴 High Priority
+- Advanced alerting rules engine
+  - Alert rules UI with condition builder
+  - Conditions: device group, sensor type, threshold state, flap count, packet loss %
+  - Multiple actions per rule: email, webhook, syslog, future Slack/Teams
+  - Alert ACK / resolve / suppress workflow
+  - Maintenance windows
+  - Alert cooldown / deduplication
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
 - Improve user box
+- Config backup evolution into NCM
+  - Config diff viewer — highlight changes between backups
+  - Search inside configs
+  - Rollback helper / command preview
+  - Backup success dashboard widget
 
 ## 🎨 Low Priority
 - Fix history icon
-- Add filter arrows (events tab)
-- Add Home button
+- Theme support
+  - Dark / light theme toggle (stub already in user menu)
+  - Persist theme preference per user
+  - Compact mode
+  - Accessible contrast mode
+  - Spacing / alignment cleanup
