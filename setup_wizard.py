@@ -574,10 +574,47 @@ def _port_in_use(port: int) -> "int | None":
             return None   # bind succeeded → port is free
         except PermissionError:
             # Cannot bind privileged port (<1024) without root — port may be free.
-            # Let the server attempt it; it will report a clear error if it fails.
-            return None
+            # Try an outbound connect to see if something is actually listening.
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as cs:
+                    cs.settimeout(0.5)
+                    cs.connect(('127.0.0.1', port))
+                return 1   # something answered → port is occupied
+            except OSError:
+                return None   # nothing answered → port is free
         except OSError:
             return 1      # address already in use → port is occupied
+
+
+def _check_webserver_on_port(port: int) -> "str | None":
+    """Return the name of a web server occupying the port, or None.
+    Only checked on Linux when a process IS listening (helps surface
+    Apache2/nginx conflicts that would otherwise silently block PingWatch)."""
+    if sys.platform == "win32":
+        return None
+    try:
+        import shutil as _sh
+        # ss -tlnp is fastest; fall back to lsof
+        if _sh.which("ss"):
+            r = subprocess.run(
+                ["ss", "-tlnp", f"sport = :{port}"],
+                capture_output=True, text=True,
+            )
+            out = r.stdout.lower()
+        elif _sh.which("lsof"):
+            r = subprocess.run(
+                ["lsof", "-i", f"tcp:{port}", "-s", "tcp:LISTEN", "-F", "c"],
+                capture_output=True, text=True,
+            )
+            out = r.stdout.lower()
+        else:
+            return None
+        for svc in ("apache2", "apache", "httpd", "nginx", "lighttpd", "caddy"):
+            if svc in out:
+                return svc
+    except Exception:
+        pass
+    return None
 
 
 def _pid_name(pid: int) -> str:
@@ -636,7 +673,18 @@ def _ask_port(label: str, default: int, protocol: str = "TCP") -> int:
         if pid is None:
             return port
 
-        _tag("warn", f"Port {port} is already in use by another process.")
+        svc = _check_webserver_on_port(port)
+        if svc:
+            _tag("warn", f"Port {port} is occupied by '{svc}' (a web server).")
+            _tag("info", f"PingWatch cannot share port {port} with {svc}.")
+            _tag("info", f"Either stop {svc} first:")
+            _tag("info", f"  sudo systemctl stop {svc}")
+            _tag("info", f"  sudo systemctl disable {svc}   (prevent it restarting)")
+            _tag("info", f"or choose a different port for PingWatch (e.g. 8443 for HTTPS).")
+            _tag("info", f"Note: if you remove {svc} later with 'apt remove {svc}',")
+            _tag("info",  "  run 'apt autoremove' carefully — it should NOT affect PingWatch.")
+        else:
+            _tag("warn", f"Port {port} is already in use by another process.")
         print()
         print("       Options:")
         print(f"         [1] Try to free port {port} and use it")
