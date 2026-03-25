@@ -87,9 +87,25 @@
   <div class="tb-right">
     <div class="tb-time" id="clk"></div>
     <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
-    <span id="tb-user" style="font-size:11px;color:var(--text3);display:none"></span>
-    <button id="btnSettings" onclick="openSettings()" style="display:none" title="Settings">⚙️</button>
-    <button id="btnLogout" onclick="doLogout()" style="display:none">⎋ Sign Out</button>
+    <div class="usr-dd" id="usrDd" style="display:none">
+      <button class="usr-dd-trigger" id="usrDdBtn" onclick="_usrDdToggle(event)" aria-haspopup="true" aria-expanded="false">
+        <span class="usr-dd-dot"></span>
+        <span id="tb-user"></span>
+        <span class="usr-dd-caret">▾</span>
+      </button>
+      <div class="usr-dd-menu" id="usrDdMenu" role="menu">
+        <div class="usr-dd-header">
+          <div class="usr-dd-name" id="usr-dd-name"></div>
+          <div class="usr-dd-badge" id="usr-dd-badge"></div>
+        </div>
+        <div class="usr-dd-sep"></div>
+        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openSettings()">⚙ Settings</button>
+        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();changeOwnPassword()">🔑 Change Password</button>
+        <button class="usr-dd-item usr-dd-item--disabled" role="menuitem" disabled title="Coming soon">◑ Theme</button>
+        <div class="usr-dd-sep"></div>
+        <button class="usr-dd-item usr-dd-item--danger" role="menuitem" onclick="_usrDdClose();doLogout()">⏻ Sign Out</button>
+      </div>
+    </div>
   </div>
 </div>
 
