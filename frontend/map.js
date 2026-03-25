@@ -3372,9 +3372,9 @@ function initDashBg() {
   const ctx = canvas.getContext('2d');
   let pts = [], scanY = 0;
 
-  // ── Performance: throttle to 10 fps (was 20) ─────────────────────────────
+  // ── Performance: throttle to 6 fps via setTimeout+RAF (not busy-RAF) ────────
   const DB_FPS = 6, DB_MS = 1000 / DB_FPS;
-  let _dbLast = 0, _rafId = null;
+  let _rafId = null;
 
   function resize() {
     canvas.width  = canvas.offsetWidth  || 300;
@@ -3393,12 +3393,10 @@ function initDashBg() {
     }));
   }
 
-  function frame(ts) {
-    // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
+  function frame() {
+    // Stop-and-restart: don't re-schedule when paused (saves empty RAF/s)
     if (_bgPaused || !_ntmVisible) { _rafId = null; return; }
-    _rafId = requestAnimationFrame(frame);
-    if (ts - _dbLast < DB_MS) return; // throttle to 10 fps
-    _dbLast = ts;
+    _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
@@ -3551,9 +3549,9 @@ function initMainBg() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
-  // ── Performance: throttle to 6 fps — reduces fillText load by ~40% ──────
+  // ── Performance: throttle to 6 fps via setTimeout+RAF (not busy-RAF) ────────
   const BG_FPS = 6, BG_MS = 1000 / BG_FPS;
-  let _bgLast = 0, _bgRafId = null;
+  let _bgRafId = null;
 
   let pts = [], rings = [], streams = [], scanY = 0;
   const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ';
@@ -3665,12 +3663,10 @@ function initMainBg() {
   }
 
   let lastRing = 0;
-  function frame(ts) {
-    // Stop-and-restart: don't re-schedule when paused (saves 60 empty RAF/s)
+  function frame() {
+    // Stop-and-restart: don't re-schedule when paused (saves empty RAF/s)
     if (_bgPaused || !_ntmVisible) { _bgRafId = null; return; }
-    _bgRafId = requestAnimationFrame(frame);
-    if (ts - _bgLast < BG_MS) return; // throttle to 10 fps
-    _bgLast = ts;
+    _bgRafId = setTimeout(() => requestAnimationFrame(frame), BG_MS);
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
