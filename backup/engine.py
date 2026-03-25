@@ -4,6 +4,7 @@ backup/engine.py — Device configuration backup execution.
 Supports SSH (via paramiko) and Telnet.
 Each run_backup() call returns a result dict consumed by db_save_backup_run().
 """
+from __future__ import annotations
 
 import datetime
 import hashlib
