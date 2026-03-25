@@ -5,6 +5,7 @@ Credentials (password, enable password) are Fernet-encrypted.
 Plaintext is NEVER returned by any public function — callers receive
 has_password / has_enable booleans instead.
 """
+from __future__ import annotations
 
 import json
 import os
