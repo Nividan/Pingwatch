@@ -1200,8 +1200,9 @@ function renderCloud(node, p, sf) {
 
 function renderFirewall(node, p, sf) {
   const isPrimary = p.status === 'PRIMARY';
+  const isSecondary = p.status === 'SECONDARY';
   const statusColor = isPrimary ? '#ff6b6b' : 'rgba(255,107,107,0.7)';
-  const statusText = isPrimary ? '● PRIMARY' : '○ SECONDARY';
+  const statusText = isPrimary ? '● PRIMARY' : isSecondary ? '○ SECONDARY' : '';
   const H = 76 + _vlanH(p);
   return `<g ${sf}>
     <rect x="0" y="0" width="155" height="${H}" rx="4" fill="rgba(60,10,15,0.92)" stroke="#ff3366" stroke-width="1.5" filter="url(#glow-red)"/>
@@ -1210,7 +1211,7 @@ function renderFirewall(node, p, sf) {
     <path d="M23,22 L28,27 L38,17" fill="none" stroke="#ff6b6b" stroke-width="1.5"/>
     <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(_truncName(node.name, 95))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 50, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
-    <text x="52" y="66" fill="${statusColor}" font-family="Share Tech Mono" font-size="9">${statusText}</text>
+    ${statusText ? `<text x="52" y="66" fill="${statusColor}" font-family="Share Tech Mono" font-size="9">${statusText}</text>` : ''}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="153" height="2" rx="1" fill="rgba(255,51,102,0.3)"/>
   </g>`;
@@ -1852,6 +1853,8 @@ function openAddNode() {
   document.getElementById('node-subtitle').value = '';
   document.getElementById('node-vlan').value = '';
   renderVlanChips();
+  const _fwsReset = document.getElementById('node-fw-status');
+  if (_fwsReset) _fwsReset.value = '';
   document.getElementById('node-name-color-enabled').checked = false;
   document.getElementById('node-name-color').value = '#00d4ff';
   document.getElementById('node-color-enabled').checked = false;
@@ -1880,6 +1883,8 @@ function openEditNode(id) {
   document.getElementById('node-subtitle').value = node.properties?.subtitle || '';
   document.getElementById('node-vlan').value = node.properties?.vlan || '';
   renderVlanChips();
+  const _fws = document.getElementById('node-fw-status');
+  if (_fws) _fws.value = node.properties?.status || '';
   const _nnc = node.properties?.name_color || null;
   document.getElementById('node-name-color-enabled').checked = !!_nnc;
   document.getElementById('node-name-color').value = _nnc || '#00d4ff';
@@ -1909,6 +1914,9 @@ async function saveNode() {
   const nodeColor = nodeColorEnabled ? document.getElementById('node-color').value : null;
 
   const infoLines = (type === 'info-box') ? collectInfoLinesFromUI() : null;
+  const fwStatus = type === 'firewall'
+    ? (document.getElementById('node-fw-status')?.value || '')
+    : null;
 
   if (!name) { toast('Device name is required'); return; }
 
@@ -1932,6 +1940,7 @@ async function saveNode() {
         applyField(nextProps, 'name_color', nameColor);
         applyField(nextProps, 'vlan', vlan);
         applyField(nextProps, 'color', nodeColor);
+        if (fwStatus !== null) applyField(nextProps, 'status', fwStatus);
         delete nextProps.lines;
       } else {
         delete nextProps.ip;
@@ -1961,6 +1970,7 @@ async function saveNode() {
         applyField(props, 'subtitle', subtitle);
         applyField(props, 'vlan', vlan);
         applyField(props, 'color', nodeColor);
+        if (fwStatus !== null) applyField(props, 'status', fwStatus);
       } else {
         props.lines = infoLines || [];
       }
@@ -2326,17 +2336,20 @@ function setInfoEditorVisible(type) {
   const ip = document.getElementById('field-ip');
   const sub = document.getElementById('field-subtitle');
   const vlan = document.getElementById('field-vlan');
+  const fwStatus = document.getElementById('field-fw-status');
 
   if (type === 'info-box') {
     info.classList.add('open');
     ip.style.display = 'none';
     sub.style.display = 'none';
     vlan.style.display = 'none';
+    if (fwStatus) fwStatus.style.display = 'none';
   } else {
     info.classList.remove('open');
     ip.style.display = '';
     sub.style.display = '';
     vlan.style.display = '';
+    if (fwStatus) fwStatus.style.display = type === 'firewall' ? '' : 'none';
 	clearInfoLines();
   }
 }
