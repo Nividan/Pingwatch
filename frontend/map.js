@@ -1269,6 +1269,11 @@ function renderBBSwitch(node, p, sf) {
   // Use stable alternating opacities — randomizing inside render causes flicker on redraws
   const ledOpacities = [1, 0.4, 1, 0.4, 1, 0.4];
 
+  const bbIsPrimary   = p.status === 'PRIMARY';
+  const bbIsSecondary = p.status === 'SECONDARY';
+  const bbStatusColor = bbIsPrimary ? '#00ff9d' : 'rgba(0,255,157,0.5)';
+  const bbStatusText  = bbIsPrimary ? '● PRIMARY' : bbIsSecondary ? '○ SECONDARY' : '';
+
   return `<g ${sf}>
     <rect x="0" y="0" width="${W}" height="${H}" rx="4"
       fill="rgba(5,30,18,0.95)" stroke="#00ff9d" stroke-width="2" filter="url(#glow-green)"/>
@@ -1284,6 +1289,8 @@ function renderBBSwitch(node, p, sf) {
     </g>
 
     <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(_truncName(node.name, 230, 8.5))}</text>
+
+    ${bbStatusText ? `<text x="${W - 8}" y="16" text-anchor="end" fill="${bbStatusColor}" font-family="Share Tech Mono" font-size="9">${bbStatusText}</text>` : ''}
 
     ${renderSubtitleAndIP(p, 62, 44, 57, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
 
@@ -1302,6 +1309,11 @@ function renderSwitch(node, p, sf) {
   const subY  = 36;
   const ipY   = 48;
 
+  const swIsPrimary   = p.status === 'PRIMARY';
+  const swIsSecondary = p.status === 'SECONDARY';
+  const swStatusColor = swIsPrimary ? '#00ff9d' : 'rgba(0,255,157,0.5)';
+  const swStatusText  = swIsPrimary ? '● PRIMARY' : swIsSecondary ? '○ SECONDARY' : '';
+
   return `<g ${sf}>
     <rect x="0" y="0" width="${w}" height="${h}" rx="4"
       fill="rgba(5,35,20,0.92)" stroke="#00ff9d" stroke-width="1.5" filter="url(#glow-green)"/>
@@ -1317,6 +1329,8 @@ function renderSwitch(node, p, sf) {
     <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="11.5" font-weight="600">
       ${escXml(_truncName(node.name, w - 58, 6.5))}
     </text>
+
+    ${swStatusText ? `<text x="${w - 6}" y="13" text-anchor="end" fill="${swStatusColor}" font-family="Share Tech Mono" font-size="8">${swStatusText}</text>` : ''}
 
     ${renderSubtitleAndIP(p, 50, subY, ipY, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
 
@@ -1914,7 +1928,7 @@ async function saveNode() {
   const nodeColor = nodeColorEnabled ? document.getElementById('node-color').value : null;
 
   const infoLines = (type === 'info-box') ? collectInfoLinesFromUI() : null;
-  const fwStatus = type === 'firewall'
+  const fwStatus = (type === 'firewall' || type === 'switch' || type === 'bb-switch')
     ? (document.getElementById('node-fw-status')?.value || '')
     : null;
 
@@ -2349,7 +2363,7 @@ function setInfoEditorVisible(type) {
     ip.style.display = '';
     sub.style.display = '';
     vlan.style.display = '';
-    if (fwStatus) fwStatus.style.display = type === 'firewall' ? '' : 'none';
+    if (fwStatus) fwStatus.style.display = (type === 'firewall' || type === 'switch' || type === 'bb-switch') ? '' : 'none';
 	clearInfoLines();
   }
 }
