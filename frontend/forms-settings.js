@@ -265,7 +265,7 @@ async function openSettings(){
         <button class="log-stab"        id="lstab-btn-backup"  onclick="_switchLogTab('backup')">Backup</button>
         <button class="btn-s" onclick="_loadLogTab()" style="margin-left:auto;font-size:11px">↻ Refresh</button>
       </div>
-      <pre id="log-body" class="log-viewer">Loading…</pre>
+      <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading…</span></div>
     </div>
     <div class="mft" id="stab-footer-logs" style="display:none">
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
@@ -672,12 +672,18 @@ function _switchLogTab(key) {
 }
 
 function _colorLog(text) {
+  if (!text) return '<span style="color:var(--text3)">(empty)</span>';
   const e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  return e(text).replace(
-    /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(\s+)(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)(\s+)/gm,
-    (_,ts,sp1,lvl,sp2) =>
-      `<span class="ll-ts">${ts}</span>${sp1}<span class="ll-${lvl.toLowerCase()}">${lvl}</span>${sp2}`
-  );
+  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
+  return text.split('\n').map(line => {
+    if (!line) return '<div class="ll-row ll-empty"></div>';
+    const m = line.match(RE);
+    if (m) {
+      const [,ts,lvl,msg] = m;
+      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${e(ts)}</span><span class="ll-${lvl.toLowerCase()}">${e(lvl)}</span></span><span class="ll-msg">${e(msg)}</span></div>`;
+    }
+    return `<div class="ll-row ll-cont"><span class="ll-msg">${e(line)}</span></div>`;
+  }).join('');
 }
 
 async function _loadLogTab() {
