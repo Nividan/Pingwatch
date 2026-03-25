@@ -43,6 +43,14 @@
   - Backbone Switch: fixed phantom default VLAN badges when no VLANs configured
   - Firewall / Switch / Backbone Switch: optional Primary / Secondary role badge
   - Edit Link: fixed source and target device changes not being saved
+- User profile dropdown (top bar)
+  - Username, role badge, green status dot
+  - Settings shortcut, Change Password modal, Theme stub, Sign Out
+  - Keyboard navigation, close on ESC / outside click
+- Settings → Sensors tab redesigned as compact table with expandable rows
+- Settings → Logs tab: improved fonts, structured rows, log-level colour coding
+- Home button — PingWatch logo navigates to Dashboard tab
+- Add filter arrows (events tab)
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
@@ -50,5 +58,3 @@
 
 ## 🎨 Low Priority
 - Fix history icon
-- Add filter arrows (events tab)
-- Add Home button
