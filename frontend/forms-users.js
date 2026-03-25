@@ -1,4 +1,50 @@
 // ── USER MANAGEMENT ───────────────────────────────────────────────────────────
+
+function _openChangePwModal(){
+  closeM('m-cpw');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-cpw';
+  o.innerHTML=`
+    <div class="mw" style="max-width:380px">
+      <div class="mhdr"><span>🔑 Change Password</span><button class="mclose" onclick="closeM('m-cpw')">✕</button></div>
+      <div class="mbdy" style="padding:20px 22px">
+        <div class="fr"><label class="fl">Current Password</label>
+          <input type="password" id="cpw-cur" placeholder="current password" autocomplete="current-password"/></div>
+        <div class="fr"><label class="fl">New Password</label>
+          <input type="password" id="cpw-new" placeholder="min 8 characters" autocomplete="new-password"/></div>
+        <div class="fr"><label class="fl">Confirm New Password</label>
+          <input type="password" id="cpw-con" placeholder="confirm" autocomplete="new-password"/></div>
+        <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+          <button class="btn-s" onclick="closeM('m-cpw')">Cancel</button>
+          <button class="btn-p" id="cpw-btn" onclick="_submitChangePw()">Update Password</button>
+        </div>
+      </div>
+    </div>`;
+  _overlayClose(o,()=>closeM('m-cpw'));
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('cpw-cur')?.focus(),50);
+}
+
+async function _submitChangePw(){
+  const cur=document.getElementById('cpw-cur')?.value||'';
+  const np =document.getElementById('cpw-new')?.value||'';
+  const np2=document.getElementById('cpw-con')?.value||'';
+  const btn=document.getElementById('cpw-btn');
+  if(!cur||!np){toast('All password fields are required','err');return;}
+  if(np!==np2){toast('Passwords do not match','err');return;}
+  if(np.length<8){toast('Password must be at least 8 characters','err');return;}
+  if(btn){btn.disabled=true;btn.textContent='Updating…';}
+  try{
+    const r=await api('PATCH','/api/me/password',{current_password:cur,password:np});
+    if(r.error){toast(r.error,'err');return;}
+    toast('Password updated','ok');
+    closeM('m-cpw');
+  }catch(e){
+    toast('Failed to update password','err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Update Password';}
+  }
+}
+
 async function changeOwnPassword(){
   const btn=document.getElementById('btnChgPw');
   const cur=document.getElementById('st-cpw')?.value||'';
