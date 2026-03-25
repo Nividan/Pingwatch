@@ -177,15 +177,20 @@ def topo_insert_link(source_id, target_id, label='', link_type='trunk', page_id=
         return {'id': cur.lastrowid, 'source_id': source_id, 'target_id': target_id, 'label': label, 'link_type': link_type, 'page_id': page_id}
 
 
-def topo_update_link(id_, label='', link_type='trunk'):
+def topo_update_link(id_, label='', link_type='trunk', source_id=None, target_id=None):
     with _conn() as con:
         row = con.execute('SELECT * FROM topo_links WHERE id=?', (id_,)).fetchone()
         if not row:
             return None
         lbl = label if label is not None else row['label']
-        lt = link_type if link_type is not None else row['link_type']
-        con.execute('UPDATE topo_links SET label=?, link_type=? WHERE id=?', (lbl, lt, id_))
-        return {**dict(row), 'label': lbl, 'link_type': lt}
+        lt  = link_type if link_type is not None else row['link_type']
+        src = source_id if source_id is not None else row['source_id']
+        tgt = target_id if target_id is not None else row['target_id']
+        con.execute(
+            'UPDATE topo_links SET label=?, link_type=?, source_id=?, target_id=? WHERE id=?',
+            (lbl, lt, src, tgt, id_)
+        )
+        return {**dict(row), 'label': lbl, 'link_type': lt, 'source_id': src, 'target_id': tgt}
 
 
 def topo_delete_link(id_):
