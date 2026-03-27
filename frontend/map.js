@@ -3876,6 +3876,8 @@ function _ntmToggleFs() {
   else document.exitFullscreen();
 }
 document.addEventListener('fullscreenchange', () => {
+  const isFs = !!document.fullscreenElement;
+  document.body.classList.toggle('fs-active', isFs);
   const btn = document.getElementById('page-fs-btn');
   if (btn) _ntmUpdateFsBtn(btn);
 });
