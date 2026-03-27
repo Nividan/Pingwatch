@@ -311,7 +311,7 @@ async function openScanModal(did){
     </div>
     <div id="scan-body" style="max-height:380px;overflow-y:auto;display:flex;flex-direction:column;
          gap:5px;padding:4px 0">
-      <div class="scan-spin">&#8635; Scanning 15 services&hellip;</div>
+      <div class="scan-spin">&#8635; Scanning&hellip;</div>
     </div>
     <div class="mfoot" style="justify-content:space-between">
       <button class="btn-s" onclick="closeM('mdscan')">Close</button>
