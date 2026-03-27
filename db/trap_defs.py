@@ -6,6 +6,7 @@ Tables managed here:
   - enterprise_oid_map  : enterprise OID prefix → vendor/product
   - trap_categories     : category name → display label/color
 """
+from __future__ import annotations
 
 import json
 import sqlite3

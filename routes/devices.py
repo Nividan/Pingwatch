@@ -52,6 +52,38 @@ _SCAN_TARGETS = [
 
 STATE = app_state.STATE
 
+_SCAN_DEFAULTS_STR = "ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443"
+
+
+def _get_scan_targets():
+    """Return scan target list from the scan_ports setting, falling back to defaults."""
+    from core.settings import _settings
+    raw = (_settings.get("scan_ports") or "").strip()
+    if not raw:
+        return _SCAN_TARGETS
+
+    _known = {t["port"]: t for t in _SCAN_TARGETS}
+    _known[None] = _SCAN_TARGETS[0]   # ping entry keyed by None
+
+    targets = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if entry.lower() == "ping":
+            targets.append(_known[None])
+        else:
+            try:
+                port = int(entry)
+            except ValueError:
+                continue
+            if port in _known:
+                targets.append(_known[port])
+            else:
+                targets.append({"name": f"Port {port}", "stype": "tcp",
+                                 "port": port, "tout": 2})
+    return targets or _SCAN_TARGETS
+
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
@@ -173,8 +205,9 @@ def handle(h, method, path, body):
                         "detail": r.get("detail", ""),
                     })
 
+        targets = _get_scan_targets()
         threads = [threading.Thread(target=_scan_one, args=(t,), daemon=True)
-                   for t in _SCAN_TARGETS]
+                   for t in targets]
         deadline = _time.monotonic() + 8  # 8s total for all probes
         for th in threads: th.start()
         for th in threads:

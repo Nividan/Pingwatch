@@ -8,6 +8,7 @@ GET    /api/backups/<did>/history      → list backup run metadata
 GET    /api/backups/run/<id>           → full run with config text
 POST   /api/backups/<did>/run          → trigger immediate backup (async)
 DELETE /api/backups/run/<id>           → delete a backup run (admin)
+GET    /api/backups/search?q=<term>    → full-text search inside stored configs
 """
 
 import threading
@@ -22,6 +23,7 @@ from db import (
     db_get_backup_list, db_get_backup_settings, db_save_backup_settings,
     db_get_backup_history, db_get_backup_run,
     db_delete_backup_run, db_ensure_backup_device,
+    db_search_configs,
 )
 from backup.engine import do_backup
 from core.logger import log_backup as log
@@ -125,6 +127,25 @@ def handle(h, method, path, body):
         db_delete_backup_run(int(m.group(1)))
         db_log_audit(user, h.client_address[0], 'backup_delete_run', m.group(1))
         h._json(200, {'ok': True})
+        return True
+
+    # ── GET /api/backups/search — full-text search inside configs ─────
+    # Must be checked BEFORE _RE_BACKUP_DEV which would match /api/backups/search
+    if path.startswith('/api/backups/search') and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(h.path).query)
+        q = (qs.get('q', [''])[0]).strip()
+        if len(q) < 3:
+            h._json(400, {'error': 'Query must be at least 3 characters'})
+            return True
+        results = db_search_configs(q, limit=50)
+        from core.app_state import STATE
+        dev_map = {did: d.name for did, d in STATE.devices.items()}
+        for r in results:
+            r['device_name'] = dev_map.get(r['did'], r['did'])
+        h._json(200, {'results': results, 'query': q})
         return True
 
     # ── GET /api/backups/<did> — settings ─────────────────────────

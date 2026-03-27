@@ -4,6 +4,7 @@ snmp/vendor.py — Enterprise OID → vendor/product identification helpers.
 Used by snmp/enricher to identify the vendor from a trap OID before
 doing a full definition lookup.
 """
+from __future__ import annotations
 
 
 # Standard enterprise OID prefix (1.3.6.1.4.1.<enterprise>)

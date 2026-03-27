@@ -77,6 +77,9 @@ def handle(h, method, path, body):
             "latency_warn_ms":   int(_settings.get("latency_warn_ms", 300)),
             # Group F — per-type sensor defaults
             "snr_type_defaults": json.loads(_settings.get("snr_type_defaults", "{}")),
+            # Group F2 — port scanner
+            "scan_ports": str(_settings.get("scan_ports",
+                "ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443")),
             # Group G — global backup scheduler
             "backup_sched_enabled": int(_settings.get("backup_sched_enabled", 0)),
             "backup_sched_freq":    _settings.get("backup_sched_freq",  "daily"),
@@ -141,6 +144,18 @@ def handle(h, method, path, body):
                 _raw = json.dumps(_raw)
             _settings.load({"snr_type_defaults": _raw})
             _db_enqueue(lambda _v=_raw: db_save_settings({"snr_type_defaults": _v}))
+        if "scan_ports" in body:
+            _sp_raw = str(body["scan_ports"]).strip()
+            try:
+                for _tok in [t.strip() for t in _sp_raw.split(",") if t.strip()]:
+                    if _tok.lower() != "ping":
+                        _p = int(_tok)
+                        if not (1 <= _p <= 65535):
+                            raise ValueError(f"Port out of range: {_p}")
+            except (ValueError, TypeError) as _e:
+                h._json(400, {"error": f"Invalid scan_ports: {_e}"}); return True
+            _settings.load({"scan_ports": _sp_raw})
+            _db_enqueue(lambda _v=_sp_raw: db_save_settings({"scan_ports": _v}))
         # Backup scheduler settings
         if "syslog_enabled" in body:
             _sye = "1" if body["syslog_enabled"] else "0"

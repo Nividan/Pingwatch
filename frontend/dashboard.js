@@ -147,6 +147,14 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwRefreshInternetHealth(wid),
     refresh: (wid, _cfg) => _dwRefreshInternetHealth(wid),
   },
+  ncm_status: {
+    label: 'Backup Status',
+    icon:  '💾',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwNcmStatusRefresh(wid),
+    refresh: (wid, _cfg) => _dwNcmStatusRefresh(wid),
+  },
 };
 
 // ── Persistence (server-side, per user) ───────────────────────────
@@ -1237,4 +1245,41 @@ function _dwRefreshInternetHealth(wid) {
     </div>
     ${failed.length ? `<div class="dw-ih-fail-list">${failRows}</div>` : ''}
   </div>`;
+}
+
+// ── NCM Backup Status Widget ─────────────────────────────────────
+async function _dwNcmStatusRefresh(wid) {
+  const el = document.getElementById(`dw-body-${wid}`);
+  if (!el) return;
+  el.innerHTML = '<div class="dw-loading">Loading…</div>';
+  try {
+    const r = await api('GET', '/api/backups');
+    const devs = (r.devices || []).filter(d => !d.orphaned);
+    const total   = devs.length;
+    const enabled = devs.filter(d => d.enabled).length;
+    const ok      = devs.filter(d => d.last_success === true).length;
+    const failed  = devs.filter(d => d.run_count > 0 && d.last_success === false).length;
+    const never   = devs.filter(d => d.run_count === 0 && d.enabled).length;
+    el.innerHTML = `
+      <div class="dw-ncm-grid">
+        <div class="dw-ncm-kpi dw-ncm-ok">
+          <span class="dw-ncm-n">${ok}</span>
+          <span class="dw-ncm-l">OK</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-fail">
+          <span class="dw-ncm-n">${failed}</span>
+          <span class="dw-ncm-l">Failed</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-never">
+          <span class="dw-ncm-n">${never}</span>
+          <span class="dw-ncm-l">Never run</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-total">
+          <span class="dw-ncm-n">${enabled}/${total}</span>
+          <span class="dw-ncm-l">Enabled</span>
+        </div>
+      </div>`;
+  } catch {
+    el.innerHTML = '<div class="dw-err">Failed to load backup status</div>';
+  }
 }

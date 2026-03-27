@@ -51,6 +51,13 @@
 - Settings → Logs tab: improved fonts, structured rows, log-level colour coding
 - Home button — PingWatch logo navigates to Dashboard tab
 - Add filter arrows (events tab)
+- Config backup evolved into lightweight NCM
+  - Config diff viewer — select 2 runs in history, line-level diff with green/red highlights
+  - Context-aware display — equal lines collapsed with ±3-line context, expandable
+  - Search inside config viewer — highlight matches, ↑/↓ navigation
+  - Global config search — search across all stored configs from the backups toolbar
+  - Rollback command preview — auto-generated from diff, copy to clipboard
+  - Backup Status dashboard widget — OK / Failed / Never run / Enabled KPI counts
 
 ## 🔴 High Priority
 - Advanced alerting rules engine
@@ -64,11 +71,6 @@
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
 - Improve user box
-- Config backup evolution into NCM
-  - Config diff viewer — highlight changes between backups
-  - Search inside configs
-  - Rollback helper / command preview
-  - Backup success dashboard widget
 
 ## 🎨 Low Priority
 - Fix history icon
