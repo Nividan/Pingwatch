@@ -987,6 +987,21 @@ def step5_firewall():
         for rule in rules:
             proto, port, name = rule
             (existing if f"{port}/{proto.lower()}" in _fcmd else missing).append(rule)
+    elif _sys == "Linux" and _sh.which("iptables"):
+        # Fallback: inspect the INPUT chain directly (covers plain iptables setups)
+        try:
+            r = subprocess.run(["sudo", "iptables", "-L", "INPUT", "-n"],
+                               capture_output=True, text=True)
+            _ipt = r.stdout if r.returncode == 0 else ""
+        except Exception:
+            _ipt = ""
+        for rule in rules:
+            proto, port, name = rule
+            found = any(
+                proto.lower() in line and f"dpt:{port}" in line
+                for line in _ipt.splitlines()
+            )
+            (existing if found else missing).append(rule)
     else:
         missing = list(rules)   # can't check — assume all missing
 
