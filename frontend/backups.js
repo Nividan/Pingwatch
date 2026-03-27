@@ -573,10 +573,13 @@ function _bkRenderDiffModal(runA, runB, diff, deviceName) {
           <span class="bk-mono" style="font-size:10px;color:var(--text3)">${runB.sha256 ? runB.sha256.slice(0,8) + '…' : '—'}</span>
           <span style="color:var(--text3)">${runB.size_bytes ? (runB.size_bytes/1024).toFixed(1)+' KB' : '—'}</span>
         </div>
-        ${diff ? `<div class="bk-diff-summary">
-          <span class="bk-diff-adds">+${adds} added</span>
-          <span class="bk-diff-dels">-${dels} removed</span>
+        ${diff ? `<div class="bk-diff-summary" id="bk-diff-summary">
+          <span class="bk-diff-adds" id="bk-diff-adds">+${adds} added</span>
+          <span class="bk-diff-dels" id="bk-diff-dels">-${dels} removed</span>
           ${adds === 0 && dels === 0 ? '<span style="color:var(--text3)">No changes</span>' : ''}
+          <label class="bk-enc-toggle" title="Hide ENC/password lines that change every backup (FortiGate, etc.)">
+            <input type="checkbox" id="bk-enc-toggle" onchange="_bkToggleEncNoise()"/> Hide credential noise
+          </label>
         </div>` : ''}
       </div>
       <div id="bk-diff-srch-bar" class="bk-srch-bar" style="flex-shrink:0">
@@ -698,6 +701,41 @@ function _bkDiffExpand(el, start, end) {
     </div>`;
   }
   el.outerHTML = html;
+}
+
+// ── ENC noise filter ──────────────────────────────────────────────
+// Matches FortiGate / Cisco / Junos credential lines that re-encrypt
+// on every config export — not real changes.
+const _BK_ENC_RE = /^\s*(set\s+(password|passwd|psksecret|key|private-key|certificate|ssh-public-key\d*)\s+ENC\b|set\s+private-key\b|[A-Za-z0-9+/=]{40,}\s*$)/i;
+
+function _bkToggleEncNoise() {
+  const container = document.getElementById('bk-diff');
+  if (!container || !container._diffData) return;
+  const hide = document.getElementById('bk-enc-toggle')?.checked;
+  let diff = container._diffData;
+  if (hide) diff = diff.filter(d => !_BK_ENC_RE.test(d.line));
+
+  // Re-render diff body
+  const body = document.getElementById('bk-diff-body');
+  if (body) {
+    body.innerHTML = _bkRenderDiffLines(diff);
+    body._filteredDiff = hide ? diff : null;
+  }
+
+  // Update summary counts
+  const adds = diff.filter(d => d.type === 'add').length;
+  const dels = diff.filter(d => d.type === 'del').length;
+  const addsEl = document.getElementById('bk-diff-adds');
+  const delsEl = document.getElementById('bk-diff-dels');
+  if (addsEl) addsEl.textContent = `+${adds} added`;
+  if (delsEl) delsEl.textContent = `-${dels} removed`;
+
+  // Reset search state
+  _bkDiffMatches = []; _bkDiffSrchIdx = 0;
+  const inp = document.getElementById('bk-diff-srch-inp');
+  const cnt = document.getElementById('bk-diff-srch-cnt');
+  if (inp) inp.value = '';
+  if (cnt) cnt.textContent = '';
 }
 
 // ── Diff search ───────────────────────────────────────────────────
