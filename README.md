@@ -221,6 +221,8 @@ Click any device row in the Backups tab to open the Config Viewer:
 
 ## Architecture
 
+> For a full developer reference — module descriptions, API endpoints, DB schema, and how to extend PingWatch — see [DEVELOPER.md](DEVELOPER.md).
+
 ```
 Browser / Desktop GUI
         │
