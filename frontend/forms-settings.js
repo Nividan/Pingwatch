@@ -19,6 +19,27 @@ async function openSettings(){
     '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
     '<input type="checkbox" id="st-bk-d' + v + '" value="' + v + '"' + (_bkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
   ).join('');
+  // Port Scanner section pre-compute
+  const _SCAN_PORT_DEFS = [
+    {key:'ping',  label:'Ping'},        {key:'21',    label:'FTP 21'},
+    {key:'22',    label:'SSH 22'},      {key:'25',    label:'SMTP 25'},
+    {key:'53',    label:'DNS 53'},      {key:'80',    label:'HTTP 80'},
+    {key:'443',   label:'HTTPS 443'},   {key:'3389',  label:'RDP 3389'},
+    {key:'3306',  label:'MySQL 3306'},  {key:'5432',  label:'PgSQL 5432'},
+    {key:'6379',  label:'Redis 6379'},  {key:'27017', label:'MongoDB 27017'},
+    {key:'389',   label:'LDAP 389'},    {key:'8080',  label:'HTTP-Alt 8080'},
+    {key:'8443',  label:'HTTPS-Alt 8443'},
+  ];
+  const _scanActive = new Set(
+    String(sr.scan_ports || 'ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443')
+      .split(',').map(s => s.trim()).filter(Boolean)
+  );
+  const _scanDefKeys  = new Set(_SCAN_PORT_DEFS.map(d => d.key));
+  const _scanCustom   = [..._scanActive].filter(k => !_scanDefKeys.has(k)).join(', ');
+  const _scanPortsHtml = _SCAN_PORT_DEFS.map(({key, label}) =>
+    `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">` +
+    `<input type="checkbox" class="st-scan-port" value="${key}"${_scanActive.has(key) ? ' checked' : ''}> ${label}</label>`
+  ).join('');
   const _dbkFreq = sr.db_backup_freq || 'daily';
   const _dbkDaysActive = (_dbkFreq === 'weekly') ? '' : 'none';
   const _dbkDaysSaved = String(sr.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
@@ -288,6 +309,20 @@ async function openSettings(){
         </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">Port Scanner</div>
+        <div class="fh" style="margin-bottom:10px">Choose which ports are probed when you click "Scan" on a device. Custom ports use a TCP probe.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:6px;margin-bottom:10px">
+          ${_scanPortsHtml}
+        </div>
+        <div class="fr" style="margin-bottom:6px">
+          <label class="fl">Custom ports <span class="fh" style="font-weight:400">(comma-separated, e.g. 9200, 8888)</span></label>
+          <input type="text" id="st-scan-custom" value="${_scanCustom}" placeholder="9200, 8888, …" style="width:100%"/>
+        </div>
+        <div style="display:flex;justify-content:flex-end">
+          <button class="btn-s" onclick="_scanPortsReset()">Reset to Defaults</button>
+        </div>
+      </div>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -825,6 +860,12 @@ async function loadSensorsDefaultsTab(){
   </table>`;
 }
 
+function _scanPortsReset(){
+  document.querySelectorAll('.st-scan-port').forEach(cb => { cb.checked = true; });
+  const el = document.getElementById('st-scan-custom');
+  if(el) el.value = '';
+}
+
 async function saveSensorTypeDefaults(){
   const sections = document.querySelectorAll('.sdr-card');
   const result = {};
@@ -864,7 +905,13 @@ async function saveSensorTypeDefaults(){
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
   if(snrFa  >= 1) globalDefaults.snr_fail_after    = snrFa;
   if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
-  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result, ...globalDefaults});
+  // Collect scan_ports from checkboxes + custom input
+  const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
+  const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();
+  const scanCustomPorts = scanCustomRaw ? scanCustomRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const scanPorts = [...scanChecked, ...scanCustomPorts].join(',');
+
+  const r = await api('PATCH', '/api/settings', {snr_type_defaults: result, ...globalDefaults, scan_ports: scanPorts});
   if(!r.ok){ toast('Save failed','err'); return; }
   window._snrTypeDefaults = result;
   window._snrDef = window._snrDef || {};
