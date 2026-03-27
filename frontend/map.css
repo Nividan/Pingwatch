@@ -21,6 +21,22 @@ body::before {
 }
 @keyframes gridShift { to { background-position:40px 40px; } }
 
+/* ── Fullscreen mode ── */
+body.fs-active #page-bar { display:none; }
+#fs-controls {
+  display:none; position:fixed; top:10px; right:12px; z-index:200;
+  gap:6px; align-items:center;
+}
+body.fs-active #fs-controls { display:flex; }
+#fs-controls button {
+  height:22px; padding:0 8px;
+  background:rgba(0,0,0,0.55); border:1px solid rgba(0,212,255,0.25); border-radius:3px;
+  color:rgba(0,212,255,0.6); cursor:pointer; transition:all 0.15s;
+  font-family:'Share Tech Mono',monospace; font-size:9px; letter-spacing:1px;
+  backdrop-filter:blur(6px);
+}
+#fs-controls button:hover { color:var(--accent); border-color:var(--accent); background:rgba(0,212,255,0.07); }
+
 /* ── Header ── */
 header {
   position:relative; z-index:50; height:54px;
