@@ -424,6 +424,7 @@ class MonitorState:
                         "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
                         "host": s.host, "stype": s.stype, "ts": _ts,
                         "detail": "Recovered", "direction": "recovered",
+                        "grp": dev.group,
                     }
                     if not _muted:
                         self._broadcast("flap_recovered", rec_data)
@@ -456,6 +457,7 @@ class MonitorState:
                         "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
                         "host": s.host, "stype": s.stype, "ts": _ts,
                         "detail": result["detail"], "direction": "down",
+                        "grp": dev.group,
                     }
                     if not _muted:
                         self._broadcast("flap_down", flap_data)
@@ -500,6 +502,7 @@ class MonitorState:
                         "sname": s.name, "host": s.host, "stype": s.stype,
                         "state": _new_thr, "ts": _ts,
                         "ms": s.last_ms, "loss_pct": s.loss_pct,
+                        "grp": dev.group,
                     })
                     _is_val_thr2 = s.stype in ('snmp', 'tls')
                     _unit = '' if _is_val_thr2 else 'ms'
@@ -545,6 +548,11 @@ class MonitorState:
             try:
                 from monitoring.syslog_client import syslog_send
                 syslog_send(event, data)
+            except Exception:
+                pass
+            try:
+                from monitoring.alert_engine import alert_engine_send
+                alert_engine_send(event, data)
             except Exception:
                 pass
 

@@ -134,6 +134,7 @@
       <button class="mtab" id="tabMap" onclick="switchMainTab('map')">🌐 Map</button>
       <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
       <button class="mtab" id="tabIpam" onclick="switchMainTab('ipam')">📋 IP Addresses</button>
+      <button class="mtab" id="tabAlerting" onclick="switchMainTab('alerting')">🔔 Alerting <span class="mtab-badge" id="alrtTabBadge" style="display:none">0</span></button>
     </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
@@ -285,6 +286,8 @@
     </div>
     <!-- IP Addresses (IPAM) view -->
     <div id="ipamView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
+    <!-- Alerting view -->
+    <div id="alertingView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;"></div>
   </div>
 </div>
 <div id="toast"></div>

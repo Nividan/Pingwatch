@@ -274,6 +274,20 @@ function onAuthenticated(username){
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, 300000);
+  // Poll active alert count for tab badge (every 60s)
+  _alertBadgePoll();
+  setInterval(_alertBadgePoll, 60000);
+}
+
+async function _alertBadgePoll() {
+  try {
+    const r = await fetch('/api/alert/events/active');
+    if (!r.ok) return;
+    const d = await r.json();
+    const n = d.count || 0;
+    const b = document.getElementById('alrtTabBadge');
+    if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+  } catch (_) {}
 }
 function applyRbac(){
   const op    = S.role==='operator'||S.role==='admin';
@@ -465,11 +479,13 @@ function switchMainTab(tab){
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
+  document.getElementById('tabAlerting').classList.toggle('active',tab==='alerting');
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
+  const alertingView =document.getElementById('alertingView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -477,6 +493,7 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
+  alertingView.style.display ='none';
   document.getElementById('devActBar').style.display='none';
   const _mf=document.getElementById('map-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
@@ -518,6 +535,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _ipamInit==='function') _ipamInit();
+  } else if(tab==='alerting'){
+    alertingView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _alertingInit==='function') _alertingInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';

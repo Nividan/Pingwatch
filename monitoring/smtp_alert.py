@@ -85,6 +85,74 @@ def send_alert_email(direction, evt):
             except Exception: pass
 
 
+def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
+    """Send an alert rule email. Called from alert_engine.py.
+
+    to_addrs    — comma-separated recipient list
+    subject_tpl — subject with {placeholder} tokens (keys from ctx dict)
+    body_tpl    — body with {placeholder} tokens; empty → auto-generated
+    ctx         — event context dict: dname, sname, stype, host, ts, detail,
+                  severity, event_type, direction, etc.
+    """
+    host      = _cfg('smtp_host', '')
+    port      = _cfg('smtp_port', 587)
+    tls       = _cfg('smtp_tls',  'starttls')
+    user      = _cfg('smtp_user', '')
+    password  = _cfg('smtp_pass', '')
+    from_addr = _cfg('smtp_from', '')
+    if not (host and from_addr and to_addrs.strip()):
+        log.warning("Alert rule email skipped — SMTP not configured")
+        return
+
+    # Resolve {placeholder} tokens safely
+    def _fmt(tpl):
+        try:
+            return tpl.format(**{k: _safe(str(v)) for k, v in ctx.items()})
+        except (KeyError, ValueError):
+            return tpl
+
+    subject = _fmt(subject_tpl) if subject_tpl else (
+        f"[PingWatch] {_safe(ctx.get('severity','').upper())} — "
+        f"{_safe(ctx.get('dname'))}/{_safe(ctx.get('sname'))}"
+    )
+    if body_tpl:
+        body = _fmt(body_tpl)
+    else:
+        body = (
+            f"Alert Rule Triggered\n"
+            f"{'─' * 40}\n"
+            f"Event    : {_safe(ctx.get('event_type',''))}\n"
+            f"Device   : {_safe(ctx.get('dname'))}\n"
+            f"Sensor   : {_safe(ctx.get('sname'))} ({_safe(ctx.get('stype'))})\n"
+            f"Host     : {_safe(ctx.get('host'))}\n"
+            f"Severity : {_safe(ctx.get('severity',''))}\n"
+            f"Time     : {_safe(ctx.get('ts',''))}\n"
+            f"Detail   : {_safe(ctx.get('detail',''))}\n"
+        )
+
+    recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
+    srv = None
+    try:
+        srv = _connect(host, port, tls, user, password)
+        for rcpt in recipients:
+            srv.sendmail(from_addr, [rcpt],
+                         _build_msg(subject, body, from_addr, rcpt).as_string())
+        srv.quit(); srv = None
+        _last_error.pop(host, None)
+        log.info(f"Rule alert email sent to {to_addrs}: {subject[:60]}")
+    except Exception as e:
+        err_str = str(e)
+        now = time.monotonic()
+        last_err, last_ts = _last_error.get(host, (None, 0))
+        if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
+            log.error(f"Rule alert SMTP failed (host={host}:{port}): {e}")
+            _last_error[host] = (err_str, now)
+    finally:
+        if srv:
+            try: srv.quit()
+            except Exception: pass
+
+
 def test_smtp(cfg):
     """Test SMTP with provided config dict. Returns (ok:bool, msg:str)."""
     srv = None

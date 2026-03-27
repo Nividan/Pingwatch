@@ -56,7 +56,7 @@ async function openSettings(){
     <div class="dw-tabs" style="padding:0 4px">
       <button class="dw-tab active" id="stab-btn-general" onclick="switchSettingsTab('general')">General</button>
       <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">Users</button>
-      <button class="dw-tab" id="stab-btn-alerts" onclick="switchSettingsTab('alerts')">Alerts</button>
+      <button class="dw-tab" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">SMTP</button>
       <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">Database</button>
       <button class="dw-tab" id="stab-btn-logs" onclick="switchSettingsTab('logs')">Logs</button>
       <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">Sensors</button>
@@ -153,7 +153,7 @@ async function openSettings(){
         </div>
       </div>
     </div>
-    <div class="mbdy stab-fade" id="stab-alerts" style="display:none">
+    <div class="mbdy stab-fade" id="stab-smtp" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
       <div class="fgrid">
         <div class="fr"><label class="fl">SMTP Host</label>
@@ -200,7 +200,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
     </div>
-    <div class="mft" id="stab-footer-alerts" style="display:none">
+    <div class="mft" id="stab-footer-smtp" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
     </div>
@@ -490,7 +490,7 @@ async function openSettings(){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','alerts','database','logs','sensors','networking','backup','syslog'];
+  const tabs = ['general','users','smtp','database','logs','sensors','networking','backup','syslog'];
 
   // Find currently visible tab
   let cur = null;
