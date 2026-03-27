@@ -115,7 +115,12 @@ function renderPageBar() {
   addBtn.textContent = '+';
   addBtn.onclick = addPage;
   bar.appendChild(addBtn);
-  // Fullscreen toggle button
+  // Panel + Fullscreen buttons (right-aligned)
+  const panelBtn = document.createElement('button');
+  panelBtn.id = 'page-panel-btn';
+  panelBtn.textContent = '☰ PANEL';
+  panelBtn.onclick = togglePanel;
+  bar.appendChild(panelBtn);
   const fsBtn = document.createElement('button');
   fsBtn.id = 'page-fs-btn';
   _ntmUpdateFsBtn(fsBtn);
