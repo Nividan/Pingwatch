@@ -463,7 +463,6 @@ function switchMainTab(tab){
   document.getElementById('tabDevices').classList.toggle('active',tab==='devices');
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
-  document.getElementById('mapNewTabBtn').style.display=tab==='map'?'flex':'none';
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   const dashboardView=document.getElementById('dashboardView');

@@ -115,6 +115,12 @@ function renderPageBar() {
   addBtn.textContent = '+';
   addBtn.onclick = addPage;
   bar.appendChild(addBtn);
+  // Fullscreen toggle button
+  const fsBtn = document.createElement('button');
+  fsBtn.id = 'page-fs-btn';
+  _ntmUpdateFsBtn(fsBtn);
+  fsBtn.onclick = _ntmToggleFs;
+  bar.appendChild(fsBtn);
 }
 
 async function switchPage(id) {
@@ -3855,6 +3861,23 @@ loadPages().then(async () => {
     ro.observe(wrap);
   }
 });
+// ── Fullscreen helpers ────────────────────────────────────────────────────────
+const _FS_ENTER = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M4 13H1V9"/></svg>';
+const _FS_EXIT  = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 1v4H1M13 5H9V1M9 13V9h4M1 9h4v4"/></svg>';
+function _ntmUpdateFsBtn(btn) {
+  const isFs = !!document.fullscreenElement;
+  btn.title   = isFs ? 'Exit fullscreen' : 'Fullscreen';
+  btn.innerHTML = isFs ? _FS_EXIT : _FS_ENTER;
+}
+function _ntmToggleFs() {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+  else document.exitFullscreen();
+}
+document.addEventListener('fullscreenchange', () => {
+  const btn = document.getElementById('page-fs-btn');
+  if (btn) _ntmUpdateFsBtn(btn);
+});
+
 // Reload pages when PingWatch parent signals tab switch
 window.addEventListener('message', e => {
   if (e.data && e.data.type === 'pw_reload_pages') {
