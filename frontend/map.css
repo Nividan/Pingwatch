@@ -24,7 +24,7 @@ body::before {
 /* ── Fullscreen mode ── */
 body.fs-active #page-bar { display:none; }
 #fs-controls {
-  display:none; position:fixed; top:10px; right:12px; z-index:200;
+  display:none; position:absolute; top:10px; left:10px; z-index:200;
   gap:6px; align-items:center;
 }
 body.fs-active #fs-controls { display:flex; }
