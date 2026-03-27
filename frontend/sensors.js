@@ -1,6 +1,6 @@
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? SENSOR TILES �?�?�?�?�?�?�?�?�?�?�?�?
 function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':'◈'}
-function msC(ms,s){if(ms===null)return'b';const hw=s?.warn_ms>0,hc=s?.crit_ms>0;if(hw||hc){const w=hw?s.warn_ms:99999,c=hc?s.crit_ms:99999;if(ms>=c)return'b';if(ms>=w)return'w';return'g';}if(ms<(window._lGood||100))return'g';if(ms<(window._lWarn||300))return'w';return'b'}
+function msC(ms,s){if(ms===null)return'b';const _td=window._snrTypeDefaults?.[s?.stype]||{};const w=s?.warn_ms>0?s.warn_ms:(_td.warn_ms>0?_td.warn_ms:0);const c=s?.crit_ms>0?s.crit_ms:(_td.crit_ms>0?_td.crit_ms:0);if(w>0||c>0){if(c>0&&ms>=c)return'b';if(w>0&&ms>=w)return'w';return'g';}if(ms<(window._lGood||100))return'g';if(ms<(window._lWarn||300))return'w';return'b'}
 function fmtTs(ts){try{return new Date(ts).toLocaleTimeString('en-GB');}catch(e){return ts;}}
 
 function tileHTML(s){
