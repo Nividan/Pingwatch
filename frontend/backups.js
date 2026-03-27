@@ -590,8 +590,8 @@ function _bkRenderDiffModal(runA, runB, diff, deviceName) {
       </div>
       <div class="bk-diff-wrap" style="flex:1" id="bk-diff-body">${diffHtml}</div>
       ${rollback.length ? `
-      <details class="bk-rollback">
-        <summary>⚠ Rollback Command Preview (${rollback.length} commands)</summary>
+      <details class="bk-rollback" id="bk-rollback-details">
+        <summary id="bk-rollback-summary">⚠ Rollback Command Preview (${rollback.length} commands)</summary>
         <div class="bk-rollback-warn">Review carefully before applying. Auto-generated from line diff only — not all commands may be valid for your platform.</div>
         <pre class="bk-cfg-pre" id="bk-rollback-pre">${esc(rollback.join('\n'))}</pre>
         <div style="padding:6px 14px 10px"><button class="btn-sm" onclick="_bkCopyRollback()">📋 Copy Commands</button></div>
@@ -717,10 +717,7 @@ function _bkToggleEncNoise() {
 
   // Re-render diff body
   const body = document.getElementById('bk-diff-body');
-  if (body) {
-    body.innerHTML = _bkRenderDiffLines(diff);
-    body._filteredDiff = hide ? diff : null;
-  }
+  if (body) body.innerHTML = _bkRenderDiffLines(diff);
 
   // Update summary counts
   const adds = diff.filter(d => d.type === 'add').length;
@@ -729,6 +726,15 @@ function _bkToggleEncNoise() {
   const delsEl = document.getElementById('bk-diff-dels');
   if (addsEl) addsEl.textContent = `+${adds} added`;
   if (delsEl) delsEl.textContent = `-${dels} removed`;
+
+  // Update rollback preview
+  const rollback = _bkGenerateRollback(diff);
+  const pre = document.getElementById('bk-rollback-pre');
+  const summary = document.getElementById('bk-rollback-summary');
+  const details = document.getElementById('bk-rollback-details');
+  if (pre) pre.textContent = rollback.join('\n');
+  if (summary) summary.textContent = `⚠ Rollback Command Preview (${rollback.length} commands)`;
+  if (details) details.style.display = rollback.length ? '' : 'none';
 
   // Reset search state
   _bkDiffMatches = []; _bkDiffSrchIdx = 0;
