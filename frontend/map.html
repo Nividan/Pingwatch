@@ -27,8 +27,10 @@
       </div>
     </div>
     <button class="btn btn-primary" onclick="togglePanel()">☰ PANEL</button>
+    <button class="btn btn-secondary" id="hdrCollapseBtn" onclick="_ntmToggleHeader()" title="Collapse header">▴</button>
   </div>
 </header>
+<div id="hdrReveal" onclick="_ntmToggleHeader()" title="Restore header">▾</div>
 
 <div id="page-bar"></div>
 
@@ -325,5 +327,13 @@
 </div>
 
 <script src="/map.js"></script>
+<script>
+function _ntmToggleHeader() {
+  const h = document.querySelector('header');
+  const r = document.getElementById('hdrReveal');
+  const collapsed = h.classList.toggle('collapsed');
+  r.style.display = collapsed ? 'block' : 'none';
+}
+</script>
 </body>
 </html>
