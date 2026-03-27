@@ -34,7 +34,7 @@ if sys.platform != "win32":
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
-from core.config import DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
+from core.config import DB_PATH, LOGS_DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
 import core.app_state as app_state
 
 # ── ANSI colour helpers ───────────────────────────────────────────────────────
@@ -498,6 +498,10 @@ def _fix_file_ownership():
         str(DB_PATH) + "-shm",
         str(DB_PATH) + ".pre_migrate.bak",
         str(DB_PATH) + ".pending_import",
+        str(LOGS_DB_PATH),
+        str(LOGS_DB_PATH) + "-wal",
+        str(LOGS_DB_PATH) + "-shm",
+        str(LOGS_DB_PATH) + ".pending_logs_import",
         str(CERTS_DIR),
     ]
     # Also chown any cert files inside CERTS_DIR
