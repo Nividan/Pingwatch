@@ -3862,12 +3862,9 @@ loadPages().then(async () => {
   }
 });
 // ── Fullscreen helpers ────────────────────────────────────────────────────────
-const _FS_ENTER = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M4 13H1V9"/></svg>';
-const _FS_EXIT  = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 1v4H1M13 5H9V1M9 13V9h4M1 9h4v4"/></svg>';
 function _ntmUpdateFsBtn(btn) {
   const isFs = !!document.fullscreenElement;
-  btn.title   = isFs ? 'Exit fullscreen' : 'Fullscreen';
-  btn.innerHTML = isFs ? _FS_EXIT : _FS_ENTER;
+  btn.textContent = isFs ? '✕ EXIT FULL' : '⛶ FULL SCREEN';
 }
 function _ntmToggleFs() {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});

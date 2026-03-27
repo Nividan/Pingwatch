@@ -355,10 +355,11 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 }
 #page-add-btn:hover { color:var(--accent); border-color:var(--accent); background:rgba(0,212,255,0.07); }
 #page-fs-btn {
-  flex-shrink:0; margin-left:auto; width:22px; height:22px;
+  flex-shrink:0; margin-left:auto; height:22px; padding:0 8px;
   display:inline-flex; align-items:center; justify-content:center;
-  background:none; border:1px solid rgba(0,212,255,0.18); border-radius:3px;
-  color:rgba(0,212,255,0.4); cursor:pointer; transition:all 0.15s;
+  background:none; border:1px solid rgba(0,212,255,0.25); border-radius:3px;
+  color:rgba(0,212,255,0.6); cursor:pointer; transition:all 0.15s;
+  font-family:'Share Tech Mono',monospace; font-size:9px; letter-spacing:1px; white-space:nowrap;
 }
 #page-fs-btn:hover { color:var(--accent); border-color:var(--accent); background:rgba(0,212,255,0.07); }
 
