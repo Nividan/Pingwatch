@@ -422,14 +422,10 @@ async function _bkOpenDiff(did) {
   const linesA = runA.config.split('\n');
   const linesB = runB.config.split('\n');
 
-  // Performance guard: skip LCS for very large configs
-  let diff;
-  if (linesA.length > 3000 || linesB.length > 3000) {
-    toast('Config too large for inline diff — showing summary only', 'warn');
-    diff = null;
-  } else {
-    diff = _bkComputeDiff(linesA, linesB);
-  }
+  // Use patience diff for large configs (avoids O(n²) LCS freeze)
+  const diff = linesA.length > 3000 || linesB.length > 3000
+    ? _bkComputeDiffLarge(linesA, linesB)
+    : _bkComputeDiff(linesA, linesB);
 
   closeM('bk-history');
   _bkRenderDiffModal(runA, runB, diff, dev.name || did);
@@ -458,6 +454,86 @@ function _bkComputeDiff(linesA, linesB) {
   return out;
 }
 
+// Patience diff for large configs (O(n·d), same output format as _bkComputeDiff).
+// 1. Find "anchor" lines unique in both files → longest increasing subsequence.
+// 2. Between each anchor pair run small LCS segments (each segment is bounded).
+function _bkComputeDiffLarge(linesA, linesB) {
+  const cntA = new Map(), cntB = new Map();
+  linesA.forEach(l => cntA.set(l, (cntA.get(l) || 0) + 1));
+  linesB.forEach(l => cntB.set(l, (cntB.get(l) || 0) + 1));
+
+  // Map unique-in-B lines to their index
+  const lineToB = new Map();
+  for (let j = 0; j < linesB.length; j++)
+    if (cntB.get(linesB[j]) === 1 && cntA.get(linesB[j]) === 1)
+      lineToB.set(linesB[j], j);
+
+  // Collect anchor pairs from A (unique in both)
+  const pairs = [];
+  for (let i = 0; i < linesA.length; i++)
+    if (lineToB.has(linesA[i]))
+      pairs.push({ai: i, bi: lineToB.get(linesA[i])});
+
+  // LIS of bi values → actual matched anchor sequence
+  const matched = _bkLIS(pairs);
+
+  const out = [];
+  let ai = 0, bi = 0;
+  for (const {ai: mAi, bi: mBi} of matched) {
+    _bkDiffSeg(linesA, linesB, ai, mAi, bi, mBi, out);
+    out.push({type: 'eq', line: linesA[mAi], lnA: mAi + 1, lnB: mBi + 1});
+    ai = mAi + 1;
+    bi = mBi + 1;
+  }
+  _bkDiffSeg(linesA, linesB, ai, linesA.length, bi, linesB.length, out);
+  return out;
+}
+
+function _bkLIS(pairs) {
+  // Longest Increasing Subsequence of pairs by .bi — returns the actual subsequence.
+  if (!pairs.length) return [];
+  const tails = [], tailI = [], pred = new Array(pairs.length).fill(-1);
+  for (let i = 0; i < pairs.length; i++) {
+    const v = pairs[i].bi;
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; tails[mid] < v ? lo = mid + 1 : hi = mid; }
+    tails[lo] = v; tailI[lo] = i;
+    if (lo > 0) pred[i] = tailI[lo - 1];
+  }
+  const result = [];
+  for (let k = tailI[tails.length - 1]; k !== -1; k = pred[k])
+    result.unshift(pairs[k]);
+  return result;
+}
+
+function _bkDiffSeg(linesA, linesB, ai, aEnd, bi, bEnd, out) {
+  const la = aEnd - ai, lb = bEnd - bi;
+  if (la === 0 && lb === 0) return;
+  if (la === 0) { for (let j = bi; j < bEnd; j++) out.push({type:'add', line:linesB[j], lnA:null,   lnB:j+1}); return; }
+  if (lb === 0) { for (let i = ai; i < aEnd; i++) out.push({type:'del', line:linesA[i], lnA:i+1, lnB:null}); return; }
+  if (la * lb <= 90000) {
+    // Small segment — full LCS
+    const dp = Array.from({length: la + 1}, () => new Uint32Array(lb + 1));
+    for (let i = la - 1; i >= 0; i--)
+      for (let j = lb - 1; j >= 0; j--)
+        dp[i][j] = linesA[ai+i] === linesB[bi+j] ? dp[i+1][j+1]+1 : Math.max(dp[i+1][j], dp[i][j+1]);
+    let i = 0, j = 0;
+    while (i < la || j < lb) {
+      if (i < la && j < lb && linesA[ai+i] === linesB[bi+j]) {
+        out.push({type:'eq',  line:linesA[ai+i], lnA:ai+i+1, lnB:bi+j+1}); i++; j++;
+      } else if (j < lb && (i >= la || dp[i][j+1] >= dp[i+1][j])) {
+        out.push({type:'add', line:linesB[bi+j], lnA:null,   lnB:bi+j+1}); j++;
+      } else {
+        out.push({type:'del', line:linesA[ai+i], lnA:ai+i+1, lnB:null}); i++;
+      }
+    }
+  } else {
+    // Unusually large unanchored block — emit as bulk replace
+    for (let i = ai; i < aEnd; i++) out.push({type:'del', line:linesA[i], lnA:i+1, lnB:null});
+    for (let j = bi; j < bEnd; j++) out.push({type:'add', line:linesB[j], lnA:null, lnB:j+1});
+  }
+}
+
 function _bkRenderDiffModal(runA, runB, diff, deviceName) {
   closeM('bk-diff');
   const tsA = _bkParseTs(runA.ts)?.toLocaleString() ?? runA.ts;
@@ -469,11 +545,7 @@ function _bkRenderDiffModal(runA, runB, diff, deviceName) {
     dels = diff.filter(d => d.type === 'del').length;
     diffHtml = _bkRenderDiffLines(diff);
   } else {
-    // Large-file fallback: just show SHA comparison
-    const same = runA.sha256 === runB.sha256;
-    diffHtml = `<div style="padding:24px;text-align:center;color:var(--text2)">
-      ${same ? '✓ Configs are identical (same SHA256)' : '⚠ Configs differ (SHA256 mismatch) — file too large for inline diff'}
-    </div>`;
+    diffHtml = `<div style="padding:24px;text-align:center;color:var(--text2)">No diff available</div>`;
   }
 
   // Generate rollback commands
