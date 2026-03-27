@@ -501,6 +501,76 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # ── Alert Rules Engine tables (v0.7.3+) ───────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT    NOT NULL,
+                enabled         INTEGER DEFAULT 1,
+                severity        TEXT    DEFAULT 'warning',
+                condition_logic TEXT    DEFAULT 'AND',
+                cooldown_s      INTEGER DEFAULT 300,
+                sort_order      INTEGER DEFAULT 0,
+                created_at      REAL    DEFAULT 0,
+                updated_at      REAL    DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rule_conditions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+                field      TEXT    NOT NULL,
+                op         TEXT    NOT NULL,
+                value      TEXT    NOT NULL DEFAULT '',
+                sort_order INTEGER DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rule_actions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+                atype      TEXT    NOT NULL,
+                config     TEXT    NOT NULL DEFAULT '{}',
+                sort_order INTEGER DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id      INTEGER DEFAULT 0,
+                rule_name    TEXT    DEFAULT '',
+                did          TEXT    DEFAULT '',
+                sid          TEXT    DEFAULT '',
+                dname        TEXT    DEFAULT '',
+                sname        TEXT    DEFAULT '',
+                severity     TEXT    DEFAULT '',
+                event_type   TEXT    DEFAULT '',
+                state        TEXT    DEFAULT 'active',
+                triggered_at REAL    DEFAULT 0,
+                resolved_at  REAL    DEFAULT 0,
+                ack_by       TEXT    DEFAULT '',
+                ack_at       REAL    DEFAULT 0,
+                detail       TEXT    DEFAULT '',
+                repeat_count INTEGER DEFAULT 1
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_dedup (
+                sig        TEXT    PRIMARY KEY,
+                last_fired REAL    DEFAULT 0,
+                fire_count INTEGER DEFAULT 1
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS maintenance_windows (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL,
+                scope_type  TEXT    DEFAULT 'all',
+                scope_value TEXT    DEFAULT '',
+                start_ts    REAL    NOT NULL,
+                end_ts      REAL    NOT NULL,
+                recurring   INTEGER DEFAULT 0,
+                recur_days  TEXT    DEFAULT '',
+                recur_start TEXT    DEFAULT '',
+                recur_end   TEXT    DEFAULT '',
+                created_by  TEXT    DEFAULT '',
+                created_at  REAL    DEFAULT 0
+            )""")
         con.commit()
     finally:
         con.close()
