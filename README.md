@@ -12,6 +12,23 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Supported Sensor Types](#supported-sensor-types)
+- [Technologies](#technologies)
+- [Installation](#installation)
+- [Usage](#usage)
+- [HTTPS / TLS](#https--tls)
+- [Syslog Forwarding](#syslog-forwarding)
+- [LDAP / Active Directory Authentication](#ldap--active-directory-authentication)
+- [IP Address Management (IPAM)](#ip-address-management-ipam)
+- [Device Configuration Backup](#device-configuration-backup)
+- [Screenshots](#screenshots)
+- [Architecture](#architecture)
+
+---
+
 ## Features
 
 - 📡 Real-time device monitoring via Server-Sent Events (SSE)
