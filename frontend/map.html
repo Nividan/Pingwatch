@@ -26,14 +26,18 @@
         <div class="export-item" onclick="closeExportMenu();exportJSON()">⎙ JSON (data)</div>
       </div>
     </div>
-    <button class="btn btn-primary" onclick="togglePanel()">☰ PANEL</button>
+    <button class="btn btn-secondary" id="hdrCollapseBtn" onclick="_ntmToggleHeader()" title="Collapse header">▴</button>
   </div>
 </header>
-
+<div id="hdrReveal" onclick="_ntmToggleHeader()" title="Restore header">▾</div>
 <div id="page-bar"></div>
 
 <div class="main">
   <div id="canvas-wrap">
+    <div id="fs-controls">
+      <button onclick="togglePanel()">☰ PANEL</button>
+      <button onclick="_ntmToggleFs()">✕ EXIT FULL</button>
+    </div>
     <canvas id="main-bg-canvas"></canvas>
     <svg id="topo-svg" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -325,5 +329,13 @@
 </div>
 
 <script src="/map.js"></script>
+<script>
+function _ntmToggleHeader() {
+  const h = document.querySelector('header');
+  const r = document.getElementById('hdrReveal');
+  const collapsed = h.classList.toggle('collapsed');
+  r.style.display = collapsed ? 'block' : 'none';
+}
+</script>
 </body>
 </html>
