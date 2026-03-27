@@ -12,8 +12,8 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "0.7.2"
-APP_VERSION_NAME = "ipam"
+APP_VERSION      = "0.7.3"
+APP_VERSION_NAME = "Config-Backup-Improvement"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─
