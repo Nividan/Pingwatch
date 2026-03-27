@@ -62,7 +62,16 @@ def generate_self_signed_cert(
     days = max(1, int(days))
 
     # ── Key ──────────────────────────────────────────────────────────────────
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    # cryptography < 36 required an explicit 'backend' argument; it was removed
+    # in 36.0. Inspect the signature so we pass it only when the parameter
+    # actually exists — safe on both old and new versions.
+    import inspect as _inspect
+    _backend_kwargs = {}
+    if 'backend' in _inspect.signature(rsa.generate_private_key).parameters:
+        from cryptography.hazmat.backends import default_backend as _default_backend
+        _backend_kwargs = {'backend': _default_backend()}
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048,
+                                   **_backend_kwargs)
 
     # ── Subject / Issuer — only include optional fields when non-empty ────────
     name_attrs = []
@@ -117,7 +126,7 @@ def generate_self_signed_cert(
         .not_valid_after(now + datetime.timedelta(days=days))
         .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
+        .sign(key, hashes.SHA256(), **_backend_kwargs)
     )
 
     cert_pem = cert.public_bytes(

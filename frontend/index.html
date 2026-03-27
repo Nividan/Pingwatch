@@ -273,6 +273,11 @@
     <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
       <div id="bk-toolbar">
         <span class="bk-title">💾 Device Configuration Backups</span>
+        <div class="bk-gsrch-wrap">
+          <input id="bk-gsrch-inp" type="text" placeholder="🔍 Search all configs…" autocomplete="off"
+                 oninput="_bkGsrchInput()" onkeydown="if(event.key==='Escape')_bkGsrchClear()"/>
+          <button class="btn-sm bk-gsrch-clear" id="bk-gsrch-clear" onclick="_bkGsrchClear()" title="Clear search" style="display:none">✕</button>
+        </div>
         <button class="btn-sm rbac-op" id="bkRunAllBtn" onclick="_bkRunAll()">▶ Run All Enabled</button>
         <button class="btn-sm" onclick="_bkInit()">↺ Refresh</button>
       </div>

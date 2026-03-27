@@ -6,6 +6,7 @@ All external writes are enqueued through the single-writer queue (_db_enqueue).
 The ipam_sync_* functions are called DIRECTLY inside the DB writer thread
 (already enqueued by the caller) and must NOT call _db_enqueue themselves.
 """
+from __future__ import annotations
 
 import ipaddress
 import sqlite3

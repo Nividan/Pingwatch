@@ -1498,6 +1498,19 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .bk-cfg-pre{font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6;
             background:var(--bg);padding:14px;border-radius:6px;overflow:auto;
             max-height:55vh;white-space:pre;color:var(--text2);border:1px solid var(--border);margin:0;}
+.bk-srch-bar{display:flex;align-items:center;gap:6px;padding:8px 16px;
+             border-bottom:1px solid var(--border);background:var(--bg2);}
+.bk-srch-bar input{flex:1;font-size:12px;padding:4px 8px;border-radius:4px;
+                   border:1px solid var(--border);background:var(--bg);color:var(--text);}
+.bk-srch-cnt{font-size:11px;color:var(--text3);min-width:60px;text-align:right;white-space:nowrap;}
+.bk-srch-hl{background:rgba(255,220,0,0.35);border-radius:2px;}
+.bk-srch-hl-cur{background:rgba(255,160,0,0.6);border-radius:2px;outline:1px solid #ff9900;}
+.bk-gsrch-wrap{display:flex;align-items:center;gap:4px;flex:1;max-width:320px;}
+.bk-gsrch-wrap input{width:100%;font-size:12px;padding:4px 10px;border-radius:4px;
+                     border:1px solid var(--border);background:var(--bg);color:var(--text);}
+.bk-gsrch-wrap input:focus{border-color:var(--accent);outline:none;}
+.bk-gsrch-banner{padding:8px 16px;font-size:12px;color:var(--text2);
+                 background:var(--bg2);border-bottom:1px solid var(--border);}
 .bk-loading{padding:32px;text-align:center;color:var(--text3);font-size:13px;}
 .bk-empty  {padding:32px;text-align:center;color:var(--text3);font-size:13px;font-style:italic;}
 .bk-err    {padding:20px;color:var(--down);font-size:12px;}
@@ -1516,6 +1529,52 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .bk-grp-cnt{background:var(--bg4);border-radius:20px;padding:1px 8px;
   font-size:10px;font-weight:600;color:var(--text3);}
 tbody.bk-grp-collapsed{display:none;}
+
+/* ── Config Diff viewer ─────────────────────────────────────────── */
+.bk-diff-meta{padding:10px 16px;border-bottom:1px solid var(--border);
+              background:var(--bg2);display:flex;flex-direction:column;gap:4px;}
+.bk-diff-meta-row{display:flex;gap:14px;align-items:center;font-size:12px;color:var(--text2);}
+.bk-diff-lbl{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;
+             letter-spacing:.04em;flex-shrink:0;}
+.bk-dl-del-lbl{background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3);}
+.bk-dl-add-lbl{background:rgba(63,185,80,0.15);color:#3fb950;border:1px solid rgba(63,185,80,0.3);}
+.bk-diff-summary{display:flex;gap:10px;align-items:center;font-size:11px;margin-top:4px;flex-wrap:wrap;}
+.bk-diff-adds{color:#3fb950;font-weight:600;}
+.bk-diff-dels{color:#f85149;font-weight:600;}
+.bk-enc-toggle{display:flex;align-items:center;gap:5px;margin-left:auto;color:var(--text2);cursor:pointer;font-size:11px;user-select:none;}
+.bk-enc-toggle input{cursor:pointer;accent-color:var(--accent);}
+.bk-diff-wrap{font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.55;
+              overflow-y:auto;background:var(--bg);border-top:1px solid var(--border);}
+.bk-dl{display:flex;gap:0;}
+.bk-dl-ln{min-width:44px;color:var(--text3);padding:0 6px;user-select:none;
+           text-align:right;border-right:1px solid var(--border);flex-shrink:0;}
+.bk-dl-pfx{width:18px;text-align:center;flex-shrink:0;font-weight:700;}
+.bk-dl-txt{flex:1;padding:0 6px;white-space:pre-wrap;word-break:break-all;}
+.bk-dl-eq .bk-dl-txt{color:var(--text2);}
+.bk-dl-add{background:rgba(63,185,80,0.10);}
+.bk-dl-add .bk-dl-pfx,.bk-dl-add .bk-dl-txt{color:#3fb950;}
+.bk-dl-del{background:rgba(248,81,73,0.10);}
+.bk-dl-del .bk-dl-pfx,.bk-dl-del .bk-dl-txt{color:#f85149;}
+.bk-dl-ctx{background:var(--bg2);cursor:pointer;}
+.bk-dl-ctx:hover{background:var(--bg3);}
+.bk-dl-ctx .bk-dl-pfx{color:var(--text3);}
+.bk-rollback{border-top:1px solid var(--border);flex-shrink:0;}
+.bk-rollback summary{padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;
+                      color:#e3b341;user-select:none;}
+.bk-rollback summary:hover{background:var(--bg3);}
+.bk-rollback-warn{font-size:11px;color:var(--text3);padding:4px 14px 6px;font-style:italic;}
+.bk-rollback pre{margin:0 14px 4px;max-height:30vh;}
+
+/* ── NCM Backup Status widget ───────────────────────────────────── */
+.dw-ncm-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px;}
+.dw-ncm-kpi{display:flex;flex-direction:column;align-items:center;border-radius:8px;
+             padding:12px 4px;background:var(--bg2);}
+.dw-ncm-n{font-size:1.6rem;font-weight:700;line-height:1;}
+.dw-ncm-l{font-size:0.7rem;color:var(--text2);margin-top:3px;}
+.dw-ncm-ok   .dw-ncm-n{color:#3fb950;}
+.dw-ncm-fail .dw-ncm-n{color:#f85149;}
+.dw-ncm-never .dw-ncm-n{color:#e3b341;}
+.dw-ncm-total .dw-ncm-n{color:var(--text);font-size:1.2rem;}
 
 /* ── Toggle switch (used in settings forms) ─────────────────────── */
 label.toggle{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0;vertical-align:middle;}

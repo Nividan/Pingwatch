@@ -5,6 +5,7 @@ Credentials (password, enable password) are Fernet-encrypted.
 Plaintext is NEVER returned by any public function — callers receive
 has_password / has_enable booleans instead.
 """
+from __future__ import annotations
 
 import json
 import os
@@ -346,6 +347,40 @@ def db_delete_backup_run(run_id: int):
         con.commit()
     finally:
         con.close()
+
+
+def db_search_configs(q: str, limit: int = 50) -> list:
+    """
+    Full-text search inside successful backup configs.
+    Returns up to *limit* matches as [{run_id, did, ts, line_no, line_text}].
+    Scans the most recent 200 successful runs to keep response times bounded.
+    """
+    con = _con()
+    rows = []
+    try:
+        cur = con.execute(
+            "SELECT id, did, ts, config FROM backup_runs "
+            "WHERE success=1 AND config LIKE ? ORDER BY ts DESC LIMIT 200",
+            (f'%{q}%',)
+        )
+        ql = q.lower()
+        for run_id, did, ts, config in cur:
+            for i, line in enumerate(config.splitlines(), 1):
+                if ql in line.lower():
+                    rows.append({
+                        'run_id':    run_id,
+                        'did':       did,
+                        'ts':        ts,
+                        'line_no':   i,
+                        'line_text': line.strip(),
+                    })
+                    if len(rows) >= limit:
+                        break
+            if len(rows) >= limit:
+                break
+    finally:
+        con.close()
+    return rows
 
 
 def db_ensure_backup_device(did: str):
