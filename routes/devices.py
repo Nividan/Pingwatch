@@ -57,7 +57,7 @@ _SCAN_DEFAULTS_STR = "ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080
 
 def _get_scan_targets():
     """Return scan target list from the scan_ports setting, falling back to defaults."""
-    from core.settings import _settings
+    import core.settings as _settings
     raw = (_settings.get("scan_ports") or "").strip()
     if not raw:
         return _SCAN_TARGETS

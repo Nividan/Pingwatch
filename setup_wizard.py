@@ -5,11 +5,12 @@ Called by start.bat when no database exists (first launch) or when
 the --setup flag is passed.  Guides the user through:
   1. Required package checks & installs
   2. HTTP port selection
-  3. HTTPS / TLS certificate setup
+  3. HTTPS / TLS certificate setup (includes HTTP → HTTPS redirect choice)
   4. SNMP trap port selection
   5. Windows Firewall rules
   6. Desktop shortcut
   7. Database initialisation & settings persistence
+  8. systemd service install (Linux only)
 
 Exit codes:
   0 — setup completed successfully (start.bat will launch server.py)
@@ -33,7 +34,7 @@ if sys.platform != "win32":
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
-from core.config import DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
+from core.config import DB_PATH, LOGS_DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
 import core.app_state as app_state
 
 # ── ANSI colour helpers ───────────────────────────────────────────────────────
@@ -497,6 +498,10 @@ def _fix_file_ownership():
         str(DB_PATH) + "-shm",
         str(DB_PATH) + ".pre_migrate.bak",
         str(DB_PATH) + ".pending_import",
+        str(LOGS_DB_PATH),
+        str(LOGS_DB_PATH) + "-wal",
+        str(LOGS_DB_PATH) + "-shm",
+        str(LOGS_DB_PATH) + ".pending_logs_import",
         str(CERTS_DIR),
     ]
     # Also chown any cert files inside CERTS_DIR
@@ -760,6 +765,14 @@ def step3_tls():
     else:
         _step3_generate()
 
+    if _state["tls_enabled"]:
+        print()
+        _tag("info", "HTTP → HTTPS redirect: when enabled, visiting the HTTP port")
+        _tag("info", "automatically redirects browsers to the HTTPS port.")
+        _state["http_redirect"] = _ask_yn("Enable HTTP → HTTPS redirect?", default=True)
+        if not _state["http_redirect"]:
+            _tag("info", "Disabled — both ports will serve the dashboard independently.")
+
     print()
 
 
@@ -978,6 +991,21 @@ def step5_firewall():
         for rule in rules:
             proto, port, name = rule
             (existing if f"{port}/{proto.lower()}" in _fcmd else missing).append(rule)
+    elif _sys == "Linux" and _sh.which("iptables"):
+        # Fallback: inspect the INPUT chain directly (covers plain iptables setups)
+        try:
+            r = subprocess.run(["sudo", "iptables", "-L", "INPUT", "-n"],
+                               capture_output=True, text=True)
+            _ipt = r.stdout if r.returncode == 0 else ""
+        except Exception:
+            _ipt = ""
+        for rule in rules:
+            proto, port, name = rule
+            found = any(
+                proto.lower() in line and f"dpt:{port}" in line
+                for line in _ipt.splitlines()
+            )
+            (existing if found else missing).append(rule)
     else:
         missing = list(rules)   # can't check — assume all missing
 
@@ -1159,6 +1187,128 @@ def step7_init_db():
     print()
 
 
+def step8_service():
+    """Offer to install PingWatch as a systemd service (Linux only)."""
+    import platform as _plat, shutil as _sh
+    if _plat.system() != "Linux" or not _sh.which("systemctl"):
+        return
+
+    _separator()
+    _tag("setup", f"{_C['bold']}Step 8 — System Service (systemd){_C['reset']}")
+    _separator()
+    _tag("info", "Install PingWatch as a systemd service so it starts automatically on boot.")
+    print()
+
+    service_src = os.path.join(_BASE, "pingwatch.service")
+    service_dst = "/etc/systemd/system/pingwatch.service"
+
+    if not os.path.isfile(service_src):
+        _tag("warn", "pingwatch.service not found — cannot install service.")
+        _tag("info", f"Expected: {service_src}")
+        print()
+        return
+
+    already = os.path.isfile(service_dst)
+    if already:
+        _tag("ok", "Service is already installed.")
+        if not _ask_yn("Reinstall / update the service unit?", default=False):
+            print()
+            return
+    else:
+        if not _ask_yn("Install PingWatch as a systemd service?", default=True):
+            _tag("info", "Skipping. To install later:")
+            _tag("info", f"  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+            print()
+            return
+
+    # Determine the actual user (SUDO_USER when run via sudo, else current user)
+    import pwd as _pwd, grp as _grp
+    actual_user = os.environ.get("SUDO_USER") or ""
+    if not actual_user:
+        try:
+            actual_user = _pwd.getpwuid(os.getuid()).pw_name
+        except Exception:
+            actual_user = os.environ.get("USER", "root")
+    try:
+        pw = _pwd.getpwnam(actual_user)
+        actual_group = _grp.getgrgid(pw.pw_gid).gr_name
+    except Exception:
+        actual_group = actual_user
+
+    # Read and patch the service template
+    try:
+        content = open(service_src, encoding="utf-8").read()
+    except Exception as e:
+        _tag("error", f"Could not read service template: {e}")
+        print()
+        return
+
+    python_path = _sh.which("python3") or sys.executable
+    content = content.replace("/opt/pingwatch", _BASE)
+    content = content.replace("/usr/bin/python3", python_path)
+    content = content.replace("# User=pingwatch",  f"User={actual_user}")
+    content = content.replace("# Group=pingwatch", f"Group={actual_group}")
+
+    # Write service file (direct if root, via sudo cp otherwise)
+    _tag("info", f"Installing service (User={actual_user}, Group={actual_group}) ...")
+    wrote_ok = False
+    if os.geteuid() == 0:
+        try:
+            with open(service_dst, "w", encoding="utf-8") as f:
+                f.write(content)
+            wrote_ok = True
+        except Exception as e:
+            _tag("error", f"Could not write {service_dst}: {e}")
+    else:
+        import tempfile as _tmp
+        try:
+            with _tmp.NamedTemporaryFile(mode="w", suffix=".service",
+                                         delete=False, encoding="utf-8") as tf:
+                tf.write(content)
+                tmp_path = tf.name
+            r = subprocess.run(["sudo", "cp", tmp_path, service_dst],
+                               capture_output=True, text=True)
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            if r.returncode == 0:
+                wrote_ok = True
+            else:
+                _tag("error", f"sudo cp failed: {r.stderr.strip()}")
+                _tag("info",  f"Retry with root:  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+        except Exception as e:
+            _tag("error", f"Could not install service file: {e}")
+
+    if not wrote_ok:
+        print()
+        return
+
+    # Reload, enable, start
+    all_ok = True
+    for cmd in [
+        ["sudo", "systemctl", "daemon-reload"],
+        ["sudo", "systemctl", "enable", "pingwatch"],
+        ["sudo", "systemctl", "start",  "pingwatch"],
+    ]:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            _tag("warn", f"  {' '.join(cmd[1:])} failed: {(r.stderr or r.stdout).strip()}")
+            all_ok = False
+            break
+
+    if all_ok:
+        _tag("ok", "Service installed, enabled, and started.")
+        _tag("info", "Auto-starts on boot. Useful commands:")
+        _tag("info", "  sudo systemctl status pingwatch")
+        _tag("info", "  sudo systemctl restart pingwatch")
+        _tag("info", "  journalctl -u pingwatch -f")
+    else:
+        _tag("warn", "Service install may be incomplete — check errors above.")
+        _tag("info", f"Retry:  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+    print()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1230,6 +1380,7 @@ def main():
         step5_firewall()
         step6_shortcut()
         step7_init_db()
+        step8_service()
     except KeyboardInterrupt:
         print()
         _tag("warn", "Setup aborted by user.")
