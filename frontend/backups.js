@@ -548,8 +548,9 @@ function _bkRenderDiffModal(runA, runB, diff, deviceName) {
     diffHtml = `<div style="padding:24px;text-align:center;color:var(--text2)">No diff available</div>`;
   }
 
-  // Generate rollback commands
-  const rollback = diff ? _bkGenerateRollback(diff) : [];
+  // Detect vendor and generate rollback
+  const vendor   = _bkDetectVendor(runA.config || runB.config || '');
+  const rollback = diff ? _bkGenerateRollback(diff, vendor) : [];
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'bk-diff';
@@ -592,32 +593,105 @@ function _bkRenderDiffModal(runA, runB, diff, deviceName) {
       ${rollback.length ? `
       <details class="bk-rollback" id="bk-rollback-details">
         <summary id="bk-rollback-summary">⚠ Rollback Command Preview (${rollback.length} commands)</summary>
-        <div class="bk-rollback-warn">Review carefully before applying. Auto-generated from line diff only — not all commands may be valid for your platform.</div>
+        <div class="bk-rollback-warn" id="bk-rollback-warn">${_bkRollbackWarn(vendor)}</div>
         <pre class="bk-cfg-pre" id="bk-rollback-pre">${esc(rollback.join('\n'))}</pre>
         <div style="padding:6px 14px 10px"><button class="btn-sm" onclick="_bkCopyRollback()">📋 Copy Commands</button></div>
       </details>` : ''}
       <div class="mft"><button class="btn-s" onclick="closeM('bk-diff')">Close</button></div>
     </div>`;
   document.body.appendChild(o);
-  // Store diff for expand-collapsed-lines handler
-  if (diff) document.getElementById('bk-diff')._diffData = diff;
+  // Store diff + vendor for expand/filter handlers
+  if (diff) { const el = document.getElementById('bk-diff'); el._diffData = diff; el._vendor = vendor; }
+}
+
+// ── Vendor detection ──────────────────────────────────────────────
+function _bkDetectVendor(config) {
+  if (!config) return 'unknown';
+  if (/#config-version=fg/i.test(config) || /#conf_file_ver=/i.test(config)) return 'fortigate';
+  if (/^asa version |^pix version /im.test(config))                           return 'cisco-asa';
+  if (/^## last commit:|^\s*set version \d+\.\d+[^;]/im.test(config))        return 'junos';
+  if (/^# routeros/im.test(config))                                           return 'mikrotik';
+  if (/^<config>/im.test(config))                                             return 'panos';
+  if (/^! device:.*\beos\b/im.test(config))                                  return 'arista';
+  return 'ios'; // Cisco IOS / IOS-XE / NX-OS — `no`-prefix CLIs
+}
+
+// Vendor-specific warning text shown in the rollback panel.
+function _bkRollbackWarn(vendor) {
+  const w = {
+    fortigate:  'Generated for <strong>FortiGate CLI</strong>. Paste directly into the CLI console — config context is included automatically.',
+    'cisco-asa':'Generated for <strong>Cisco ASA</strong>. Apply in <code>conf t</code> mode. Review sub-interface commands carefully.',
+    junos:      '⚠ <strong>JunOS</strong> uses <code>delete</code>/<code>set</code> — commands shown are best-effort. Verify each line before applying.',
+    mikrotik:   '⚠ <strong>MikroTik RouterOS</strong> uses a different syntax. Commands shown are approximations only — do not apply directly.',
+    panos:      '⚠ <strong>Palo Alto</strong> uses XML-based config. Use candidate config or revert — do not apply these commands directly.',
+    arista:     'Generated for <strong>Arista EOS</strong>. Apply in <code>conf t</code> mode.',
+    ios:        'Generated for <strong>Cisco IOS / IOS-XE / NX-OS</strong>. Apply in <code>conf t</code> mode.',
+    unknown:    'Review carefully before applying. Auto-generated from line diff only — vendor not detected.',
+  };
+  return w[vendor] || w.unknown;
 }
 
 // ── Rollback command generator ────────────────────────────────────
-function _bkGenerateRollback(diff) {
+function _bkGenerateRollback(diff, vendor = 'ios') {
+  if (vendor === 'fortigate') return _bkGenerateRollbackFortigate(diff);
+  // IOS-style: negate added lines with `no`, restore deleted lines as-is
   const cmds = [];
   for (const {type, line} of diff) {
     const t = line.trim();
     if (!t || t.startsWith('!') || t.startsWith('#')) continue;
-    if (type === 'del') {
-      // Line existed in old, gone in new → restore it
-      cmds.push(t);
-    } else if (type === 'add') {
-      // Line was added in new → remove it
-      cmds.push(t.startsWith('no ') ? t.slice(3) : `no ${t}`);
-    }
+    if (type === 'del') cmds.push(t);
+    else if (type === 'add') cmds.push(t.startsWith('no ') ? t.slice(3) : `no ${t}`);
   }
   return cmds;
+}
+
+// FortiGate-aware rollback: tracks config/edit context blocks and emits
+// `set field old_value` to restore changed/deleted fields and `unset field`
+// for purely added fields. Deduplicates: if both add+del exist for the same
+// field, the del (old value restore) takes precedence.
+function _bkGenerateRollbackFortigate(diff) {
+  const ctxStack = [];
+  const groups   = new Map(); // contextKey → {context, dels: Map<field,cmd>, adds: Set<field>}
+
+  const getField = t => { const m = t.match(/^set\s+(\S+)/i); return m ? m[1] : null; };
+  const ctxKey   = () => ctxStack.join('\x00');
+  const getGroup = () => {
+    const k = ctxKey();
+    if (!groups.has(k)) groups.set(k, {context: [...ctxStack], dels: new Map(), adds: new Set()});
+    return groups.get(k);
+  };
+
+  for (const {type, line} of diff) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    if (type === 'eq') {
+      if      (/^config\s/i.test(t))  ctxStack.push(t);
+      else if (t === 'end')           { while (/^edit\s/i.test(ctxStack[ctxStack.length-1]||'')) ctxStack.pop(); ctxStack.pop(); }
+      else if (/^edit\s/i.test(t))    { if (/^edit\s/i.test(ctxStack[ctxStack.length-1]||'')) ctxStack.pop(); ctxStack.push(t); }
+      else if (t === 'next')          { if (/^edit\s/i.test(ctxStack[ctxStack.length-1]||'')) ctxStack.pop(); }
+    } else {
+      const f = getField(t);
+      if (!f) continue;
+      if (type === 'del') getGroup().dels.set(f, t);
+      else                getGroup().adds.add(f);
+    }
+  }
+
+  const cmds = [];
+  for (const [, {context, dels, adds}] of groups) {
+    const restore = [...dels.values()];
+    const unsets  = [...adds].filter(f => !dels.has(f)).map(f => `unset ${f}`);
+    if (!restore.length && !unsets.length) continue;
+    let depth = 0;
+    for (const ctx of context) { cmds.push('    '.repeat(depth) + ctx); depth++; }
+    for (const cmd of [...restore, ...unsets]) cmds.push('    '.repeat(depth) + cmd);
+    for (const ctx of [...context].reverse()) {
+      depth--;
+      cmds.push('    '.repeat(depth) + (/^edit\s/i.test(ctx) ? 'next' : 'end'));
+    }
+    cmds.push('');
+  }
+  return cmds.filter(c => c !== undefined);
 }
 
 function _bkCopyRollback() {
@@ -728,10 +802,11 @@ function _bkToggleEncNoise() {
   if (delsEl) delsEl.textContent = `-${dels} removed`;
 
   // Update rollback preview
-  const rollback = _bkGenerateRollback(diff);
-  const pre = document.getElementById('bk-rollback-pre');
-  const summary = document.getElementById('bk-rollback-summary');
-  const details = document.getElementById('bk-rollback-details');
+  const vendor   = container._vendor || 'ios';
+  const rollback = _bkGenerateRollback(diff, vendor);
+  const pre      = document.getElementById('bk-rollback-pre');
+  const summary  = document.getElementById('bk-rollback-summary');
+  const details  = document.getElementById('bk-rollback-details');
   if (pre) pre.textContent = rollback.join('\n');
   if (summary) summary.textContent = `⚠ Rollback Command Preview (${rollback.length} commands)`;
   if (details) details.style.display = rollback.length ? '' : 'none';
