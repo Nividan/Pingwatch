@@ -6,7 +6,9 @@ const PORT_CHIPS = [['HTTP','80'],['HTTPS','443'],['SSH','22'],['FTP','21'],['DN
 
 // Render the shared sensor fields HTML (used by both Add and Edit)
 function sensorFormHTML(dev, s=null) {
-  const defHost = s?.host || dev?.host || '';
+  const defHost   = s?.host || '';
+  const devHost   = dev?.host || '';
+  const hostHint  = devHost ? `leave blank — uses device (${esc(devHost)})` : 'e.g. 192.168.1.1';
   const curType = s?.stype || 'ping';
   return `
   <div class="fr">
@@ -45,7 +47,7 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='ping'?'vis':''}" id="fg-ping">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-ph" value="${esc(defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-ph" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Timeout (s)</label>
         <input type="number" id="as-pto" value="${s?.timeout||4}" min="1" max="30"/></div>
     </div>
@@ -54,7 +56,7 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='tcp'?'vis':''}" id="fg-tcp">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-th" value="${esc(defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-th" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Port Number</label>
         <input type="number" id="as-tp" value="${s?.port||''}" placeholder="80" min="1" max="65535"/></div>
     </div>
@@ -86,7 +88,7 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='snmp'?'vis':''}" id="fg-snmp">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-sh" value="${esc(defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-sh" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
       <div class="fr"><label class="fl">UDP Port</label>
         <input type="number" id="as-sp" value="${s?.port||161}" min="1" max="65535"/></div>
     </div>
@@ -151,7 +153,7 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='tls'?'vis':''}" id="fg-tls">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host</label>
-        <input type="text" id="as-tlsh" value="${esc(s?.host||defHost)}" placeholder="example.com" autocomplete="off"/></div>
+        <input type="text" id="as-tlsh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-tlsp" value="${s?.port||443}" min="1" max="65535"/></div>
     </div>
@@ -181,7 +183,7 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='banner'?'vis':''}" id="fg-banner">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host</label>
-        <input type="text" id="as-bnh" value="${esc(s?.host||defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-bnh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-bnp" value="${s?.port||21}" min="1" max="65535"/></div>
     </div>
