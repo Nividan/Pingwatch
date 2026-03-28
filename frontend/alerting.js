@@ -1,87 +1,11 @@
-// ── Alerting Tab ─────────────────────────────────────────────────────
-// Sub-tabs: Rules | Active Alerts | History | Maintenance
+// ── Alerting (Rules in Settings, History in Events tab) ──────────────
 
 let _alertRules        = [];
-let _alertShellInited  = false;
 let _alertEditingId    = null;   // null = new rule
-let _alertSubTab       = 'rules';
 let _alertEvtFilter    = 'all';
 let _alertEvtOffset    = 0;
 const _ALERT_EVT_LIMIT = 100;
 let _alertMaintWindows = [];
-let _alertActivePollTimer = null;
-
-// ── Init ─────────────────────────────────────────────────────────────
-async function _alertingInit() {
-  if (!_alertShellInited) {
-    _alertShellInited = true;
-    _alertingRenderShell();
-  }
-  _alertingSubTab(_alertSubTab, true);
-  _alertingStartPoll();
-}
-
-function _alertingRenderShell() {
-  const view = document.getElementById('alertingView');
-  if (!view) return;
-  view.innerHTML = `
-    <div class="alrt-hdr">
-      <div>
-        <div class="alrt-title">🔔 Alerting</div>
-        <div class="alrt-sub">Rules engine, alert history, and maintenance windows.</div>
-      </div>
-    </div>
-    <div class="alrt-subtabs">
-      <button class="alrt-stab active" id="alrt-stab-rules"   onclick="_alertingSubTab('rules')">Rules</button>
-      <button class="alrt-stab"        id="alrt-stab-active"  onclick="_alertingSubTab('active')">
-        Active <span class="alrt-badge" id="alrt-active-badge" style="display:none">0</span>
-      </button>
-      <button class="alrt-stab"        id="alrt-stab-history" onclick="_alertingSubTab('history')">History</button>
-      <button class="alrt-stab"        id="alrt-stab-maint"   onclick="_alertingSubTab('maint')">Maintenance</button>
-    </div>
-    <div id="alrt-panel-rules"   class="alrt-panel"></div>
-    <div id="alrt-panel-active"  class="alrt-panel" style="display:none"></div>
-    <div id="alrt-panel-history" class="alrt-panel" style="display:none"></div>
-    <div id="alrt-panel-maint"   class="alrt-panel" style="display:none"></div>`;
-  applyRbac();
-}
-
-function _alertingSubTab(name, force) {
-  if (_alertSubTab === name && !force) return;
-  _alertSubTab = name;
-  ['rules','active','history','maint'].forEach(t => {
-    document.getElementById(`alrt-stab-${t}`)?.classList.toggle('active', t === name);
-    const p = document.getElementById(`alrt-panel-${t}`);
-    if (p) p.style.display = t === name ? '' : 'none';
-  });
-  if (name === 'rules')   _alertingLoadRules();
-  if (name === 'active')  _alertingLoadEvents('active', true);
-  if (name === 'history') _alertingLoadEvents(_alertEvtFilter, true);
-  if (name === 'maint')   _alertingLoadMaint();
-}
-
-// ── Active-alert badge polling ────────────────────────────────────────
-function _alertingStartPoll() {
-  if (_alertActivePollTimer) return;
-  _alertActivePollTimer = setInterval(_alertingPollActive, 30000);
-  _alertingPollActive();
-}
-
-async function _alertingPollActive() {
-  try {
-    const r = await fetch('/api/alert/events/active');
-    if (!r.ok) return;
-    const d = await r.json();
-    _alertingSetBadge(d.count || 0);
-  } catch (_) {}
-}
-
-function _alertingSetBadge(n) {
-  const badge = document.getElementById('alrt-active-badge');
-  const tabBadge = document.getElementById('alrtTabBadge');
-  if (badge) { badge.textContent = n; badge.style.display = n > 0 ? '' : 'none'; }
-  if (tabBadge) { tabBadge.textContent = n; tabBadge.style.display = n > 0 ? '' : 'none'; }
-}
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -89,14 +13,9 @@ function _alertingSetBadge(n) {
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadRules() {
-  const wrap = document.getElementById('alrt-panel-rules');
-  if (!wrap) return;
-  wrap.innerHTML = `
-    <div class="alrt-panel-hdr">
-      <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
-      <button class="btn-p rbac-admin" onclick="_alertingOpenEditor(null)">＋ New Rule</button>
-    </div>
-    <div id="alrt-list"><div class="alrt-loading">Loading…</div></div>`;
+  const list = document.getElementById('alrt-list');
+  if (!list) return;
+  list.innerHTML = '<div class="alrt-loading">Loading…</div>';
   applyRbac();
   try {
     const r = await fetch('/api/alert/rules');
@@ -105,8 +24,7 @@ async function _alertingLoadRules() {
     _alertRules = d.rules || [];
     _alertingRenderRules(_alertRules);
   } catch (e) {
-    document.getElementById('alrt-list').innerHTML =
-      `<div class="alrt-err">Failed to load rules: ${esc(String(e))}</div>`;
+    list.innerHTML = `<div class="alrt-err">Failed to load rules: ${esc(String(e))}</div>`;
   }
 }
 
@@ -185,31 +103,26 @@ async function _alertingDelete(id, name) {
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadEvents(state, reset) {
-  const isActive  = state === 'active';
-  const panelId   = isActive ? 'alrt-panel-active' : 'alrt-panel-history';
-  const wrap      = document.getElementById(panelId);
+  const panelId = 'alrt-history-panel';
+  const wrap    = document.getElementById(panelId);
   if (!wrap) return;
 
   if (reset) _alertEvtOffset = 0;
 
-  const filterBar = isActive ? '' : `
-    <div class="alrt-evt-filters">
-      <span style="font-size:12px;color:var(--text2)">State:</span>
-      ${['all','active','acknowledged','resolved','suppressed'].map(s =>
-        `<button class="alrt-flt-btn ${_alertEvtFilter===s?'active':''}"
-           onclick="_alertEvtSetFilter('${s}')">${s}</button>`
-      ).join('')}
-    </div>`;
+  const filterBar = `<div class="alrt-evt-filters">
+    <span style="font-size:12px;color:var(--text2)">State:</span>
+    ${['all','active','acknowledged','resolved','suppressed'].map(s =>
+      `<button class="alrt-flt-btn ${_alertEvtFilter===s?'active':''}"
+         onclick="_alertEvtSetFilter('${s}')">${s}</button>`
+    ).join('')}
+  </div>`;
 
   wrap.innerHTML = `
-    <div class="alrt-panel-hdr" style="justify-content:flex-start;gap:12px">
-      ${filterBar}
-    </div>
+    <div class="alrt-panel-hdr" style="justify-content:flex-start;gap:12px">${filterBar}</div>
     <div id="alrt-evt-list-${panelId}"><div class="alrt-loading">Loading…</div></div>
     <div id="alrt-evt-pager-${panelId}" class="alrt-pager"></div>`;
 
   await _alertingFetchEvents(state, panelId);
-  if (isActive) _alertingPollActive();
 }
 
 async function _alertingFetchEvents(state, panelId) {
@@ -222,7 +135,10 @@ async function _alertingFetchEvents(state, panelId) {
     if (r.status === 401) { showLogin('Session expired'); return; }
     const d = await r.json();
     const events = d.events || [];
-    _alertingSetBadge(d.active_count || 0);
+    if (typeof _alertEvtBadgeCount !== 'undefined') {
+      _alertEvtBadgeCount = d.active_count || 0;
+      if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
+    }
     if (!events.length) {
       list.innerHTML = '<div class="alrt-empty">No events.</div>';
       document.getElementById(`alrt-evt-pager-${panelId}`).innerHTML = '';
@@ -295,16 +211,22 @@ async function _alertAck(id) {
   const d = await api('POST', `/api/alert/event/${id}/ack`);
   if (!d.ok && d.error) { toast(d.error, 'err'); return; }
   toast('Alert acknowledged', 'ok');
-  _alertingSubTab(_alertSubTab, true);
-  _alertingPollActive();
+  _alertingLoadEvents(_alertEvtFilter, true);
+  fetch('/api/alert/events/active').then(r=>r.json()).then(d=>{
+    _alertEvtBadgeCount = d.count || 0;
+    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
+  }).catch(()=>{});
 }
 
 async function _alertResolve(id) {
   const d = await api('POST', `/api/alert/event/${id}/resolve`);
   if (!d.ok && d.error) { toast(d.error, 'err'); return; }
   toast('Alert resolved', 'ok');
-  _alertingSubTab(_alertSubTab, true);
-  _alertingPollActive();
+  _alertingLoadEvents(_alertEvtFilter, true);
+  fetch('/api/alert/events/active').then(r=>r.json()).then(d=>{
+    _alertEvtBadgeCount = d.count || 0;
+    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
+  }).catch(()=>{});
 }
 
 
@@ -313,16 +235,9 @@ async function _alertResolve(id) {
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadMaint() {
-  const wrap = document.getElementById('alrt-panel-maint');
-  if (!wrap) return;
-  wrap.innerHTML = `
-    <div class="alrt-panel-hdr">
-      <span style="color:var(--text3);font-size:12px">
-        Suppress alerts during scheduled maintenance. Rules still evaluate but no notifications are sent.
-      </span>
-      <button class="btn-p rbac-admin" onclick="_alertMaintOpen(null)">＋ New Window</button>
-    </div>
-    <div id="alrt-maint-list"><div class="alrt-loading">Loading…</div></div>`;
+  const list = document.getElementById('alrt-maint-list');
+  if (!list) return;
+  list.innerHTML = '<div class="alrt-loading">Loading…</div>';
   applyRbac();
   try {
     const r = await fetch('/api/alert/windows');
@@ -331,8 +246,7 @@ async function _alertingLoadMaint() {
     _alertMaintWindows = d.windows || [];
     _alertMaintRenderList(_alertMaintWindows);
   } catch (e) {
-    document.getElementById('alrt-maint-list').innerHTML =
-      `<div class="alrt-err">Error: ${esc(String(e))}</div>`;
+    list.innerHTML = `<div class="alrt-err">Error: ${esc(String(e))}</div>`;
   }
 }
 

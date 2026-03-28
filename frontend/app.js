@@ -274,20 +274,27 @@ function onAuthenticated(username){
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, 300000);
-  // Poll active alert count for tab badge (every 60s); clear on re-login to prevent stacking
-  _alertBadgePoll();
-  if (window._alertBadgeInterval) clearInterval(window._alertBadgeInterval);
-  window._alertBadgeInterval = setInterval(_alertBadgePoll, 60000);
+  // Poll active alert count for combined Events badge (every 60s); clear on re-login to prevent stacking
+  _alertEvtBadgePoll();
+  if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
+  window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, 60000);
 }
 
-async function _alertBadgePoll() {
+let _alertEvtBadgeCount = 0;
+
+function _updateEvtBadge() {
+  const n = unseenFlaps + _alertEvtBadgeCount;
+  const b = document.getElementById('evtBadge');
+  if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+}
+
+async function _alertEvtBadgePoll() {
   try {
     const r = await fetch('/api/alert/events/active');
     if (!r.ok) return;
     const d = await r.json();
-    const n = d.count || 0;
-    const b = document.getElementById('alrtTabBadge');
-    if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+    _alertEvtBadgeCount = d.count || 0;
+    _updateEvtBadge();
   } catch (_) {}
 }
 function applyRbac(){
@@ -396,7 +403,7 @@ function _flapKey(d){
   // Unique key: device+sensor+timestamp+direction (covers both flaps and traps)
   return (d.did||d.src_ip||'')+'|'+(d.sid||d.trap_oid||'')+'|'+(d.ts||'')+'|'+(d._direction||d.direction||'');
 }
-let activeMainTab=(()=>{try{return localStorage.getItem('pw_tab')||'devices';}catch{return 'devices';}})();
+let activeMainTab=(()=>{try{const t=localStorage.getItem('pw_tab')||'devices';return t==='alerting'?'events':t;}catch{return 'devices';}})();
 // Apply correct tab button immediately — synchronous, no network request needed
 document.getElementById('tab'+activeMainTab[0].toUpperCase()+activeMainTab.slice(1))?.classList.add('active');
 
@@ -407,8 +414,7 @@ function pushFlap(d){
   renderFlaps();
   if(activeMainTab!=='events'){
     unseenFlaps++;
-    const badge=document.getElementById('evtBadge');
-    if(badge){ badge.style.display=''; badge.textContent=unseenFlaps; }
+    _updateEvtBadge();
   }
   flashDownPill();
 }
@@ -421,8 +427,7 @@ function pushThresholdEvent(d, level){
   renderFlaps();
   if(activeMainTab!=='events'){
     unseenFlaps++;
-    const badge=document.getElementById('evtBadge');
-    if(badge){badge.style.display='';badge.textContent=unseenFlaps;}
+    _updateEvtBadge();
   }
 }
 
@@ -472,6 +477,7 @@ function renderFlaps(){
 }
 
 function switchMainTab(tab){
+  if(tab==='alerting') tab='events';
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
   document.getElementById('tabDashboard').classList.toggle('active',tab==='dashboard');
@@ -480,13 +486,11 @@ function switchMainTab(tab){
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
-  document.getElementById('tabAlerting').classList.toggle('active',tab==='alerting');
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
-  const alertingView =document.getElementById('alertingView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -494,7 +498,6 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
-  alertingView.style.display ='none';
   document.getElementById('devActBar').style.display='none';
   const _mf=document.getElementById('map-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
@@ -513,10 +516,10 @@ function switchMainTab(tab){
     emptyMain.style.display='none';
     dpanels.style.display='none';
     unseenFlaps=0;
-    const badge=document.getElementById('evtBadge');
-    if(badge) badge.style.display='none';
+    _updateEvtBadge();
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshEvents();
+    if(typeof _evtSubTab==='function') _evtSubTab(_evtActiveSubTab);
   } else if(tab==='map'){
     emptyMain.style.display='none';
     dpanels.style.display='none';
@@ -536,12 +539,6 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _ipamInit==='function') _ipamInit();
-  } else if(tab==='alerting'){
-    alertingView.style.display='flex';
-    emptyMain.style.display='none';
-    dpanels.style.display='none';
-    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
-    if(typeof _alertingInit==='function') _alertingInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';

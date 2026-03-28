@@ -63,6 +63,8 @@ async function openSettings(){
       <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">Networking</button>
       <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">Config Backup</button>
       <button class="dw-tab" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">Syslog</button>
+      <button class="dw-tab" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">Alert Rules</button>
+      <button class="dw-tab" id="stab-btn-maint"       onclick="switchSettingsTab('maint')">Maintenance</button>
     </div>
     <div class="mbdy stab-fade" id="stab-general" style="max-height:72vh;overflow-y:auto">
       <div class="fr">
@@ -483,6 +485,26 @@ async function openSettings(){
       <button class="btn-s" onclick="testSyslog()">Send Test Message</button>
       <button class="btn-p" onclick="saveSyslogSettings()">Save Syslog</button>
     </div>
+    <div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;max-height:72vh;overflow-y:auto">
+      <div class="alrt-panel-hdr">
+        <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
+        <button class="btn-p rbac-admin" onclick="_alertingOpenEditor(null)">＋ New Rule</button>
+      </div>
+      <div id="alrt-list"><div class="alrt-loading">Loading…</div></div>
+    </div>
+    <div class="mft" id="stab-footer-alert-rules" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
+    <div class="mbdy stab-fade" id="stab-maint" style="display:none;max-height:72vh;overflow-y:auto">
+      <div class="alrt-panel-hdr">
+        <span style="color:var(--text3);font-size:12px">Suppress alerts during scheduled maintenance. Rules still evaluate but no notifications are sent.</span>
+        <button class="btn-p rbac-admin" onclick="_alertMaintOpen(null)">＋ New Window</button>
+      </div>
+      <div id="alrt-maint-list"><div class="alrt-loading">Loading…</div></div>
+    </div>
+    <div class="mft" id="stab-footer-maint" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
   </div>`;
   document.body.appendChild(o);
 }
@@ -490,7 +512,7 @@ async function openSettings(){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','smtp','database','logs','sensors','networking','backup','syslog'];
+  const tabs = ['general','users','smtp','database','logs','sensors','networking','backup','syslog','alert-rules','maint'];
 
   // Find currently visible tab
   let cur = null;
@@ -538,10 +560,12 @@ function switchSettingsTab(tab){
             mbox.style.height = '';
             mbox.classList.remove('stab-anim');
             _stabSwitching = false;
-            if (tab === 'logs')     _loadLogTab();
-            if (tab === 'sensors')  loadSensorsDefaultsTab();
-            if (tab === 'backup')   _loadBackupScheduleSettings();
-            if (tab === 'database') _loadDbBackupSettings();
+            if (tab === 'logs')        _loadLogTab();
+            if (tab === 'sensors')     loadSensorsDefaultsTab();
+            if (tab === 'backup')      _loadBackupScheduleSettings();
+            if (tab === 'database')    _loadDbBackupSettings();
+            if (tab === 'alert-rules') _alertingLoadRules();
+            if (tab === 'maint')       _alertingLoadMaint();
           }, 280);
         });
       });
@@ -550,10 +574,12 @@ function switchSettingsTab(tab){
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
     _stabSwitching = false;
-    if (tab === 'logs')     _loadLogTab();
-    if (tab === 'sensors')  loadSensorsDefaultsTab();
-    if (tab === 'backup')   _loadBackupScheduleSettings();
-    if (tab === 'database') _loadDbBackupSettings();
+    if (tab === 'logs')        _loadLogTab();
+    if (tab === 'sensors')     loadSensorsDefaultsTab();
+    if (tab === 'backup')      _loadBackupScheduleSettings();
+    if (tab === 'database')    _loadDbBackupSettings();
+    if (tab === 'alert-rules') _alertingLoadRules();
+    if (tab === 'maint')       _alertingLoadMaint();
   }
 }
 
