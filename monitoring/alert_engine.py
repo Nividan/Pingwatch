@@ -5,7 +5,7 @@ Design mirrors syslog_client.py: a bounded queue fed by non-blocking
 alert_engine_send() calls from core/state.py, consumed by a daemon worker
 thread that evaluates rules and dispatches actions.
 
-Actions: email (smtp_alert), webhook (HTTP POST), syslog (syslog_client)
+Actions: email (smtp_alert), webhook (HTTP POST), syslog (syslog_client), browser (SSE push)
 Cooldown: DB-persisted via alert_dedup (survives restarts)
 History:  every rule firing written to alert_events table
 Maintenance: suppresses actions during active maintenance windows
@@ -317,6 +317,8 @@ def _dispatch(rule: dict, ctx: dict):
                 _dispatch_webhook(cfg, ctx)
             elif atype == "syslog":
                 _dispatch_syslog(cfg, ctx)
+            elif atype == "browser":
+                _dispatch_browser(cfg, ctx)
             else:
                 log.debug(f"alert_engine: unsupported action type '{atype}' (skipped)")
         except Exception as e:
@@ -441,3 +443,36 @@ def _dispatch_syslog(cfg: dict, ctx: dict):
         pass
     except Exception as e:
         log.error(f"alert_engine: syslog enqueue error: {e}")
+
+
+def _dispatch_browser(cfg: dict, ctx: dict):
+    """Push a browser_notification SSE event to all connected clients."""
+    def _render(tpl, default):
+        if not tpl:
+            return default
+        try:
+            return tpl.format(**{k: str(v or '') for k, v in ctx.items()})
+        except (KeyError, ValueError):
+            return tpl
+
+    title = _render(
+        cfg.get("title", ""),
+        f"[{ctx.get('severity', '?')}] {ctx.get('dname', '?')}/{ctx.get('sname', '?')}"
+    )
+    body  = _render(
+        cfg.get("body", ""),
+        f"{ctx.get('event_type', '?')}: {ctx.get('detail', '')}"
+    )
+    sound = cfg.get("sound", "alert")  # "alert" | "double" | "none"
+
+    push_payload = {
+        "title":    title,
+        "body":     body,
+        "sound":    sound,
+        "severity": ctx.get("severity", "info"),
+    }
+    try:
+        from core.app_state import STATE
+        STATE._broadcast("browser_notification", push_payload)
+    except Exception as e:
+        log.error(f"alert_engine: browser notification error: {e}")

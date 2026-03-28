@@ -110,6 +110,10 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
   });
+  sse.addEventListener('browser_notification',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    _showBrowserNotif(d);
+  });
   sse.onerror=()=>{
     document.getElementById('cbn').style.display='block';
     // Guard: onerror can fire multiple times (browser retries) before the timer fires.
@@ -296,6 +300,42 @@ async function _alertEvtBadgePoll() {
     _alertEvtBadgeCount = d.count || 0;
     _updateEvtBadge();
   } catch (_) {}
+}
+
+function _requestNotifPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default')
+    Notification.requestPermission();
+}
+
+function _playNotifSound(type) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const play = (freq, start, dur) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = freq;
+      o.type = 'sine';
+      g.gain.setValueAtTime(0.3, ctx.currentTime + start);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+      o.start(ctx.currentTime + start);
+      o.stop(ctx.currentTime + start + dur + 0.05);
+    };
+    if (type === 'double') { play(880, 0, 0.12); play(880, 0.18, 0.12); }
+    else { play(660, 0, 0.20); }  // 'alert' default
+  } catch (_) {}
+}
+
+function _showBrowserNotif(d) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const n = new Notification(d.title || 'PingWatch Alert', {
+    body: d.body || '',
+    icon: '/static/favicon.ico',
+    tag:  'pingwatch-alert',
+  });
+  n.onclick = () => { window.focus(); n.close(); };
+  if (d.sound && d.sound !== 'none') _playNotifSound(d.sound);
 }
 function applyRbac(){
   const op    = S.role==='operator'||S.role==='admin';
