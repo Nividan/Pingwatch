@@ -11,13 +11,80 @@ _last_error: dict = {}          # host -> (error_str, timestamp)
 _ERROR_SUPPRESS_S = 300         # seconds between identical error logs
 
 
-def _build_msg(subject, body, from_addr, to_addr):
-    msg = MIMEMultipart()
-    msg['Subject'] = subject
-    msg['From']    = from_addr
-    msg['To']      = to_addr
-    msg.attach(MIMEText(body, 'plain'))
+def _build_msg(subject, body, from_addr, to_addr, html=None):
+    """Build a MIME message. If html is provided, sends multipart/alternative."""
+    if html:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From']    = from_addr
+        msg['To']      = to_addr
+        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(html, 'html'))
+    else:
+        msg = MIMEMultipart()
+        msg['Subject'] = subject
+        msg['From']    = from_addr
+        msg['To']      = to_addr
+        msg.attach(MIMEText(body, 'plain'))
     return msg
+
+
+def _status_style(event_type: str, severity: str):
+    """Return (banner_color, emoji, label) based on event type / severity."""
+    et = (event_type or '').lower()
+    sv = (severity   or '').lower()
+    if et == 'recovered':
+        return '#1a7a4a', '\U0001f7e2', 'RECOVERED'   # green
+    if et == 'down' or sv == 'critical':
+        return '#c0392b', '\U0001f534', 'DOWN'         # red
+    if sv == 'warning':
+        return '#d68910', '\U0001f7e0', 'WARNING'      # orange
+    return '#2c6fad',   '\U0001f535', 'INFO'           # blue
+
+
+def _build_alert_html(rows: list, event_type: str, severity: str,
+                      title_device: str, title_sensor: str) -> str:
+    """Render a clean HTML email body. rows = list of (label, value) tuples."""
+    color, _emoji, label = _status_style(event_type, severity)
+    table_rows = ''.join(
+        f'<tr style="border-bottom:1px solid #e8e8e8">'
+        f'<td style="color:#888;width:80px;padding:7px 4px;font-size:13px">{lbl}</td>'
+        f'<td style="padding:7px 4px;font-size:13px;color:#222">{val}</td>'
+        f'</tr>'
+        for lbl, val in rows
+    )
+    sev_badge = (
+        f'<span style="background:{color};color:#fff;padding:2px 9px;'
+        f'border-radius:4px;font-size:11px;font-weight:700">{severity.upper()}</span>'
+    )
+    # Replace severity row value with badge
+    table_rows = table_rows.replace(
+        f'<td style="padding:7px 4px;font-size:13px;color:#222">{severity}</td>',
+        f'<td style="padding:7px 4px">{sev_badge}</td>'
+    )
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,Helvetica,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f0f0;padding:24px 0">
+<tr><td align="center">
+<table width="520" cellpadding="0" cellspacing="0"
+       style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.13)">
+  <tr><td style="background:{color};padding:18px 24px">
+    <div style="font-size:26px;display:inline-block;vertical-align:middle">{_emoji}</div>
+    <span style="color:#fff;font-size:20px;font-weight:700;margin-left:10px;vertical-align:middle">{label}</span>
+    <div style="color:rgba(255,255,255,.82);font-size:12px;margin-top:5px">
+      {title_device} &nbsp;/&nbsp; {title_sensor}
+    </div>
+  </td></tr>
+  <tr><td style="padding:18px 24px 8px">
+    <table width="100%" cellpadding="0" cellspacing="0">{table_rows}</table>
+  </td></tr>
+  <tr><td style="background:#f8f8f8;padding:10px 24px;border-top:1px solid #e8e8e8">
+    <span style="font-size:11px;color:#aaa">PingWatch &nbsp;·&nbsp; Alert Engine</span>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>"""
 
 
 def _connect(host, port, tls, user, password):
@@ -54,21 +121,26 @@ def send_alert_email(direction, evt):
     to_addr   = _cfg('smtp_to',   '')
     if not (host and from_addr and to_addr):
         return
-    emoji = '\U0001f534' if direction == 'down' else '\U0001f7e2'
-    label = 'DOWN' if direction == 'down' else 'RECOVERED'
-    subject = f"[PingWatch] {emoji} {label}: {_safe(evt.get('dname'))} / {_safe(evt.get('sname'))}"
-    body = (
-        f"Status : {label}\n"
-        f"Device : {_safe(evt.get('dname'))}\n"
-        f"Sensor : {_safe(evt.get('sname'))} ({_safe(evt.get('stype'))})\n"
-        f"Host   : {_safe(evt.get('host'))}\n"
-        f"Time   : {_safe(evt.get('ts'))}\n"
-        f"Detail : {_safe(evt.get('detail'))}\n"
-    )
+    sev        = 'critical' if direction == 'down' else 'info'
+    _c, emoji, label = _status_style(direction, sev)
+    dname  = _safe(evt.get('dname'))
+    sname  = _safe(evt.get('sname'))
+    subject = f"[PingWatch] {emoji} {label}: {dname} / {sname}"
+    rows = [
+        ('Status',   label),
+        ('Device',   dname),
+        ('Sensor',   f"{sname} ({_safe(evt.get('stype'))})"),
+        ('Host',     _safe(evt.get('host'))),
+        ('Severity', sev),
+        ('Time',     _safe(evt.get('ts'))),
+        ('Detail',   _safe(evt.get('detail'))),
+    ]
+    body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
+    html = _build_alert_html(rows, direction, sev, dname, sname)
     srv = None
     try:
         srv = _connect(host, port, tls, user, password)
-        srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr).as_string())
+        srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr, html).as_string())
         srv.quit(); srv = None
         _last_error.pop(host, None)   # clear suppression on success
         log.info(f"Alert email sent ({label}): {evt.get('dname')}/{evt.get('sname')}")
@@ -113,24 +185,32 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
         except (KeyError, ValueError):
             return tpl
 
-    subject = _fmt(subject_tpl) if subject_tpl else (
-        f"[PingWatch] {_safe(ctx.get('severity','').upper())} — "
-        f"{_safe(ctx.get('dname'))}/{_safe(ctx.get('sname'))}"
-    )
+    event_type = _safe(ctx.get('event_type', ''))
+    severity   = _safe(ctx.get('severity',   ''))
+    dname      = _safe(ctx.get('dname',      ''))
+    sname      = _safe(ctx.get('sname',      ''))
+    _c, emoji, _lbl = _status_style(event_type, severity)
+
+    if subject_tpl:
+        subject = _fmt(subject_tpl)
+    else:
+        subject = f"[PingWatch] {emoji} {severity.upper()} — {dname}/{sname}"
+
     if body_tpl:
         body = _fmt(body_tpl)
+        html = None
     else:
-        body = (
-            f"Alert Rule Triggered\n"
-            f"{'─' * 40}\n"
-            f"Event    : {_safe(ctx.get('event_type',''))}\n"
-            f"Device   : {_safe(ctx.get('dname'))}\n"
-            f"Sensor   : {_safe(ctx.get('sname'))} ({_safe(ctx.get('stype'))})\n"
-            f"Host     : {_safe(ctx.get('host'))}\n"
-            f"Severity : {_safe(ctx.get('severity',''))}\n"
-            f"Time     : {_safe(ctx.get('ts',''))}\n"
-            f"Detail   : {_safe(ctx.get('detail',''))}\n"
-        )
+        rows = [
+            ('Event',    event_type),
+            ('Device',   dname),
+            ('Sensor',   f"{sname} ({_safe(ctx.get('stype', ''))})"),
+            ('Host',     _safe(ctx.get('host',   ''))),
+            ('Severity', severity),
+            ('Time',     _safe(ctx.get('ts',     ''))),
+            ('Detail',   _safe(ctx.get('detail', ''))),
+        ]
+        body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
+        html = _build_alert_html(rows, event_type, severity, dname, sname)
 
     recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
     srv = None
@@ -138,7 +218,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
         srv = _connect(host, port, tls, user, password)
         for rcpt in recipients:
             srv.sendmail(from_addr, [rcpt],
-                         _build_msg(subject, body, from_addr, rcpt).as_string())
+                         _build_msg(subject, body, from_addr, rcpt, html).as_string())
         srv.quit(); srv = None
         _last_error.pop(host, None)
         log.info(f"Rule alert email sent to {to_addrs}: {subject[:60]}")
