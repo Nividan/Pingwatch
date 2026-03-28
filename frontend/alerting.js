@@ -645,19 +645,21 @@ function _alertingAddAction(atype, action) {
   if (atype === 'email') {
     blk.innerHTML = `
       <div class="alrt-act-hdr"><span class="alrt-act-label">📧 Email</span>${rmBtn}</div>
-      <div class="fr">
-        <label class="fl">To <span style="color:var(--text3);font-size:10px">(comma-separated)</span></label>
-        <input type="text" class="ae-act-to" value="${esc(cfg.to||'')}"
-          placeholder="ops@example.com, alerts@corp.com" autocomplete="off"/>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div class="fr" style="flex:1;min-width:160px">
+          <label class="fl">To <span style="color:var(--text3);font-size:10px">(comma-separated)</span></label>
+          <input type="text" class="ae-act-to" value="${esc(cfg.to||'')}"
+            placeholder="ops@example.com" autocomplete="off"/>
+        </div>
+        <div class="fr" style="flex:2;min-width:200px">
+          <label class="fl">Subject <span style="color:var(--text3);font-size:10px">({dname} {sname} {severity} {event_type})</span></label>
+          <input type="text" class="ae-act-subj" value="${esc(cfg.subject||'')}"
+            placeholder="[{severity}] {dname}/{sname} — {event_type}" autocomplete="off"/>
+        </div>
       </div>
       <div class="fr">
-        <label class="fl">Subject <span style="color:var(--text3);font-size:10px">(supports {dname}, {sname}, {severity}, {event_type})</span></label>
-        <input type="text" class="ae-act-subj" value="${esc(cfg.subject||'')}"
-          placeholder="[{severity}] {dname}/{sname} — {event_type}" autocomplete="off"/>
-      </div>
-      <div class="fr">
-        <label class="fl">Body <span style="color:var(--text3);font-size:10px">(empty = auto-generated)</span></label>
-        <textarea class="ae-act-body" rows="2" placeholder="Leave empty for default…">${esc(cfg.body||'')}</textarea>
+        <label class="fl">Body <span style="color:var(--text3);font-size:10px">(empty = auto-generated HTML email)</span></label>
+        <textarea class="ae-act-body" rows="1" placeholder="Leave empty for default…">${esc(cfg.body||'')}</textarea>
       </div>`;
   } else if (atype === 'webhook') {
     blk.innerHTML = `
@@ -669,7 +671,7 @@ function _alertingAddAction(atype, action) {
       </div>
       <div class="fr">
         <label class="fl">Body template <span style="color:var(--text3);font-size:10px">(JSON with {placeholders} — empty = full ctx dict)</span></label>
-        <textarea class="ae-act-wbody" rows="2"
+        <textarea class="ae-act-wbody" rows="1"
           placeholder='{"text":"[{severity}] {dname}/{sname} is {event_type}"}'>${esc(cfg.body||'')}</textarea>
       </div>`;
   } else if (atype === 'syslog') {
