@@ -436,7 +436,8 @@ function snmpOidPick(){
 
 // ── SNMP Interface Discovery ──────────────────────────────────────────────
 async function discoverInterfaces(){
-  const host      = document.getElementById('as-sh')?.value.trim();
+  const did       = window._ifaceDid;
+  const host      = document.getElementById('as-sh')?.value.trim() || S.devices[did]?.host || '';
   const community = document.getElementById('as-sc')?.value.trim()||'public';
   const port      = parseInt(document.getElementById('as-sp')?.value)||161;
   const version   = document.getElementById('as-sv')?.value||'2c';
