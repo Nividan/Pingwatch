@@ -250,10 +250,16 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
                     break
             if not val_line:
                 val_line = raw
-            val = val_line.split("=", 1)[-1].strip()
-            if ":" in val:
-                val = val.split(":", 1)[-1].strip()
-            return {"ok": True, "ms": ms, "detail": f"{val}", "value": val, "raw": raw}
+            rhs = val_line.split("=", 1)[-1].strip()
+            snmp_type = ""
+            if ":" in rhs:
+                snmp_type, _, val = rhs.partition(":")
+                snmp_type = snmp_type.strip()
+                val = val.strip()
+            else:
+                val = rhs
+            return {"ok": True, "ms": ms, "detail": f"{val}", "value": val,
+                    "snmp_type": snmp_type, "raw": raw}
         err = raw[:120] if raw else "No response"
         return {"ok": False, "ms": None, "detail": err}
     except FileNotFoundError:

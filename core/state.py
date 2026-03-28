@@ -15,6 +15,16 @@ from monitoring.smtp_alert import send_alert_email
 from .settings import get as _cfg
 from .logger import log_sensors
 
+_COUNTER_TYPES = {"counter32", "counter64", "counter"}
+
+def _fmt_bps(bps):
+    """Format bytes/sec as a human-readable rate string."""
+    if bps >= 1_000_000_000: return f"{bps/1_000_000_000:.2f} GB/s"
+    if bps >= 1_000_000:     return f"{bps/1_000_000:.2f} MB/s"
+    if bps >= 1_000:         return f"{bps/1_000:.1f} KB/s"
+    return f"{bps:.0f} B/s"
+
+
 def _smtp_down_delayed(sensor, data):
     """Sleep smtp_down_delay seconds, then send alert only if sensor is still down."""
     delay = max(0, int(_cfg('smtp_down_delay', 10)))
@@ -67,6 +77,9 @@ class Sensor:
         self.banner_regex  = banner_regex or ""
         self.alerts_muted  = bool(alerts_muted)
         self.host_override = False   # True = host was manually set; don't sync from device
+        # SNMP counter rate tracking (not persisted)
+        self._snmp_prev    = None   # previous raw counter value (int)
+        self._snmp_prev_ts = None   # timestamp of previous counter read
         # Runtime state (not persisted)
         self._consec_fail     = 0
         self._consec_ok       = 0
@@ -422,10 +435,37 @@ class MonitorState:
                 s.alive       = True
                 s.last_ms     = result["ms"]
                 s.last_detail = result["detail"]
-                s.last_value  = result.get("value")
+                # ── SNMP counter rate calculation ─────────────────
+                _raw_val = result.get("value")
+                _stype   = result.get("snmp_type", "").lower()
+                if s.stype == "snmp" and _stype in _COUNTER_TYPES and _raw_val is not None:
+                    try:
+                        _cur = int(_raw_val)
+                        _now = time.time()
+                        if s._snmp_prev is not None and s._snmp_prev_ts is not None:
+                            _elapsed = _now - s._snmp_prev_ts
+                            if _elapsed > 0:
+                                _delta = _cur - s._snmp_prev
+                                if _delta < 0:  # counter wrapped
+                                    _delta += (2**32 if _stype == "counter32" else 2**64)
+                                s.last_value = _fmt_bps(_delta / _elapsed)
+                            else:
+                                s.last_value = _raw_val
+                        else:
+                            s.last_value = None  # first poll — no rate yet
+                        s._snmp_prev    = _cur
+                        s._snmp_prev_ts = _now
+                    except (ValueError, TypeError):
+                        s.last_value    = _raw_val
+                        s._snmp_prev    = None
+                        s._snmp_prev_ts = None
+                else:
+                    s.last_value = _raw_val
+                # ─────────────────────────────────────────────────
                 s.history.append(result["ms"])
+                _log_msg = s.last_value if (s.stype == "snmp" and s.last_value and s.last_value.endswith("/s")) else result["detail"]
                 self._broadcast("log", {"did": did, "sid": sid,
-                                         "msg": result["detail"], "type": "ok"})
+                                         "msg": _log_msg, "type": "ok"})
                 # ── Debounce: track consecutive successes ──
                 s._consec_fail = 0
                 s._consec_ok  += 1
