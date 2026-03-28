@@ -602,6 +602,15 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 /* Threshold state coloring */
 .stl.thr-warn{border-color:var(--warn-border)}.stl.thr-crit{border-color:var(--down-border)}
 .stl.thr-warn .stl-sdot{background:var(--warn)}.stl.thr-crit .stl-sdot{background:var(--down)}
+/* ── Sensor tile loading skeleton ── */
+.stl-skel{min-height:168px;cursor:default;pointer-events:none;overflow:hidden;position:relative;}
+.stl-skel::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.055) 50%,transparent 100%);
+  background-size:300% 100%;
+  animation:skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skel-shimmer{0%{background-position:150% 0}100%{background-position:-150% 0}}
 /* New probe type icons */
 .stl-tbdg.tls         {background:rgba(6,182,212,.15);color:#22d3ee;border:1px solid rgba(6,182,212,.25)}
 .stl-tbdg.http_keyword{background:rgba(234,179,8,.15); color:#fde047;border:1px solid rgba(234,179,8,.25)}
