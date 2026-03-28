@@ -144,8 +144,15 @@ def _build_ctx(event_type: str, data: dict) -> dict:
         "threshold_warning":  "warning",
         "threshold_critical": "critical",
     }
+    # Normalize internal SSE event names to user-friendly values for condition matching
+    _etype_norm = {
+        "flap_down":          "down",
+        "flap_recovered":     "recovered",
+        "threshold_warning":  "threshold_warning",
+        "threshold_critical": "threshold_critical",
+    }
     ctx = dict(data)
-    ctx["event_type"] = event_type
+    ctx["event_type"] = _etype_norm.get(event_type, event_type)
     ctx["severity"]   = _sev_map.get(event_type, "info")
 
     if "grp" not in ctx or not ctx.get("grp"):
