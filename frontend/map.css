@@ -43,10 +43,10 @@ header {
   background:rgba(6,10,15,0.95); border-bottom:1px solid var(--panel-border);
   display:flex; align-items:center; padding:0 20px; gap:16px;
   backdrop-filter:blur(10px); flex-shrink:0;
-  transition:height .2s, padding .2s, border-color .2s;
-  overflow:hidden;
+  transition:height .2s, padding .2s, border-color .2s, opacity .2s;
+  overflow:visible;
 }
-header.collapsed { height:0; padding-top:0; padding-bottom:0; border-color:transparent; }
+header.collapsed { height:0; padding-top:0; padding-bottom:0; border-color:transparent; opacity:0; pointer-events:none; }
 #hdrReveal {
   position:fixed; top:0; left:50%; transform:translateX(-50%);
   background:rgba(0,212,255,0.08); border:1px solid rgba(0,212,255,0.22);

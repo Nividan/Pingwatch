@@ -9,6 +9,7 @@ let _ipamFiltered     = [];     // search-filtered view of _ipamAllIps
 let _ipamPage         = 0;      // current page (0-based)
 let _ipamShellInited  = false;  // shell HTML built once; data always refreshed on tab switch
 const _IPAM_PAGE_SIZE = 200;
+let _ipamGlobalCache  = null;   // flat array of all IPs across all subnets, with subnetLabel; null = stale
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function _ipamInit() {
@@ -157,9 +158,98 @@ function _n2ip(n) {
 }
 
 // ── Search / filter ────────────────────────────────────────────────────────
-function _ipamOnSearch(val) {
+async function _ipamOnSearch(val) {
   _ipamPage = 0;
-  _ipamApplyFilter(val);
+  const q = (val || '').trim();
+  if (q) {
+    await _ipamGlobalSearch(q);
+  } else {
+    // Clear global results: restore subnet view (or empty prompt)
+    document.getElementById('ipam-table-wrap')?.classList.remove('ipam-global-results');
+    if (_ipamSelectedId) {
+      _ipamApplyFilter('');
+    } else {
+      _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
+    }
+  }
+}
+
+async function _ipamGlobalSearch(q) {
+  const wrap = document.getElementById('ipam-table-wrap');
+  if (!wrap) return;
+  // Build global cache if stale
+  if (!_ipamGlobalCache) {
+    wrap.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3);font-size:13px">Searching all subnets…</div>';
+    const flat = [];
+    await Promise.all(_ipamSubnets.map(async sub => {
+      try {
+        const r = await fetch(`/api/ipam/subnets/${sub.id}/ips`);
+        if (!r.ok) return;
+        const d = await r.json();
+        const label = sub.cidr + (sub.name ? ' — ' + sub.name : '');
+        const allocs = d.allocations || {};
+        _ipamExpandCidr(sub.cidr).forEach(ip => {
+          const a = allocs[ip];
+          flat.push(a
+            ? { ip, subnetId: sub.id, subnetLabel: label,
+                name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
+                device_id: a.device_id || '', dns_name: a.dns_name || '' }
+            : { ip, subnetId: sub.id, subnetLabel: label,
+                name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '' });
+        });
+      } catch(_) {}
+    }));
+    _ipamGlobalCache = flat;
+  }
+  const lq = q.toLowerCase();
+  const results = _ipamGlobalCache.filter(e =>
+    e.ip.includes(lq) ||
+    e.name.toLowerCase().includes(lq) ||
+    (e.dns_name || '').toLowerCase().includes(lq) ||
+    e.subnetLabel.toLowerCase().includes(lq)
+  );
+  _ipamRenderGlobalResults(results, q);
+}
+
+function _ipamRenderGlobalResults(results, q) {
+  const wrap = document.getElementById('ipam-table-wrap');
+  if (!wrap) return;
+  const pg = document.getElementById('ipam-pg');
+  if (!results.length) {
+    wrap.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3);font-size:13px">No IPs match your search across any subnet.</div>';
+    if (pg) pg.innerHTML = '';
+    return;
+  }
+  const canEdit = S.role === 'operator' || S.role === 'admin';
+  const rows = results.map(e => {
+    const used = !!e.name;
+    const badge = used ? `<span class="ipam-used">Used</span>` : `<span class="ipam-free">Free</span>`;
+    const devBadge = e.device_id ? `<span class="ipam-dev-badge" title="Auto-populated from device">🔗</span>` : '';
+    const nameText = e.name ? devBadge + esc(e.name) : '<span style="color:var(--text3)">—</span>';
+    const dns = e.dns_name || '';
+    const dnsDisplay = dns.length > 30 ? dns.slice(0, 28) + '…' : dns;
+    return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
+      <td class="ipam-ip">${esc(e.ip)}</td>
+      <td style="font-size:11px;color:var(--text3)">${esc(e.subnetLabel)}</td>
+      <td>${nameText}</td>
+      <td class="ipam-dns" title="${esc(dns)}">${dnsDisplay ? esc(dnsDisplay) : '<span class="ipam-ts">—</span>'}</td>
+      <td>${badge}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `
+    <table class="ipam-tbl">
+      <thead>
+        <tr>
+          <th>IP Address</th>
+          <th>Subnet</th>
+          <th>Name / Description</th>
+          <th>DNS</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  if (pg) pg.innerHTML = `<span style="color:var(--text3);font-size:11px">${results.length} result${results.length === 1 ? '' : 's'} across all subnets</span>`;
 }
 
 function _ipamApplyFilter(q) {
@@ -290,6 +380,7 @@ function _ipamEditCell(td, ip) {
       entry.modified_at = Date.now() / 1000;
       entry.device_id   = '';   // user took ownership
     }
+    _ipamGlobalCache = null;  // invalidate cross-subnet cache
     // Re-sort (named IPs float to top)
     const search = document.getElementById('ipam-search')?.value || '';
     _ipamAllIps.sort((a, b) => {
@@ -368,6 +459,7 @@ async function _ipamSaveSubnet() {
   }
   closeM('ipam-add-modal');
   toast(`Subnet ${cidr} added`, 'ok');
+  _ipamGlobalCache = null;
   await _ipamLoadSubnets();
   // Auto-select the new subnet
   if (d.id) _ipamOnSubnetChange(d.id);
@@ -416,9 +508,10 @@ async function _ipamConfirmRemove() {
   closeM('ipam-rm-modal');
   const sub = _ipamSubnets.find(s => s.id === _ipamSelectedId);
   toast(`Subnet ${sub?.cidr || ''} removed`, 'ok');
-  _ipamSelectedId = null;
-  _ipamAllIps     = [];
-  _ipamFiltered   = [];
+  _ipamSelectedId  = null;
+  _ipamAllIps      = [];
+  _ipamFiltered    = [];
+  _ipamGlobalCache = null;
   await _ipamLoadSubnets();
 }
 
