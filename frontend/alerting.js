@@ -22,6 +22,8 @@ async function _alertingLoadRules() {
     if (r.status === 401) { showLogin('Session expired'); return; }
     const d = await r.json();
     _alertRules = d.rules || [];
+    if (_alertRules.some(r => (r.actions||[]).some(a => a.atype === 'browser')))
+      if (typeof _requestNotifPermission === 'function') _requestNotifPermission();
     _alertingRenderRules(_alertRules);
   } catch (e) {
     list.innerHTML = `<div class="alrt-err">Failed to load rules: ${esc(String(e))}</div>`;
@@ -530,6 +532,7 @@ function _alertingOpenEditor(id) {
               <button class="btn-sm" onclick="_alertingAddAction('email')">＋ Email</button>
               <button class="btn-sm" onclick="_alertingAddAction('webhook')">＋ Webhook</button>
               <button class="btn-sm" onclick="_alertingAddAction('syslog')">＋ Syslog</button>
+              <button class="btn-sm" onclick="_alertingAddAction('browser')">＋ Browser</button>
             </div>
           </div>
           <div id="ae-act-list" class="alrt-act-list"></div>
@@ -690,6 +693,31 @@ function _alertingAddAction(atype, action) {
           </select>
         </div>
       </div>`;
+  } else if (atype === 'browser') {
+    blk.innerHTML = `
+      <div class="alrt-act-hdr"><span class="alrt-act-label">🔔 Browser Notification</span>${rmBtn}</div>
+      <div class="fr">
+        <label class="fl">Title <span style="color:var(--text3);font-size:10px">(supports {dname}, {sname}, {severity}, {event_type})</span></label>
+        <input type="text" class="ae-act-btitle" value="${esc(cfg.title||'')}"
+          placeholder="[{severity}] {dname}/{sname}" autocomplete="off"/>
+      </div>
+      <div class="fr">
+        <label class="fl">Body <span style="color:var(--text3);font-size:10px">(empty = auto)</span></label>
+        <input type="text" class="ae-act-bbody" value="${esc(cfg.body||'')}"
+          placeholder="{event_type}: {detail}" autocomplete="off"/>
+      </div>
+      <div class="fr">
+        <label class="fl">Sound</label>
+        <select class="ae-act-bsound">
+          <option value="alert"  ${(cfg.sound||'alert')==='alert' ?'selected':''}>Alert beep</option>
+          <option value="double" ${(cfg.sound||'')==='double'?'selected':''}>Double beep</option>
+          <option value="none"   ${(cfg.sound||'')==='none'  ?'selected':''}>No sound</option>
+        </select>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">
+        Notification permission will be requested now. All logged-in users receive this alert.
+      </div>`;
+    _requestNotifPermission();
   }
   list.appendChild(blk);
 }
@@ -737,6 +765,12 @@ async function _alertingSave() {
         host:  (blk.querySelector('.ae-act-shost')?.value  || '').trim(),
         port:  parseInt(blk.querySelector('.ae-act-sport')?.value || '514', 10),
         proto: blk.querySelector('.ae-act-sproto')?.value || 'udp',
+      };
+    } else if (atype === 'browser') {
+      cfg = {
+        title: (blk.querySelector('.ae-act-btitle')?.value || '').trim(),
+        body:  (blk.querySelector('.ae-act-bbody')?.value  || '').trim(),
+        sound: blk.querySelector('.ae-act-bsound')?.value || 'alert',
       };
     }
     actions.push({ atype, config: cfg });
