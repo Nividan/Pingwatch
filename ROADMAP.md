@@ -77,6 +77,21 @@
   - Global config search — search across all stored configs from the backups toolbar
   - Rollback command preview — auto-generated from diff, copy to clipboard
   - Backup Status dashboard widget — OK / Failed / Never run / Enabled KPI counts
+  - Cisco rollback now includes enclosing interface/context block, `end`, and `wr`
+- SNMP improvements
+  - Interface discovery — walks ifTable + ifXTable; auto-selects metric per interface; clicking a single checkbox+metric syncs the OID input field
+  - Counter32 / Counter64 traffic OIDs display live rate (B/s, KB/s, MB/s, GB/s) via delta calculation with wraparound handling
+  - Non-numeric SNMP values (e.g. device name from wrong OID) shown in orange as a misconfiguration hint
+  - Probe uses `-On` flag and stdout-only parsing for deterministic output regardless of MIB environment
+- Sensor host linking
+  - Sensors inherit device host by default (`host_override = False`)
+  - Setting a host manually marks it overridden; clearing it re-links to the device
+  - Device IP changes propagate automatically to all linked sensors
+- Device tile loading skeleton — shimmer animation replaces stale cached tiles while fresh data fetches in parallel
+- Alert tagging on sensor events table
+  - Severity badge, rule name, and state badge shown inline on each event row
+  - ACK and Resolve buttons appear directly on active-alert rows
+  - Tag refreshes on SSE `ack_event` without page reload
 
 ## 🔴 High Priority
 

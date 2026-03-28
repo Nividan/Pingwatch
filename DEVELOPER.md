@@ -173,7 +173,7 @@ HTTP(S) dispatcher and application entry point. Serves static files, delegates e
 Cross-platform first-run wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only).
 
 ### `core/state.py`
-In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to all connected clients.
+In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to all connected clients. The probe loop calculates live traffic rates for Counter32/Counter64 SNMP OIDs (`_fmt_bps`, wraparound-safe delta / elapsed) and stores the formatted rate in `last_value`. `Sensor.host_override` tracks whether the host was set manually (not inherited from the device); device IP changes propagate to all non-overridden sensors.
 
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
@@ -185,7 +185,7 @@ LDAP/AD helpers: `ldap_authenticate`, `ldap_test_connection`, `ldap_test_auth_us
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
 
 ### `monitoring/probes.py`
-All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match).
+All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match). `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
 
 ### `backup/engine.py`
 SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH host key verification, password and keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable command, per-command idle timeouts, configurable command list.
@@ -237,7 +237,7 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 |--------|----------------|
 | `core.py` | Dual write-queues (main + logs), schema init for both DBs, user seeding |
 | `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB |
-| `persistence.py` | Device/sensor save, load, autosave loop |
+| `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag |
 | `samples.py` | Buffered probe writes, history & summary queries |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
@@ -278,11 +278,11 @@ The frontend is served as static files — no build step.
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`) |
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
 | `devices.js` | Device list, detail panel, port scan modal |
-| `sensors.js` | Sensor list, detail panel, history chart |
-| `events.js` | Flap/trap/error event log with filters |
-| `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback |
+| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads |
+| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event` |
+| `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |
-| `forms-sensor.js` | Add/edit sensor modal |
+| `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths |
 | `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Syslog, Alert Rules) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal |

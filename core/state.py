@@ -18,11 +18,12 @@ from .logger import log_sensors
 _COUNTER_TYPES = {"counter32", "counter64", "counter"}
 
 def _fmt_bps(bps):
-    """Format bytes/sec as a human-readable rate string."""
-    if bps >= 1_000_000_000: return f"{bps/1_000_000_000:.2f} GB/s"
-    if bps >= 1_000_000:     return f"{bps/1_000_000:.2f} MB/s"
-    if bps >= 1_000:         return f"{bps/1_000:.1f} KB/s"
-    return f"{bps:.0f} B/s"
+    """Format bytes/sec as a human-readable network rate (bits/sec)."""
+    bits = bps * 8
+    if bits >= 1_000_000_000: return f"{bits/1_000_000_000:.2f} Gbps"
+    if bits >= 1_000_000:     return f"{bits/1_000_000:.2f} Mbps"
+    if bits >= 1_000:         return f"{bits/1_000:.1f} Kbps"
+    return f"{bits:.0f} bps"
 
 
 def _smtp_down_delayed(sensor, data):

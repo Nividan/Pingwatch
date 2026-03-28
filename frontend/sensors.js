@@ -18,7 +18,7 @@ function tileHTML(s){
   // For SNMP: warn (orange) if alive but value is a non-numeric string — likely wrong OID
   // Warn (orange) when SNMP is alive but value is a plain string (e.g. wrong OID → sysDescr).
   // Don't warn for formatted rates ("5.8 KB/s", "1.2 MB/s") — those end with /s.
-  const _snmpStrVal = isSnmp && s.alive===true && rawVal && rawVal!=='—' && isNaN(rawVal) && !rawVal.endsWith('/s');
+  const _snmpStrVal = isSnmp && s.alive===true && rawVal && rawVal!=='—' && isNaN(rawVal) && !/bps$|\/s$/.test(rawVal);
   const vc=s.alive===false?'b':((isSnmp||isDns||isTls)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m'));
   const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
