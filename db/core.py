@@ -356,6 +356,12 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # snmp_unit — semantic unit for the OID (e.g. "bytes", "errors", "%", "count")
+        try:
+            con.execute("ALTER TABLE sensors ADD COLUMN snmp_unit TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass
         # alerts_muted — disable alerts per sensor / device
         for stmt in [
             "ALTER TABLE sensors ADD COLUMN alerts_muted INTEGER DEFAULT 0",

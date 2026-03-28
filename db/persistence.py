@@ -35,7 +35,8 @@ def db_save(state):
              getattr(s, "keyword", ""), int(getattr(s, "keyword_case", False)),
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
-             int(getattr(s, "host_override", False)))
+             int(getattr(s, "host_override", False)),
+             getattr(s, "snmp_unit", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -63,8 +64,8 @@ def db_save(state):
             "dns_query,dns_record_type,dns_server,http_expected_status,"
             "fail_after,recover_after,warn_ms,crit_ms,"
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
-            "alerts_muted,host_override) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "alerts_muted,host_override,snmp_unit) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -97,7 +98,8 @@ def db_load(state):
             "verify_ssl,snmp_community,snmp_oid,snmp_version,sid_ctr,"
             "dns_query,dns_record_type,dns_server,http_expected_status,"
             "fail_after,recover_after,warn_ms,crit_ms,"
-            "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted,host_override "
+            "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted,host_override,"
+            "COALESCE(snmp_unit,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -130,7 +132,7 @@ def db_load(state):
          dns_query, dns_record_type, dns_server, http_expected_status,
          fail_after, recover_after, warn_ms, crit_ms,
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
-         alerts_muted, host_override) in srows:
+         alerts_muted, host_override, snmp_unit) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -143,7 +145,8 @@ def db_load(state):
                    loss_warn_pct=int(loss_warn_pct or 0),
                    loss_crit_pct=int(loss_crit_pct or 0),
                    keyword=keyword or "", keyword_case=bool(keyword_case),
-                   banner_regex=banner_regex or "")
+                   banner_regex=banner_regex or "",
+                   snmp_unit=snmp_unit or "")
         s.dns_query            = dns_query or ""
         s.dns_record_type      = dns_record_type or "A"
         s.dns_server           = dns_server or ""
