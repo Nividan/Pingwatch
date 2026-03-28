@@ -62,11 +62,13 @@ function renderTile(did,s){
   if(old)old.remove();
   const t=document.createElement('div');
   const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr}`;
+  t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr} stl-enter`;
   t.id=`t-${key.replace('/','_')}`;
   t.onclick=()=>openDetail(did,s.sensor_id);
+  t.style.animationDelay=Math.min(grid.children.length*40,200)+'ms';
   t.innerHTML=tileHTML(s);
   grid.appendChild(t);
+  t.addEventListener('animationend',()=>{t.classList.remove('stl-enter');t.style.animationDelay='';},{once:true});
   const cvs=t.querySelector('canvas.spk');
   if(cvs){
     S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')};
