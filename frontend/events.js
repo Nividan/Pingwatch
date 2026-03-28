@@ -278,7 +278,7 @@ function _applyEvtFilters() {
 })();
 
 // ── View mode ─────────────────────────────────────────────────────
-let _evtViewMode = (()=>{ try{ return localStorage.getItem('pw_evt_view')||'card'; }catch{ return 'card'; } })();
+let _evtViewMode = (()=>{ try{ return localStorage.getItem('pw_evt_view')||'table'; }catch{ return 'table'; } })();
 
 function _setEvtViewMode(mode) {
   _evtViewMode = mode;
@@ -451,23 +451,26 @@ function _buildEvtTable(events) {
     const alertEvt = _matchAlertEvt(d);
     let alertCell = '<td></td>';
     if (alertEvt) {
-      const stCls = {active:'aev-st-active',acknowledged:'aev-st-ack',resolved:'aev-st-res',suppressed:'aev-st-sup'}[alertEvt.state]||'aev-st-res';
-      const svCls = {critical:'aev-sv-crit',warning:'aev-sv-warn',info:'aev-sv-info'}[alertEvt.severity]||'aev-sv-warn';
-      const btns  = alertEvt.state === 'active'
-        ? `<div class="aev-btns">` +
-            `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtAlertAck(${alertEvt.id})">ACK</button>` +
-            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">Resolve</button>` +
-          `</div>`
-        : '';
+      const isActive = alertEvt.state === 'active';
+      const svKey = {critical:'crit',warning:'warn',info:'info'}[alertEvt.severity]||'info';
+      const tagCls = `aev-tag aev-tag-${svKey}${isActive?' aev-tag-active':''}`;
+      const stCls  = {active:'aev-st-active',acknowledged:'aev-st-ack',resolved:'aev-st-res',suppressed:'aev-st-sup'}[alertEvt.state]||'aev-st-res';
+      const stLabel= {active:'● active',acknowledged:'◐ ack',resolved:'✓ done',suppressed:'◌ sup'}[alertEvt.state]||alertEvt.state;
       const repeatBadge = alertEvt.repeat_count > 1
         ? `<span class="aev-repeat" title="Fired ${alertEvt.repeat_count} times">×${alertEvt.repeat_count}</span>`
         : '';
+      const btns = isActive
+        ? `<div class="aev-btns">` +
+            `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtAlertAck(${alertEvt.id})">✓ ACK</button>` +
+            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">◉ Resolve</button>` +
+          `</div>`
+        : '';
       alertCell =
         `<td class="aev-cell">` +
-          `<div class="aev-tag">` +
-            `<span class="aev-sv ${svCls}">${esc(alertEvt.severity.toUpperCase())}</span>` +
+          `<div class="${tagCls}">` +
+            `<span class="aev-dot"></span>` +
             `<span class="aev-rule" title="${esc(alertEvt.rule_name)}">${esc(alertEvt.rule_name)}</span>` +
-            `<span class="aev-st ${stCls}">${esc(alertEvt.state)}</span>` +
+            `<span class="aev-st ${stCls}">${stLabel}</span>` +
             repeatBadge +
           `</div>` +
           btns +
