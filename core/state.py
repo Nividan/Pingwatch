@@ -15,7 +15,9 @@ from monitoring.smtp_alert import send_alert_email
 from .settings import get as _cfg
 from .logger import log_sensors
 
-_COUNTER_TYPES = {"counter32", "counter64", "counter"}
+_COUNTER_TYPES  = {"counter32", "counter64", "counter"}
+_BYTE_UNITS     = {"bytes"}
+_COUNT_UNITS    = {"errors", "packets"}  # counter OIDs that count events, not bytes
 
 def _fmt_bps(bps):
     """Format bytes/sec as a human-readable network rate (bits/sec)."""
@@ -24,6 +26,17 @@ def _fmt_bps(bps):
     if bits >= 1_000_000:     return f"{bits/1_000_000:.2f} Mbps"
     if bits >= 1_000:         return f"{bits/1_000:.1f} Kbps"
     return f"{bits:.0f} bps"
+
+def _fmt_rate(rate, unit):
+    """Format a per-second counter rate based on its semantic unit."""
+    if unit in _BYTE_UNITS or unit == "":
+        return _fmt_bps(rate)          # bytes/sec → Kbps/Mbps/Gbps
+    if unit == "errors":
+        return f"{rate:.2f} err/s" if rate < 10 else f"{rate:.1f} err/s"
+    if unit == "packets":
+        return f"{rate:.2f} pkt/s" if rate < 10 else f"{rate:.1f} pkt/s"
+    # Fallback for any other counter unit
+    return f"{rate:.2f}/s"
 
 
 def _smtp_down_delayed(sensor, data):
@@ -46,7 +59,7 @@ class Sensor:
                  fail_after=2, recover_after=1,
                  warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                  keyword="", keyword_case=False, banner_regex="",
-                 alerts_muted=False):
+                 alerts_muted=False, snmp_unit=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -77,11 +90,12 @@ class Sensor:
         self.keyword_case  = bool(keyword_case)
         self.banner_regex  = banner_regex or ""
         self.alerts_muted  = bool(alerts_muted)
+        self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
         self.host_override = False   # True = host was manually set; don't sync from device
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
-        self._last_bits    = None   # float bits/sec for Counter32/Counter64, None otherwise
+        self._last_rate    = None   # float bytes/sec (for "bytes") or events/sec (for "errors"/"packets")
         # Runtime state (not persisted)
         self._consec_fail     = 0
         self._consec_ok       = 0
@@ -172,12 +186,13 @@ class Sensor:
             "banner_regex":          self.banner_regex,
             "alerts_muted":          self.alerts_muted,
             "host_override":         self.host_override,
+            "snmp_unit":             self.snmp_unit,
             "threshold_state":       self._threshold_state,
             "alive":          self.alive,
             "last_ms":        self.last_ms,
             "last_detail":    self.last_detail,
             "last_value":     self.last_value,
-            "last_bits":      round(self._last_bits, 2) if self._last_bits is not None else None,
+            "last_rate":      round(self._last_rate, 4) if self._last_rate is not None else None,
             "avg_ms":         self.avg_ms,
             "min_ms":         self.min_ms,
             "max_ms":         self.max_ms,
@@ -299,7 +314,7 @@ class MonitorState:
                    snmp_oid="1.3.6.1.2.1.1.1.0", snmp_version="2c",
                    fail_after=1, recover_after=1,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
-                   keyword="", keyword_case=False, banner_regex=""):
+                   keyword="", keyword_case=False, banner_regex="", snmp_unit=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -312,7 +327,8 @@ class MonitorState:
                        fail_after=fail_after, recover_after=recover_after,
                        warn_ms=warn_ms, crit_ms=crit_ms,
                        loss_warn_pct=loss_warn_pct, loss_crit_pct=loss_crit_pct,
-                       keyword=keyword, keyword_case=keyword_case, banner_regex=banner_regex)
+                       keyword=keyword, keyword_case=keyword_case, banner_regex=banner_regex,
+                       snmp_unit=snmp_unit)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -340,7 +356,8 @@ class MonitorState:
                         "http_expected_status",
                         "fail_after", "recover_after",
                         "warn_ms", "crit_ms", "loss_warn_pct", "loss_crit_pct",
-                        "keyword", "keyword_case", "banner_regex", "alerts_muted"]
+                        "keyword", "keyword_case", "banner_regex", "alerts_muted",
+                        "snmp_unit"]
             for k, v in kwargs.items():
                 if k in editable and v is not None:
                     if k == 'host':
@@ -451,28 +468,28 @@ class MonitorState:
                                 _delta = _cur - s._snmp_prev
                                 if _delta < 0:  # counter wrapped
                                     _delta += (2**32 if _stype == "counter32" else 2**64)
-                                _Bps = _delta / _elapsed          # bytes/sec
-                                s._last_bits = _Bps * 8           # bits/sec for threshold
-                                s.last_value = _fmt_bps(_Bps)
+                                _rate = _delta / _elapsed  # bytes/sec OR events/sec
+                                s._last_rate = _rate
+                                s.last_value = _fmt_rate(_rate, s.snmp_unit)
                             else:
                                 s.last_value = _raw_val
-                                s._last_bits = None
+                                s._last_rate = None
                         else:
                             s.last_value = None   # first poll — no rate yet
-                            s._last_bits = None
+                            s._last_rate = None
                         s._snmp_prev    = _cur
                         s._snmp_prev_ts = _now
                     except (ValueError, TypeError):
                         s.last_value    = _raw_val
-                        s._last_bits    = None
+                        s._last_rate    = None
                         s._snmp_prev    = None
                         s._snmp_prev_ts = None
                 else:
                     s.last_value = _raw_val
-                    s._last_bits = None
+                    s._last_rate = None
                 # ─────────────────────────────────────────────────
                 s.history.append(result["ms"])
-                _log_msg = s.last_value if (s.stype == "snmp" and s._last_bits is not None and s.last_value) else result["detail"]
+                _log_msg = s.last_value if (s.stype == "snmp" and s._last_rate is not None and s.last_value) else result["detail"]
                 self._broadcast("log", {"did": did, "sid": sid,
                                          "msg": _log_msg, "type": "ok"})
                 # ── Debounce: track consecutive successes ──
@@ -540,9 +557,14 @@ class MonitorState:
             if result["ok"]:
                 _thr_chk = None
                 if s.stype in ('snmp', 'tls'):
-                    if s._last_bits is not None:
-                        # Counter sensor — warn_ms/crit_ms treated as Mbps
-                        _thr_chk = s._last_bits / 1_000_000
+                    if s._last_rate is not None:
+                        _u = s.snmp_unit
+                        if _u in _BYTE_UNITS or _u == "":
+                            # Traffic bytes counter — compare in Mbps
+                            _thr_chk = s._last_rate * 8 / 1_000_000
+                        else:
+                            # Event counter (errors, packets) — compare raw events/sec
+                            _thr_chk = s._last_rate
                     else:
                         try: _thr_chk = float(s.last_value)
                         except (TypeError, ValueError): pass
@@ -566,8 +588,13 @@ class MonitorState:
                         "ms": s.last_ms, "loss_pct": s.loss_pct,
                         "grp": dev.group,
                     })
-                    if s._last_bits is not None:
-                        _unit = 'Mbps'; _val_disp = s.last_value or f"{s._last_bits/1_000_000:.2f}Mbps"
+                    if s._last_rate is not None:
+                        _u2 = s.snmp_unit
+                        if _u2 in _BYTE_UNITS or _u2 == "":
+                            _unit = 'Mbps'
+                        else:
+                            _unit = _u2 + '/s' if _u2 else '/s'
+                        _val_disp = s.last_value or f"{s._last_rate:.2f}{_unit}"
                     elif s.stype in ('snmp', 'tls'):
                         _unit = ''; _val_disp = s.last_value or ''
                     else:

@@ -360,7 +360,8 @@ def handle(h, method, path, body):
                   "http_expected_status",
                   "fail_after", "recover_after", "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
-                  "keyword", "keyword_case", "banner_regex", "alerts_muted"]:
+                  "keyword", "keyword_case", "banner_regex", "alerts_muted",
+                  "snmp_unit"]:
             if k in body: kwargs[k] = body[k]
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
@@ -420,6 +421,7 @@ def handle(h, method, path, body):
         comm  = body.get("snmp_community", "public")
         oid   = body.get("snmp_oid", "1.3.6.1.2.1.1.1.0")
         sver  = body.get("snmp_version", "2c")
+        sunit = body.get("snmp_unit", "")
         xstat = int(body.get("http_expected_status", 0))
         fa    = max(1, int(body.get("fail_after",    1) or 1))
         ra    = max(1, int(body.get("recover_after", 1) or 1))
@@ -444,7 +446,8 @@ def handle(h, method, path, body):
                                fail_after=fa, recover_after=ra,
                                warn_ms=wms, crit_ms=cms,
                                loss_warn_pct=lwp, loss_crit_pct=lcp,
-                               keyword=kw, keyword_case=kwc, banner_regex=bnr)
+                               keyword=kw, keyword_case=kwc, banner_regex=bnr,
+                               snmp_unit=sunit)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
