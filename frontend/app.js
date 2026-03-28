@@ -91,16 +91,21 @@ function connectSSE(){
   sse.addEventListener('flap_down',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
+    // Refresh alert cache after alert engine has had time to process (3s delay)
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);

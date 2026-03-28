@@ -93,18 +93,18 @@ function _matchAlertEvt(event) {
   const key = `${event.did}::${event.sid||''}`;
   const candidates = _alertMap[key];
   if (!candidates || !candidates.length) return null;
-  // ts from flaps is "YYYY-MM-DD HH:MM:SS"; triggered_at is unix seconds
-  const evtSec = new Date(event.ts.replace(' ', 'T')).getTime() / 1000;
+  // ts is ISO UTC "2026-03-28T17:17:48Z"; triggered_at is unix seconds
+  const evtSec = new Date(event.ts).getTime() / 1000;
   if (isNaN(evtSec)) return null;
   // Determine whether this sensor event is a down/threshold or recovery
   const dir = event._direction || event.direction || '';
   const isDown = dir === 'down' || dir === 'threshold';
   const isRecovered = dir === 'recovered';
-  // Alert fires after sensor detects state change: triggered_at >= evtSec, within 90s
-  const WINDOW = 90;
+  // Alert fires after sensor event (queue delay); allow up to 5 min after, 60s before
+  const WINDOW = 300;
   return candidates.find(a => {
     const lag = a.triggered_at - evtSec;
-    if (lag < -5 || lag > WINDOW) return false;  // allow 5s clock skew back
+    if (lag < -60 || lag > WINDOW) return false;
     // Direction filter: only match alert event_type that aligns with sensor direction
     const et = (a.event_type || '').toLowerCase();
     if (isDown)      return et === 'down' || et.startsWith('threshold');
