@@ -66,6 +66,7 @@ class Sensor:
         self.keyword_case  = bool(keyword_case)
         self.banner_regex  = banner_regex or ""
         self.alerts_muted  = bool(alerts_muted)
+        self.host_override = False   # True = host was manually set; don't sync from device
         # Runtime state (not persisted)
         self._consec_fail     = 0
         self._consec_ok       = 0
@@ -155,6 +156,7 @@ class Sensor:
             "keyword_case":          self.keyword_case,
             "banner_regex":          self.banner_regex,
             "alerts_muted":          self.alerts_muted,
+            "host_override":         self.host_override,
             "threshold_state":       self._threshold_state,
             "alive":          self.alive,
             "last_ms":        self.last_ms,
@@ -296,6 +298,7 @@ class MonitorState:
                        loss_warn_pct=loss_warn_pct, loss_crit_pct=loss_crit_pct,
                        keyword=keyword, keyword_case=keyword_case, banner_regex=banner_regex)
             dev.sensors[sid] = s
+            s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
 
     def update_sensor(self, did, sid, **kwargs):
@@ -324,8 +327,12 @@ class MonitorState:
                         "keyword", "keyword_case", "banner_regex", "alerts_muted"]
             for k, v in kwargs.items():
                 if k in editable and v is not None:
-                    if k == 'host' and not v:
-                        v = dev.host  # fall back to device host when sensor host is cleared
+                    if k == 'host':
+                        if v:  # Non-empty: manually overridden — unlink from device
+                            s.host_override = True
+                        else:  # Cleared: re-link to device host
+                            v = dev.host
+                            s.host_override = False
                     setattr(s, k, v)
         if was_running:
             self.start_sensor(did, sid)

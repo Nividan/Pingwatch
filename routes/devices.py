@@ -267,6 +267,10 @@ def handle(h, method, path, body):
                 if not h._valid_host(h2):
                     h._json(400, {"error": "invalid host"}); return True
                 dev.host = h2
+                # Propagate new host to all sensors that haven't been manually overridden
+                for _s in dev.sensors.values():
+                    if not _s.host_override:
+                        _s.host = h2
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name
