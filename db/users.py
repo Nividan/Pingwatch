@@ -45,19 +45,63 @@ def db_save_settings(d: dict):
 # ── User management ───────────────────────────────────────────────
 
 def db_list_users() -> list:
-    """Return all users as [{username, role, auth_type, domain}]."""
+    """Return all users as [{username, role, auth_type, domain, full_name, email, group_id, group_name}]."""
     con = sqlite3.connect(DB_PATH)
     try:
-        rows = con.execute(
-            "SELECT username, role, auth_type, domain FROM users ORDER BY username"
-        ).fetchall()
+        rows = con.execute("""
+            SELECT u.username, u.role, u.auth_type, u.domain,
+                   u.full_name, u.email, u.group_id, g.name AS group_name
+            FROM users u
+            LEFT JOIN user_groups g ON g.id = u.group_id
+            ORDER BY u.username
+        """).fetchall()
         return [{"username": r[0], "role": r[1],
-                 "auth_type": r[2] or "local", "domain": r[3] or ""} for r in rows]
+                 "auth_type": r[2] or "local", "domain": r[3] or "",
+                 "full_name": r[4] or "", "email": r[5] or "",
+                 "group_id": r[6], "group_name": r[7] or ""} for r in rows]
     except Exception as e:
         log.error(f"DB list users error: {e}")
         return []
     finally:
         con.close()
+
+
+_UNSET = object()
+
+
+def db_update_profile(username: str, full_name: str, email: str,
+                      group_id=_UNSET, role: str = _UNSET) -> bool:
+    """
+    Update user profile fields.
+    group_id and role are only updated when explicitly passed (admin path).
+    Returns False if user not found.
+    """
+    con = sqlite3.connect(DB_PATH)
+    try:
+        sets = ["full_name=?", "email=?"]
+        params = [full_name.strip(), email.strip()]
+        if group_id is not _UNSET:
+            sets.append("group_id=?")
+            params.append(group_id)
+        if role is not _UNSET:
+            sets.append("role=?")
+            params.append(role)
+        params.append(username)
+        cur = con.execute(
+            f"UPDATE users SET {', '.join(sets)} WHERE username=?", params
+        )
+        con.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"DB update profile error: {e}")
+        return False
+    finally:
+        con.close()
+
+
+def db_update_own_profile(username: str, full_name: str, email: str) -> bool:
+    """Update only full_name and email for the user (self-service, no role/group change)."""
+    return db_update_profile(username, full_name, email)
 
 
 def db_add_user(username: str, password: str, role: str = "admin") -> bool:

@@ -501,6 +501,17 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Migration: user profiles + groups (v0.8+)
+        for _col, _def in [
+            ("full_name", "TEXT DEFAULT ''"),
+            ("email",     "TEXT DEFAULT ''"),
+            ("group_id",  "INTEGER DEFAULT NULL"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
         # ── Alert Rules Engine tables (v0.7.3+) ───────────────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS alert_rules (
@@ -570,6 +581,12 @@ def db_init():
                 recur_end   TEXT    DEFAULT '',
                 created_by  TEXT    DEFAULT '',
                 created_at  REAL    DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS user_groups (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL UNIQUE,
+                description TEXT    DEFAULT ''
             )""")
         con.commit()
     finally:

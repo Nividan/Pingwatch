@@ -327,13 +327,32 @@ def _dispatch(rule: dict, ctx: dict):
 
 def _dispatch_email(cfg: dict, ctx: dict):
     from monitoring.smtp_alert import send_rule_email
-    to_addrs = cfg.get("to", "").strip()
-    subject  = cfg.get("subject", "").strip()
-    body     = cfg.get("body", "").strip()
-    if not to_addrs:
+    from db.groups import db_resolve_group_emails
+
+    emails: set = set()
+
+    # Resolve groups → member emails
+    for gid in (cfg.get("groups") or []):
+        try:
+            emails.update(db_resolve_group_emails(int(gid)))
+        except Exception as e:
+            log.warning(f"alert_engine: group {gid} email resolve error: {e}")
+
+    # Extra/legacy raw emails  (extra_to = new field, to = legacy field)
+    raw = cfg.get("extra_to") or cfg.get("to") or ""
+    for addr in str(raw).split(","):
+        addr = addr.strip()
+        if addr:
+            emails.add(addr)
+
+    if not emails:
         log.warning("alert_engine: email action has no recipients — skipped")
         return
-    send_rule_email(to_addrs, subject, body, ctx)
+
+    send_rule_email(",".join(sorted(emails)),
+                    cfg.get("subject", "").strip(),
+                    cfg.get("body", "").strip(),
+                    ctx)
 
 
 def _is_safe_url(url: str) -> bool:
