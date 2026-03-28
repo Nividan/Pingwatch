@@ -79,14 +79,11 @@
   - Backup Status dashboard widget — OK / Failed / Never run / Enabled KPI counts
 
 ## 🔴 High Priority
-- Slack / Teams / PagerDuty alert actions
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
-- Theme support (dark/light toggle)
 
 ## 🎨 Low Priority
-- Fix history icon
 - Theme support
   - Dark / light theme toggle (stub already in user menu)
   - Persist theme preference per user
