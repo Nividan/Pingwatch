@@ -27,7 +27,6 @@ def handle(h, method, path, body):
         h.send_header("Content-Type", "text/event-stream")
         h.send_header("Cache-Control", "no-cache")
         h.send_header("Connection", "keep-alive")
-        h.send_header("Access-Control-Allow-Origin", "*")
         h.end_headers()
         q = STATE.subscribe()
         try:

@@ -44,15 +44,19 @@ _dns_refresh_lock_mutex = threading.Lock()
 
 
 def _resolve_dns(ip_str, timeout=2):
-    """Reverse DNS lookup. Returns hostname string or '' on any failure."""
+    """Reverse DNS lookup. Returns hostname string or '' on any failure.
+
+    Uses a thread + Future.result(timeout) instead of socket.setdefaulttimeout()
+    to avoid mutating the process-global socket timeout.
+    """
     import socket
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
     try:
-        socket.setdefaulttimeout(timeout)
-        return socket.gethostbyaddr(ip_str)[0]
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(socket.gethostbyaddr, ip_str)
+            return fut.result(timeout=timeout)[0]
     except Exception:
         return ''
-    finally:
-        socket.setdefaulttimeout(None)
 
 
 def _dns_refresh_worker(subnet_id, ip_list):

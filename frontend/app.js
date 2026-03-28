@@ -274,9 +274,10 @@ function onAuthenticated(username){
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, 300000);
-  // Poll active alert count for tab badge (every 60s)
+  // Poll active alert count for tab badge (every 60s); clear on re-login to prevent stacking
   _alertBadgePoll();
-  setInterval(_alertBadgePoll, 60000);
+  if (window._alertBadgeInterval) clearInterval(window._alertBadgeInterval);
+  window._alertBadgeInterval = setInterval(_alertBadgePoll, 60000);
 }
 
 async function _alertBadgePoll() {

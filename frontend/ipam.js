@@ -368,7 +368,6 @@ async function _ipamSaveSubnet() {
   }
   closeM('ipam-add-modal');
   toast(`Subnet ${cidr} added`, 'ok');
-  _ipamInited = false;
   await _ipamLoadSubnets();
   // Auto-select the new subnet
   if (d.id) _ipamOnSubnetChange(d.id);
@@ -420,7 +419,6 @@ async function _ipamConfirmRemove() {
   _ipamSelectedId = null;
   _ipamAllIps     = [];
   _ipamFiltered   = [];
-  _ipamInited     = false;
   await _ipamLoadSubnets();
 }
 

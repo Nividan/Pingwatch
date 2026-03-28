@@ -208,8 +208,10 @@ def handle(h, method, path, body):
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
         _pw = (body.get("smtp_pass") or "").strip()
         if _pw:
-            _settings.load({"smtp_pass": _pw})
-            _db_enqueue(lambda _p=_pw: db_save_settings({"smtp_pass": _p}))
+            from db.backups import encrypt_pw as _enc_smtp_pw
+            _pw_enc = _enc_smtp_pw(_pw)
+            _settings.load({"smtp_pass": _pw_enc})
+            _db_enqueue(lambda _p=_pw_enc: db_save_settings({"smtp_pass": _p}))
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
         h._json(200, {"ok": True})
         return True
@@ -228,12 +230,13 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         from monitoring.smtp_alert import test_smtp
+        from db.backups import decrypt_pw as _dec_smtp_pw
         cfg = {
             "host":      (body.get("smtp_host") or "").strip(),
             "port":      body.get("smtp_port", 587),
             "tls":       (body.get("smtp_tls")  or "starttls").strip(),
             "user":      (body.get("smtp_user") or "").strip(),
-            "password":  (body.get("smtp_pass") or _settings.get("smtp_pass", "")).strip(),
+            "password":  (body.get("smtp_pass") or _dec_smtp_pw(_settings.get("smtp_pass", ""))).strip(),
             "from_addr": (body.get("smtp_from") or "").strip(),
             "to_addr":   (body.get("smtp_to")   or "").strip(),
         }

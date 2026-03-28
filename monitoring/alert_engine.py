@@ -71,11 +71,16 @@ def _worker_loop():
             item = _Q.get(timeout=5)
         except queue.Empty:
             continue
+        except Exception as e:
+            log.error(f"alert_engine: queue error: {e}")
+            continue
         try:
             event_type, data = item
             _process(event_type, data)
         except Exception as e:
             log.error(f"alert_engine worker error: {e}")
+        finally:
+            _Q.task_done()
 
 
 def _get_rules() -> list:
@@ -194,7 +199,8 @@ def _eval_condition(cond: dict, ctx: dict) -> bool:
 
     getter = _FIELD_MAP.get(field)
     if not getter:
-        return True
+        log.warning(f"alert_engine: unknown condition field {field!r} — condition skipped")
+        return False
 
     actual = getter(ctx)
 
@@ -234,7 +240,6 @@ def _check_maintenance(ctx: dict) -> tuple:
 
     now_dt  = datetime.datetime.now()
     now_day = now_dt.isoweekday()   # 1=Mon, 7=Sun
-    now_hm  = now_dt.strftime("%H:%M")
 
     for w in windows:
         if w.get("recurring"):
@@ -243,8 +248,19 @@ def _check_maintenance(ctx: dict) -> tuple:
                 continue
             rs = w.get("recur_start", "")
             re = w.get("recur_end", "")
-            if rs and re and not (rs <= now_hm <= re):
-                continue
+            if rs and re:
+                try:
+                    rs_t = datetime.datetime.strptime(rs, "%H:%M").time()
+                    re_t = datetime.datetime.strptime(re, "%H:%M").time()
+                    now_t = now_dt.time()
+                    if rs_t <= re_t:
+                        active = rs_t <= now_t <= re_t
+                    else:  # crosses midnight
+                        active = now_t >= rs_t or now_t <= re_t
+                    if not active:
+                        continue
+                except ValueError:
+                    continue
 
         scope = w.get("scope_type", "all")
         if scope == "group" and ctx.get("grp", "") != w.get("scope_value", ""):
@@ -311,11 +327,38 @@ def _dispatch_email(cfg: dict, ctx: dict):
     send_rule_email(to_addrs, subject, body, ctx)
 
 
+def _is_safe_url(url: str) -> bool:
+    """Return True if url is safe to request (not localhost/link-local/private)."""
+    import ipaddress
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return False
+        host = (p.hostname or "").lower()
+        if not host:
+            return False
+        if host in ("localhost",) or host.startswith("127.") or host == "::1":
+            return False
+        if host.endswith(".local"):
+            return False
+        try:
+            ip = ipaddress.ip_address(host)
+            return ip.is_global
+        except ValueError:
+            return True  # hostname — allow (DNS resolves at request time)
+    except Exception:
+        return False
+
+
 def _dispatch_webhook(cfg: dict, ctx: dict):
     """HTTP POST webhook with JSON-template body. Runs synchronously in engine thread."""
     url = cfg.get("url", "").strip()
     if not url:
         log.warning("alert_engine: webhook action has no URL — skipped")
+        return
+    if not _is_safe_url(url):
+        log.error(f"alert_engine: webhook URL blocked (SSRF guard): {url!r}")
         return
 
     body_tpl = cfg.get("body", "").strip()

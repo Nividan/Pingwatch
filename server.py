@@ -203,7 +203,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", 0))
             if n > self._MAX_BODY:
-                return {}
+                self.send_response(413)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
             return json.loads(self.rfile.read(n)) if n else {}
         except (ValueError, json.JSONDecodeError):
             return {}
@@ -280,6 +283,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         body = self._body()
+        if body is None: return
 
         from routes import ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod
         for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod):
@@ -293,6 +297,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod
         p    = urlparse(self.path).path
         body = self._body()
+        if body is None: return
 
         for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_rules_mod, _maint_mod):
             if mod.handle(self, 'PATCH', p, body):
@@ -305,6 +310,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import topology, settings, backups, ipam
         p    = urlparse(self.path).path
         body = self._body()
+        if body is None: return
 
         if settings.handle(self, 'PUT', p, body):
             return

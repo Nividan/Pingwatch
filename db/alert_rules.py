@@ -69,37 +69,38 @@ def _load_actions(con, rule_id: int) -> list:
 
 def db_list_rules() -> list:
     """Return all alert rules with their conditions and actions."""
+    con = _con()
     try:
-        con = _con()
         rules = [_rule_row_to_dict(r) for r in con.execute(
             "SELECT * FROM alert_rules ORDER BY sort_order, id"
         ).fetchall()]
         for rule in rules:
             rule["conditions"] = _load_conditions(con, rule["id"])
             rule["actions"]    = _load_actions(con, rule["id"])
-        con.close()
         return rules
     except Exception as e:
         log.error(f"db_list_rules error: {e}")
         return []
+    finally:
+        con.close()
 
 
 def db_get_rule(rule_id: int) -> dict | None:
     """Return a single rule with conditions and actions, or None."""
+    con = _con()
     try:
-        con = _con()
         row = con.execute("SELECT * FROM alert_rules WHERE id=?", (rule_id,)).fetchone()
         if not row:
-            con.close()
             return None
         rule = _rule_row_to_dict(row)
         rule["conditions"] = _load_conditions(con, rule_id)
         rule["actions"]    = _load_actions(con, rule_id)
-        con.close()
         return rule
     except Exception as e:
         log.error(f"db_get_rule error: {e}")
         return None
+    finally:
+        con.close()
 
 
 # ── Public write functions (called inside _db_enqueue lambdas) ────
@@ -107,8 +108,8 @@ def db_get_rule(rule_id: int) -> dict | None:
 def db_create_rule(data: dict) -> int:
     """Insert a new rule (with conditions + actions). Returns new rule id."""
     now = time.time()
+    con = _con()
     try:
-        con = _con()
         cur = con.execute(
             "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, sort_order, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?,?)",
@@ -126,18 +127,19 @@ def db_create_rule(data: dict) -> int:
         _write_conditions(con, rule_id, data.get("conditions", []))
         _write_actions(con, rule_id, data.get("actions", []))
         con.commit()
-        con.close()
         return rule_id
     except Exception as e:
         log.error(f"db_create_rule error: {e}")
         return -1
+    finally:
+        con.close()
 
 
 def db_update_rule(rule_id: int, data: dict) -> bool:
     """Replace a rule's fields, conditions, and actions atomically."""
     now = time.time()
+    con = _con()
     try:
-        con = _con()
         con.execute(
             "UPDATE alert_rules SET name=?, enabled=?, severity=?, condition_logic=?, "
             "cooldown_s=?, sort_order=?, updated_at=? WHERE id=?",
@@ -157,50 +159,54 @@ def db_update_rule(rule_id: int, data: dict) -> bool:
         _write_conditions(con, rule_id, data.get("conditions", []))
         _write_actions(con, rule_id, data.get("actions", []))
         con.commit()
-        con.close()
         return True
     except Exception as e:
         log.error(f"db_update_rule error: {e}")
         return False
+    finally:
+        con.close()
 
 
 def db_delete_rule(rule_id: int) -> bool:
+    con = _con()
     try:
-        con = _con()
         con.execute("DELETE FROM alert_rule_conditions WHERE rule_id=?", (rule_id,))
         con.execute("DELETE FROM alert_rule_actions WHERE rule_id=?", (rule_id,))
         con.execute("DELETE FROM alert_rules WHERE id=?", (rule_id,))
         con.commit()
-        con.close()
         return True
     except Exception as e:
         log.error(f"db_delete_rule error: {e}")
         return False
+    finally:
+        con.close()
 
 
 def db_set_rule_enabled(rule_id: int, enabled: bool) -> bool:
+    con = _con()
     try:
-        con = _con()
         con.execute("UPDATE alert_rules SET enabled=?, updated_at=? WHERE id=?",
                     (1 if enabled else 0, time.time(), rule_id))
         con.commit()
-        con.close()
         return True
     except Exception as e:
         log.error(f"db_set_rule_enabled error: {e}")
         return False
+    finally:
+        con.close()
 
 
 def db_reorder_rules(id_list: list) -> None:
     """Set sort_order for each rule id in id_list (position = index)."""
+    con = _con()
     try:
-        con = _con()
         for i, rule_id in enumerate(id_list):
             con.execute("UPDATE alert_rules SET sort_order=? WHERE id=?", (i, rule_id))
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"db_reorder_rules error: {e}")
+    finally:
+        con.close()
 
 
 # ── Private write helpers ─────────────────────────────────────────

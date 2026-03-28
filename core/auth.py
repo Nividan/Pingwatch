@@ -50,10 +50,12 @@ def auth_login(username: str, password: str):
     clean = _strip_domain(username)
     try:
         con = sqlite3.connect(DB_PATH)
-        row = con.execute(
-            "SELECT pw_hash, role, auth_type FROM users WHERE username=?", (clean,)
-        ).fetchone()
-        con.close()
+        try:
+            row = con.execute(
+                "SELECT pw_hash, role, auth_type FROM users WHERE username=?", (clean,)
+            ).fetchone()
+        finally:
+            con.close()
     except Exception:
         return None
     if not row:
@@ -83,11 +85,13 @@ def auth_login(username: str, password: str):
         _SESSIONS[token] = {"username": clean, "expires": expires, "role": _role}
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("DELETE FROM sessions WHERE username=?", (clean,))
-        con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
-        con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
-        con.commit()
-        con.close()
+        try:
+            con.execute("DELETE FROM sessions WHERE username=?", (clean,))
+            con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
+            con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
+            con.commit()
+        finally:
+            con.close()
     except Exception as e:
         log.error(f"Session save error: {e}")
     return token
@@ -98,9 +102,11 @@ def auth_logout(token: str):
         _SESSIONS.pop(token, None)
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
-        con.commit()
-        con.close()
+        try:
+            con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
+            con.commit()
+        finally:
+            con.close()
     except Exception:
         pass
 
@@ -113,9 +119,11 @@ def auth_revoke_user_sessions(username: str):
             del _SESSIONS[t]
     try:
         con = sqlite3.connect(DB_PATH)
-        con.execute("DELETE FROM sessions WHERE username=?", (username,))
-        con.commit()
-        con.close()
+        try:
+            con.execute("DELETE FROM sessions WHERE username=?", (username,))
+            con.commit()
+        finally:
+            con.close()
     except Exception as e:
         log.error(f"Session revoke error: {e}")
 
@@ -124,25 +132,53 @@ def auth_verify_current(username: str, password: str) -> bool:
     """Return True if password matches the stored hash for username."""
     try:
         con = sqlite3.connect(DB_PATH)
-        row = con.execute("SELECT pw_hash FROM users WHERE username=?", (username,)).fetchone()
-        con.close()
+        try:
+            row = con.execute("SELECT pw_hash FROM users WHERE username=?", (username,)).fetchone()
+        finally:
+            con.close()
         return bool(row and _verify_pw(password, row[0]))
     except Exception:
         return False
 
 
 def auth_check(token: str):
-    """Return username if session token is valid, else None."""
+    """Return username if session token is valid, else None.
+
+    Falls back to a DB lookup on cache miss so sessions survive server restarts.
+    On a successful DB hit the session is re-populated into _SESSIONS so that
+    the immediately-following auth_check_role() call finds it in memory.
+    """
     if not token:
         return None
     with _SESSIONS_LOCK:
         s = _SESSIONS.get(token)
-    if not s:
-        return None
-    if s["expires"] < time.time():
-        auth_logout(token)
-        return None
-    return s["username"]
+    if s:
+        if s["expires"] < time.time():
+            auth_logout(token)
+            return None
+        return s["username"]
+    # Not in memory — may have survived a restart; check the DB.
+    try:
+        h = _hash_token(token)
+        con = sqlite3.connect(DB_PATH)
+        try:
+            row = con.execute(
+                "SELECT s.username, s.expires, u.role "
+                "FROM sessions s JOIN users u ON u.username=s.username "
+                "WHERE s.token=? AND s.expires>?",
+                (h, time.time())
+            ).fetchone()
+        finally:
+            con.close()
+        if row:
+            username, expires, role = row
+            with _SESSIONS_LOCK:
+                _SESSIONS[token] = {"username": username, "expires": expires,
+                                    "role": role or "viewer"}
+            return username
+    except Exception as e:
+        log.error(f"Session DB lookup error: {e}")
+    return None
 
 
 def auth_check_role(token: str):

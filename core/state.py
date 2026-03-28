@@ -336,6 +336,7 @@ class MonitorState:
             s = dev.sensors.get(sid)
             if not s: return False
             s.running = False
+            s._stop_event.set()
             del dev.sensors[sid]
         return True
 
