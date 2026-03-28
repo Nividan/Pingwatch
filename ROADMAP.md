@@ -47,6 +47,25 @@
   - Username, role badge, green status dot
   - Settings shortcut, Change Password modal, Theme stub, Sign Out
   - Keyboard navigation, close on ESC / outside click
+  - Edit Profile shortcut (opens self-service name + email editor)
+- User profiles and groups
+  - `full_name` + `email` columns on every user account
+  - Self-service profile editor accessible from the user dropdown (any role)
+  - Admin can also set group assignment and role from Settings → Users
+  - `user_groups` table — named groups with description and member count
+  - Settings → Groups tab — create, edit, delete groups; assign members (one group per user)
+  - Users tab extended with Full Name / Email / Group columns and per-row Edit button
+- Advanced alerting rules engine
+  - Rules UI with name, severity, condition builder (AND/OR logic)
+  - Conditions: event type, sensor type, device group, threshold state, direction, packet loss %, severity
+  - Multiple actions per rule: email, webhook, syslog, browser push notification
+  - Email action targets user groups (resolved to member emails at dispatch) + optional extra raw addresses; backward-compatible with legacy `"to"` field
+  - Browser push notification action with configurable title, body template, and sound
+  - Collapsible action blocks in rule editor — pre-configured blocks start collapsed with a one-line summary
+  - Alert cooldown / deduplication (DB-persisted, survives restarts)
+  - Maintenance windows — suppresses alert dispatch for all/group/device scopes; recurring daily schedule supported
+  - Alert history tab with severity filter, acknowledge/resolve workflow
+  - Test-fire button per rule (dispatches all actions with synthetic context)
 - Settings → Sensors tab redesigned as compact table with expandable rows
 - Settings → Logs tab: improved fonts, structured rows, log-level colour coding
 - Home button — PingWatch logo navigates to Dashboard tab
@@ -60,17 +79,11 @@
   - Backup Status dashboard widget — OK / Failed / Never run / Enabled KPI counts
 
 ## 🔴 High Priority
-- Advanced alerting rules engine
-  - Alert rules UI with condition builder
-  - Conditions: device group, sensor type, threshold state, flap count, packet loss %
-  - Multiple actions per rule: email, webhook, syslog, future Slack/Teams
-  - Alert ACK / resolve / suppress workflow
-  - Maintenance windows
-  - Alert cooldown / deduplication
+- Slack / Teams / PagerDuty alert actions
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
-- Improve user box
+- Theme support (dark/light toggle)
 
 ## 🎨 Low Priority
 - Fix history icon

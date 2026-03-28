@@ -38,6 +38,7 @@ Browser / Desktop GUI
         │
         ├── monitoring/           ← Probes, alerting, topology
         │   ├── probes.py         ← Sensor engine
+        │   ├── alert_engine.py   ← Rules-based alert engine (conditions, dispatch, cooldown)
         │   ├── smtp_alert.py     ← Email notifications
         │   ├── syslog_client.py  ← RFC 5424 syslog forwarding
         │   └── network_map.py    ← NTM topology data layer
@@ -54,7 +55,7 @@ Browser / Desktop GUI
         │   └── seeds/            ← Built-in trap definitions
         │
         └── db/                   ← SQLite persistence package (dual-DB)
-                                       Main DB: config, devices, users, IPAM, settings
+                                       Main DB: config, devices, users, groups, IPAM, settings
                                        Logs DB: sensor samples, flap log, SNMP traps, error log
 ```
 
@@ -113,14 +114,16 @@ pingwatch/
 │   ├── persistence.py      ← Device/sensor save & load
 │   ├── samples.py          ← Buffered probe writes, history & summary queries
 │   ├── events.py           ← Flap log, SNMP trap log, sensor error log
-│   ├── users.py            ← User management (local + LDAP) and app_settings table
+│   ├── users.py            ← User management (local + LDAP), profile (full_name, email), app_settings
+│   ├── groups.py           ← User group CRUD and email resolution for alert dispatch
 │   ├── audit.py            ← Audit log write & query
 │   ├── backups.py          ← Backup settings (encrypted), run history, 3-run retention
 │   ├── trap_defs.py        ← SNMP trap definition queries
 │   └── ipam.py             ← Subnet and IP allocation management
 │
 ├── routes/
-│   ├── auth.py             ← Login, logout, users
+│   ├── auth.py             ← Login, logout, users, user/self profile PATCH
+│   ├── groups.py           ← User group CRUD and member assignment
 │   ├── devices.py          ← Device & sensor CRUD, port scan
 │   ├── monitoring.py       ← SSE, flaps, traps, SNMP
 │   ├── settings.py         ← App settings, server info, restart/shutdown
@@ -128,6 +131,9 @@ pingwatch/
 │   ├── topology.py         ← NTM pages/nodes/links/groups
 │   ├── export.py           ← DB export/import, audit log
 │   ├── backups.py          ← Device config backup API
+│   ├── alert_rules.py      ← Alert rules CRUD, toggle, test-fire
+│   ├── alert_events.py     ← Alert history, ACK/resolve
+│   ├── maintenance_windows.py ← Maintenance window CRUD
 │   ├── ldap.py             ← LDAP/AD settings & test endpoints
 │   └── ipam.py             ← IPAM subnet & IP allocation API
 │
@@ -187,6 +193,9 @@ SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH hos
 ### `backup/db_backup.py`
 Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to run while the DB is being written) to snapshot both Main DB and Logs DB into timestamped files under `backup/database/`. Applies a configurable retention policy (default: keep 7 copies). Triggered by the scheduler and also callable on demand via `POST /api/db/backup/run`.
 
+### `monitoring/alert_engine.py`
+Rules-based alert engine. A bounded daemon queue receives events from `core/state.py` on every sensor state change. The worker thread evaluates all enabled rules against each event: condition matching (AND/OR), maintenance window suppression, cooldown/deduplication (DB-persisted), and multi-action dispatch. Actions: email (group-resolved + raw addresses), HTTP webhook (SSRF-guarded), syslog, and browser push notification via SSE. Rules are cached in memory with a 30-second TTL; `invalidate_rules_cache()` forces an immediate reload after saves.
+
 ### `monitoring/smtp_alert.py`
 Down/up email alerts via SMTP when sensor states change. Rate-limits repeated SMTP failure logs (5-minute suppression per host).
 
@@ -205,7 +214,8 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 
 | Module | Endpoints |
 |--------|-----------|
-| `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password` |
+| `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/users/{u}/profile` |
+| `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard`, `/api/db/stats` |
@@ -213,6 +223,9 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
+| `alert_rules.py` | `/api/alert/rules`, `/api/alert/rule`, `/api/alert/rule/{id}`, `/api/alert/rule/{id}/toggle`, `/api/alert/rule/{id}/test` |
+| `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
+| `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 
@@ -227,7 +240,8 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 | `persistence.py` | Device/sensor save, load, autosave loop |
 | `samples.py` | Buffered probe writes, history & summary queries |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management (local + LDAP domain users), `app_settings` key/value store |
+| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
+| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
 | `trap_defs.py` | SNMP trap definition queries |
@@ -269,10 +283,12 @@ The frontend is served as static files — no build step.
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback |
 | `forms-device.js` | Add/edit device modal |
 | `forms-sensor.js` | Add/edit sensor modal |
-| `forms-settings.js` | Settings modal (9 tabs: General, Sensors, Networking, TLS, SMTP, Syslog, Users, Export, About) |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Syslog, Alert Rules) |
+| `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities (field validation, common UI helpers) |
+| `alerting.js` | Alert rules editor (conditions, collapsible action blocks with group chip selector), alert history viewer, maintenance windows |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.js` | NTM canvas engine — drag-and-drop topology editor |
@@ -361,6 +377,55 @@ The frontend is served as static files — no build step.
 | `DELETE` | `/api/ipam/subnets/{id}` | Remove subnet and all allocations |
 | `GET` | `/api/ipam/subnets/{id}/ips` | IP allocations for a subnet |
 | `PUT` | `/api/ipam/ips/{subnet_id}/{ip}` | Set or clear the name for an IP |
+
+### User Profiles
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/me` | any | Own username, role, full_name, email |
+| `PATCH` | `/api/me/profile` | any | Update own full_name and email |
+| `PATCH` | `/api/users/{u}/profile` | admin or self | Update profile; admin can also set group_id and role |
+
+### User Groups
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/groups` | viewer | List all groups with member_count |
+| `POST` | `/api/group` | admin | Create group `{name, description}` |
+| `PATCH` | `/api/group/{id}` | admin | Update group name / description |
+| `DELETE` | `/api/group/{id}` | admin | Delete group; members are unassigned |
+| `PUT` | `/api/group/{id}/members` | admin | Replace member list `{usernames: [...]}` |
+
+### Alert Rules
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/alert/rules` | viewer | List all rules |
+| `POST` | `/api/alert/rule` | admin | Create rule |
+| `GET` | `/api/alert/rule/{id}` | viewer | Get single rule |
+| `PATCH` | `/api/alert/rule/{id}` | admin | Update rule |
+| `DELETE` | `/api/alert/rule/{id}` | admin | Delete rule |
+| `POST` | `/api/alert/rule/{id}/toggle` | operator | Enable / disable rule |
+| `POST` | `/api/alert/rule/{id}/test` | admin | Test-fire all actions with synthetic event |
+| `POST` | `/api/alert/rules` | admin | Reorder rules `{order: [id, ...]}` |
+
+### Alert Events
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/alert/events` | viewer | Paginated event history |
+| `GET` | `/api/alert/events/active` | viewer | Active / unresolved events |
+| `POST` | `/api/alert/event/{id}/ack` | operator | Acknowledge event |
+| `POST` | `/api/alert/event/{id}/resolve` | operator | Resolve event |
+
+### Maintenance Windows
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/alert/windows` | viewer | List all maintenance windows |
+| `POST` | `/api/alert/window` | admin | Create window |
+| `PATCH` | `/api/alert/window/{id}` | admin | Update window |
+| `DELETE` | `/api/alert/window/{id}` | admin | Delete window |
 
 ---
 

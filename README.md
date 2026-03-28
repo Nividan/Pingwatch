@@ -35,7 +35,9 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
-- 🚨 Email alerting via SMTP (configurable per device/sensor)
+- 🚨 Rules-based alert engine — conditions, multi-action dispatch (email, webhook, syslog, browser push), cooldown, maintenance windows
+- 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
+- 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
 - 🌐 Web-based dashboard with live latency sparklines and customizable widgets
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
