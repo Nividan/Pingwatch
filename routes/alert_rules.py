@@ -32,7 +32,7 @@ _VALID_FIELDS = {
 _VALID_OPS    = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"}
 _VALID_SEVS   = {"info", "warning", "critical"}
 _VALID_LOGICS = {"AND", "OR"}
-_VALID_ATYPES = {"email", "webhook", "syslog"}
+_VALID_ATYPES = {"email", "webhook", "syslog", "browser"}
 
 
 def _validate_rule(body: dict) -> str | None:
