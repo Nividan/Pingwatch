@@ -571,6 +571,32 @@ const _AE_OPS = [
   {v:'lt',       l:'< less than'},
   {v:'lte',      l:'≤ at most'},
 ];
+// Known enum values for fields that have a fixed set of options
+const _AE_FIELD_VALUES = {
+  event_type:      ['down','recovered','threshold_warning','threshold_critical'],
+  severity:        ['critical','warning','info'],
+  direction:       ['down','recovered','threshold'],
+  threshold_state: ['warn','crit'],
+};
+
+function _aeValueHtml(field, val) {
+  const opts = _AE_FIELD_VALUES[field];
+  if (opts) {
+    const safeVal = opts.includes(val) ? val : opts[0];
+    return `<select class="ae-cond-val">${opts.map(o =>
+      `<option value="${o}"${safeVal===o?' selected':''}>${o}</option>`).join('')}</select>`;
+  }
+  return `<input type="text" class="ae-cond-val" value="${esc(val)}"
+    placeholder="value" autocomplete="off" spellcheck="false"/>`;
+}
+
+function _aeFieldChanged(selectEl) {
+  const row   = selectEl.closest('.alrt-cond-row');
+  const valEl = row?.querySelector('.ae-cond-val');
+  if (!valEl) return;
+  const newHtml = _aeValueHtml(selectEl.value, '');
+  valEl.outerHTML = newHtml;
+}
 
 function _alertingAddCondition(cond) {
   const list  = document.getElementById('ae-cond-list');
@@ -587,10 +613,9 @@ function _alertingAddCondition(cond) {
   const row = document.createElement('div');
   row.className = 'alrt-cond-row';
   row.innerHTML = `
-    <select class="ae-cond-field">${fieldOpts}</select>
+    <select class="ae-cond-field" onchange="_aeFieldChanged(this)">${fieldOpts}</select>
     <select class="ae-cond-op">${opOpts}</select>
-    <input type="text" class="ae-cond-val" value="${esc(val)}"
-      placeholder="value" autocomplete="off" spellcheck="false"/>
+    ${_aeValueHtml(field, val)}
     <button class="alrt-rm-btn"
       onclick="this.closest('.alrt-cond-row').remove();
                _alertingCheckEmpty('ae-cond-list','ae-cond-empty')"
