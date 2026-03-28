@@ -634,17 +634,40 @@ function _alertingAddAction(atype, action) {
   if (empty) empty.style.display = 'none';
   const cfg = action?.config || {};
   const blk = document.createElement('div');
-  blk.className = 'alrt-act-block';
   blk.dataset.atype = atype;
 
+  // Pre-configured actions (loaded from saved rule) start collapsed
+  const isConfigured = !!action;
+  blk.className = 'alrt-act-block' + (isConfigured ? ' collapsed' : '');
+
+  // Summary shown in header when collapsed
+  let summary = '';
+  if (isConfigured) {
+    if (atype === 'email')   summary = cfg.to || '';
+    if (atype === 'webhook') summary = cfg.url || '';
+    if (atype === 'syslog')  summary = cfg.host ? `${cfg.host}:${cfg.port||514}` : 'global settings';
+    if (atype === 'browser') summary = cfg.title || `sound: ${cfg.sound || 'alert'}`;
+  }
+
   const rmBtn = `<button class="alrt-rm-btn"
-    onclick="this.closest('.alrt-act-block').remove();
+    onclick="event.stopPropagation();this.closest('.alrt-act-block').remove();
              _alertingCheckEmpty('ae-act-list','ae-act-empty')"
     title="Remove">✕</button>`;
 
+  const labels = {email:'📧 Email', webhook:'🔗 Webhook', syslog:'📡 Syslog', browser:'🔔 Browser Notification'};
+  const hdr = `
+    <div class="alrt-act-hdr" onclick="this.closest('.alrt-act-block').classList.toggle('collapsed')">
+      <span class="alrt-act-label">${labels[atype]||atype}</span>
+      <span class="alrt-act-summary">${esc(summary)}</span>
+      <div style="display:flex;align-items:center;gap:2px">
+        <span class="alrt-act-chevron">▾</span>
+        ${rmBtn}
+      </div>
+    </div>`;
+
+  let body = '';
   if (atype === 'email') {
-    blk.innerHTML = `
-      <div class="alrt-act-hdr"><span class="alrt-act-label">📧 Email</span>${rmBtn}</div>
+    body = `
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <div class="fr" style="flex:1;min-width:160px">
           <label class="fl">To <span style="color:var(--text3);font-size:10px">(comma-separated)</span></label>
@@ -662,8 +685,7 @@ function _alertingAddAction(atype, action) {
         <textarea class="ae-act-body" rows="1" placeholder="Leave empty for default…">${esc(cfg.body||'')}</textarea>
       </div>`;
   } else if (atype === 'webhook') {
-    blk.innerHTML = `
-      <div class="alrt-act-hdr"><span class="alrt-act-label">🔗 Webhook</span>${rmBtn}</div>
+    body = `
       <div class="fr">
         <label class="fl">URL</label>
         <input type="text" class="ae-act-url" value="${esc(cfg.url||'')}"
@@ -675,8 +697,7 @@ function _alertingAddAction(atype, action) {
           placeholder='{"text":"[{severity}] {dname}/{sname} is {event_type}"}'>${esc(cfg.body||'')}</textarea>
       </div>`;
   } else if (atype === 'syslog') {
-    blk.innerHTML = `
-      <div class="alrt-act-hdr"><span class="alrt-act-label">📡 Syslog</span>${rmBtn}</div>
+    body = `
       <div style="display:flex;gap:12px;flex-wrap:wrap">
         <div class="fr" style="flex:2;min-width:180px">
           <label class="fl">Host <span style="color:var(--text3);font-size:10px">(empty = use global syslog settings)</span></label>
@@ -696,8 +717,7 @@ function _alertingAddAction(atype, action) {
         </div>
       </div>`;
   } else if (atype === 'browser') {
-    blk.innerHTML = `
-      <div class="alrt-act-hdr"><span class="alrt-act-label">🔔 Browser Notification</span>${rmBtn}</div>
+    body = `
       <div class="fr">
         <label class="fl">Title <span style="color:var(--text3);font-size:10px">(supports {dname}, {sname}, {severity}, {event_type})</span></label>
         <input type="text" class="ae-act-btitle" value="${esc(cfg.title||'')}"
@@ -717,10 +737,12 @@ function _alertingAddAction(atype, action) {
         </select>
       </div>
       <div style="font-size:11px;color:var(--text3);margin-top:2px">
-        Notification permission will be requested now. All logged-in users receive this alert.
+        All logged-in users receive this alert.
       </div>`;
     _requestNotifPermission();
   }
+
+  blk.innerHTML = hdr + `<div class="alrt-act-body">${body}</div>`;
   list.appendChild(blk);
 }
 
