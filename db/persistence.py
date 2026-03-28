@@ -126,7 +126,7 @@ def db_load(state):
          alerts_muted) in srows:
         dev = state.devices.get(did)
         if not dev: continue
-        s = Sensor(did, sid, name, stype, host,
+        s = Sensor(did, sid, name, stype, host or dev.host,
                    port=port, url=url, interval=interval, timeout=timeout,
                    verify_ssl=bool(vssl), snmp_community=comm or "public",
                    snmp_oid=oid or "1.3.6.1.2.1.1.1.0",
