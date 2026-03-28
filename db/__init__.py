@@ -46,6 +46,18 @@ from db.users       import (
     db_save_settings,
     db_get_dashboard,
     db_save_dashboard,
+    db_update_profile,
+    db_update_own_profile,
+)
+
+# groups
+from db.groups      import (
+    db_list_groups,
+    db_create_group,
+    db_update_group,
+    db_delete_group,
+    db_update_group_members,
+    db_resolve_group_emails,
 )
 
 # audit
@@ -102,6 +114,10 @@ __all__ = [
     "db_delete_user", "db_set_password",
     "db_load_settings", "db_save_settings",
     "db_get_dashboard", "db_save_dashboard",
+    "db_update_profile", "db_update_own_profile",
+    # groups
+    "db_list_groups", "db_create_group", "db_update_group", "db_delete_group",
+    "db_update_group_members", "db_resolve_group_emails",
     # audit
     "db_log_audit", "db_get_audit",
     # ipam

@@ -68,8 +68,10 @@ def _validate_rule(body: dict) -> str | None:
             cfg = action.get("config", {})
             if not isinstance(cfg, dict):
                 return "email action config must be an object"
-            if not str(cfg.get("to", "")).strip():
-                return "email action requires at least one recipient in 'to'"
+            has_groups   = bool(cfg.get("groups"))
+            has_extra_to = bool(str(cfg.get("extra_to", "") or cfg.get("to", "")).strip())
+            if not has_groups and not has_extra_to:
+                return "email action requires at least one group or recipient"
 
     return None
 

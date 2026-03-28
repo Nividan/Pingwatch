@@ -6,6 +6,53 @@ let _alertEvtFilter    = 'all';
 let _alertEvtOffset    = 0;
 const _ALERT_EVT_LIMIT = 100;
 let _alertMaintWindows = [];
+let _aeGroups          = null;   // [{id, name}] cached per editor session
+let _aeBlkCounter      = 0;      // unique per-block ID for chip scoping
+
+async function _aeLoadGroups() {
+  if (_aeGroups) return _aeGroups;
+  try {
+    const r = await fetch('/api/groups');
+    const d = await r.json();
+    _aeGroups = (d.groups || []).map(g => ({id: g.id, name: g.name}));
+  } catch (_) { _aeGroups = []; }
+  return _aeGroups;
+}
+
+function _aeGrpAdd(sel, blkId) {
+  const gid  = parseInt(sel.value);
+  if (!gid) return;
+  const name = sel.options[sel.selectedIndex].text;
+  sel.value  = '';
+
+  // Remove from dropdown
+  const opt = sel.querySelector(`option[value="${gid}"]`);
+  if (opt) opt.remove();
+
+  // Add chip
+  const chips = document.getElementById(`ae-chips-${blkId}`);
+  if (!chips) return;
+  const chip = document.createElement('span');
+  chip.className  = 'ae-grp-chip';
+  chip.dataset.gid = gid;
+  chip.innerHTML  = `${esc(name)}<button type="button" onclick="_aeGrpRemove(${gid},'${blkId}','${esc(name)}')" title="Remove">✕</button>`;
+  chips.appendChild(chip);
+}
+
+function _aeGrpRemove(gid, blkId, name) {
+  // Remove chip
+  const chips = document.getElementById(`ae-chips-${blkId}`);
+  if (chips) chips.querySelector(`[data-gid="${gid}"]`)?.remove();
+
+  // Restore to dropdown
+  const sel = chips?.closest('.alrt-act-body')?.querySelector('.ae-grp-add');
+  if (sel) {
+    const opt = document.createElement('option');
+    opt.value = gid;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+}
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -459,8 +506,10 @@ async function _alertMaintSave(id) {
 // RULE EDITOR modal
 // ═══════════════════════════════════════════════════════════════
 
-function _alertingOpenEditor(id) {
+async function _alertingOpenEditor(id) {
   closeM('alrt-editor-modal');
+  _aeGroups = null;  // invalidate cache so fresh groups load
+  await _aeLoadGroups();
   const rule = (id !== null) ? (_alertRules.find(r => r.id === id) || null) : null;
   _alertEditingId = rule ? rule.id : null;
 
@@ -643,7 +692,17 @@ function _alertingAddAction(atype, action) {
   // Summary shown in header when collapsed
   let summary = '';
   if (isConfigured) {
-    if (atype === 'email')   summary = cfg.to || '';
+    if (atype === 'email') {
+      if ((cfg.groups||[]).length) {
+        const grpNames = (cfg.groups||[]).map(gid => {
+          const g = (_aeGroups||[]).find(g=>g.id===gid);
+          return g ? g.name : `#${gid}`;
+        }).join(', ');
+        summary = grpNames + (cfg.extra_to ? ` + ${cfg.extra_to}` : '');
+      } else {
+        summary = cfg.extra_to || cfg.to || '';
+      }
+    }
     if (atype === 'webhook') summary = cfg.url || '';
     if (atype === 'syslog')  summary = cfg.host ? `${cfg.host}:${cfg.port||514}` : 'global settings';
     if (atype === 'browser') summary = cfg.title || `sound: ${cfg.sound || 'alert'}`;
@@ -665,20 +724,43 @@ function _alertingAddAction(atype, action) {
       </div>
     </div>`;
 
+  const blkId = ++_aeBlkCounter;
   let body = '';
   if (atype === 'email') {
+    const selectedGids = new Set((cfg.groups||[]).map(Number));
+    const availGroups  = (_aeGroups||[]).filter(g => !selectedGids.has(g.id));
+    const selectedChips = [...selectedGids].map(gid => {
+      const g = (_aeGroups||[]).find(g=>g.id===gid);
+      const n = g ? g.name : `#${gid}`;
+      return `<span class="ae-grp-chip" data-gid="${gid}">${esc(n)}<button type="button" onclick="_aeGrpRemove(${gid},'${blkId}','${esc(n)}')" title="Remove">✕</button></span>`;
+    }).join('');
+    const groupOpts = availGroups.length
+      ? availGroups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')
+      : '<option value="" disabled>No groups — create one in Settings › Groups</option>';
+    const noGroupsHint = (_aeGroups||[]).length === 0
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:2px">No groups yet. Go to Settings → Groups to create one.</div>'
+      : '';
     body = `
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <div class="fr" style="flex:1;min-width:160px">
-          <label class="fl">To <span style="color:var(--text3);font-size:10px">(comma-separated)</span></label>
-          <input type="text" class="ae-act-to" value="${esc(cfg.to||'')}"
-            placeholder="ops@example.com" autocomplete="off"/>
+      <div class="fr">
+        <label class="fl">Groups <span style="color:var(--text3);font-size:10px">(recipients)</span></label>
+        <div class="ae-grp-wrap">
+          <div class="ae-grp-chips" id="ae-chips-${blkId}">${selectedChips}</div>
+          <select class="ae-grp-add" onchange="_aeGrpAdd(this,'${blkId}')">
+            <option value="">＋ Add group…</option>
+            ${groupOpts}
+          </select>
         </div>
-        <div class="fr" style="flex:2;min-width:200px">
-          <label class="fl">Subject <span style="color:var(--text3);font-size:10px">({dname} {sname} {severity} {event_type})</span></label>
-          <input type="text" class="ae-act-subj" value="${esc(cfg.subject||'')}"
-            placeholder="[{severity}] {dname}/{sname} — {event_type}" autocomplete="off"/>
-        </div>
+        ${noGroupsHint}
+      </div>
+      <div class="fr">
+        <label class="fl">Extra emails <span style="color:var(--text3);font-size:10px">(comma-separated, optional)</span></label>
+        <input type="text" class="ae-act-extrato" value="${esc(cfg.extra_to||cfg.to||'')}"
+          placeholder="cto@corp.com" autocomplete="off"/>
+      </div>
+      <div class="fr">
+        <label class="fl">Subject <span style="color:var(--text3);font-size:10px">({dname} {sname} {severity} {event_type})</span></label>
+        <input type="text" class="ae-act-subj" value="${esc(cfg.subject||'')}"
+          placeholder="[{severity}] {dname}/{sname} — {event_type}" autocomplete="off"/>
       </div>
       <div class="fr">
         <label class="fl">Body <span style="color:var(--text3);font-size:10px">(empty = auto-generated HTML email)</span></label>
@@ -774,10 +856,12 @@ async function _alertingSave() {
     const atype = blk.dataset.atype;
     let cfg = {};
     if (atype === 'email') {
+      const chips = blk.querySelectorAll('.ae-grp-chip');
       cfg = {
-        to:      (blk.querySelector('.ae-act-to')?.value   || '').trim(),
-        subject: (blk.querySelector('.ae-act-subj')?.value || '').trim(),
-        body:    (blk.querySelector('.ae-act-body')?.value || '').trim(),
+        groups:   Array.from(chips).map(c => parseInt(c.dataset.gid)).filter(n => !isNaN(n)),
+        extra_to: (blk.querySelector('.ae-act-extrato')?.value || '').trim(),
+        subject:  (blk.querySelector('.ae-act-subj')?.value    || '').trim(),
+        body:     (blk.querySelector('.ae-act-body')?.value     || '').trim(),
       };
     } else if (atype === 'webhook') {
       cfg = {

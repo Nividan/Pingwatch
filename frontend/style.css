@@ -1701,6 +1701,14 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-rm-btn{background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;padding:2px 5px;
   border-radius:3px;line-height:1;flex-shrink:0;}
 .alrt-rm-btn:hover{color:var(--down);background:var(--down-bg);}
+/* Group chip selector */
+.ae-grp-wrap{display:flex;flex-direction:column;gap:4px;}
+.ae-grp-chips{display:flex;flex-wrap:wrap;gap:4px;min-height:24px;}
+.ae-grp-chip{display:inline-flex;align-items:center;gap:4px;background:var(--accent-bg);color:var(--accent);
+  border:1px solid var(--accent);border-radius:4px;padding:2px 6px;font-size:11px;font-weight:600;}
+.ae-grp-chip button{background:none;border:none;cursor:pointer;color:var(--accent);padding:0;font-size:11px;line-height:1;}
+.ae-grp-chip button:hover{color:var(--down);}
+.ae-grp-add{font-size:11px;}
 
 /* ── Events Sub-tab Bar ───────────────────────────────────────────── */
 .evt-subtab-bar{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 24px;background:var(--bg2);flex-shrink:0;}

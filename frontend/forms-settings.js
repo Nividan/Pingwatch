@@ -56,6 +56,7 @@ async function openSettings(){
     <div class="dw-tabs" style="padding:0 4px">
       <button class="dw-tab active" id="stab-btn-general" onclick="switchSettingsTab('general')">General</button>
       <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">Users</button>
+      <button class="dw-tab" id="stab-btn-groups" onclick="switchSettingsTab('groups')">Groups</button>
       <button class="dw-tab" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">SMTP</button>
       <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">Database</button>
       <button class="dw-tab" id="stab-btn-logs" onclick="switchSettingsTab('logs')">Logs</button>
@@ -154,6 +155,13 @@ async function openSettings(){
         </div>
       </div>
     </div>
+    <div class="mbdy stab-fade" id="stab-groups" style="display:none;max-height:72vh;overflow-y:auto">
+      <div class="alrt-panel-hdr" style="margin-bottom:10px">
+        <span style="color:var(--text3);font-size:12px">Manage alert recipient groups. Assign users to groups and use groups in alert rule email actions.</span>
+        <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="_groupsOpenEditor(null)">＋ New Group</button>
+      </div>
+      <div id="group-list"><div class="alrt-loading">Loading…</div></div>
+    </div>
     <div class="mbdy stab-fade" id="stab-smtp" style="display:none">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
       <div class="fgrid">
@@ -200,6 +208,9 @@ async function openSettings(){
     <div class="mft" id="stab-footer-users" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
+    </div>
+    <div class="mft" id="stab-footer-groups" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
     <div class="mft" id="stab-footer-smtp" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -511,7 +522,7 @@ async function openSettings(){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','smtp','database','logs','sensors','networking','backup','syslog','alert-rules'];
+  const tabs = ['general','users','groups','smtp','database','logs','sensors','networking','backup','syslog','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -564,6 +575,7 @@ function switchSettingsTab(tab){
             if (tab === 'backup')      _loadBackupScheduleSettings();
             if (tab === 'database')    _loadDbBackupSettings();
             if (tab === 'alert-rules') { _alertingLoadRules(); _alertingLoadMaint(); }
+            if (tab === 'groups')      _groupsLoad();
           }, 280);
         });
       });
@@ -578,6 +590,7 @@ function switchSettingsTab(tab){
     if (tab === 'database')    _loadDbBackupSettings();
     if (tab === 'alert-rules') _alertingLoadRules();
     if (tab === 'maint')       _alertingLoadMaint();
+    if (tab === 'groups')      _groupsLoad();
   }
 }
 
@@ -953,20 +966,25 @@ function renderUserTable(users){
     const badge=isLdap
       ?`<span class="usr-badge-ldap">🌐 Domain</span>`
       :`<span class="usr-badge-local">🔑 Local</span>`;
-    const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Password</button>`;
+    const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
+    const uq=encodeURIComponent(u.username);
     return `
     <tr>
       <td><strong>${esc(u.username)}</strong></td>
+      <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.full_name||'')}">${esc(u.full_name||'—')}</td>
+      <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.email||'')}">${esc(u.email||'—')}</td>
+      <td>${esc(u.group_name||'—')}</td>
       <td><span style="color:var(--text2)">${esc(u.role)}</span></td>
       <td>${badge}</td>
       <td><div class="usr-act">
+        <button onclick="_openUserProfileModal('${esc(u.username)}')">✏ Edit</button>
         ${resetBtn}
         <button class="del" onclick="deleteUser('${esc(u.username)}')">🗑 Delete</button>
       </div></td>
     </tr>`;
   }).join('');
   return `<table class="usr-table">
-    <thead><tr><th>Username</th><th>Role</th><th>Auth</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Username</th><th>Full Name</th><th>Email</th><th>Group</th><th>Role</th><th>Auth</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -1284,5 +1302,234 @@ async function serverShutdown(){
     // A network error here just means the server already stopped — that's fine
     toast('Server shut down','warn');
     closeM('mset');
+  }
+}
+
+// ── GROUP MANAGEMENT ──────────────────────────────────────────────
+
+let _groupsCache = null;
+
+async function _groupsLoad(){
+  const wrap = document.getElementById('group-list');
+  if(!wrap) return;
+  try{
+    const r = await api('GET','/api/groups');
+    _groupsCache = r.groups || [];
+    wrap.innerHTML = _groupsRender(_groupsCache);
+  }catch(e){
+    wrap.innerHTML='<div style="color:var(--err);font-size:12px">Failed to load groups.</div>';
+  }
+}
+
+function _groupsRender(groups){
+  if(!groups.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No groups yet. Create one to use as alert email recipients.</div>';
+  const rows=groups.map(g=>`
+    <tr>
+      <td><strong>${esc(g.name)}</strong></td>
+      <td style="color:var(--text3)">${esc(g.description||'')}</td>
+      <td style="text-align:center">${g.member_count}</td>
+      <td><div class="usr-act">
+        <button onclick="_groupsOpenEditor(${g.id})">✏ Edit</button>
+        <button class="del" onclick="_groupsDelete(${g.id},'${esc(g.name)}')">🗑 Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `<table class="usr-table">
+    <thead><tr><th>Name</th><th>Description</th><th style="text-align:center">Members</th><th>Actions</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function _groupsOpenEditor(id){
+  // Fetch users to build member list
+  let users=[], group=null;
+  try{
+    const ur=await api('GET','/api/users');
+    users=ur.users||[];
+  }catch(_){}
+  if(id){
+    group=(_groupsCache||[]).find(g=>g.id===id)||null;
+  }
+  const memberUsernames=new Set(users.filter(u=>u.group_id===id).map(u=>u.username));
+  const memberList=users.map(u=>`
+    <label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+      <input type="checkbox" data-uname="${esc(u.username)}" ${memberUsernames.has(u.username)?'checked':''}/>
+      <span>${esc(u.username)}</span>
+      <span style="color:var(--text3);font-size:11px">${esc(u.role)}</span>
+    </label>`).join('');
+
+  closeM('m-grp-ed');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-grp-ed';
+  _overlayClose(o,()=>closeM('m-grp-ed'));
+  o.innerHTML=`
+  <div class="mbox" style="max-width:420px">
+    <div class="mhd">
+      <div class="mttl">${id?'Edit Group':'New Group'}</div>
+      <button class="mclose" onclick="closeM('m-grp-ed')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div class="fr"><label class="fl">Name</label>
+        <input type="text" id="grp-name" value="${esc(group?.name||'')}" placeholder="NOC Team" maxlength="100" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Description</label>
+        <input type="text" id="grp-desc" value="${esc(group?.description||'')}" placeholder="Optional description" maxlength="500" autocomplete="off"/></div>
+      <div class="fr"><label class="fl" style="margin-bottom:6px">Members</label>
+        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+          ${memberList||'<span style="color:var(--text3);font-size:12px">No users found.</span>'}
+        </div>
+        <div class="fh">A user can belong to only one group. Changing group here removes them from their previous group.</div>
+      </div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('m-grp-ed')">Cancel</button>
+      <button class="btn-p" onclick="_groupsSave(${id||'null'})">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('grp-name')?.focus(),50);
+}
+
+async function _groupsSave(id){
+  const name=(document.getElementById('grp-name')?.value||'').trim();
+  const desc=(document.getElementById('grp-desc')?.value||'').trim();
+  if(!name){toast('Group name is required','err');return;}
+  const btn=document.querySelector('#m-grp-ed .btn-p');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    let r;
+    if(id){
+      r=await api('PATCH',`/api/group/${id}`,{name,description:desc});
+    }else{
+      r=await api('POST','/api/group',{name,description:desc});
+      id=r.id;
+    }
+    if(r.error){toast(r.error,'err');return;}
+    // Save members
+    if(id){
+      const checks=document.querySelectorAll('#m-grp-ed [data-uname]');
+      const usernames=Array.from(checks).filter(c=>c.checked).map(c=>c.dataset.uname);
+      await api('PUT',`/api/group/${id}/members`,{usernames});
+    }
+    _groupsCache=r.groups||_groupsCache;
+    const wrap=document.getElementById('group-list');
+    if(wrap) wrap.innerHTML=_groupsRender(_groupsCache||[]);
+    // Refresh user table too (group assignments changed)
+    const uw=document.getElementById('userTableWrap');
+    if(uw){
+      const ur=await api('GET','/api/users');
+      uw.innerHTML=renderUserTable(ur.users||[]);
+    }
+    closeM('m-grp-ed');
+    toast(id?`Group "${name}" saved`:`Group "${name}" created`,'ok');
+  }catch(e){
+    toast('Failed to save group','err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save';}
+  }
+}
+
+async function _groupsDelete(id, name){
+  if(!confirm(`Delete group "${name}"?\n\nMembers will be unassigned from this group. Alert rules using this group will stop sending emails to it.`)) return;
+  const r=await api('DELETE',`/api/group/${id}`);
+  if(r.error){toast(r.error,'err');return;}
+  _groupsCache=r.groups||[];
+  const wrap=document.getElementById('group-list');
+  if(wrap) wrap.innerHTML=_groupsRender(_groupsCache);
+  // Refresh user table
+  const uw=document.getElementById('userTableWrap');
+  if(uw){
+    const ur=await api('GET','/api/users');
+    uw.innerHTML=renderUserTable(ur.users||[]);
+  }
+  toast(`Group "${name}" deleted`,'ok');
+}
+
+// ── USER PROFILE MODAL (admin path, opens from Users tab) ─────────
+
+async function _openUserProfileModal(username){
+  // Fetch current data from /api/users (admin) or /api/me (self)
+  let userData=null;
+  let isMe=false;
+  let callerRole='viewer';
+  try{
+    const me=await api('GET','/api/me');
+    isMe=(me.username===username);
+    callerRole=me.role||'viewer';
+  }catch(_){}
+
+  try{
+    const ur=await api('GET','/api/users');
+    userData=(ur.users||[]).find(u=>u.username===username)||null;
+  }catch(_){}
+
+  const groups=await (async()=>{
+    try{ const r=await api('GET','/api/groups'); return r.groups||[]; }catch(_){return [];}
+  })();
+
+  const isAdmin=(callerRole==='admin');
+  const fullName=userData?.full_name||'';
+  const email=userData?.email||'';
+  const groupId=userData?.group_id??'';
+  const role=userData?.role||'viewer';
+
+  const groupOpts=['<option value="">— No group —</option>',
+    ...groups.map(g=>`<option value="${g.id}" ${g.id===userData?.group_id?'selected':''}>${esc(g.name)}</option>`)
+  ].join('');
+  const roleOpts=['viewer','operator','admin'].map(r=>
+    `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('');
+
+  closeM('m-uprof');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-uprof';
+  _overlayClose(o,()=>closeM('m-uprof'));
+  o.innerHTML=`
+  <div class="mbox" style="max-width:400px">
+    <div class="mhd">
+      <div class="mttl">Edit Profile — ${esc(username)}</div>
+      <button class="mclose" onclick="closeM('m-uprof')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div class="fr"><label class="fl">Full Name</label>
+        <input type="text" id="uprof-name" value="${esc(fullName)}" placeholder="Jane Doe" maxlength="200" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Email</label>
+        <input type="email" id="uprof-email" value="${esc(email)}" placeholder="jane@corp.com" maxlength="200" autocomplete="off"/></div>
+      ${isAdmin?`
+      <div class="fr"><label class="fl">Group</label>
+        <select id="uprof-group">${groupOpts}</select></div>
+      <div class="fr"><label class="fl">Role</label>
+        <select id="uprof-role">${roleOpts}</select></div>`:''}
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('m-uprof')">Cancel</button>
+      <button class="btn-p" onclick="_submitUserProfile('${esc(username)}',${isAdmin})">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('uprof-name')?.focus(),50);
+}
+
+async function _submitUserProfile(username, isAdmin){
+  const full_name=(document.getElementById('uprof-name')?.value||'').trim();
+  const email=(document.getElementById('uprof-email')?.value||'').trim();
+  const btn=document.querySelector('#m-uprof .btn-p');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    let body={full_name,email};
+    if(isAdmin){
+      const gv=document.getElementById('uprof-group')?.value;
+      body.group_id = gv===''?null:parseInt(gv);
+      body.role=(document.getElementById('uprof-role')?.value||'');
+    }
+    const r=await api('PATCH',`/api/users/${encodeURIComponent(username)}/profile`,body);
+    if(r.error){toast(r.error,'err');return;}
+    closeM('m-uprof');
+    // Refresh user table
+    const uw=document.getElementById('userTableWrap');
+    if(uw){
+      const ur=await api('GET','/api/users');
+      uw.innerHTML=renderUserTable(ur.users||[]);
+    }
+    toast('Profile saved','ok');
+  }catch(e){
+    toast('Failed to save profile','err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save';}
   }
 }

@@ -1,5 +1,63 @@
 // ── USER MANAGEMENT ───────────────────────────────────────────────────────────
 
+async function _openProfileModal(){
+  // Fetch own profile from /api/me (includes full_name + email)
+  let me={username:'',role:'viewer',full_name:'',email:''};
+  try{
+    const r=await api('GET','/api/me');
+    me=Object.assign(me,r);
+  }catch(_){}
+
+  closeM('m-myprof');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-myprof';
+  _overlayClose(o,()=>closeM('m-myprof'));
+  const roleBadgeStyle={
+    admin:'background:var(--accent-bg);color:var(--accent)',
+    operator:'background:#2a3a2a;color:#4caf50',
+    viewer:'background:var(--bg3);color:var(--text2)',
+  }[me.role]||'background:var(--bg3);color:var(--text2)';
+  o.innerHTML=`
+  <div class="mw" style="max-width:380px">
+    <div class="mhdr"><span>👤 Edit Profile</span><button class="mclose" onclick="closeM('m-myprof')">✕</button></div>
+    <div class="mbdy" style="padding:20px 22px">
+      <div style="display:flex;gap:12px;align-items:center;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${esc(me.username)}</div>
+          <span style="font-size:11px;padding:2px 8px;border-radius:4px;${roleBadgeStyle}">${esc(me.role)}</span>
+        </div>
+      </div>
+      <div class="fr"><label class="fl">Full Name</label>
+        <input type="text" id="myp-name" value="${esc(me.full_name||'')}" placeholder="Jane Doe" maxlength="200" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Email</label>
+        <input type="email" id="myp-email" value="${esc(me.email||'')}" placeholder="jane@corp.com" maxlength="200" autocomplete="off"/></div>
+      <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+        <button class="btn-s" onclick="closeM('m-myprof')">Cancel</button>
+        <button class="btn-p" id="myp-btn" onclick="_submitProfileModal()">Save</button>
+      </div>
+    </div>
+  </div>`;
+  _overlayClose(o,()=>closeM('m-myprof'));
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('myp-name')?.focus(),50);
+}
+
+async function _submitProfileModal(){
+  const full_name=(document.getElementById('myp-name')?.value||'').trim();
+  const email=(document.getElementById('myp-email')?.value||'').trim();
+  const btn=document.getElementById('myp-btn');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    const r=await api('PATCH','/api/me/profile',{full_name,email});
+    if(r.error){toast(r.error,'err');return;}
+    closeM('m-myprof');
+    toast('Profile updated','ok');
+  }catch(e){
+    toast('Failed to update profile','err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save';}
+  }
+}
+
 function _openChangePwModal(){
   closeM('m-cpw');
   const o=document.createElement('div'); o.className='mo'; o.id='m-cpw';

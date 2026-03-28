@@ -72,3 +72,11 @@ _RE_ALERT_EVENT_ACT     = re.compile(r'^/api/alert/event/(\d+)/(ack|resolve)$')
 # Maintenance windows
 _RE_ALERT_WINDOWS   = re.compile(r'^/api/alert/windows$')
 _RE_ALERT_WINDOW    = re.compile(r'^/api/alert/window/(\d+)$')
+# User groups
+_RE_GROUPS          = re.compile(r'^/api/groups$')
+_RE_GROUP           = re.compile(r'^/api/group$')
+_RE_GROUP_ITEM      = re.compile(r'^/api/group/(\d+)$')
+_RE_GROUP_MEMBERS   = re.compile(r'^/api/group/(\d+)/members$')
+# User profiles
+_RE_ME_PROFILE      = re.compile(r'^/api/me/profile$')
+_RE_USER_PROFILE    = re.compile(r'^/api/users/([^/]+)/profile$')
