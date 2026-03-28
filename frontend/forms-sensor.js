@@ -9,6 +9,13 @@ function sensorFormHTML(dev, s=null) {
   const defHost   = s?.host || '';
   const devHost   = dev?.host || '';
   const hostHint  = devHost ? `leave blank — uses device (${esc(devHost)})` : 'e.g. 192.168.1.1';
+  // Link indicator shown when editing — tells user whether host is linked to the device
+  const isLinked  = s ? !s.host_override : null;
+  const hostStatusHtml = (s && devHost)
+    ? (isLinked
+        ? `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`
+        : `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`)
+    : '';
   const curType = s?.stype || 'ping';
   return `
   <div class="fr">
@@ -47,7 +54,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='ping'?'vis':''}" id="fg-ping">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-ph" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
+        <input type="text" id="as-ph" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Timeout (s)</label>
         <input type="number" id="as-pto" value="${s?.timeout||4}" min="1" max="30"/></div>
     </div>
@@ -56,7 +64,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='tcp'?'vis':''}" id="fg-tcp">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-th" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
+        <input type="text" id="as-th" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Port Number</label>
         <input type="number" id="as-tp" value="${s?.port||''}" placeholder="80" min="1" max="65535"/></div>
     </div>
@@ -88,7 +97,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='snmp'?'vis':''}" id="fg-snmp">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-sh" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
+        <input type="text" id="as-sh" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">UDP Port</label>
         <input type="number" id="as-sp" value="${s?.port||161}" min="1" max="65535"/></div>
     </div>
@@ -153,7 +163,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='tls'?'vis':''}" id="fg-tls">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host</label>
-        <input type="text" id="as-tlsh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
+        <input type="text" id="as-tlsh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-tlsp" value="${s?.port||443}" min="1" max="65535"/></div>
     </div>
@@ -183,7 +194,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='banner'?'vis':''}" id="fg-banner">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host</label>
-        <input type="text" id="as-bnh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/></div>
+        <input type="text" id="as-bnh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-bnp" value="${s?.port||21}" min="1" max="65535"/></div>
     </div>
@@ -618,36 +630,37 @@ function collectSensorForm(did){
       snmp_community='public',snmp_oid='1.3.6.1.2.1.1.1.0',snmp_version='2c',
       dns_query='',dns_record_type='A',dns_server='',http_expected_status=0,
       keyword='',keyword_case=false,banner_regex='';
+  const _devHost = S.devices[did]?.host || '';
   if(type==='ping'){
-    host=document.getElementById('as-ph')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-ph')?.value.trim()||'';
   } else if(type==='tcp'){
-    host=document.getElementById('as-th')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-th')?.value.trim()||'';
     port=parseInt(document.getElementById('as-tp')?.value);
     if(!port){toast('Port number required','err');return null;}
   } else if(type==='http'){
     url=document.getElementById('as-hu')?.value.trim();
     if(!url){toast('URL required','err');return null;}
-    host=S.devices[did]?.host;
+    host='';  // HTTP uses URL — host always inherited from device
     verify_ssl=document.getElementById('as-vssl')?.checked!==false;
     http_expected_status=parseInt(document.getElementById('as-xstatus')?.value)||0;
   } else if(type==='snmp'){
-    host=document.getElementById('as-sh')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-sh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-sp')?.value)||161;
     snmp_community=document.getElementById('as-sc')?.value.trim()||'public';
     snmp_oid=document.getElementById('as-oid')?.value.trim()||'1.3.6.1.2.1.1.1.0';
     snmp_version=document.getElementById('as-sv')?.value||'2c';
   } else if(type==='dns'){
-    dns_query=document.getElementById('as-dq')?.value.trim()||S.devices[did]?.host||'';
+    dns_query=document.getElementById('as-dq')?.value.trim()||_devHost||'';
     if(!dns_query){toast('Query hostname required','err');return null;}
     dns_record_type=document.getElementById('as-drt')?.value||'A';
     dns_server=document.getElementById('as-ds')?.value.trim()||'';
     port=parseInt(document.getElementById('as-dp')?.value)||53;
-    host=dns_server||S.devices[did]?.host||'';
+    host=dns_server||_devHost||'';
   } else if(type==='tls'){
-    host=(document.getElementById('as-tlsh')?.value.trim()||S.devices[did]?.host||'')
+    host=(document.getElementById('as-tlsh')?.value.trim()||'')
          .replace(/^https?:\/\//i,'').split('/')[0];
     port=parseInt(document.getElementById('as-tlsp')?.value)||443;
-    if(!host){toast('Host required','err');return null;}
+    if(!host && !_devHost){toast('Host required','err');return null;}
   } else if(type==='http_keyword'){
     url=document.getElementById('as-kwu')?.value.trim();
     if(!url){toast('URL required','err');return null;}
@@ -655,12 +668,12 @@ function collectSensorForm(did){
     if(!keyword){toast('Keyword required','err');return null;}
     verify_ssl=document.getElementById('as-kwssl')?.checked!==false;
     keyword_case=document.getElementById('as-kwcase')?.checked||false;
-    host=S.devices[did]?.host;
+    host='';  // HTTP KW uses URL — host always inherited from device
   } else if(type==='banner'){
-    host=document.getElementById('as-bnh')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-bnh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-bnp')?.value)||21;
     banner_regex=document.getElementById('as-bnr')?.value.trim()||'';
-    if(!host){toast('Host required','err');return null;}
+    if(!host && !_devHost){toast('Host required','err');return null;}
   }
   const fail_after   =Math.max(1,parseInt(document.getElementById('as-fa')?.value)||1);
   const recover_after=Math.max(1,parseInt(document.getElementById('as-ra')?.value)||1);

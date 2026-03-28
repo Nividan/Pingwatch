@@ -350,6 +350,12 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # host_override — sensor host was manually set (not inherited from device)
+        try:
+            con.execute("ALTER TABLE sensors ADD COLUMN host_override INTEGER DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
         # alerts_muted — disable alerts per sensor / device
         for stmt in [
             "ALTER TABLE sensors ADD COLUMN alerts_muted INTEGER DEFAULT 0",

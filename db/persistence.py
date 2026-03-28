@@ -34,7 +34,8 @@ def db_save(state):
              getattr(s, "loss_warn_pct", 0), getattr(s, "loss_crit_pct", 0),
              getattr(s, "keyword", ""), int(getattr(s, "keyword_case", False)),
              getattr(s, "banner_regex", ""),
-             int(getattr(s, "alerts_muted", False)))
+             int(getattr(s, "alerts_muted", False)),
+             int(getattr(s, "host_override", False)))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -56,8 +57,14 @@ def db_save(state):
         else:
             cur.execute("DELETE FROM devices")
         cur.executemany(
-            "INSERT OR REPLACE INTO sensors VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO sensors "
+            "(did,sid,name,stype,host,port,url,interval,timeout,"
+            "verify_ssl,snmp_community,snmp_oid,snmp_version,sid_ctr,"
+            "dns_query,dns_record_type,dns_server,http_expected_status,"
+            "fail_after,recover_after,warn_ms,crit_ms,"
+            "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
+            "alerts_muted,host_override) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -90,7 +97,7 @@ def db_load(state):
             "verify_ssl,snmp_community,snmp_oid,snmp_version,sid_ctr,"
             "dns_query,dns_record_type,dns_server,http_expected_status,"
             "fail_after,recover_after,warn_ms,crit_ms,"
-            "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted "
+            "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted,host_override "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -123,7 +130,7 @@ def db_load(state):
          dns_query, dns_record_type, dns_server, http_expected_status,
          fail_after, recover_after, warn_ms, crit_ms,
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
-         alerts_muted) in srows:
+         alerts_muted, host_override) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -142,6 +149,7 @@ def db_load(state):
         s.dns_server           = dns_server or ""
         s.http_expected_status = int(http_expected_status or 0)
         s.alerts_muted         = bool(alerts_muted or 0)
+        s.host_override        = bool(host_override or 0)
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
