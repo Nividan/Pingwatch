@@ -511,6 +511,7 @@ async function discoverInterfaces(){
     html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${esc(iface.speed)}</td>`;
     html+=`<td style="padding:4px 8px">
       <select class="as-iface-metric" data-idx="${iface.index}"
+              onchange="updateIfaceSelCount()"
               style="font-size:11px;padding:2px 4px;max-width:140px">
         <option value="">— metric —</option>${opts}
       </select>
@@ -534,11 +535,25 @@ function toggleAllIfaces(cb){
 
 function updateIfaceSelCount(){
   const cbs=[...document.querySelectorAll('.as-iface-cb')];
-  const n=cbs.filter(c=>c.checked).length;
+  const checked=cbs.filter(c=>c.checked);
+  const n=checked.length;
   const el=document.getElementById('as-iface-sel-count');
   if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
   const all=document.getElementById('as-iface-all');
   if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
+  // When exactly 1 interface+metric is selected, sync the OID field so "Add Sensor" uses it
+  const oidEl=document.getElementById('as-oid');
+  if(oidEl && n===1){
+    const cb=checked[0];
+    const idx=parseInt(cb.dataset.idx);
+    const sel=document.querySelector(`.as-iface-metric[data-idx="${cb.dataset.idx}"]`);
+    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel?.value);
+    if(metric && !isNaN(idx)){
+      oidEl.value=metric.oid+idx;
+      const unitEl=document.getElementById('as-oid-unit2');
+      if(unitEl) unitEl.textContent=metric.u?'Unit: '+metric.u:'';
+    }
+  }
 }
 
 async function addSelectedIfaceSensors(){
