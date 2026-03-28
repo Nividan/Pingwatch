@@ -19,7 +19,9 @@ function tileHTML(s){
   // Warn (orange) when SNMP is alive but value is a plain string (e.g. wrong OID → sysDescr).
   // Don't warn for formatted rates ("5.8 KB/s", "1.2 MB/s") — those end with /s.
   const _snmpStrVal = isSnmp && s.alive===true && rawVal && rawVal!=='—' && isNaN(rawVal) && !/bps$|\/s$/.test(rawVal);
-  const vc=s.alive===false?'b':((isSnmp||isDns||isTls)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m'));
+  const _isCounter = isSnmp && s.last_bits != null;
+  const _counterThrColor = _isCounter ? (s.threshold_state==='crit'?'r':s.threshold_state==='warn'?'w':'g') : null;
+  const vc=s.alive===false?'b':(_isCounter?_counterThrColor:((isSnmp||isDns||isTls)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
   const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-40);
@@ -99,8 +101,10 @@ function updateTile(s){
     ? (s.alive===false?'FAIL':(rawVal2.length>14?rawVal2.slice(0,14)+'…':rawVal2))
     : isTls2 ? (s.alive===false?'FAIL':(rawVal2||'—'))
     : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
-  const _snmpStrVal2 = isSnmp && s.alive===true && rawVal2 && rawVal2!=='—' && isNaN(rawVal2) && !rawVal2.endsWith('/s');
-  const vc=s.alive===false?'b':((isSnmp||isDns2||isTls2)?(_snmpStrVal2?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m'));
+  const _snmpStrVal2 = isSnmp && s.alive===true && rawVal2 && rawVal2!=='—' && isNaN(rawVal2) && !/bps$|\/s$/.test(rawVal2);
+  const _isCounter2 = isSnmp && s.last_bits != null;
+  const _counterThrColor2 = _isCounter2 ? (s.threshold_state==='crit'?'r':s.threshold_state==='warn'?'w':'g') : null;
+  const vc=s.alive===false?'b':(_isCounter2?_counterThrColor2:((isSnmp||isDns2||isTls2)?(_snmpStrVal2?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
   const vel=document.getElementById(`stv-${sk}`);
   if(vel){vel.textContent=vt;vel.className=`stl-val ${vc}`;}
   const mutedBadge=document.getElementById(`sm-muted-${sk}`);
