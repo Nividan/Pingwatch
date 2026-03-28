@@ -73,6 +73,26 @@ function _calcDurations(events) {
   }
 }
 
+// ── Events sub-tab state ──────────────────────────────────────────
+let _evtActiveSubTab = (() => {
+  try { return localStorage.getItem('pw_evt_subtab') || 'sensor-events'; } catch { return 'sensor-events'; }
+})();
+
+function _evtSubTab(name) {
+  _evtActiveSubTab = name;
+  try { localStorage.setItem('pw_evt_subtab', name); } catch(_) {}
+  const panels = ['sensor-events', 'alert-history'];
+  panels.forEach(p => {
+    document.getElementById(`evtstab-btn-${p}`)?.classList.toggle('active', p === name);
+    const el = document.getElementById(`evtstab-panel-${p}`);
+    if (el) el.style.display = (p === name) ? 'flex' : 'none';
+  });
+  if (name === 'alert-history') {
+    if (typeof _alertingLoadEvents === 'function')
+      _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
+  }
+}
+
 // ── Filter state ──────────────────────────────────────────────────
 const EVT_FILTER = {
   timeRange: '24h',  // '5m'|'1h'|'24h'|'all'|'custom'

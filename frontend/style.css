@@ -1692,6 +1692,12 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   border-radius:3px;line-height:1;flex-shrink:0;}
 .alrt-rm-btn:hover{color:var(--down);background:var(--down-bg);}
 
+/* ── Events Sub-tab Bar ───────────────────────────────────────────── */
+.evt-subtab-bar{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 24px;background:var(--bg2);flex-shrink:0;}
+.evt-stab{padding:9px 18px;font-size:13px;font-weight:500;color:var(--text3);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s,border-color .15s;}
+.evt-stab:hover{color:var(--text);}
+.evt-stab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
 /* ── Alerting Phase 2+3 ───────────────────────────────────────────── */
 /* Sub-tabs */
 .alrt-subtabs{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 14px;flex-shrink:0;}
