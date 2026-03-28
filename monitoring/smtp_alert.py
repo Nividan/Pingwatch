@@ -44,11 +44,12 @@ def _safe(v):
 
 def send_alert_email(direction, evt):
     """Send a flap alert email. Called in a daemon thread from state.py."""
+    from db.backups import decrypt_pw as _dec_pw
     host      = _cfg('smtp_host', '')
     port      = _cfg('smtp_port', 587)
     tls       = _cfg('smtp_tls',  'starttls')  # 'ssl' | 'starttls' | 'none'
     user      = _cfg('smtp_user', '')
-    password  = _cfg('smtp_pass', '')
+    password  = _dec_pw(_cfg('smtp_pass', ''))
     from_addr = _cfg('smtp_from', '')
     to_addr   = _cfg('smtp_to',   '')
     if not (host and from_addr and to_addr):
@@ -94,11 +95,12 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
     ctx         — event context dict: dname, sname, stype, host, ts, detail,
                   severity, event_type, direction, etc.
     """
+    from db.backups import decrypt_pw as _dec_pw
     host      = _cfg('smtp_host', '')
     port      = _cfg('smtp_port', 587)
     tls       = _cfg('smtp_tls',  'starttls')
     user      = _cfg('smtp_user', '')
-    password  = _cfg('smtp_pass', '')
+    password  = _dec_pw(_cfg('smtp_pass', ''))
     from_addr = _cfg('smtp_from', '')
     if not (host and from_addr and to_addrs.strip()):
         log.warning("Alert rule email skipped — SMTP not configured")

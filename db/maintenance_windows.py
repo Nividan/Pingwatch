@@ -30,35 +30,37 @@ def _to_dict(r) -> dict:
 # ── CRUD ──────────────────────────────────────────────────────────
 
 def db_list_windows() -> list:
+    con = _con()
     try:
-        con = _con()
         rows = con.execute(
             "SELECT * FROM maintenance_windows ORDER BY start_ts"
         ).fetchall()
-        con.close()
         return [_to_dict(r) for r in rows]
     except Exception as e:
         log.error(f"db_list_windows error: {e}")
         return []
+    finally:
+        con.close()
 
 
 def db_get_window(window_id: int) -> dict:
+    con = _con()
     try:
-        con = _con()
         row = con.execute(
             "SELECT * FROM maintenance_windows WHERE id=?", (window_id,)
         ).fetchone()
-        con.close()
         return _to_dict(row) if row else None
     except Exception as e:
         log.error(f"db_get_window error: {e}")
         return None
+    finally:
+        con.close()
 
 
 def db_create_window(data: dict, created_by: str = '') -> int:
     now = time.time()
+    con = _con()
     try:
-        con = _con()
         cur = con.execute(
             """INSERT INTO maintenance_windows
                (name, scope_type, scope_value, start_ts, end_ts,
@@ -80,17 +82,17 @@ def db_create_window(data: dict, created_by: str = '') -> int:
             )
         )
         con.commit()
-        wid = cur.lastrowid
-        con.close()
-        return wid
+        return cur.lastrowid
     except Exception as e:
         log.error(f"db_create_window error: {e}")
         return -1
+    finally:
+        con.close()
 
 
 def db_update_window(window_id: int, data: dict) -> bool:
+    con = _con()
     try:
-        con = _con()
         con.execute(
             """UPDATE maintenance_windows SET
                name=?, scope_type=?, scope_value=?,
@@ -111,36 +113,39 @@ def db_update_window(window_id: int, data: dict) -> bool:
             )
         )
         con.commit()
-        con.close()
         return True
     except Exception as e:
         log.error(f"db_update_window error: {e}")
         return False
+    finally:
+        con.close()
 
 
 def db_delete_window(window_id: int) -> bool:
+    con = _con()
     try:
-        con = _con()
         con.execute("DELETE FROM maintenance_windows WHERE id=?", (window_id,))
         con.commit()
-        con.close()
         return True
     except Exception as e:
         log.error(f"db_delete_window error: {e}")
         return False
+    finally:
+        con.close()
 
 
 def db_active_windows() -> list:
     """Return windows that are currently active (used by alert engine)."""
     now = time.time()
+    con = _con()
     try:
-        con = _con()
         rows = con.execute(
             "SELECT * FROM maintenance_windows WHERE start_ts<=? AND end_ts>=?",
             (now, now)
         ).fetchall()
-        con.close()
         return [_to_dict(r) for r in rows]
     except Exception as e:
         log.error(f"db_active_windows error: {e}")
         return []
+    finally:
+        con.close()
