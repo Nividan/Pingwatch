@@ -219,12 +219,13 @@ function sensorFormHTML(dev, s=null) {
         </div>
       </div>
       <div class="fgrid">
-        <div class="fr"><label class="fl">${curType==='tls'?'Warn Days (cert expiry)':curType==='snmp'?'Warn Value':'Warn Latency (ms)'}</label>
-          <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200'}" min="1" style="max-width:100px"/>
+        ${(()=>{const isCounterSnmp=curType==='snmp'&&s?.last_bits!=null;return`
+        <div class="fr"><label class="fl">${curType==='tls'?'Warn Days (cert expiry)':isCounterSnmp?'Warn (Mbps)':curType==='snmp'?'Warn Value':'Warn Latency (ms)'}</label>
+          <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${isCounterSnmp?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200'}" min="1" style="max-width:100px"/>
         </div>
-        <div class="fr"><label class="fl">${curType==='tls'?'Crit Days (cert expiry)':curType==='snmp'?'Crit Value':'Crit Latency (ms)'}</label>
-          <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500'}" min="1" style="max-width:100px"/>
-        </div>
+        <div class="fr"><label class="fl">${curType==='tls'?'Crit Days (cert expiry)':isCounterSnmp?'Crit (Mbps)':curType==='snmp'?'Crit Value':'Crit Latency (ms)'}</label>
+          <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${isCounterSnmp?'e.g. 100':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500'}" min="1" style="max-width:100px"/>
+        </div>`;})()}
       </div>
       <div class="fgrid">
         <div class="fr"><label class="fl">Warn Loss %</label>

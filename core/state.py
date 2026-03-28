@@ -81,6 +81,7 @@ class Sensor:
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
+        self._last_bits    = None   # float bits/sec for Counter32/Counter64, None otherwise
         # Runtime state (not persisted)
         self._consec_fail     = 0
         self._consec_ok       = 0
@@ -176,6 +177,7 @@ class Sensor:
             "last_ms":        self.last_ms,
             "last_detail":    self.last_detail,
             "last_value":     self.last_value,
+            "last_bits":      round(self._last_bits, 2) if self._last_bits is not None else None,
             "avg_ms":         self.avg_ms,
             "min_ms":         self.min_ms,
             "max_ms":         self.max_ms,
@@ -449,22 +451,28 @@ class MonitorState:
                                 _delta = _cur - s._snmp_prev
                                 if _delta < 0:  # counter wrapped
                                     _delta += (2**32 if _stype == "counter32" else 2**64)
-                                s.last_value = _fmt_bps(_delta / _elapsed)
+                                _Bps = _delta / _elapsed          # bytes/sec
+                                s._last_bits = _Bps * 8           # bits/sec for threshold
+                                s.last_value = _fmt_bps(_Bps)
                             else:
                                 s.last_value = _raw_val
+                                s._last_bits = None
                         else:
-                            s.last_value = None  # first poll — no rate yet
+                            s.last_value = None   # first poll — no rate yet
+                            s._last_bits = None
                         s._snmp_prev    = _cur
                         s._snmp_prev_ts = _now
                     except (ValueError, TypeError):
                         s.last_value    = _raw_val
+                        s._last_bits    = None
                         s._snmp_prev    = None
                         s._snmp_prev_ts = None
                 else:
                     s.last_value = _raw_val
+                    s._last_bits = None
                 # ─────────────────────────────────────────────────
                 s.history.append(result["ms"])
-                _log_msg = s.last_value if (s.stype == "snmp" and s.last_value and s.last_value.endswith("/s")) else result["detail"]
+                _log_msg = s.last_value if (s.stype == "snmp" and s._last_bits is not None and s.last_value) else result["detail"]
                 self._broadcast("log", {"did": did, "sid": sid,
                                          "msg": _log_msg, "type": "ok"})
                 # ── Debounce: track consecutive successes ──
@@ -530,11 +538,14 @@ class MonitorState:
             # ── Threshold state check (transitions only) ──
             _new_thr = "ok"
             if result["ok"]:
-                _is_val_thr = s.stype in ('snmp', 'tls')
                 _thr_chk = None
-                if _is_val_thr:
-                    try: _thr_chk = float(s.last_value)
-                    except (TypeError, ValueError): pass
+                if s.stype in ('snmp', 'tls'):
+                    if s._last_bits is not None:
+                        # Counter sensor — warn_ms/crit_ms treated as Mbps
+                        _thr_chk = s._last_bits / 1_000_000
+                    else:
+                        try: _thr_chk = float(s.last_value)
+                        except (TypeError, ValueError): pass
                 elif s.last_ms is not None:
                     _thr_chk = s.last_ms
                 if _thr_chk is not None:
@@ -555,9 +566,12 @@ class MonitorState:
                         "ms": s.last_ms, "loss_pct": s.loss_pct,
                         "grp": dev.group,
                     })
-                    _is_val_thr2 = s.stype in ('snmp', 'tls')
-                    _unit = '' if _is_val_thr2 else 'ms'
-                    _val_disp = s.last_value if _is_val_thr2 else f"{s.last_ms}ms"
+                    if s._last_bits is not None:
+                        _unit = 'Mbps'; _val_disp = s.last_value or f"{s._last_bits/1_000_000:.2f}Mbps"
+                    elif s.stype in ('snmp', 'tls'):
+                        _unit = ''; _val_disp = s.last_value or ''
+                    else:
+                        _unit = 'ms'; _val_disp = f"{s.last_ms}ms"
                     if _new_thr == "crit":
                         log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
                     else:
