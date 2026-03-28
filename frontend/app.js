@@ -620,8 +620,8 @@ async function _refreshEvents(){
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
     ]);
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
-    (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
+    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);} });
+    (td.traps||[]).forEach(t=>{ t._direction='trap'; const k=_flapKey(t); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(t);} });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
     renderFlaps();
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
@@ -715,12 +715,12 @@ async function loadAll(){
   try {
     const fr=await fetch('/api/flaps');
     const fd=await fr.json();
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
+    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);} });
   } catch(e){}
   try {
     const tr=await fetch('/api/traps');
     const td=await tr.json();
-    (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
+    (td.traps||[]).forEach(t=>{ t._direction='trap'; const k=_flapKey(t); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(t);} });
   } catch(e){}
   // Sort combined list newest-first and cap size
   FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
