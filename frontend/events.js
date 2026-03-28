@@ -73,6 +73,74 @@ function _calcDurations(events) {
   }
 }
 
+// ── Alert event cache (for tagging sensor event rows) ─────────────
+let _alertEvtCache = [];
+let _alertMap      = null;  // did::sid → [alert events]; null = not loaded yet
+
+function _buildAlertMap(alertEvents) {
+  const map = {};
+  for (const a of alertEvents) {
+    if (!a.did) continue;
+    const key = `${a.did}::${a.sid||''}`;
+    if (!map[key]) map[key] = [];
+    map[key].push(a);
+  }
+  return map;
+}
+
+function _matchAlertEvt(event) {
+  if (!_alertMap || !event.did) return null;
+  const key = `${event.did}::${event.sid||''}`;
+  const candidates = _alertMap[key];
+  if (!candidates || !candidates.length) return null;
+  // ts from flaps is an ISO string; triggered_at is unix seconds
+  const evtSec = new Date(event.ts).getTime() / 1000;
+  if (isNaN(evtSec)) return null;
+  const WINDOW = 90;
+  return candidates.find(a => Math.abs(a.triggered_at - evtSec) <= WINDOW) || null;
+}
+
+async function _loadAlertCache() {
+  try {
+    const d = await api('GET', '/api/alert/events?state=all&limit=500');
+    _alertEvtCache = d.events || [];
+    _alertMap = _buildAlertMap(_alertEvtCache);
+    _renderEvtView();
+  } catch(_) {
+    _alertMap = {};  // mark as attempted even on failure
+  }
+}
+
+async function _refreshAlertCache() {
+  try {
+    const d = await api('GET', '/api/alert/events?state=all&limit=500');
+    _alertEvtCache = d.events || [];
+    _alertMap = _buildAlertMap(_alertEvtCache);
+    _renderEvtView();
+    const ac = await api('GET', '/api/alert/events/active');
+    _alertEvtBadgeCount = (ac && ac.count) || 0;
+    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
+  } catch(_) {}
+}
+
+async function _evtAlertAck(id) {
+  const d = await api('POST', `/api/alert/event/${id}/ack`);
+  if (!d.ok) { toast(d.error || 'Failed to acknowledge', 'err'); return; }
+  toast('Alert acknowledged', 'ok');
+  await _refreshAlertCache();
+  if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
+    _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
+}
+
+async function _evtAlertResolve(id) {
+  const d = await api('POST', `/api/alert/event/${id}/resolve`);
+  if (!d.ok) { toast(d.error || 'Failed to resolve', 'err'); return; }
+  toast('Alert resolved', 'ok');
+  await _refreshAlertCache();
+  if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
+    _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
+}
+
 // ── Events sub-tab state ──────────────────────────────────────────
 let _evtActiveSubTab = (() => {
   try { return localStorage.getItem('pw_evt_subtab') || 'sensor-events'; } catch { return 'sensor-events'; }
@@ -90,6 +158,9 @@ function _evtSubTab(name) {
   if (name === 'alert-history') {
     if (typeof _alertingLoadEvents === 'function')
       _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
+  }
+  if (name === 'sensor-events' && _alertMap === null) {
+    _loadAlertCache();
   }
 }
 
@@ -346,7 +417,7 @@ function _buildEvtTable(events) {
   tbl.innerHTML =
     '<thead><tr>' +
       '<th>Sev</th><th>Time</th><th>Device</th><th>Trap / Sensor</th>' +
-      '<th>Vendor</th><th>Detail</th><th>Duration</th>' +
+      '<th>Vendor</th><th>Detail</th><th>Duration</th><th>Alert</th>' +
     '</tr></thead>';
   const tbody = document.createElement('tbody');
   events.forEach(d => {
@@ -363,6 +434,32 @@ function _buildEvtTable(events) {
       ? (d.vendor && d.vendor !== 'Unknown' ? _vendorBadge(d) + (d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') : '—')
       : '—';
     const durStr = d._duration != null ? _fmtDuration(d._duration) : '—';
+    // Build alert tag cell
+    const alertEvt = _matchAlertEvt(d);
+    let alertCell = '<td></td>';
+    if (alertEvt) {
+      const stCls = {active:'aev-st-active',acknowledged:'aev-st-ack',resolved:'aev-st-res',suppressed:'aev-st-sup'}[alertEvt.state]||'aev-st-res';
+      const svCls = {critical:'aev-sv-crit',warning:'aev-sv-warn',info:'aev-sv-info'}[alertEvt.severity]||'aev-sv-warn';
+      const btns  = alertEvt.state === 'active'
+        ? `<div class="aev-btns">` +
+            `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtAlertAck(${alertEvt.id})">ACK</button>` +
+            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">Resolve</button>` +
+          `</div>`
+        : '';
+      const repeatBadge = alertEvt.repeat_count > 1
+        ? `<span class="aev-repeat" title="Fired ${alertEvt.repeat_count} times">×${alertEvt.repeat_count}</span>`
+        : '';
+      alertCell =
+        `<td class="aev-cell">` +
+          `<div class="aev-tag">` +
+            `<span class="aev-sv ${svCls}">${esc(alertEvt.severity.toUpperCase())}</span>` +
+            `<span class="aev-rule" title="${esc(alertEvt.rule_name)}">${esc(alertEvt.rule_name)}</span>` +
+            `<span class="aev-st ${stCls}">${esc(alertEvt.state)}</span>` +
+            repeatBadge +
+          `</div>` +
+          btns +
+        `</td>`;
+    }
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.onclick = () => _openEvtDetail(d);
@@ -373,7 +470,8 @@ function _buildEvtTable(events) {
       `<td>${dispSub}</td>` +
       `<td>${vendorCell}</td>` +
       `<td>${esc(d.detail||'')}</td>` +
-      `<td class="evt-td-dur">${durStr}</td>`;
+      `<td class="evt-td-dur">${durStr}</td>` +
+      alertCell;
     tbody.appendChild(tr);
   });
   tbl.appendChild(tbody);
@@ -385,6 +483,8 @@ function _buildEvtTable(events) {
 function _renderEvtView() {
   const list = document.getElementById('evtList');
   if (!list) return;
+  // Kick off alert cache load on first render (fire-and-forget; re-renders when done)
+  if (_alertMap === null) { _loadAlertCache(); }
 
   _populateEvtGroupDropdown();
   _populateEvtDeviceDropdown();

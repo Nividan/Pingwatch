@@ -1710,6 +1710,26 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .ae-grp-chip button:hover{color:var(--down);}
 .ae-grp-add{font-size:11px;}
 
+/* ── Alert tags in sensor events table ────────────────────────────── */
+.aev-cell{vertical-align:middle;min-width:160px;}
+.aev-tag{display:flex;align-items:center;gap:4px;flex-wrap:wrap;}
+.aev-sv{font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px;flex-shrink:0;}
+.aev-sv-crit{background:#3d1a1a;color:#f87171;}
+.aev-sv-warn{background:#3d2e0a;color:#fbbf24;}
+.aev-sv-info{background:var(--bg3);color:var(--text3);}
+.aev-rule{font-size:11px;color:var(--text2);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.aev-st{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:600;flex-shrink:0;}
+.aev-st-active{background:#1a2a1a;color:#4caf50;}
+.aev-st-ack{background:#2a2a0a;color:#fbbf24;}
+.aev-st-res{background:var(--bg3);color:var(--text3);}
+.aev-st-sup{background:var(--bg3);color:var(--text3);}
+.aev-repeat{font-size:10px;color:var(--accent);font-weight:700;}
+.aev-btns{display:flex;gap:4px;margin-top:3px;}
+.aev-btn-ack,.aev-btn-res{font-size:10px;padding:2px 7px;border-radius:3px;border:none;cursor:pointer;font-weight:600;transition:opacity .15s;}
+.aev-btn-ack{background:var(--accent-bg);color:var(--accent);}
+.aev-btn-res{background:#1a2a1a;color:#4caf50;}
+.aev-btn-ack:hover,.aev-btn-res:hover{opacity:.8;}
+
 /* ── Events Sub-tab Bar ───────────────────────────────────────────── */
 .evt-subtab-bar{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 24px;background:var(--bg2);flex-shrink:0;}
 .evt-stab{padding:9px 18px;font-size:13px;font-weight:500;color:var(--text3);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s,border-color .15s;}
