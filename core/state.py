@@ -324,6 +324,8 @@ class MonitorState:
                         "keyword", "keyword_case", "banner_regex", "alerts_muted"]
             for k, v in kwargs.items():
                 if k in editable and v is not None:
+                    if k == 'host' and not v:
+                        v = dev.host  # fall back to device host when sensor host is cleared
                     setattr(s, k, v)
         if was_running:
             self.start_sensor(did, sid)
