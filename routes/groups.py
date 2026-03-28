@@ -1,11 +1,11 @@
 """
 routes/groups.py — User group management API endpoints.
 
-GET    /api/groups              viewer  — list all groups with member_count
-POST   /api/group               admin   — create group {name, description}
-PATCH  /api/group/{id}          admin   — update group {name?, description?}
-DELETE /api/group/{id}          admin   — delete group
-PUT    /api/group/{id}/members  admin   — replace member list {usernames: [...]}
+GET    /api/user/groups              viewer  — list all groups with member_count
+POST   /api/user/group               admin   — create group {name, description}
+PATCH  /api/user/group/{id}          admin   — update group {name?, description?}
+DELETE /api/user/group/{id}          admin   — delete group
+PUT    /api/user/group/{id}/members  admin   — replace member list {usernames: [...]}
 """
 
 from core.config import (

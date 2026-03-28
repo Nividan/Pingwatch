@@ -15,7 +15,7 @@ async function _openProfileModal(){
     try{
       const [ur,gr]=await Promise.all([
         api('GET','/api/users'),
-        api('GET','/api/groups'),
+        api('GET','/api/user/groups'),
       ]);
       const row=(ur.users||[]).find(u=>u.username===me.username);
       if(row){currentGroupId=row.group_id??null;}

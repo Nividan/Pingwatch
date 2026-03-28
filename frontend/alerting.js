@@ -9,10 +9,12 @@ let _alertMaintWindows = [];
 let _aeGroups          = null;   // [{id, name}] cached per editor session
 let _aeBlkCounter      = 0;      // unique per-block ID for chip scoping
 
+function _aeInvalidateGroups() { _aeGroups = null; }
+
 async function _aeLoadGroups() {
   if (_aeGroups) return _aeGroups;
   try {
-    const r = await fetch('/api/groups');
+    const r = await fetch('/api/user/groups');
     const d = await r.json();
     _aeGroups = (d.groups || []).map(g => ({id: g.id, name: g.name}));
   } catch (_) { _aeGroups = []; }

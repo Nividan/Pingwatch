@@ -1313,7 +1313,7 @@ async function _groupsLoad(){
   const wrap = document.getElementById('group-list');
   if(!wrap) return;
   try{
-    const r = await api('GET','/api/groups');
+    const r = await api('GET','/api/user/groups');
     _groupsCache = r.groups || [];
     wrap.innerHTML = _groupsRender(_groupsCache);
   }catch(e){
@@ -1396,9 +1396,9 @@ async function _groupsSave(id){
   try{
     let r;
     if(id){
-      r=await api('PATCH',`/api/group/${id}`,{name,description:desc});
+      r=await api('PATCH',`/api/user/group/${id}`,{name,description:desc});
     }else{
-      r=await api('POST','/api/group',{name,description:desc});
+      r=await api('POST','/api/user/group',{name,description:desc});
       id=r.id;
     }
     if(r.error){toast(r.error,'err');return;}
@@ -1406,7 +1406,7 @@ async function _groupsSave(id){
     if(id){
       const checks=document.querySelectorAll('#m-grp-ed [data-uname]');
       const usernames=Array.from(checks).filter(c=>c.checked).map(c=>c.dataset.uname);
-      await api('PUT',`/api/group/${id}/members`,{usernames});
+      await api('PUT',`/api/user/group/${id}/members`,{usernames});
     }
     _groupsCache=r.groups||_groupsCache;
     const wrap=document.getElementById('group-list');
@@ -1417,6 +1417,7 @@ async function _groupsSave(id){
       const ur=await api('GET','/api/users');
       uw.innerHTML=renderUserTable(ur.users||[]);
     }
+    if(typeof _aeInvalidateGroups==='function') _aeInvalidateGroups();
     closeM('m-grp-ed');
     toast(id?`Group "${name}" saved`:`Group "${name}" created`,'ok');
   }catch(e){
@@ -1428,7 +1429,7 @@ async function _groupsSave(id){
 
 async function _groupsDelete(id, name){
   if(!confirm(`Delete group "${name}"?\n\nMembers will be unassigned from this group. Alert rules using this group will stop sending emails to it.`)) return;
-  const r=await api('DELETE',`/api/group/${id}`);
+  const r=await api('DELETE',`/api/user/group/${id}`);
   if(r.error){toast(r.error,'err');return;}
   _groupsCache=r.groups||[];
   const wrap=document.getElementById('group-list');
@@ -1439,6 +1440,7 @@ async function _groupsDelete(id, name){
     const ur=await api('GET','/api/users');
     uw.innerHTML=renderUserTable(ur.users||[]);
   }
+  if(typeof _aeInvalidateGroups==='function') _aeInvalidateGroups();
   toast(`Group "${name}" deleted`,'ok');
 }
 
@@ -1461,7 +1463,7 @@ async function _openUserProfileModal(username){
   }catch(_){}
 
   const groups=await (async()=>{
-    try{ const r=await api('GET','/api/groups'); return r.groups||[]; }catch(_){return [];}
+    try{ const r=await api('GET','/api/user/groups'); return r.groups||[]; }catch(_){return [];}
   })();
 
   const isAdmin=(callerRole==='admin');
