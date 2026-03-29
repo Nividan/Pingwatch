@@ -581,13 +581,14 @@ class MonitorState:
                 s._threshold_state = _new_thr
                 if _new_thr != "ok" and not _muted:
                     _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
-                    self._broadcast(_tevt, {
+                    _thr_evt_data = {
                         "did": did, "sid": sid, "dname": dev.name,
                         "sname": s.name, "host": s.host, "stype": s.stype,
                         "state": _new_thr, "ts": _ts,
                         "ms": s.last_ms, "loss_pct": s.loss_pct,
                         "grp": dev.group,
-                    })
+                    }
+                    self._broadcast(_tevt, _thr_evt_data)
                     if s._last_rate is not None:
                         _u2 = s.snmp_unit
                         if _u2 in _BYTE_UNITS or _u2 == "":
@@ -603,6 +604,10 @@ class MonitorState:
                         log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
                     else:
                         log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
+                    _thr_flap = dict(_thr_evt_data)
+                    _thr_flap["direction"] = "threshold_crit" if _new_thr == "crit" else "threshold_warn"
+                    _thr_flap["detail"]    = _val_disp
+                    _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
 
             self._broadcast("sensor", s.to_dict())
             self._broadcast("device_status", {"did": did, "status": dev.status})
