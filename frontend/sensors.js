@@ -27,12 +27,13 @@ function tileHTML(s){
   const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-40);
+  const thrHist=(s.thr_history||[]).slice(-40);
   const ub=Array(40).fill(0).map((_,i)=>{
     const idx=i-(40-hist.length);
     if(idx<0)return'<div class="ub-s"></div>';
     const v=hist[idx];
     if(v===null)return`<div class="ub-s" style="background:var(--down)"></div>`;
-    const _mc=msC(v,s);const _thr=isSnmp&&!_isCounter?(s.thr_history||[])[idx]||'ok':'ok';const _snmpDotC=_thr==='crit'?'var(--down)':_thr==='warn'?'var(--warn)':'var(--up)';const c=(isSnmp||isDns||isTls)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
+    const _mc=msC(v,s);const _thr=isSnmp&&!_isCounter?thrHist[idx]||'ok':'ok';const _snmpDotC=_thr==='crit'?'var(--down)':_thr==='warn'?'var(--warn)':'var(--up)';const c=(isSnmp||isDns||isTls)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
     return`<div class="ub-s" style="background:${c}"></div>`;
   }).join('');
   return`
@@ -128,12 +129,13 @@ function updateTile(s){
   const ubEl=document.getElementById(`ub-${sk}`);
   if(ubEl){
     const hist=(s.history||[]).slice(-40),sqs=ubEl.querySelectorAll('.ub-s');
+    const thrHist2=(s.thr_history||[]).slice(-40);
     sqs.forEach((sq,i)=>{
       const idx=i-(40-hist.length);
       if(idx<0){sq.style.background='var(--bg4)';return;}
       const v=hist[idx];
       if(v===null){sq.style.background='var(--down)';return;}
-      const _mc2=msC(v,s);const _thr2=isSnmp&&!_isCounter2?(s.thr_history||[])[idx]||'ok':'ok';const _snmpDotC2=_thr2==='crit'?'var(--down)':_thr2==='warn'?'var(--warn)':'var(--up)';sq.style.background=(isSnmp||isDns2||isTls2)?_snmpDotC2:(_mc2==='g'?'var(--up)':_mc2==='w'?'var(--warn)':'var(--down)');
+      const _mc2=msC(v,s);const _thr2=isSnmp&&!_isCounter2?thrHist2[idx]||'ok':'ok';const _snmpDotC2=_thr2==='crit'?'var(--down)':_thr2==='warn'?'var(--warn)':'var(--up)';sq.style.background=(isSnmp||isDns2||isTls2)?_snmpDotC2:(_mc2==='g'?'var(--up)':_mc2==='w'?'var(--warn)':'var(--down)');
     });
   }
   drawSpk(key,s.history||[]);
