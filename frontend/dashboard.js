@@ -72,6 +72,14 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwRenderSystemStatus(wid),
     refresh: (wid, _cfg) => _dwRenderSystemStatus(wid),
   },
+  server_perf: {
+    label: 'Server Performance',
+    icon:  '🖥',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRenderServerPerf(wid),
+    refresh: (wid, _cfg) => _dwFetchServerPerf(wid),
+  },
   down_devices: {
     label: 'Down & Warning Devices',
     icon:  '⚠',
@@ -1244,6 +1252,53 @@ function _dwRefreshInternetHealth(wid) {
       <span style="color:var(--text3);font-size:10px"> / ${total} external</span>
     </div>
     ${failed.length ? `<div class="dw-ih-fail-list">${failRows}</div>` : ''}
+  </div>`;
+}
+
+// ── Widget: Server Performance ───────────────────────────────────
+function _dwRenderServerPerf(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  body.innerHTML = '<div class="dw-loading">Loading…</div>';
+  _dwFetchServerPerf(wid);
+}
+
+async function _dwFetchServerPerf(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  let d = null;
+  try {
+    const r = await fetch('/api/system/perf');
+    if (r.ok) d = await r.json();
+  } catch {}
+  if (!d || d.error) {
+    const msg = d?.error || 'Failed to load';
+    body.innerHTML = `<div class="dw-err">${esc(msg)}</div>`;
+    return;
+  }
+  const _fmtBytes = b => {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    return (b / 1048576).toFixed(0) + ' MB';
+  };
+  const _gauge = (pct, label, detail) => {
+    const color = pct >= 90 ? 'var(--down)' : pct >= 70 ? 'var(--warn)' : 'var(--up)';
+    return `<div class="dw-sp-row">
+      <div class="dw-sp-hdr">
+        <span class="dw-sp-lbl">${label}</span>
+        <span class="dw-sp-pct" style="color:${color}">${pct}%</span>
+      </div>
+      <div class="dw-sp-bar-wrap">
+        <div class="dw-sp-bar" style="width:${Math.min(pct,100)}%;background:${color}"></div>
+      </div>
+      <span class="dw-sp-detail">${detail}</span>
+    </div>`;
+  };
+  const ramDetail  = `${_fmtBytes(d.ram_used)} / ${_fmtBytes(d.ram_total)}`;
+  const diskDetail = `${_fmtBytes(d.disk_used)} / ${_fmtBytes(d.disk_total)}`;
+  body.innerHTML = `<div class="dw-sp-list">
+    ${_gauge(d.cpu_pct,  'CPU',  `${d.cpu_pct}%`)}
+    ${_gauge(d.ram_pct,  'RAM',  ramDetail)}
+    ${_gauge(d.disk_pct, 'Disk', diskDetail)}
   </div>`;
 }
 

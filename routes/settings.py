@@ -267,6 +267,31 @@ def handle(h, method, path, body):
         })
         return True
 
+    # ── /api/system/perf GET ─────────────────────────────────────
+    if path == "/api/system/perf" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        try:
+            import psutil
+            cpu  = psutil.cpu_percent(interval=0.1)
+            ram  = psutil.virtual_memory()
+            _dp  = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            disk = psutil.disk_usage(_dp)
+            h._json(200, {
+                "cpu_pct":    round(cpu, 1),
+                "ram_pct":    round(ram.percent, 1),
+                "ram_used":   ram.used,
+                "ram_total":  ram.total,
+                "disk_pct":   round(disk.percent, 1),
+                "disk_used":  disk.used,
+                "disk_total": disk.total,
+            })
+        except ImportError:
+            h._json(503, {"error": "psutil not installed — run: pip install psutil"})
+        except Exception as e:
+            h._json(500, {"error": str(e)})
+        return True
+
     # ── /api/dashboard GET ────────────────────────────────────────
     if path == "/api/dashboard" and method == "GET":
         user, _ = h._require("viewer")
