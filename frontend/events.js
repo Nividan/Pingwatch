@@ -6,6 +6,7 @@ function evtSeverity(d) {
   // Normalise: backend sends 'direction', SSE handlers set '_direction'
   const dir = d._direction || d.direction || '';
   if (dir === 'recovered')                             return 'recovery';
+  if (dir === 'threshold_ok')                          return 'recovery';
   if (dir === 'down')                                  return 'critical';
   if (dir === 'threshold' && d._thr_level === 'crit') return 'critical';
   if (dir === 'threshold' && d._thr_level === 'warn') return 'warning';
@@ -34,6 +35,7 @@ function evtIcon(d) {
   const dir = d._direction || d.direction || '';
   if (dir === 'trap') return _VENDOR_ICONS[d.vendor] || '📡';
   if (dir === 'threshold') return '⚠️';
+  if (dir === 'threshold_ok') return '✅';
   return _EVT_ICONS[d.stype] || '⚠️';
 }
 function _trapLabel(d) {
@@ -99,7 +101,7 @@ function _matchAlertEvt(event) {
   // Determine whether this sensor event is a down/threshold or recovery
   const dir = event._direction || event.direction || '';
   const isDown = dir === 'down' || dir === 'threshold';
-  const isRecovered = dir === 'recovered';
+  const isRecovered = dir === 'recovered' || dir === 'threshold_ok';
   // Alert fires after sensor event (queue delay); allow up to 5 min after, 60s before
   const WINDOW = 300;
   return candidates.find(a => {
@@ -152,6 +154,22 @@ async function _evtAlertResolve(id) {
   await _refreshAlertCache();
   if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
     _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
+}
+
+async function _evtFlapAck(flapId) {
+  const d = await api('POST', `/api/flaps/${flapId}/ack`);
+  if (!d.ok) { toast('Failed to acknowledge', 'err'); return; }
+  toast('Acknowledged', 'ok');
+  await _refreshFlapList();
+  _renderEvtView();
+}
+
+async function _evtFlapResolve(flapId) {
+  const d = await api('POST', `/api/flaps/${flapId}/resolve`);
+  if (!d.ok) { toast('Failed to resolve', 'err'); return; }
+  toast('Resolved', 'ok');
+  await _refreshFlapList();
+  _renderEvtView();
 }
 
 // ── Events sub-tab state ──────────────────────────────────────────
@@ -475,6 +493,26 @@ function _buildEvtTable(events) {
           `</div>` +
           btns +
         `</td>`;
+    } else if (d.id) {
+      const flapState = d.ack_state || 'active';
+      const isActive  = flapState === 'active';
+      const isAcked   = flapState === 'acknowledged';
+      const stCls   = isActive ? 'aev-st-active' : isAcked ? 'aev-st-ack' : 'aev-st-res';
+      const stLabel = isActive ? '● active' : isAcked ? '◐ ack' : '✓ done';
+      const btns = (isActive || isAcked)
+        ? `<div class="aev-btns">` +
+            (isActive ? `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtFlapAck(${d.id})">✓ ACK</button>` : '') +
+            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtFlapResolve(${d.id})">◉ Resolve</button>` +
+          `</div>`
+        : '';
+      alertCell =
+        `<td class="aev-cell">` +
+          `<div class="aev-tag aev-tag-info${isActive?' aev-tag-active':''}">` +
+            `<span class="aev-dot"></span>` +
+            `<span class="aev-st ${stCls}">${stLabel}</span>` +
+          `</div>` +
+          btns +
+        `</td>`;
     }
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
@@ -560,6 +598,7 @@ function _openEvtDetail(d) {
   const typeLabel = {
     down: 'Device / Sensor Down', recovered: 'Recovery',
     threshold: 'Threshold Alert (' + (d._thr_level||'') + ')',
+    threshold_ok: 'Threshold Recovered',
     trap: 'SNMP Trap', info: 'Info'
   }[_dir] || _dir || '—';
   const durStr = d._duration != null ? _fmtDuration(d._duration) : '—';
