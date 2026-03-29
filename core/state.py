@@ -661,7 +661,7 @@ class MonitorState:
                     try: self._sse.remove(d)
                     except ValueError: pass
         if event in ('flap_down', 'flap_recovered', 'snmp_trap',
-                     'threshold_critical', 'threshold_warning'):
+                     'threshold_critical', 'threshold_warning', 'threshold_ok'):
             try:
                 from monitoring.syslog_client import syslog_send
                 syslog_send(event, data)
