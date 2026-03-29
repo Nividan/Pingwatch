@@ -943,7 +943,7 @@ canvas.dmc{width:100%;height:110px;display:block}
 }
 .dm-lbody{font-family:'JetBrains Mono',monospace;font-size:10px;height:130px;overflow-y:auto;padding:5px 10px}
 .ll{display:block;line-height:1.8}
-.ll.ok{color:var(--up)}.ll.err{color:var(--down)}.ll.info{color:#60a5fa}
+.ll.ok{color:var(--up)}.ll.warn{color:var(--warn)}.ll.err{color:var(--down)}.ll.info{color:#60a5fa}
 .ll .ts{color:var(--text3)}
 .dm-ft{display:flex;justify-content:flex-end;gap:8px;padding:11px 18px;border-top:1px solid var(--border);flex-shrink:0}
 

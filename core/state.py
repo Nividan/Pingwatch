@@ -490,8 +490,9 @@ class MonitorState:
                 # ─────────────────────────────────────────────────
                 s.history.append(result["ms"])
                 _log_msg = s.last_value if (s.stype == "snmp" and s._last_rate is not None and s.last_value) else result["detail"]
+                _log_type = "err" if s._threshold_state == "crit" else ("warn" if s._threshold_state == "warn" else "ok")
                 self._broadcast("log", {"did": did, "sid": sid,
-                                         "msg": _log_msg, "type": "ok"})
+                                         "msg": _log_msg, "type": _log_type})
                 # ── Debounce: track consecutive successes ──
                 s._consec_fail = 0
                 s._consec_ok  += 1
