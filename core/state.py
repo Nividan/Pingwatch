@@ -492,9 +492,6 @@ class MonitorState:
                 # ─────────────────────────────────────────────────
                 s.history.append(result["ms"])
                 _log_msg = s.last_value if (s.stype == "snmp" and s._last_rate is not None and s.last_value) else result["detail"]
-                _log_type = "err" if s._threshold_state == "crit" else ("warn" if s._threshold_state == "warn" else "ok")
-                self._broadcast("log", {"did": did, "sid": sid,
-                                         "msg": _log_msg, "type": _log_type})
                 # ── Debounce: track consecutive successes ──
                 s._consec_fail = 0
                 s._consec_ok  += 1
@@ -629,6 +626,9 @@ class MonitorState:
                     _db_enqueue(lambda _f=_thr_rec_flap: db_log_flap(_f))
 
             s.thr_history.append(s._threshold_state)
+            if result["ok"]:
+                _log_type = "err" if s._threshold_state == "crit" else ("warn" if s._threshold_state == "warn" else "ok")
+                self._broadcast("log", {"did": did, "sid": sid, "msg": _log_msg, "type": _log_type})
             self._broadcast("sensor", s.to_dict())
             self._broadcast("device_status", {"did": did, "status": dev.status})
             s._stop_event.wait(timeout=s.interval)
