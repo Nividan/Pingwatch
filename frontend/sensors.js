@@ -54,7 +54,7 @@ function tileHTML(s){
   <div class="stl-spark"><canvas class="spk" height="38"></canvas></div>
   <div class="stl-stats">
     ${(isSnmp||isTls)?`
-    <div class="stl-stat"><div class="stl-sv" id="sa-${s.device_id}_${s.sensor_id}">—</div><div class="stl-sk">Avg</div></div>
+    <div class="stl-stat"><div class="stl-sv" id="sa-${s.device_id}_${s.sensor_id}">${_isCounter&&s.last_rate!=null?_fmtRateDisplay(s.last_rate,s.snmp_unit||'bytes'):'—'}</div><div class="stl-sk">Avg</div></div>
     <div class="stl-stat"><div class="stl-sv" id="sm-${s.device_id}_${s.sensor_id}">${s.loss_pct!==undefined?s.loss_pct+'%':'—'}</div><div class="stl-sk">Loss</div></div>
     <div class="stl-stat"><div class="stl-sv" id="sl-${s.device_id}_${s.sensor_id}">${s.total||0}</div><div class="stl-sk">Sent</div></div>`:`
     <div class="stl-stat"><div class="stl-sv" id="sa-${s.device_id}_${s.sensor_id}">${s.avg_ms?s.avg_ms+'ms':'—'}</div><div class="stl-sk">Avg</div></div>
@@ -118,7 +118,7 @@ function updateTile(s){
   if(del)del.textContent=s.last_detail||'';
   const ael=document.getElementById(`sa-${sk}`),mel=document.getElementById(`sm-${sk}`),lel=document.getElementById(`sl-${sk}`);
   if(isSnmp||isTls2){
-    if(ael)ael.textContent='—';
+    if(ael)ael.textContent=_isCounter2&&s.last_rate!=null?_fmtRateDisplay(s.last_rate,s.snmp_unit||'bytes'):'—';
     if(mel)mel.textContent=s.loss_pct!==undefined?`${s.loss_pct}%`:'—';
     if(lel)lel.textContent=String(s.total||0);
   }else{
@@ -772,6 +772,10 @@ function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
     _setKpi(`kpi-min-${did}-${sid}`, 'Min '+_lbl, _fr(minR));
     _setKpi(`kpi-max-${did}-${sid}`, 'Max '+_lbl, _fr(maxR));
     _setKpi(`kpi-jitter-${did}-${sid}`, 'Jitter', '—', 'dm-kpi-info');
+    // Push into overview dmv- stats
+    const _sk2=`${did}/${sid}`;
+    const _so=S.sensors[_sk2]; if(_so){_so._ov_avg=_fr(avgR);_so._ov_min=_fr(minR);_so._ov_max=_fr(maxR);}
+    ['avg','min','max'].forEach((k,i)=>{const el=document.getElementById(`dmv-${did}-${sid}-${k}`);if(el)el.textContent=[_fr(avgR),_fr(minR),_fr(maxR)][i];});
     return;
   }
   // ms-based KPIs
@@ -1513,9 +1517,9 @@ function mVal(s,k){
     if(s.stype==='tls') return s.alive===false?'FAIL':(s.last_value!=null?s.last_value+'d':'—');
     return s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   }
-  if(k==='avg') return (s.stype==='snmp'||s.stype==='tls')?'—':(s.avg_ms?`${s.avg_ms}ms`:'—');
-  if(k==='min') return (s.stype==='snmp'||s.stype==='tls')?'—':(s.min_ms?`${s.min_ms}ms`:'—');
-  if(k==='max') return (s.stype==='snmp'||s.stype==='tls')?'—':(s.max_ms?`${s.max_ms}ms`:'—');
+  if(k==='avg') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_avg||'—'):(s.avg_ms?`${s.avg_ms}ms`:'—');
+  if(k==='min') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_min||'—'):(s.min_ms?`${s.min_ms}ms`:'—');
+  if(k==='max') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_max||'—'):(s.max_ms?`${s.max_ms}ms`:'—');
   if(k==='loss')return s.loss_pct!==undefined?`${s.loss_pct}%`:'—';
   if(k==='sent')return String(s.total||0);
 }
