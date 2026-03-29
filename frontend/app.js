@@ -620,7 +620,12 @@ async function _refreshEvents(){
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
     ]);
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);} });
+    (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
+      else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else f._direction=f.direction||'down';
+      const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
+    });
     (td.traps||[]).forEach(t=>{ t._direction='trap'; const k=_flapKey(t); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(t);} });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
     renderFlaps();
@@ -715,7 +720,12 @@ async function loadAll(){
   try {
     const fr=await fetch('/api/flaps');
     const fd=await fr.json();
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);} });
+    (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
+      else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else f._direction=f.direction||'down';
+      const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
+    });
   } catch(e){}
   try {
     const tr=await fetch('/api/traps');
