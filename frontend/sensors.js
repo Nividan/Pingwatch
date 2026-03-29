@@ -701,7 +701,9 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   const summary = sr.summary || [];
   const windowStart = Date.now() / 1000 - minutes * 60;
   const _senObj = S.sensors[`${did}/${sid}`];
-  const _snmpUnit = (_senObj?.stype==='snmp' && _senObj?.snmp_unit) ? _senObj.snmp_unit : '';
+  const _rawUnit = (_senObj?.stype==='snmp' && _senObj?.snmp_unit) ? _senObj.snmp_unit : '';
+  // Fall back to 'bytes' for counter sensors created before snmp_unit was stored
+  const _snmpUnit = _rawUnit || ((_senObj?.stype==='snmp' && _senObj?.last_rate != null) ? 'bytes' : '');
   const rateSamples = _computeRateSamples(samples, _snmpUnit);
   _histCache[`${did}/${sid}`] = { samples, summary, minutes, windowStart, rateSamples, snmpUnit: _snmpUnit };
   // Re-fetch elements by ID after the await: the modal may have been closed/reopened
