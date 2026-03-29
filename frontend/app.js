@@ -115,6 +115,7 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     d._direction='threshold_ok';
     pushFlap(d);
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
     setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('snmp_trap',e=>{
