@@ -609,8 +609,39 @@ function _closeEvtDetail() {
   _evtDetailCurrent = null;
 }
 
+// Returns {secs, live}: secs = current duration value, live = whether it should tick
+function _iipGetDuration(d) {
+  const dir        = d._direction || d.direction || '';
+  const isRecovery = dir === 'recovered' || dir === 'threshold_ok';
+
+  // Recovery row: _calcDurations already computed down→up duration
+  if (isRecovery && d._duration != null) {
+    return { secs: d._duration, live: false };
+  }
+
+  // Down/threshold row: look for the matching recovery in FLAPS so both rows
+  // show the same fixed value (down→recovery), not the ever-growing "age since down"
+  if (d.did && d.sid && typeof FLAPS !== 'undefined') {
+    const dTs = new Date(d.ts).getTime();
+    const rec = FLAPS.find(f =>
+      f.did === d.did && f.sid === d.sid &&
+      (f._direction === 'recovered' || f._direction === 'threshold_ok') &&
+      new Date(f.ts).getTime() > dTs
+    );
+    if (rec) {
+      return { secs: Math.floor((new Date(rec.ts).getTime() - dTs) / 1000), live: false };
+    }
+  }
+
+  // No recovery yet: live ticker from event start
+  const secs = d.ts ? Math.max(0, Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000)) : 0;
+  return { secs, live: true };
+}
+
 function _startEvtDurTimer(d) {
   clearInterval(_evtDetailTimer);
+  const { live } = _iipGetDuration(d);
+  if (!live) return;  // static duration — no ticker needed
   _evtDetailTimer = setInterval(() => {
     const el = document.getElementById('iip-dur-live');
     if (!el) { clearInterval(_evtDetailTimer); return; }
@@ -665,8 +696,8 @@ function _iipStatus(d) {
   const localStr = d.ts ? new Date(d.ts).toLocaleString([], {month:'short', day:'numeric',
     hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' Local' : '';
 
-  const initDur = d._duration != null ? _fmtDuration(d._duration)
-                : (d.ts ? _fmtDuration(Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000)) : '—');
+  const { secs: durSecs } = _iipGetDuration(d);
+  const initDur = _fmtDuration(durSecs);
 
   let ackmeta = '';
   if (isAcked && d.ack_by) {
