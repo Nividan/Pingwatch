@@ -108,7 +108,8 @@ def invalidate_rules_cache():
 def _process(event_type: str, data: dict):
     """Evaluate all enabled rules against this event and dispatch matches."""
     if event_type not in ("flap_down", "flap_recovered",
-                           "threshold_warning", "threshold_critical"):
+                           "threshold_warning", "threshold_critical",
+                           "threshold_ok"):
         return
 
     rules = _get_rules()
@@ -143,6 +144,7 @@ def _build_ctx(event_type: str, data: dict) -> dict:
         "flap_recovered":     "info",
         "threshold_warning":  "warning",
         "threshold_critical": "critical",
+        "threshold_ok":       "info",
     }
     # Normalize internal SSE event names to user-friendly values for condition matching
     _etype_norm = {
@@ -150,6 +152,7 @@ def _build_ctx(event_type: str, data: dict) -> dict:
         "flap_recovered":     "recovered",
         "threshold_warning":  "threshold_warning",
         "threshold_critical": "threshold_critical",
+        "threshold_ok":       "threshold_ok",
     }
     ctx = dict(data)
     ctx["event_type"] = _etype_norm.get(event_type, event_type)

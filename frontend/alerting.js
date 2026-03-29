@@ -627,7 +627,7 @@ const _AE_OPS = [
 ];
 // Known enum values for fields that have a fixed set of options
 const _AE_FIELD_VALUES = {
-  event_type:      ['down','recovered','threshold_warning','threshold_critical'],
+  event_type:      ['down','recovered','threshold_warning','threshold_critical','threshold_ok'],
   severity:        ['critical','warning','info'],
   direction:       ['down','recovered','threshold'],
   threshold_state: ['warn','crit'],
