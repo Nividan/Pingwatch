@@ -484,6 +484,65 @@ function pushLog(did,sid,msg,type){
 }
 
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DETAIL WINDOW �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
+// ── SNMP Counter rate helpers for history view ────────────────────────────
+const _COUNTER_HIST_UNITS = new Set(['bytes','errors','packets']);
+
+function _computeRateSamples(samples, snmpUnit) {
+  if (!_COUNTER_HIST_UNITS.has(snmpUnit)) return null;
+  const sorted = [...samples].filter(p => p.value != null).sort((a, b) => a.ts - b.ts);
+  const result = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i-1], curr = sorted[i];
+    if (!curr.ok) { result.push({ts:curr.ts, ok:false, rate:null, ms:curr.ms}); continue; }
+    if (curr.value==null||prev.value==null) continue;
+    const elapsed = curr.ts - prev.ts;
+    if (elapsed<=0||elapsed>300) continue;
+    let delta = parseFloat(curr.value) - parseFloat(prev.value);
+    if (isNaN(delta)) continue;
+    if (delta < 0) delta += 4294967296; // Counter32 wrap
+    result.push({ts:curr.ts, ok:true, rate:delta/elapsed, ms:curr.ms});
+  }
+  return result;
+}
+
+function _fmtRateDisplay(ratePerSec, snmpUnit) {
+  if (snmpUnit==='bytes') {
+    const bps=ratePerSec*8;
+    if(bps>=1e9) return (bps/1e9).toFixed(2)+' Gbps';
+    if(bps>=1e6) return (bps/1e6).toFixed(2)+' Mbps';
+    if(bps>=1e3) return (bps/1e3).toFixed(1)+' Kbps';
+    return bps.toFixed(0)+' bps';
+  }
+  if (snmpUnit==='errors')  return ratePerSec.toFixed(ratePerSec<10?2:1)+' err/s';
+  if (snmpUnit==='packets') return ratePerSec.toFixed(ratePerSec<10?2:1)+' pkt/s';
+  return ratePerSec.toFixed(2)+'/s';
+}
+
+function _rateToDisplayUnits(ratePerSec, snmpUnit) {
+  return snmpUnit==='bytes' ? ratePerSec*8/1e6 : ratePerSec;
+}
+
+function _fmtRateYLabel(displayVal, snmpUnit) {
+  if (snmpUnit==='bytes') {
+    if(displayVal>=1000) return (displayVal/1000).toFixed(1)+'G';
+    if(displayVal>=1)    return displayVal.toFixed(1)+'M';
+    return (displayVal*1000).toFixed(0)+'K';
+  }
+  if (snmpUnit==='errors')  return displayVal.toFixed(1)+'e/s';
+  if (snmpUnit==='packets') return displayVal.toFixed(1)+'p/s';
+  return displayVal.toFixed(1);
+}
+
+function _fmtRateThrLabel(displayVal, snmpUnit) {
+  if (snmpUnit==='bytes') {
+    if(displayVal>=1000) return (displayVal/1000).toFixed(1)+' Gbps';
+    return displayVal.toFixed(1)+' Mbps';
+  }
+  if (snmpUnit==='errors')  return displayVal.toFixed(1)+' err/s';
+  if (snmpUnit==='packets') return displayVal.toFixed(1)+' pkt/s';
+  return displayVal.toFixed(1)+'/s';
+}
+
 function openDetail(did,sid,initialTab){
   const key=`${did}/${sid}`;
   const s=S.sensors[key];if(!s)return;
@@ -556,9 +615,9 @@ function openDetail(did,sid,initialTab){
       </div>
       <div class="dm-kpi-bar" id="kpi-${did}-${sid}">
         <div class="dm-kpi-item" id="kpi-avail-${did}-${sid}">Avail<br><span>—</span></div>
-        <div class="dm-kpi-item" id="kpi-avg-${did}-${sid}">Avg ms<br><span>—</span></div>
-        <div class="dm-kpi-item" id="kpi-min-${did}-${sid}">Min ms<br><span>—</span></div>
-        <div class="dm-kpi-item" id="kpi-max-${did}-${sid}">Max ms<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-avg-${did}-${sid}">Avg<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-min-${did}-${sid}">Min<br><span>—</span></div>
+        <div class="dm-kpi-item" id="kpi-max-${did}-${sid}">Max<br><span>—</span></div>
         <div class="dm-kpi-item" id="kpi-loss-${did}-${sid}">Loss %<br><span>—</span></div>
         <div class="dm-kpi-item" id="kpi-jitter-${did}-${sid}">Jitter<br><span>—</span></div>
       </div>
@@ -641,7 +700,10 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   const samples = hr.samples || [];
   const summary = sr.summary || [];
   const windowStart = Date.now() / 1000 - minutes * 60;
-  _histCache[`${did}/${sid}`] = { samples, summary, minutes, windowStart };
+  const _senObj = S.sensors[`${did}/${sid}`];
+  const _snmpUnit = (_senObj?.stype==='snmp' && _senObj?.snmp_unit) ? _senObj.snmp_unit : '';
+  const rateSamples = _computeRateSamples(samples, _snmpUnit);
+  _histCache[`${did}/${sid}`] = { samples, summary, minutes, windowStart, rateSamples, snmpUnit: _snmpUnit };
   // Re-fetch elements by ID after the await: the modal may have been closed/reopened
   // while the fetch was in-flight, making the captured references stale (detached DOM).
   // Fall back to the originally-passed elements for callers that use their own IDs
@@ -650,10 +712,10 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   const _statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`) || statsEl;
   const _sumEl   = document.getElementById(`dm-hist-summary-${did}-${sid}`) || sumEl;
   if (!c) return; // genuinely not found (modal closed mid-flight)
-  _buildKpiBar(summary, did, sid);
-  _setupHistTooltip(c, summary, did, sid, minutes);
-  _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart);
-  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes);
+  _buildKpiBar(summary, did, sid, rateSamples, _snmpUnit);
+  _setupHistTooltip(c, summary, did, sid, minutes, rateSamples, _snmpUnit);
+  _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
+  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit);
   // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
   // the next animation frame will have correct dimensions — redraw from cache.
   requestAnimationFrame(() => dmHistRedraw(did, sid));
@@ -664,47 +726,62 @@ function dmHistRedraw(did, sid) {
   if (!cache) return;
   const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
   const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
-  if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples, cache.minutes, cache.windowStart);
+  if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples,
+    cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
 }
 
-function _buildKpiBar(summary, did, sid) {
-  if (!summary.length) return;
-  let totalOk = 0, totalFail = 0, wsum = 0, wcnt = 0;
-  let minMs = Infinity, maxMs = -Infinity, lossSum = 0, jitterSum = 0;
+function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
+  const _setKpi = (id, label, val, cls) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = `${label}<br><span>${val}</span>`;
+    el.className = 'dm-kpi-item' + (cls ? ' ' + cls : '');
+  };
+  // Availability + loss always from summary
+  let totalOk=0, totalFail=0, lossSum=0, jitterSum=0;
   for (const r of summary) {
-    totalOk   += r.ok;
-    totalFail += r.fail;
-    if (r.avg_ms != null) { wsum += r.avg_ms * r.ok; wcnt += r.ok; }
-    if (r.min_ms != null) minMs = Math.min(minMs, r.min_ms);
-    if (r.max_ms != null) maxMs = Math.max(maxMs, r.max_ms);
-    lossSum   += r.loss_pct   || 0;
-    jitterSum += r.jitter_ms  || 0;
+    totalOk+=r.ok; totalFail+=r.fail;
+    lossSum+=r.loss_pct||0; jitterSum+=r.jitter_ms||0;
   }
-  const total = totalOk + totalFail;
-  const avail = total > 0 ? (totalOk / total * 100) : 100;
-  const avg   = wcnt > 0 ? Math.round(wsum / wcnt * 10) / 10 : null;
-  const _set = (id, val) => {
-    const el = document.getElementById(id);
-    if (el) { const sp = el.querySelector('span'); if (sp) sp.textContent = val; }
-  };
-  _set(`kpi-avail-${did}-${sid}`,  avail.toFixed(1) + '%');
-  _set(`kpi-avg-${did}-${sid}`,    avg != null ? avg + 'ms' : '—');
-  _set(`kpi-min-${did}-${sid}`,    minMs !== Infinity  ? minMs + 'ms' : '—');
-  _set(`kpi-max-${did}-${sid}`,    maxMs !== -Infinity ? maxMs + 'ms' : '—');
-  const avgLoss = lossSum / summary.length;
-  _set(`kpi-loss-${did}-${sid}`,   avgLoss.toFixed(1) + '%');
-  _set(`kpi-jitter-${did}-${sid}`, (jitterSum / summary.length).toFixed(1) + 'ms');
-  // Color-variant classes
-  const _kpiColor = (id, cls) => {
-    const el = document.getElementById(id);
-    if (el) el.className = 'dm-kpi-item' + (cls ? ' ' + cls : '');
-  };
-  _kpiColor(`kpi-avail-${did}-${sid}`, avail < 80 ? 'dm-kpi-crit' : avail < 95 ? 'dm-kpi-warn' : avail === 100 ? 'dm-kpi-good' : '');
-  _kpiColor(`kpi-loss-${did}-${sid}`,  avgLoss >= 20 ? 'dm-kpi-crit' : avgLoss >= 5 ? 'dm-kpi-warn' : avgLoss === 0 ? 'dm-kpi-good' : '');
-  _kpiColor(`kpi-jitter-${did}-${sid}`, 'dm-kpi-info');
+  const avail    = (totalOk+totalFail)>0 ? totalOk/(totalOk+totalFail)*100 : 100;
+  const avgLoss  = summary.length ? lossSum/summary.length : 0;
+  const avgJitt  = summary.length ? jitterSum/summary.length : 0;
+  _setKpi(`kpi-avail-${did}-${sid}`, 'Avail', avail.toFixed(1)+'%',
+    avail<80?'dm-kpi-crit':avail<95?'dm-kpi-warn':avail===100?'dm-kpi-good':'');
+  _setKpi(`kpi-loss-${did}-${sid}`, 'Loss %', avgLoss.toFixed(1)+'%',
+    avgLoss>=20?'dm-kpi-crit':avgLoss>=5?'dm-kpi-warn':avgLoss===0?'dm-kpi-good':'');
+
+  const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
+  if (_isCounter) {
+    const _u   = snmpUnit;
+    const _lbl = _u==='bytes'?'Mbps':_u==='errors'?'err/s':_u==='packets'?'pkt/s':'/s';
+    const okR  = rateSamples.filter(r=>r.ok&&r.rate!=null).map(r=>r.rate);
+    const avgR = okR.length ? okR.reduce((a,b)=>a+b,0)/okR.length : null;
+    const minR = okR.length ? Math.min(...okR) : null;
+    const maxR = okR.length ? Math.max(...okR) : null;
+    const _fr  = v => v!=null ? _fmtRateDisplay(v,_u) : '—';
+    _setKpi(`kpi-avg-${did}-${sid}`, 'Avg '+_lbl, _fr(avgR));
+    _setKpi(`kpi-min-${did}-${sid}`, 'Min '+_lbl, _fr(minR));
+    _setKpi(`kpi-max-${did}-${sid}`, 'Max '+_lbl, _fr(maxR));
+    _setKpi(`kpi-jitter-${did}-${sid}`, 'Jitter', '—', 'dm-kpi-info');
+    return;
+  }
+  // ms-based KPIs
+  if (!summary.length) return;
+  let wsum=0, wcnt=0, minMs=Infinity, maxMs=-Infinity;
+  for (const r of summary) {
+    if(r.avg_ms!=null){wsum+=r.avg_ms*r.ok;wcnt+=r.ok;}
+    if(r.min_ms!=null) minMs=Math.min(minMs,r.min_ms);
+    if(r.max_ms!=null) maxMs=Math.max(maxMs,r.max_ms);
+  }
+  const avg = wcnt>0 ? Math.round(wsum/wcnt*10)/10 : null;
+  _setKpi(`kpi-avg-${did}-${sid}`, 'Avg ms', avg!=null?avg+'ms':'—');
+  _setKpi(`kpi-min-${did}-${sid}`, 'Min ms', minMs!==Infinity?minMs+'ms':'—');
+  _setKpi(`kpi-max-${did}-${sid}`, 'Max ms', maxMs!==-Infinity?maxMs+'ms':'—');
+  _setKpi(`kpi-jitter-${did}-${sid}`, 'Jitter', avgJitt.toFixed(1)+'ms', 'dm-kpi-info');
 }
 
-function _setupHistTooltip(canvas, summary, did, sid, minutes) {
+function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmpUnit) {
   const tip = document.getElementById(`tip-${did}-${sid}`);
   if (!tip || !canvas) return;
   if (canvas._tipAC) canvas._tipAC.abort();
@@ -712,21 +789,22 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
   canvas._tipAC = ac;
   const { signal } = ac;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
+  const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   canvas.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const mx = (e.clientX - rect.left) * scaleX;
     const plotW = canvas.width - LEFT - RIGHT;
     if (mx < LEFT || mx > canvas.width - RIGHT) { tip.classList.remove('tip-visible'); return; }
-    const _cachedWS = (_histCache[`${did}/${sid}`] || {}).windowStart;
-    const _winRef = _cachedWS ?? (Date.now() / 1000 - minutes * 60);
+    const _cRef = _histCache[`${did}/${sid}`];
+    const _winRef = _cRef?.windowStart ?? (Date.now() / 1000 - minutes * 60);
     const hoverTs = _winRef + (mx - LEFT) / plotW * (minutes * 60);
     let nearest = null, bestDist = Infinity;
     for (const r of summary) {
       const d = Math.abs(r.ts + 1800 - hoverTs);
       if (d < bestDist) { bestDist = d; nearest = r; }
     }
-    if (!nearest) { tip.classList.remove('tip-visible'); return; }
+    if (!nearest && !_isCounter) { tip.classList.remove('tip-visible'); return; }
     // Use actual cursor timestamp (hoverTs), not the hourly bucket boundary
     const _hd = new Date(hoverTs * 1000);
     const _datePart = _hd.toLocaleDateString([], {month:'short', day:'numeric'});
@@ -734,32 +812,45 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
       ? _hd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false})
       : _hd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false});
     const lbl = _datePart + ' ' + _timePart;
-    const isDown = nearest.ok === 0 && nearest.fail > 0;
+    const isDown = nearest ? (nearest.ok === 0 && nearest.fail > 0) : false;
     const statusColor = isDown ? 'var(--down)' : 'var(--up)';
     const statusText  = isDown ? '● DOWN' : '● UP';
-    const lossColor   = (nearest.loss_pct || 0) > 5 ? 'var(--warn)' : 'var(--text)';
-    tip.innerHTML =
-      `<div style="font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:7px;` +
-      `padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.1)">${lbl}</div>` +
-      `<div style="font-size:1.1rem;font-weight:700;color:#7ec8ff;text-align:center;` +
-      `margin-bottom:8px;font-variant-numeric:tabular-nums" class="tip-exact">— ms</div>` +
-      `<table style="border-collapse:collapse;font-size:.76rem">` +
-      `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Avg</td>` +
-      `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
-      `${nearest.avg_ms != null ? nearest.avg_ms + ' ms' : '—'}</td></tr>` +
-      `<tr><td style="color:var(--text3);padding-bottom:3px">Min</td>` +
-      `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
-      `${nearest.min_ms != null ? nearest.min_ms + ' ms' : '—'}</td></tr>` +
-      `<tr><td style="color:var(--text3);padding-bottom:3px">Max</td>` +
-      `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
-      `${nearest.max_ms != null ? nearest.max_ms + ' ms' : '—'}</td></tr>` +
-      `<tr><td style="color:var(--text3);padding-bottom:3px">Loss</td>` +
-      `<td style="color:${lossColor};text-align:right">${(nearest.loss_pct || 0).toFixed(1)}%</td></tr>` +
-      `<tr><td style="color:var(--text3)">Jitter</td>` +
-      `<td style="color:rgba(188,130,255,.9);text-align:right">${(nearest.jitter_ms || 0).toFixed(1)} ms</td></tr>` +
-      `</table>` +
-      `<div style="margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,.1);` +
-      `font-size:.76rem;color:${statusColor}">${statusText}</div>`;
+    const lossColor   = (nearest?.loss_pct || 0) > 5 ? 'var(--warn)' : 'var(--text)';
+    const _hdrStyle = `font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:7px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.1)`;
+    const _valStyle = `font-size:1.1rem;font-weight:700;color:#7ec8ff;text-align:center;margin-bottom:8px;font-variant-numeric:tabular-nums`;
+    const _ftStyle  = `margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,.1);font-size:.76rem`;
+    if (_isCounter) {
+      tip.innerHTML =
+        `<div style="${_hdrStyle}">${lbl}</div>` +
+        `<div style="${_valStyle}" class="tip-exact">—</div>` +
+        `<table style="border-collapse:collapse;font-size:.76rem">` +
+        `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Checks</td>` +
+        `<td style="color:var(--text);text-align:right">${nearest?.ok||0}↑ ${nearest?.fail||0}↓</td></tr>` +
+        `<tr><td style="color:var(--text3)">Loss</td>` +
+        `<td style="color:${lossColor};text-align:right">${(nearest?.loss_pct||0).toFixed(1)}%</td></tr>` +
+        `</table>` +
+        `<div style="${_ftStyle};color:${statusColor}">${statusText}</div>`;
+    } else {
+      tip.innerHTML =
+        `<div style="${_hdrStyle}">${lbl}</div>` +
+        `<div style="${_valStyle}" class="tip-exact">— ms</div>` +
+        `<table style="border-collapse:collapse;font-size:.76rem">` +
+        `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Avg</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.avg_ms != null ? nearest.avg_ms + ' ms' : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Min</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.min_ms != null ? nearest.min_ms + ' ms' : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Max</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.max_ms != null ? nearest.max_ms + ' ms' : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Loss</td>` +
+        `<td style="color:${lossColor};text-align:right">${(nearest.loss_pct || 0).toFixed(1)}%</td></tr>` +
+        `<tr><td style="color:var(--text3)">Jitter</td>` +
+        `<td style="color:rgba(188,130,255,.9);text-align:right">${(nearest.jitter_ms || 0).toFixed(1)} ms</td></tr>` +
+        `</table>` +
+        `<div style="${_ftStyle};color:${statusColor}">${statusText}</div>`;
+    }
     const cssMx = e.clientX - rect.left;
     let tx = cssMx + 12, ty = e.clientY - rect.top - 70;
     if (tx + 175 > rect.width) tx = cssMx - 180;
@@ -775,99 +866,88 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
     cctx.setLineDash([3, 3]);
     cctx.beginPath(); cctx.moveTo(mx, TOP); cctx.lineTo(mx, canvas.height - BOT); cctx.stroke();
     cctx.setLineDash([]);
-    // Find nearest raw sample and compute dot position using same scale as _drawHistCanvas
+    // Dot position: use maxY from cache (set by _drawHistCanvas)
     const cache = _histCache[`${did}/${sid}`];
     if (cache) {
-      const { samples: _sp, summary: _s } = cache;
-      const okSp = _sp.filter(p => p.ok && p.ms != null);
-
-      // Find nearest raw sample to hover timestamp
-      let nearestSample = null, bestSampleDist = Infinity;
-      for (const p of okSp) {
-        const d = Math.abs(p.ts - hoverTs);
-        if (d < bestSampleDist) { bestSampleDist = d; nearestSample = p; }
-      }
-
-      // Compute maxY using same p95 formula as _drawHistCanvas
-      const _sorted = [...okSp.map(p => p.ms)].sort((a, b) => a - b);
-      const _p95 = _sorted[Math.floor(_sorted.length * 0.95)] ?? (_sorted[_sorted.length - 1] ?? 0);
-      const _avgMax = _s.reduce((m, r) => Math.max(m, r.avg_ms || 0), 0);
-      const _sen2 = S.sensors[`${did}/${sid}`];
-      const _maxY = Math.max(Math.max(_avgMax, _p95) * 1.4, (_sen2?.warn_ms || 0) * 1.2, 10);
+      const _maxY = cache.maxY ?? 10;
       const _plotH = canvas.height - BOT - TOP;
-      const _yOf = ms => Math.max(TOP, (canvas.height - BOT) - (Math.min(ms, _maxY) / _maxY) * _plotH);
-
-      // Read bucket data from cache (computed once in _drawHistCanvas, not per-mousemove)
+      const _yOf = v => Math.max(TOP, (canvas.height - BOT) - (Math.min(v, _maxY) / _maxY) * _plotH);
       const TARGET = 300;
       const _winStart = cache.windowStart ?? (Date.now() / 1000 - minutes * 60);
       const _bucketSec = cache.bucketSec ?? (minutes * 60) / TARGET;
-      const _allBuckets = cache.buckets;   // null in raw mode (≤300 samples)
-      const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
-      const bucketAvg = (_allBuckets && _allBuckets[_cursorBi].n > 0)
-        ? _allBuckets[_cursorBi].sum / _allBuckets[_cursorBi].n : null;
-
-      // In bucket mode (>300 raw samples) the drawn line uses bucket averages.
-      // In raw mode (≤300) it draws each sample directly.
-      const usingBuckets = okSp.length > TARGET;
       const _plotW2 = canvas.width - LEFT - RIGHT;
       const _xOf2 = ts => LEFT + (ts - _winStart) / (minutes * 60) * _plotW2;
+      const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
 
-      // Interpolate the line's Y at cursor X so the dot tracks the actual drawn curve.
-      // Linear interpolation between the two adjacent drawn data points gives a close
-      // match to the quadratic bezier without needing full bezier math.
-      let dotMs = null;
-      if (usingBuckets) {
-        // Bucket mode: interpolate between cursor bucket center and adjacent non-empty bucket
-        const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
-        if (bucketAvg !== null) {
-          // Find the adjacent non-empty bucket to interpolate with (O(1) lookup)
-          let adjMs = null, adjX = null;
-          if (mx >= _bcX) {
-            for (let i = _cursorBi + 1; i < TARGET; i++) {
-              if (_allBuckets[i].n > 0) { adjMs = _allBuckets[i].sum / _allBuckets[i].n; adjX = _xOf2(_winStart + (i + 0.5) * _bucketSec); break; }
+      let dotVal = null;
+      if (_isCounter) {
+        // Counter mode: interpolate from rateBuckets or sortedRateSamples
+        const _rateBuckets = cache.rateBuckets;
+        if (_rateBuckets) {
+          const bucketAvgR = _rateBuckets[_cursorBi]?.n > 0
+            ? _rateBuckets[_cursorBi].sum / _rateBuckets[_cursorBi].n : null;
+          const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
+          if (bucketAvgR !== null) {
+            let adjV=null, adjX=null;
+            if (mx >= _bcX) {
+              for (let i=_cursorBi+1;i<TARGET;i++) { if(_rateBuckets[i].n>0){adjV=_rateBuckets[i].sum/_rateBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
+            } else {
+              for (let i=_cursorBi-1;i>=0;i--) { if(_rateBuckets[i].n>0){adjV=_rateBuckets[i].sum/_rateBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
             }
-          } else {
-            for (let i = _cursorBi - 1; i >= 0; i--) {
-              if (_allBuckets[i].n > 0) { adjMs = _allBuckets[i].sum / _allBuckets[i].n; adjX = _xOf2(_winStart + (i + 0.5) * _bucketSec); break; }
-            }
-          }
-          if (adjMs !== null && adjX !== null && Math.abs(adjX - _bcX) > 0) {
-            const t = (mx - _bcX) / (adjX - _bcX);
-            dotMs = bucketAvg + t * (adjMs - bucketAvg);
-          } else {
-            dotMs = bucketAvg;
-          }
+            if (adjV!==null&&adjX!==null&&Math.abs(adjX-_bcX)>0) {
+              dotVal = bucketAvgR + (mx-_bcX)/(adjX-_bcX)*(adjV-bucketAvgR);
+            } else { dotVal=bucketAvgR; }
+          } else { dotVal=0; }
         } else {
-          dotMs = 0; // downtime bucket → line is at baseline
+          const sorted = cache.sortedRateSamples || [];
+          let p1=null, p2=null;
+          for (const p of sorted) {
+            if (_xOf2(p.ts)<=mx) p1=p; else if(!p2){p2=p;break;}
+          }
+          if (p1&&p2) { const x1=_xOf2(p1.ts),x2=_xOf2(p2.ts),t=(mx-x1)/(x2-x1); dotVal=p1.displayRate+t*(p2.displayRate-p1.displayRate); }
+          else dotVal=(p1||p2)?.displayRate??null;
         }
       } else {
-        // Raw mode: linear interpolation between the two samples straddling cursor X
-        // Use cached sorted array (computed once in _drawHistCanvas, not per-mousemove)
-        const sorted = cache.sortedOkSamples || [...okSp].sort((a, b) => a.ts - b.ts);
-        let p1 = null, p2 = null;
-        for (const p of sorted) {
-          if (_xOf2(p.ts) <= mx) p1 = p;
-          else if (!p2) { p2 = p; break; }
-        }
-        if (p1 && p2) {
-          const x1 = _xOf2(p1.ts), x2 = _xOf2(p2.ts);
-          const t = (mx - x1) / (x2 - x1);
-          dotMs = p1.ms + t * (p2.ms - p1.ms);
+        // ms mode: original interpolation logic
+        const okSp = cache.samples.filter(p => p.ok && p.ms != null);
+        const _allBuckets = cache.buckets;
+        const bucketAvg = (_allBuckets && _allBuckets[_cursorBi].n > 0)
+          ? _allBuckets[_cursorBi].sum / _allBuckets[_cursorBi].n : null;
+        const usingBuckets = okSp.length > TARGET;
+        if (usingBuckets) {
+          const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
+          if (bucketAvg !== null) {
+            let adjMs=null, adjX=null;
+            if (mx >= _bcX) {
+              for (let i=_cursorBi+1;i<TARGET;i++) { if(_allBuckets[i].n>0){adjMs=_allBuckets[i].sum/_allBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
+            } else {
+              for (let i=_cursorBi-1;i>=0;i--) { if(_allBuckets[i].n>0){adjMs=_allBuckets[i].sum/_allBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
+            }
+            if (adjMs!==null&&adjX!==null&&Math.abs(adjX-_bcX)>0) {
+              dotVal = bucketAvg + (mx-_bcX)/(adjX-_bcX)*(adjMs-bucketAvg);
+            } else { dotVal=bucketAvg; }
+          } else { dotVal=0; }
         } else {
-          dotMs = (p1 || p2)?.ms ?? null;
+          const sorted = cache.sortedOkSamples || [...okSp].sort((a,b)=>a.ts-b.ts);
+          let p1=null, p2=null;
+          for (const p of sorted) {
+            if (_xOf2(p.ts)<=mx) p1=p; else if(!p2){p2=p;break;}
+          }
+          if (p1&&p2) { const x1=_xOf2(p1.ts),x2=_xOf2(p2.ts),t=(mx-x1)/(x2-x1); dotVal=p1.ms+t*(p2.ms-p1.ms); }
+          else dotVal=(p1||p2)?.ms??null;
         }
       }
 
-      // Exact ms tooltip: show interpolated value at cursor
+      // Exact value tooltip
       const exactEl = tip.querySelector('.tip-exact');
       if (exactEl) {
-        if (dotMs != null) exactEl.textContent = Math.round(dotMs) + ' ms';
-        else exactEl.textContent = '— ms';
+        if (_isCounter) exactEl.textContent = dotVal!=null ? _fmtRateThrLabel(dotVal, snmpUnit) : '—';
+        else exactEl.textContent = dotVal!=null ? Math.round(dotVal)+' ms' : '— ms';
       }
 
       // Draw dot on the drawn line
-      if (dotMs != null) {
-        const dotY = _yOf(dotMs);
+      if (dotVal != null) {
+        const dotY = _yOf(dotVal);
         cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
         cctx.fillStyle = '#7ec8ff'; cctx.fill();
         cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
@@ -880,7 +960,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes) {
   }, { signal });
 }
 
-function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, windowStart) {
+function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, snmpUnit) {
   if (!canvas) return;
   canvas.width = canvas.offsetWidth || 660;
   const W = canvas.width, H = canvas.height || 320;
@@ -915,20 +995,29 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   const windowEnd = _ws + tsRange;
   const xOf = ts => LEFT + (ts - _ws) / tsRange * plotW;
 
-  // ── Y-axis scaling — p95 of ok samples to prevent spike-flattening ──
-  const msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
-  const summaryAvgMax = summary.reduce((m, r) => Math.max(m, r.avg_ms || 0), 0);
-  const sortedMs = [...msVals].sort((a, b) => a - b);
-  const p95 = sortedMs.length ? (sortedMs[Math.floor(sortedMs.length * 0.95)] ?? sortedMs[sortedMs.length - 1]) : 0;
-  const rawMax = sortedMs.length ? sortedMs[sortedMs.length - 1] : 0;
+  // ── Y-axis scaling ────────────────────────────────────────────────────────
   const _sen = S.sensors[`${did}/${sid}`];
-  const maxY = Math.max(
-    Math.max(summaryAvgMax, p95) * 1.4,
-    (_sen?.warn_ms || 0) * 1.2,
-    10
-  );
-  // Clamp ms to maxY so spikes beyond scale don't draw outside plot area
-  const yOf   = ms  => Math.max(TOP, (H - BOT) - (Math.min(ms, maxY) / maxY) * plotH);
+  const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
+  let msVals, rawMax, maxY, yOf;
+  if (_isCounter) {
+    const okR = rateSamples.filter(r => r.ok && r.rate != null);
+    const dispVals = okR.map(r => _rateToDisplayUnits(r.rate, snmpUnit));
+    const sortedD = [...dispVals].sort((a, b) => a - b);
+    const rP95 = sortedD.length ? (sortedD[Math.floor(sortedD.length * 0.95)] ?? sortedD[sortedD.length - 1]) : 0;
+    maxY = Math.max(rP95 * 1.4, (_sen?.warn_ms || 0) * 1.2, 0.1);
+    yOf = v => Math.max(TOP, (H - BOT) - (Math.min(v, maxY) / maxY) * plotH);
+    msVals = []; rawMax = 0;
+  } else {
+    msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
+    const summaryAvgMax = summary.reduce((m, r) => Math.max(m, r.avg_ms || 0), 0);
+    const sortedMs = [...msVals].sort((a, b) => a - b);
+    const p95 = sortedMs.length ? (sortedMs[Math.floor(sortedMs.length * 0.95)] ?? sortedMs[sortedMs.length - 1]) : 0;
+    rawMax = sortedMs.length ? sortedMs[sortedMs.length - 1] : 0;
+    maxY = Math.max(Math.max(summaryAvgMax, p95) * 1.4, (_sen?.warn_ms || 0) * 1.2, 10);
+    yOf = ms => Math.max(TOP, (H - BOT) - (Math.min(ms, maxY) / maxY) * plotH);
+  }
+  // Store maxY in cache for tooltip dot positioning
+  if (_histCache[`${did}/${sid}`]) _histCache[`${did}/${sid}`].maxY = maxY;
   const yLoss = pct => (H - BOT) - (pct / 100) * plotH;
 
   // ── 1. Grid — horizontal lines + Y labels (drawn FIRST, behind all data) ──
@@ -936,12 +1025,14 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   ctx.font = 'bold 11px Inter,sans-serif';
   [0.2, 0.4, 0.6, 0.8, 1.0].forEach(f => {
     const y = (H - BOT) - f * plotH;
-    const msLbl = Math.round(maxY * f);
     ctx.strokeStyle = 'rgba(255,255,255,.08)';
     ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
     ctx.fillStyle = 'rgba(200,210,220,.92)'; ctx.textAlign = 'right';
-    ctx.fillText(msLbl >= 1000 ? (msLbl / 1000).toFixed(1) + 's' : msLbl + 'ms', LEFT - 4, y + 4);
-    if (togLoss) {
+    const _yLbl = _isCounter
+      ? _fmtRateYLabel(maxY * f, snmpUnit)
+      : (Math.round(maxY * f) >= 1000 ? (Math.round(maxY * f) / 1000).toFixed(1) + 's' : Math.round(maxY * f) + 'ms');
+    ctx.fillText(_yLbl, LEFT - 4, y + 4);
+    if (togLoss && !_isCounter) {
       ctx.fillStyle = 'rgba(240,165,0,.9)'; ctx.textAlign = 'left';
       ctx.fillText(Math.round(100 * f) + '%', W - RIGHT + 4, y + 4);
     }
@@ -951,7 +1042,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   // Y/X axis border lines
   ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(LEFT, TOP); ctx.lineTo(LEFT, H - BOT); ctx.stroke();
-  if (togLoss) {
+  if (togLoss && !_isCounter) {
     ctx.strokeStyle = 'rgba(240,165,0,.2)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(W - RIGHT, TOP); ctx.lineTo(W - RIGHT, H - BOT); ctx.stroke();
   }
@@ -1017,7 +1108,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   }
 
   // ── 5. Min/Max lines (secondary — 50% opacity, thinner) ───────
-  if (togBand) {
+  if (togBand && !_isCounter) {
     const bandPts = summary.filter(r => r.min_ms != null && r.max_ms != null);
     if (bandPts.length > 1) {
       ctx.globalAlpha = 0.5;
@@ -1040,7 +1131,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   }
 
   // ── 6. Jitter line (dashed purple, 50% opacity) ───────────────
-  if (togJitter) {
+  if (togJitter && !_isCounter) {
     const jPts = summary.filter(r => (r.jitter_ms || 0) > 0);
     if (jPts.length > 1) {
       ctx.globalAlpha = 0.6;
@@ -1058,9 +1149,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     }
   }
 
-  // ── 7. Avg line — main focus ──────────────────────────────────
-  // >2h: draw from hourly summary avg_ms (clean trend line, no spike noise)
-  // ≤2h: draw from raw samples (high-resolution detail)
+  // ── 7. Avg/Rate line — main focus ────────────────────────────
   if (togAvg) {
     const _drawLine = (pts, gapMult) => {
       if (pts.length < 2) return;
@@ -1091,53 +1180,100 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       ctx.shadowBlur = 0;
     };
 
-    const okSamples = samples.filter(p => p.ok && p.ms != null);
-    if (okSamples.length > 1) {
+    const TARGET = 300;
+    const _ckey = `${did}/${sid}`;
+    if (_isCounter) {
+      // Draw rate line from rateSamples
+      const okR = rateSamples.filter(r => r.ok && r.rate != null);
+      if (okR.length > 1) {
+        let pts;
+        if (okR.length <= TARGET) {
+          pts = okR.map(r => ({ x: xOf(r.ts), y: yOf(_rateToDisplayUnits(r.rate, snmpUnit)), ts: r.ts }));
+          if (_histCache[_ckey]) {
+            _histCache[_ckey].sortedRateSamples = [...okR].sort((a, b) => a.ts - b.ts)
+              .map(r => ({ ...r, displayRate: _rateToDisplayUnits(r.rate, snmpUnit) }));
+            _histCache[_ckey].rateBuckets = null;
+            _histCache[_ckey].buckets = null;
+            _histCache[_ckey].bucketSec = null;
+            _histCache[_ckey].sortedOkSamples = null;
+          }
+        } else {
+          const bucketSec = tsRange / TARGET;
+          const accR = Array.from({ length: TARGET }, () => ({ sum: 0, n: 0 }));
+          for (const r of okR) {
+            const bi = Math.min(TARGET - 1, Math.floor((r.ts - _ws) / bucketSec));
+            if (bi >= 0) { accR[bi].sum += _rateToDisplayUnits(r.rate, snmpUnit); accR[bi].n++; }
+          }
+          if (_histCache[_ckey]) {
+            _histCache[_ckey].rateBuckets = accR;
+            _histCache[_ckey].buckets = null;
+            _histCache[_ckey].bucketSec = bucketSec;
+            _histCache[_ckey].sortedRateSamples = null;
+            _histCache[_ckey].sortedOkSamples = null;
+          }
+          let firstBi = -1, lastBi = -1;
+          for (let i = 0; i < TARGET; i++) {
+            if (accR[i].n > 0) { if (firstBi < 0) firstBi = i; lastBi = i; }
+          }
+          pts = [];
+          if (firstBi >= 0) {
+            for (let i = firstBi; i <= lastBi; i++) {
+              const ts = _ws + (i + 0.5) * bucketSec;
+              const v = accR[i].n > 0 ? accR[i].sum / accR[i].n : 0;
+              pts.push({ x: xOf(ts), y: yOf(v), ts });
+            }
+          }
+        }
+        _drawLine(pts, 4);
+      }
+    } else {
+      // Draw ms line from raw samples
       // Bucket-average into at most 300 points — naturally adapts to every time frame:
       //   1h  (~120 raw)  → drawn as-is, full per-probe detail
       //   6h  (~720 raw)  → 300 buckets of ~72 s each, 2–3 samples averaged → shape preserved
       //   24h (~2880 raw) → 300 buckets of ~288 s, ~10 samples/bucket → smooth trend
       //   7d+ (≤10k raw)  → 300 buckets, 30+ samples/bucket → clean trend line
-      const TARGET = 300;
-      let pts;
-      const _ckey = `${did}/${sid}`;
-      if (okSamples.length <= TARGET) {
-        pts = okSamples.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
-        // Cache sorted raw samples for tooltip linear interpolation (computed once here)
-        if (_histCache[_ckey]) {
-          _histCache[_ckey].sortedOkSamples = [...okSamples].sort((a, b) => a.ts - b.ts);
-          _histCache[_ckey].buckets = null;
-          _histCache[_ckey].bucketSec = null;
-        }
-      } else {
-        const bucketSec = tsRange / TARGET;
-        const acc = Array.from({ length: TARGET }, () => ({ sum: 0, n: 0 }));
-        for (const p of okSamples) {
-          const bi = Math.min(TARGET - 1, Math.floor((p.ts - _ws) / bucketSec));
-          if (bi >= 0) { acc[bi].sum += p.ms; acc[bi].n++; }
-        }
-        // Cache bucket data so tooltip can look up O(1) instead of recomputing O(n)
-        if (_histCache[_ckey]) {
-          _histCache[_ckey].buckets = acc;
-          _histCache[_ckey].bucketSec = bucketSec;
-          _histCache[_ckey].sortedOkSamples = null;
-        }
-        // Find range of buckets that have data
-        let firstBi = -1, lastBi = -1;
-        for (let i = 0; i < TARGET; i++) {
-          if (acc[i].n > 0) { if (firstBi < 0) firstBi = i; lastBi = i; }
-        }
-        pts = [];
-        if (firstBi >= 0) {
-          for (let i = firstBi; i <= lastBi; i++) {
-            const ts = _ws + (i + 0.5) * bucketSec;
-            // Empty bucket = downtime → connect at 0ms baseline
-            const ms = acc[i].n > 0 ? acc[i].sum / acc[i].n : 0;
-            pts.push({ x: xOf(ts), y: yOf(ms), ts });
+      const okSamples = samples.filter(p => p.ok && p.ms != null);
+      if (okSamples.length > 1) {
+        let pts;
+        if (okSamples.length <= TARGET) {
+          pts = okSamples.map(p => ({ x: xOf(p.ts), y: yOf(p.ms), ts: p.ts }));
+          // Cache sorted raw samples for tooltip linear interpolation (computed once here)
+          if (_histCache[_ckey]) {
+            _histCache[_ckey].sortedOkSamples = [...okSamples].sort((a, b) => a.ts - b.ts);
+            _histCache[_ckey].buckets = null;
+            _histCache[_ckey].bucketSec = null;
+          }
+        } else {
+          const bucketSec = tsRange / TARGET;
+          const acc = Array.from({ length: TARGET }, () => ({ sum: 0, n: 0 }));
+          for (const p of okSamples) {
+            const bi = Math.min(TARGET - 1, Math.floor((p.ts - _ws) / bucketSec));
+            if (bi >= 0) { acc[bi].sum += p.ms; acc[bi].n++; }
+          }
+          // Cache bucket data so tooltip can look up O(1) instead of recomputing O(n)
+          if (_histCache[_ckey]) {
+            _histCache[_ckey].buckets = acc;
+            _histCache[_ckey].bucketSec = bucketSec;
+            _histCache[_ckey].sortedOkSamples = null;
+          }
+          // Find range of buckets that have data
+          let firstBi = -1, lastBi = -1;
+          for (let i = 0; i < TARGET; i++) {
+            if (acc[i].n > 0) { if (firstBi < 0) firstBi = i; lastBi = i; }
+          }
+          pts = [];
+          if (firstBi >= 0) {
+            for (let i = firstBi; i <= lastBi; i++) {
+              const ts = _ws + (i + 0.5) * bucketSec;
+              // Empty bucket = downtime → connect at 0ms baseline
+              const ms = acc[i].n > 0 ? acc[i].sum / acc[i].n : 0;
+              pts.push({ x: xOf(ts), y: yOf(ms), ts });
+            }
           }
         }
+        _drawLine(pts, 4);
       }
-      _drawLine(pts, 4);
     }
   }
 
@@ -1150,7 +1286,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(240,165,0,.85)'; ctx.textAlign = 'left';
-    ctx.fillText('warn ' + _sen.warn_ms + 'ms', LEFT + 4, wy - 3);
+    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
   }
   if (_sen?.crit_ms > 0 && _sen.crit_ms <= maxY) {
     const cy = yOf(_sen.crit_ms);
@@ -1159,7 +1295,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(248,81,73,.85)'; ctx.textAlign = 'left';
-    ctx.fillText('crit ' + _sen.crit_ms + 'ms', LEFT + 4, cy - 3);
+    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
   }
 
   // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──
@@ -1173,24 +1309,83 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
 
   // ── Stats bar ─────────────────────────────────────────────────
   if (statsEl) {
-    const total = samples.length, okCt = samples.filter(p => p.ok).length;
-    const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
-    const avgMs = msVals.length ? Math.round(msVals.reduce((a, b) => a + b, 0) / msVals.length) : null;
-    const minMs = msVals.length ? Math.round(Math.min(...msVals)) : null;
-    statsEl.textContent =
-      `${total} probes · ${upPct}% up · avg ${avgMs != null ? avgMs + 'ms' : '—'} · min ${minMs != null ? minMs + 'ms' : '—'} · max ${Math.round(rawMax)}ms`;
+    if (_isCounter) {
+      const okR = rateSamples.filter(r => r.ok && r.rate != null);
+      const total = rateSamples.length, upPct = total ? Math.round(okR.length / total * 1000) / 10 : 0;
+      const avgD = okR.length ? _rateToDisplayUnits(okR.reduce((a, r) => a + r.rate, 0) / okR.length, snmpUnit) : null;
+      const minD = okR.length ? _rateToDisplayUnits(Math.min(...okR.map(r => r.rate)), snmpUnit) : null;
+      const maxD = okR.length ? _rateToDisplayUnits(Math.max(...okR.map(r => r.rate)), snmpUnit) : null;
+      const _f = v => v != null ? _fmtRateThrLabel(v, snmpUnit) : '—';
+      statsEl.textContent = `${total} probes · ${upPct}% up · avg ${_f(avgD)} · min ${_f(minD)} · max ${_f(maxD)}`;
+    } else {
+      const total = samples.length, okCt = samples.filter(p => p.ok).length;
+      const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
+      const avgMs = msVals.length ? Math.round(msVals.reduce((a, b) => a + b, 0) / msVals.length) : null;
+      const minMs = msVals.length ? Math.round(Math.min(...msVals)) : null;
+      statsEl.textContent =
+        `${total} probes · ${upPct}% up · avg ${avgMs != null ? avgMs + 'ms' : '—'} · min ${minMs != null ? minMs + 'ms' : '—'} · max ${Math.round(rawMax)}ms`;
+    }
   }
 }
 
-function _buildSummaryTable(sumEl, summary, minutes) {
+function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit) {
   if (!sumEl) return;
-  if (!summary.length) { sumEl.innerHTML = ''; return; }
+  const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   let _bSec;
   if      (minutes <= 5760)   _bSec = 3600;
   else if (minutes <= 64800)  _bSec = 86400;
   else if (minutes <= 288000) _bSec = 7 * 86400;
   else                        _bSec = 30 * 86400;
   const _tzOff = new Date().getTimezoneOffset() * 60;
+
+  if (_isCounter) {
+    // Counter mode: rate stats per time bucket
+    if (!rateSamples.length && !summary.length) { sumEl.innerHTML = ''; return; }
+    const _buckets = {};
+    for (const r of summary) {
+      const k = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+      if (!_buckets[k]) _buckets[k] = {ts:k, ok:0, fail:0, rsum:0, rmin:Infinity, rmax:-Infinity, rcnt:0};
+      _buckets[k].ok += r.ok; _buckets[k].fail += r.fail;
+    }
+    for (const r of rateSamples) {
+      if (!r.ok || r.rate == null) continue;
+      const k = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+      if (!_buckets[k]) _buckets[k] = {ts:k, ok:0, fail:0, rsum:0, rmin:Infinity, rmax:-Infinity, rcnt:0};
+      const d = _rateToDisplayUnits(r.rate, snmpUnit);
+      _buckets[k].rsum += d; _buckets[k].rmin = Math.min(_buckets[k].rmin, d);
+      _buckets[k].rmax = Math.max(_buckets[k].rmax, d); _buckets[k].rcnt++;
+    }
+    const _u   = snmpUnit;
+    const _lbl = _u==='bytes'?'Mbps':_u==='errors'?'err/s':_u==='packets'?'pkt/s':'/s';
+    const _fr  = v => (v!=null&&isFinite(v)) ? _fmtRateThrLabel(v, _u) : '—';
+    const rows = Object.values(_buckets).sort((a, b) => a.ts - b.ts).map(_b => {
+      const d = new Date(_b.ts * 1000);
+      let lbl;
+      if      (_bSec < 86400)  lbl = d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      else if (_bSec < 604800) lbl = d.toLocaleDateString([],{month:'short',day:'numeric'});
+      else                     lbl = d.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+      const upPct = _b.ok + _b.fail > 0 ? Math.round(_b.ok / (_b.ok + _b.fail) * 100) : 100;
+      const avgR  = _b.rcnt > 0 ? _b.rsum / _b.rcnt : null;
+      const rowCls = upPct < 80 ? 'hrow-crit' : upPct < 95 ? 'hrow-warn' : '';
+      return `<tr class="${rowCls}">
+        <td>${lbl}</td>
+        <td style="color:var(--up)">${_b.ok}↑</td>
+        <td style="color:${_b.fail?'var(--down)':'var(--text3)'}">${_b.fail}↓</td>
+        <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
+        <td>${_fr(avgR)}</td>
+        <td>${_fr(_b.rmin===Infinity?null:_b.rmin)}</td>
+        <td>${_fr(_b.rmax===-Infinity?null:_b.rmax)}</td>
+      </tr>`;
+    }).join('');
+    sumEl.innerHTML = `<table class="dm-hist-tbl">
+      <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
+        <th>Avg ${_lbl}</th><th>Min ${_lbl}</th><th>Max ${_lbl}</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    return;
+  }
+
+  // ms-based summary table (unchanged)
+  if (!summary.length) { sumEl.innerHTML = ''; return; }
   const _buckets = {};
   for (const r of summary) {
     const _bKey = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
