@@ -79,6 +79,10 @@ function _calcDurations(events) {
 let _alertEvtCache = [];
 let _alertMap      = null;  // did::sid → [alert events]; null = not loaded yet
 
+// ── Incident Investigation Panel state ────────────────────────────
+let _evtDetailCurrent = null;
+let _evtDetailTimer   = null;
+
 function _buildAlertMap(alertEvents) {
   const map = {};
   for (const a of alertEvents) {
@@ -586,85 +590,36 @@ function _renderEvtView() {
   }
 }
 
-// ── Detail modal ──────────────────────────────────────────────────
+// ── Incident Investigation Panel ──────────────────────────────────
 function _openEvtDetail(d) {
-  const sev  = evtSeverity(d);
-  const isTrap = d._direction === 'trap';
-  const host = isTrap ? (d.src_ip||'—') : (d.host||'—');
-  const sensor = isTrap
-    ? (d.trap_oid ? d.trap_oid.split('.').slice(-4).join('.') : 'SNMP Trap')
-    : (d.sname||'—');
-  const _dir = d._direction || d.direction || '';
-  const typeLabel = {
-    down: 'Device / Sensor Down', recovered: 'Recovery',
-    threshold: 'Threshold Alert (' + (d._thr_level||'') + ')',
-    threshold_ok: 'Threshold Recovered',
-    trap: 'SNMP Trap', info: 'Info'
-  }[_dir] || _dir || '—';
-  const durStr = d._duration != null ? _fmtDuration(d._duration) : '—';
-
-  const set = (id, html) => { const el=document.getElementById(id); if(el) el.innerHTML=html; };
-  set('evtDtlSev',    `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span>`);
-  set('evtDtlTs',     esc(d.ts||'—'));
-  set('evtDtlDur',    esc(durStr));
-  set('evtDtlDev',    esc(isTrap ? (d.dname||d.src_ip||'Unknown') : (d.dname||'—')));
-  set('evtDtlHost',   esc(host));
-  set('evtDtlSensor', esc(sensor));
-  set('evtDtlType',   esc(typeLabel));
-  set('evtDtlMsg',    esc(d.detail||d.community||'—'));
-
-  // ── Trap-specific enrichment rows ─────────────────────────────
-  const trapExtra = document.getElementById('evtDtlTrapExtra');
-  if (trapExtra) {
-    if (isTrap) {
-      let html = '';
-      if (d.vendor && d.vendor !== 'Unknown')
-        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Vendor</span><span>${_vendorBadge(d)}${esc(d.product_family||'')}</span></div>`;
-      if (d.trap_name)
-        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Trap Name</span><span style="font-family:monospace">${esc(d.trap_name)}</span></div>`;
-      if (d.enterprise_oid)
-        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Enterprise OID</span><span style="font-family:monospace;font-size:11px">${esc(d.enterprise_oid)}</span></div>`;
-      if (d.category)
-        html += `<div class="evt-dtl-row"><span class="evt-dtl-label">Category</span><span class="evt-cat-badge">${esc(d.category)}</span></div>`;
-      if (d.probable_cause)
-        html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px"><span class="evt-dtl-label">Probable Cause</span><span style="color:var(--text2);font-size:12px">${esc(d.probable_cause)}</span></div>`;
-      if (d.recommended_action)
-        html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px"><span class="evt-dtl-label">Action</span><span style="color:var(--text2);font-size:12px">${esc(d.recommended_action)}</span></div>`;
-      const _vbSrc = (d.enriched_varbinds && d.enriched_varbinds !== '[]') ? d.enriched_varbinds : d.raw_varbinds;
-      if (_vbSrc && _vbSrc !== '[]') {
-        let vbHtml = '';
-        try {
-          const vbs = JSON.parse(_vbSrc);
-          vbHtml = vbs.map(v => {
-            const label = v.name
-              ? `${esc(v.name)} <span class="evt-oid-hint">(${esc(v.oid)})</span>`
-              : esc(v.oid);
-            return `<div>${label} = ${esc(String(v.value))}</div>`;
-          }).join('');
-        } catch { vbHtml = esc(_vbSrc); }
-        html += `<div class="evt-dtl-row" style="flex-direction:column;gap:3px">` +
-          `<span class="evt-dtl-label">Varbinds</span>` +
-          `<div class="evt-trap-raw-block">${vbHtml}</div></div>`;
-      }
-      if (!d.enriched)
-        html += `<div class="evt-dtl-row"><span style="color:var(--text3);font-size:11px;font-style:italic">Unknown trap — no matching definition found</span></div>`;
-      trapExtra.innerHTML = html;
-      trapExtra.style.display = '';
-    } else {
-      trapExtra.style.display = 'none';
-    }
-  }
-
-  const modal = document.getElementById('evtDetailModal');
-  if (modal) { modal.style.display = 'flex'; }
+  _evtDetailCurrent = d;
+  const alertEvt = _matchAlertEvt(d);
+  const panel = document.querySelector('#evtDetailModal .iip-panel');
+  if (!panel) return;
+  panel.innerHTML = _buildIIP(d, alertEvt);
+  document.getElementById('evtDetailModal').style.display = 'flex';
+  _startEvtDurTimer(d);
 }
 
 function _closeEvtDetail() {
-  const modal = document.getElementById('evtDetailModal');
-  if (modal) modal.style.display = 'none';
+  const m = document.getElementById('evtDetailModal');
+  if (m) m.style.display = 'none';
+  clearInterval(_evtDetailTimer);
+  _evtDetailTimer = null;
+  _evtDetailCurrent = null;
 }
 
-// Close modal on backdrop click (ignore mousedown-inside drags)
+function _startEvtDurTimer(d) {
+  clearInterval(_evtDetailTimer);
+  _evtDetailTimer = setInterval(() => {
+    const el = document.getElementById('iip-dur-live');
+    if (!el) { clearInterval(_evtDetailTimer); return; }
+    const sec = Math.max(0, Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000));
+    el.textContent = _fmtDuration(sec);
+  }, 1000);
+}
+
+// Close panel on backdrop click (ignore mousedown-inside drags)
 let _evtMdown = false;
 document.addEventListener('mousedown', e => {
   const modal = document.getElementById('evtDetailModal');
@@ -674,6 +629,246 @@ document.addEventListener('click', e => {
   const modal = document.getElementById('evtDetailModal');
   if (modal && e.target === modal && _evtMdown) _closeEvtDetail();
 });
+
+function _buildIIP(d, alertEvt) {
+  const icon   = evtIcon(d);
+  const isTrap = d._direction === 'trap';
+  const title  = esc((isTrap ? (d.dname||d.src_ip||'?') : (d.dname||'?')) +
+                 ' / ' + (isTrap ? 'SNMP Trap' : (d.sname||'?')));
+  return `
+    <div class="iip-hdr">
+      <span>${icon} ${title}</span>
+      <button class="iip-close-btn" onclick="_closeEvtDetail()">✕</button>
+    </div>
+    <div class="iip-body">
+      ${_iipStatus(d)}
+      ${_iipIdentity(d)}
+      ${isTrap ? _iipTrapEnrich(d) : _iipStability(d)}
+      ${alertEvt ? _iipAlert(alertEvt) : ''}
+      ${_iipDebug(d)}
+    </div>
+    <div class="iip-actions">
+      <button class="iip-act-btn" onclick="_iipOpenDevice(${JSON.stringify(d.did||'')})">🖥 Open Device</button>
+      ${!isTrap ? `<button class="iip-act-btn" onclick="_iipOpenHistory(${JSON.stringify(d.did||'')},${JSON.stringify(d.sid||'')})">📊 Sensor History</button>` : ''}
+    </div>`;
+}
+
+function _iipStatus(d) {
+  const state    = d.ack_state || 'active';
+  const isActive = state === 'active';
+  const isAcked  = state === 'acknowledged';
+  const isRes    = state === 'resolved';
+  const badgeCls = isActive ? 'iip-st-active' : isAcked ? 'iip-st-ack' : 'iip-st-res';
+  const badgeTxt = isActive ? '● Active' : isAcked ? '◐ Acknowledged' : '✓ Resolved';
+
+  const utcStr   = d.ts ? d.ts.replace('T', ' ').replace('Z', ' UTC') : '—';
+  const localStr = d.ts ? new Date(d.ts).toLocaleString([], {month:'short', day:'numeric',
+    hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' Local' : '';
+
+  const initDur = d._duration != null ? _fmtDuration(d._duration)
+                : (d.ts ? _fmtDuration(Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000)) : '—');
+
+  let ackmeta = '';
+  if (isAcked && d.ack_by) {
+    const ackTs = d.ack_at ? new Date(d.ack_at * 1000).toLocaleTimeString([],
+      {hour:'2-digit', minute:'2-digit'}) + ' Local' : '';
+    ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
+  }
+
+  let btns = '';
+  if (d.id && !isRes) {
+    btns = `<div class="iip-btns">` +
+      (isActive ? `<button class="aev-btn-ack" onclick="_iipFlapAck(${d.id})">✓ ACK</button>` : '') +
+      `<button class="aev-btn-res" onclick="_iipFlapResolve(${d.id})">◉ Resolve</button>` +
+    `</div>`;
+  }
+
+  return `<div class="iip-section">
+    <div class="iip-section-title">STATUS</div>
+    <div class="iip-st-row"><span class="iip-st-badge ${badgeCls}">${badgeTxt}</span></div>
+    <div class="iip-time-row">
+      <span class="iip-mono">${esc(utcStr)}</span>
+      ${localStr ? `<span class="iip-ts-sep">·</span><span class="iip-ts-local">${esc(localStr)}</span>` : ''}
+    </div>
+    <div class="iip-dur-row">Duration: <span id="iip-dur-live" class="iip-dur-live">${initDur}</span></div>
+    ${ackmeta}${btns}
+  </div>`;
+}
+
+function _iipIdentity(d) {
+  const isTrap = d._direction === 'trap';
+  const _dir   = d._direction || d.direction || '';
+  const typeLabel = {
+    down: 'Device / Sensor Down', recovered: 'Recovery',
+    threshold: 'Threshold Alert (' + (d._thr_level||'') + ')',
+    threshold_ok: 'Threshold Recovered', trap: 'SNMP Trap', info: 'Info'
+  }[_dir] || _dir || '—';
+  const host    = isTrap ? (d.src_ip||'—') : (d.host||'—');
+  const sensor  = isTrap ? (d.trap_oid ? d.trap_oid.split('.').slice(-4).join('.') : 'SNMP Trap') : (d.sname||'—');
+  const device  = isTrap ? (d.dname||d.src_ip||'Unknown') : (d.dname||'—');
+  const message = d.detail || d.community || '—';
+  const cp = (txt) => `<button class="iip-copy-btn" onclick="_iipCopy(${JSON.stringify(txt)})" title="Copy">📋</button>`;
+  const row = (lbl, val, mono, extra='') =>
+    `<div class="iip-id-row"><span class="iip-id-label">${lbl}</span><span${mono?' class="iip-mono"':''}>${val}</span>${extra}</div>`;
+  return `<div class="iip-section">
+    <div class="iip-section-title">IDENTITY</div>
+    ${row('Device',   esc(device))}
+    ${row('Sensor',   esc(sensor))}
+    ${row('Host / IP', esc(host), true, host !== '—' ? cp(host) : '')}
+    ${row('Type',     esc(typeLabel))}
+    <div class="iip-id-row"><span class="iip-id-label">Message</span><span class="iip-msg">${esc(message)}</span>${message !== '—' ? cp(message) : ''}</div>
+  </div>`;
+}
+
+function _iipStability(d) {
+  if (!d.did || !d.sid) return '';
+  const selfKey = _flapKey(d);
+  const related = (typeof FLAPS !== 'undefined' ? FLAPS : [])
+    .filter(f => f.did === d.did && f.sid === d.sid && _flapKey(f) !== selfKey)
+    .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+    .slice(0, 7);
+  if (!related.length) return '';
+
+  const dirIcon = (f) => {
+    const dir = f._direction || f.direction || '';
+    if (dir === 'down' || dir === 'threshold') return `<span class="iip-tl-down">↓</span>`;
+    if (dir === 'recovered' || dir === 'threshold_ok') return `<span class="iip-tl-up">↑</span>`;
+    return '<span style="width:14px;display:inline-block">·</span>';
+  };
+  const dirLbl = (f) => {
+    const dir = f._direction || f.direction || '';
+    if (dir === 'threshold') return f._thr_level === 'crit' ? 'CRIT' : 'WARN';
+    if (dir === 'threshold_ok') return 'THR OK';
+    return (dir || '').toUpperCase().slice(0, 8);
+  };
+  const relTime = (ts) => {
+    const sec = Math.floor((new Date(d.ts) - new Date(ts)) / 1000);
+    if (Math.abs(sec) < 5) return 'same time';
+    if (sec < 0)    return _fmtDuration(-sec) + ' after';
+    if (sec < 60)   return sec + 's before';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm before';
+    return Math.floor(sec / 3600) + 'h ' + Math.floor((sec % 3600) / 60) + 'm before';
+  };
+
+  const rows = related.map(f =>
+    `<div class="iip-tl-row">
+      ${dirIcon(f)}
+      <span class="iip-tl-lbl">${dirLbl(f)}</span>
+      <span class="iip-tl-ts iip-mono">${esc((f.ts||'').replace('T', ' ').replace('Z', ''))}</span>
+      <span class="iip-tl-rel">${relTime(f.ts)}</span>
+    </div>`).join('');
+
+  return `<div class="iip-section">
+    <div class="iip-section-title">STABILITY</div>
+    ${rows}
+  </div>`;
+}
+
+function _iipTrapEnrich(d) {
+  let html = '';
+  if (d.vendor && d.vendor !== 'Unknown')
+    html += `<div class="iip-id-row"><span class="iip-id-label">Vendor</span><span>${_vendorBadge(d)}${esc(d.product_family||'')}</span></div>`;
+  if (d.trap_name)
+    html += `<div class="iip-id-row"><span class="iip-id-label">Trap Name</span><span class="iip-mono">${esc(d.trap_name)}</span></div>`;
+  if (d.enterprise_oid)
+    html += `<div class="iip-id-row"><span class="iip-id-label">Enterprise OID</span><span class="iip-mono" style="font-size:10px">${esc(d.enterprise_oid)}</span></div>`;
+  if (d.category)
+    html += `<div class="iip-id-row"><span class="iip-id-label">Category</span><span class="evt-cat-badge">${esc(d.category)}</span></div>`;
+  if (d.probable_cause)
+    html += `<div class="iip-id-row" style="flex-direction:column;gap:3px"><span class="iip-id-label">Probable Cause</span><span style="color:var(--text2);font-size:12px">${esc(d.probable_cause)}</span></div>`;
+  if (d.recommended_action)
+    html += `<div class="iip-id-row" style="flex-direction:column;gap:3px"><span class="iip-id-label">Action</span><span style="color:var(--text2);font-size:12px">${esc(d.recommended_action)}</span></div>`;
+  const _vbSrc = (d.enriched_varbinds && d.enriched_varbinds !== '[]') ? d.enriched_varbinds : d.raw_varbinds;
+  if (_vbSrc && _vbSrc !== '[]') {
+    let vbHtml = '';
+    try {
+      const vbs = JSON.parse(_vbSrc);
+      vbHtml = vbs.map(v => {
+        const label = v.name
+          ? `${esc(v.name)} <span class="evt-oid-hint">(${esc(v.oid)})</span>`
+          : esc(v.oid);
+        return `<div>${label} = ${esc(String(v.value))}</div>`;
+      }).join('');
+    } catch { vbHtml = esc(_vbSrc); }
+    html += `<div class="iip-id-row" style="flex-direction:column;gap:3px">
+      <span class="iip-id-label">Varbinds</span>
+      <div class="evt-trap-raw-block">${vbHtml}</div></div>`;
+  }
+  if (!d.enriched)
+    html += `<div class="iip-id-row"><span style="color:var(--text3);font-size:11px;font-style:italic">Unknown trap — no matching definition found</span></div>`;
+  if (!html) return '';
+  return `<div class="iip-section">
+    <div class="iip-section-title">TRAP DETAILS</div>
+    ${html}
+  </div>`;
+}
+
+function _iipAlert(alertEvt) {
+  const isActive = alertEvt.state === 'active';
+  const isRes    = alertEvt.state === 'resolved';
+  const stCls    = {active:'aev-st-active', acknowledged:'aev-st-ack', resolved:'aev-st-res'}[alertEvt.state] || '';
+  const stLbl    = {active:'● Active', acknowledged:'◐ Acknowledged', resolved:'✓ Resolved'}[alertEvt.state] || alertEvt.state;
+  const firedTs  = alertEvt.triggered_at
+    ? new Date(alertEvt.triggered_at * 1000).toLocaleString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' Local' : '—';
+  const repeat   = (alertEvt.repeat_count || 1) > 1 ? `<span class="iip-repeat">×${alertEvt.repeat_count}</span>` : '';
+  const btns = !isRes
+    ? `<div class="iip-btns">` +
+        (isActive ? `<button class="aev-btn-ack" onclick="_iipAlertAck(${alertEvt.id})">✓ ACK Alert</button>` : '') +
+        `<button class="aev-btn-res" onclick="_iipAlertResolve(${alertEvt.id})">◉ Resolve Alert</button>` +
+      `</div>` : '';
+  return `<div class="iip-section">
+    <div class="iip-section-title">ALERT RULE</div>
+    <div class="iip-id-row">
+      <span class="iip-id-label">Rule</span>
+      <span>${esc(alertEvt.rule_name)}</span>
+      <span class="aev-st ${stCls}" style="margin-left:6px">${stLbl}</span>
+    </div>
+    <div class="iip-id-row">
+      <span class="iip-id-label">Fired</span>
+      <span class="iip-mono">${esc(firedTs)}</span>${repeat}
+    </div>
+    ${btns}
+  </div>`;
+}
+
+function _iipDebug(d) {
+  const txt = d.detail || d.community || '';
+  if (!txt) return '';
+  return `<details class="iip-debug">
+    <summary class="iip-debug-summary">▶ Debug / Raw Data</summary>
+    <div class="evt-trap-raw-block" style="margin-top:8px;white-space:pre-wrap">${esc(txt)}</div>
+  </details>`;
+}
+
+function _iipCopy(txt) {
+  navigator.clipboard.writeText(txt).then(() => toast('Copied', 'ok')).catch(() => {});
+}
+
+async function _iipFlapAck(id) {
+  await _evtFlapAck(id);
+  if (_evtDetailCurrent) _openEvtDetail(_evtDetailCurrent);
+}
+async function _iipFlapResolve(id) {
+  await _evtFlapResolve(id);
+  if (_evtDetailCurrent) _openEvtDetail(_evtDetailCurrent);
+}
+async function _iipAlertAck(id) {
+  await _evtAlertAck(id);
+  if (_evtDetailCurrent) _openEvtDetail(_evtDetailCurrent);
+}
+async function _iipAlertResolve(id) {
+  await _evtAlertResolve(id);
+  if (_evtDetailCurrent) _openEvtDetail(_evtDetailCurrent);
+}
+
+function _iipOpenDevice(did) {
+  _closeEvtDetail();
+  document.getElementById('tabDevices')?.click();
+}
+function _iipOpenHistory(did, sid) {
+  _closeEvtDetail();
+  document.getElementById('tabSensors')?.click();
+}
 
 // ── Export ────────────────────────────────────────────────────────
 function _evtExportCsv() {

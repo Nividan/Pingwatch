@@ -214,25 +214,9 @@
       </div>
     </div>
 
-    <!-- Event detail modal -->
+    <!-- Incident Investigation Panel -->
     <div id="evtDetailModal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.55);align-items:center;justify-content:center;">
-      <div class="evt-modal-inner">
-        <div class="evt-modal-hdr">
-          <span>Event Details</span>
-          <button onclick="_closeEvtDetail()" style="background:none;border:none;color:var(--text2);font-size:18px;cursor:pointer;padding:0 4px;line-height:1">✕</button>
-        </div>
-        <div class="evt-modal-body">
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Severity</span><span id="evtDtlSev"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Time</span>    <span id="evtDtlTs"     style="font-family:'JetBrains Mono',monospace;font-size:12px"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Duration</span><span id="evtDtlDur"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Device</span>  <span id="evtDtlDev"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Host / IP</span><span id="evtDtlHost"  style="font-family:'JetBrains Mono',monospace;font-size:12px"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Sensor</span>  <span id="evtDtlSensor"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Type</span>    <span id="evtDtlType"></span></div>
-          <div class="evt-dtl-row"><span class="evt-dtl-label">Message</span> <span id="evtDtlMsg"   style="color:var(--text2);font-size:12px;line-height:1.5"></span></div>
-          <div id="evtDtlTrapExtra" style="display:none;flex-direction:column;gap:9px"></div>
-        </div>
-      </div>
+      <div class="iip-panel"></div>
     </div>
     <div id="emptyMain" style="display:none">
       <!-- Hero radar SVG -->
