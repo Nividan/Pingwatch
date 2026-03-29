@@ -700,14 +700,14 @@ function _iipStatus(d) {
   const badgeCls = isActive ? 'iip-st-active' : isAcked ? 'iip-st-ack' : 'iip-st-res';
   const badgeTxt = isActive ? '● Active' : isAcked ? '◐ Acknowledged' : '✓ Resolved';
 
-  const utcStr = d.ts ? d.ts.replace('T', ' ').replace('Z', '') : '—';
+  const utcStr = d.ts ? _iipFmtDt(d.ts) : '—';
 
   const { secs: durSecs } = _iipGetDuration(d);
   const initDur = _fmtDuration(durSecs);
 
   let ackmeta = '';
   if (isAcked && d.ack_by) {
-    const ackTs = d.ack_at ? new Date(d.ack_at * 1000).toISOString().replace('T', ' ').slice(0, 19) : '';
+    const ackTs = d.ack_at ? _iipFmtDt(new Date(d.ack_at * 1000)) : '';
     ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
   }
 
@@ -787,7 +787,7 @@ function _iipStability(d) {
     `<div class="iip-tl-row">
       ${dirIcon(f)}
       <span class="iip-tl-lbl">${dirLbl(f)}</span>
-      <span class="iip-tl-ts iip-mono">${esc((f.ts||'').replace('T', ' ').replace('Z', ''))}</span>
+      <span class="iip-tl-ts iip-mono">${esc(_iipFmtDt(f.ts))}</span>
       <span class="iip-tl-rel">${relTime(f.ts)}</span>
     </div>`).join('');
 
@@ -841,8 +841,7 @@ function _iipAlert(alertEvt) {
   const isRes    = alertEvt.state === 'resolved';
   const stCls    = {active:'aev-st-active', acknowledged:'aev-st-ack', resolved:'aev-st-res'}[alertEvt.state] || '';
   const stLbl    = {active:'● Active', acknowledged:'◐ Acknowledged', resolved:'✓ Resolved'}[alertEvt.state] || alertEvt.state;
-  const firedTs  = alertEvt.triggered_at
-    ? new Date(alertEvt.triggered_at * 1000).toISOString().replace('T', ' ').slice(0, 19) : '—';
+  const firedTs  = alertEvt.triggered_at ? _iipFmtDt(new Date(alertEvt.triggered_at * 1000)) : '—';
   const repeat   = (alertEvt.repeat_count || 1) > 1 ? `<span class="iip-repeat">×${alertEvt.repeat_count}</span>` : '';
   const btns = !isRes
     ? `<div class="iip-btns">` +
@@ -871,6 +870,15 @@ function _iipDebug(d) {
     <summary class="iip-debug-summary">▶ Debug / Raw Data</summary>
     <div class="evt-trap-raw-block" style="margin-top:8px;white-space:pre-wrap">${esc(txt)}</div>
   </details>`;
+}
+
+// Local-timezone datetime formatter (matches fmtTs in sensors.js)
+function _iipFmtDt(ts) {
+  try {
+    const dt = new Date(ts);
+    const p  = n => String(n).padStart(2, '0');
+    return `${dt.getFullYear()}-${p(dt.getMonth()+1)}-${p(dt.getDate())} ${p(dt.getHours())}:${p(dt.getMinutes())}:${p(dt.getSeconds())}`;
+  } catch { return ts || '—'; }
 }
 
 function _iipCopy(txt) {
