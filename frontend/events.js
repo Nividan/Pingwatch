@@ -613,6 +613,7 @@ function _closeEvtDetail() {
 function _iipGetDuration(d) {
   const dir        = d._direction || d.direction || '';
   const isRecovery = dir === 'recovered' || dir === 'threshold_ok';
+  const tsSec      = d.ts ? new Date(d.ts).getTime() / 1000 : 0;
 
   // Recovery row: _calcDurations already computed down→up duration
   if (isRecovery && d._duration != null) {
@@ -625,7 +626,8 @@ function _iipGetDuration(d) {
     const dTs = new Date(d.ts).getTime();
     const rec = FLAPS.find(f =>
       f.did === d.did && f.sid === d.sid &&
-      (f._direction === 'recovered' || f._direction === 'threshold_ok') &&
+      (f._direction === 'recovered' || f._direction === 'threshold_ok' ||
+       f.direction  === 'recovered' || f.direction  === 'threshold_ok') &&
       new Date(f.ts).getTime() > dTs
     );
     if (rec) {
@@ -633,7 +635,13 @@ function _iipGetDuration(d) {
     }
   }
 
-  // No recovery yet: live ticker from event start
+  // Resolved/acked with no auto-recovery in FLAPS — use ack_at as end time
+  const state = d.ack_state || 'active';
+  if ((state === 'resolved' || state === 'acknowledged') && d.ack_at && tsSec) {
+    return { secs: Math.max(0, Math.floor(d.ack_at - tsSec)), live: false };
+  }
+
+  // Still active: live ticker from event start
   const secs = d.ts ? Math.max(0, Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000)) : 0;
   return { secs, live: true };
 }
@@ -692,17 +700,14 @@ function _iipStatus(d) {
   const badgeCls = isActive ? 'iip-st-active' : isAcked ? 'iip-st-ack' : 'iip-st-res';
   const badgeTxt = isActive ? '● Active' : isAcked ? '◐ Acknowledged' : '✓ Resolved';
 
-  const utcStr   = d.ts ? d.ts.replace('T', ' ').replace('Z', ' UTC') : '—';
-  const localStr = d.ts ? new Date(d.ts).toLocaleString([], {month:'short', day:'numeric',
-    hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' Local' : '';
+  const utcStr = d.ts ? d.ts.replace('T', ' ').replace('Z', '') : '—';
 
   const { secs: durSecs } = _iipGetDuration(d);
   const initDur = _fmtDuration(durSecs);
 
   let ackmeta = '';
   if (isAcked && d.ack_by) {
-    const ackTs = d.ack_at ? new Date(d.ack_at * 1000).toLocaleTimeString([],
-      {hour:'2-digit', minute:'2-digit'}) + ' Local' : '';
+    const ackTs = d.ack_at ? new Date(d.ack_at * 1000).toISOString().replace('T', ' ').slice(0, 19) : '';
     ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
   }
 
@@ -717,10 +722,7 @@ function _iipStatus(d) {
   return `<div class="iip-section">
     <div class="iip-section-title">STATUS</div>
     <div class="iip-st-row"><span class="iip-st-badge ${badgeCls}">${badgeTxt}</span></div>
-    <div class="iip-time-row">
-      <span class="iip-mono">${esc(utcStr)}</span>
-      ${localStr ? `<span class="iip-ts-sep">·</span><span class="iip-ts-local">${esc(localStr)}</span>` : ''}
-    </div>
+    <div class="iip-time-row"><span class="iip-mono">${esc(utcStr)}</span></div>
     <div class="iip-dur-row">Duration: <span id="iip-dur-live" class="iip-dur-live">${initDur}</span></div>
     ${ackmeta}${btns}
   </div>`;
@@ -840,7 +842,7 @@ function _iipAlert(alertEvt) {
   const stCls    = {active:'aev-st-active', acknowledged:'aev-st-ack', resolved:'aev-st-res'}[alertEvt.state] || '';
   const stLbl    = {active:'● Active', acknowledged:'◐ Acknowledged', resolved:'✓ Resolved'}[alertEvt.state] || alertEvt.state;
   const firedTs  = alertEvt.triggered_at
-    ? new Date(alertEvt.triggered_at * 1000).toLocaleString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' Local' : '—';
+    ? new Date(alertEvt.triggered_at * 1000).toISOString().replace('T', ' ').slice(0, 19) : '—';
   const repeat   = (alertEvt.repeat_count || 1) > 1 ? `<span class="iip-repeat">×${alertEvt.repeat_count}</span>` : '';
   const btns = !isRes
     ? `<div class="iip-btns">` +
