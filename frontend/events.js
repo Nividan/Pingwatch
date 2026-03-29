@@ -614,35 +614,47 @@ function _iipGetDuration(d) {
   const dir        = d._direction || d.direction || '';
   const isRecovery = dir === 'recovered' || dir === 'threshold_ok';
   const tsSec      = d.ts ? new Date(d.ts).getTime() / 1000 : 0;
+  const dTs        = d.ts ? new Date(d.ts).getTime() : 0;
 
-  // Recovery row: _calcDurations already computed down→up duration
+  // Recovery row: _calcDurations pre-computed down→up (only for plain 'recovered' direction)
   if (isRecovery && d._duration != null) {
     return { secs: d._duration, live: false };
   }
 
-  // Down/threshold row: look for the matching recovery in FLAPS so both rows
-  // show the same fixed value (down→recovery), not the ever-growing "age since down"
   if (d.did && d.sid && typeof FLAPS !== 'undefined') {
-    const dTs = new Date(d.ts).getTime();
-    const rec = FLAPS.find(f =>
-      f.did === d.did && f.sid === d.sid &&
-      (f._direction === 'recovered' || f._direction === 'threshold_ok' ||
-       f.direction  === 'recovered' || f.direction  === 'threshold_ok') &&
-      new Date(f.ts).getTime() > dTs
-    );
-    if (rec) {
-      return { secs: Math.floor((new Date(rec.ts).getTime() - dTs) / 1000), live: false };
+    if (isRecovery) {
+      // Recovery/threshold_ok: look for the nearest DOWN/CRIT/WARN event before this ts
+      // FLAPS is newest-first, so first match with ts < dTs is the closest prior down
+      const down = FLAPS.find(f =>
+        f.did === d.did && f.sid === d.sid &&
+        (f._direction === 'down' || f._direction === 'threshold') &&
+        new Date(f.ts).getTime() < dTs
+      );
+      if (down) {
+        return { secs: Math.floor((dTs - new Date(down.ts).getTime()) / 1000), live: false };
+      }
+    } else {
+      // Down/threshold: look for matching recovery AFTER this ts
+      const rec = FLAPS.find(f =>
+        f.did === d.did && f.sid === d.sid &&
+        (f._direction === 'recovered' || f._direction === 'threshold_ok' ||
+         f.direction  === 'recovered' || f.direction  === 'threshold_ok') &&
+        new Date(f.ts).getTime() > dTs
+      );
+      if (rec) {
+        return { secs: Math.floor((new Date(rec.ts).getTime() - dTs) / 1000), live: false };
+      }
     }
   }
 
-  // Resolved/acked with no auto-recovery in FLAPS — use ack_at as end time
+  // Resolved/acked with no matching event in FLAPS — use ack_at as end time
   const state = d.ack_state || 'active';
   if ((state === 'resolved' || state === 'acknowledged') && d.ack_at && tsSec) {
     return { secs: Math.max(0, Math.floor(d.ack_at - tsSec)), live: false };
   }
 
-  // Still active: live ticker from event start
-  const secs = d.ts ? Math.max(0, Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000)) : 0;
+  // Still active with no recovery yet: live ticker from event start
+  const secs = d.ts ? Math.max(0, Math.floor((Date.now() - dTs) / 1000)) : 0;
   return { secs, live: true };
 }
 
@@ -680,7 +692,7 @@ function _buildIIP(d, alertEvt) {
       <button class="iip-close-btn" onclick="_closeEvtDetail()">✕</button>
     </div>
     <div class="iip-body">
-      ${_iipStatus(d)}
+      ${_iipStatus(d, alertEvt)}
       ${_iipIdentity(d)}
       ${isTrap ? _iipTrapEnrich(d) : _iipStability(d)}
       ${alertEvt ? _iipAlert(alertEvt) : ''}
@@ -692,8 +704,12 @@ function _buildIIP(d, alertEvt) {
     </div>`;
 }
 
-function _iipStatus(d) {
-  const state    = d.ack_state || 'active';
+function _iipStatus(d, alertEvt) {
+  // Use the most-resolved state between flap-native and alert event
+  const _rank    = { active: 0, acknowledged: 1, resolved: 2 };
+  const flapSt   = d.ack_state || 'active';
+  const alertSt  = alertEvt ? (alertEvt.state || 'active') : 'active';
+  const state    = _rank[alertSt] >= _rank[flapSt] ? alertSt : flapSt;
   const isActive = state === 'active';
   const isAcked  = state === 'acknowledged';
   const isRes    = state === 'resolved';
