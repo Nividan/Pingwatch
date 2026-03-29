@@ -32,7 +32,7 @@ function tileHTML(s){
     if(idx<0)return'<div class="ub-s"></div>';
     const v=hist[idx];
     if(v===null)return`<div class="ub-s" style="background:var(--down)"></div>`;
-    const _mc=msC(v,s);const c=(isSnmp||isDns||isTls)?'var(--up)':(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
+    const _mc=msC(v,s);const _snmpDotC=(isSnmp&&!_isCounter&&_snmpThrColor)?(_snmpThrColor==='r'?'var(--down)':'var(--warn)'):'var(--up)';const c=(isSnmp||isDns||isTls)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
     return`<div class="ub-s" style="background:${c}"></div>`;
   }).join('');
   return`
@@ -133,7 +133,7 @@ function updateTile(s){
       if(idx<0){sq.style.background='var(--bg4)';return;}
       const v=hist[idx];
       if(v===null){sq.style.background='var(--down)';return;}
-      const _mc2=msC(v,s);sq.style.background=(isSnmp||isDns2||isTls2)?'var(--up)':(_mc2==='g'?'var(--up)':_mc2==='w'?'var(--warn)':'var(--down)');
+      const _mc2=msC(v,s);const _snmpDotC2=(isSnmp&&!_isCounter2&&_snmpThrColor2)?(_snmpThrColor2==='r'?'var(--down)':'var(--warn)'):'var(--up)';sq.style.background=(isSnmp||isDns2||isTls2)?_snmpDotC2:(_mc2==='g'?'var(--up)':_mc2==='w'?'var(--warn)':'var(--down)');
     });
   }
   drawSpk(key,s.history||[]);
