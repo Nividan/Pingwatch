@@ -76,6 +76,7 @@ const _DW_REG = {
     label: 'Server Performance',
     icon:  '🖥',
     defaultCols: 1,
+    note:  'Requires <strong>psutil</strong> on the PingWatch server.<br>Install with: <code>pip install psutil</code>',
     fields: [],
     render:  (wid, _cfg) => _dwRenderServerPerf(wid),
     refresh: (wid, _cfg) => _dwFetchServerPerf(wid),
@@ -413,6 +414,9 @@ function _dwSelectType(type) {
     }
     return '';
   }).join('');
+  const noteHtml = reg.note
+    ? `<div class="dw-cfg-note">${reg.note}</div>`
+    : '';
   const titleDefault = reg.label;
   const html = `
     <div class="mo" id="dw-cfg-overlay">
@@ -422,6 +426,7 @@ function _dwSelectType(type) {
           <button class="mclose" onclick="document.getElementById('dw-cfg-overlay').remove()">✕</button>
         </div>
         <div class="mbdy">
+          ${noteHtml}
           <div class="fr">
             <label class="fl">Widget Title</label>
             <input id="dw-cfg-title" type="text" value="${titleDefault}" placeholder="Widget title">
@@ -1269,7 +1274,7 @@ async function _dwFetchServerPerf(wid) {
   let d = null;
   try {
     const r = await fetch('/api/system/perf');
-    if (r.ok) d = await r.json();
+    d = await r.json();
   } catch {}
   if (!d || d.error) {
     const msg = d?.error || 'Failed to load';
