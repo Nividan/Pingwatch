@@ -106,7 +106,7 @@ def handle(h, method, path, body):
                 result[label] = {
                     "down":      counts.get("down", 0),
                     "recovered": counts.get("recovered", 0),
-                    "threshold": counts.get("threshold", 0),
+                    "threshold": counts.get("threshold_crit", 0) + counts.get("threshold_warn", 0) + counts.get("threshold_ok", 0),
                     "trap":      trap_row[0] if trap_row else 0,
                 }
             h._json(200, {"summary": result})
