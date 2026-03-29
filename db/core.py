@@ -128,7 +128,10 @@ def db_init():
                     host      TEXT,
                     stype     TEXT,
                     detail    TEXT,
-                    direction TEXT DEFAULT 'down'
+                    direction TEXT DEFAULT 'down',
+                    ack_state TEXT DEFAULT 'active',
+                    ack_by    TEXT DEFAULT '',
+                    ack_at    REAL DEFAULT 0
                 )""")
             con.execute("""
                 CREATE TABLE IF NOT EXISTS sensor_err_log (
@@ -666,8 +669,22 @@ def logs_db_init():
                 host      TEXT,
                 stype     TEXT,
                 detail    TEXT,
-                direction TEXT DEFAULT 'down'
+                direction TEXT DEFAULT 'down',
+                ack_state TEXT DEFAULT 'active',
+                ack_by    TEXT DEFAULT '',
+                ack_at    REAL DEFAULT 0
             )""")
+        # Migration: add ack columns to existing flap_log tables
+        for _col, _def in [
+            ("ack_state", "TEXT DEFAULT 'active'"),
+            ("ack_by",    "TEXT DEFAULT ''"),
+            ("ack_at",    "REAL DEFAULT 0"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE flap_log ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_err_log (
                 id    INTEGER PRIMARY KEY AUTOINCREMENT,

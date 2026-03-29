@@ -110,18 +110,58 @@ def db_load_flaps():
     con = sqlite3.connect(LOGS_DB_PATH)
     try:
         rows = con.execute(
-            "SELECT ts,did,sid,dname,sname,host,stype,detail,direction "
+            "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
+            "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0) "
             "FROM flap_log ORDER BY id DESC LIMIT 500"
         ).fetchall()
-        return [{"ts": r[0], "did": r[1], "sid": r[2], "dname": r[3],
-                 "sname": r[4], "host": r[5], "stype": r[6], "detail": r[7],
-                 "direction": r[8] or "down"}
+        return [{"id": r[0], "ts": r[1], "did": r[2], "sid": r[3],
+                 "dname": r[4], "sname": r[5], "host": r[6], "stype": r[7],
+                 "detail": r[8], "direction": r[9] or "down",
+                 "ack_state": r[10], "ack_by": r[11], "ack_at": r[12]}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load flaps error: {e}")
         return []
     finally:
         con.close()
+
+
+def db_ack_flap(flap_id, actor=""):
+    """Set ack_state='acknowledged' on a flap entry."""
+    import time as _time
+    con = None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        con.execute(
+            "UPDATE flap_log SET ack_state='acknowledged', ack_by=?, ack_at=? WHERE id=?",
+            (actor, _time.time(), flap_id)
+        )
+        con.commit()
+        return con.execute("SELECT changes()").fetchone()[0] > 0
+    except Exception as e:
+        log.error(f"DB ack flap error: {e}")
+        return False
+    finally:
+        if con: con.close()
+
+
+def db_resolve_flap(flap_id):
+    """Set ack_state='resolved' on a flap entry."""
+    import time as _time
+    con = None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        con.execute(
+            "UPDATE flap_log SET ack_state='resolved', ack_at=? WHERE id=?",
+            (_time.time(), flap_id)
+        )
+        con.commit()
+        return con.execute("SELECT changes()").fetchone()[0] > 0
+    except Exception as e:
+        log.error(f"DB resolve flap error: {e}")
+        return False
+    finally:
+        if con: con.close()
 
 
 # ── SNMP trap log ────────────────────────────────────────────────

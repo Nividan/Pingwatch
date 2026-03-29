@@ -12,7 +12,7 @@ import time
 
 import core.app_state as app_state
 from core.config import DB_PATH, LOGS_DB_PATH
-from db import db_load_flaps, db_load_traps
+from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap
 from core.logger import log
 
 
@@ -139,6 +139,31 @@ def handle(h, method, path, body):
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
         h._json(200, {"interfaces": _ifaces})
+        return True
+
+    # ── /api/flaps/<id>/ack POST ──────────────────────────────────
+    if method == "POST" and path.startswith("/api/flaps/") and path.endswith("/ack"):
+        user, _ = h._require("operator")
+        if not user: return True
+        try:
+            flap_id = int(path.split("/")[3])
+        except (IndexError, ValueError):
+            h._json(400, {"error": "invalid id"}); return True
+        actor = user or ""
+        ok = db_ack_flap(flap_id, actor)
+        h._json(200, {"ok": ok})
+        return True
+
+    # ── /api/flaps/<id>/resolve POST ──────────────────────────────
+    if method == "POST" and path.startswith("/api/flaps/") and path.endswith("/resolve"):
+        user, _ = h._require("operator")
+        if not user: return True
+        try:
+            flap_id = int(path.split("/")[3])
+        except (IndexError, ValueError):
+            h._json(400, {"error": "invalid id"}); return True
+        ok = db_resolve_flap(flap_id)
+        h._json(200, {"ok": ok})
         return True
 
     return False

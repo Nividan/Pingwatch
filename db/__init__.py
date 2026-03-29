@@ -25,6 +25,8 @@ from db.samples     import (
 from db.events      import (
     db_log_flap,
     db_load_flaps,
+    db_ack_flap,
+    db_resolve_flap,
     db_log_trap,
     db_load_traps,
     db_clear_device_traps,
@@ -105,7 +107,7 @@ __all__ = [
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
     # events
-    "db_log_flap", "db_load_flaps",
+    "db_log_flap", "db_load_flaps", "db_ack_flap", "db_resolve_flap",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",
     "db_log_err", "db_load_err_logs", "db_clear_err_logs",
     "db_clear_sensor_err_logs",

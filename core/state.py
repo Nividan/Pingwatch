@@ -578,6 +578,7 @@ class MonitorState:
             elif s.loss_warn_pct and s.loss_pct >= s.loss_warn_pct:
                 if _new_thr != "crit": _new_thr = "warn"
             if _new_thr != s._threshold_state:
+                _prev_thr = s._threshold_state
                 s._threshold_state = _new_thr
                 if _new_thr != "ok" and not _muted:
                     _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
@@ -608,6 +609,21 @@ class MonitorState:
                     _thr_flap["direction"] = "threshold_crit" if _new_thr == "crit" else "threshold_warn"
                     _thr_flap["detail"]    = _val_disp
                     _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
+                elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
+                    # Threshold recovered — broadcast and persist
+                    _thr_rec_data = {
+                        "did": did, "sid": sid, "dname": dev.name,
+                        "sname": s.name, "host": s.host, "stype": s.stype,
+                        "state": "ok", "ts": _ts,
+                        "ms": s.last_ms, "loss_pct": s.loss_pct,
+                        "grp": dev.group,
+                    }
+                    self._broadcast("threshold_ok", _thr_rec_data)
+                    log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
+                    _thr_rec_flap = dict(_thr_rec_data)
+                    _thr_rec_flap["direction"] = "threshold_ok"
+                    _thr_rec_flap["detail"]    = s.last_value or ""
+                    _db_enqueue(lambda _f=_thr_rec_flap: db_log_flap(_f))
 
             self._broadcast("sensor", s.to_dict())
             self._broadcast("device_status", {"did": did, "status": dev.status})

@@ -93,19 +93,29 @@ function connectSSE(){
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     // Refresh alert cache after alert engine has had time to process (3s delay)
     if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
     if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
     if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
+  });
+  sse.addEventListener('threshold_ok',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    d._direction='threshold_ok';
+    pushFlap(d);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
@@ -498,6 +508,8 @@ function renderFlaps(){
       const isCrit=d._thr_level==='crit';
       dotStyle=isCrit?'background:#e74c3c':'background:#f39c12';
       label=isCrit?'CRIT':'WARN';
+    } else if(d._direction==='threshold_ok'){
+      dotStyle='background:var(--up);box-shadow:0 0 6px rgba(35,209,139,.8)'; label='THR OK';
     } else if(d._direction==='trap'){
       dotStyle='background:#8e44ad;box-shadow:0 0 6px rgba(142,68,173,.8)'; label='TRAP';
     }
@@ -519,6 +531,25 @@ function renderFlaps(){
       '<div class="evt-time" style="padding-left:16px;font-size:12px;color:var(--text2)">'+dispDate+'</div>';
     list.appendChild(row);
   });
+}
+
+async function _refreshFlapList(){
+  try{
+    const fd=await fetch('/api/flaps').then(r=>r.json());
+    const byKey={};
+    (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
+      else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
+      else f._direction=f.direction||'down';
+      byKey[_flapKey(f)]=f;
+    });
+    for(let i=0;i<FLAPS.length;i++){
+      const k=_flapKey(FLAPS[i]);
+      if(byKey[k]) Object.assign(FLAPS[i],{id:byKey[k].id,ack_state:byKey[k].ack_state});
+    }
+    renderFlaps();
+  }catch(_){}
 }
 
 function switchMainTab(tab){
@@ -623,6 +654,7 @@ async function _refreshEvents(){
     (fd.flaps||[]).forEach(f=>{
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
@@ -723,6 +755,7 @@ async function loadAll(){
     (fd.flaps||[]).forEach(f=>{
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
