@@ -441,7 +441,7 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .dc-snr-nm{font-size:10px;color:var(--text2);flex:1;min-width:0;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-snr-val{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;flex-shrink:0}
-.dc-snr-val.g{color:var(--up)}.dc-snr-val.w{color:var(--warn)}.dc-snr-val.b{color:var(--down)}.dc-snr-val.m{color:var(--text2)}
+.dc-snr-val.g{color:var(--up)}.dc-snr-val.w{color:var(--warn)}.dc-snr-val.b{color:var(--down)}.dc-snr-val.r{color:var(--down)}.dc-snr-val.m{color:var(--text2)}
 .dc-snr-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0;background:var(--text3)}
 .dc-snr-dot.up  {background:var(--up)}
 .dc-snr-dot.down{background:var(--down)}
@@ -588,7 +588,7 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
   font-family:'JetBrains Mono',monospace;font-size:32px;font-weight:500;
   line-height:1;color:var(--text);margin-bottom:4px;transition:color .3s;
 }
-.stl-val.g{color:var(--up)}.stl-val.w{color:var(--warn)}.stl-val.b{color:var(--down)}.stl-val.m{color:var(--text2)}
+.stl-val.g{color:var(--up)}.stl-val.w{color:var(--warn)}.stl-val.b{color:var(--down)}.stl-val.r{color:var(--down)}.stl-val.m{color:var(--text2)}
 .stl-det{font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace;
          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ub{display:flex;gap:1px;height:6px;margin-top:5px;border-radius:2px;overflow:hidden}
@@ -929,7 +929,7 @@ select{cursor:pointer;appearance:none;
 .dm-metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-bottom:14px}
 .dm-m{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:9px 7px;text-align:center}
 .dm-mv{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:500;color:var(--text);display:block;margin-bottom:2px;transition:color .3s}
-.dm-mv.g{color:var(--up)}.dm-mv.w{color:var(--warn)}.dm-mv.b{color:var(--down)}
+.dm-mv.g{color:var(--up)}.dm-mv.w{color:var(--warn)}.dm-mv.b{color:var(--down)}.dm-mv.r{color:var(--down)}
 .dm-mk{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px}
 .dm-chart-wrap{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:11px;margin-bottom:12px}
 .dm-cht{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;
