@@ -103,6 +103,7 @@ class Sensor:
         self._email_sent_down = False   # True only after the delayed DOWN email was actually sent
         self._threshold_state = "ok"
         self.history               = collections.deque(maxlen=self.MAX)
+        self.thr_history           = collections.deque(maxlen=self.MAX)
         self.total          = 0
         self.success        = 0
         self.last_ms        = None
@@ -199,6 +200,7 @@ class Sensor:
             "loss_pct":       self.loss_pct,
             "total":          self.total,
             "history":        list(self.history),
+            "thr_history":    list(self.thr_history),
         }
 
 
@@ -626,6 +628,7 @@ class MonitorState:
                     _thr_rec_flap["detail"]    = s.last_value or ""
                     _db_enqueue(lambda _f=_thr_rec_flap: db_log_flap(_f))
 
+            s.thr_history.append(s._threshold_state)
             self._broadcast("sensor", s.to_dict())
             self._broadcast("device_status", {"did": did, "status": dev.status})
             s._stop_event.wait(timeout=s.interval)
