@@ -109,8 +109,8 @@ function _matchAlertEvt(event) {
     if (lag < -60 || lag > WINDOW) return false;
     // Direction filter: only match alert event_type that aligns with sensor direction
     const et = (a.event_type || '').toLowerCase();
-    if (isDown)      return et === 'down' || et.startsWith('threshold');
-    if (isRecovered) return et === 'recovered';
+    if (isDown)      return et === 'down' || et === 'threshold_warning' || et === 'threshold_critical';
+    if (isRecovered) return et === 'recovered' || et === 'threshold_ok';
     return true;
   }) || null;
 }
