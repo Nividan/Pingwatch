@@ -5,10 +5,49 @@ state.py — Data model: Sensor, Device, MonitorState.
 import collections
 import concurrent.futures
 import datetime
+import heapq
 import json
 import queue
 import threading
 import time
+
+
+class _SensorScheduler:
+    """Single background thread that fires sensor probes at the right time.
+
+    Instead of one thread (or Timer) per sensor sleeping between probes,
+    all pending 'run-at' times live in a min-heap.  The scheduler thread
+    wakes up only when the next probe is due and submits it to the executor.
+    Thread cost: exactly 1, regardless of sensor count.
+    """
+    def __init__(self, executor, run_fn):
+        self._heap     = []          # (run_at, seq, did, sid)
+        self._seq      = 0
+        self._lock     = threading.Lock()
+        self._wake     = threading.Event()
+        self._executor = executor
+        self._run_fn   = run_fn
+        t = threading.Thread(target=self._loop, daemon=True, name='pw-sched')
+        t.start()
+
+    def schedule(self, did, sid, delay):
+        """Schedule a probe for (did, sid) to run after `delay` seconds."""
+        with self._lock:
+            self._seq += 1
+            heapq.heappush(self._heap, (time.monotonic() + delay, self._seq, did, sid))
+        self._wake.set()
+
+    def _loop(self):
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._heap and self._heap[0][0] <= now:
+                    _, _, did, sid = heapq.heappop(self._heap)
+                    self._executor.submit(self._run_fn, did, sid)
+                    now = time.monotonic()
+                sleep_for = (self._heap[0][0] - now) if self._heap else 60.0
+            self._wake.wait(timeout=min(sleep_for, 1.0))
+            self._wake.clear()
 
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
 from monitoring.probes import probe_tls, probe_http_keyword, probe_banner
@@ -287,9 +326,10 @@ class MonitorState:
         self.devices   = {}
         self._did_ctr  = 0
         self._sse      = []
-        self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=512, thread_name_prefix='pw-sensor'
+        self._executor  = concurrent.futures.ThreadPoolExecutor(
+            max_workers=64, thread_name_prefix='pw-sensor'
         )
+        self._scheduler = _SensorScheduler(self._executor, self._run_once)
 
     def _next_did(self):
         self._did_ctr += 1
@@ -382,8 +422,6 @@ class MonitorState:
             s = dev.sensors.get(sid)
             if not s: return False
             s.running = False
-            t = getattr(s, '_timer', None)
-            if t: t.cancel()
             del dev.sensors[sid]
         return True
 
@@ -404,8 +442,7 @@ class MonitorState:
                 s = dev.sensors.get(sid)
                 if s:
                     s.running = False
-                    t = getattr(s, '_timer', None)
-                    if t: t.cancel()
+                    # Scheduler entry will be ignored — _run_once checks s.running at entry
 
     def start_device(self, did):
         with self._lock:
@@ -640,19 +677,9 @@ class MonitorState:
         self._broadcast("sensor", s.to_dict())
         self._broadcast("device_status", {"did": did, "status": dev.status})
 
-        # Schedule next run after interval — thread is released immediately, not held during wait
+        # Release thread immediately — scheduler fires next probe after interval
         if s.running:
-            def _reschedule():
-                if s.running:
-                    self._executor.submit(self._run_once, did, sid)
-                else:
-                    self._broadcast("log", {"did": did, "sid": sid,
-                                             "msg": f"[STOP] {s.name}", "type": "info"})
-                    s._stopped.set()
-            t = threading.Timer(s.interval, _reschedule)
-            t.daemon = True
-            s._timer = t
-            t.start()
+            self._scheduler.schedule(did, sid, s.interval)
         else:
             self._broadcast("log", {"did": did, "sid": sid,
                                      "msg": f"[STOP] {s.name}", "type": "info"})
