@@ -382,6 +382,8 @@ class MonitorState:
             s = dev.sensors.get(sid)
             if not s: return False
             s.running = False
+            t = getattr(s, '_timer', None)
+            if t: t.cancel()
             del dev.sensors[sid]
         return True
 
@@ -402,7 +404,8 @@ class MonitorState:
                 s = dev.sensors.get(sid)
                 if s:
                     s.running = False
-                    # _run_once detects s.running=False on next poll (≤0.5s)
+                    t = getattr(s, '_timer', None)
+                    if t: t.cancel()
 
     def start_device(self, did):
         with self._lock:
@@ -637,16 +640,19 @@ class MonitorState:
         self._broadcast("sensor", s.to_dict())
         self._broadcast("device_status", {"did": did, "status": dev.status})
 
-        # Interruptible wait — check s.running every 0.5s instead of blocking on an Event
-        _elapsed = 0.0
-        _step    = 0.5
-        while s.running and _elapsed < s.interval:
-            time.sleep(min(_step, s.interval - _elapsed))
-            _elapsed += _step
-
-        # Reschedule or mark stopped
+        # Schedule next run after interval — thread is released immediately, not held during wait
         if s.running:
-            self._executor.submit(self._run_once, did, sid)
+            def _reschedule():
+                if s.running:
+                    self._executor.submit(self._run_once, did, sid)
+                else:
+                    self._broadcast("log", {"did": did, "sid": sid,
+                                             "msg": f"[STOP] {s.name}", "type": "info"})
+                    s._stopped.set()
+            t = threading.Timer(s.interval, _reschedule)
+            t.daemon = True
+            s._timer = t
+            t.start()
         else:
             self._broadcast("log", {"did": did, "sid": sid,
                                      "msg": f"[STOP] {s.name}", "type": "info"})
