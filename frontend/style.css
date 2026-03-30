@@ -1483,6 +1483,8 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 /* ── Global Network Health Bar (lives inside #topbar > .tb-mid) ──── */
 #healthBar{display:flex;align-items:center;gap:10px;font-size:12px;}
 #hb-bar-wrap{flex:0 0 160px;height:6px;background:var(--border2);border-radius:3px;overflow:hidden;}
+.hb-sep{width:1px;height:16px;background:var(--border2);flex-shrink:0;}
+.hb-spark-lbl{font-size:10px;color:var(--text3);white-space:nowrap;letter-spacing:.02em;}
 #hb-spark{flex:0 0 160px;border-radius:3px;transition:filter .15s;}
 #hb-spark:hover{filter:brightness(1.15);}
 #hb-trend-arrow{font-size:11px;font-weight:700;line-height:1;margin-left:-4px;}
