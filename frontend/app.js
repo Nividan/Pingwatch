@@ -435,6 +435,10 @@ async function _hbDrawSpark() {
     canvas.width = canvas.offsetWidth || 160;
     _hbRenderSpk(canvas, false);
     canvas.style.display = '';
+    const sep = document.getElementById('hb-spark-sep');
+    const lbl = document.getElementById('hb-spark-lbl');
+    if (sep) sep.style.display = '';
+    if (lbl) lbl.style.display = '';
     _hbUpdateTrendArrow();
   } catch {}
 }
