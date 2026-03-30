@@ -3959,6 +3959,16 @@ document.addEventListener('fullscreenchange', () => {
   document.body.classList.toggle('fs-active', isFs);
   const btn = document.getElementById('page-fs-btn');
   if (btn) _ntmUpdateFsBtn(btn);
+  // Collapse side panel on enter, restore on exit
+  const panel = document.getElementById('side-panel');
+  if (panel) {
+    if (isFs) {
+      panel._ntmWasCollapsed = panel.classList.contains('collapsed');
+      panel.classList.add('collapsed');
+    } else {
+      if (!panel._ntmWasCollapsed) panel.classList.remove('collapsed');
+    }
+  }
 });
 
 // Reload pages when PingWatch parent signals tab switch
