@@ -215,6 +215,14 @@ _PACKAGES = [
         "desc":     "LDAP / Active Directory authentication",
         "required": False,
     },
+    {
+        "import":   "psutil",
+        "name":     "psutil",
+        "install":  "psutil>=5.9.0",
+        "pip":      True,
+        "desc":     "server CPU / RAM / disk monitoring widget",
+        "required": False,
+    },
 ]
 
 _SNMP_TOOL = "snmpget"
@@ -354,6 +362,7 @@ def step1_packages():
                     "paramiko":     ("python3-paramiko", None),
                     "cryptography": ("python3-cryptography", None),
                     "ldap3":        ("python3-ldap3",   None),
+                    "psutil":       ("python3-psutil",  None),
                 }
                 _apt_entry = _apt_map.get(pkg["name"])
 
@@ -387,6 +396,7 @@ def step1_packages():
                             "python3-paramiko":     "python3-paramiko",
                             "python3-cryptography": "python3-cryptography",
                             "python3-ldap3":        "python3-ldap3",
+                            "python3-psutil":       "python3-psutil",
                         }
                         _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
                         r = subprocess.run(

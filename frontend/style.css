@@ -1483,7 +1483,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 /* ── Global Network Health Bar (lives inside #topbar > .tb-mid) ──── */
 #healthBar{display:flex;align-items:center;gap:10px;font-size:12px;}
 #hb-bar-wrap{flex:0 0 160px;height:6px;background:var(--border2);border-radius:3px;overflow:hidden;}
-#hb-spark{flex:0 0 120px;}
+#hb-spark{flex:0 0 160px;border-radius:3px;transition:filter .15s;}
+#hb-spark:hover{filter:brightness(1.15);}
+#hb-trend-arrow{font-size:11px;font-weight:700;line-height:1;margin-left:-4px;}
 #hb-bar-fill{height:100%;border-radius:3px;transition:width .5s,background .5s;}
 .hb-fill-healthy{background:var(--up);}.hb-fill-degraded{background:var(--warn);}.hb-fill-critical{background:var(--down);}
 .hb-pct-healthy{color:var(--up);font-weight:700;font-size:14px;}.hb-pct-degraded{color:var(--warn);font-weight:700;font-size:14px;}.hb-pct-critical{color:var(--down);font-weight:700;font-size:14px;}
@@ -1493,6 +1495,39 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .hb-pill.up  {color:var(--up);  background:rgba(35,209,139,.12);}
 .hb-pill.down{color:var(--down);background:rgba(248,81,73,.12);}
 .hb-pill.warn{color:var(--warn);background:rgba(240,165,0,.12);}
+
+/* ── Health sparkline tooltip ───────────────────────────────────── */
+.hb-spk-tip{position:fixed;z-index:600;background:var(--bg2);border:1px solid var(--border2);
+  border-radius:7px;padding:7px 10px;font-size:11px;pointer-events:none;
+  box-shadow:0 4px 20px rgba(0,0,0,.5);min-width:88px;}
+.hb-tip-time{font-size:10px;color:var(--text3);margin-bottom:2px;}
+.hb-tip-pct{font-size:16px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1.2;}
+.hb-tip-row{font-size:10px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-top:2px;}
+
+/* ── Health trend expanded panel ────────────────────────────────── */
+.hb-exp-panel{position:fixed;top:calc(var(--header-h) + 6px);left:50%;transform:translateX(-50%);
+  z-index:400;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;
+  width:min(500px,92vw);box-shadow:0 12px 40px rgba(0,0,0,.6);overflow:hidden;}
+.hb-exp-hdr{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);}
+.hb-exp-title{font-size:12px;font-weight:600;color:var(--text);flex:1;}
+.hb-exp-ranges{display:flex;gap:4px;}
+.hb-exp-rbtn{background:var(--bg3);border:1px solid var(--border);border-radius:4px;
+  color:var(--text3);font-size:10px;padding:2px 8px;cursor:pointer;transition:background .15s;}
+.hb-exp-rbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.hb-exp-rbtn:not(.active):hover{background:var(--bg);color:var(--text);}
+.hb-exp-close{background:none;border:none;color:var(--text3);font-size:16px;
+  cursor:pointer;padding:0 2px;margin-left:4px;line-height:1;}
+.hb-exp-close:hover{color:var(--text);}
+.hb-exp-canvas{display:block;width:100%;height:120px;}
+.hb-exp-footer{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 14px;
+  border-top:1px solid var(--border);background:var(--bg3);}
+.hb-exp-stats{display:flex;gap:14px;flex:1;}
+.hb-exp-stat{font-size:11px;color:var(--text3);}
+.hb-exp-stat strong{color:var(--text);}
+.hb-exp-evlist{display:flex;flex-wrap:wrap;gap:5px;}
+.hb-exp-ev{font-size:10px;color:var(--text2);background:var(--bg2);border:1px solid var(--border);
+  border-radius:4px;padding:2px 6px;white-space:nowrap;display:flex;align-items:center;gap:3px;}
+.hb-exp-ev-ok{font-size:10px;color:var(--up);}
 
 /* ── Backups Tab ─────────────────────────────────────────────────── */
 #backupsView{padding:0;}

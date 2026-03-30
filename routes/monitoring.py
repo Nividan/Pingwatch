@@ -117,6 +117,46 @@ def handle(h, method, path, body):
             if con: con.close()
         return True
 
+    # ── /api/health/trend GET ────────────────────────────────────
+    if path == "/api/health/trend" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from urllib.parse import parse_qs, urlparse as _urlparse
+        from db import db_load_availability
+        qs          = parse_qs(_urlparse(h.path).query)
+        range_param = qs.get("range", ["24h"])[0]
+        minutes     = {"1h": 60, "6h": 360, "24h": 1440}.get(range_param, 1440)
+        pts         = db_load_availability(minutes)
+        cutoff      = datetime.datetime.utcfromtimestamp(
+            time.time() - minutes * 60).strftime("%Y-%m-%dT%H:%M:%SZ")
+        events = []
+        con = None
+        try:
+            con = sqlite3.connect(LOGS_DB_PATH)
+            rows = con.execute(
+                "SELECT ts, direction, dname, sname FROM flap_log "
+                "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
+                (cutoff,)
+            ).fetchall()
+            for ts_str, direction, dname, sname in rows:
+                try:
+                    dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+                    epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
+                except Exception:
+                    continue
+                label = " / ".join(x for x in [dname, sname] if x)
+                events.append({
+                    "ts":    epoch,
+                    "type":  "outage" if direction == "down" else "alert",
+                    "label": label,
+                })
+        except Exception as e:
+            log.error(f"health/trend events error: {e}")
+        finally:
+            if con: con.close()
+        h._json(200, {"points": pts, "events": events, "range": range_param})
+        return True
+
     # ── /api/snmp/catalog GET ─────────────────────────────────────
     if path == "/api/snmp/catalog" and method == "GET":
         if not h._auth(): return True
