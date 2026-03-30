@@ -632,6 +632,7 @@ def main():
     # ── Graceful shutdown ─────────────────────────────────────────
     log.info("Shutting down...")
     STATE.stop_all()
+    STATE._executor.shutdown(wait=False)
     db_save(STATE)
     log.info("Configuration saved.")
     server.shutdown()
