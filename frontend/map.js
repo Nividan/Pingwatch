@@ -698,7 +698,12 @@ function _pwLiveUpdate(did) {
       if (node.properties.color) {
         const deg = Math.round(getHue(node.properties.color) - 37);
         const f = 'grayscale(1) sepia(1) hue-rotate('+deg+'deg) saturate(2.5) brightness(1.05)';
-        if (filterG) filterG.style.filter = f;
+        if (filterG) {
+          filterG.style.filter = f;
+        } else {
+          // Wrapper doesn't exist yet (device was UP at render time) — create it now
+          _applyNodeColorFilter(el, node);
+        }
       } else if (filterG) {
         filterG.style.filter = '';
       }
