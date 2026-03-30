@@ -76,7 +76,6 @@ const _DW_REG = {
     label: 'Server Performance',
     icon:  '🖥',
     defaultCols: 1,
-    note:  'Requires <strong>psutil</strong> on the PingWatch server.<br>Install with: <code>pip install psutil</code>',
     fields: [],
     render:  (wid, _cfg) => _dwRenderServerPerf(wid),
     refresh: (wid, _cfg) => _dwFetchServerPerf(wid),
