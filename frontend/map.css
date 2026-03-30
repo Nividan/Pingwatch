@@ -219,6 +219,12 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 @keyframes dashFlow   { to { stroke-dashoffset:-16; } }
 @keyframes tunnelFlow { to { stroke-dashoffset:-28; } }
 
+/* ── Bandwidth threshold link pulse ── */
+@keyframes pwBwCritPulse { 0%,100%{opacity:.9} 50%{opacity:.12} }
+@keyframes pwBwWarnPulse { 0%,100%{opacity:.85} 50%{opacity:.3} }
+.pw-bw-crit { animation:dashFlow 1.2s steps(15) infinite, pwBwCritPulse  1s ease-in-out infinite !important; }
+.pw-bw-warn { animation:dashFlow 1.2s steps(15) infinite, pwBwWarnPulse 2s ease-in-out infinite !important; }
+
 .node-g { cursor:grab; }
 .node-g:active { cursor:grabbing; }
 .node-g.selected rect:first-child, .node-g.selected circle:first-child { filter:brightness(1.5); }

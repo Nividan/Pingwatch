@@ -229,6 +229,18 @@ function _pwLinkStroke(lk, srcDev, tgtDev) {
   return lcfg(lk.link_type || 'trunk').stroke;
 }
 
+// Apply stroke + width + pulse animation to a .link-main SVG element
+function _pwApplyLinkEl(lineEl, lk, srcDev, tgtDev) {
+  const stroke = _pwLinkStroke(lk, srcDev, tgtDev);
+  const isCrit = stroke === '#a855f7';
+  const isWarn = stroke === '#c084fc';
+  const baseW  = lcfg(lk.link_type || 'trunk').width;
+  lineEl.setAttribute('stroke', stroke);
+  lineEl.setAttribute('stroke-width', isCrit ? baseW * 2.5 : isWarn ? baseW * 1.8 : baseW);
+  lineEl.classList.toggle('pw-bw-crit', isCrit);
+  lineEl.classList.toggle('pw-bw-warn', isWarn);
+}
+
 function pwDeviceType(dev) {
   const n = (dev.name  || '').toLowerCase();
   const g = (dev.group || '').toLowerCase();
@@ -520,7 +532,7 @@ function _pwSensorThresholdUpdate(did, sid, state) {
     const lineEl = document.querySelector(`[data-pwlid="${CSS.escape(lk.id)}"] .link-main`);
     if (!lineEl) return;
     const srcD = _pwDevMap[lk.src_did], tgtD = _pwDevMap[lk.tgt_did];
-    lineEl.setAttribute('stroke', _pwLinkStroke(lk, srcD, tgtD));
+    _pwApplyLinkEl(lineEl, lk, srcD, tgtD);
   });
 }
 
@@ -712,7 +724,7 @@ function _pwLiveUpdate(did) {
       const otherDev = _pwDevMap[otherDid];
       const srcD = lk.src_did === did ? dev : otherDev;
       const tgtD = lk.src_did === did ? otherDev : dev;
-      lineEl.setAttribute('stroke', _pwLinkStroke(lk, srcD, tgtD));
+      _pwApplyLinkEl(lineEl, lk, srcD, tgtD);
     });
 
   // Update right panel only if relevant and no input is focused
@@ -923,13 +935,15 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const srcDev = pwDevices.find(d => d.device_id === lk.src_did);
     const tgtDev = pwDevices.find(d => d.device_id === lk.tgt_did);
     const stroke = _pwLinkStroke(lk, srcDev, tgtDev);
+    const bwCls  = stroke === '#a855f7' ? 'pw-bw-crit' : stroke === '#c084fc' ? 'pw-bw-warn' : '';
+    const lw     = stroke === '#a855f7' ? cfg.width * 2.5 : stroke === '#c084fc' ? cfg.width * 1.8 : cfg.width;
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
     gg.innerHTML = `
       <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
-      <line class="link-main ${cfg.cls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-        stroke="${stroke}" stroke-width="${cfg.width}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
+        stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
     `;
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);
@@ -3134,7 +3148,7 @@ function setPwLinkSensors(lkId) {
   _pwSave('pw_links', pwLinks);
   // Re-color immediately with current threshold state
   const lineEl = document.querySelector(`[data-pwlid="${CSS.escape(lkId)}"] .link-main`);
-  if (lineEl) lineEl.setAttribute('stroke', _pwLinkStroke(lk, _pwDevMap[lk.src_did], _pwDevMap[lk.tgt_did]));
+  if (lineEl) _pwApplyLinkEl(lineEl, lk, _pwDevMap[lk.src_did], _pwDevMap[lk.tgt_did]);
   toast('Sensors saved');
 }
 
