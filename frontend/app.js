@@ -91,16 +91,32 @@ function connectSSE(){
   sse.addEventListener('flap_down',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
+    // Refresh alert cache after alert engine has had time to process (3s delay)
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
+  });
+  sse.addEventListener('threshold_ok',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    d._direction='threshold_ok';
+    pushFlap(d);
+    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
+    setTimeout(_refreshFlapList, 2000);
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
@@ -109,6 +125,10 @@ function connectSSE(){
   sse.addEventListener('backup_complete',e=>{
     const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
+  });
+  sse.addEventListener('browser_notification',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    _showBrowserNotif(d);
   });
   sse.onerror=()=>{
     document.getElementById('cbn').style.display='block';
@@ -274,6 +294,64 @@ function onAuthenticated(username){
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, 300000);
+  // Poll active alert count for combined Events badge (every 60s); clear on re-login to prevent stacking
+  _alertEvtBadgePoll();
+  if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
+  window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, 60000);
+}
+
+let _alertEvtBadgeCount = 0;
+
+function _updateEvtBadge() {
+  const n = unseenFlaps + _alertEvtBadgeCount;
+  const b = document.getElementById('evtBadge');
+  if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+}
+
+async function _alertEvtBadgePoll() {
+  try {
+    const r = await fetch('/api/alert/events/active');
+    if (!r.ok) return;
+    const d = await r.json();
+    _alertEvtBadgeCount = d.count || 0;
+    _updateEvtBadge();
+  } catch (_) {}
+}
+
+function _requestNotifPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default')
+    Notification.requestPermission();
+}
+
+function _playNotifSound(type) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const play = (freq, start, dur) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = freq;
+      o.type = 'sine';
+      g.gain.setValueAtTime(0.3, ctx.currentTime + start);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+      o.start(ctx.currentTime + start);
+      o.stop(ctx.currentTime + start + dur + 0.05);
+    };
+    if (type === 'double') { play(880, 0, 0.12); play(880, 0.18, 0.12); }
+    else { play(660, 0, 0.20); }  // 'alert' default
+  } catch (_) {}
+}
+
+function _showBrowserNotif(d) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const n = new Notification(d.title || 'PingWatch Alert', {
+    body: d.body || '',
+    icon: '/static/favicon.ico',
+    tag:  'pingwatch-alert',
+  });
+  n.onclick = () => { window.focus(); n.close(); };
+  if (d.sound && d.sound !== 'none') _playNotifSound(d.sound);
 }
 function applyRbac(){
   const op    = S.role==='operator'||S.role==='admin';
@@ -310,8 +388,11 @@ function updatePills(){
 }
 
 // ── Global Network Health Bar ─────────────────────────────────────
-let _hbSparkLoaded = false;
+let _hbSparkLoaded   = false;
 let _hbSparkInterval = null;
+let _hbSparkData     = [];    // [{ts, pct}] — latest fetch
+let _hbSparkEvents   = [];    // [{ts, type, label}]
+let _hbSparkRange    = '24h';
 function _hbUpdate() {
   const devs = Object.values(S.devices);
   if (!devs.length) return;
@@ -337,38 +418,247 @@ function _hbUpdate() {
   if (upEl) upEl.textContent = up + ' Up';
   if (dnEl) { dnEl.textContent = dn + ' Down'; dnEl.style.display = dn ? '' : 'none'; }
   if (wnEl) { wnEl.textContent = wn + ' Warn'; wnEl.style.display = wn ? '' : 'none'; }
-  if (!_hbSparkLoaded) { _hbSparkLoaded = true; _hbDrawSpark(); }
+  if (!_hbSparkLoaded) { _hbSparkLoaded = true; _hbDrawSpark(); _hbSetupSparkInteractions(); }
 }
+
 async function _hbDrawSpark() {
   const canvas = document.getElementById('hb-spark');
   if (!canvas) return;
   try {
-    const r = await fetch('/api/availability?minutes=1440');
+    const r = await fetch(`/api/health/trend?range=${_hbSparkRange}`);
+    if (!r.ok) return;
     const d = await r.json();
-    const pts = d.availability || [];
-    if (!pts.length) return;
-    // Use rAF to ensure the canvas is laid out before reading offsetWidth
+    _hbSparkData   = d.points || [];
+    _hbSparkEvents = d.events || [];
+    if (!_hbSparkData.length) return;
     await new Promise(res => requestAnimationFrame(res));
-    canvas.width = canvas.offsetWidth || 120;
-    const W = canvas.width, H = canvas.height || 20;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-    const avg = pts.reduce((s, b) => s + b.pct, 0) / pts.length;
-    const color = avg >= 90 ? '#23d18b' : avg >= 70 ? '#f0a500' : '#f85149';
-    const now = Date.now() / 1000, win = 1440 * 60;
-    const xOf = ts => (ts - (now - win)) / win * W;
-    const yOf = pct => H - (Math.min(100, Math.max(0, pct)) / 100) * H;
-    ctx.beginPath();
-    pts.forEach((p, i) => {
-      const x = xOf(p.ts + 1800), y = yOf(p.pct);
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
-    // Only show the canvas (and its label) after it has content
+    canvas.width = canvas.offsetWidth || 160;
+    _hbRenderSpk(canvas, false);
     canvas.style.display = '';
+    const sep = document.getElementById('hb-spark-sep');
     const lbl = document.getElementById('hb-spark-lbl');
+    if (sep) sep.style.display = '';
     if (lbl) lbl.style.display = '';
-  } catch (e) { /* non-critical */ }
+    _hbUpdateTrendArrow();
+  } catch {}
+}
+
+// Core sparkline renderer — works for both mini (top bar) and expanded panel
+function _hbRenderSpk(canvas, expanded) {
+  const W   = canvas.width;
+  const H   = canvas.height || (expanded ? 120 : 22);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const pts = _hbSparkData;
+  if (pts.length < 2) return;
+  const rangeMin = _hbSparkRange === '1h' ? 60 : _hbSparkRange === '6h' ? 360 : 1440;
+  const win  = rangeMin * 60;
+  const now  = Date.now() / 1000;
+  const t0   = now - win;
+  const pad  = expanded ? 6 : 2;
+  const xOf  = ts  => Math.max(0, Math.min(W, (ts + 900 - t0) / win * W));
+  const yOf  = pct => pad + (1 - Math.min(100, Math.max(0, pct)) / 100) * (H - pad * 2);
+  const coords = pts.map(p => ({ x: xOf(p.ts), y: yOf(p.pct), pct: p.pct, ts: p.ts }));
+
+  // Vertical gradient: green (top/100%) → yellow → red (bottom/0%)
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0,   '#23d18b');
+  grad.addColorStop(0.2, '#23d18b');
+  grad.addColorStop(0.5, '#f0a500');
+  grad.addColorStop(1,   '#f85149');
+
+  // Subtle fill under line
+  const fillGrad = ctx.createLinearGradient(0, 0, 0, H);
+  fillGrad.addColorStop(0,   'rgba(35,209,139,0.13)');
+  fillGrad.addColorStop(0.5, 'rgba(240,165,0,0.06)');
+  fillGrad.addColorStop(1,   'rgba(248,81,73,0.03)');
+  ctx.beginPath();
+  ctx.moveTo(coords[0].x, H);
+  coords.forEach(c => ctx.lineTo(c.x, c.y));
+  ctx.lineTo(coords[coords.length - 1].x, H);
+  ctx.closePath();
+  ctx.fillStyle = fillGrad;
+  ctx.fill();
+
+  // Smooth bezier line
+  ctx.beginPath();
+  ctx.moveTo(coords[0].x, coords[0].y);
+  for (let i = 1; i < coords.length; i++) {
+    const p = coords[i - 1], c = coords[i], mx = (p.x + c.x) / 2;
+    ctx.bezierCurveTo(mx, p.y, mx, c.y, c.x, c.y);
+  }
+  ctx.strokeStyle = grad;
+  ctx.lineWidth   = expanded ? 2 : 1.5;
+  ctx.lineJoin    = 'round';
+  ctx.stroke();
+
+  // Event indicator dots (bottom edge)
+  _hbSparkEvents.forEach(ev => {
+    const x = xOf(ev.ts);
+    if (x < 2 || x > W - 2) return;
+    const dotY = H - (expanded ? 5 : 3);
+    ctx.beginPath();
+    ctx.arc(x, dotY, expanded ? 3 : 2, 0, Math.PI * 2);
+    ctx.fillStyle = ev.type === 'outage' ? 'rgba(248,81,73,0.85)' : 'rgba(240,165,0,0.85)';
+    ctx.fill();
+  });
+
+  // Live pulse dot on latest point
+  if (coords.length) {
+    const last = coords[coords.length - 1];
+    const pc   = last.pct >= 95 ? '#23d18b' : last.pct >= 80 ? '#f0a500' : '#f85149';
+    const pcA  = last.pct >= 95 ? 'rgba(35,209,139,0.2)' : last.pct >= 80 ? 'rgba(240,165,0,0.2)' : 'rgba(248,81,73,0.2)';
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, expanded ? 6 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = pcA;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, expanded ? 2.5 : 2, 0, Math.PI * 2);
+    ctx.fillStyle = pc;
+    ctx.fill();
+  }
+}
+
+function _hbUpdateTrendArrow() {
+  const el = document.getElementById('hb-trend-arrow');
+  if (!el || _hbSparkData.length < 4) { if (el) el.style.display = 'none'; return; }
+  const tail  = _hbSparkData.slice(-4);
+  const delta = tail[tail.length - 1].pct - tail[0].pct;
+  let arrow = '→', color = 'var(--text3)';
+  if (delta >= 3)  { arrow = '↑'; color = 'var(--up)'; }
+  if (delta <= -3) { arrow = '↓'; color = 'var(--down)'; }
+  el.textContent = arrow;
+  el.style.color  = color;
+  el.style.display = '';
+}
+
+function _hbSetupSparkInteractions() {
+  const canvas = document.getElementById('hb-spark');
+  if (!canvas || canvas._hbReady) return;
+  canvas._hbReady = true;
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    const W    = canvas.offsetWidth || 160;
+    const rangeMin = _hbSparkRange === '1h' ? 60 : _hbSparkRange === '6h' ? 360 : 1440;
+    const win  = rangeMin * 60, now = Date.now() / 1000, t0 = now - win;
+    let best = null, bestD = Infinity;
+    _hbSparkData.forEach(p => {
+      const x = (p.ts + 900 - t0) / win * W;
+      const d = Math.abs(x - mx);
+      if (d < bestD) { bestD = d; best = p; }
+    });
+    if (!best) return;
+    const tot = Object.values(S.devices).length;
+    const up  = Math.round(best.pct / 100 * tot);
+    const dt  = new Date(best.ts * 1000);
+    const t   = `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+    _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t);
+  });
+  canvas.addEventListener('mouseleave', _hbSpkTipHide);
+  canvas.addEventListener('click', () => { _hbSpkTipHide(); _hbOpenExpanded(); });
+}
+
+function _hbSpkTip(cx, cy, pct, up, down, time) {
+  let tip = document.getElementById('hb-spk-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'hb-spk-tip';
+    tip.className = 'hb-spk-tip';
+    document.body.appendChild(tip);
+  }
+  const col = pct >= 95 ? 'var(--up)' : pct >= 80 ? 'var(--warn)' : 'var(--down)';
+  tip.innerHTML =
+    `<div class="hb-tip-time">${time}</div>` +
+    `<div class="hb-tip-pct" style="color:${col}">${Math.round(pct)}%</div>` +
+    `<div class="hb-tip-row"><span style="color:var(--up)">▲</span> ${up} up</div>` +
+    (down ? `<div class="hb-tip-row"><span style="color:var(--down)">▼</span> ${down} down</div>` : '');
+  tip.style.display = '';
+  const tw = 94;
+  let left = cx - tw / 2, top = cy - 82;
+  if (left < 4) left = 4;
+  if (left + tw > innerWidth - 4) left = innerWidth - tw - 4;
+  if (top < 4) top = cy + 12;
+  tip.style.left = left + 'px';
+  tip.style.top  = top  + 'px';
+}
+function _hbSpkTipHide() {
+  const tip = document.getElementById('hb-spk-tip');
+  if (tip) tip.style.display = 'none';
+}
+
+function _hbOpenExpanded() {
+  document.getElementById('hb-exp-panel')?.remove();
+  const ranges   = ['1h', '6h', '24h'];
+  const rangeBtns = ranges.map(r =>
+    `<button class="hb-exp-rbtn${r === _hbSparkRange ? ' active' : ''}" onclick="_hbExpRange('${r}')">${r}</button>`
+  ).join('');
+  const panel = document.createElement('div');
+  panel.id    = 'hb-exp-panel';
+  panel.className = 'hb-exp-panel';
+  panel.innerHTML = `
+    <div class="hb-exp-hdr">
+      <span class="hb-exp-title">System Health Trend</span>
+      <div class="hb-exp-ranges">${rangeBtns}</div>
+      <button class="hb-exp-close" onclick="document.getElementById('hb-exp-panel').remove()">✕</button>
+    </div>
+    <canvas id="hb-exp-canvas" class="hb-exp-canvas"></canvas>
+    <div class="hb-exp-footer">
+      <div class="hb-exp-stats" id="hb-exp-stats"></div>
+      <div class="hb-exp-evlist" id="hb-exp-evlist"></div>
+    </div>`;
+  document.body.appendChild(panel);
+  const closeOut = e => {
+    if (!panel.contains(e.target) && e.target.id !== 'hb-spark') {
+      panel.remove();
+      document.removeEventListener('mousedown', closeOut);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeOut), 0);
+  requestAnimationFrame(_hbRenderExpanded);
+}
+
+function _hbExpRange(range) {
+  _hbSparkRange = range;
+  document.querySelectorAll('.hb-exp-rbtn').forEach(b => b.classList.toggle('active', b.textContent === range));
+  _hbSparkLoaded = false;
+  _hbDrawSpark().then(() => _hbRenderExpanded());
+}
+
+function _hbRenderExpanded() {
+  const canvas = document.getElementById('hb-exp-canvas');
+  if (!canvas) return;
+  canvas.width  = canvas.offsetWidth || 460;
+  canvas.height = 120;
+  if (!_hbSparkData.length) {
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+  _hbRenderSpk(canvas, true);
+  const stats = document.getElementById('hb-exp-stats');
+  if (stats) {
+    const avg  = _hbSparkData.reduce((s, p) => s + p.pct, 0) / _hbSparkData.length;
+    const low  = Math.min(..._hbSparkData.map(p => p.pct));
+    const lowC = low < 80 ? 'var(--down)' : low < 95 ? 'var(--warn)' : 'var(--up)';
+    stats.innerHTML =
+      `<span class="hb-exp-stat">Avg <strong>${Math.round(avg)}%</strong></span>` +
+      `<span class="hb-exp-stat">Low <strong style="color:${lowC}">${Math.round(low)}%</strong></span>` +
+      `<span class="hb-exp-stat">Incidents <strong>${_hbSparkEvents.length}</strong></span>`;
+  }
+  const evlist = document.getElementById('hb-exp-evlist');
+  if (evlist) {
+    if (!_hbSparkEvents.length) {
+      evlist.innerHTML = '<span class="hb-exp-ev-ok">✓ No incidents</span>';
+    } else {
+      evlist.innerHTML = _hbSparkEvents.slice(-6).reverse().map(ev => {
+        const dt = new Date(ev.ts * 1000);
+        const t  = `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+        const ic = ev.type === 'outage' ? '↓' : '⚠';
+        const c  = ev.type === 'outage' ? 'var(--down)' : 'var(--warn)';
+        return `<span class="hb-exp-ev"><span style="color:${c};font-weight:700">${ic}</span> ${t} ${esc(ev.label)}</span>`;
+      }).join('');
+    }
+  }
 }
 
 // ── Events / Flap log ────────────────────────────────────────────
@@ -381,7 +671,7 @@ function _flapKey(d){
   // Unique key: device+sensor+timestamp+direction (covers both flaps and traps)
   return (d.did||d.src_ip||'')+'|'+(d.sid||d.trap_oid||'')+'|'+(d.ts||'')+'|'+(d._direction||d.direction||'');
 }
-let activeMainTab=(()=>{try{return localStorage.getItem('pw_tab')||'devices';}catch{return 'devices';}})();
+let activeMainTab=(()=>{try{const t=localStorage.getItem('pw_tab')||'devices';return t==='alerting'?'events':t;}catch{return 'devices';}})();
 // Apply correct tab button immediately — synchronous, no network request needed
 document.getElementById('tab'+activeMainTab[0].toUpperCase()+activeMainTab.slice(1))?.classList.add('active');
 
@@ -392,8 +682,7 @@ function pushFlap(d){
   renderFlaps();
   if(activeMainTab!=='events'){
     unseenFlaps++;
-    const badge=document.getElementById('evtBadge');
-    if(badge){ badge.style.display=''; badge.textContent=unseenFlaps; }
+    _updateEvtBadge();
   }
   flashDownPill();
 }
@@ -406,8 +695,7 @@ function pushThresholdEvent(d, level){
   renderFlaps();
   if(activeMainTab!=='events'){
     unseenFlaps++;
-    const badge=document.getElementById('evtBadge');
-    if(badge){badge.style.display='';badge.textContent=unseenFlaps;}
+    _updateEvtBadge();
   }
 }
 
@@ -433,6 +721,8 @@ function renderFlaps(){
       const isCrit=d._thr_level==='crit';
       dotStyle=isCrit?'background:#e74c3c':'background:#f39c12';
       label=isCrit?'CRIT':'WARN';
+    } else if(d._direction==='threshold_ok'){
+      dotStyle='background:var(--up);box-shadow:0 0 6px rgba(35,209,139,.8)'; label='THR OK';
     } else if(d._direction==='trap'){
       dotStyle='background:#8e44ad;box-shadow:0 0 6px rgba(142,68,173,.8)'; label='TRAP';
     }
@@ -456,7 +746,27 @@ function renderFlaps(){
   });
 }
 
+async function _refreshFlapList(){
+  try{
+    const fd=await fetch('/api/flaps').then(r=>r.json());
+    const byKey={};
+    (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
+      else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
+      else f._direction=f.direction||'down';
+      byKey[_flapKey(f)]=f;
+    });
+    for(let i=0;i<FLAPS.length;i++){
+      const k=_flapKey(FLAPS[i]);
+      if(byKey[k]) Object.assign(FLAPS[i],{id:byKey[k].id,ack_state:byKey[k].ack_state});
+    }
+    renderFlaps();
+  }catch(_){}
+}
+
 function switchMainTab(tab){
+  if(tab==='alerting') tab='events';
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
   document.getElementById('tabDashboard').classList.toggle('active',tab==='dashboard');
@@ -495,10 +805,10 @@ function switchMainTab(tab){
     emptyMain.style.display='none';
     dpanels.style.display='none';
     unseenFlaps=0;
-    const badge=document.getElementById('evtBadge');
-    if(badge) badge.style.display='none';
+    _updateEvtBadge();
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshEvents();
+    if(typeof _evtSubTab==='function') _evtSubTab(_evtActiveSubTab);
   } else if(tab==='map'){
     emptyMain.style.display='none';
     dpanels.style.display='none';
@@ -554,8 +864,14 @@ async function _refreshEvents(){
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
     ]);
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
-    (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
+    (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
+      else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
+      else f._direction=f.direction||'down';
+      const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
+    });
+    (td.traps||[]).forEach(t=>{ t._direction='trap'; const k=_flapKey(t); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(t);} });
     FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));
     renderFlaps();
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
@@ -649,12 +965,18 @@ async function loadAll(){
   try {
     const fr=await fetch('/api/flaps');
     const fd=await fr.json();
-    (fd.flaps||[]).forEach(f=>{ f._direction=f.direction||'down'; _FLAP_SEEN.add(_flapKey(f)); FLAPS.push(f); });
+    (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
+      else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
+      else f._direction=f.direction||'down';
+      const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
+    });
   } catch(e){}
   try {
     const tr=await fetch('/api/traps');
     const td=await tr.json();
-    (td.traps||[]).forEach(t=>{ t._direction='trap'; _FLAP_SEEN.add(_flapKey(t)); FLAPS.push(t); });
+    (td.traps||[]).forEach(t=>{ t._direction='trap'; const k=_flapKey(t); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(t);} });
   } catch(e){}
   // Sort combined list newest-first and cap size
   FLAPS.sort((a,b)=>new Date(b.ts)-new Date(a.ts));

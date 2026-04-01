@@ -59,3 +59,24 @@ _RE_IPAM_SUBNET     = re.compile(r'^/api/ipam/subnets/(\d+)$')
 _RE_IPAM_SUBNET_IPS = re.compile(r'^/api/ipam/subnets/(\d+)/ips$')
 _RE_IPAM_SUBNET_DNS = re.compile(r'^/api/ipam/subnets/(\d+)/dns/refresh$')
 _RE_IPAM_IP         = re.compile(r'^/api/ipam/ips/(\d+)/([^/]+)$')
+# Alert rules engine
+_RE_ALERT_RULES     = re.compile(r'^/api/alert/rules$')
+_RE_ALERT_RULE_NEW  = re.compile(r'^/api/alert/rule$')
+_RE_ALERT_RULE      = re.compile(r'^/api/alert/rule/(\d+)$')
+_RE_ALERT_RULE_ACT  = re.compile(r'^/api/alert/rule/(\d+)/(toggle|test)$')
+# Alert events
+_RE_ALERT_EVENTS        = re.compile(r'^/api/alert/events$')
+_RE_ALERT_EVENTS_ACTIVE = re.compile(r'^/api/alert/events/active$')
+_RE_ALERT_EVENT         = re.compile(r'^/api/alert/event/(\d+)$')
+_RE_ALERT_EVENT_ACT     = re.compile(r'^/api/alert/event/(\d+)/(ack|resolve)$')
+# Maintenance windows
+_RE_ALERT_WINDOWS   = re.compile(r'^/api/alert/windows$')
+_RE_ALERT_WINDOW    = re.compile(r'^/api/alert/window/(\d+)$')
+# User groups
+_RE_GROUPS          = re.compile(r'^/api/user/groups$')
+_RE_GROUP           = re.compile(r'^/api/user/group$')
+_RE_GROUP_ITEM      = re.compile(r'^/api/user/group/(\d+)$')
+_RE_GROUP_MEMBERS   = re.compile(r'^/api/user/group/(\d+)/members$')
+# User profiles
+_RE_ME_PROFILE      = re.compile(r'^/api/me/profile$')
+_RE_USER_PROFILE    = re.compile(r'^/api/users/([^/]+)/profile$')

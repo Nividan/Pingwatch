@@ -592,7 +592,7 @@ function _bkRenderDiffModal(runA, runB, diff, deviceName) {
       <div class="bk-diff-wrap" style="flex:1" id="bk-diff-body">${diffHtml}</div>
       ${rollback.length ? `
       <details class="bk-rollback" id="bk-rollback-details">
-        <summary id="bk-rollback-summary">⚠ Rollback Command Preview (${rollback.length} commands)</summary>
+        <summary id="bk-rollback-summary">⚠ Rollback Command Preview (${rollback.cmdCount ?? rollback.length} commands)</summary>
         <div class="bk-rollback-warn" id="bk-rollback-warn">${_bkRollbackWarn(vendor)}</div>
         <pre class="bk-cfg-pre" id="bk-rollback-pre">${esc(rollback.join('\n'))}</pre>
         <div style="padding:6px 14px 10px"><button class="btn-sm" onclick="_bkCopyRollback()">📋 Copy Commands</button></div>
@@ -634,15 +634,64 @@ function _bkRollbackWarn(vendor) {
 // ── Rollback command generator ────────────────────────────────────
 function _bkGenerateRollback(diff, vendor = 'ios') {
   if (vendor === 'fortigate') return _bkGenerateRollbackFortigate(diff);
-  // IOS-style: negate added lines with `no`, restore deleted lines as-is
-  const cmds = [];
+
+  // IOS / IOS-XE / NX-OS / ASA / Arista EOS:
+  // Walk diff tracking the current block-header (last non-indented `eq` line).
+  // Rollback commands are grouped under their enclosing block so the output
+  // includes the context line (e.g. "interface Ethernet1/8"), the negations,
+  // then "end" + save command ready to paste.
+  const GLOBAL = '\x00';
+  let currentCtx = GLOBAL;
+  const groups = new Map(); // context_line → [rollback_cmds]  (insertion-ordered)
+
   for (const {type, line} of diff) {
     const t = line.trim();
     if (!t || t.startsWith('!') || t.startsWith('#')) continue;
-    if (type === 'del') cmds.push(t);
-    else if (type === 'add') cmds.push(t.startsWith('no ') ? t.slice(3) : `no ${t}`);
+
+    const indented = line[0] === ' ' || line[0] === '\t';
+
+    if (type === 'eq') {
+      // Non-indented unchanged lines establish the current block context
+      if (!indented) currentCtx = t;
+      continue;
+    }
+
+    // Compute the rollback command: negate added lines, restore deleted lines
+    const rollCmd = type === 'del' ? t : (t.startsWith('no ') ? t.slice(3) : `no ${t}`);
+
+    // Indented changed lines belong to the current block; non-indented are global
+    const ctx = indented ? currentCtx : GLOBAL;
+    if (!groups.has(ctx)) groups.set(ctx, []);
+    groups.get(ctx).push(rollCmd);
   }
-  return cmds;
+
+  // Semantic count: rollback commands only (not context headers / end / wr)
+  let cmdCount = 0;
+  for (const cmds of groups.values()) cmdCount += cmds.length;
+
+  // Build output — context header first, then the rollback commands beneath it
+  const out = [];
+  for (const [ctx, cmds] of groups) {
+    if (ctx !== GLOBAL) out.push(ctx);
+    out.push(...cmds);
+  }
+
+  // Append vendor-appropriate epilog
+  if (out.length) {
+    if (vendor === 'cisco-asa') {
+      out.push('end');
+      out.push('write mem');
+    } else if (vendor === 'ios' || vendor === 'arista') {
+      out.push('end');
+      out.push('wr');
+    } else if (vendor === 'junos') {
+      out.push('commit');
+    }
+    // mikrotik / panos / unknown: no epilog — syntax differs too much
+  }
+
+  out.cmdCount = cmdCount; // used for the "N commands" summary label
+  return out;
 }
 
 // FortiGate-aware rollback: tracks config/edit context blocks and emits
@@ -808,7 +857,7 @@ function _bkToggleEncNoise() {
   const summary  = document.getElementById('bk-rollback-summary');
   const details  = document.getElementById('bk-rollback-details');
   if (pre) pre.textContent = rollback.join('\n');
-  if (summary) summary.textContent = `⚠ Rollback Command Preview (${rollback.length} commands)`;
+  if (summary) summary.textContent = `⚠ Rollback Command Preview (${rollback.cmdCount ?? rollback.length} commands)`;
   if (details) details.style.display = rollback.length ? '' : 'none';
 
   // Reset search state

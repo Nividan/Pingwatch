@@ -12,7 +12,7 @@ import time
 
 import core.app_state as app_state
 from core.config import DB_PATH, LOGS_DB_PATH
-from db import db_load_flaps, db_load_traps
+from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap
 from core.logger import log
 
 
@@ -27,7 +27,6 @@ def handle(h, method, path, body):
         h.send_header("Content-Type", "text/event-stream")
         h.send_header("Cache-Control", "no-cache")
         h.send_header("Connection", "keep-alive")
-        h.send_header("Access-Control-Allow-Origin", "*")
         h.end_headers()
         q = STATE.subscribe()
         try:
@@ -107,7 +106,7 @@ def handle(h, method, path, body):
                 result[label] = {
                     "down":      counts.get("down", 0),
                     "recovered": counts.get("recovered", 0),
-                    "threshold": counts.get("threshold", 0),
+                    "threshold": counts.get("threshold_crit", 0) + counts.get("threshold_warn", 0) + counts.get("threshold_ok", 0),
                     "trap":      trap_row[0] if trap_row else 0,
                 }
             h._json(200, {"summary": result})
@@ -116,6 +115,46 @@ def handle(h, method, path, body):
             h._json(500, {"error": str(e)})
         finally:
             if con: con.close()
+        return True
+
+    # ── /api/health/trend GET ────────────────────────────────────
+    if path == "/api/health/trend" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from urllib.parse import parse_qs, urlparse as _urlparse
+        from db import db_load_availability
+        qs          = parse_qs(_urlparse(h.path).query)
+        range_param = qs.get("range", ["24h"])[0]
+        minutes     = {"1h": 60, "6h": 360, "24h": 1440}.get(range_param, 1440)
+        pts         = db_load_availability(minutes)
+        cutoff      = datetime.datetime.utcfromtimestamp(
+            time.time() - minutes * 60).strftime("%Y-%m-%dT%H:%M:%SZ")
+        events = []
+        con = None
+        try:
+            con = sqlite3.connect(LOGS_DB_PATH)
+            rows = con.execute(
+                "SELECT ts, direction, dname, sname FROM flap_log "
+                "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
+                (cutoff,)
+            ).fetchall()
+            for ts_str, direction, dname, sname in rows:
+                try:
+                    dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+                    epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
+                except Exception:
+                    continue
+                label = " / ".join(x for x in [dname, sname] if x)
+                events.append({
+                    "ts":    epoch,
+                    "type":  "outage" if direction == "down" else "alert",
+                    "label": label,
+                })
+        except Exception as e:
+            log.error(f"health/trend events error: {e}")
+        finally:
+            if con: con.close()
+        h._json(200, {"points": pts, "events": events, "range": range_param})
         return True
 
     # ── /api/snmp/catalog GET ─────────────────────────────────────
@@ -140,6 +179,31 @@ def handle(h, method, path, body):
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
         h._json(200, {"interfaces": _ifaces})
+        return True
+
+    # ── /api/flaps/<id>/ack POST ──────────────────────────────────
+    if method == "POST" and path.startswith("/api/flaps/") and path.endswith("/ack"):
+        user, _ = h._require("operator")
+        if not user: return True
+        try:
+            flap_id = int(path.split("/")[3])
+        except (IndexError, ValueError):
+            h._json(400, {"error": "invalid id"}); return True
+        actor = user or ""
+        ok = db_ack_flap(flap_id, actor)
+        h._json(200, {"ok": ok})
+        return True
+
+    # ── /api/flaps/<id>/resolve POST ──────────────────────────────
+    if method == "POST" and path.startswith("/api/flaps/") and path.endswith("/resolve"):
+        user, _ = h._require("operator")
+        if not user: return True
+        try:
+            flap_id = int(path.split("/")[3])
+        except (IndexError, ValueError):
+            h._json(400, {"error": "invalid id"}); return True
+        ok = db_resolve_flap(flap_id)
+        h._json(200, {"ok": ok})
         return True
 
     return False

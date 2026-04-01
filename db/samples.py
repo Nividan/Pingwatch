@@ -75,7 +75,7 @@ def db_clean_samples(retention_days=365):
     con = None
     try:
         cutoff = time.time() - retention_days * 86400
-        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
         con.execute("DELETE FROM sensor_samples WHERE ts < ?", (cutoff,))
         # Row-count cap: keep newest 10M rows (~600 MB) regardless of probe rate
         total = con.execute("SELECT COUNT(*) FROM sensor_samples").fetchone()[0]
@@ -86,6 +86,10 @@ def db_clean_samples(retention_days=365):
                 (total - 10_000_000,)
             )
         con.commit()
+        # VACUUM inside the same connection (serialised via _logs_enqueue caller)
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.execute("VACUUM")
+        log.debug("DB vacuum complete")
     except Exception as e:
         log.error(f"DB clean samples error: {e}")
         if "malformed" in str(e).lower():
@@ -94,25 +98,9 @@ def db_clean_samples(retention_days=365):
                 "Stop PingWatch, run: sqlite3 pingwatch_logs.db 'PRAGMA integrity_check' "
                 "to assess damage, or delete pingwatch_logs.db to start fresh."
             )
-            # Force WAL checkpoint to release any pending WAL locks
-            try:
-                if con:
-                    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except Exception:
-                pass
     finally:
         if con:
             con.close()
-
-    # Reclaim free pages left by the DELETE (must be outside any transaction)
-    try:
-        vac = sqlite3.connect(LOGS_DB_PATH, timeout=30)
-        vac.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        vac.execute("VACUUM")
-        vac.close()
-        log.debug("DB vacuum complete")
-    except Exception as e:
-        log.warning("DB vacuum error: %s", e)
 
 
 def db_load_availability(minutes: int = 1440):

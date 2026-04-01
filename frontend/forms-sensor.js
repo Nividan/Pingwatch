@@ -6,7 +6,16 @@ const PORT_CHIPS = [['HTTP','80'],['HTTPS','443'],['SSH','22'],['FTP','21'],['DN
 
 // Render the shared sensor fields HTML (used by both Add and Edit)
 function sensorFormHTML(dev, s=null) {
-  const defHost = s?.host || dev?.host || '';
+  const defHost   = s?.host || '';
+  const devHost   = dev?.host || '';
+  const hostHint  = devHost ? `leave blank — uses device (${esc(devHost)})` : 'e.g. 192.168.1.1';
+  // Link indicator shown when editing — tells user whether host is linked to the device
+  const isLinked  = s ? !s.host_override : null;
+  const hostStatusHtml = (s && devHost)
+    ? (isLinked
+        ? `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`
+        : `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`)
+    : '';
   const curType = s?.stype || 'ping';
   return `
   <div class="fr">
@@ -45,7 +54,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='ping'?'vis':''}" id="fg-ping">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-ph" value="${esc(defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-ph" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Timeout (s)</label>
         <input type="number" id="as-pto" value="${s?.timeout||4}" min="1" max="30"/></div>
     </div>
@@ -54,7 +64,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='tcp'?'vis':''}" id="fg-tcp">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-th" value="${esc(defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-th" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Port Number</label>
         <input type="number" id="as-tp" value="${s?.port||''}" placeholder="80" min="1" max="65535"/></div>
     </div>
@@ -86,7 +97,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='snmp'?'vis':''}" id="fg-snmp">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-sh" value="${esc(defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-sh" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">UDP Port</label>
         <input type="number" id="as-sp" value="${s?.port||161}" min="1" max="65535"/></div>
     </div>
@@ -121,6 +133,7 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr"><label class="fl">OID</label>
       <input type="text" id="as-oid" value="${esc(s?.snmp_oid||'1.3.6.1.2.1.1.1.0')}" placeholder="1.3.6.1.2.1.1.1.0" autocomplete="off"/>
+      <input type="hidden" id="as-snmp-unit" value="${esc(s?.snmp_unit||'')}"/>
       <div class="fh" id="as-oid-unit2" style="min-height:14px">Type or paste an OID, choose from picker above, or use Discover Interfaces.</div>
     </div>
   </div>
@@ -151,7 +164,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='tls'?'vis':''}" id="fg-tls">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host</label>
-        <input type="text" id="as-tlsh" value="${esc(s?.host||defHost)}" placeholder="example.com" autocomplete="off"/></div>
+        <input type="text" id="as-tlsh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-tlsp" value="${s?.port||443}" min="1" max="65535"/></div>
     </div>
@@ -181,7 +195,8 @@ function sensorFormHTML(dev, s=null) {
   <div class="fg ${curType==='banner'?'vis':''}" id="fg-banner">
     <div class="fgrid">
       <div class="fr"><label class="fl">Host</label>
-        <input type="text" id="as-bnh" value="${esc(s?.host||defHost)}" autocomplete="off"/></div>
+        <input type="text" id="as-bnh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-bnp" value="${s?.port||21}" min="1" max="65535"/></div>
     </div>
@@ -204,14 +219,24 @@ function sensorFormHTML(dev, s=null) {
           <div class="fh">Consecutive successes before RECOVERED</div>
         </div>
       </div>
-      <div class="fgrid">
-        <div class="fr"><label class="fl">${curType==='tls'?'Warn Days (cert expiry)':curType==='snmp'?'Warn Value':'Warn Latency (ms)'}</label>
-          <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200'}" min="1" style="max-width:100px"/>
+      ${(()=>{
+        const _su=s?.snmp_unit||'';
+        const _isStr=curType==='snmp'&&_su==='string';
+        if(_isStr) return`<div class="fgrid"><div class="fr"><div class="fh" style="color:var(--text3)">String OID — no numeric threshold</div></div></div>`;
+        const _wLbl=curType==='tls'?'Warn Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,true)||'Warn Value'):'Warn Latency (ms)';
+        const _cLbl=curType==='tls'?'Crit Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,false)||'Crit Value'):'Crit Latency (ms)';
+        const _ph=_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200';
+        const _phc=_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 200':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500';
+        const _cur=curType==='snmp'&&s?.last_value!=null?`<div class="fh" style="margin-top:2px">Current: <strong>${esc(String(s.last_value))}</strong></div>`:'';
+        return`<div class="fgrid">
+        <div class="fr"><label class="fl">${_wLbl}</label>
+          <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${_ph}" min="1" style="max-width:100px"/>
         </div>
-        <div class="fr"><label class="fl">${curType==='tls'?'Crit Days (cert expiry)':curType==='snmp'?'Crit Value':'Crit Latency (ms)'}</label>
-          <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500'}" min="1" style="max-width:100px"/>
-        </div>
-      </div>
+        <div class="fr"><label class="fl">${_cLbl}</label>
+          <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${_phc}" min="1" style="max-width:100px"/>
+          ${_cur}
+        </div></div>`;
+      })()}
       <div class="fgrid">
         <div class="fr"><label class="fl">Warn Loss %</label>
           <input type="number" id="as-lwp" value="${s?.loss_warn_pct||0}" min="0" max="100" style="max-width:100px"/>
@@ -388,6 +413,32 @@ async function _snmpLoadVendors(){
   }catch(e){}
 }
 
+// Normalize metric u-field to canonical snmp_unit value stored in DB
+function _normSnmpUnit(u){
+  if(!u) return '';
+  if(u.startsWith('bytes')) return 'bytes';   // "bytes (32-bit)", "bytes (64-bit)" → "bytes"
+  return u;
+}
+
+// Map snmp_unit to a human-readable threshold label prefix
+function _snmpThrLabel(unit, isWarn){
+  const p=isWarn?'Warn':'Crit';
+  if(unit==='bytes')    return `${p} (Mbps)`;
+  if(unit==='errors')   return `${p} (err/s)`;
+  if(unit==='packets')  return `${p} (pkt/s)`;
+  if(unit==='%')        return `${p} (%)`;
+  if(unit==='count')    return `${p} (count)`;
+  if(unit==='°C')       return `${p} (°C)`;
+  if(unit==='MB')       return `${p} (MB)`;
+  if(unit==='KB')       return `${p} (KB)`;
+  if(unit==='seconds')  return `${p} (sec)`;
+  if(unit==='bits/sec') return `${p} (Mbps)`;
+  if(unit==='sess/sec') return `${p} (sess/s)`;
+  if(unit==='conn/sec') return `${p} (conn/s)`;
+  if(unit&&unit.startsWith('1=')) return `${p} (≥ val)`;
+  return null;  // caller uses type-based fallback
+}
+
 function snmpVendorChange(){
   const vendor=document.getElementById('as-oid-vendor')?.value;
   const psel=document.getElementById('as-oid-pick');
@@ -412,17 +463,21 @@ function snmpOidPick(){
   const psel=document.getElementById('as-oid-pick');
   const oidEl=document.getElementById('as-oid');
   const unitEl=document.getElementById('as-oid-unit');
+  const sunitEl=document.getElementById('as-snmp-unit');
   if(!psel||!oidEl) return;
   const sel=psel.options[psel.selectedIndex];
   if(sel&&sel.value){
     oidEl.value=sel.value;
-    if(unitEl) unitEl.textContent=sel.dataset.unit?'Unit: '+sel.dataset.unit:'';
+    const u=sel.dataset.unit||'';
+    if(unitEl) unitEl.textContent=u?'Unit: '+u:'';
+    if(sunitEl) sunitEl.value=u;
   }
 }
 
 // ── SNMP Interface Discovery ──────────────────────────────────────────────
 async function discoverInterfaces(){
-  const host      = document.getElementById('as-sh')?.value.trim();
+  const did       = window._ifaceDid;
+  const host      = document.getElementById('as-sh')?.value.trim() || S.devices[did]?.host || '';
   const community = document.getElementById('as-sc')?.value.trim()||'public';
   const port      = parseInt(document.getElementById('as-sp')?.value)||161;
   const version   = document.getElementById('as-sv')?.value||'2c';
@@ -496,6 +551,7 @@ async function discoverInterfaces(){
     html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${esc(iface.speed)}</td>`;
     html+=`<td style="padding:4px 8px">
       <select class="as-iface-metric" data-idx="${iface.index}"
+              onchange="updateIfaceSelCount()"
               style="font-size:11px;padding:2px 4px;max-width:140px">
         <option value="">— metric —</option>${opts}
       </select>
@@ -519,11 +575,27 @@ function toggleAllIfaces(cb){
 
 function updateIfaceSelCount(){
   const cbs=[...document.querySelectorAll('.as-iface-cb')];
-  const n=cbs.filter(c=>c.checked).length;
+  const checked=cbs.filter(c=>c.checked);
+  const n=checked.length;
   const el=document.getElementById('as-iface-sel-count');
   if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
   const all=document.getElementById('as-iface-all');
   if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
+  // When exactly 1 interface+metric is selected, sync the OID and snmp_unit fields
+  const oidEl=document.getElementById('as-oid');
+  if(oidEl && n===1){
+    const cb=checked[0];
+    const idx=parseInt(cb.dataset.idx);
+    const sel=document.querySelector(`.as-iface-metric[data-idx="${cb.dataset.idx}"]`);
+    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel?.value);
+    if(metric && !isNaN(idx)){
+      oidEl.value=metric.oid+idx;
+      const unitEl=document.getElementById('as-oid-unit2');
+      if(unitEl) unitEl.textContent=metric.u?'Unit: '+metric.u:'';
+      const sunitEl=document.getElementById('as-snmp-unit');
+      if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+    }
+  }
 }
 
 async function addSelectedIfaceSensors(){
@@ -561,6 +633,7 @@ async function addSelectedIfaceSensors(){
     const r=await api('POST',`/api/device/${did}/sensor`,{
       name:row.name+' '+row.metric.l, type:'snmp', host, port,
       snmp_community:community, snmp_oid:row.metric.oid+row.idx, snmp_version:version,
+      snmp_unit:_normSnmpUnit(row.metric.u),
       interval:iv, timeout:tmo, verify_ssl:true, url:null,
       dns_query:'',dns_record_type:'A',dns_server:'',http_expected_status:0,
       fail_after,recover_after,warn_ms,crit_ms,
@@ -613,39 +686,41 @@ function collectSensorForm(did){
   const iv  =parseInt(document.getElementById('as-iv')?.value)||5;
   const tmo =parseInt(document.getElementById('as-tmo')?.value)||4;
   let host=null,port=null,url=null,verify_ssl=true,
-      snmp_community='public',snmp_oid='1.3.6.1.2.1.1.1.0',snmp_version='2c',
+      snmp_community='public',snmp_oid='1.3.6.1.2.1.1.1.0',snmp_version='2c',snmp_unit='',
       dns_query='',dns_record_type='A',dns_server='',http_expected_status=0,
       keyword='',keyword_case=false,banner_regex='';
+  const _devHost = S.devices[did]?.host || '';
   if(type==='ping'){
-    host=document.getElementById('as-ph')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-ph')?.value.trim()||'';
   } else if(type==='tcp'){
-    host=document.getElementById('as-th')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-th')?.value.trim()||'';
     port=parseInt(document.getElementById('as-tp')?.value);
     if(!port){toast('Port number required','err');return null;}
   } else if(type==='http'){
     url=document.getElementById('as-hu')?.value.trim();
     if(!url){toast('URL required','err');return null;}
-    host=S.devices[did]?.host;
+    host='';  // HTTP uses URL — host always inherited from device
     verify_ssl=document.getElementById('as-vssl')?.checked!==false;
     http_expected_status=parseInt(document.getElementById('as-xstatus')?.value)||0;
   } else if(type==='snmp'){
-    host=document.getElementById('as-sh')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-sh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-sp')?.value)||161;
     snmp_community=document.getElementById('as-sc')?.value.trim()||'public';
     snmp_oid=document.getElementById('as-oid')?.value.trim()||'1.3.6.1.2.1.1.1.0';
     snmp_version=document.getElementById('as-sv')?.value||'2c';
+    snmp_unit=document.getElementById('as-snmp-unit')?.value||'';
   } else if(type==='dns'){
-    dns_query=document.getElementById('as-dq')?.value.trim()||S.devices[did]?.host||'';
+    dns_query=document.getElementById('as-dq')?.value.trim()||_devHost||'';
     if(!dns_query){toast('Query hostname required','err');return null;}
     dns_record_type=document.getElementById('as-drt')?.value||'A';
     dns_server=document.getElementById('as-ds')?.value.trim()||'';
     port=parseInt(document.getElementById('as-dp')?.value)||53;
-    host=dns_server||S.devices[did]?.host||'';
+    host=dns_server||_devHost||'';
   } else if(type==='tls'){
-    host=(document.getElementById('as-tlsh')?.value.trim()||S.devices[did]?.host||'')
+    host=(document.getElementById('as-tlsh')?.value.trim()||'')
          .replace(/^https?:\/\//i,'').split('/')[0];
     port=parseInt(document.getElementById('as-tlsp')?.value)||443;
-    if(!host){toast('Host required','err');return null;}
+    if(!host && !_devHost){toast('Host required','err');return null;}
   } else if(type==='http_keyword'){
     url=document.getElementById('as-kwu')?.value.trim();
     if(!url){toast('URL required','err');return null;}
@@ -653,12 +728,12 @@ function collectSensorForm(did){
     if(!keyword){toast('Keyword required','err');return null;}
     verify_ssl=document.getElementById('as-kwssl')?.checked!==false;
     keyword_case=document.getElementById('as-kwcase')?.checked||false;
-    host=S.devices[did]?.host;
+    host='';  // HTTP KW uses URL — host always inherited from device
   } else if(type==='banner'){
-    host=document.getElementById('as-bnh')?.value.trim()||S.devices[did]?.host;
+    host=document.getElementById('as-bnh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-bnp')?.value)||21;
     banner_regex=document.getElementById('as-bnr')?.value.trim()||'';
-    if(!host){toast('Host required','err');return null;}
+    if(!host && !_devHost){toast('Host required','err');return null;}
   }
   const fail_after   =Math.max(1,parseInt(document.getElementById('as-fa')?.value)||1);
   const recover_after=Math.max(1,parseInt(document.getElementById('as-ra')?.value)||1);
@@ -669,7 +744,7 @@ function collectSensorForm(did){
   const alerts_muted =document.getElementById('as-am')?.checked||false;
   if(!name){toast('Sensor name required','err');return null;}
   return {type,name,host,port,url,interval:iv,timeout:tmo,
-          verify_ssl,snmp_community,snmp_oid,snmp_version,
+          verify_ssl,snmp_community,snmp_oid,snmp_version,snmp_unit,
           dns_query,dns_record_type,dns_server,http_expected_status,
           fail_after,recover_after,warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};

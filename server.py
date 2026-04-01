@@ -58,7 +58,7 @@ _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
-    "dashboard.js", "events.js", "backups.js", "ipam.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "alerting.js", "app.js",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
@@ -203,7 +203,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", 0))
             if n > self._MAX_BODY:
-                return {}
+                self.send_response(413)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
             return json.loads(self.rfile.read(n)) if n else {}
         except (ValueError, json.JSONDecodeError):
             return {}
@@ -262,8 +265,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -280,9 +283,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         body = self._body()
+        if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod):
+        from routes import ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -290,11 +294,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod
         p    = urlparse(self.path).path
         body = self._body()
+        if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_rules_mod, _maint_mod, _groups_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -302,9 +307,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology, settings, backups, ipam
+        from routes import topology, settings, backups, ipam, groups as _groups_mod
         p    = urlparse(self.path).path
         body = self._body()
+        if body is None: return
 
         if settings.handle(self, 'PUT', p, body):
             return
@@ -314,6 +320,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if ipam.handle(self, 'PUT', p, body):
             return
+        if _groups_mod.handle(self, 'PUT', p, body):
+            return
 
         self._json(404, {"error": "not found"})
 
@@ -322,8 +330,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam
-        for mod in (auth, devices, topology, backups, ipam):
+        from routes import ipam, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_rules_mod, _maint_mod, _groups_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -553,6 +561,8 @@ def main():
     log.info(f"SNMP trap receiver started on port {app_state.effective_snmp_port}")
     from backup.scheduler import start_scheduler
     start_scheduler()
+    from monitoring.alert_engine import alert_engine_start
+    alert_engine_start()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
@@ -622,6 +632,7 @@ def main():
     # ── Graceful shutdown ─────────────────────────────────────────
     log.info("Shutting down...")
     STATE.stop_all()
+    STATE._executor.shutdown(wait=False)
     db_save(STATE)
     log.info("Configuration saved.")
     server.shutdown()

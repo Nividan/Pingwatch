@@ -128,7 +128,10 @@ def db_init():
                     host      TEXT,
                     stype     TEXT,
                     detail    TEXT,
-                    direction TEXT DEFAULT 'down'
+                    direction TEXT DEFAULT 'down',
+                    ack_state TEXT DEFAULT 'active',
+                    ack_by    TEXT DEFAULT '',
+                    ack_at    REAL DEFAULT 0
                 )""")
             con.execute("""
                 CREATE TABLE IF NOT EXISTS sensor_err_log (
@@ -350,6 +353,18 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # host_override — sensor host was manually set (not inherited from device)
+        try:
+            con.execute("ALTER TABLE sensors ADD COLUMN host_override INTEGER DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
+        # snmp_unit — semantic unit for the OID (e.g. "bytes", "errors", "%", "count")
+        try:
+            con.execute("ALTER TABLE sensors ADD COLUMN snmp_unit TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass
         # alerts_muted — disable alerts per sensor / device
         for stmt in [
             "ALTER TABLE sensors ADD COLUMN alerts_muted INTEGER DEFAULT 0",
@@ -501,6 +516,93 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Migration: user profiles + groups (v0.8+)
+        for _col, _def in [
+            ("full_name", "TEXT DEFAULT ''"),
+            ("email",     "TEXT DEFAULT ''"),
+            ("group_id",  "INTEGER DEFAULT NULL"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
+        # ── Alert Rules Engine tables (v0.7.3+) ───────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT    NOT NULL,
+                enabled         INTEGER DEFAULT 1,
+                severity        TEXT    DEFAULT 'warning',
+                condition_logic TEXT    DEFAULT 'AND',
+                cooldown_s      INTEGER DEFAULT 300,
+                sort_order      INTEGER DEFAULT 0,
+                created_at      REAL    DEFAULT 0,
+                updated_at      REAL    DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rule_conditions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+                field      TEXT    NOT NULL,
+                op         TEXT    NOT NULL,
+                value      TEXT    NOT NULL DEFAULT '',
+                sort_order INTEGER DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rule_actions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+                atype      TEXT    NOT NULL,
+                config     TEXT    NOT NULL DEFAULT '{}',
+                sort_order INTEGER DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id      INTEGER DEFAULT 0,
+                rule_name    TEXT    DEFAULT '',
+                did          TEXT    DEFAULT '',
+                sid          TEXT    DEFAULT '',
+                dname        TEXT    DEFAULT '',
+                sname        TEXT    DEFAULT '',
+                severity     TEXT    DEFAULT '',
+                event_type   TEXT    DEFAULT '',
+                state        TEXT    DEFAULT 'active',
+                triggered_at REAL    DEFAULT 0,
+                resolved_at  REAL    DEFAULT 0,
+                ack_by       TEXT    DEFAULT '',
+                ack_at       REAL    DEFAULT 0,
+                detail       TEXT    DEFAULT '',
+                repeat_count INTEGER DEFAULT 1
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_dedup (
+                sig        TEXT    PRIMARY KEY,
+                last_fired REAL    DEFAULT 0,
+                fire_count INTEGER DEFAULT 1
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS maintenance_windows (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL,
+                scope_type  TEXT    DEFAULT 'all',
+                scope_value TEXT    DEFAULT '',
+                start_ts    REAL    NOT NULL,
+                end_ts      REAL    NOT NULL,
+                recurring   INTEGER DEFAULT 0,
+                recur_days  TEXT    DEFAULT '',
+                recur_start TEXT    DEFAULT '',
+                recur_end   TEXT    DEFAULT '',
+                created_by  TEXT    DEFAULT '',
+                created_at  REAL    DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS user_groups (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL UNIQUE,
+                description TEXT    DEFAULT ''
+            )""")
         con.commit()
     finally:
         con.close()
@@ -567,8 +669,22 @@ def logs_db_init():
                 host      TEXT,
                 stype     TEXT,
                 detail    TEXT,
-                direction TEXT DEFAULT 'down'
+                direction TEXT DEFAULT 'down',
+                ack_state TEXT DEFAULT 'active',
+                ack_by    TEXT DEFAULT '',
+                ack_at    REAL DEFAULT 0
             )""")
+        # Migration: add ack columns to existing flap_log tables
+        for _col, _def in [
+            ("ack_state", "TEXT DEFAULT 'active'"),
+            ("ack_by",    "TEXT DEFAULT ''"),
+            ("ack_at",    "REAL DEFAULT 0"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE flap_log ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_err_log (
                 id    INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,5 +1,5 @@
 """
-monitoring/syslog_client.py — Non-blocking syslog forwarding client.
+monitoring/syslog_client.py - Non-blocking syslog forwarding client.
 
 Sends PingWatch events (flap_down, flap_recovered, snmp_trap) as RFC 5424
 syslog messages to a configured remote server via UDP or TCP.
@@ -8,7 +8,7 @@ Design:
 - A single daemon queue thread dequeues and sends messages asynchronously.
 - The queue is bounded (500 entries); if full, messages are silently dropped
   so the monitor thread is never blocked.
-- Settings are re-read on every send — changes take effect without restart.
+- Settings are re-read on every send - changes take effect without restart.
 """
 
 import datetime
@@ -72,7 +72,7 @@ def _build_message(event_type: str, data: dict) -> str:
     if event_type == "flap_down":
         return (f"[DOWN] {data.get('dname', data.get('host', '?'))}/"
                 f"{data.get('sname', '?')} ({data.get('host', '?')}) "
-                f"— {data.get('detail', '')}")
+                f"- {data.get('detail', '')}")
     if event_type == "flap_recovered":
         return (f"[RECOVERED] {data.get('dname', data.get('host', '?'))}/"
                 f"{data.get('sname', '?')} ({data.get('host', '?')})")
@@ -81,7 +81,7 @@ def _build_message(event_type: str, data: dict) -> str:
         trap   = data.get("trap_name") or data.get("trap_oid", "")
         src    = data.get("dname") or data.get("src_ip", "?")
         return (f"[TRAP] {src} {vendor+' ' if vendor else ''}{trap} "
-                f"— {data.get('detail', '')}")
+                f"- {data.get('detail', '')}")
     return f"[{event_type.upper()}] {data.get('detail', '')}"
 
 
@@ -97,7 +97,7 @@ def _send_one(payload: bytes, host: str, port: int, proto: str):
 
 
 def _worker_loop():
-    """Daemon thread — dequeues and sends syslog messages."""
+    """Daemon thread - dequeues and sends syslog messages."""
     while True:
         try:
             payload, host, port, proto = _Q.get(timeout=5)
@@ -158,7 +158,7 @@ def syslog_send(event_type: str, data: dict) -> None:
         payload  = _format_rfc5424(pri, hostname, msg)
         _Q.put_nowait((payload, cfg["host"], cfg["port"], cfg["proto"]))
     except queue.Full:
-        pass   # drop silently — never block the caller
+        pass   # drop silently - never block the caller
     except Exception:
         pass   # never let syslog errors propagate
 
@@ -175,7 +175,7 @@ def send_test_syslog() -> tuple:
         pri      = _FACILITY * 8 + 6   # INFO
         hostname = socket.gethostname()
         payload  = _format_rfc5424(pri, hostname,
-                                   "PingWatch test message — syslog forwarding is working.")
+                                   "PingWatch test message - syslog forwarding is working.")
         _send_one(payload, cfg["host"], cfg["port"], cfg["proto"])
         return True, f"Test message sent to {cfg['host']}:{cfg['port']}/{cfg['proto'].upper()}"
     except Exception as e:

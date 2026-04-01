@@ -47,6 +47,25 @@
   - Username, role badge, green status dot
   - Settings shortcut, Change Password modal, Theme stub, Sign Out
   - Keyboard navigation, close on ESC / outside click
+  - Edit Profile shortcut (opens self-service name + email editor)
+- User profiles and groups
+  - `full_name` + `email` columns on every user account
+  - Self-service profile editor accessible from the user dropdown (any role)
+  - Admin can also set group assignment and role from Settings → Users
+  - `user_groups` table — named groups with description and member count
+  - Settings → Groups tab — create, edit, delete groups; assign members (one group per user)
+  - Users tab extended with Full Name / Email / Group columns and per-row Edit button
+- Advanced alerting rules engine
+  - Rules UI with name, severity, condition builder (AND/OR logic)
+  - Conditions: event type, sensor type, device group, threshold state, direction, packet loss %, severity
+  - Multiple actions per rule: email, webhook, syslog, browser push notification
+  - Email action targets user groups (resolved to member emails at dispatch) + optional extra raw addresses; backward-compatible with legacy `"to"` field
+  - Browser push notification action with configurable title, body template, and sound
+  - Collapsible action blocks in rule editor — pre-configured blocks start collapsed with a one-line summary
+  - Alert cooldown / deduplication (DB-persisted, survives restarts)
+  - Maintenance windows — suppresses alert dispatch for all/group/device scopes; recurring daily schedule supported
+  - Alert history tab with severity filter, acknowledge/resolve workflow
+  - Test-fire button per rule (dispatches all actions with synthetic context)
 - Settings → Sensors tab redesigned as compact table with expandable rows
 - Settings → Logs tab: improved fonts, structured rows, log-level colour coding
 - Home button — PingWatch logo navigates to Dashboard tab
@@ -58,22 +77,28 @@
   - Global config search — search across all stored configs from the backups toolbar
   - Rollback command preview — auto-generated from diff, copy to clipboard
   - Backup Status dashboard widget — OK / Failed / Never run / Enabled KPI counts
+  - Cisco rollback now includes enclosing interface/context block, `end`, and `wr`
+- SNMP improvements
+  - Interface discovery — walks ifTable + ifXTable; auto-selects metric per interface; clicking a single checkbox+metric syncs the OID input field
+  - Counter32 / Counter64 traffic OIDs display live rate (B/s, KB/s, MB/s, GB/s) via delta calculation with wraparound handling
+  - Non-numeric SNMP values (e.g. device name from wrong OID) shown in orange as a misconfiguration hint
+  - Probe uses `-On` flag and stdout-only parsing for deterministic output regardless of MIB environment
+- Sensor host linking
+  - Sensors inherit device host by default (`host_override = False`)
+  - Setting a host manually marks it overridden; clearing it re-links to the device
+  - Device IP changes propagate automatically to all linked sensors
+- Device tile loading skeleton — shimmer animation replaces stale cached tiles while fresh data fetches in parallel
+- Alert tagging on sensor events table
+  - Severity badge, rule name, and state badge shown inline on each event row
+  - ACK and Resolve buttons appear directly on active-alert rows
+  - Tag refreshes on SSE `ack_event` without page reload
 
 ## 🔴 High Priority
-- Advanced alerting rules engine
-  - Alert rules UI with condition builder
-  - Conditions: device group, sensor type, threshold state, flap count, packet loss %
-  - Multiple actions per rule: email, webhook, syslog, future Slack/Teams
-  - Alert ACK / resolve / suppress workflow
-  - Maintenance windows
-  - Alert cooldown / deduplication
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
-- Improve user box
 
 ## 🎨 Low Priority
-- Fix history icon
 - Theme support
   - Dark / light theme toggle (stub already in user menu)
   - Persist theme preference per user

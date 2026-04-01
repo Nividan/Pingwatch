@@ -25,6 +25,8 @@ from db.samples     import (
 from db.events      import (
     db_log_flap,
     db_load_flaps,
+    db_ack_flap,
+    db_resolve_flap,
     db_log_trap,
     db_load_traps,
     db_clear_device_traps,
@@ -46,6 +48,18 @@ from db.users       import (
     db_save_settings,
     db_get_dashboard,
     db_save_dashboard,
+    db_update_profile,
+    db_update_own_profile,
+)
+
+# groups
+from db.groups      import (
+    db_list_groups,
+    db_create_group,
+    db_update_group,
+    db_delete_group,
+    db_update_group_members,
+    db_resolve_group_emails,
 )
 
 # audit
@@ -93,7 +107,7 @@ __all__ = [
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
     # events
-    "db_log_flap", "db_load_flaps",
+    "db_log_flap", "db_load_flaps", "db_ack_flap", "db_resolve_flap",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",
     "db_log_err", "db_load_err_logs", "db_clear_err_logs",
     "db_clear_sensor_err_logs",
@@ -102,6 +116,10 @@ __all__ = [
     "db_delete_user", "db_set_password",
     "db_load_settings", "db_save_settings",
     "db_get_dashboard", "db_save_dashboard",
+    "db_update_profile", "db_update_own_profile",
+    # groups
+    "db_list_groups", "db_create_group", "db_update_group", "db_delete_group",
+    "db_update_group_members", "db_resolve_group_emails",
     # audit
     "db_log_audit", "db_get_audit",
     # ipam

@@ -3,19 +3,41 @@ routes/auth.py — Authentication and user-management endpoints.
 
 Handles: /api/login, /api/logout, /api/me, /api/me/password,
          /api/users (GET/POST), /api/users/{u} (DELETE),
-         /api/users/{u}/password (PATCH).
+         /api/users/{u}/password (PATCH),
+         /api/me/profile (PATCH), /api/users/{u}/profile (PATCH).
 """
 
+import re
+import sqlite3
 import threading
 import time
 
 from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
                          auth_revoke_user_sessions, auth_verify_current)
-from core.config import _RE_USER, _RE_USER_PW, _RE_ME_PW
+from core.config import (_RE_USER, _RE_USER_PW, _RE_ME_PW,
+                         _RE_ME_PROFILE, _RE_USER_PROFILE)
+from core.config import DB_PATH
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
-                         db_delete_user, db_set_password, db_get_user_auth_type)
+                         db_delete_user, db_set_password, db_get_user_auth_type,
+                         db_update_profile, db_update_own_profile)
 from core.logger import log
 import core.settings as _settings
+
+_RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def _get_user_profile(username: str) -> dict:
+    """Return {full_name, email} for username."""
+    con = sqlite3.connect(DB_PATH)
+    try:
+        row = con.execute(
+            "SELECT full_name, email FROM users WHERE username=?", (username,)
+        ).fetchone()
+        return {"full_name": row[0] or "", "email": row[1] or ""} if row else {}
+    except Exception:
+        return {}
+    finally:
+        con.close()
 
 # ── Login rate-limiting state ─────────────────────────────────────
 _FAIL_LOCK   = threading.Lock()
@@ -32,10 +54,63 @@ def handle(h, method, path, body):
         token = h._get_token()
         user  = auth_check(token)
         if user:
-            role = auth_check_role(token) or "viewer"
-            h._json(200, {"username": user, "role": role})
+            role    = auth_check_role(token) or "viewer"
+            profile = _get_user_profile(user)
+            h._json(200, {"username": user, "role": role,
+                          "full_name": profile.get("full_name", ""),
+                          "email":     profile.get("email", "")})
         else:
             h._json(401, {"error": "unauthorized"})
+        return True
+
+    # ── /api/me/profile PATCH ─────────────────────────────────────
+    if _RE_ME_PROFILE.match(path) and method == "PATCH":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        full_name = str(body.get("full_name", "")).strip()[:200]
+        email     = str(body.get("email", "")).strip()[:200]
+        if email and not _RE_EMAIL.match(email):
+            h._json(400, {"error": "invalid email address"}); return True
+        db_update_own_profile(me, full_name, email)
+        db_log_audit(me, h.client_address[0], 'profile_update', me)
+        h._json(200, {"ok": True})
+        return True
+
+    # ── /api/users/{u}/profile PATCH ─────────────────────────────
+    mp = _RE_USER_PROFILE.match(path)
+    if mp and method == "PATCH":
+        caller_token = h._get_token()
+        caller       = auth_check(caller_token)
+        if not caller:
+            h._json(401, {"error": "unauthorized"}); return True
+        caller_role = auth_check_role(caller_token) or "viewer"
+        target = mp.group(1)
+        if caller_role != "admin" and caller != target:
+            h._json(403, {"error": "forbidden"}); return True
+        full_name = str(body.get("full_name", "")).strip()[:200]
+        email     = str(body.get("email", "")).strip()[:200]
+        if email and not _RE_EMAIL.match(email):
+            h._json(400, {"error": "invalid email address"}); return True
+        if caller_role == "admin":
+            # Admin can also set group_id and role
+            group_id  = body.get("group_id")  # None means "no group"
+            new_role  = body.get("role", "").strip()
+            if group_id is not None:
+                try:
+                    group_id = int(group_id) if group_id != "" else None
+                except (TypeError, ValueError):
+                    group_id = None
+            if new_role and new_role not in ("viewer", "operator", "admin"):
+                h._json(400, {"error": "invalid role"}); return True
+            from db.users import _UNSET
+            role_arg = new_role if new_role else _UNSET
+            gid_arg  = group_id if "group_id" in body else _UNSET
+            db_update_profile(target, full_name, email, gid_arg, role_arg)
+        else:
+            db_update_own_profile(target, full_name, email)
+        db_log_audit(caller, h.client_address[0], 'profile_update', target)
+        h._json(200, {"ok": True})
         return True
 
     # ── /api/users GET ────────────────────────────────────────────

@@ -30,14 +30,15 @@ def db_log_audit(actor: str, ip: str, action: str, target: str = '', detail: str
 
 def db_get_audit(limit: int = 200) -> list:
     """Return newest-first audit entries."""
+    con = sqlite3.connect(DB_PATH)
     try:
-        con = sqlite3.connect(DB_PATH)
         rows = con.execute(
             "SELECT ts,actor,ip,action,target,detail FROM audit_log "
             "ORDER BY ts DESC LIMIT ?", (limit,)
         ).fetchall()
-        con.close()
         return [{"ts": r[0], "actor": r[1], "ip": r[2],
                  "action": r[3], "target": r[4], "detail": r[5]} for r in rows]
     except Exception:
         return []
+    finally:
+        con.close()
