@@ -229,6 +229,8 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
 
     offset = 0
     skipped = 0
+    first_err = None  # capture first distinct error for diagnosis
+
     while offset < total:
         rows = sq_con.execute(
             f"SELECT {col_list} FROM {table} LIMIT {_CHUNK} OFFSET {offset}"
@@ -253,14 +255,26 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
                 except Exception as row_err:
                     pg_cur.execute("ROLLBACK TO SAVEPOINT sp_row")
                     skipped += 1
-                    log.debug(f"Migration: skip row in {schema}.{table}: {row_err}")
+                    if first_err is None:
+                        first_err = str(row_err).split("\n")[0]  # first line only
+                        # Log the failing row's key columns for diagnosis
+                        key_idx = {c: i for i, c in enumerate(cols)}
+                        did_v = v[key_idx["did"]] if "did" in key_idx else "?"
+                        sid_v = v[key_idx["sid"]] if "sid" in key_idx else "?"
+                        log.warning(
+                            f"Migration: first skipped row in {schema}.{table} "
+                            f"(did={did_v!r}, sid={sid_v!r}): {first_err}"
+                        )
 
         offset += len(rows)
         if progress_cb:
             progress_cb(f"{schema}.{table}", offset, total)
 
     if skipped:
-        log.warning(f"Migration: {schema}.{table} — {skipped} rows skipped (type/constraint mismatch)")
+        log.warning(
+            f"Migration: {schema}.{table} — {skipped} rows skipped "
+            f"(first error: {first_err})"
+        )
 
     log.info(f"Migrated {schema}.{table}: {total} rows")
 
