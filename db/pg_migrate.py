@@ -217,6 +217,17 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
 
     pg_cur.execute(f"SET search_path TO {schema}, public")
 
+    # Find which columns are numeric in PG so we can coerce "" → None.
+    # SQLite's loose typing allows storing "" in INTEGER columns; PG rejects it.
+    pg_cur.execute(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = %s AND table_name = %s
+             AND data_type IN ('integer','bigint','smallint','double precision','numeric','real')""",
+        (schema, table),
+    )
+    numeric_cols = {row[0] for row in pg_cur.fetchall()}
+    numeric_idx = {i for i, c in enumerate(cols) if c in numeric_cols}
+
     # Delete existing PG rows to avoid conflicts
     pg_cur.execute(f"DELETE FROM {table}")
 
@@ -237,7 +248,11 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
         ).fetchall()
         if not rows:
             break
-        values = [tuple(row) for row in rows]
+        # Coerce empty strings to None for numeric columns
+        values = [
+            tuple(None if (i in numeric_idx and v == "") else v for i, v in enumerate(row))
+            for row in rows
+        ]
 
         # Try bulk insert first; if it fails, fall back row-by-row with SAVEPOINTs
         # so a single bad row doesn't abort the whole transaction.
