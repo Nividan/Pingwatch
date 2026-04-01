@@ -23,6 +23,8 @@ body::before {
 
 /* ── Fullscreen mode ── */
 body.fs-active #page-bar { display:none; }
+body.fs-active header { display:none; }
+body.fs-active #hdrReveal { display:none !important; }
 #fs-controls {
   display:none; position:absolute; top:10px; right:10px; z-index:200;
   gap:6px; align-items:center;
@@ -43,10 +45,10 @@ header {
   background:rgba(6,10,15,0.95); border-bottom:1px solid var(--panel-border);
   display:flex; align-items:center; padding:0 20px; gap:16px;
   backdrop-filter:blur(10px); flex-shrink:0;
-  transition:height .2s, padding .2s, border-color .2s;
-  overflow:hidden;
+  transition:height .2s, padding .2s, border-color .2s, opacity .2s;
+  overflow:visible;
 }
-header.collapsed { height:0; padding-top:0; padding-bottom:0; border-color:transparent; }
+header.collapsed { height:0; padding-top:0; padding-bottom:0; border-color:transparent; opacity:0; pointer-events:none; }
 #hdrReveal {
   position:fixed; top:0; left:50%; transform:translateX(-50%);
   background:rgba(0,212,255,0.08); border:1px solid rgba(0,212,255,0.22);
@@ -218,6 +220,12 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .link-tunnel2 { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(30) infinite; animation-delay:-1.5s; }
 @keyframes dashFlow   { to { stroke-dashoffset:-16; } }
 @keyframes tunnelFlow { to { stroke-dashoffset:-28; } }
+
+/* ── Bandwidth threshold link pulse ── */
+@keyframes pwBwCritPulse { 0%,100%{opacity:.9} 50%{opacity:.12} }
+@keyframes pwBwWarnPulse { 0%,100%{opacity:.85} 50%{opacity:.3} }
+.pw-bw-crit { animation:dashFlow 1.2s steps(15) infinite, pwBwCritPulse  1s ease-in-out infinite !important; }
+.pw-bw-warn { animation:dashFlow 1.2s steps(15) infinite, pwBwWarnPulse 2s ease-in-out infinite !important; }
 
 .node-g { cursor:grab; }
 .node-g:active { cursor:grabbing; }

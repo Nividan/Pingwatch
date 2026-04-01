@@ -1,5 +1,101 @@
 // ── USER MANAGEMENT ───────────────────────────────────────────────────────────
 
+async function _openProfileModal(){
+  let me={username:'',role:'viewer',full_name:'',email:'',group_id:null,group_name:''};
+  try{
+    const r=await api('GET','/api/me');
+    Object.assign(me,r);
+  }catch(_){}
+
+  // Admins also see group + role selector — fetch current user row for group_id
+  let groups=[];
+  let currentGroupId=null;
+  const isAdmin=(me.role==='admin');
+  if(isAdmin){
+    try{
+      const [ur,gr]=await Promise.all([
+        api('GET','/api/users'),
+        api('GET','/api/user/groups'),
+      ]);
+      const row=(ur.users||[]).find(u=>u.username===me.username);
+      if(row){currentGroupId=row.group_id??null;}
+      groups=gr.groups||[];
+    }catch(_){}
+  }
+
+  const roleBadge={
+    admin:'background:var(--accent-bg);color:var(--accent)',
+    operator:'background:#2a3a2a;color:#4caf50',
+    viewer:'background:var(--bg3);color:var(--text2)',
+  }[me.role]||'background:var(--bg3);color:var(--text2)';
+
+  const groupSel=isAdmin
+    ?`<div class="fr"><label class="fl">Group</label>
+        <select id="myp-group">
+          <option value="">— No group —</option>
+          ${groups.map(g=>`<option value="${g.id}" ${g.id===currentGroupId?'selected':''}>${esc(g.name)}</option>`).join('')}
+        </select></div>`
+    :'';
+
+  closeM('m-myprof');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-myprof';
+  _overlayClose(o,()=>closeM('m-myprof'));
+  o.innerHTML=`
+  <div class="mbox" style="max-width:400px">
+    <div class="mhd">
+      <div class="mttl">👤 Edit Profile</div>
+      <button class="mclose" onclick="closeM('m-myprof')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${esc(me.username)}</div>
+          <span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;margin-top:3px;${roleBadge}">${esc(me.role)}</span>
+        </div>
+      </div>
+      <div class="fr"><label class="fl">Full Name</label>
+        <input type="text" id="myp-name" value="${esc(me.full_name||'')}" placeholder="Jane Doe" maxlength="200" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Email</label>
+        <input type="email" id="myp-email" value="${esc(me.email||'')}" placeholder="jane@corp.com" maxlength="200" autocomplete="off"/></div>
+      ${groupSel}
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('m-myprof')">Cancel</button>
+      <button class="btn-p" id="myp-btn" onclick="_submitProfileModal('${esc(me.username)}',${isAdmin})">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('myp-name')?.focus(),50);
+}
+
+async function _submitProfileModal(username, isAdmin){
+  const full_name=(document.getElementById('myp-name')?.value||'').trim();
+  const email=(document.getElementById('myp-email')?.value||'').trim();
+  const btn=document.getElementById('myp-btn');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    const body={full_name,email};
+    if(isAdmin){
+      const gv=document.getElementById('myp-group')?.value;
+      body.group_id=gv===''||gv===undefined?null:parseInt(gv);
+    }
+    const r=await api('PATCH',`/api/users/${encodeURIComponent(username)}/profile`,body);
+    if(r.error){toast(r.error,'err');return;}
+    closeM('m-myprof');
+    toast('Profile updated','ok');
+    // Refresh user table if it's visible (Settings → Users tab open)
+    const uw=document.getElementById('userTableWrap');
+    if(uw){
+      const ur=await api('GET','/api/users');
+      uw.innerHTML=renderUserTable(ur.users||[]);
+    }
+  }catch(e){
+    toast('Failed to update profile','err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Save';}
+  }
+}
+
 function _openChangePwModal(){
   closeM('m-cpw');
   const o=document.createElement('div'); o.className='mo'; o.id='m-cpw';

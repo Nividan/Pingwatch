@@ -36,41 +36,44 @@ def db_log_err(did, sid, sname, stype, msg, ts):
 
 def db_load_err_logs(did):
     """Return last 200 error entries for a device's sensors, newest first."""
+    con = sqlite3.connect(LOGS_DB_PATH)
     try:
-        con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute(
             "SELECT ts,did,sid,sname,stype,msg FROM sensor_err_log "
             "WHERE did=? ORDER BY id DESC LIMIT 200", (did,)
         ).fetchall()
-        con.close()
         return [{"ts": r[0], "did": r[1], "sid": r[2],
                  "sname": r[3], "stype": r[4], "msg": r[5], "type": "err"}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load err logs error: {e}")
         return []
+    finally:
+        con.close()
 
 
 def db_clear_err_logs(did):
     """Delete all sensor error logs for a device."""
+    con = sqlite3.connect(LOGS_DB_PATH)
     try:
-        con = sqlite3.connect(LOGS_DB_PATH)
         con.execute("DELETE FROM sensor_err_log WHERE did=?", (did,))
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"DB clear err logs error: {e}")
+    finally:
+        con.close()
 
 
 def db_clear_sensor_err_logs(did, sid):
     """Delete all sensor error logs for a specific sensor."""
+    con = sqlite3.connect(LOGS_DB_PATH)
     try:
-        con = sqlite3.connect(LOGS_DB_PATH)
         con.execute("DELETE FROM sensor_err_log WHERE did=? AND sid=?", (did, sid))
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"DB clear sensor err logs error: {e}")
+    finally:
+        con.close()
 
 
 # ── Flap log ─────────────────────────────────────────────────────
@@ -104,20 +107,61 @@ def db_log_flap(flap):
 
 def db_load_flaps():
     """Return last 500 flap/recovery events, newest first."""
+    con = sqlite3.connect(LOGS_DB_PATH)
     try:
-        con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute(
-            "SELECT ts,did,sid,dname,sname,host,stype,detail,direction "
+            "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
+            "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0) "
             "FROM flap_log ORDER BY id DESC LIMIT 500"
         ).fetchall()
-        con.close()
-        return [{"ts": r[0], "did": r[1], "sid": r[2], "dname": r[3],
-                 "sname": r[4], "host": r[5], "stype": r[6], "detail": r[7],
-                 "direction": r[8] or "down"}
+        return [{"id": r[0], "ts": r[1], "did": r[2], "sid": r[3],
+                 "dname": r[4], "sname": r[5], "host": r[6], "stype": r[7],
+                 "detail": r[8], "direction": r[9] or "down",
+                 "ack_state": r[10], "ack_by": r[11], "ack_at": r[12]}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load flaps error: {e}")
         return []
+    finally:
+        con.close()
+
+
+def db_ack_flap(flap_id, actor=""):
+    """Set ack_state='acknowledged' on a flap entry."""
+    import time as _time
+    con = None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        con.execute(
+            "UPDATE flap_log SET ack_state='acknowledged', ack_by=?, ack_at=? WHERE id=?",
+            (actor, _time.time(), flap_id)
+        )
+        con.commit()
+        return con.execute("SELECT changes()").fetchone()[0] > 0
+    except Exception as e:
+        log.error(f"DB ack flap error: {e}")
+        return False
+    finally:
+        if con: con.close()
+
+
+def db_resolve_flap(flap_id):
+    """Set ack_state='resolved' on a flap entry."""
+    import time as _time
+    con = None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        con.execute(
+            "UPDATE flap_log SET ack_state='resolved', ack_at=? WHERE id=?",
+            (_time.time(), flap_id)
+        )
+        con.commit()
+        return con.execute("SELECT changes()").fetchone()[0] > 0
+    except Exception as e:
+        log.error(f"DB resolve flap error: {e}")
+        return False
+    finally:
+        if con: con.close()
 
 
 # ── SNMP trap log ────────────────────────────────────────────────
@@ -165,8 +209,8 @@ def db_log_trap(t):
 
 def db_load_traps(limit=500, vendor=None, category=None, severity=None):
     """Return SNMP traps newest first with optional filters."""
+    con = sqlite3.connect(LOGS_DB_PATH)
     try:
-        con = sqlite3.connect(LOGS_DB_PATH)
         where, params = [], []
         if vendor:
             where.append("vendor=?");   params.append(vendor)
@@ -185,7 +229,6 @@ def db_load_traps(limit=500, vendor=None, category=None, severity=None):
         )
         params.append(limit)
         rows = con.execute(sql, params).fetchall()
-        con.close()
         return [{
             "ts": r[0], "src_ip": r[1], "dname": r[2], "community": r[3],
             "trap_oid": r[4], "detail": r[5],
@@ -200,14 +243,17 @@ def db_load_traps(limit=500, vendor=None, category=None, severity=None):
     except Exception as e:
         log.error(f"DB load traps error: {e}")
         return []
+    finally:
+        con.close()
 
 
 def db_clear_device_traps(src_ip):
     """Delete all SNMP traps from a device (matched by src_ip / host)."""
+    con = sqlite3.connect(LOGS_DB_PATH)
     try:
-        con = sqlite3.connect(LOGS_DB_PATH)
         con.execute("DELETE FROM snmp_traps WHERE src_ip=?", (src_ip,))
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"DB clear device traps error: {e}")
+    finally:
+        con.close()

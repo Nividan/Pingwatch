@@ -208,8 +208,10 @@ def handle(h, method, path, body):
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
         _pw = (body.get("smtp_pass") or "").strip()
         if _pw:
-            _settings.load({"smtp_pass": _pw})
-            _db_enqueue(lambda _p=_pw: db_save_settings({"smtp_pass": _p}))
+            from db.backups import encrypt_pw as _enc_smtp_pw
+            _pw_enc = _enc_smtp_pw(_pw)
+            _settings.load({"smtp_pass": _pw_enc})
+            _db_enqueue(lambda _p=_pw_enc: db_save_settings({"smtp_pass": _p}))
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
         h._json(200, {"ok": True})
         return True
@@ -228,12 +230,13 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         from monitoring.smtp_alert import test_smtp
+        from db.backups import decrypt_pw as _dec_smtp_pw
         cfg = {
             "host":      (body.get("smtp_host") or "").strip(),
             "port":      body.get("smtp_port", 587),
             "tls":       (body.get("smtp_tls")  or "starttls").strip(),
             "user":      (body.get("smtp_user") or "").strip(),
-            "password":  (body.get("smtp_pass") or _settings.get("smtp_pass", "")).strip(),
+            "password":  (body.get("smtp_pass") or _dec_smtp_pw(_settings.get("smtp_pass", ""))).strip(),
             "from_addr": (body.get("smtp_from") or "").strip(),
             "to_addr":   (body.get("smtp_to")   or "").strip(),
         }
@@ -262,6 +265,31 @@ def handle(h, method, path, body):
             "logs_db_size_bytes": os.path.getsize(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else 0,
             "log_size_bytes":     _log_bytes,
         })
+        return True
+
+    # ── /api/system/perf GET ─────────────────────────────────────
+    if path == "/api/system/perf" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        try:
+            import psutil
+            cpu  = psutil.cpu_percent(interval=0.1)
+            ram  = psutil.virtual_memory()
+            _dp  = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            disk = psutil.disk_usage(_dp)
+            h._json(200, {
+                "cpu_pct":    round(cpu, 1),
+                "ram_pct":    round(ram.percent, 1),
+                "ram_used":   ram.used,
+                "ram_total":  ram.total,
+                "disk_pct":   round(disk.percent, 1),
+                "disk_used":  disk.used,
+                "disk_total": disk.total,
+            })
+        except ImportError:
+            h._json(503, {"error": "psutil not installed — run: pip install psutil"})
+        except Exception as e:
+            h._json(500, {"error": str(e)})
         return True
 
     # ── /api/dashboard GET ────────────────────────────────────────

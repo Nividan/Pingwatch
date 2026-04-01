@@ -230,7 +230,8 @@ def _dns_decode_name(data: bytes, offset: int) -> str:
 def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
     """Run snmpget via subprocess. Requires net-snmp tools installed."""
     ver_flag = f"-v{version}"
-    cmd = ["snmpget", ver_flag, "-c", community,
+    # -On: numeric OIDs in output — avoids MIB translation surprises
+    cmd = ["snmpget", ver_flag, "-On", "-c", community,
            "-t", str(timeout), "-r", "1",
            f"{host}:{port}", oid]
     t0 = time.time()
@@ -238,13 +239,28 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
         kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if SYS == "Windows" else {}
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 3, **kw)
         ms  = round((time.time() - t0) * 1000, 1)
-        out = (r.stdout + r.stderr).strip()
-        if r.returncode == 0 and out:
-            val = out.split("=", 1)[-1].strip()
-            if ":" in val:
-                val = val.split(":", 1)[-1].strip()
-            return {"ok": True, "ms": ms, "detail": f"{val}", "value": val, "raw": out}
-        err = out[:120] if out else "No response"
+        # Use stdout for value; stderr may contain MIB warnings with '=' that corrupt parsing
+        raw = (r.stdout or r.stderr).strip()
+        if r.returncode == 0 and raw:
+            # Find the last line containing '=' — the actual OID result line
+            val_line = ""
+            for line in reversed(raw.splitlines()):
+                if "=" in line:
+                    val_line = line
+                    break
+            if not val_line:
+                val_line = raw
+            rhs = val_line.split("=", 1)[-1].strip()
+            snmp_type = ""
+            if ":" in rhs:
+                snmp_type, _, val = rhs.partition(":")
+                snmp_type = snmp_type.strip()
+                val = val.strip()
+            else:
+                val = rhs
+            return {"ok": True, "ms": ms, "detail": f"{val}", "value": val,
+                    "snmp_type": snmp_type, "raw": raw}
+        err = raw[:120] if raw else "No response"
         return {"ok": False, "ms": None, "detail": err}
     except FileNotFoundError:
         return {"ok": False, "ms": None, "detail": "snmpget not found — install net-snmp"}

@@ -215,6 +215,32 @@ function pwStatusColor(status) {
   return '#888888';
 }
 
+// did/sid → "ok"|"warn"|"crit"  — updated by SSE threshold events
+const _pwSensorState = {};
+
+// Unified PW link stroke resolver — priority: down > crit > warn > type color
+function _pwLinkStroke(lk, srcDev, tgtDev) {
+  if (srcDev?.status === 'down' || tgtDev?.status === 'down') return '#ff3333';
+  const states = [lk.sensor_in, lk.sensor_out]
+    .filter(Boolean)
+    .map(key => _pwSensorState[key] || 'ok');
+  if (states.includes('crit')) return '#a855f7';
+  if (states.includes('warn')) return '#c084fc';
+  return lcfg(lk.link_type || 'trunk').stroke;
+}
+
+// Apply stroke + width + pulse animation to a .link-main SVG element
+function _pwApplyLinkEl(lineEl, lk, srcDev, tgtDev) {
+  const stroke = _pwLinkStroke(lk, srcDev, tgtDev);
+  const isCrit = stroke === '#a855f7';
+  const isWarn = stroke === '#c084fc';
+  const baseW  = lcfg(lk.link_type || 'trunk').width;
+  lineEl.setAttribute('stroke', stroke);
+  lineEl.setAttribute('stroke-width', isCrit ? baseW * 2.5 : isWarn ? baseW * 1.8 : baseW);
+  lineEl.classList.toggle('pw-bw-crit', isCrit);
+  lineEl.classList.toggle('pw-bw-warn', isWarn);
+}
+
 function pwDeviceType(dev) {
   const n = (dev.name  || '').toLowerCase();
   const g = (dev.group || '').toLowerCase();
@@ -483,8 +509,31 @@ function startPwSSE() {
         if (idx >= 0) dev.sensors[idx] = s; else (dev.sensors = dev.sensors||[]).push(s);
         _pwFireTrace(s.device_id, s.alive);
       }
+      // Keep threshold state map in sync from sensor SSE (initial + ongoing)
+      const key = `${s.device_id}/${s.sensor_id}`;
+      if (s.threshold_state) _pwSensorState[key] = s.threshold_state;
+    });
+    // Threshold events → re-color any PW link assigned to that sensor
+    ['threshold_critical', 'threshold_warning', 'threshold_ok'].forEach(evt => {
+      pwSSE.addEventListener(evt, e => {
+        if (!isPingWatchPage) return;
+        const d = JSON.parse(e.data);
+        const state = evt === 'threshold_ok' ? 'ok' : evt === 'threshold_warning' ? 'warn' : 'crit';
+        _pwSensorThresholdUpdate(d.did, d.sid, state);
+      });
     });
   } catch(e) {}
+}
+
+function _pwSensorThresholdUpdate(did, sid, state) {
+  const key = `${did}/${sid}`;
+  _pwSensorState[key] = state;
+  pwLinks.filter(lk => lk.sensor_in === key || lk.sensor_out === key).forEach(lk => {
+    const lineEl = document.querySelector(`[data-pwlid="${CSS.escape(lk.id)}"] .link-main`);
+    if (!lineEl) return;
+    const srcD = _pwDevMap[lk.src_did], tgtD = _pwDevMap[lk.tgt_did];
+    _pwApplyLinkEl(lineEl, lk, srcD, tgtD);
+  });
 }
 
 function stopPwSSE() {
@@ -649,7 +698,12 @@ function _pwLiveUpdate(did) {
       if (node.properties.color) {
         const deg = Math.round(getHue(node.properties.color) - 37);
         const f = 'grayscale(1) sepia(1) hue-rotate('+deg+'deg) saturate(2.5) brightness(1.05)';
-        if (filterG) filterG.style.filter = f;
+        if (filterG) {
+          filterG.style.filter = f;
+        } else {
+          // Wrapper doesn't exist yet (device was UP at render time) — create it now
+          _applyNodeColorFilter(el, node);
+        }
       } else if (filterG) {
         filterG.style.filter = '';
       }
@@ -673,10 +727,9 @@ function _pwLiveUpdate(did) {
       if (!lineEl) return;
       const otherDid = lk.src_did === did ? lk.tgt_did : lk.src_did;
       const otherDev = _pwDevMap[otherDid];
-      const lkCfg    = lcfg(lk.link_type || 'trunk');
-      const newStroke = (dev?.status === 'down' || otherDev?.status === 'down')
-                        ? '#ff3333' : lkCfg.stroke;
-      lineEl.setAttribute('stroke', newStroke);
+      const srcD = lk.src_did === did ? dev : otherDev;
+      const tgtD = lk.src_did === did ? otherDev : dev;
+      _pwApplyLinkEl(lineEl, lk, srcD, tgtD);
     });
 
   // Update right panel only if relevant and no input is focused
@@ -886,14 +939,16 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const cfg = lcfg(lk.link_type || 'trunk');
     const srcDev = pwDevices.find(d => d.device_id === lk.src_did);
     const tgtDev = pwDevices.find(d => d.device_id === lk.tgt_did);
-    const stroke = (srcDev?.status === 'down' || tgtDev?.status === 'down') ? '#ff3333' : cfg.stroke;
+    const stroke = _pwLinkStroke(lk, srcDev, tgtDev);
+    const bwCls  = stroke === '#a855f7' ? 'pw-bw-crit' : stroke === '#c084fc' ? 'pw-bw-warn' : '';
+    const lw     = stroke === '#a855f7' ? cfg.width * 2.5 : stroke === '#c084fc' ? cfg.width * 1.8 : cfg.width;
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
     gg.innerHTML = `
       <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
-      <line class="link-main ${cfg.cls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-        stroke="${stroke}" stroke-width="${cfg.width}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
+        stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
     `;
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);
@@ -3047,9 +3102,20 @@ function showPwLinkPanel(lkId) {
         onchange="setPwLinkLabel('${lkId}',this.value)"
         style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;box-sizing:border-box;"/>
     </div>
+    <div class="field-group"><div class="field-label">IN TRAFFIC</div>
+      <select id="pw-lk-si" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;">
+        ${_pwSensorOpts(lk, 'sensor_in')}
+      </select>
+    </div>
+    <div class="field-group"><div class="field-label">OUT TRAFFIC</div>
+      <select id="pw-lk-so" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;">
+        ${_pwSensorOpts(lk, 'sensor_out')}
+      </select>
+    </div>
   `;
   document.getElementById('panel-actions').innerHTML = `
-    <button class="btn btn-danger" style="flex:1" onclick="deletePwLink('${lkId}')">✕ DELETE LINK</button>
+    <button class="btn btn-danger" style="flex:1" onclick="deletePwLink('${lkId}')">✕ DELETE</button>
+    <button class="btn btn-primary" style="flex:1" onclick="setPwLinkSensors('${lkId}')">💾 SAVE SENSORS</button>
   `;
 }
 function deletePwLink(lkId) {
@@ -3071,6 +3137,24 @@ function setPwLinkLabel(lkId, label) {
   lk.label = label;
   _pwSave('pw_links', pwLinks);
   renderLinks();
+}
+function _pwSensorOpts(lk, field) {
+  const dids = [lk.src_did, lk.tgt_did].filter(Boolean);
+  const sensors = dids.flatMap(did => (_pwDevMap[did]?.sensors || []).filter(s => s.stype === 'snmp'));
+  const cur = lk[field] || '';
+  const opts = [['', '— None —'], ...sensors.map(s => [`${s.device_id}/${s.sensor_id}`, s.name])];
+  return opts.map(([v, l]) => `<option value="${v}"${v===cur?' selected':''}>${escXml(l)}</option>`).join('');
+}
+function setPwLinkSensors(lkId) {
+  const lk = pwLinks.find(l => l.id === lkId);
+  if (!lk) return;
+  lk.sensor_in  = document.getElementById('pw-lk-si')?.value || '';
+  lk.sensor_out = document.getElementById('pw-lk-so')?.value || '';
+  _pwSave('pw_links', pwLinks);
+  // Re-color immediately with current threshold state
+  const lineEl = document.querySelector(`[data-pwlid="${CSS.escape(lkId)}"] .link-main`);
+  if (lineEl) _pwApplyLinkEl(lineEl, lk, _pwDevMap[lk.src_did], _pwDevMap[lk.tgt_did]);
+  toast('Sensors saved');
 }
 
 // ═══════════════════════════ SEARCH / FILTER ═══════════════════════════
@@ -3880,6 +3964,16 @@ document.addEventListener('fullscreenchange', () => {
   document.body.classList.toggle('fs-active', isFs);
   const btn = document.getElementById('page-fs-btn');
   if (btn) _ntmUpdateFsBtn(btn);
+  // Collapse side panel on enter, restore on exit
+  const panel = document.getElementById('side-panel');
+  if (panel) {
+    if (isFs) {
+      panel._ntmWasCollapsed = panel.classList.contains('collapsed');
+      panel.classList.add('collapsed');
+    } else {
+      if (!panel._ntmWasCollapsed) panel.classList.remove('collapsed');
+    }
+  }
 });
 
 // Reload pages when PingWatch parent signals tab switch

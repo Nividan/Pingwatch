@@ -518,29 +518,46 @@ function openDevWin(did){
     </div>
   </div>`;
   document.body.appendChild(o);
-  setTimeout(async ()=>{
-    const devObj=S.devices[did];
-    if(devObj) devObj.sensors.forEach(s=>renderTile(did,s));
+
+  // ── Show skeleton tiles immediately (avoids flash of stale cache) ──
+  const _sg = document.getElementById('sg-'+did);
+  const _skelN = (dev.sensors||[]).length || 2;
+  if(_sg) _sg.innerHTML = Array.from({length:_skelN},()=>'<div class="stl stl-skel"></div>').join('');
+
+  // ── Fetch fresh device data + logs in parallel ────────────────────
+  const _devFetch  = fetch('/api/device/'+did).then(r=>r.json()).catch(()=>null);
+  const _logsFetch = fetch('/api/device/'+did+'/logs').then(r=>r.json()).catch(()=>({logs:[]}));
+
+  _devFetch.then(freshDev=>{
+    if(!document.getElementById('dwo')) return; // panel closed while loading
+    if(_sg) _sg.innerHTML=''; // clear skeletons
+    if(freshDev){
+      S.devices[did]=freshDev;
+      (freshDev.sensors||[]).forEach(s=>{
+        S.sensors[`${did}/${s.sensor_id}`]=s;
+        renderTile(did,s);
+      });
+    } else {
+      // fetch failed — render from cache silently
+      (S.devices[did]?.sensors||[]).forEach(s=>renderTile(did,s));
+    }
     setupChartsByDid(did);
-    // Fetch persisted error logs from DB and merge into S.logs
-    try {
-      const r=await fetch('/api/device/'+did+'/logs');
-      const data=await r.json();
-      (data.logs||[]).forEach(e=>{
-        const key=did+'/'+e.sid;
-        if(!S.logs[key]) S.logs[key]=[];
-        // only add if not already present (avoid dupes with live entries)
-        const exists=S.logs[key].some(x=>x.ts===e.ts&&x.msg===e.msg);
-        if(!exists) S.logs[key].push(e);
-      });
-      // sort each key newest-first after merge
-      Object.keys(S.logs).filter(k=>k.startsWith(did+'/')).forEach(k=>{
-        S.logs[k].sort((a,b)=>new Date(b.ts)-new Date(a.ts));
-        if(S.logs[k].length>200) S.logs[k]=S.logs[k].slice(0,200);
-      });
-    } catch(e){}
+  });
+
+  _logsFetch.then(data=>{
+    if(!document.getElementById('dwo')) return;
+    (data.logs||[]).forEach(e=>{
+      const key=did+'/'+e.sid;
+      if(!S.logs[key]) S.logs[key]=[];
+      const exists=S.logs[key].some(x=>x.ts===e.ts&&x.msg===e.msg);
+      if(!exists) S.logs[key].push(e);
+    });
+    Object.keys(S.logs).filter(k=>k.startsWith(did+'/')).forEach(k=>{
+      S.logs[k].sort((a,b)=>new Date(b.ts)-new Date(a.ts));
+      if(S.logs[k].length>200) S.logs[k]=S.logs[k].slice(0,200);
+    });
     renderDevLog(did);
-  },20);
+  });
 }
 
 function dwSwitchTab(did, tab){

@@ -35,14 +35,18 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
-- 🚨 Email alerting via SMTP (configurable per device/sensor)
+- 🚨 Rules-based alert engine — conditions, multi-action dispatch (email, webhook, syslog, browser push), cooldown, maintenance windows
+- 🏷 Alert tagging on sensor events — severity badge, rule name, and state shown inline; ACK / Resolve without leaving the Events tab
+- 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
+- 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
 - 🌐 Web-based dashboard with live latency sparklines and customizable widgets
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
 - 📤 Database export and import (individual DBs or full ZIP bundle)
 - 🖥 Native desktop status window with optional system-tray icon
-- 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback
+- 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback with full interface context (`interface X / no … / end / wr`)
+- 🔗 Sensor host linking — sensors inherit the device IP by default; setting a host manually marks it as overridden; clearing the host re-links it to the device
 - 🔍 Per-device port scanner with configurable default ports (Settings → Sensors)
 - 🧙 Interactive first-run setup wizard (`start.bat` / `bash start.sh`)
 - 🐧 Native Linux/macOS support — headless mode, systemd service, auto package-manager detection
@@ -59,7 +63,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 | **HTTP / HTTPS** | Status code, keyword, and response-time checks |
 | **TCP Port** | Port reachability and connection-time checks |
 | **TLS** | Certificate validity and TLS handshake checks |
-| **SNMP** | OID polling (v1/v2c) |
+| **SNMP** | OID polling (v1/v2c); Counter32/Counter64 traffic OIDs display live rate (B/s – GB/s); interface discovery with metric auto-select; wrong-OID detection |
 | **DNS** | Record lookup and resolution-time checks |
 | **Banner** | Raw TCP banner capture with optional regex match |
 
