@@ -225,7 +225,10 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
     placeholders = ", ".join(["%s"] * len(cols))
     insert_sql = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})"
 
+    import psycopg2.extras
+
     offset = 0
+    skipped = 0
     while offset < total:
         rows = sq_con.execute(
             f"SELECT {col_list} FROM {table} LIMIT {_CHUNK} OFFSET {offset}"
@@ -233,19 +236,31 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
         if not rows:
             break
         values = [tuple(row) for row in rows]
+
+        # Try bulk insert first; if it fails, fall back row-by-row with SAVEPOINTs
+        # so a single bad row doesn't abort the whole transaction.
         try:
-            import psycopg2.extras
+            pg_cur.execute("SAVEPOINT sp_batch")
             psycopg2.extras.execute_batch(pg_cur, insert_sql, values, page_size=500)
+            pg_cur.execute("RELEASE SAVEPOINT sp_batch")
         except Exception:
-            # Fallback to one-by-one if batch fails (column mismatch, etc.)
+            pg_cur.execute("ROLLBACK TO SAVEPOINT sp_batch")
             for v in values:
                 try:
+                    pg_cur.execute("SAVEPOINT sp_row")
                     pg_cur.execute(insert_sql, v)
+                    pg_cur.execute("RELEASE SAVEPOINT sp_row")
                 except Exception as row_err:
-                    log.warning(f"Migration: skip row in {schema}.{table}: {row_err}")
+                    pg_cur.execute("ROLLBACK TO SAVEPOINT sp_row")
+                    skipped += 1
+                    log.debug(f"Migration: skip row in {schema}.{table}: {row_err}")
+
         offset += len(rows)
         if progress_cb:
             progress_cb(f"{schema}.{table}", offset, total)
+
+    if skipped:
+        log.warning(f"Migration: {schema}.{table} — {skipped} rows skipped (type/constraint mismatch)")
 
     log.info(f"Migrated {schema}.{table}: {total} rows")
 

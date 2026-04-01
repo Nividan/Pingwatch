@@ -901,22 +901,49 @@ def step2_database():
         print()
         _instructions = _pg_install_instructions()
         _tag("info", "Install PostgreSQL with:")
-        _tag("info", f"  {_instructions}")
+        _tag("info", f"  {_C['cyan']}{_instructions}{_C['reset']}")
         print()
-        _tag("info", "After installing, press Enter to check again.")
-        _tag("info", "Or choose [s] to skip (useful if PostgreSQL runs on another host).")
-        print()
-        while True:
-            raw = _ask("Press Enter to check, or type 's' to skip", "")
-            if raw.lower() == "s":
-                _tag("info", "Skipping server check — continuing with connection details.")
-                break
-            _pg_installed, _pg_ver = _detect_pg_server()
-            if _pg_installed:
-                _tag("ok", f"PostgreSQL detected: {_pg_ver}")
-                break
-            else:
-                _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
+
+        # Offer automatic install on Linux where we know the exact command
+        _auto_installed = False
+        if sys.platform != "win32" and _instructions.startswith("sudo apt"):
+            if _ask_yn("Install PostgreSQL automatically now?", default=True):
+                _tag("info", "Installing PostgreSQL (this may take a minute) ...")
+                import shutil as _sh
+                _mgr = "apt-get" if _sh.which("apt-get") else "apt"
+                r = subprocess.run(
+                    ["sudo", _mgr, "install", "-y", "postgresql", "postgresql-contrib"],
+                    capture_output=False,
+                )
+                if r.returncode == 0:
+                    # Ensure service is running
+                    subprocess.run(["sudo", "systemctl", "start", "postgresql"],
+                                   capture_output=True)
+                    _pg_installed, _pg_ver = _detect_pg_server()
+                    if _pg_installed:
+                        _tag("ok", f"PostgreSQL installed and detected: {_pg_ver}")
+                        _auto_installed = True
+                    else:
+                        _tag("warn", "Installed but still not detected — continuing anyway.")
+                        _auto_installed = True
+                else:
+                    _tag("warn", "Automatic install failed — install manually and press Enter.")
+
+        if not _auto_installed and not _pg_installed:
+            _tag("info", "After installing, press Enter to check again.")
+            _tag("info", "Or choose [s] to skip (useful if PostgreSQL runs on another host).")
+            print()
+            while True:
+                raw = _ask("Press Enter to check, or type 's' to skip", "")
+                if raw.lower() == "s":
+                    _tag("info", "Skipping server check — continuing with connection details.")
+                    break
+                _pg_installed, _pg_ver = _detect_pg_server()
+                if _pg_installed:
+                    _tag("ok", f"PostgreSQL detected: {_pg_ver}")
+                    break
+                else:
+                    _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
     print()
 
     # 2c. Create database and user ───────────────────────────────────────────────
@@ -924,16 +951,64 @@ def step2_database():
     _tag("info", "Create a PostgreSQL database and user for PingWatch.")
     print()
     _gen_pw = _generate_pg_password()
-    print(_C["bold"] + "       Run these commands in a terminal:" + _C["reset"])
-    print()
-    print(_C["cyan"] + "         sudo -u postgres psql" + _C["reset"])
-    print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';" + _C["reset"])
-    print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
-    print(_C["cyan"] +  "         \\q" + _C["reset"])
-    print()
-    _tag("info", "Copy the password above or enter a custom one below.")
-    _pw = _ask("Password for the 'pingwatch' user", _gen_pw)
-    print()
+
+    # Offer to create the DB/user automatically via sudo -u postgres psql
+    _db_auto_ok = False
+    _pw = _gen_pw
+    if sys.platform != "win32" and _pg_installed:
+        print(_C["bold"] + "       The wizard can create the database and user automatically." + _C["reset"])
+        print(_C["bold"] + "       It will run (requires sudo / postgres access):" + _C["reset"])
+        print()
+        print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '****';" + _C["reset"])
+        print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
+        print()
+        if _ask_yn("Create database and user automatically?", default=True):
+            import shutil as _sh
+            _psql = _sh.which("psql")
+            if not _psql:
+                _tag("warn", "psql not found in PATH — cannot run automatically.")
+            else:
+                _tag("info", "Creating PostgreSQL user and database ...")
+                _cmds = [
+                    f"CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';",
+                    "CREATE DATABASE pingwatch OWNER pingwatch;",
+                ]
+                _all_ok = True
+                for _sql in _cmds:
+                    r = subprocess.run(
+                        ["sudo", "-u", "postgres", _psql, "-c", _sql],
+                        capture_output=True, text=True,
+                    )
+                    if r.returncode != 0:
+                        _err_out = (r.stderr or r.stdout or "").strip()
+                        # "already exists" errors are safe to ignore
+                        if "already exists" in _err_out.lower():
+                            _tag("ok", f"Already exists (skipping): {_sql.split()[2]}")
+                        else:
+                            _tag("warn", f"Command failed: {_err_out}")
+                            _all_ok = False
+                    else:
+                        _tag("ok", _sql.split(";")[0])
+                if _all_ok:
+                    _tag("ok", "Database and user created successfully.")
+                    _pw = _gen_pw
+                    _db_auto_ok = True
+                else:
+                    _tag("warn", "Some commands failed. You can create them manually:")
+            print()
+
+    if not _db_auto_ok:
+        # Fall back to showing manual instructions
+        print(_C["bold"] + "       Run these commands in a terminal:" + _C["reset"])
+        print()
+        print(_C["cyan"] + "         sudo -u postgres psql" + _C["reset"])
+        print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';" + _C["reset"])
+        print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
+        print(_C["cyan"] +  "         \\q" + _C["reset"])
+        print()
+        _tag("info", "Copy the password above or enter a custom one below.")
+        _pw = _ask("Password for the 'pingwatch' user", _gen_pw)
+        print()
 
     # 2d. Connection details ─────────────────────────────────────────────────────
     _separator("·")
