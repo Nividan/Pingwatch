@@ -376,6 +376,35 @@ def handle(h, method, path, body):
     if _RE_DB_STATS.match(path) and method == "GET":
         user, _ = h._require("admin")
         if not user: return True
+        from db.backend import is_pg
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor("main") as cur:
+                    cur.execute("SELECT pg_database_size(current_database()) AS sz")
+                    db_sz = cur.fetchone()["sz"]
+                with pg_cursor("logs") as cur:
+                    def _pg_cnt(table):
+                        try:
+                            cur.execute(f"SELECT COUNT(*) AS cnt FROM {table}")
+                            return cur.fetchone()["cnt"]
+                        except Exception:
+                            return 0
+                    h._json(200, {
+                        "main": {"path": "PostgreSQL", "size": db_sz},
+                        "logs": {
+                            "path": "PostgreSQL (logs schema)",
+                            "size": db_sz,
+                            "samples": _pg_cnt("sensor_samples"),
+                            "flaps":   _pg_cnt("flap_log"),
+                            "traps":   _pg_cnt("snmp_traps"),
+                            "errors":  _pg_cnt("sensor_err_log"),
+                        },
+                    })
+            except Exception as e:
+                log.error(f"db/stats PG error: {e}")
+                h._json(500, {"error": str(e)})
+            return True
         import sqlite3 as _sq3
         def _db_size(p):
             try:
@@ -404,6 +433,86 @@ def handle(h, method, path, body):
                 "errors":       _row_count(LOGS_DB_PATH, "sensor_err_log"),
             },
         })
+        return True
+
+    # ── GET /api/settings/db ─────────────────────────────────────
+    if path == "/api/settings/db" and method == "GET":
+        user, _ = h._require("admin")
+        if not user: return True
+        from db.backend import is_pg, get_config
+        cfg = get_config()
+        result = {
+            "backend": "postgresql" if is_pg() else "sqlite",
+        }
+        if is_pg():
+            result["pg_host"]     = cfg.get("pg_host", "")
+            result["pg_port"]     = cfg.get("pg_port", 5432)
+            result["pg_database"] = cfg.get("pg_database", "")
+            result["pg_user"]     = cfg.get("pg_user", "")
+        else:
+            result["db_path"]      = str(DB_PATH)
+            result["logs_db_path"] = str(LOGS_DB_PATH)
+            result["db_size"]      = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+            result["logs_db_size"] = os.path.getsize(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else 0
+        h._json(200, result)
+        return True
+
+    # ── POST /api/settings/db/test ───────────────────────────────
+    if path == "/api/settings/db/test" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from db.pg_pool import pg_test_connection
+        ok, err = pg_test_connection(
+            str(body.get("host", "localhost")).strip(),
+            int(body.get("port", 5432)),
+            str(body.get("database", "pingwatch")).strip(),
+            str(body.get("user", "pingwatch")).strip(),
+            str(body.get("password", "")),
+        )
+        h._json(200, {"ok": ok, "error": err})
+        return True
+
+    # ── POST /api/settings/db/migrate ────────────────────────────
+    if path == "/api/settings/db/migrate" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from db.pg_pool import pg_test_connection
+        host   = str(body.get("host", "localhost")).strip()
+        port   = int(body.get("port", 5432))
+        dbname = str(body.get("database", "pingwatch")).strip()
+        pg_user = str(body.get("user", "pingwatch")).strip()
+        pw     = str(body.get("password", ""))
+
+        # Test connection
+        ok, err = pg_test_connection(host, port, dbname, pg_user, pw)
+        if not ok:
+            h._json(400, {"ok": False, "error": f"Connection failed: {err}"})
+            return True
+
+        # Run migration
+        try:
+            from db.pg_migrate import migrate_sqlite_to_pg
+            pg_cfg = {
+                "pg_host": host, "pg_port": port, "pg_database": dbname,
+                "pg_user": pg_user, "pg_password": pw,
+            }
+            success, msg = migrate_sqlite_to_pg(str(DB_PATH), str(LOGS_DB_PATH), pg_cfg)
+            if success:
+                # Update config to switch backend
+                from db.backend import save_config, load_config
+                save_config({
+                    "db_backend": "postgresql",
+                    "pg_host": host, "pg_port": port, "pg_database": dbname,
+                    "pg_user": pg_user, "pg_password": pw,
+                })
+                load_config()
+                db_log_audit(user, h.client_address[0], 'db_migrate', '', 'sqlite_to_pg')
+                h._json(200, {"ok": True, "msg": msg, "restart_required": True})
+            else:
+                h._json(500, {"ok": False, "error": msg})
+        except Exception as e:
+            log.error(f"Migration failed: {e}")
+            h._json(500, {"ok": False, "error": str(e)})
         return True
 
     return False

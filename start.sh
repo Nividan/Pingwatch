@@ -112,10 +112,10 @@ PYEOF
 fi
 
 # ── First-run / forced setup ────────────────────────────────
-DB="$SCRIPT_DIR/pingwatch.db"
-if [ ! -f "$DB" ] || [ "${1:-}" = "--setup" ]; then
+CONF="$SCRIPT_DIR/pingwatch.conf"
+if [ ! -f "$CONF" ] || [ "${1:-}" = "--setup" ]; then
     echo "[SETUP] Running first-run setup wizard..."
-    "$PYTHON" "$SCRIPT_DIR/setup_wizard.py"
+    "$PYTHON" "$SCRIPT_DIR/setup_wizard.py" "$@"
     # If the wizard restarted the systemd service, don't launch a second instance
     if command -v systemctl &>/dev/null && systemctl is-active --quiet pingwatch 2>/dev/null; then
         exit 0

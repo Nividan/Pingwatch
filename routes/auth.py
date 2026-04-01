@@ -20,6 +20,7 @@ from core.config import DB_PATH
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
                          db_delete_user, db_set_password, db_get_user_auth_type,
                          db_update_profile, db_update_own_profile)
+from db.backend  import is_pg
 from core.logger import log
 import core.settings as _settings
 
@@ -28,6 +29,18 @@ _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 def _get_user_profile(username: str) -> dict:
     """Return {full_name, email} for username."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT full_name, email FROM users WHERE username=%s", (username,)
+                )
+                row = cur.fetchone()
+            return {"full_name": row["full_name"] or "", "email": row["email"] or ""} if row else {}
+        except Exception:
+            return {}
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         row = con.execute(

@@ -138,6 +138,13 @@ _state = {
     "org_name":        "PingWatch",
     "http_redirect":   True,
     "headless":        False,   # True when user opts out of desktop GUI
+    # Database backend (populated by step2_database)
+    "db_backend":   "sqlite",
+    "pg_host":      "localhost",
+    "pg_port":      5432,
+    "pg_database":  "pingwatch",
+    "pg_user":      "pingwatch",
+    "pg_password":  "",
 }
 
 # Track whether the DB was partially created (for Ctrl+C cleanup)
@@ -745,9 +752,325 @@ def _ask_port(label: str, default: int, protocol: str = "TCP") -> int:
         _tag("info", "Enter a different port:")
 
 
+def _generate_pg_password(length: int = 20) -> str:
+    """Generate a random alphanumeric password."""
+    import random, string
+    chars = string.ascii_letters + string.digits
+    return "".join(random.SystemRandom().choices(chars, k=length))
+
+
+def _detect_pg_server() -> "tuple[bool, str]":
+    """Return (installed, version_string)."""
+    import shutil as _sh
+    for cmd in (["psql", "--version"], ["pg_isready", "--version"]):
+        if _sh.which(cmd[0]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                ver = (r.stdout or r.stderr or "").strip().splitlines()[0]
+                return True, ver
+            except Exception:
+                return True, cmd[0]
+    return False, ""
+
+
+def _pg_install_instructions() -> str:
+    """Return distro-specific install instructions for PostgreSQL."""
+    import platform as _plat, shutil as _sh
+    _sys = _plat.system()
+    if _sys == "Linux":
+        distro = ""
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("ID="):
+                        distro = line.strip().split("=")[1].strip('"').lower()
+                        break
+        except Exception:
+            pass
+        if distro in ("ubuntu", "debian", "pop", "mint", "elementary", "raspbian"):
+            return "sudo apt install postgresql postgresql-contrib"
+        if distro in ("rhel", "centos", "rocky", "almalinux"):
+            return ("sudo dnf install postgresql-server postgresql && "
+                    "sudo postgresql-setup --initdb && "
+                    "sudo systemctl enable --now postgresql")
+        if distro == "fedora":
+            return ("sudo dnf install postgresql-server && "
+                    "sudo postgresql-setup --initdb && "
+                    "sudo systemctl enable --now postgresql")
+        # Generic: try to detect package manager
+        if _sh.which("apt-get"):
+            return "sudo apt install postgresql postgresql-contrib"
+        if _sh.which("dnf"):
+            return "sudo dnf install postgresql-server postgresql"
+        if _sh.which("yum"):
+            return "sudo yum install postgresql-server postgresql"
+        return "Install PostgreSQL using your distribution's package manager"
+    if _sys == "Darwin":
+        return "brew install postgresql@16 && brew services start postgresql@16"
+    return "Download from https://www.postgresql.org/download/"
+
+
+def step2_database():
+    """Step 2 — Choose and configure the database backend."""
+    _separator()
+    _tag("setup", f"{_C['bold']}Step 2 — Database Backend{_C['reset']}")
+    _separator()
+    print()
+    _tag("info", "Choose where PingWatch stores its data:")
+    print()
+    print("         [1] SQLite  — Zero configuration. Data stored locally.")
+    print("                       Best for most single-server deployments.")
+    print()
+    print("         [2] PostgreSQL — External database server.")
+    print("                       Best for production environments.")
+    print()
+
+    # Pre-select based on existing config (re-run mode)
+    _default_choice = "2" if _state["db_backend"] == "postgresql" else "1"
+    choice = _ask("Choose", _default_choice)
+
+    if choice != "2":
+        # ── SQLite ─────────────────────────────────────────────────────────────
+        from db.backend import save_config, load_config
+        save_config({"db_backend": "sqlite"})
+        load_config()
+        _state["db_backend"] = "sqlite"
+        _tag("ok", "SQLite selected — no additional configuration needed.")
+        print()
+        return
+
+    # ── PostgreSQL ─────────────────────────────────────────────────────────────
+    _tag("info", "PostgreSQL selected.")
+    print()
+
+    # 2a. Install psycopg2-binary ───────────────────────────────────────────────
+    try:
+        import psycopg2  # noqa: F401
+        _tag("ok", "psycopg2 — Python PostgreSQL driver")
+    except ImportError:
+        _tag("warn", "psycopg2 is not installed (required for PostgreSQL).")
+        if _ask_yn("Install psycopg2-binary now?", default=True):
+            _tag("info", "Installing psycopg2-binary ...")
+            ok, err = _pip_install("psycopg2-binary>=2.9.9")
+            if ok:
+                _tag("ok", "psycopg2-binary installed successfully")
+            else:
+                # Try system package as fallback
+                import shutil as _sh
+                _sys_ok = False
+                if sys.platform != "win32" and _sh.which("apt-get"):
+                    r = subprocess.run(
+                        ["sudo", "apt-get", "install", "-y", "python3-psycopg2"],
+                        capture_output=False,
+                    )
+                    _sys_ok = r.returncode == 0
+                if _sys_ok:
+                    _tag("ok", "psycopg2 installed via system package manager")
+                else:
+                    _tag("error", "Could not install psycopg2-binary automatically.")
+                    _tag("info", "Install manually:")
+                    _tag("info", "  pip install psycopg2-binary")
+                    _tag("info", "  or: sudo apt install python3-psycopg2")
+                    if not _ask_yn("Continue anyway?", default=False):
+                        _tag("info", "Switching to SQLite.")
+                        from db.backend import save_config, load_config
+                        save_config({"db_backend": "sqlite"})
+                        load_config()
+                        _state["db_backend"] = "sqlite"
+                        return
+        else:
+            _tag("warn", "Skipping — PostgreSQL backend requires psycopg2.")
+            _tag("info", "Switching to SQLite.")
+            from db.backend import save_config, load_config
+            save_config({"db_backend": "sqlite"})
+            load_config()
+            _state["db_backend"] = "sqlite"
+            return
+    print()
+
+    # 2b. Check PostgreSQL server installed ─────────────────────────────────────
+    _separator("·")
+    _tag("info", "Checking for PostgreSQL server on this host...")
+    print()
+    _pg_installed, _pg_ver = _detect_pg_server()
+
+    if _pg_installed:
+        _tag("ok", f"PostgreSQL detected: {_pg_ver}")
+    else:
+        _tag("warn", "PostgreSQL server not found on this host.")
+        print()
+        _instructions = _pg_install_instructions()
+        _tag("info", "Install PostgreSQL with:")
+        _tag("info", f"  {_instructions}")
+        print()
+        _tag("info", "After installing, press Enter to check again.")
+        _tag("info", "Or choose [s] to skip (useful if PostgreSQL runs on another host).")
+        print()
+        while True:
+            raw = _ask("Press Enter to check, or type 's' to skip", "")
+            if raw.lower() == "s":
+                _tag("info", "Skipping server check — continuing with connection details.")
+                break
+            _pg_installed, _pg_ver = _detect_pg_server()
+            if _pg_installed:
+                _tag("ok", f"PostgreSQL detected: {_pg_ver}")
+                break
+            else:
+                _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
+    print()
+
+    # 2c. Create database and user ───────────────────────────────────────────────
+    _separator("·")
+    _tag("info", "Create a PostgreSQL database and user for PingWatch.")
+    print()
+    _gen_pw = _generate_pg_password()
+    print(_C["bold"] + "       Run these commands in a terminal:" + _C["reset"])
+    print()
+    print(_C["cyan"] + "         sudo -u postgres psql" + _C["reset"])
+    print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';" + _C["reset"])
+    print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
+    print(_C["cyan"] +  "         \\q" + _C["reset"])
+    print()
+    _tag("info", "Copy the password above or enter a custom one below.")
+    _pw = _ask("Password for the 'pingwatch' user", _gen_pw)
+    print()
+
+    # 2d. Connection details ─────────────────────────────────────────────────────
+    _separator("·")
+    _tag("info", "Connection details (press Enter to accept defaults):")
+    print()
+    _host = _ask("PostgreSQL host", _state["pg_host"])
+    _port_raw = _ask("PostgreSQL port", str(_state["pg_port"]))
+    try:
+        _port = int(_port_raw)
+    except ValueError:
+        _port = 5432
+    _dbname = _ask("Database name", _state["pg_database"])
+    _user   = _ask("Username",      _state["pg_user"])
+    _password = _pw
+    print()
+
+    # 2e. Test connection loop ───────────────────────────────────────────────────
+    _separator("·")
+    _tag("info", "Testing connection...")
+    print()
+    _conn_ok = False
+    while True:
+        from db.pg_pool import pg_test_connection
+        _ok, _err = pg_test_connection(_host, _port, _dbname, _user, _password)
+        if _ok:
+            _tag("ok", f"Connected to PostgreSQL at {_host}:{_port}/{_dbname}")
+            _conn_ok = True
+            break
+        _tag("error", f"Connection failed: {_err}")
+        print()
+        print("         Options:")
+        print("           [1] Edit connection details and try again")
+        print("           [2] Continue anyway (skip validation)")
+        print("           [3] Switch to SQLite instead")
+        print()
+        _opt = _ask("Choose", "1")
+        if _opt == "2":
+            _tag("warn", "Proceeding without a confirmed connection.")
+            _conn_ok = False
+            break
+        if _opt == "3":
+            _tag("info", "Switching to SQLite.")
+            from db.backend import save_config, load_config
+            save_config({"db_backend": "sqlite"})
+            load_config()
+            _state["db_backend"] = "sqlite"
+            return
+        # re-ask details
+        _host     = _ask("PostgreSQL host", _host)
+        _port_raw = _ask("PostgreSQL port", str(_port))
+        try:
+            _port = int(_port_raw)
+        except ValueError:
+            _port = 5432
+        _dbname   = _ask("Database name", _dbname)
+        _user     = _ask("Username",      _user)
+        _password = _ask("Password",      _password)
+        print()
+        _tag("info", "Retrying connection...")
+        print()
+    print()
+
+    # ── Persist backend settings ────────────────────────────────────────────────
+    _state["db_backend"]  = "postgresql"
+    _state["pg_host"]     = _host
+    _state["pg_port"]     = _port
+    _state["pg_database"] = _dbname
+    _state["pg_user"]     = _user
+    _state["pg_password"] = _password
+
+    from db.backend import save_config, load_config
+    save_config({
+        "db_backend":  "postgresql",
+        "pg_host":     _host,
+        "pg_port":     _port,
+        "pg_database": _dbname,
+        "pg_user":     _user,
+        "pg_password": _password,
+    })
+    load_config()
+
+    # ── Init PG pool + schemas ──────────────────────────────────────────────────
+    if _conn_ok:
+        try:
+            from db.pg_pool import pg_init_pool
+            pg_init_pool()
+            from db.core import db_init
+            db_init()
+            _tag("ok", "PostgreSQL schemas created.")
+        except Exception as _e:
+            _tag("error", f"PostgreSQL init failed: {_e}")
+            _tag("info", "You can retry later or use Settings → Database to migrate.")
+
+    # 2f. Migration offer (existing SQLite data) ────────────────────────────────
+    if os.path.isfile(DB_PATH) and _conn_ok:
+        _sz = os.path.getsize(DB_PATH)
+        _sz_str = f"{_sz / 1048576:.1f} MB" if _sz >= 1048576 else f"{_sz // 1024} KB"
+        print()
+        _separator("·")
+        _tag("info", f"Existing SQLite database detected ({_sz_str}).")
+        _tag("info", "Migrate all data (devices, sensors, settings, history) to PostgreSQL?")
+        print()
+        if _ask_yn("Migrate existing data to PostgreSQL?", default=True):
+            _tag("info", "Migrating data — this may take a minute for large databases...")
+            print()
+            try:
+                from db.pg_migrate import migrate_sqlite_to_pg
+                def _progress(table, done, total):
+                    pct = int(done / total * 100) if total else 100
+                    print(f"\r         {table:<35} {pct:3d}%", end="", flush=True)
+                _ok_mig, _msg_mig = migrate_sqlite_to_pg(
+                    str(DB_PATH), str(LOGS_DB_PATH),
+                    {"pg_host": _host, "pg_port": _port, "pg_database": _dbname,
+                     "pg_user": _user, "pg_password": _password},
+                    progress_cb=_progress,
+                )
+                print()  # newline after progress
+                if _ok_mig:
+                    _tag("ok", f"Migration complete: {_msg_mig}")
+                    _tag("info", "SQLite files kept as backup. You can delete them once you've")
+                    _tag("info", "verified all data is present in PostgreSQL.")
+                else:
+                    _tag("warn", f"Migration finished with issues: {_msg_mig}")
+                    _tag("info", "You can retry from Settings → Database after startup.")
+            except Exception as _me:
+                print()
+                _tag("error", f"Migration error: {_me}")
+                _tag("info", "You can retry from Settings → Database after startup.")
+        else:
+            _tag("info", "Skipping migration. Your SQLite data remains untouched.")
+            _tag("info", "Migrate later from Settings → Database if needed.")
+    print()
+
+
 def step2_http_port():
     _separator()
-    _tag("setup", f"{_C['bold']}Step 2 — HTTP Port{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 3 — HTTP Port{_C['reset']}")
     _separator()
     _tag("info", "The HTTP dashboard port (used for HTTP access or redirect to HTTPS).")
     print()
@@ -758,7 +1081,7 @@ def step2_http_port():
 
 def step3_tls():
     _separator()
-    _tag("setup", f"{_C['bold']}Step 3 — HTTPS / TLS{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 4 — HTTPS / TLS{_C['reset']}")
     _separator()
     print()
     print("       Options:")
@@ -918,7 +1241,7 @@ def _step3_http_only():
 
 def step4_snmp_port():
     _separator()
-    _tag("setup", f"{_C['bold']}Step 4 — SNMP Trap Port{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 5 — SNMP Trap Port{_C['reset']}")
     _separator()
     import platform as _plat
     _sys = _plat.system()
@@ -951,7 +1274,7 @@ def step5_firewall():
     import platform as _plat, shutil as _sh
     _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 5 — Firewall Rules{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 6 — Firewall Rules{_C['reset']}")
     _separator()
     print()
 
@@ -1092,7 +1415,7 @@ def step6_shortcut():
     import platform as _plat
     _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 6 — Desktop Shortcut{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 7 — Desktop Shortcut{_C['reset']}")
     _separator()
     print()
 
@@ -1141,21 +1464,25 @@ def step6_shortcut():
 def step7_init_db():
     global _db_created
     _separator()
-    _tag("setup", f"{_C['bold']}Step 7 — Initialise Database & Save Settings{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 8 — Initialise Database & Save Settings{_C['reset']}")
     _separator()
     print()
 
+    from db.backend import is_pg
     from db.core import db_init
     from db.users import db_save_settings
 
-    _tag("info", "Creating database schema ...")
+    _tag("info", "Verifying database schema ...")
     _db_created = True   # mark so atexit cleanup can remove it on abort
     try:
         db_init()
     except Exception as e:
         _tag("error", f"Database initialisation failed: {e}")
         sys.exit(1)
-    _tag("ok", f"Database created: {DB_PATH}")
+    if is_pg():
+        _tag("ok", f"PostgreSQL database ready: {_state['pg_host']}:{_state['pg_port']}/{_state['pg_database']}")
+    else:
+        _tag("ok", f"Database created: {DB_PATH}")
 
     # Build settings dict from wizard state
     settings = {
@@ -1204,7 +1531,7 @@ def step8_service():
         return
 
     _separator()
-    _tag("setup", f"{_C['bold']}Step 8 — System Service (systemd){_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 9 — System Service (systemd){_C['reset']}")
     _separator()
     _tag("info", "Install PingWatch as a systemd service so it starts automatically on boot.")
     print()
@@ -1324,10 +1651,25 @@ def step8_service():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # ── Check for re-run mode (--setup with existing DB) ─────────────────────
+    # ── Check for re-run mode (--setup with existing config/DB) ──────────────
     rerun = "--setup" in sys.argv
-    if rerun and os.path.isfile(DB_PATH):
-        # Load existing settings as defaults
+
+    # Load existing pingwatch.conf backend settings as defaults (re-run mode)
+    try:
+        from db.backend import load_config as _load_backend_config, get_config as _get_cfg
+        _load_backend_config()
+        _cfg = _get_cfg()
+        _state["db_backend"]  = _cfg.get("db_backend",  "sqlite")
+        _state["pg_host"]     = _cfg.get("pg_host",     "localhost")
+        _state["pg_port"]     = int(_cfg.get("pg_port", 5432))
+        _state["pg_database"] = _cfg.get("pg_database", "pingwatch")
+        _state["pg_user"]     = _cfg.get("pg_user",     "pingwatch")
+        _state["pg_password"] = _cfg.get("pg_password", "")
+    except Exception:
+        pass
+
+    if rerun:
+        # Load existing app settings (port, TLS, etc.) as defaults
         try:
             from db.users import db_load_settings
             existing = db_load_settings()
@@ -1373,17 +1715,23 @@ def main():
             _tag("warn", "Proceeding with service running — database conflicts may occur.")
         print()
 
-    # Initialise DB schema before any step so encrypt_pw / db helpers work
-    try:
-        from db.core import db_init
-        db_init()
-    except Exception as _e:
-        _tag("error", f"Failed to initialise database schema: {_e}")
-        sys.exit(1)
-    _fix_file_ownership()   # chown DB back to SUDO_USER if running as root
-
     try:
         step1_packages()
+        # Step 2: database backend (must run before db_init so the right backend is used)
+        step2_database()
+
+        # Initialise DB schema now that the backend is known; this also makes
+        # encrypt_pw / db helpers available for the TLS step that follows.
+        # For PostgreSQL the pool was already opened inside step2_database();
+        # db_init() here is idempotent (creates schemas if missing, no-ops otherwise).
+        try:
+            from db.core import db_init
+            db_init()
+        except Exception as _e:
+            _tag("error", f"Failed to initialise database schema: {_e}")
+            sys.exit(1)
+        _fix_file_ownership()   # chown DB back to SUDO_USER if running as root
+
         step2_http_port()
         step3_tls()
         step4_snmp_port()

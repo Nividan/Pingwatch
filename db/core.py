@@ -12,6 +12,7 @@ import time
 from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
 from core.config import DB_PATH, LOGS_DB_PATH
 from core.logger import log
+from db.backend  import is_pg
 
 # ── Single-writer queues (Main DB + Logs DB) ─────────────────────────────────
 _DB_QUEUE:   queue.Queue = queue.Queue()
@@ -47,18 +48,52 @@ threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer").s
 
 
 def _db_enqueue(fn):
-    """Queue a zero-argument callable for the Main DB writer thread."""
-    _DB_QUEUE.put(fn)
+    """Queue a zero-argument callable for the Main DB writer thread.
+    In PostgreSQL mode the callable is executed directly (PG MVCC
+    handles concurrency)."""
+    if is_pg():
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"DB writer error: {e}")
+    else:
+        _DB_QUEUE.put(fn)
 
 
 def _logs_enqueue(fn):
-    """Queue a zero-argument callable for the Logs DB writer thread."""
-    _LOGS_QUEUE.put(fn)
+    """Queue a zero-argument callable for the Logs DB writer thread.
+    In PostgreSQL mode the callable is executed directly."""
+    if is_pg():
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"Logs DB writer error: {e}")
+    else:
+        _LOGS_QUEUE.put(fn)
 
 
 # ── Schema init ──────────────────────────────────────────────────
 
+def db_init_pg():
+    """Create PostgreSQL schemas, seed defaults.  Called instead of
+    ``db_init()`` + ``logs_db_init()`` when the backend is PostgreSQL."""
+    from db.pg_pool   import pg_conn
+    from db.pg_schema import pg_create_main_schema, pg_create_logs_schema, pg_seed_defaults
+
+    with pg_conn("public") as con:
+        cur = con.cursor()
+        pg_create_main_schema(cur)
+        pg_create_logs_schema(cur)
+        pg_seed_defaults(cur)
+        cur.close()
+    log.info("PG schema init complete")
+
+
 def db_init():
+    if is_pg():
+        db_init_pg()
+        return
+
     # ── Pre-migration safety backup (runs once per DB file) ──────────────
     _bak = str(DB_PATH) + ".pre_migrate.bak"
     if not os.path.exists(_bak) and os.path.exists(DB_PATH):
@@ -612,6 +647,26 @@ def db_init():
 def db_seed_users():
     """Seed default admin user if not present; preload live sessions into memory."""
     import secrets as _sec
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        with pg_cursor("main") as cur:
+            cur.execute("SELECT 1 FROM users WHERE username='admin'")
+            if not cur.fetchone():
+                pw = _sec.token_urlsafe(9)
+                cur.execute(
+                    "INSERT INTO users (username, pw_hash, role) VALUES (%s,%s,%s)",
+                    ("admin", _hash_pw(pw), "admin")
+                )
+                print("=" * 51, flush=True)
+                print(f"  Default admin password: {pw}", flush=True)
+                print("  Change it in Settings -> Users -> Reset Password", flush=True)
+                print("=" * 51, flush=True)
+                log.warning("Default admin user created — password printed to terminal")
+            cur.execute("DELETE FROM sessions")
+            log.info("DB seed: all sessions cleared (server restarted)")
+        return
+
     con = sqlite3.connect(DB_PATH)
     try:
         if not con.execute("SELECT 1 FROM users WHERE username='admin'").fetchone():
@@ -637,6 +692,9 @@ def db_seed_users():
 
 def logs_db_init():
     """Create the Logs DB schema (sensor_samples, flap_log, sensor_err_log, snmp_traps)."""
+    if is_pg():
+        return   # handled by db_init_pg()
+
     con = sqlite3.connect(LOGS_DB_PATH)
     try:
         con.execute("PRAGMA journal_mode=WAL")

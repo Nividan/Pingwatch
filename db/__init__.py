@@ -4,6 +4,9 @@ that all existing callers (server.py, state.py, trap_receiver.py, etc.) that
 use ``import db; db.X()`` or ``from db import X`` continue to work unchanged.
 """
 
+# backend — backend selection + config
+from db.backend     import is_pg, needs_setup
+
 # core — write queues + schema
 from db.core        import db_init, db_seed_users, _db_enqueue, \
                            _logs_enqueue, logs_db_init
@@ -98,6 +101,8 @@ from db.backups     import (
 )
 
 __all__ = [
+    # backend
+    "is_pg", "needs_setup",
     # core
     "db_init", "db_seed_users", "_db_enqueue",
     "_logs_enqueue", "logs_db_init",

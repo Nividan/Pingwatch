@@ -80,6 +80,11 @@ def _dns_refresh_worker(subnet_id, ip_list):
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+    # Phase 2: IPAM not yet available on PostgreSQL backend
+    from db.backend import is_pg
+    if is_pg() and path.startswith('/api/ipam'):
+        h._json(503, {"error": "IPAM is not yet available with PostgreSQL backend (coming in Phase 2)"})
+        return True
 
     # ── GET /api/ipam/subnets ─────────────────────────────────────
     if _RE_IPAM_SUBNETS.match(path) and method == 'GET':

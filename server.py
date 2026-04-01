@@ -35,6 +35,7 @@ from db              import (
     db_init, logs_db_init, db_load, db_seed_users,
     db_load_settings, db_save,
 )
+from db.backend      import is_pg, needs_setup
 
 import core.app_state as app_state
 from core.app_state import STATE
@@ -216,6 +217,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, monitoring, settings, topology, export, backups
         p = urlparse(self.path).path
 
+        # ── Setup wizard intercept (first-run) ────────────────────
+        if needs_setup():
+            if p == "/setup" or p == "/":
+                _setup_html = os.path.join(FRONTEND_DIR, "setup.html")
+                if os.path.isfile(_setup_html):
+                    with open(_setup_html, "rb") as _f:
+                        data = _f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self._json(503, {"error": "Setup wizard not found"})
+                return
+            if p.startswith("/api/setup/"):
+                from routes import setup as _setup_mod
+                if _setup_mod.handle(self, "GET", p, {}):
+                    return
+            # Serve static assets needed by setup page
+            ext = os.path.splitext(p)[1].lower()
+            if ext in _STATIC_TYPES:
+                pass  # fall through to static handler below
+            else:
+                self._json(503, {"error": "Setup required", "redirect": "/setup"})
+                return
+
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
         if p in ("/", "/index.html"):
             body = _load_html()
@@ -276,6 +304,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         from routes import auth, devices, monitoring, settings, topology, export, backups, tls as _tls_mod
         p = urlparse(self.path).path
+
+        # ── Setup wizard intercept (first-run) ────────────────────
+        if needs_setup() and p.startswith("/api/setup/"):
+            body = self._body()
+            if body is None: return
+            from routes import setup as _setup_mod
+            if _setup_mod.handle(self, "POST", p, body):
+                return
+            self._json(404, {"error": "not found"})
+            return
 
         # DB import reads its own oversized body before we call _body()
         if _RE_DB_IMPORT.match(p):
@@ -436,12 +474,32 @@ def main():
         except Exception as _pe:
             log.error(f"DB import: failed to apply pending Logs DB import — {_pe}")
 
+    # ── Load database backend config ───────────────────────────────────
+    from db.backend import load_config as _load_backend_config
+    _load_backend_config()
+
     # ── One-time migration: split legacy single-DB → dual-DB ─────────
     try:
         from db.migration import run_migration_if_needed
         run_migration_if_needed()
     except Exception as _me:
         log.error(f"DB migration error (non-fatal): {_me}")
+
+    # ── PostgreSQL pool init (if configured) ────────────────────────
+    if is_pg():
+        from db.pg_pool import pg_init_pool, pg_test_connection
+        from db.backend import get_config
+        _cfg = get_config()
+        _ok, _err = pg_test_connection(
+            _cfg["pg_host"], _cfg["pg_port"], _cfg["pg_database"],
+            _cfg["pg_user"], _cfg["pg_password"],
+        )
+        if not _ok:
+            log.error(f"PostgreSQL connection failed: {_err}")
+            log.error("Refusing to start — fix PostgreSQL configuration and restart.")
+            return
+        pg_init_pool()
+        log.info(f"PostgreSQL pool ready: {_cfg['pg_host']}:{_cfg['pg_port']}/{_cfg['pg_database']}")
 
     db_init()
     logs_db_init()
@@ -463,8 +521,13 @@ def main():
 
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))
-    log.info(f"Database: {DB_PATH}")
-    log.info(f"Logs DB:  {LOGS_DB_PATH}")
+    if is_pg():
+        from db.backend import get_config as _get_cfg
+        _c = _get_cfg()
+        log.info(f"Database: PostgreSQL {_c['pg_host']}:{_c['pg_port']}/{_c['pg_database']}")
+    else:
+        log.info(f"Database: {DB_PATH}")
+        log.info(f"Logs DB:  {LOGS_DB_PATH}")
 
     # ── Bind HTTP port FIRST — fail fast before loading state ──────
     try:
@@ -635,6 +698,10 @@ def main():
     STATE._executor.shutdown(wait=False)
     db_save(STATE)
     log.info("Configuration saved.")
+    if is_pg():
+        from db.pg_pool import pg_close_pool
+        pg_close_pool()
+        log.info("PostgreSQL pool closed.")
     server.shutdown()
 
 

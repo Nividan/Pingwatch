@@ -137,6 +137,11 @@ def run_migration_if_needed():
       3. Main DB lacks sensor_samples → post-split DB imported; create empty Logs DB schema
       4. Main DB has sensor_samples   → legacy single-DB; run the split
     """
+    # SQLite-only migration — skip entirely on PostgreSQL backend
+    from db.backend import is_pg
+    if is_pg():
+        return
+
     # ── Case 1: already done ──────────────────────────────────────
     if _is_split_complete():
         log.debug("Migration: already complete — skipping")
