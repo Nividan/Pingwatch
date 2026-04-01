@@ -47,26 +47,43 @@ def _strip_domain(username: str) -> str:
 
 def auth_login(username: str, password: str):
     """Return a session token on success, None on failure."""
+    from db.backend import is_pg
     clean = _strip_domain(username)
-    try:
-        con = sqlite3.connect(DB_PATH)
-        try:
-            row = con.execute(
-                "SELECT pw_hash, role, auth_type FROM users WHERE username=?", (clean,)
-            ).fetchone()
-        finally:
-            con.close()
-    except Exception:
-        return None
-    if not row:
-        return None
 
-    pw_hash   = row[0]
-    _role     = row[1] or "viewer"
-    auth_type = row[2] if len(row) > 2 else 'local'
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT pw_hash, role, auth_type FROM users WHERE username=%s",
+                    (clean,)
+                )
+                row = cur.fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        pw_hash   = row["pw_hash"]
+        _role     = row["role"] or "viewer"
+        auth_type = row["auth_type"] or "local"
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                row = con.execute(
+                    "SELECT pw_hash, role, auth_type FROM users WHERE username=?", (clean,)
+                ).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return None
+        if not row:
+            return None
+        pw_hash   = row[0]
+        _role     = row[1] or "viewer"
+        auth_type = row[2] if len(row) > 2 else 'local'
 
     if auth_type == 'ldap':
-        # Domain user — authenticate against LDAP directory
         try:
             from core.ldap_auth import ldap_authenticate
             if not ldap_authenticate(clean, password):
@@ -75,7 +92,6 @@ def auth_login(username: str, password: str):
             log.error(f"LDAP auth error for {clean!r}: {e}")
             return None
     else:
-        # Local user — verify password hash
         if not _verify_pw(password, pw_hash):
             return None
 
@@ -83,62 +99,105 @@ def auth_login(username: str, password: str):
     expires = time.time() + _settings.get("session_ttl", 86400)
     with _SESSIONS_LOCK:
         _SESSIONS[token] = {"username": clean, "expires": expires, "role": _role}
-    try:
-        con = sqlite3.connect(DB_PATH)
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
         try:
-            con.execute("DELETE FROM sessions WHERE username=?", (clean,))
-            con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
-            con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
-            con.commit()
-        finally:
-            con.close()
-    except Exception as e:
-        log.error(f"Session save error: {e}")
+            with pg_cursor("main") as cur:
+                cur.execute("DELETE FROM sessions WHERE username=%s", (clean,))
+                cur.execute("INSERT INTO sessions VALUES (%s,%s,%s)",
+                            (_hash_token(token), clean, expires))
+                cur.execute("DELETE FROM sessions WHERE expires<%s", (time.time(),))
+        except Exception as e:
+            log.error(f"Session save error: {e}")
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                con.execute("DELETE FROM sessions WHERE username=?", (clean,))
+                con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
+                con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
+                con.commit()
+            finally:
+                con.close()
+        except Exception as e:
+            log.error(f"Session save error: {e}")
     return token
 
 
 def auth_logout(token: str):
+    from db.backend import is_pg
     with _SESSIONS_LOCK:
         _SESSIONS.pop(token, None)
-    try:
-        con = sqlite3.connect(DB_PATH)
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
         try:
-            con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
-            con.commit()
-        finally:
-            con.close()
-    except Exception:
-        pass
+            with pg_cursor("main") as cur:
+                cur.execute("DELETE FROM sessions WHERE token=%s", (_hash_token(token),))
+        except Exception:
+            pass
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
+                con.commit()
+            finally:
+                con.close()
+        except Exception:
+            pass
 
 
 def auth_revoke_user_sessions(username: str):
     """Invalidate all active sessions for a given user (e.g. after password reset)."""
+    from db.backend import is_pg
     with _SESSIONS_LOCK:
         to_remove = [t for t, s in _SESSIONS.items() if s["username"] == username]
         for t in to_remove:
             del _SESSIONS[t]
-    try:
-        con = sqlite3.connect(DB_PATH)
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
         try:
-            con.execute("DELETE FROM sessions WHERE username=?", (username,))
-            con.commit()
-        finally:
-            con.close()
-    except Exception as e:
-        log.error(f"Session revoke error: {e}")
+            with pg_cursor("main") as cur:
+                cur.execute("DELETE FROM sessions WHERE username=%s", (username,))
+        except Exception as e:
+            log.error(f"Session revoke error: {e}")
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                con.execute("DELETE FROM sessions WHERE username=?", (username,))
+                con.commit()
+            finally:
+                con.close()
+        except Exception as e:
+            log.error(f"Session revoke error: {e}")
 
 
 def auth_verify_current(username: str, password: str) -> bool:
     """Return True if password matches the stored hash for username."""
-    try:
-        con = sqlite3.connect(DB_PATH)
+    from db.backend import is_pg
+    if is_pg():
+        from db.pg_pool import pg_cursor
         try:
-            row = con.execute("SELECT pw_hash FROM users WHERE username=?", (username,)).fetchone()
-        finally:
-            con.close()
-        return bool(row and _verify_pw(password, row[0]))
-    except Exception:
-        return False
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT pw_hash FROM users WHERE username=%s", (username,))
+                row = cur.fetchone()
+            return bool(row and _verify_pw(password, row["pw_hash"]))
+        except Exception:
+            return False
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                row = con.execute("SELECT pw_hash FROM users WHERE username=?", (username,)).fetchone()
+            finally:
+                con.close()
+            return bool(row and _verify_pw(password, row[0]))
+        except Exception:
+            return False
 
 
 def auth_check(token: str):
@@ -148,6 +207,7 @@ def auth_check(token: str):
     On a successful DB hit the session is re-populated into _SESSIONS so that
     the immediately-following auth_check_role() call finds it in memory.
     """
+    from db.backend import is_pg
     if not token:
         return None
     with _SESSIONS_LOCK:
@@ -158,26 +218,49 @@ def auth_check(token: str):
             return None
         return s["username"]
     # Not in memory — may have survived a restart; check the DB.
-    try:
-        h = _hash_token(token)
-        con = sqlite3.connect(DB_PATH)
+    if is_pg():
+        from db.pg_pool import pg_cursor
         try:
-            row = con.execute(
-                "SELECT s.username, s.expires, u.role "
-                "FROM sessions s JOIN users u ON u.username=s.username "
-                "WHERE s.token=? AND s.expires>?",
-                (h, time.time())
-            ).fetchone()
-        finally:
-            con.close()
-        if row:
-            username, expires, role = row
-            with _SESSIONS_LOCK:
-                _SESSIONS[token] = {"username": username, "expires": expires,
-                                    "role": role or "viewer"}
-            return username
-    except Exception as e:
-        log.error(f"Session DB lookup error: {e}")
+            h = _hash_token(token)
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT s.username, s.expires, u.role "
+                    "FROM sessions s JOIN users u ON u.username=s.username "
+                    "WHERE s.token=%s AND s.expires>%s",
+                    (h, time.time())
+                )
+                row = cur.fetchone()
+            if row:
+                with _SESSIONS_LOCK:
+                    _SESSIONS[token] = {
+                        "username": row["username"],
+                        "expires": row["expires"],
+                        "role": row["role"] or "viewer",
+                    }
+                return row["username"]
+        except Exception as e:
+            log.error(f"Session DB lookup error: {e}")
+    else:
+        try:
+            h = _hash_token(token)
+            con = sqlite3.connect(DB_PATH)
+            try:
+                row = con.execute(
+                    "SELECT s.username, s.expires, u.role "
+                    "FROM sessions s JOIN users u ON u.username=s.username "
+                    "WHERE s.token=? AND s.expires>?",
+                    (h, time.time())
+                ).fetchone()
+            finally:
+                con.close()
+            if row:
+                username, expires, role = row
+                with _SESSIONS_LOCK:
+                    _SESSIONS[token] = {"username": username, "expires": expires,
+                                        "role": role or "viewer"}
+                return username
+        except Exception as e:
+            log.error(f"Session DB lookup error: {e}")
     return None
 
 

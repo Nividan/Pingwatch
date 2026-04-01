@@ -186,6 +186,11 @@ def _do_restart(pending_main=None, pending_logs=None):
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+    # Phase 2: DB export/import not yet available on PostgreSQL backend
+    from db.backend import is_pg
+    if is_pg() and (path.startswith('/api/db/export') or path.startswith('/api/db/import')):
+        h._json(503, {"error": "DB export/import is not yet available with PostgreSQL backend (coming in Phase 2)"})
+        return True
 
     # ── GET /api/db/export — Main DB ─────────────────────────────
     if _RE_DB_EXPORT.match(path) and method == "GET":

@@ -17,6 +17,16 @@ DB_PATH      = os.path.join(_ROOT, "pingwatch.db")
 LOGS_DB_PATH = os.path.join(_ROOT, "pingwatch_logs.db")
 SESSION_TTL  = 86400   # 24 hours
 
+# ── PostgreSQL backend (overridden at runtime by pingwatch.conf / env vars) ──
+DB_BACKEND   = os.environ.get("PW_DB_BACKEND", "sqlite")
+PG_HOST      = os.environ.get("PW_PG_HOST", "localhost")
+PG_PORT      = int(os.environ.get("PW_PG_PORT", "5432"))
+PG_DATABASE  = os.environ.get("PW_PG_DATABASE", "pingwatch")
+PG_USER      = os.environ.get("PW_PG_USER", "pingwatch")
+PG_PASSWORD  = os.environ.get("PW_PG_PASSWORD", "")
+PG_POOL_MIN  = int(os.environ.get("PW_PG_POOL_MIN", "2"))
+PG_POOL_MAX  = int(os.environ.get("PW_PG_POOL_MAX", "20"))
+
 FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
 CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
 DB_BACKUP_DIR    = os.path.join(_ROOT, "backup", "database")

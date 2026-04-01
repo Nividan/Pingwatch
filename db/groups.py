@@ -6,10 +6,31 @@ import sqlite3
 
 from core.config import DB_PATH
 from core.logger import log
+from db.backend  import is_pg
 
 
 def db_list_groups() -> list:
     """Return [{id, name, description, member_count}] ordered by name."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("""
+                    SELECT g.id, g.name, g.description,
+                           COUNT(u.username) AS member_count
+                    FROM user_groups g
+                    LEFT JOIN users u ON u.group_id = g.id
+                    GROUP BY g.id
+                    ORDER BY g.name
+                """)
+                rows = cur.fetchall()
+            return [{"id": r["id"], "name": r["name"],
+                     "description": r["description"] or "",
+                     "member_count": r["member_count"]} for r in rows]
+        except Exception as e:
+            log.error(f"db_list_groups error: {e}")
+            return []
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         rows = con.execute("""
@@ -31,6 +52,22 @@ def db_list_groups() -> list:
 
 def db_create_group(name: str, description: str = "") -> int:
     """Insert group. Returns new id, -2 on duplicate name, -1 on error."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        import psycopg2
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "INSERT INTO user_groups (name, description) VALUES (%s,%s) RETURNING id",
+                    (name.strip(), description.strip())
+                )
+                return cur.fetchone()["id"]
+        except psycopg2.IntegrityError:
+            return -2
+        except Exception as e:
+            log.error(f"db_create_group error: {e}")
+            return -1
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         cur = con.execute(
@@ -50,6 +87,22 @@ def db_create_group(name: str, description: str = "") -> int:
 
 def db_update_group(group_id: int, name: str, description: str = "") -> bool:
     """Update group name/description. Returns False if not found."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        import psycopg2
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE user_groups SET name=%s, description=%s WHERE id=%s",
+                    (name.strip(), description.strip(), group_id)
+                )
+                return cur.rowcount > 0
+        except psycopg2.IntegrityError:
+            return False
+        except Exception as e:
+            log.error(f"db_update_group error: {e}")
+            return False
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         cur = con.execute(
@@ -69,6 +122,20 @@ def db_update_group(group_id: int, name: str, description: str = "") -> bool:
 
 def db_delete_group(group_id: int) -> bool:
     """Delete group; sets group_id=NULL for all members. Returns False if not found."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT id FROM user_groups WHERE id=%s", (group_id,))
+                if not cur.fetchone():
+                    return False
+                cur.execute("UPDATE users SET group_id=NULL WHERE group_id=%s", (group_id,))
+                cur.execute("DELETE FROM user_groups WHERE id=%s", (group_id,))
+            return True
+        except Exception as e:
+            log.error(f"db_delete_group error: {e}")
+            return False
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         row = con.execute(
@@ -94,15 +161,32 @@ def db_update_group_members(group_id: int, usernames: list) -> bool:
     - Set group_id=NULL WHERE group_id=group_id AND username NOT IN usernames
     Returns True on success.
     """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT id FROM user_groups WHERE id=%s", (group_id,))
+                if not cur.fetchone():
+                    return False
+                cur.execute("UPDATE users SET group_id=NULL WHERE group_id=%s", (group_id,))
+                if usernames:
+                    placeholders = ",".join(["%s"] * len(usernames))
+                    cur.execute(
+                        f"UPDATE users SET group_id=%s WHERE username IN ({placeholders})",
+                        [group_id] + list(usernames)
+                    )
+            return True
+        except Exception as e:
+            log.error(f"db_update_group_members error: {e}")
+            return False
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         if not con.execute(
             "SELECT id FROM user_groups WHERE id=?", (group_id,)
         ).fetchone():
             return False
-        # Clear current members of this group
         con.execute("UPDATE users SET group_id=NULL WHERE group_id=?", (group_id,))
-        # Assign selected members
         if usernames:
             placeholders = ",".join("?" * len(usernames))
             con.execute(
@@ -120,6 +204,19 @@ def db_update_group_members(group_id: int, usernames: list) -> bool:
 
 def db_resolve_group_emails(group_id: int) -> list:
     """Return list of non-empty email addresses for all users in this group."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT email FROM users WHERE group_id=%s AND email IS NOT NULL AND email != ''",
+                    (group_id,)
+                )
+                return [r["email"] for r in cur.fetchall()]
+        except Exception as e:
+            log.error(f"db_resolve_group_emails error: {e}")
+            return []
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         rows = con.execute(

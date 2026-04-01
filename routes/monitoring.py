@@ -13,6 +13,7 @@ import time
 import core.app_state as app_state
 from core.config import DB_PATH, LOGS_DB_PATH
 from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap
+from db.backend import is_pg
 from core.logger import log
 
 
@@ -89,6 +90,34 @@ def handle(h, method, path, body):
         if not user: return True
         now = time.time()
         periods = {"1h": 3600, "24h": 86400, "7d": 604800}
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor("logs") as cur:
+                    result = {}
+                    for label, secs in periods.items():
+                        cutoff = datetime.datetime.utcfromtimestamp(now - secs).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        cur.execute(
+                            "SELECT direction, COUNT(*) AS cnt FROM flap_log WHERE ts >= %s GROUP BY direction",
+                            (cutoff,)
+                        )
+                        counts = {r["direction"]: r["cnt"] for r in cur.fetchall()}
+                        cur.execute(
+                            "SELECT COUNT(*) AS cnt FROM snmp_traps WHERE ts >= %s", (cutoff,)
+                        )
+                        trap_row = cur.fetchone()
+                        result[label] = {
+                            "down":      counts.get("down", 0),
+                            "recovered": counts.get("recovered", 0),
+                            "threshold": counts.get("threshold_crit", 0) + counts.get("threshold_warn", 0) + counts.get("threshold_ok", 0),
+                            "trap":      trap_row["cnt"] if trap_row else 0,
+                        }
+                h._json(200, {"summary": result})
+            except Exception as e:
+                log.error(f"Events summary error: {e}")
+                h._json(500, {"error": str(e)})
+            return True
+        # SQLite
         con = None
         try:
             con = sqlite3.connect(LOGS_DB_PATH)
@@ -130,30 +159,55 @@ def handle(h, method, path, body):
         cutoff      = datetime.datetime.utcfromtimestamp(
             time.time() - minutes * 60).strftime("%Y-%m-%dT%H:%M:%SZ")
         events = []
-        con = None
-        try:
-            con = sqlite3.connect(LOGS_DB_PATH)
-            rows = con.execute(
-                "SELECT ts, direction, dname, sname FROM flap_log "
-                "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
-                (cutoff,)
-            ).fetchall()
-            for ts_str, direction, dname, sname in rows:
-                try:
-                    dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
-                    epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
-                except Exception:
-                    continue
-                label = " / ".join(x for x in [dname, sname] if x)
-                events.append({
-                    "ts":    epoch,
-                    "type":  "outage" if direction == "down" else "alert",
-                    "label": label,
-                })
-        except Exception as e:
-            log.error(f"health/trend events error: {e}")
-        finally:
-            if con: con.close()
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor("logs") as cur:
+                    cur.execute(
+                        "SELECT ts, direction, dname, sname FROM flap_log "
+                        "WHERE ts >= %s AND direction IN ('down','threshold_crit') ORDER BY ts",
+                        (cutoff,)
+                    )
+                    for r in cur.fetchall():
+                        try:
+                            dt = datetime.datetime.strptime(r["ts"], "%Y-%m-%dT%H:%M:%SZ")
+                            epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
+                        except Exception:
+                            continue
+                        label = " / ".join(x for x in [r["dname"], r["sname"]] if x)
+                        events.append({
+                            "ts":    epoch,
+                            "type":  "outage" if r["direction"] == "down" else "alert",
+                            "label": label,
+                        })
+            except Exception as e:
+                log.error(f"health/trend events error: {e}")
+        else:
+            # SQLite
+            con = None
+            try:
+                con = sqlite3.connect(LOGS_DB_PATH)
+                rows = con.execute(
+                    "SELECT ts, direction, dname, sname FROM flap_log "
+                    "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
+                    (cutoff,)
+                ).fetchall()
+                for ts_str, direction, dname, sname in rows:
+                    try:
+                        dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+                        epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
+                    except Exception:
+                        continue
+                    label = " / ".join(x for x in [dname, sname] if x)
+                    events.append({
+                        "ts":    epoch,
+                        "type":  "outage" if direction == "down" else "alert",
+                        "label": label,
+                    })
+            except Exception as e:
+                log.error(f"health/trend events error: {e}")
+            finally:
+                if con: con.close()
         h._json(200, {"points": pts, "events": events, "range": range_param})
         return True
 

@@ -5,6 +5,9 @@ paramiko>=3.0.0
 cryptography>=41.0.0
 ldap3>=2.9
 
+# Optional: PostgreSQL backend (required only if using PostgreSQL instead of SQLite)
+psycopg2-binary>=2.9.9
+
 # ── Platform-specific system packages (not pip-installable) ──────────────────
 #
 # Linux (Debian/Ubuntu):

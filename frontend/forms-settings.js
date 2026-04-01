@@ -218,6 +218,12 @@ async function openSettings(){
     </div>
     <div class="mbdy stab-fade" id="stab-database" style="display:none">
 
+      <!-- Database Backend -->
+      <div id="db-backend-section" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Database Backend</div>
+        <div id="db-backend-info" style="font-size:12px;color:var(--text3)">Loading...</div>
+      </div>
+
       <!-- Main DB -->
       <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Main Database</div>
@@ -1134,8 +1140,109 @@ async function _loadDbStats(){
   }
 }
 
+async function _loadDbBackendInfo(){
+  const el = document.getElementById('db-backend-info');
+  if(!el) return;
+  try {
+    const d = await api('GET', '/api/settings/db');
+    if(d.backend === 'postgresql'){
+      el.innerHTML =
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up)"></span>' +
+        '<span style="color:var(--text);font-weight:600">PostgreSQL</span></div>' +
+        '<span style="color:var(--text3)">Host: ' + esc(d.pg_host) + ':' + d.pg_port +
+        ' &nbsp;|&nbsp; Database: ' + esc(d.pg_database) + ' &nbsp;|&nbsp; User: ' + esc(d.pg_user) + '</span>';
+    } else {
+      const fmtSize = b => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : b >= 1024 ? (b/1024).toFixed(1)+' KB' : b+' B';
+      el.innerHTML =
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent)"></span>' +
+        '<span style="color:var(--text);font-weight:600">SQLite</span></div>' +
+        '<span style="color:var(--text3)">Main: ' + fmtSize(d.db_size||0) + ' &nbsp;|&nbsp; Logs: ' + fmtSize(d.logs_db_size||0) + '</span>' +
+        '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">' +
+        '<div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px">Migrate to PostgreSQL</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Copy all data to a PostgreSQL server and switch the backend.</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">' +
+        '<div><label style="font-size:11px;color:var(--text3)">Host</label><input type="text" id="mig-pg-host" value="localhost" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:12px"></div>' +
+        '<div><label style="font-size:11px;color:var(--text3)">Port</label><input type="number" id="mig-pg-port" value="5432" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:12px"></div>' +
+        '</div>' +
+        '<div style="margin-bottom:8px"><label style="font-size:11px;color:var(--text3)">Database</label><input type="text" id="mig-pg-db" value="pingwatch" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:12px"></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">' +
+        '<div><label style="font-size:11px;color:var(--text3)">User</label><input type="text" id="mig-pg-user" value="pingwatch" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:12px"></div>' +
+        '<div><label style="font-size:11px;color:var(--text3)">Password</label><input type="password" id="mig-pg-pass" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:12px"></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+        '<button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="_migTestConn()">Test Connection</button>' +
+        '<button class="btn-p" style="font-size:12px;padding:6px 14px" id="mig-btn" onclick="_migRun()" disabled>Migrate Now</button>' +
+        '<span id="mig-status" style="font-size:12px;color:var(--text3)"></span>' +
+        '</div>' +
+        '</div>';
+    }
+  } catch(e) {
+    el.textContent = 'Could not load backend info';
+  }
+}
+
+async function _migTestConn(){
+  const st = document.getElementById('mig-status');
+  st.textContent = 'Testing...';
+  st.style.color = 'var(--text3)';
+  try {
+    const r = await api('POST', '/api/settings/db/test', {
+      host: document.getElementById('mig-pg-host')?.value || 'localhost',
+      port: parseInt(document.getElementById('mig-pg-port')?.value) || 5432,
+      database: document.getElementById('mig-pg-db')?.value || 'pingwatch',
+      user: document.getElementById('mig-pg-user')?.value || 'pingwatch',
+      password: document.getElementById('mig-pg-pass')?.value || '',
+    });
+    if(r.ok){
+      st.innerHTML = '<span style="color:var(--up)">&#10003; Connected</span>';
+      const btn = document.getElementById('mig-btn');
+      if(btn) btn.disabled = false;
+    } else {
+      st.innerHTML = '<span style="color:var(--down)">&#10007; ' + esc(r.error) + '</span>';
+    }
+  } catch(e) {
+    st.innerHTML = '<span style="color:var(--down)">' + esc(e.message) + '</span>';
+  }
+}
+
+async function _migRun(){
+  if(!confirm('This will copy all SQLite data to PostgreSQL and switch the backend.\nThe server will need to restart after migration.\n\nContinue?')) return;
+  const btn = document.getElementById('mig-btn');
+  const st  = document.getElementById('mig-status');
+  btn.disabled = true;
+  st.textContent = 'Migrating...';
+  st.style.color = 'var(--warn)';
+  try {
+    const r = await api('POST', '/api/settings/db/migrate', {
+      host: document.getElementById('mig-pg-host')?.value || 'localhost',
+      port: parseInt(document.getElementById('mig-pg-port')?.value) || 5432,
+      database: document.getElementById('mig-pg-db')?.value || 'pingwatch',
+      user: document.getElementById('mig-pg-user')?.value || 'pingwatch',
+      password: document.getElementById('mig-pg-pass')?.value || '',
+    });
+    if(r.ok){
+      st.innerHTML = '<span style="color:var(--up)">&#10003; Migration complete! Server restart required.</span>';
+      if(r.restart_required) {
+        if(confirm('Migration successful! Restart the server now?')) {
+          await api('POST', '/api/server/restart');
+          st.textContent = 'Server restarting...';
+        }
+      }
+    } else {
+      st.innerHTML = '<span style="color:var(--down)">&#10007; ' + esc(r.error) + '</span>';
+      btn.disabled = false;
+    }
+  } catch(e) {
+    st.innerHTML = '<span style="color:var(--down)">' + esc(e.message) + '</span>';
+    btn.disabled = false;
+  }
+}
+
 async function _loadDbBackupSettings(){
   _loadDbStats();
+  _loadDbBackendInfo();
   const r = await api('GET', '/api/settings');
   const en   = document.getElementById('st-dbk-enabled');
   const freq = document.getElementById('st-dbk-freq');
