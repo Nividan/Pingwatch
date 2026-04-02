@@ -437,7 +437,7 @@ function _applyTypeDefaults(t){
   _sv('as-wms', d.warn_ms  ?? _SDR_WARN_DEF[t]);
   _sv('as-cms', d.crit_ms  ?? _SDR_CRIT_DEF[t]);
   if(t==='tcp')          _sv('as-tp',    d.port);
-  if(t==='snmp')       { _sv('as-sp',    d.port); _sv('as-sc', d.community); if(d.version) document.getElementById('as-sv').value=d.version; }
+  if(t==='snmp')       { _sv('as-sp',    d.port); const _snrDev=window._ifaceDid?S.devices[window._ifaceDid]:null; if(!_snrDev?.snmp_community_default) _sv('as-sc', d.community); if(d.version&&!_snrDev?.snmp_version_default) document.getElementById('as-sv').value=d.version; }
   if(t==='dns')        { _sv('as-dp',    d.port); if(d.record_type) document.getElementById('as-drt').value=d.record_type; _sv('as-ds', d.dns_server); }
   if(t==='tls')          _sv('as-tlsp',  d.port);
   if(t==='banner')       _sv('as-bnp',   d.port);
@@ -591,7 +591,7 @@ function snmpOidPick(){
 async function discoverInterfaces(){
   const did       = window._ifaceDid;
   const host      = document.getElementById('as-sh')?.value.trim() || S.devices[did]?.host || '';
-  const community = document.getElementById('as-sc')?.value.trim()||'public';
+  const community = document.getElementById('as-sc')?.value.trim()||S.devices[did]?.snmp_community_default||'public';
   const port      = parseInt(document.getElementById('as-sp')?.value)||161;
   const version   = document.getElementById('as-sv')?.value||'2c';
   const btn       = document.getElementById('as-disc-btn');
