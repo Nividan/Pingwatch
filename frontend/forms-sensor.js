@@ -421,6 +421,7 @@ function _snmpTryMatchCurrentOid(){
   if(!oidEl) return;
   const currentOid=oidEl.value.trim();
   if(!currentOid) return;
+  // Exact catalog match
   for(const vendor of _snmpCatalog){
     for(const o of vendor.oids){
       if(o.oid===currentOid){
@@ -431,6 +432,19 @@ function _snmpTryMatchCurrentOid(){
         const unitEl=document.getElementById('as-oid-unit');
         if(unitEl) unitEl.textContent=o.unit?'Unit: '+o.unit:'';
         return;
+      }
+    }
+  }
+  // Fallback: interface-discovered OID (base + numeric index, e.g. "1.3.6.1.2.1.2.2.1.14.44")
+  const ifaceMetrics=window._ifaceMetrics;
+  if(ifaceMetrics){
+    const m=currentOid.match(/^(.+\.)(\d+)$/);
+    if(m){
+      const base=m[1], idx=m[2];
+      const metric=ifaceMetrics.find(mm=>mm.oid===base);
+      if(metric){
+        const unitEl2=document.getElementById('as-oid-unit2');
+        if(unitEl2) unitEl2.textContent=`${metric.l} (interface ${idx}) · Unit: ${metric.u}`;
       }
     }
   }
@@ -615,8 +629,9 @@ function updateIfaceSelCount(){
     const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel?.value);
     if(metric && !isNaN(idx)){
       oidEl.value=metric.oid+idx;
+      const ifaceName=cb.dataset.name||('interface '+idx);
       const unitEl=document.getElementById('as-oid-unit2');
-      if(unitEl) unitEl.textContent=metric.u?'Unit: '+metric.u:'';
+      if(unitEl) unitEl.textContent=`${metric.l} on ${ifaceName} · Unit: ${metric.u}`;
       const sunitEl=document.getElementById('as-snmp-unit');
       if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
     }
@@ -639,12 +654,15 @@ async function addSelectedIfaceSensors(){
     if(!metric){toast('Unknown metric','err');return;}
     const oidEl=document.getElementById('as-oid');
     const sunitEl=document.getElementById('as-snmp-unit');
+    const ifaceName=cb.dataset.name||('interface '+idx);
     if(oidEl) oidEl.value=metric.oid+idx;
     if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+    const unitEl2=document.getElementById('as-oid-unit2');
+    if(unitEl2) unitEl2.textContent=`${metric.l} on ${ifaceName} · Unit: ${metric.u}`;
     const listEl=document.getElementById('as-iface-list');
     if(listEl) listEl.style.display='none';
     const statusEl=document.getElementById('as-iface-status');
-    if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent='OID applied — save to confirm';}
+    if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=`Applied: ${metric.l} on ${ifaceName} — save to confirm`;}
     return;
   }
 
