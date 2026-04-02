@@ -838,6 +838,32 @@ function _fmtRateThrLabel(displayVal, snmpUnit) {
   return displayVal.toFixed(1)+'/s';
 }
 
+// ── VMware metric unit helpers ───────────────────────────────────
+const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'KB',mem_consumed:'KB',mem_consumed_pct:'%',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:''};
+function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
+function _fmtVmVal(v,u){
+  if(v==null)return'—';
+  switch(u){
+    case'%':return v.toFixed(2)+'%';
+    case'KB':return v>=1048576?(v/1048576).toFixed(1)+' GB':v>=1024?(v/1024).toFixed(1)+' MB':v+' KB';
+    case'KBps':return v>=1024?(v/1024).toFixed(1)+' MBps':v.toFixed(1)+' KBps';
+    case'ms':return v.toFixed(1)+' ms';
+    case'seconds':return v>=86400?(v/86400).toFixed(1)+' days':v>=3600?(v/3600).toFixed(1)+' hrs':v.toFixed(0)+' sec';
+    default:return String(v);
+  }
+}
+function _vmUnitLabel(u){return u==='%'?'%':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':'';}
+function _fmtVmYLabel(v,u){
+  switch(u){
+    case'%':return Math.round(v)+'%';
+    case'KB':return v>=1048576?(v/1048576).toFixed(1)+'GB':v>=1024?(v/1024).toFixed(0)+'MB':Math.round(v)+'KB';
+    case'KBps':return v>=1024?(v/1024).toFixed(1)+'MBps':Math.round(v)+'KBps';
+    case'ms':return Math.round(v)+'ms';
+    case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v)+'s';
+    default:return String(Math.round(v));
+  }
+}
+
 function openDetail(did,sid,initialTab){
   const key=`${did}/${sid}`;
   const s=S.sensors[key];if(!s)return;
@@ -878,7 +904,7 @@ function openDetail(did,sid,initialTab){
       </div>
       <div class="dm-chart-wrap">
         <div class="dm-cht">
-          <span>${s.stype==='snmp'?'Poll history':s.stype==='tls'?'Check history':'Latency'} — last ${s.history?.length||0} samples</span>
+          <span>${s.stype==='snmp'?'Poll history':s.stype==='tls'?'Check history':s.stype==='vmware'?'Metric history':'Latency'} — last ${s.history?.length||0} samples</span>
           <span id="dmlbl-${did}-${sid}"></span>
         </div>
         <canvas class="dmc" id="dmc-${did}-${sid}" height="110"></canvas>
@@ -1017,7 +1043,7 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   _buildKpiBar(summary, did, sid, rateSamples, _snmpUnit);
   _setupHistTooltip(c, summary, did, sid, minutes, rateSamples, _snmpUnit);
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
-  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit);
+  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit, did, sid);
   // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
   // the next animation frame will have correct dimensions — redraw from cache.
   requestAnimationFrame(() => dmHistRedraw(did, sid));
@@ -1072,6 +1098,24 @@ function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
     ['avg','min','max'].forEach((k,i)=>{const el=document.getElementById(`dmv-${did}-${sid}-${k}`);if(el)el.textContent=[_fr(avgR),_fr(minR),_fr(maxR)][i];});
     return;
   }
+  // VMware metric-value KPIs
+  const _vmU = _vmUnit(did, sid);
+  if (_vmU !== null) {
+    if (!summary.length) return;
+    const _lbl2 = _vmUnitLabel(_vmU);
+    let _ws2=0, _wc2=0, _mnV=Infinity, _mxV=-Infinity;
+    for (const r of summary) {
+      if(r.avg_ms!=null){_ws2+=r.avg_ms*r.ok;_wc2+=r.ok;}
+      if(r.min_ms!=null) _mnV=Math.min(_mnV,r.min_ms);
+      if(r.max_ms!=null) _mxV=Math.max(_mxV,r.max_ms);
+    }
+    const _av2=_wc2>0?_ws2/_wc2:null;
+    _setKpi(`kpi-avg-${did}-${sid}`,'Avg '+_lbl2,_fmtVmVal(_av2,_vmU));
+    _setKpi(`kpi-min-${did}-${sid}`,'Min '+_lbl2,_mnV!==Infinity?_fmtVmVal(_mnV,_vmU):'—');
+    _setKpi(`kpi-max-${did}-${sid}`,'Max '+_lbl2,_mxV!==-Infinity?_fmtVmVal(_mxV,_vmU):'—');
+    _setKpi(`kpi-jitter-${did}-${sid}`,'Jitter',_fmtVmVal(avgJitt,_vmU),'dm-kpi-info');
+    return;
+  }
   // ms-based KPIs
   if (!summary.length) return;
   let wsum=0, wcnt=0, minMs=Infinity, maxMs=-Infinity;
@@ -1096,6 +1140,8 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
   const { signal } = ac;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
+  const _vmU3 = _vmUnit(did, sid);
+  const _isVmware3 = _vmU3 !== null;
   canvas.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -1134,6 +1180,24 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
         `<td style="color:var(--text);text-align:right">${nearest?.ok||0}↑ ${nearest?.fail||0}↓</td></tr>` +
         `<tr><td style="color:var(--text3)">Loss</td>` +
         `<td style="color:${lossColor};text-align:right">${(nearest?.loss_pct||0).toFixed(1)}%</td></tr>` +
+        `</table>` +
+        `<div style="${_ftStyle};color:${statusColor}">${statusText}</div>`;
+    } else if (_isVmware3) {
+      tip.innerHTML =
+        `<div style="${_hdrStyle}">${lbl}</div>` +
+        `<div style="${_valStyle}" class="tip-exact">—</div>` +
+        `<table style="border-collapse:collapse;font-size:.76rem">` +
+        `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Avg</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.avg_ms != null ? _fmtVmVal(nearest.avg_ms, _vmU3) : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Min</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.min_ms != null ? _fmtVmVal(nearest.min_ms, _vmU3) : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Max</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.max_ms != null ? _fmtVmVal(nearest.max_ms, _vmU3) : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3)">Loss</td>` +
+        `<td style="color:${lossColor};text-align:right">${(nearest.loss_pct || 0).toFixed(1)}%</td></tr>` +
         `</table>` +
         `<div style="${_ftStyle};color:${statusColor}">${statusText}</div>`;
     } else {
@@ -1248,6 +1312,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
       const exactEl = tip.querySelector('.tip-exact');
       if (exactEl) {
         if (_isCounter) exactEl.textContent = dotVal!=null ? _fmtRateThrLabel(dotVal, snmpUnit) : '—';
+        else if (_isVmware3) exactEl.textContent = dotVal!=null ? _fmtVmVal(dotVal, _vmU3) : '—';
         else exactEl.textContent = dotVal!=null ? Math.round(dotVal)+' ms' : '— ms';
       }
 
@@ -1304,6 +1369,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   // ── Y-axis scaling ────────────────────────────────────────────────────────
   const _sen = S.sensors[`${did}/${sid}`];
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
+  const _vmU2 = _vmUnit(did, sid);
+  const _isVmware = _vmU2 !== null;
   let msVals, rawMax, maxY, yOf;
   if (_isCounter) {
     const okR = rateSamples.filter(r => r.ok && r.rate != null);
@@ -1336,6 +1403,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.fillStyle = 'rgba(200,210,220,.92)'; ctx.textAlign = 'right';
     const _yLbl = _isCounter
       ? _fmtRateYLabel(maxY * f, snmpUnit)
+      : _isVmware ? _fmtVmYLabel(maxY * f, _vmU2)
       : (Math.round(maxY * f) >= 1000 ? (Math.round(maxY * f) / 1000).toFixed(1) + 's' : Math.round(maxY * f) + 'ms');
     ctx.fillText(_yLbl, LEFT - 4, y + 4);
     if (togLoss && !_isCounter) {
@@ -1592,7 +1660,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(240,165,0,.85)'; ctx.textAlign = 'left';
-    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
+    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : _isVmware ? 'warn '+_fmtVmVal(_sen.warn_ms,_vmU2) : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
   }
   if (_sen?.crit_ms > 0 && _sen.crit_ms <= maxY) {
     const cy = yOf(_sen.crit_ms);
@@ -1601,7 +1669,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(248,81,73,.85)'; ctx.textAlign = 'left';
-    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
+    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : _isVmware ? 'crit '+_fmtVmVal(_sen.crit_ms,_vmU2) : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
   }
 
   // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──
@@ -1623,6 +1691,13 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       const maxD = okR.length ? _rateToDisplayUnits(Math.max(...okR.map(r => r.rate)), snmpUnit) : null;
       const _f = v => v != null ? _fmtRateThrLabel(v, snmpUnit) : '—';
       statsEl.textContent = `${total} probes · ${upPct}% up · avg ${_f(avgD)} · min ${_f(minD)} · max ${_f(maxD)}`;
+    } else if (_isVmware) {
+      const total = samples.length, okCt = samples.filter(p => p.ok).length;
+      const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
+      const avgV = msVals.length ? msVals.reduce((a,b) => a+b, 0) / msVals.length : null;
+      const minV = msVals.length ? Math.min(...msVals) : null;
+      statsEl.textContent =
+        `${total} probes · ${upPct}% up · avg ${_fmtVmVal(avgV,_vmU2)} · min ${_fmtVmVal(minV,_vmU2)} · max ${_fmtVmVal(rawMax||null,_vmU2)}`;
     } else {
       const total = samples.length, okCt = samples.filter(p => p.ok).length;
       const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
@@ -1634,7 +1709,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   }
 }
 
-function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit) {
+function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did, sid) {
   if (!sumEl) return;
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   let _bSec;
@@ -1687,6 +1762,48 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit) {
       <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
         <th>Avg ${_lbl}</th><th>Min ${_lbl}</th><th>Max ${_lbl}</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
+    return;
+  }
+
+  // VMware metric-value summary table
+  const _vmU4 = _vmUnit(did, sid);
+  if (_vmU4 !== null) {
+    if (!summary.length) { sumEl.innerHTML = ''; return; }
+    const _lbl2 = _vmUnitLabel(_vmU4);
+    const _bk2 = {};
+    for (const r of summary) {
+      const k = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+      if (!_bk2[k]) _bk2[k] = {ts:k, ok:0, fail:0, wsum:0, wcnt:0, minV:Infinity, maxV:-Infinity, cnt:0};
+      const b = _bk2[k];
+      b.ok += r.ok; b.fail += r.fail;
+      if (r.avg_ms != null) { b.wsum += r.avg_ms * r.ok; b.wcnt += r.ok; }
+      if (r.min_ms != null) b.minV = Math.min(b.minV, r.min_ms);
+      if (r.max_ms != null) b.maxV = Math.max(b.maxV, r.max_ms);
+      b.cnt++;
+    }
+    const rows2 = Object.values(_bk2).sort((a, b) => a.ts - b.ts).map(b => {
+      const d = new Date(b.ts * 1000);
+      let lbl;
+      if      (_bSec < 86400)  lbl = d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      else if (_bSec < 604800) lbl = d.toLocaleDateString([],{month:'short',day:'numeric'});
+      else                     lbl = d.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+      const upPct = b.ok + b.fail > 0 ? Math.round(b.ok / (b.ok + b.fail) * 100) : 100;
+      const avg = b.wcnt > 0 ? b.wsum / b.wcnt : null;
+      const rowCls = upPct < 80 ? 'hrow-crit' : upPct < 95 ? 'hrow-warn' : '';
+      return `<tr class="${rowCls}">
+        <td>${lbl}</td>
+        <td style="color:var(--up)">${b.ok}↑</td>
+        <td style="color:${b.fail?'var(--down)':'var(--text3)'}">${b.fail}↓</td>
+        <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
+        <td>${_fmtVmVal(avg, _vmU4)}</td>
+        <td>${b.minV!==Infinity?_fmtVmVal(b.minV, _vmU4):'—'}</td>
+        <td>${b.maxV!==-Infinity?_fmtVmVal(b.maxV, _vmU4):'—'}</td>
+      </tr>`;
+    }).join('');
+    sumEl.innerHTML = `<table class="dm-hist-tbl">
+      <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
+        <th>Avg ${_lbl2}</th><th>Min ${_lbl2}</th><th>Max ${_lbl2}</th></tr></thead>
+      <tbody>${rows2}</tbody></table>`;
     return;
   }
 
@@ -1806,14 +1923,17 @@ async function loadDmHistory(did, sid, minutes) {
 function mVal(s,k){
   const isSnmp=s.stype==='snmp';
   const isDns =s.stype==='dns';
+  const isVm  =s.stype==='vmware';
+  const _vu   =isVm?(_VM_UNITS[s.vmware_metric]||''):null;
   if(k==='last'){
     if(isSnmp||isDns) return s.alive===false?'FAIL':(s.last_value||s.last_detail||'—');
     if(s.stype==='tls') return s.alive===false?'FAIL':(s.last_value!=null?s.last_value+'d':'—');
+    if(isVm) return s.last_ms!=null?_fmtVmVal(s.last_ms,_vu):(s.alive===false?'DOWN':'—');
     return s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   }
-  if(k==='avg') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_avg||'—'):(s.avg_ms?`${s.avg_ms}ms`:'—');
-  if(k==='min') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_min||'—'):(s.min_ms?`${s.min_ms}ms`:'—');
-  if(k==='max') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_max||'—'):(s.max_ms?`${s.max_ms}ms`:'—');
+  if(k==='avg') return (isSnmp||s.stype==='tls')?(s._ov_avg||'—'):isVm?(s.avg_ms!=null?_fmtVmVal(s.avg_ms,_vu):'—'):(s.avg_ms?`${s.avg_ms}ms`:'—');
+  if(k==='min') return (isSnmp||s.stype==='tls')?(s._ov_min||'—'):isVm?(s.min_ms!=null?_fmtVmVal(s.min_ms,_vu):'—'):(s.min_ms?`${s.min_ms}ms`:'—');
+  if(k==='max') return (isSnmp||s.stype==='tls')?(s._ov_max||'—'):isVm?(s.max_ms!=null?_fmtVmVal(s.max_ms,_vu):'—'):(s.max_ms?`${s.max_ms}ms`:'—');
   if(k==='loss')return s.loss_pct!==undefined?`${s.loss_pct}%`:'—';
   if(k==='sent')return String(s.total||0);
 }

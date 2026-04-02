@@ -282,8 +282,7 @@ def vmware_probe(host, user, password, vm_id, metric,
         if cached and (now_mono - cached["ts"]) < _METRIC_CACHE_TTL:
             val = cached["data"].get(metric)
             if val is not None:
-                elapsed = round((time.time() - t0) * 1000, 1)
-                return {"ok": True, "ms": elapsed,
+                return {"ok": True, "ms": float(val),
                         "detail": f"{mdef['l']}: {val} {mdef['unit']}",
                         "value": str(val)}
 
@@ -329,9 +328,8 @@ def vmware_probe(host, user, password, vm_id, metric,
 
     # "on" metric: just report power state, no perf counters needed
     if metric == "on":
-        elapsed = round((time.time() - t0) * 1000, 1)
         is_on = (power_state == "poweredOn")
-        return {"ok": is_on, "ms": elapsed,
+        return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
                 "detail": f"Power State: {power_state}",
                 "value": power_state}
 
@@ -344,12 +342,11 @@ def vmware_probe(host, user, password, vm_id, metric,
     with _metric_cache_lock:
         _metric_cache[cache_key] = {"ts": time.monotonic(), "data": data}
 
-    elapsed = round((time.time() - t0) * 1000, 1)
     val = data.get(metric)
     if val is None:
-        return {"ok": False, "ms": elapsed,
+        return {"ok": False, "ms": None,
                 "detail": f"Metric {mdef['l']} not available for this VM"}
 
-    return {"ok": True, "ms": elapsed,
+    return {"ok": True, "ms": float(val),
             "detail": f"{mdef['l']}: {val} {mdef['unit']}",
             "value": str(val)}
