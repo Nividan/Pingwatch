@@ -54,12 +54,14 @@ Browser / Desktop GUI
         │   ├── catalog.py        ← OID catalog queries
         │   └── seeds/            ← Built-in trap definitions
         │
-        └── db/                   ← SQLite persistence package (dual-DB)
-                                       Main DB: config, devices, users, groups, IPAM, settings
-                                       Logs DB: sensor samples, flap log, SNMP traps, error log
+        └── db/                   ← Dual-backend persistence (SQLite default / PostgreSQL production)
+                                       Main: config, devices, users, groups, IPAM, settings, alerts
+                                       Logs: sensor samples, flap log, SNMP traps, error log
 ```
 
-**Dual write-queue design:** two independent queue threads — one for the Main DB (`pingwatch.db`) and one for the Logs DB (`pingwatch_logs.db`). Probe threads never block on DB writes; they enqueue a lambda and continue.
+**Dual-backend:** SQLite (default, zero-setup) or PostgreSQL (production/high-scale), selected via `pingwatch.conf`. All `db/` modules implement both paths gated by `is_pg()`.
+
+**Dual write-queue design (SQLite):** two independent queue threads — one for the Main DB (`pingwatch.db`) and one for the Logs DB (`pingwatch_logs.db`). Probe threads never block on DB writes; they enqueue a lambda and continue. PostgreSQL bypasses the queues (MVCC handles concurrency).
 
 ---
 
@@ -110,7 +112,11 @@ pingwatch/
 ├── db/
 │   ├── __init__.py         ← Re-exports all public symbols
 │   ├── core.py             ← Dual write-queues, schema init, user seeding
-│   ├── migration.py        ← One-time split: legacy single-DB → Main + Logs DB
+│   ├── backend.py          ← Backend selection: is_pg(), load_config() from pingwatch.conf
+│   ├── pg_pool.py          ← PostgreSQL connection pool; pg_conn() / pg_cursor() context managers
+│   ├── pg_schema.py        ← PostgreSQL DDL — main + logs schemas, indexes, partitioned tables
+│   ├── pg_migrate.py       ← One-time SQLite-to-PostgreSQL migration tool
+│   ├── migration.py        ← One-time split: legacy single-DB → Main + Logs DB (SQLite)
 │   ├── persistence.py      ← Device/sensor save & load
 │   ├── samples.py          ← Buffered probe writes, history & summary queries
 │   ├── events.py           ← Flap log, SNMP trap log, sensor error log
@@ -167,7 +173,7 @@ pingwatch/
 ## Backend Modules
 
 ### `server.py`
-HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect.
+HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
 ### `setup_wizard.py`
 Cross-platform first-run wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only).
@@ -233,12 +239,25 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 
 ## Database Package
 
+PingWatch supports two database backends selected via `pingwatch.conf`. All DB modules implement both paths; the `is_pg()` helper gates which branch runs.
+
+| SQLite | PostgreSQL |
+|--------|------------|
+| `pingwatch.db` (main) + `pingwatch_logs.db` (logs) | Single PG server, `main` schema + `logs` schema |
+| `?` placeholders, tuple rows | `%s` placeholders, `RealDictCursor` dict rows |
+| Write-queue serialization (`_db_enqueue` / `_logs_enqueue`) | MVCC — queues bypassed, direct connection via `pg_conn()` / `pg_cursor()` |
+| No partitioning | `sensor_samples` range-partitioned by month (auto-created) |
+
 | Module | Responsibility |
 |--------|----------------|
+| `backend.py` | `is_pg()`, `load_config()` / `save_config()` — reads `pingwatch.conf` to select backend |
+| `pg_pool.py` | PostgreSQL connection pool; `pg_conn()` (auto-commit/rollback) and `pg_cursor()` (auto-close) context managers |
+| `pg_schema.py` | PostgreSQL DDL — main + logs schemas, indexes, monthly-partitioned `sensor_samples`, rollup tables (`sensor_samples_5m`, `sensor_samples_1h`) |
+| `pg_migrate.py` | One-time SQLite → PostgreSQL migration: copies all tables, verifies row counts |
 | `core.py` | Dual write-queues (main + logs), schema init for both DBs, user seeding |
-| `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB |
+| `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB (SQLite only) |
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag |
-| `samples.py` | Buffered probe writes, history & summary queries |
+| `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
 | `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch |
@@ -264,6 +283,7 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `db_backup_time` | `"HH:MM"` | Time of day for scheduled DB backup |
 | `db_backup_days` | `"1,2,3,4,5,6,7"` | Days of week for weekly DB backup |
 | `db_backup_keep` | integer string | Number of DB backup snapshots to retain (default 7) |
+| `max_workers_executor` | integer string | Probe worker override (4–512). `"0"` or absent = auto (`max(64, min(512, sensor_count // 4))`). Live resize on device add/delete — no restart needed. |
 
 ---
 
@@ -277,8 +297,8 @@ The frontend is served as static files — no build step.
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`) |
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
-| `devices.js` | Device list, detail panel, port scan modal |
-| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads |
+| `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
+| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device |
 | `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event` |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |

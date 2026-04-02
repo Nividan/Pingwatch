@@ -561,7 +561,8 @@ async function discoverInterfaces(){
 
   html+='</tbody></table></div>';
   html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
-  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedIfaceSensors()">Add Selected as Sensors</button>';
+  const _ifBtnLabel=window._snrAddMode?'Add Selected as Sensors':'Apply to Form';
+  html+=`<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedIfaceSensors()">${_ifBtnLabel}</button>`;
   html+='<span id="as-iface-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
   html+='</div></div>';
   listEl.innerHTML=html;
@@ -603,6 +604,28 @@ async function addSelectedIfaceSensors(){
   if(!did){toast('Device context lost — reopen the sensor form','err');return;}
   const checked=[...document.querySelectorAll('.as-iface-cb:checked')];
   if(!checked.length){toast('Select at least one interface','err');return;}
+
+  // ── Edit mode: apply selection to current form fields, don't POST ──────
+  if(!window._snrAddMode){
+    if(checked.length>1){toast('Select exactly one interface to apply to the form','err');return;}
+    const cb=checked[0];
+    const idx=cb.dataset.idx;
+    const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
+    if(!sel||!sel.value){toast('Choose a metric for the selected interface','err');return;}
+    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel.value);
+    if(!metric){toast('Unknown metric','err');return;}
+    const oidEl=document.getElementById('as-oid');
+    const sunitEl=document.getElementById('as-snmp-unit');
+    if(oidEl) oidEl.value=metric.oid+idx;
+    if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+    const listEl=document.getElementById('as-iface-list');
+    if(listEl) listEl.style.display='none';
+    const statusEl=document.getElementById('as-iface-status');
+    if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent='OID applied — save to confirm';}
+    return;
+  }
+
+  // ── Add mode: create sensors via API ──────────────────────────────────
   const host=document.getElementById('as-sh')?.value.trim()||S.devices[did]?.host||'';
   const community=document.getElementById('as-sc')?.value.trim()||'public';
   const port=parseInt(document.getElementById('as-sp')?.value)||161;

@@ -92,6 +92,13 @@
   - Severity badge, rule name, and state badge shown inline on each event row
   - ACK and Resolve buttons appear directly on active-alert rows
   - Tag refreshes on SSE `ack_event` without page reload
+- 10K sensor scalability
+  - Auto-scaling probe executor — formula `max(64, min(512, sensor_count // 4))`; live resize on device add/delete; manual override (4–512) in Settings → General; setting to 0/blank returns to auto
+  - Status filter pills (All / Down / Warn / Up / Pause) in device action bar with live SSE-updated counts; composes with text search
+  - Device list pagination — 50 devices/page by default; user-selectable 25/50/100 with `localStorage` persistence; filter and status changes reset to page 1
+  - Sensor tile drag-to-reorder — HTML5 drag inside device detail window; order saved to `localStorage` per device; device card top-3 preview respects custom order
+  - Fixed 3d history showing only ~14h — `_pick_table` boundary moved from 4320 → 1440 min so 3d routes to `sensor_samples_5m` (full 3-day coverage) instead of raw table (10k-row-capped)
+  - Fixed rollup backfill triggering on every restart — condition now checks `sensor_samples_5m` row count instead of stale `MIN(ts)` gap detection
 
 ## 🔴 High Priority
 

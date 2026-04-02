@@ -54,6 +54,10 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🔁 Server restart and shutdown from the web UI (Settings → General)
 - 🏢 LDAP / Active Directory authentication with encrypted bind credentials
 - 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration
+- 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (1 per 4 sensors, 64–512 range); manual override available in Settings → General
+- 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
+- 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
+- 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
 
 ### Supported Sensor Types
 
@@ -73,11 +77,12 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 
 - **Backend:** Python 3.x stdlib — no third-party web framework
 - **Web Server:** `http.server` (threading) + `ssl.SSLContext` for HTTPS
-- **Database:** SQLite WAL — dual-DB: `pingwatch.db` (config/devices/users/IPAM) + `pingwatch_logs.db` (samples/events/traps)
+- **Database:** Dual-backend — SQLite WAL (default, zero-setup) or PostgreSQL (production/high-scale); dual-DB layout: `main` schema (config, devices, users, IPAM, alerts) + `logs` schema (sensor samples, flap log, SNMP traps)
 - **Frontend:** Vanilla HTML, CSS, JavaScript — no build step
 - **Real-time:** Server-Sent Events (SSE)
 - **TLS:** `cryptography` (RSA-2048, X.509, Fernet encryption)
 - **SSH backup:** `paramiko`
+- **PostgreSQL:** `psycopg2` *(optional — only needed when PostgreSQL backend is enabled)*
 - **System tray:** `pystray` + `Pillow` *(optional)*
 - **LDAP/AD:** `ldap3` *(optional — only needed when LDAP auth is enabled)*
 
