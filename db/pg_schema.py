@@ -91,19 +91,24 @@ def pg_create_main_schema(cur):
             PRIMARY KEY (did, sid)
         )""")
 
-    # VMware columns — migration for existing installs
-    for col in ("vmware_user", "vmware_password", "vmware_vm_id", "vmware_metric"):
+    # ALTER TABLE migrations — each wrapped in a savepoint so a failure
+    # (column already exists) does not abort the surrounding transaction.
+    _migrations = [
+        ("sensors", "vmware_user",            "TEXT DEFAULT ''"),
+        ("sensors", "vmware_password",         "TEXT DEFAULT ''"),
+        ("sensors", "vmware_vm_id",            "TEXT DEFAULT ''"),
+        ("sensors", "vmware_metric",           "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
+        ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
+        ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
+    ]
+    for _tbl, _col, _typedef in _migrations:
         try:
-            cur.execute(f"ALTER TABLE sensors ADD COLUMN {col} TEXT DEFAULT ''")
+            cur.execute("SAVEPOINT _alter")
+            cur.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_typedef}")
+            cur.execute("RELEASE SAVEPOINT _alter")
         except Exception:
-            pass
-
-    # Device-level default credentials — migration for existing installs
-    for col in ("snmp_community_default", "vmware_user_default", "vmware_password_default"):
-        try:
-            cur.execute(f"ALTER TABLE main.devices ADD COLUMN {col} TEXT DEFAULT ''")
-        except Exception:
-            pass
+            cur.execute("ROLLBACK TO SAVEPOINT _alter")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
