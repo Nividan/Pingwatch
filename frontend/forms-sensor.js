@@ -293,10 +293,10 @@ function sensorFormHTML(dev, s=null) {
         const _noThr=curType==='vmware'&&['uptime','on','disk_read','disk_write','disk_usage'].includes(_vmm);
         return`<div class="fgrid">
         <div class="fr" id="as-wms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-wms-lbl">${_wLbl}</label>
-          <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${_ph}" min="1" style="max-width:100px"/>
+          <input type="number" id="as-wms" value="${curType==='vmware'?(s?.warn_ms||''):(s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||''))}" placeholder="${_ph}" min="1" style="max-width:100px"/>
         </div>
         <div class="fr" id="as-cms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-cms-lbl">${_cLbl}</label>
-          <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${_phc}" min="1" style="max-width:100px"/>
+          <input type="number" id="as-cms" value="${curType==='vmware'?(s?.crit_ms||''):(s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||''))}" placeholder="${_phc}" min="1" style="max-width:100px"/>
           ${_cur}
         </div></div>`;
       })()}
@@ -1205,9 +1205,16 @@ async function addSelectedVMSensors(){
       const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
       // Smart per-VM threshold: only if user left warn/crit blank
       let rowWms=wms, rowCms=cms;
-      if(!rowWms&&!rowCms&&vmMemMB>0){
-        if(metric==='mem_consumed'){ rowWms=Math.round(vmMemMB*0.80); rowCms=Math.round(vmMemMB*0.90); }
-        else if(metric==='mem_active'){ rowWms=Math.round(vmMemMB*0.50); rowCms=Math.round(vmMemMB*0.70); }
+      // Skip thresholds for info-only metrics
+      if(['uptime','on','disk_read','disk_write','disk_usage'].includes(metric)){ rowWms=null; rowCms=null; }
+      else if(!rowWms&&!rowCms){
+        // Memory metrics: compute from VM RAM
+        if(vmMemMB>0){
+          if(metric==='mem_consumed'){ rowWms=Math.round(vmMemMB*0.80); rowCms=Math.round(vmMemMB*0.90); }
+          else if(metric==='mem_active'){ rowWms=Math.round(vmMemMB*0.50); rowCms=Math.round(vmMemMB*0.70); }
+        }
+        // Other metrics: use fixed per-metric defaults
+        if(!rowWms){ const def=_VM_THR_DEFAULTS[metric]; if(def){rowWms=def.w;rowCms=def.c;} }
       }
       rows.push({vmid,vmname,metric,metricLabel:metricDef?metricDef.l:metric,wms:rowWms,cms:rowCms});
     });
