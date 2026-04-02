@@ -416,7 +416,7 @@ def db_init():
             except Exception:
                 pass
         # VMware sensor fields
-        for col in ("vmware_user", "vmware_password", "vmware_vm_id", "vmware_metric"):
+        for col in ("vmware_user", "vmware_password", "vmware_vm_id", "vmware_vm_name", "vmware_metric"):
             try:
                 con.execute(f"ALTER TABLE sensors ADD COLUMN {col} TEXT DEFAULT ''")
                 con.commit()

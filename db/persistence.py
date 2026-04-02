@@ -48,6 +48,7 @@ def _pg_save(state):
              getattr(s, "vmware_user", ""),
              getattr(s, "vmware_password", ""),
              getattr(s, "vmware_vm_id", ""),
+             getattr(s, "vmware_vm_name", ""),
              getattr(s, "vmware_metric", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
@@ -96,7 +97,7 @@ def _pg_save(state):
                     "fail_after,recover_after,warn_ms,crit_ms,"
                     "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
                     "alerts_muted,host_override,snmp_unit,"
-                    "vmware_user,vmware_password,vmware_vm_id,vmware_metric) "
+                    "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -113,7 +114,8 @@ def _pg_save(state):
                     "banner_regex=EXCLUDED.banner_regex, alerts_muted=EXCLUDED.alerts_muted, "
                     "host_override=EXCLUDED.host_override, snmp_unit=EXCLUDED.snmp_unit, "
                     "vmware_user=EXCLUDED.vmware_user, vmware_password=EXCLUDED.vmware_password, "
-                    "vmware_vm_id=EXCLUDED.vmware_vm_id, vmware_metric=EXCLUDED.vmware_metric",
+                    "vmware_vm_id=EXCLUDED.vmware_vm_id, vmware_vm_name=EXCLUDED.vmware_vm_name, "
+                    "vmware_metric=EXCLUDED.vmware_metric",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -166,6 +168,7 @@ def db_save(state):
              getattr(s, "vmware_user", ""),
              getattr(s, "vmware_password", ""),
              getattr(s, "vmware_vm_id", ""),
+             getattr(s, "vmware_vm_name", ""),
              getattr(s, "vmware_metric", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
@@ -195,8 +198,8 @@ def db_save(state):
             "fail_after,recover_after,warn_ms,crit_ms,"
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
             "alerts_muted,host_override,snmp_unit,"
-            "vmware_user,vmware_password,vmware_vm_id,vmware_metric) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -242,6 +245,7 @@ def _pg_load(state):
                 "COALESCE(vmware_user,'') AS vmware_user,"
                 "COALESCE(vmware_password,'') AS vmware_password,"
                 "COALESCE(vmware_vm_id,'') AS vmware_vm_id,"
+                "COALESCE(vmware_vm_name,'') AS vmware_vm_name,"
                 "COALESCE(vmware_metric,'') AS vmware_metric "
                 "FROM sensors"
             )
@@ -299,7 +303,8 @@ def _pg_load(state):
         s.vmware_user          = row[30] or ""
         s.vmware_password      = row[31] or ""
         s.vmware_vm_id         = row[32] or ""
-        s.vmware_metric        = row[33] or ""
+        s.vmware_vm_name       = row[33] or ""
+        s.vmware_metric        = row[34] or ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -372,7 +377,7 @@ def db_load(state):
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted,host_override,"
             "COALESCE(snmp_unit,''),"
             "COALESCE(vmware_user,''),COALESCE(vmware_password,''),"
-            "COALESCE(vmware_vm_id,''),COALESCE(vmware_metric,'') "
+            "COALESCE(vmware_vm_id,''),COALESCE(vmware_vm_name,''),COALESCE(vmware_metric,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -411,7 +416,7 @@ def db_load(state):
          fail_after, recover_after, warn_ms, crit_ms,
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
          alerts_muted, host_override, snmp_unit,
-         vmware_user, vmware_password, vmware_vm_id, vmware_metric) in srows:
+         vmware_user, vmware_password, vmware_vm_id, vmware_vm_name, vmware_metric) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -435,6 +440,7 @@ def db_load(state):
         s.vmware_user          = vmware_user or ""
         s.vmware_password      = vmware_password or ""
         s.vmware_vm_id         = vmware_vm_id or ""
+        s.vmware_vm_name       = vmware_vm_name or ""
         s.vmware_metric        = vmware_metric or ""
         dev.sensors[sid] = s
 

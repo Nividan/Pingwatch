@@ -279,11 +279,11 @@ function setupCharts(dev){
 function _vmGrpSfx(vmid){ return vmid.replace(/[^a-z0-9]/gi,'-'); }
 
 function _vmNameFromSensor(s){
-  // Try to strip the metric label suffix to recover the VM name from sensor.name
-  // Auto-naming is "<vmname> <metricLabel>", e.g. "dc0.bslab.local CPU Usage (%)"
+  // Prefer stored VM display name; fall back to stripping metric label from sensor name
+  if(s.vmware_vm_name) return s.vmware_vm_name;
   const m=(_vmwareMetrics||[]).find(x=>x.v===s.vmware_metric);
   if(m&&s.name.endsWith(' '+m.l)) return s.name.slice(0,s.name.length-m.l.length-1);
-  return s.vmware_vm_id||s.name;
+  return s.name||s.vmware_vm_id;
 }
 
 function _ensureVmGrp(did,s){
@@ -305,16 +305,21 @@ function _ensureVmGrp(did,s){
       <div class="vm-grp-nm">${esc(vmName)}</div>
       <div class="vm-grp-dot" id="vgdot-${did}-${sfx}"></div>
       <div class="vm-grp-cnt" id="vgcnt-${did}-${sfx}">0 metrics</div>
-      <button class="dp-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add another metric for this VM">+ Metric</button>
+      <button class="dp-btn vm-add-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add another metric for this VM">+ Metric</button>
+      <button class="dp-btn d vm-del-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" title="Remove all metrics for this VM">✕ Remove</button>
     </div>
     <div class="vm-grp-body${collapsed?' collapsed':''}" id="vgbody-${did}-${sfx}"></div>`;
   grp.querySelector('.vm-grp-hdr').addEventListener('click',e=>{
     if(e.target.closest('button')) return;
     toggleVmGrp(did,vmid);
   });
-  grp.querySelector('button').addEventListener('click',e=>{
+  grp.querySelector('.vm-add-btn').addEventListener('click',e=>{
     e.stopPropagation();
     openAddVmMetric(did,vmid,vmName);
+  });
+  grp.querySelector('.vm-del-btn').addEventListener('click',e=>{
+    e.stopPropagation();
+    delVmGrp(did,vmid);
   });
   grid.appendChild(grp);
   grp.addEventListener('animationend',()=>grp.classList.remove('stl-enter'),{once:true});
@@ -381,6 +386,7 @@ function vmRowHTML(s){
   <div class="ub vm-ub" id="ub-${sk}">${ub}</div>
   <canvas class="spk" height="28" style="flex:0 0 60px"></canvas>
   <button class="stl-hist" onclick="event.stopPropagation();openDetail('${s.device_id}','${s.sensor_id}','history')" title="History">⌚</button>
+  <button class="vm-row-del" onclick="event.stopPropagation();delVmRow('${s.device_id}','${s.sensor_id}')" title="Remove metric">✕</button>
   <span id="std-${sk}" style="display:none">${esc(s.last_detail||'')}</span>`;
 }
 
@@ -707,6 +713,32 @@ async function delSensor(did,sid){
   const cntEl=document.querySelector(`#sbn-${did} .dev-cnt`);
   if(cntEl) cntEl.textContent=Object.values(S.sensors).filter(s=>s.device_id===did).length;
   toast('Sensor removed','info');
+}
+
+// ── VMware vm-row / vm-group delete ──────────────────────────────
+async function delVmRow(did,sid){
+  const s=S.sensors[`${did}/${sid}`];
+  const vmid=s?.vmware_vm_id;
+  await delSensor(did,sid);
+  if(vmid){
+    const sfx=_vmGrpSfx(vmid);
+    const body=document.getElementById(`vgbody-${did}-${sfx}`);
+    if(body&&body.querySelectorAll('.vm-row').length===0){
+      document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
+    } else {
+      _updateVmGrpStatus(did,vmid);
+    }
+  }
+}
+
+async function delVmGrp(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  if(!body) return;
+  const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
+  if(sids.length&&!confirm(`Remove all ${sids.length} metric${sids.length===1?'':'s'} for this VM?`)) return;
+  for(const sid of sids) await delSensor(did,sid);
+  document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
 }
 
 // ── Logs ─────────────────────────────────────────────────────────
