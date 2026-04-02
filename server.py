@@ -478,13 +478,6 @@ def main():
     from db.backend import load_config as _load_backend_config
     _load_backend_config()
 
-    # ── One-time migration: split legacy single-DB → dual-DB ─────────
-    try:
-        from db.migration import run_migration_if_needed
-        run_migration_if_needed()
-    except Exception as _me:
-        log.error(f"DB migration error (non-fatal): {_me}")
-
     # ── PostgreSQL pool init (if configured) ────────────────────────
     if is_pg():
         from db.pg_pool import pg_init_pool, pg_test_connection
