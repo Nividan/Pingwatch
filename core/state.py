@@ -657,6 +657,8 @@ class MonitorState:
                 else:
                     try: _thr_chk = float(s.last_value)
                     except (TypeError, ValueError): pass
+            elif s.stype == 'vmware' and s.vmware_metric in ('uptime', 'on'):
+                pass  # no threshold comparison for informational metrics
             elif s.last_ms is not None:
                 _thr_chk = s.last_ms
             if _thr_chk is not None:
