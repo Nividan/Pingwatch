@@ -388,18 +388,17 @@ def handle(h, method, path, body):
         if is_pg():
             from db.pg_pool import pg_cursor
             try:
-                def _schema_size(schema):
-                    """Sum of all table + index sizes within a schema."""
-                    with pg_cursor(schema) as cur:
-                        cur.execute(
-                            "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0) AS sz "
-                            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-                            "WHERE n.nspname = %s AND c.relkind = 'r'",
-                            (schema,)
-                        )
-                        return cur.fetchone()["sz"]
-                main_sz = _schema_size("main")
-                logs_sz = _schema_size("logs")
+                _sz_q = (
+                    "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0) AS sz "
+                    "FROM pg_catalog.pg_class c "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = %s AND c.relkind = 'r'"
+                )
+                with pg_cursor("main") as cur:
+                    cur.execute(_sz_q, ("main",))
+                    main_sz = cur.fetchone()["sz"]
+                    cur.execute(_sz_q, ("logs",))
+                    logs_sz = cur.fetchone()["sz"]
                 with pg_cursor("logs") as cur:
                     def _pg_cnt(table):
                         try:
