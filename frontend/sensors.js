@@ -63,6 +63,80 @@ function tileHTML(s){
   </div>`;
 }
 
+// ── Sensor tile drag-to-reorder ───────────────────────────────────
+let _snrDragEl=null, _snrDragDid=null, _snrDropInd=null;
+
+function _snrSaveOrder(did){
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid)return;
+  const order=[...grid.querySelectorAll('.stl:not(.stl-drop-ind)')].map(t=>t.dataset.sid);
+  _lsSet(`pw_snr_order_${did}`,order);
+}
+
+function _applySensorOrder(did){
+  const order=_lsGet(`pw_snr_order_${did}`,[]);
+  if(!order.length)return;
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid)return;
+  // Move tiles matching saved order to front, preserving unknown tiles at end
+  order.forEach(sid=>{
+    const el=grid.querySelector(`.stl[data-sid="${sid}"]`);
+    if(el) grid.appendChild(el);
+  });
+}
+
+function _initSensorGrid(did){
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid||grid._snrDragInit)return;
+  grid._snrDragInit=true;
+  grid.addEventListener('dragover',_snrDragOver);
+  grid.addEventListener('drop',_snrDrop);
+  grid.addEventListener('dragleave',_snrDragLeave);
+}
+
+function _snrDragOver(e){
+  if(!_snrDragEl)return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  const grid=e.currentTarget;
+  grid.classList.add('sg-drag-over');
+  if(!_snrDropInd){
+    _snrDropInd=document.createElement('div');
+    _snrDropInd.className='stl stl-drop-ind';
+  }
+  // Find tile after cursor (vertical layout)
+  const tiles=[...grid.querySelectorAll('.stl:not(.stl-drop-ind):not(.stl-dragging)')];
+  let after=null;
+  for(const t of tiles){
+    const r=t.getBoundingClientRect();
+    if(e.clientY<r.top+r.height/2){after=t;break;}
+  }
+  if(after) grid.insertBefore(_snrDropInd,after);
+  else       grid.appendChild(_snrDropInd);
+}
+
+function _snrDrop(e){
+  if(!_snrDragEl)return;
+  e.preventDefault();
+  const grid=e.currentTarget;
+  grid.classList.remove('sg-drag-over');
+  if(_snrDropInd){
+    grid.insertBefore(_snrDragEl,_snrDropInd);
+    _snrDropInd.remove(); _snrDropInd=null;
+  }
+  _snrDragEl.classList.remove('stl-dragging');
+  if(_snrDragDid) _snrSaveOrder(_snrDragDid);
+  _snrDragEl=null; _snrDragDid=null;
+}
+
+function _snrDragLeave(e){
+  const grid=e.currentTarget;
+  if(!grid.contains(e.relatedTarget)){
+    grid.classList.remove('sg-drag-over');
+    if(_snrDropInd&&_snrDropInd.parentNode===grid){_snrDropInd.remove();_snrDropInd=null;}
+  }
+}
+
 function renderTile(did,s){
   const grid=document.getElementById(`sg-${did}`);
   if(!grid)return;
@@ -73,9 +147,25 @@ function renderTile(did,s){
   const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
   t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr} stl-enter`;
   t.id=`t-${key.replace('/','_')}`;
+  t.dataset.sid=s.sensor_id;
   t.onclick=()=>openDetail(did,s.sensor_id);
   t.style.animationDelay=Math.min(grid.children.length*40,200)+'ms';
   t.innerHTML=tileHTML(s);
+  // Drag-to-reorder
+  t.setAttribute('draggable','true');
+  t.addEventListener('dragstart',e=>{
+    if(e.target.tagName==='BUTTON'||e.target.closest('button')){e.preventDefault();return;}
+    _snrDragEl=t; _snrDragDid=did;
+    e.dataTransfer.effectAllowed='move';
+    e.dataTransfer.setData('text/plain',s.sensor_id);
+    setTimeout(()=>t.classList.add('stl-dragging'),0);
+  });
+  t.addEventListener('dragend',()=>{
+    t.classList.remove('stl-dragging');
+    if(_snrDropInd){_snrDropInd.remove();_snrDropInd=null;}
+    grid.classList.remove('sg-drag-over');
+    _snrDragEl=null; _snrDragDid=null;
+  });
   grid.appendChild(t);
   t.addEventListener('animationend',()=>{t.classList.remove('stl-enter');t.style.animationDelay='';},{once:true});
   const cvs=t.querySelector('canvas.spk');

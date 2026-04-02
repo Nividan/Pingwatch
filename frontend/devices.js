@@ -531,6 +531,7 @@ function openDevWin(did){
   _devFetch.then(freshDev=>{
     if(!document.getElementById('dwo')) return; // panel closed while loading
     if(_sg) _sg.innerHTML=''; // clear skeletons
+    _initSensorGrid(did);
     if(freshDev){
       S.devices[did]=freshDev;
       (freshDev.sensors||[]).forEach(s=>{
@@ -541,6 +542,7 @@ function openDevWin(did){
       // fetch failed — render from cache silently
       (S.devices[did]?.sensors||[]).forEach(s=>renderTile(did,s));
     }
+    _applySensorOrder(did);
     setupChartsByDid(did);
   });
 
