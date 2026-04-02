@@ -76,7 +76,8 @@ _RE_ALERT_RULE      = re.compile(r'^/api/alert/rule/(\d+)$')
 _RE_ALERT_RULE_ACT  = re.compile(r'^/api/alert/rule/(\d+)/(toggle|test)$')
 # Alert events
 _RE_ALERT_EVENTS        = re.compile(r'^/api/alert/events$')
-_RE_ALERT_EVENTS_ACTIVE = re.compile(r'^/api/alert/events/active$')
+_RE_ALERT_EVENTS_ACTIVE      = re.compile(r'^/api/alert/events/active$')
+_RE_ALERT_EVENTS_RESOLVE_ALL = re.compile(r'^/api/alert/events/resolve-all$')
 _RE_ALERT_EVENT         = re.compile(r'^/api/alert/event/(\d+)$')
 _RE_ALERT_EVENT_ACT     = re.compile(r'^/api/alert/event/(\d+)/(ack|resolve)$')
 # Maintenance windows

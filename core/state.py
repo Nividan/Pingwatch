@@ -83,7 +83,7 @@ def _smtp_down_delayed(sensor, data):
     """Sleep smtp_down_delay seconds, then send alert only if sensor is still down."""
     delay = max(0, int(_cfg('smtp_down_delay', 10)))
     time.sleep(delay)
-    if sensor._alerted_down:
+    if sensor._alerted_down and sensor.running:
         send_alert_email('down', data)
         sensor._email_sent_down = True
 

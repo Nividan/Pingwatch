@@ -265,6 +265,37 @@ def db_resolve_event(event_id: int) -> bool:
         con.close()
 
 
+def db_resolve_all_active() -> int:
+    """Resolve all active/acknowledged alert events.  Returns count resolved."""
+    now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_events SET state='resolved', resolved_at=%s "
+                    "WHERE state IN ('active','acknowledged')", (now,)
+                )
+                return cur.rowcount
+        except Exception as e:
+            log.error(f"db_resolve_all_active error: {e}")
+            return 0
+    # SQLite
+    con = _con()
+    try:
+        cur = con.execute(
+            "UPDATE alert_events SET state='resolved', resolved_at=? "
+            "WHERE state IN ('active','acknowledged')", (now,)
+        )
+        con.commit()
+        return cur.rowcount
+    except Exception as e:
+        log.error(f"db_resolve_all_active error: {e}")
+        return 0
+    finally:
+        con.close()
+
+
 # ── ACK suppression check ────────────────────────────────────────
 
 def db_has_acked_event(rule_id: int, did: str, sid: str) -> bool:

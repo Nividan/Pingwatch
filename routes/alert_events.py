@@ -1,27 +1,39 @@
 """
 routes/alert_events.py — Alert event history API endpoints.
 
-GET  /api/alert/events         viewer   — list events (state filter + pagination)
-GET  /api/alert/events/active  viewer   — count of active events + first page
-GET  /api/alert/event/{id}     viewer   — single event
-POST /api/alert/event/{id}/ack operator — acknowledge
-POST /api/alert/event/{id}/resolve operator — resolve
+GET  /api/alert/events              viewer   — list events (state filter + pagination)
+GET  /api/alert/events/active       viewer   — count of active events + first page
+POST /api/alert/events/resolve-all  operator — resolve all active events + flaps
+GET  /api/alert/event/{id}          viewer   — single event
+POST /api/alert/event/{id}/ack      operator — acknowledge
+POST /api/alert/event/{id}/resolve  operator — resolve
 """
 
 from core.config import (
-    _RE_ALERT_EVENTS, _RE_ALERT_EVENTS_ACTIVE,
+    _RE_ALERT_EVENTS, _RE_ALERT_EVENTS_ACTIVE, _RE_ALERT_EVENTS_RESOLVE_ALL,
     _RE_ALERT_EVENT, _RE_ALERT_EVENT_ACT,
 )
 from db.alert_events import (
     db_list_events, db_count_active, db_get_event,
-    db_ack_event, db_resolve_event,
+    db_ack_event, db_resolve_event, db_resolve_all_active,
 )
-from db import db_log_audit
+from db import db_log_audit, db_resolve_all_flaps
 from urllib.parse import urlparse, parse_qs
 
 
 def handle(h, method, path, body):
     """Return True if this module handled the request."""
+
+    # POST /api/alert/events/resolve-all  (must check before /events)
+    if _RE_ALERT_EVENTS_RESOLVE_ALL.match(path) and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        alert_count = db_resolve_all_active()
+        flap_count  = db_resolve_all_flaps()
+        db_log_audit(user, h.client_address[0], 'alert_resolve_all',
+                     f"{alert_count} alerts, {flap_count} flaps")
+        h._json(200, {"ok": True, "alerts": alert_count, "flaps": flap_count})
+        return True
 
     # GET /api/alert/events/active  (must check before /events)
     if _RE_ALERT_EVENTS_ACTIVE.match(path) and method == "GET":
