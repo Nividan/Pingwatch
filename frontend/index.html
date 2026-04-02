@@ -258,6 +258,13 @@
         <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">⊞ Add Group</button>
       </div>
       <div class="dev-act-sep"></div>
+      <div class="dev-pills">
+        <button class="dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="down"  onclick="_setStatusFilter('down')">Down <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="warn"  onclick="_setStatusFilter('warn')">Warn <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="up"    onclick="_setStatusFilter('up')">Up <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="pause" onclick="_setStatusFilter('pause')">Pause <span class="pill-ct">0</span></button>
+      </div>
       <div class="dev-search-wrap">
         <svg class="dev-search-ico" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/>
@@ -267,6 +274,7 @@
       </div>
     </div>
     <div id="dpanels" style="display:none"></div>
+    <div id="devPagination" style="display:none"></div>
     <!-- Backups view -->
     <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
       <div id="bk-toolbar">
