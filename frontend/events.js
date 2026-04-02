@@ -727,20 +727,12 @@ function _iipStatus(d, alertEvt) {
     ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
   }
 
-  let btns = '';
-  if (d.id && !isRes) {
-    btns = `<div class="iip-btns">` +
-      (isActive ? `<button class="aev-btn-ack" onclick="_iipFlapAck(${d.id})">✓ ACK</button>` : '') +
-      `<button class="aev-btn-res" onclick="_iipFlapResolve(${d.id})">◉ Resolve</button>` +
-    `</div>`;
-  }
-
   return `<div class="iip-section">
     <div class="iip-section-title">STATUS</div>
     <div class="iip-st-row"><span class="iip-st-badge ${badgeCls}">${badgeTxt}</span></div>
     <div class="iip-time-row"><span class="iip-mono">${esc(utcStr)}</span></div>
     <div class="iip-dur-row">Duration: <span id="iip-dur-live" class="iip-dur-live">${initDur}</span></div>
-    ${ackmeta}${btns}
+    ${ackmeta}
   </div>`;
 }
 
