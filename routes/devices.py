@@ -478,7 +478,9 @@ def handle(h, method, path, body):
         iv    = max(1, min(3600, int(body.get("interval", 5))))
         to    = max(1, min(iv, int(body.get("timeout", 4))))
         vssl  = bool(body.get("verify_ssl", True))
-        comm  = body.get("snmp_community", "public")
+        comm  = (body.get("snmp_community") or "").strip()
+        if not comm:
+            comm = (dev.snmp_community_default if dev and dev.snmp_community_default else "public")
         oid   = body.get("snmp_oid", "1.3.6.1.2.1.1.1.0")
         sver  = body.get("snmp_version", "2c")
         sunit = body.get("snmp_unit", "")
