@@ -1231,7 +1231,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
           }
           pts = [];
           if (firstBi >= 0) {
-            for (let i = firstBi; i <= lastBi; i++) {
+            for (let i = 0; i <= lastBi; i++) {
               const ts = _ws + (i + 0.5) * bucketSec;
               const v = accR[i].n > 0 ? accR[i].sum / accR[i].n : 0;
               pts.push({ x: xOf(ts), y: yOf(v), ts });
@@ -1278,9 +1278,9 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
           }
           pts = [];
           if (firstBi >= 0) {
-            for (let i = firstBi; i <= lastBi; i++) {
+            for (let i = 0; i <= lastBi; i++) {
               const ts = _ws + (i + 0.5) * bucketSec;
-              // Empty bucket = downtime → connect at 0ms baseline
+              // Empty bucket = downtime → show 0ms baseline (covers gaps at start or middle)
               const ms = acc[i].n > 0 ? acc[i].sum / acc[i].n : 0;
               pts.push({ x: xOf(ts), y: yOf(ms), ts });
             }
