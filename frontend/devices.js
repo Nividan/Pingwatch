@@ -139,7 +139,13 @@ function sSnrPreview(did){
   }
   const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
   const snrVal=s=>{
-    if(s.stype==='vmware') return s.last_value!=null?(s.last_value+'').slice(0,10):'—';
+    if(s.stype==='vmware'){
+      if(s.last_value==null) return '—';
+      const v=parseFloat(s.last_value);
+      if(isNaN(v)) return (s.last_value+'').slice(0,10);
+      const u=_VM_UNITS[s.vmware_metric]||'';
+      return _fmtVmVal(v,u);
+    }
     if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'—').slice(0,10);
     return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   };
@@ -229,9 +235,17 @@ function updateCardSensor(s){
   const dEl = document.getElementById(`csd-${s.device_id}_${s.sensor_id}`);
   if(vEl){
     const isSnmp = full.stype==='snmp'||full.stype==='dns';
-    const v = isSnmp ? (full.alive===false?'FAIL':(full.last_value||'—').slice(0,10))
-                     : (full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'—'));
-    const c = full.alive===false?'b':(isSnmp?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
+    const isVmware = full.stype==='vmware';
+    let v;
+    if(isVmware){
+      if(full.last_value==null) v='—';
+      else { const nv=parseFloat(full.last_value); v=isNaN(nv)?(full.last_value+'').slice(0,10):_fmtVmVal(nv,_VM_UNITS[full.vmware_metric]||''); }
+    } else if(isSnmp){
+      v=full.alive===false?'FAIL':(full.last_value||'—').slice(0,10);
+    } else {
+      v=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'—');
+    }
+    const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
     vEl.textContent=v; vEl.className=`dc-snr-val ${c}`;
   }
   if(dEl) dEl.className=`dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;

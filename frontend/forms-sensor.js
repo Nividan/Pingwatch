@@ -257,6 +257,11 @@ function sensorFormHTML(dev, s=null) {
         <input type="hidden" id="as-vmmet-v" value="${esc(s?.vmware_metric||'')}"/>
       </div>
     </div>
+    <div class="fr" id="as-vm-diskpath-row" style="display:${s?.vmware_metric==='disk_used_pct'?'':'none'}">
+      <label class="fl">Disk Path</label>
+      <input type="text" id="as-vm-diskpath" value="${esc(s?.vmware_disk_path||'')}" placeholder="e.g. C:\\ or /" autocomplete="off"/>
+      <div class="fh">Partition to monitor — leave blank for most-used disk</div>
+    </div>
   </div>
   <!-- Alert Thresholds & Debounce -->
   <details style="margin-top:8px">
@@ -819,6 +824,21 @@ async function addSelectedIfaceSensors(){
 // ── VMware VM Discovery ──────────────────────────────────────────────────
 
 let _vmwareMetrics=null;
+let _vmSelectedMemMB=0;  // memory of currently selected VM (MB), for smart threshold defaults
+
+// Auto-fill warn/crit thresholds based on VM specs and metric type.
+// Only fills if both fields are currently empty (never overwrites user input).
+function _vmwareThrAutoFill(metric, memMB){
+  const wi=document.getElementById('as-wms');
+  const ci=document.getElementById('as-cms');
+  if(!wi||!ci||wi.value||ci.value) return;
+  let w=null,c=null;
+  if(memMB>0){
+    if(metric==='mem_consumed'){ w=Math.round(memMB*0.80); c=Math.round(memMB*0.90); }
+    else if(metric==='mem_active'){ w=Math.round(memMB*0.50); c=Math.round(memMB*0.70); }
+  }
+  if(w!=null){ wi.value=w; ci.value=c; }
+}
 
 function _vmwareThrLabel(metric, isWarn){
   const pfx=isWarn?'Warn':'Crit';
@@ -826,7 +846,8 @@ function _vmwareThrLabel(metric, isWarn){
   const m=(_vmwareMetrics||[]).find(x=>x.v===metric);
   const u=m?.unit||'';
   if(u==='%')       return pfx+' %';
-  if(u==='KB')      return pfx+' MB';
+  if(u==='MB')      return pfx+' MB';
+  if(u==='KB')      return pfx+' KB';
   if(u==='KBps')    return pfx+' KBps';
   if(u==='ms')      return pfx+' ms';
   if(u==='seconds') return pfx+' seconds';
@@ -838,8 +859,9 @@ const _VM_THR_PH = {
   cpu_usage:       {w:'e.g. 80',  c:'e.g. 90'},
   cpu_ready:       {w:'e.g. 10',  c:'e.g. 20'},
   mem_consumed_pct:{w:'e.g. 80',  c:'e.g. 90'},
-  mem_active:      {w:'e.g. 4096',c:'e.g. 6144'},   // KB
-  mem_consumed:    {w:'e.g. 4096',c:'e.g. 6144'},   // KB
+  mem_active:      {w:'e.g. 4096',c:'e.g. 6144'},   // MB (4GB / 6GB)
+  mem_consumed:    {w:'e.g. 12288',c:'e.g. 14336'}, // MB (12GB / 14GB)
+  disk_used_pct:   {w:'e.g. 80',  c:'e.g. 90'},
   disk_read:       {w:'e.g. 500', c:'e.g. 1000'},
   disk_write:      {w:'e.g. 500', c:'e.g. 1000'},
   disk_usage:      {w:'e.g. 500', c:'e.g. 1000'},
@@ -858,12 +880,15 @@ function _vmwareThrUpdateLabels(){
   const cl=document.getElementById('as-cms-lbl');
   if(wl) wl.textContent=_vmwareThrLabel(sel.value,true);
   if(cl) cl.textContent=_vmwareThrLabel(sel.value,false);
+  const dpRow=document.getElementById('as-vm-diskpath-row');
+  if(dpRow) dpRow.style.display=sel.value==='disk_used_pct'?'':'none';
   // Update placeholders to metric-appropriate hints
   const ph=_VM_THR_PH[sel.value];
   const wi=document.getElementById('as-wms');
   const ci=document.getElementById('as-cms');
   if(wi) wi.placeholder=ph?ph.w:'e.g. 80';
   if(ci) ci.placeholder=ph?ph.c:'e.g. 90';
+  _vmwareThrAutoFill(sel.value, _vmSelectedMemMB);
 }
 
 async function _vmwareLoadMetrics(){
@@ -966,7 +991,7 @@ async function discoverVMs(){
     const memStr=vm.memory_mb>=1024?Math.round(vm.memory_mb/1024)+'GB':vm.memory_mb+'MB';
     const rowBg=i%2?'background:var(--bg2)':'';
     html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
-    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-vm-cb" data-vmid="${esc(vm.vm_id)}" data-name="${esc(vm.name)}" onchange="updateVMSelCount()"/></td>`;
+    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-vm-cb" data-vmid="${esc(vm.vm_id)}" data-name="${esc(vm.name)}" data-mem-mb="${vm.memory_mb||0}" data-num-cpu="${vm.num_cpu||0}" onchange="updateVMSelCount()"/></td>`;
     html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap" title="${esc(vm.name)}">${esc(vm.name)}</td>`;
     html+=`<td style="padding:4px 8px;color:${pwClr};white-space:nowrap">${pwTxt}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(vm.guest_os)}">${esc(vm.guest_os)}</td>`;
@@ -1103,6 +1128,7 @@ async function addSelectedVMSensors(){
     const cb=checked[0];
     const vmid=cb.dataset.vmid;
     const vmname=cb.dataset.name;
+    _vmSelectedMemMB=parseInt(cb.dataset.memMb)||0;
     const metric=firstMetrics[0]||'';
     if(!metric){toast('Pick at least one metric for this VM','err');return;}
     const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
@@ -1147,11 +1173,18 @@ async function addSelectedVMSensors(){
   checked.forEach(cb=>{
     const vmid=cb.dataset.vmid;
     const vmname=cb.dataset.name;
+    const vmMemMB=parseInt(cb.dataset.memMb)||0;
     const metrics=_getVmMetrics(vmid);
     if(!metrics.length){noMetric++;return;}
     metrics.forEach(metric=>{
       const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
-      rows.push({vmid,vmname,metric,metricLabel:metricDef?metricDef.l:metric});
+      // Smart per-VM threshold: only if user left warn/crit blank
+      let rowWms=wms, rowCms=cms;
+      if(!rowWms&&!rowCms&&vmMemMB>0){
+        if(metric==='mem_consumed'){ rowWms=Math.round(vmMemMB*0.80); rowCms=Math.round(vmMemMB*0.90); }
+        else if(metric==='mem_active'){ rowWms=Math.round(vmMemMB*0.50); rowCms=Math.round(vmMemMB*0.70); }
+      }
+      rows.push({vmid,vmname,metric,metricLabel:metricDef?metricDef.l:metric,wms:rowWms,cms:rowCms});
     });
   });
   if(noMetric) toast(`${noMetric} VM${noMetric>1?'s':''} skipped — no metrics chosen`,'info');
@@ -1165,7 +1198,7 @@ async function addSelectedVMSensors(){
     try{
       const r=await api('POST',`/api/device/${did}/sensor`,{
         name:sname,type:'vmware',host,port,interval:iv,timeout:tmo,
-        verify_ssl:vssl,fail_after:fa,recover_after:ra,warn_ms:wms,crit_ms:cms,
+        verify_ssl:vssl,fail_after:fa,recover_after:ra,warn_ms:row.wms,crit_ms:row.cms,
         vmware_user:username,vmware_password:password,
         vmware_vm_id:row.vmid,vmware_vm_name:row.vmname,vmware_metric:row.metric
       });
@@ -1289,6 +1322,7 @@ function collectSensorForm(did){
     payload.vmware_vm_id=document.getElementById('as-vmid')?.value.trim()||'';
     payload.vmware_vm_name=document.getElementById('as-vmnm')?.value.trim()||'';
     payload.vmware_metric=document.getElementById('as-vmmet')?.value||'';
+    payload.vmware_disk_path=document.getElementById('as-vm-diskpath')?.value.trim()||'';
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}
   }

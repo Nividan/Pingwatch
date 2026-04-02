@@ -839,12 +839,13 @@ function _fmtRateThrLabel(displayVal, snmpUnit) {
 }
 
 // ── VMware metric unit helpers ───────────────────────────────────
-const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'KB',mem_consumed:'KB',mem_consumed_pct:'%',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:''};
+const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',mem_consumed_pct:'%',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',disk_used_pct:'%',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:''};
 function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
 function _fmtVmVal(v,u){
   if(v==null)return'—';
   switch(u){
     case'%':return v.toFixed(2)+'%';
+    case'MB':return v>=1024?(v/1024).toFixed(1)+' GB':v.toFixed(0)+' MB';
     case'KB':return v>=1048576?(v/1048576).toFixed(1)+' GB':v>=1024?(v/1024).toFixed(1)+' MB':v+' KB';
     case'KBps':return v>=1024?(v/1024).toFixed(1)+' MBps':v.toFixed(1)+' KBps';
     case'ms':return v.toFixed(1)+' ms';
@@ -852,10 +853,11 @@ function _fmtVmVal(v,u){
     default:return String(v);
   }
 }
-function _vmUnitLabel(u){return u==='%'?'%':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':'';}
+function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':'';}
 function _fmtVmYLabel(v,u){
   switch(u){
     case'%':return Math.round(v)+'%';
+    case'MB':return v>=1024?(v/1024).toFixed(1)+'GB':Math.round(v)+'MB';
     case'KB':return v>=1048576?(v/1048576).toFixed(1)+'GB':v>=1024?(v/1024).toFixed(0)+'MB':Math.round(v)+'KB';
     case'KBps':return v>=1024?(v/1024).toFixed(1)+'MBps':Math.round(v)+'KBps';
     case'ms':return Math.round(v)+'ms';
