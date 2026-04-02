@@ -459,11 +459,11 @@ def _clean_sqlite(cutoff_raw, cutoff_5m, cutoff_1h):
 def _pick_table(minutes):
     """Return (table_name, bucket_seconds) based on requested time range.
 
-    <=3 days  → raw sensor_samples  (no bucketing)
-    3-90 days → sensor_samples_5m   (300s buckets)
+    <=1 day   → raw sensor_samples  (no bucketing)
+    1-90 days → sensor_samples_5m   (300s buckets)
     >90 days  → sensor_samples_1h   (3600s buckets)
     """
-    if minutes <= 4320:
+    if minutes <= 1440:
         return "sensor_samples", None
     if minutes <= 129600:
         return "sensor_samples_5m", 300
