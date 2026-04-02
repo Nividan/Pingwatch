@@ -32,8 +32,8 @@ def _require_pyvmomi():
 VM_METRICS = [
     {"v": "cpu_usage",        "l": "CPU Usage",                 "group": "cpu",       "counter": "cpu.usage.average",                       "unit": "%",      "divisor": 100},
     {"v": "cpu_ready",        "l": "CPU Ready (Percent)",       "group": "cpu",       "counter": "cpu.ready.summation",                     "unit": "%",      "convert": "ready_pct"},
-    {"v": "mem_active",       "l": "Memory Active",             "group": "mem",       "counter": "mem.active.average",                      "unit": "KB"},
-    {"v": "mem_consumed",     "l": "Memory Consumed",           "group": "mem",       "counter": "mem.consumed.average",                    "unit": "KB"},
+    {"v": "mem_active",       "l": "Memory Active",             "group": "mem",       "counter": "mem.active.average",                      "unit": "MB",     "divisor": 1024},
+    {"v": "mem_consumed",     "l": "Memory Consumed",           "group": "mem",       "counter": "mem.consumed.average",                    "unit": "MB",     "divisor": 1024},
     {"v": "mem_consumed_pct", "l": "Memory Consumed (Percent)", "group": "mem",       "counter": "mem.usage.average",                       "unit": "%",      "divisor": 100},
     {"v": "disk_read",        "l": "Disk Read",                 "group": "disk",      "counter": "disk.read.average",                       "unit": "KBps"},
     {"v": "disk_write",       "l": "Disk Write",                "group": "disk",      "counter": "disk.write.average",                      "unit": "KBps"},
@@ -43,6 +43,7 @@ VM_METRICS = [
     {"v": "net_rx",           "l": "Network Received",          "group": "net",       "counter": "net.received.average",                    "unit": "KBps"},
     {"v": "net_tx",           "l": "Network Transmitted",       "group": "net",       "counter": "net.transmitted.average",                 "unit": "KBps"},
     {"v": "net_usage",        "l": "Network Usage",             "group": "net",       "counter": "net.usage.average",                       "unit": "KBps"},
+    {"v": "disk_used_pct",    "l": "Disk Used (%)",             "group": "disk",      "counter": None,                                      "unit": "%"},
     {"v": "uptime",           "l": "Uptime",                    "group": "sys",       "counter": "sys.uptime.latest",                       "unit": "seconds"},
     {"v": "on",               "l": "Power State",               "group": "sys",       "counter": None,                                      "unit": ""},
 ]
@@ -261,7 +262,7 @@ def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
 # ---------------------------------------------------------------------------
 
 def vmware_probe(host, user, password, vm_id, metric,
-                 port=443, verify_ssl=False, timeout=30):
+                 port=443, verify_ssl=False, timeout=30, disk_path=""):
     """Probe a single VMware metric for a specific VM.
 
     Returns {ok, ms, detail, value} matching the PingWatch probe contract.
@@ -335,6 +336,35 @@ def vmware_probe(host, user, password, vm_id, metric,
 
     if power_state != "poweredOn":
         return {"ok": False, "ms": None, "detail": "VM powered off"}
+
+    # ── Disk used % — reads guest.disk (requires VMware Tools) ───────────
+    if metric == "disk_used_pct":
+        try:
+            disks = (vm_moref.guest.disk or []) if vm_moref.guest else []
+        except Exception:
+            disks = []
+        if not disks:
+            return {"ok": False, "ms": None,
+                    "detail": "No disk info — VMware Tools must be installed and running"}
+        if disk_path:
+            matched = next(
+                (d for d in disks if d.diskPath.rstrip("/\\").lower() ==
+                 disk_path.rstrip("/\\").lower()), None)
+            if not matched:
+                paths = ", ".join(d.diskPath for d in disks)
+                return {"ok": False, "ms": None,
+                        "detail": f"Path '{disk_path}' not found. Available: {paths}"}
+            target = matched
+        else:
+            target = max(
+                disks,
+                key=lambda d: (d.capacity - d.freeSpace) / d.capacity if d.capacity else 0)
+        if not target.capacity:
+            return {"ok": False, "ms": None, "detail": "Disk capacity reported as 0"}
+        pct = round((target.capacity - target.freeSpace) / target.capacity * 100, 1)
+        return {"ok": True, "ms": pct,
+                "detail": f"Disk {target.diskPath}: {pct}% used",
+                "value": str(pct)}
 
     # Query all metrics (cached for other sensors targeting same VM)
     data = _query_all_vm_metrics(si, vm_moref, num_cpu)

@@ -101,7 +101,8 @@ class Sensor:
                  keyword="", keyword_case=False, banner_regex="",
                  alerts_muted=False, snmp_unit="",
                  vmware_user="", vmware_password="",
-                 vmware_vm_id="", vmware_vm_name="", vmware_metric=""):
+                 vmware_vm_id="", vmware_vm_name="", vmware_metric="",
+                 vmware_disk_path=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -140,6 +141,7 @@ class Sensor:
         self.vmware_vm_id    = vmware_vm_id or ""      # VM managed-object ID (e.g. "vm-123")
         self.vmware_vm_name  = vmware_vm_name or ""    # VM display name (e.g. "dc0.bslab.local")
         self.vmware_metric   = vmware_metric or ""     # metric key from VM_METRICS
+        self.vmware_disk_path = vmware_disk_path or ""  # for disk_used_pct: e.g. "C:\" or "/"
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -210,7 +212,8 @@ class Sensor:
                                 self.vmware_vm_id, self.vmware_metric,
                                 port=self.port or 443,
                                 verify_ssl=self.verify_ssl,
-                                timeout=self.timeout)
+                                timeout=self.timeout,
+                                disk_path=self.vmware_disk_path)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -248,6 +251,7 @@ class Sensor:
             "vmware_vm_id":          self.vmware_vm_id,
             "vmware_vm_name":        self.vmware_vm_name,
             "vmware_metric":         self.vmware_metric,
+            "vmware_disk_path":      self.vmware_disk_path,
             "has_vmware_password":   bool(self.vmware_password),
             "threshold_state":       self._threshold_state,
             "alive":          self.alive,
@@ -392,7 +396,8 @@ class MonitorState:
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
                    vmware_user="", vmware_password="",
-                   vmware_vm_id="", vmware_vm_name="", vmware_metric=""):
+                   vmware_vm_id="", vmware_vm_name="", vmware_metric="",
+                   vmware_disk_path=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -409,7 +414,7 @@ class MonitorState:
                        snmp_unit=snmp_unit,
                        vmware_user=vmware_user, vmware_password=vmware_password,
                        vmware_vm_id=vmware_vm_id, vmware_vm_name=vmware_vm_name,
-                       vmware_metric=vmware_metric)
+                       vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -439,7 +444,8 @@ class MonitorState:
                         "keyword", "keyword_case", "banner_regex", "alerts_muted",
                         "snmp_unit",
                         "vmware_user", "vmware_password",
-                        "vmware_vm_id", "vmware_vm_name", "vmware_metric"]
+                        "vmware_vm_id", "vmware_vm_name", "vmware_metric",
+                        "vmware_disk_path"]
             for k, v in kwargs.items():
                 if k in editable and v is not None:
                     if k == 'host':

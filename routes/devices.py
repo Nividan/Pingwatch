@@ -414,7 +414,8 @@ def handle(h, method, path, body):
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
                   "snmp_unit",
-                  "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric"]:
+                  "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
+                  "vmware_disk_path"]:
             if k in body: kwargs[k] = body[k]
         # VMware password: encrypt if provided, skip if empty (keep existing)
         if body.get("vmware_password"):
@@ -495,11 +496,12 @@ def handle(h, method, path, body):
         kwc   = bool(body.get("keyword_case", False))
         bnr   = body.get("banner_regex", "")
         # VMware fields
-        vm_user   = body.get("vmware_user", "")
-        vm_pw     = body.get("vmware_password", "")
-        vm_vmid   = body.get("vmware_vm_id", "")
-        vm_vmname = body.get("vmware_vm_name", "")
-        vm_metric = body.get("vmware_metric", "")
+        vm_user      = body.get("vmware_user", "")
+        vm_pw        = body.get("vmware_password", "")
+        vm_vmid      = body.get("vmware_vm_id", "")
+        vm_vmname    = body.get("vmware_vm_name", "")
+        vm_metric    = body.get("vmware_metric", "")
+        vm_disk_path = body.get("vmware_disk_path", "")
         _vm_pw_from_device = False
         if stype == "vmware" and dev:
             if not vm_user and dev.vmware_user_default:
@@ -530,7 +532,7 @@ def handle(h, method, path, body):
                                snmp_unit=sunit,
                                vmware_user=vm_user, vmware_password=vm_pw,
                                vmware_vm_id=vm_vmid, vmware_vm_name=vm_vmname,
-                               vmware_metric=vm_metric)
+                               vmware_metric=vm_metric, vmware_disk_path=vm_disk_path)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
