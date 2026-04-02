@@ -221,6 +221,91 @@ def _do_restart(pending_main=None, pending_logs=None):
         os.execv(sys.executable, _cmd)
 
 
+def _handle_pg_bundle_import(h, raw_bytes: bytes):
+    """Restore a PG bundle ZIP (pingwatch_main.sql + pingwatch_logs.sql) via psql."""
+    import subprocess as _sp
+    from db.backend import get_config
+
+    log.info(f"DB import (PG): ZIP bundle — {len(raw_bytes):,} bytes")
+    try:
+        buf = io.BytesIO(raw_bytes)
+        with zipfile.ZipFile(buf, "r") as zf:
+            names = zf.namelist()
+            if "manifest.json" in names:
+                manifest = _json_mod.loads(zf.read("manifest.json"))
+                log.info(f"DB import (PG): manifest: {manifest}")
+                if manifest.get("backend") != "postgresql":
+                    h._json(400, {"error": "Bundle was not exported from a PostgreSQL backend"}); return True
+            tmp_main = tmp_logs = None
+            if "pingwatch_main.sql" in names:
+                fd, tmp_main = tempfile.mkstemp(suffix="_main.sql")
+                os.write(fd, zf.read("pingwatch_main.sql"))
+                os.close(fd)
+            if "pingwatch_logs.sql" in names:
+                fd, tmp_logs = tempfile.mkstemp(suffix="_logs.sql")
+                os.write(fd, zf.read("pingwatch_logs.sql"))
+                os.close(fd)
+    except Exception as e:
+        log.error(f"DB import (PG): ZIP extraction failed — {e}")
+        h._json(400, {"error": "ZIP extraction failed"}); return True
+
+    if not tmp_main and not tmp_logs:
+        h._json(400, {"error": "No PostgreSQL dumps found in bundle (expected pingwatch_main.sql / pingwatch_logs.sql)"}); return True
+
+    cfg = get_config()
+    env = {**os.environ, "PGPASSWORD": cfg.get("pg_password", "")}
+    base_cmd = [
+        "psql",
+        "-h", cfg["pg_host"],
+        "-p", str(cfg["pg_port"]),
+        "-U", cfg["pg_user"],
+        "-d", cfg["pg_database"],
+        "--no-password",
+    ]
+
+    def _restore(sql_file, schema):
+        r = _sp.run(
+            base_cmd + ["-c", f"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"],
+            env=env, capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"schema reset: {r.stderr.strip()}")
+        r = _sp.run(base_cmd + ["-f", sql_file], env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"psql restore: {r.stderr.strip()}")
+
+    try:
+        if tmp_main:
+            log.info("DB import (PG): restoring main schema…")
+            _restore(tmp_main, "main")
+            log.info("DB import (PG): main schema restored")
+        if tmp_logs:
+            log.info("DB import (PG): restoring logs schema…")
+            _restore(tmp_logs, "logs")
+            log.info("DB import (PG): logs schema restored")
+    except Exception as e:
+        log.error(f"DB import (PG): restore failed — {e}")
+        for t in (tmp_main, tmp_logs):
+            if t:
+                try: os.unlink(t)
+                except OSError: pass
+        h._json(500, {"error": "PostgreSQL restore failed — check server logs"}); return True
+
+    for t in (tmp_main, tmp_logs):
+        if t:
+            try: os.unlink(t)
+            except OSError: pass
+
+    log.info("DB import (PG): complete — restarting…")
+    h._json(200, {"ok": True, "msg": "PostgreSQL bundle imported — server is restarting…"})
+    try:
+        h.wfile.flush()
+    except Exception:
+        pass
+    threading.Thread(target=_do_restart, args=(None, None), daemon=True).start()
+    return True
+
+
 # ── Route handler ─────────────────────────────────────────────────────────────
 
 def handle(h, method, path, body):
@@ -345,19 +430,36 @@ def handle(h, method, path, body):
         h.wfile.write(zip_bytes)
         return True
 
-    # ── POST /api/db/import ───────────────────────────────────────
+    # ── POST /api/db/import (PostgreSQL) ─────────────────────────
     if _RE_DB_IMPORT.match(path) and method == "POST" and is_pg():
         user, _ = h._require("admin")
         if not user:
             return True
-        h._json(501, {
-            "error": (
-                "Direct DB import is not supported for PostgreSQL. "
-                "To restore, stop the server and run: "
-                "psql -h HOST -U pingwatch -d pingwatch -f dump.sql"
-            )
-        })
-        return True
+        _MAX_IMPORT = 2 * 1024 * 1024 * 1024
+        n = int(h.headers.get("Content-Length", 0))
+        if n > _MAX_IMPORT:
+            h._json(413, {"error": "File too large (max 2 GB)"}); return True
+        if not n:
+            h._json(400, {"error": "No data provided"}); return True
+        content_type = h.headers.get("Content-Type", "")
+        if "application/octet-stream" in content_type:
+            raw_bytes = h.rfile.read(n)
+        else:
+            try:
+                body_imp = _json_mod.loads(h.rfile.read(n))
+            except Exception:
+                h._json(400, {"error": "Invalid JSON"}); return True
+            raw_b64 = (body_imp.get("data") or "").strip()
+            if not raw_b64:
+                h._json(400, {"error": "No data provided"}); return True
+            try:
+                raw_bytes = base64.b64decode(raw_b64)
+            except Exception:
+                h._json(400, {"error": "Invalid base64 data"}); return True
+        if raw_bytes[:4] != b"PK\x03\x04":
+            h._json(400, {"error": "PostgreSQL import requires a bundle ZIP exported from PingWatch"}); return True
+        db_log_audit(user, h.client_address[0], "db_import_pg")
+        return _handle_pg_bundle_import(h, raw_bytes)
 
     if _RE_DB_IMPORT.match(path) and method == "POST":
         user, _ = h._require("admin")
