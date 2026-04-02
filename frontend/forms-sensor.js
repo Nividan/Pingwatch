@@ -10,13 +10,11 @@ function sensorFormHTML(dev, s=null) {
   const devHost   = dev?.host || '';
   const hostHint  = devHost ? `leave blank — uses device (${esc(devHost)})` : 'e.g. 192.168.1.1';
   // Link indicator shown when editing — tells user whether host is linked to the device
-  const isLinked  = s ? !s.host_override : null;
+  const isLinked  = s ? (!s.host_override || !s.host || s.host === devHost) : null;
   const hostStatusHtml = (s && devHost)
     ? (isLinked
         ? `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`
-        : (s.host && s.host !== devHost)
-          ? `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`
-          : '')
+        : `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`)
     : '';
   // SNMP community — blank means "use device default" (same pattern as host)
   const devComm   = dev?.snmp_community_default || '';
