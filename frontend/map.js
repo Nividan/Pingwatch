@@ -743,7 +743,7 @@ function _pwLiveUpdate(did) {
 // ═══════════════════════════ API ═══════════════════════════
 async function api(method, path, body) {
   const r = await fetch(path, {
-    method, headers: {'Content-Type':'application/json'},
+    method, credentials: 'include', headers: {'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
@@ -759,6 +759,7 @@ async function api(method, path, body) {
 function _pwSave(key, value) {
   fetch('/api/settings/' + key, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
     keepalive: true,
