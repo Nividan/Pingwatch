@@ -967,17 +967,21 @@ async function discoverVMs(){
       _vmwareMetrics=md.metrics||[];
     }catch(e){}
   }
+  const _grpNames={cpu:'CPU',mem:'Memory',disk:'Disk',datastore:'Datastore',net:'Network',sys:'System'};
+  const _metByGrp={};
+  (_vmwareMetrics||[]).forEach(m=>{(_metByGrp[m.group]=_metByGrp[m.group]||[]).push(m);});
   const metricCheckboxes=
-    `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:3px;padding-bottom:6px"><input type="checkbox" class="vm-met-all-cb" onchange="vmMetSelectAll(this)"> <strong>All metrics</strong></label>`+
-    (_vmwareMetrics||[]).map(m=>
-      `<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="vmMetChanged(this)"> ${esc(m.l)}</label>`
+    `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="vm-met-all-cb" onchange="vmMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+    Object.entries(_metByGrp).map(([grp,mets])=>
+      `<div class="vm-met-grp-hdr">${_grpNames[grp]||grp}</div>`+
+      mets.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="vmMetChanged(this)"> ${esc(m.l)}</label>`).join('')
     ).join('');
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:4px">';
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
   html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
   html+='<input type="text" id="as-vm-search" placeholder="Search VM names…" oninput="filterVMs(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
   html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">Set for checked:</span>';
-  html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none;right:0">${metricCheckboxes}</div></div>`;
+  html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
   html+='</div>';
   html+='<div style="overflow-x:auto;overflow-y:auto;max-height:260px">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
