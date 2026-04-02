@@ -278,16 +278,17 @@ function sensorFormHTML(dev, s=null) {
         const _su=s?.snmp_unit||'';
         const _isStr=curType==='snmp'&&_su==='string';
         if(_isStr) return`<div class="fgrid"><div class="fr"><div class="fh" style="color:var(--text3)">String OID — no numeric threshold</div></div></div>`;
-        const _wLbl=curType==='tls'?'Warn Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,true)||'Warn Value'):'Warn Latency (ms)';
-        const _cLbl=curType==='tls'?'Crit Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,false)||'Crit Value'):'Crit Latency (ms)';
+        const _vmm=curType==='vmware'?(s?.vmware_metric||''):'';
+        const _wLbl=curType==='tls'?'Warn Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,true)||'Warn Value'):curType==='vmware'?_vmwareThrLabel(_vmm,true):'Warn Latency (ms)';
+        const _cLbl=curType==='tls'?'Crit Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,false)||'Crit Value'):curType==='vmware'?_vmwareThrLabel(_vmm,false):'Crit Latency (ms)';
         const _ph=_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200';
         const _phc=_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 200':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500';
         const _cur=curType==='snmp'&&s?.last_value!=null?`<div class="fh" style="margin-top:2px">Current: <strong>${esc(String(s.last_value))}</strong></div>`:'';
         return`<div class="fgrid">
-        <div class="fr"><label class="fl">${_wLbl}</label>
+        <div class="fr"><label class="fl" id="as-wms-lbl">${_wLbl}</label>
           <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${_ph}" min="1" style="max-width:100px"/>
         </div>
-        <div class="fr"><label class="fl">${_cLbl}</label>
+        <div class="fr"><label class="fl" id="as-cms-lbl">${_cLbl}</label>
           <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${_phc}" min="1" style="max-width:100px"/>
           ${_cur}
         </div></div>`;
@@ -818,9 +819,33 @@ async function addSelectedIfaceSensors(){
 
 let _vmwareMetrics=null;
 
+function _vmwareThrLabel(metric, isWarn){
+  const pfx=isWarn?'Warn':'Crit';
+  if(!metric) return pfx+' Value';
+  const m=(_vmwareMetrics||[]).find(x=>x.v===metric);
+  const u=m?.unit||'';
+  if(u==='%')       return pfx+' %';
+  if(u==='KB')      return pfx+' MB';
+  if(u==='KBps')    return pfx+' KBps';
+  if(u==='ms')      return pfx+' ms';
+  if(u==='seconds') return pfx+' seconds';
+  return pfx+' Value';
+}
+
+function _vmwareThrUpdateLabels(){
+  const sel=document.getElementById('as-vmmet');
+  if(!sel) return;
+  const wl=document.getElementById('as-wms-lbl');
+  const cl=document.getElementById('as-cms-lbl');
+  if(wl) wl.textContent=_vmwareThrLabel(sel.value,true);
+  if(cl) cl.textContent=_vmwareThrLabel(sel.value,false);
+}
+
 async function _vmwareLoadMetrics(){
   const sel=document.getElementById('as-vmmet');
-  if(!sel||sel.options.length>1) return;
+  if(!sel) return;
+  sel.onchange=()=>_vmwareThrUpdateLabels();
+  if(sel.options.length>1){ _vmwareThrUpdateLabels(); return; }
   if(!_vmwareMetrics){
     try{
       const r=await fetch('/api/vmware/metrics');
@@ -836,6 +861,7 @@ async function _vmwareLoadMetrics(){
   });
   const cur=document.getElementById('as-vmmet-v')?.value;
   if(cur) sel.value=cur;
+  _vmwareThrUpdateLabels();
 }
 
 async function discoverVMs(){
