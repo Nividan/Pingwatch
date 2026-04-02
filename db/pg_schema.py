@@ -642,6 +642,39 @@ def _pg_is_partitioned(cur):
     return cur.fetchone() is not None
 
 
+def _pg_do_copy(cur, pg_con, dt_start, max_ts, total):
+    """Copy rows from sensor_samples_old into the new partitioned table month by month."""
+    copied = 0
+    dt = dt_start
+    while dt.timestamp() <= max_ts + 86400:
+        m_next = dt.month + 1
+        y_next = dt.year + (m_next - 1) // 12
+        m_next = ((m_next - 1) % 12) + 1
+        dt_next = datetime.datetime(y_next, m_next, 1)
+        cur.execute(
+            "INSERT INTO sensor_samples (id, ts, did, sid, ok, ms, value) "
+            "SELECT id, ts, did, sid, ok, ms, value "
+            "FROM sensor_samples_old WHERE ts >= %s AND ts < %s",
+            (dt.timestamp(), dt_next.timestamp()),
+        )
+        chunk = cur.rowcount
+        copied += chunk
+        if chunk > 0:
+            log.info(f"  Copied {chunk} rows for {dt.strftime('%Y-%m')} ({copied}/{total})")
+        pg_con.commit()
+        dt = dt_next
+    return copied
+
+
+def _pg_has_old_table(cur):
+    """Return True if sensor_samples_old exists (incomplete prior migration)."""
+    cur.execute(
+        "SELECT 1 FROM pg_class WHERE relname = 'sensor_samples_old' "
+        "AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'logs')"
+    )
+    return cur.fetchone() is not None
+
+
 def pg_migrate_to_partitioned(pg_con):
     """Convert a non-partitioned sensor_samples table to range-partitioned.
 
@@ -653,14 +686,52 @@ def pg_migrate_to_partitioned(pg_con):
       4. Copy data in monthly chunks
       5. Recreate indexes
       6. Drop old table
+
+    If a previous run was interrupted (sensor_samples_old exists but the copy
+    was not finished), the migration resumes from step 4 automatically.
     """
     cur = pg_con.cursor()
     cur.execute("SET search_path TO logs, public")
+    # Disable statement timeout for this session — the data copy can take minutes
+    cur.execute("SET statement_timeout = 0")
 
-    if _pg_is_partitioned(cur):
+    has_old = _pg_has_old_table(cur)
+
+    if _pg_is_partitioned(cur) and not has_old:
         pg_ensure_sample_partitions(cur)
         pg_con.commit()
-        return  # already partitioned
+        return  # already fully migrated
+
+    if _pg_is_partitioned(cur) and has_old:
+        # Previous run was interrupted after the rename+create but before the
+        # copy finished.  Resume from the copy step.
+        log.info("Resuming incomplete partition migration (sensor_samples_old found) …")
+        cur.execute("SELECT MIN(ts), MAX(ts), COUNT(*) FROM sensor_samples_old")
+        row = cur.fetchone()
+        min_ts, max_ts, total = row[0], row[1], row[2]
+        if not min_ts:
+            cur.execute("DROP TABLE sensor_samples_old")
+            pg_con.commit()
+            return
+        log.info(f"  {total} rows to copy from sensor_samples_old")
+        dt_start = datetime.datetime.utcfromtimestamp(min_ts).replace(day=1)
+        # Ensure partitions exist for the full range before copying
+        pg_ensure_sample_partitions(cur)
+        pg_con.commit()
+        _pg_do_copy(cur, pg_con, dt_start, max_ts, total)
+        cur.execute("DROP INDEX IF EXISTS idx_samples_ds")
+        cur.execute("DROP INDEX IF EXISTS idx_samples_ds_cov")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_samples_ds ON sensor_samples(did, sid, ts)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_samples_ds_cov ON sensor_samples(did, sid, ts, ok, ms)")
+        pg_con.commit()
+        cur.execute("SELECT MAX(id) FROM sensor_samples")
+        max_id = cur.fetchone()[0] or 0
+        cur.execute("SELECT setval(pg_get_serial_sequence('sensor_samples', 'id'), %s, true)", (max(max_id, 1),))
+        pg_con.commit()
+        cur.execute("DROP TABLE sensor_samples_old")
+        pg_con.commit()
+        log.info("Partition migration resume complete")
+        return
 
     # Check if the table exists at all (fresh install already partitioned)
     cur.execute(
@@ -734,25 +805,7 @@ def pg_migrate_to_partitioned(pg_con):
     pg_con.commit()
 
     # 5. Copy data in monthly chunks
-    copied = 0
-    dt = dt_start
-    while dt.timestamp() <= max_ts + 86400:
-        m_next = dt.month + 1
-        y_next = dt.year + (m_next - 1) // 12
-        m_next = ((m_next - 1) % 12) + 1
-        dt_next = datetime.datetime(y_next, m_next, 1)
-        cur.execute(
-            "INSERT INTO sensor_samples (id, ts, did, sid, ok, ms, value) "
-            "SELECT id, ts, did, sid, ok, ms, value "
-            "FROM sensor_samples_old WHERE ts >= %s AND ts < %s",
-            (dt.timestamp(), dt_next.timestamp()),
-        )
-        chunk = cur.rowcount
-        copied += chunk
-        if chunk > 0:
-            log.info(f"  Copied {chunk} rows for {dt.strftime('%Y-%m')} ({copied}/{total})")
-        pg_con.commit()
-        dt = dt_next
+    copied = _pg_do_copy(cur, pg_con, dt_start, max_ts, total)
 
     # 6. Recreate indexes on partitioned table
     cur.execute(
