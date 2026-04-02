@@ -14,7 +14,9 @@ function sensorFormHTML(dev, s=null) {
   const hostStatusHtml = (s && devHost)
     ? (isLinked
         ? `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`
-        : `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`)
+        : (s.host && s.host !== devHost)
+          ? `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`
+          : '')
     : '';
   // SNMP community — blank means "use device default" (same pattern as host)
   const devComm   = dev?.snmp_community_default || '';
@@ -223,7 +225,7 @@ function sensorFormHTML(dev, s=null) {
     <div class="fgrid">
       <div class="fr"><label class="fl">vCenter / ESXi Host</label>
         <input type="text" id="as-vmh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
-        ${hostStatusHtml}</div>
+        </div>
       <div class="fr"><label class="fl">Port</label>
         <input type="number" id="as-vmp" value="${s?.port||443}" min="1" max="65535"/></div>
     </div>
