@@ -277,33 +277,24 @@ def db_rollup_backfill():
         with pg_cursor("logs") as cur:
             cur.execute("SELECT COUNT(*) AS cnt FROM sensor_samples_5m")
             empty = cur.fetchone()["cnt"] == 0
-            cur.execute("SELECT MIN(ts) AS mn FROM sensor_samples")
-            r = cur.fetchone()
-            if not r or r["mn"] is None:
-                return
-            min_raw = r["mn"]
-            cur.execute("SELECT last_ts FROM rollup_state WHERE tier = '5m'")
-            rs = cur.fetchone()
-            last_ts = rs["last_ts"] if rs else 0
-        # Backfill if empty OR if oldest raw data predates where rollup started
-        if not empty and min_raw >= last_ts - 600:
-            return
+            if not empty:
+                return  # already backfilled on a previous run
+            cur.execute("SELECT COUNT(*) AS cnt FROM sensor_samples")
+            if cur.fetchone()["cnt"] == 0:
+                return  # no raw data to backfill from
         log.info("Backfilling rollup tables from existing PG data …")
     else:
         con = sqlite3.connect(LOGS_DB_PATH)
         try:
             cnt = con.execute("SELECT COUNT(*) FROM sensor_samples_5m").fetchone()[0]
             empty = cnt == 0
-            r = con.execute("SELECT MIN(ts) FROM sensor_samples").fetchone()
-            if not r or r[0] is None:
-                return
-            min_raw = r[0]
-            rs = con.execute("SELECT last_ts FROM rollup_state WHERE tier='5m'").fetchone()
-            last_ts = rs[0] if rs else 0
+            if not empty:
+                return  # already backfilled on a previous run
+            raw_cnt = con.execute("SELECT COUNT(*) FROM sensor_samples").fetchone()[0]
         finally:
             con.close()
-        if not empty and min_raw >= last_ts - 600:
-            return
+        if not raw_cnt:
+            return  # no raw data to backfill from
         log.info("Backfilling rollup tables from existing SQLite data …")
 
     # Reset rollup_state to 0 so the worker processes everything
