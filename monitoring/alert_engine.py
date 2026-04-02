@@ -128,6 +128,8 @@ def _process(event_type: str, data: dict):
                 db_log_event(rule["id"], rule["name"], ctx, state='suppressed')
                 log.debug(f"alert_engine: rule {rule['id']} suppressed by window '{mw_name}'")
                 continue
+            if _is_acked(rule, ctx):
+                continue
             if not _check_cooldown(rule, ctx):
                 continue
             _dispatch(rule, ctx)
@@ -281,6 +283,18 @@ def _check_maintenance(ctx: dict) -> tuple:
         return True, w.get("name", "")
 
     return False, ""
+
+
+# ── ACK suppression ──────────────────────────────────────────────
+
+def _is_acked(rule: dict, ctx: dict) -> bool:
+    """Return True if this rule+device+sensor has an acknowledged event (suppress until resolved)."""
+    try:
+        from db.alert_events import db_has_acked_event
+        return db_has_acked_event(rule["id"], ctx.get("did", ""), ctx.get("sid", ""))
+    except Exception as e:
+        log.warning(f"alert_engine: ACK check error: {e}")
+        return False
 
 
 # ── Cooldown / dedup ──────────────────────────────────────────────
