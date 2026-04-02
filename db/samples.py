@@ -262,33 +262,48 @@ def _rollup_1h():
 
 
 def db_rollup_backfill():
-    """One-time backfill of rollup tables from existing raw data.
+    """Backfill rollup tables from existing raw data if needed.
 
-    Processes in 1-day chunks to limit memory.  Safe to call if rollup
-    tables already have data (upsert prevents duplicates).
+    Runs on startup.  Two cases trigger a backfill:
+    1. sensor_samples_5m is empty — never rolled up yet.
+    2. MIN(ts) in sensor_samples predates rollup_state.last_ts by >10 min —
+       last_ts jumped ahead (e.g. partition migration interrupted) leaving
+       historical data unprocessed.
+
+    Safe to call repeatedly — upsert prevents duplicates.
     """
     if is_pg():
         from db.pg_pool import pg_cursor
         with pg_cursor("logs") as cur:
             cur.execute("SELECT COUNT(*) AS cnt FROM sensor_samples_5m")
-            if cur.fetchone()["cnt"] > 0:
-                return
-            cur.execute("SELECT MIN(ts) AS mn, MAX(ts) AS mx FROM sensor_samples")
+            empty = cur.fetchone()["cnt"] == 0
+            cur.execute("SELECT MIN(ts) AS mn FROM sensor_samples")
             r = cur.fetchone()
             if not r or r["mn"] is None:
                 return
+            min_raw = r["mn"]
+            cur.execute("SELECT last_ts FROM rollup_state WHERE tier = '5m'")
+            rs = cur.fetchone()
+            last_ts = rs["last_ts"] if rs else 0
+        # Backfill if empty OR if oldest raw data predates where rollup started
+        if not empty and min_raw >= last_ts - 600:
+            return
         log.info("Backfilling rollup tables from existing PG data …")
     else:
         con = sqlite3.connect(LOGS_DB_PATH)
         try:
             cnt = con.execute("SELECT COUNT(*) FROM sensor_samples_5m").fetchone()[0]
-            if cnt > 0:
-                return
-            r = con.execute("SELECT MIN(ts), MAX(ts) FROM sensor_samples").fetchone()
+            empty = cnt == 0
+            r = con.execute("SELECT MIN(ts) FROM sensor_samples").fetchone()
             if not r or r[0] is None:
                 return
+            min_raw = r[0]
+            rs = con.execute("SELECT last_ts FROM rollup_state WHERE tier='5m'").fetchone()
+            last_ts = rs[0] if rs else 0
         finally:
             con.close()
+        if not empty and min_raw >= last_ts - 600:
+            return
         log.info("Backfilling rollup tables from existing SQLite data …")
 
     # Reset rollup_state to 0 so the worker processes everything
