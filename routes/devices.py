@@ -28,6 +28,7 @@ from db     import (
     db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
 )
 from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete
+from monitoring.network_map import topo_prune_pw_links
 from core.logger import log
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
 
@@ -293,6 +294,7 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: db_save(STATE))
         _dd = ddid
         _db_enqueue(lambda: ipam_sync_device_delete(_dd))
+        _db_enqueue(lambda: topo_prune_pw_links(_dd))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
         h._json(200, {"status": "ok"})
         return True
