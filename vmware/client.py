@@ -371,9 +371,20 @@ def vmware_probe(host, user, password, vm_id, metric,
     # Query all metrics (cached for other sensors targeting same VM)
     data = _query_all_vm_metrics(si, vm_moref, num_cpu)
 
-    # Compute mem_consumed_pct from consumed MB vs total VM RAM (matches guest OS view)
-    if memory_mb > 0 and data.get('mem_consumed') is not None:
-        data['mem_consumed_pct'] = round(data['mem_consumed'] / memory_mb * 100, 2)
+    # Compute mem_consumed_pct — use guestMemoryUsage (VMware Tools) for guest-OS
+    # accuracy (matches Task Manager).  Falls back to mem_active if Tools unavailable.
+    if memory_mb > 0:
+        guest_used_mb = 0
+        try:
+            qs = vm_moref.summary.quickStats
+            guest_used_mb = int(qs.guestMemoryUsage or 0)
+        except Exception:
+            pass
+        if guest_used_mb > 0:
+            data['mem_consumed_pct'] = round(guest_used_mb / memory_mb * 100, 2)
+        elif data.get('mem_active'):
+            # Fallback: mem.active.average / configured RAM (VMware Tools not running)
+            data['mem_consumed_pct'] = round(data['mem_active'] / memory_mb * 100, 2)
 
     with _metric_cache_lock:
         _metric_cache[cache_key] = {"ts": time.monotonic(), "data": data}
