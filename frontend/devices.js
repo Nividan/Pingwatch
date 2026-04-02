@@ -127,9 +127,16 @@ function renderDp(dev){
 }
 
 function sSnrPreview(did){
-  // return up to 3 sensor preview rows for the card
+  // return up to 3 sensor preview rows for the card, respecting saved drag order
   const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
   if(!snrs.length) return '<div class="dc-more" style="padding:6px 0">No sensors yet</div>';
+  const _ord=_lsGet(`pw_snr_order_${did}`,[]);
+  if(_ord.length){
+    snrs.sort((a,b)=>{
+      const ai=_ord.indexOf(a.sensor_id),bi=_ord.indexOf(b.sensor_id);
+      return (ai<0?9999:ai)-(bi<0?9999:bi);
+    });
+  }
   const shown=snrs.slice(0,3);
   const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
   const snrVal=s=>{
