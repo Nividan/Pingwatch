@@ -281,8 +281,9 @@ function sensorFormHTML(dev, s=null) {
         const _vmm=curType==='vmware'?(s?.vmware_metric||''):'';
         const _wLbl=curType==='tls'?'Warn Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,true)||'Warn Value'):curType==='vmware'?_vmwareThrLabel(_vmm,true):'Warn Latency (ms)';
         const _cLbl=curType==='tls'?'Crit Days (cert expiry)':curType==='snmp'?(_snmpThrLabel(_su,false)||'Crit Value'):curType==='vmware'?_vmwareThrLabel(_vmm,false):'Crit Latency (ms)';
-        const _ph=_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200';
-        const _phc=_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 200':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500';
+        const _vmph=curType==='vmware'?(_VM_THR_PH[_vmm]||{w:'e.g. 80',c:'e.g. 90'}):null;
+        const _ph=_vmph?_vmph.w:_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200';
+        const _phc=_vmph?_vmph.c:_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 200':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500';
         const _cur=curType==='snmp'&&s?.last_value!=null?`<div class="fh" style="margin-top:2px">Current: <strong>${esc(String(s.last_value))}</strong></div>`:'';
         return`<div class="fgrid">
         <div class="fr"><label class="fl" id="as-wms-lbl">${_wLbl}</label>
@@ -832,6 +833,24 @@ function _vmwareThrLabel(metric, isWarn){
   return pfx+' Value';
 }
 
+// Per-metric sensible warn/crit placeholder hints
+const _VM_THR_PH = {
+  cpu_usage:       {w:'e.g. 80',  c:'e.g. 90'},
+  cpu_ready:       {w:'e.g. 10',  c:'e.g. 20'},
+  mem_consumed_pct:{w:'e.g. 80',  c:'e.g. 90'},
+  mem_active:      {w:'e.g. 4096',c:'e.g. 6144'},   // KB
+  mem_consumed:    {w:'e.g. 4096',c:'e.g. 6144'},   // KB
+  disk_read:       {w:'e.g. 500', c:'e.g. 1000'},
+  disk_write:      {w:'e.g. 500', c:'e.g. 1000'},
+  disk_usage:      {w:'e.g. 500', c:'e.g. 1000'},
+  ds_read_lat:     {w:'e.g. 20',  c:'e.g. 50'},
+  ds_write_lat:    {w:'e.g. 20',  c:'e.g. 50'},
+  net_rx:          {w:'e.g. 500', c:'e.g. 1000'},
+  net_tx:          {w:'e.g. 500', c:'e.g. 1000'},
+  net_usage:       {w:'e.g. 500', c:'e.g. 1000'},
+  uptime:          {w:'e.g. 86400',c:'e.g. 3600'},
+};
+
 function _vmwareThrUpdateLabels(){
   const sel=document.getElementById('as-vmmet');
   if(!sel) return;
@@ -839,6 +858,12 @@ function _vmwareThrUpdateLabels(){
   const cl=document.getElementById('as-cms-lbl');
   if(wl) wl.textContent=_vmwareThrLabel(sel.value,true);
   if(cl) cl.textContent=_vmwareThrLabel(sel.value,false);
+  // Update placeholders to metric-appropriate hints
+  const ph=_VM_THR_PH[sel.value];
+  const wi=document.getElementById('as-wms');
+  const ci=document.getElementById('as-cms');
+  if(wi) wi.placeholder=ph?ph.w:'e.g. 80';
+  if(ci) ci.placeholder=ph?ph.c:'e.g. 90';
 }
 
 async function _vmwareLoadMetrics(){
@@ -1113,6 +1138,8 @@ async function addSelectedVMSensors(){
   const startNow=document.getElementById('as-si')?.value==='1';
   const fa=parseInt(document.getElementById('as-fa')?.value)||1;
   const ra=parseInt(document.getElementById('as-ra')?.value)||1;
+  const wms=parseInt(document.getElementById('as-wms')?.value)||null;
+  const cms=parseInt(document.getElementById('as-cms')?.value)||null;
 
   // Expand checked VMs × their selected metrics into individual sensor rows
   const rows=[];
@@ -1138,7 +1165,7 @@ async function addSelectedVMSensors(){
     try{
       const r=await api('POST',`/api/device/${did}/sensor`,{
         name:sname,type:'vmware',host,port,interval:iv,timeout:tmo,
-        verify_ssl:vssl,fail_after:fa,recover_after:ra,
+        verify_ssl:vssl,fail_after:fa,recover_after:ra,warn_ms:wms,crit_ms:cms,
         vmware_user:username,vmware_password:password,
         vmware_vm_id:row.vmid,vmware_vm_name:row.vmname,vmware_metric:row.metric
       });
