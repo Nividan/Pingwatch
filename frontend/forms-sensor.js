@@ -443,8 +443,10 @@ function _applyTypeDefaults(t){
   _sv('as-tmo', d.timeout);
   _sv('as-fa',  d.fail_after);
   _sv('as-ra',  d.recover_after);
-  _sv('as-wms', d.warn_ms  ?? _SDR_WARN_DEF[t]);
-  _sv('as-cms', d.crit_ms  ?? _SDR_CRIT_DEF[t]);
+  if(t !== 'vmware'){
+    _sv('as-wms', d.warn_ms  ?? _SDR_WARN_DEF[t]);
+    _sv('as-cms', d.crit_ms  ?? _SDR_CRIT_DEF[t]);
+  }
   if(t==='tcp')          _sv('as-tp',    d.port);
   if(t==='snmp')       { _sv('as-sp',    d.port); const _snrDev=window._ifaceDid?S.devices[window._ifaceDid]:null; if(!_snrDev?.snmp_community_default) _sv('as-sc', d.community); if(d.version&&!_snrDev?.snmp_version_default) document.getElementById('as-sv').value=d.version; }
   if(t==='dns')        { _sv('as-dp',    d.port); if(d.record_type) document.getElementById('as-drt').value=d.record_type; _sv('as-ds', d.dns_server); }
@@ -827,6 +829,16 @@ async function addSelectedIfaceSensors(){
 let _vmwareMetrics=null;
 let _vmSelectedMemMB=0;  // memory of currently selected VM (MB), for smart threshold defaults
 
+// Fixed per-metric defaults (used when VM RAM not available or metric isn't memory-based)
+const _VM_THR_DEFAULTS={
+  cpu_usage:       {w:80,  c:95},
+  cpu_ready:       {w:10,  c:20},
+  mem_consumed_pct:{w:80,  c:90},
+  disk_used_pct:   {w:80,  c:90},
+  ds_read_lat:     {w:20,  c:50},
+  ds_write_lat:    {w:20,  c:50},
+};
+
 // Auto-fill warn/crit thresholds based on VM specs and metric type.
 // Only fills if both fields are currently empty (never overwrites user input).
 function _vmwareThrAutoFill(metric, memMB){
@@ -834,10 +846,13 @@ function _vmwareThrAutoFill(metric, memMB){
   const ci=document.getElementById('as-cms');
   if(!wi||!ci||wi.value||ci.value) return;
   let w=null,c=null;
+  // Memory metrics: compute from VM RAM
   if(memMB>0){
     if(metric==='mem_consumed'){ w=Math.round(memMB*0.80); c=Math.round(memMB*0.90); }
     else if(metric==='mem_active'){ w=Math.round(memMB*0.50); c=Math.round(memMB*0.70); }
   }
+  // All other metrics: use fixed defaults
+  if(w==null){ const def=_VM_THR_DEFAULTS[metric]; if(def){w=def.w;c=def.c;} }
   if(w!=null){ wi.value=w; ci.value=c; }
 }
 
