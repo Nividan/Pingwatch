@@ -265,6 +265,39 @@ def db_resolve_event(event_id: int) -> bool:
         con.close()
 
 
+# ── ACK suppression check ────────────────────────────────────────
+
+def db_has_acked_event(rule_id: int, did: str, sid: str) -> bool:
+    """Return True if an acknowledged (not resolved) event exists for this rule+device+sensor."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT 1 FROM alert_events "
+                    "WHERE rule_id=%s AND did=%s AND sid=%s AND state='acknowledged' LIMIT 1",
+                    (rule_id, did, sid)
+                )
+                return cur.fetchone() is not None
+        except Exception as e:
+            log.error(f"db_has_acked_event error: {e}")
+            return False
+    # SQLite
+    con = _con()
+    try:
+        row = con.execute(
+            "SELECT 1 FROM alert_events "
+            "WHERE rule_id=? AND did=? AND sid=? AND state='acknowledged' LIMIT 1",
+            (rule_id, did, sid)
+        ).fetchone()
+        return row is not None
+    except Exception as e:
+        log.error(f"db_has_acked_event error: {e}")
+        return False
+    finally:
+        con.close()
+
+
 # ── Dedup / cooldown persistence ──────────────────────────────────
 
 def db_get_dedup(sig: str) -> dict:

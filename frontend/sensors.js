@@ -715,6 +715,22 @@ async function delSensor(did,sid){
   toast('Sensor removed','info');
 }
 
+// ── Inline confirm (window.confirm is blocked on remote HTTP) ────
+function _pwConfirm(msg, onYes, yesLabel='Remove'){
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:22px 26px;max-width:340px;text-align:center">
+    <p style="color:var(--text);margin:0 0 16px;font-size:14px">${esc(msg)}</p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn-danger" id="_pwc-yes">${esc(yesLabel)}</button>
+      <button class="dp-btn" id="_pwc-no">Cancel</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#_pwc-no').onclick=()=>ov.remove();
+  ov.querySelector('#_pwc-yes').onclick=()=>{ov.remove();onYes();};
+  ov.onclick=e=>{if(e.target===ov)ov.remove();};
+}
+
 // ── VMware vm-row / vm-group delete ──────────────────────────────
 async function delVmRow(did,sid){
   const s=S.sensors[`${did}/${sid}`];
@@ -731,14 +747,17 @@ async function delVmRow(did,sid){
   }
 }
 
-async function delVmGrp(did,vmid){
+function delVmGrp(did,vmid){
   const sfx=_vmGrpSfx(vmid);
   const body=document.getElementById(`vgbody-${did}-${sfx}`);
   if(!body) return;
   const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
-  if(sids.length&&!confirm(`Remove all ${sids.length} metric${sids.length===1?'':'s'} for this VM?`)) return;
-  for(const sid of sids) await delSensor(did,sid);
-  document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
+  const count=sids.length;
+  if(!count){document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();return;}
+  _pwConfirm(`Remove all ${count} metric${count===1?'':'s'} for this VM?`,async()=>{
+    for(const sid of sids) await delSensor(did,sid);
+    document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
+  });
 }
 
 // ── Logs ─────────────────────────────────────────────────────────
