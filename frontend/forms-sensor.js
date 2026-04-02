@@ -290,11 +290,12 @@ function sensorFormHTML(dev, s=null) {
         const _ph=_vmph?_vmph.w:_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200';
         const _phc=_vmph?_vmph.c:_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 200':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500';
         const _cur=curType==='snmp'&&s?.last_value!=null?`<div class="fh" style="margin-top:2px">Current: <strong>${esc(String(s.last_value))}</strong></div>`:'';
+        const _noThr=curType==='vmware'&&(_vmm==='uptime'||_vmm==='on');
         return`<div class="fgrid">
-        <div class="fr"><label class="fl" id="as-wms-lbl">${_wLbl}</label>
+        <div class="fr" id="as-wms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-wms-lbl">${_wLbl}</label>
           <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${_ph}" min="1" style="max-width:100px"/>
         </div>
-        <div class="fr"><label class="fl" id="as-cms-lbl">${_cLbl}</label>
+        <div class="fr" id="as-cms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-cms-lbl">${_cLbl}</label>
           <input type="number" id="as-cms" value="${s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||'')}" placeholder="${_phc}" min="1" style="max-width:100px"/>
           ${_cur}
         </div></div>`;
@@ -880,6 +881,11 @@ function _vmwareThrUpdateLabels(){
   const cl=document.getElementById('as-cms-lbl');
   if(wl) wl.textContent=_vmwareThrLabel(sel.value,true);
   if(cl) cl.textContent=_vmwareThrLabel(sel.value,false);
+  const _noThr2=sel.value==='uptime'||sel.value==='on';
+  const wr=document.getElementById('as-wms-row');
+  const cr=document.getElementById('as-cms-row');
+  if(wr) wr.style.display=_noThr2?'none':'';
+  if(cr) cr.style.display=_noThr2?'none':'';
   const dpRow=document.getElementById('as-vm-diskpath-row');
   if(dpRow) dpRow.style.display=sel.value==='disk_used_pct'?'':'none';
   // Update placeholders to metric-appropriate hints

@@ -849,7 +849,7 @@ function _fmtVmVal(v,u){
     case'KB':return v>=1048576?(v/1048576).toFixed(1)+' GB':v>=1024?(v/1024).toFixed(1)+' MB':v+' KB';
     case'KBps':return v>=1024?(v/1024).toFixed(1)+' MBps':v.toFixed(1)+' KBps';
     case'ms':return v.toFixed(1)+' ms';
-    case'seconds':return v>=86400?(v/86400).toFixed(1)+' days':v>=3600?(v/3600).toFixed(1)+' hrs':v.toFixed(0)+' sec';
+    case'seconds':{const d=Math.floor(v/86400),h=Math.floor((v%86400)/3600),m=Math.floor((v%3600)/60);return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m`;}
     default:return String(v);
   }
 }
@@ -861,7 +861,7 @@ function _fmtVmYLabel(v,u){
     case'KB':return v>=1048576?(v/1048576).toFixed(1)+'GB':v>=1024?(v/1024).toFixed(0)+'MB':Math.round(v)+'KB';
     case'KBps':return v>=1024?(v/1024).toFixed(1)+'MBps':Math.round(v)+'KBps';
     case'ms':return Math.round(v)+'ms';
-    case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v)+'s';
+    case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v/60)+'m';
     default:return String(Math.round(v));
   }
 }
