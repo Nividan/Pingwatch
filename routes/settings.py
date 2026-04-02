@@ -389,7 +389,7 @@ def handle(h, method, path, body):
             from db.pg_pool import pg_cursor
             try:
                 _sz_q = (
-                    "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0) AS sz "
+                    "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::bigint AS sz "
                     "FROM pg_catalog.pg_class c "
                     "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
                     "WHERE n.nspname = %s AND c.relkind = 'r'"
