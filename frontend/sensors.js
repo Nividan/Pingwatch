@@ -615,7 +615,9 @@ function openDetail(did,sid,initialTab){
           <button class="dm-hist-pill" data-m="10080"  onclick="dmHistPick('${did}','${sid}',10080)">7d</button>
           <button class="dm-hist-pill" data-m="43200"  onclick="dmHistPick('${did}','${sid}',43200)">30d</button>
           <button class="dm-hist-pill" data-m="129600" onclick="dmHistPick('${did}','${sid}',129600)">90d</button>
-          <button class="dm-hist-pill" data-m="525600" onclick="dmHistPick('${did}','${sid}',525600)">1y</button>
+          <button class="dm-hist-pill" data-m="525600"  onclick="dmHistPick('${did}','${sid}',525600)">1y</button>
+          <button class="dm-hist-pill" data-m="1051200" onclick="dmHistPick('${did}','${sid}',1051200)">2y</button>
+          <button class="dm-hist-pill" data-m="1576800" onclick="dmHistPick('${did}','${sid}',1576800)">3y</button>
         </div>
         <span id="dm-hist-stats-${did}-${sid}" class="dm-hist-stats"></span>
       </div>

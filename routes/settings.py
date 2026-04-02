@@ -107,6 +107,11 @@ def handle(h, method, path, body):
             "syslog_port":         int(_settings.get("syslog_port",         514) or 514),
             "syslog_proto":        _settings.get("syslog_proto",        "udp"),
             "syslog_min_severity": _settings.get("syslog_min_severity", "warning"),
+            # Group J — data rollup / retention tiers (v0.8.0)
+            "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
+            "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
+            "retention_1h_days":     int(_settings.get("retention_1h_days", 1095) or 1095),
+            "max_workers_executor":  int(_settings.get("max_workers_executor", 64) or 64),
         })
         return True
 
@@ -219,6 +224,26 @@ def handle(h, method, path, body):
             _pw_enc = _enc_smtp_pw(_pw)
             _settings.load({"smtp_pass": _pw_enc})
             _db_enqueue(lambda _p=_pw_enc: db_save_settings({"smtp_pass": _p}))
+        # Data rollup retention tiers (v0.8.0)
+        for _k, _min, _max in [
+            ("retention_raw_days", 1, 365),
+            ("retention_5m_days",  7, 1825),
+            ("retention_1h_days",  30, 3650),
+        ]:
+            if _k in body:
+                try:
+                    _v = max(_min, min(_max, int(body[_k])))
+                except (ValueError, TypeError):
+                    h._json(400, {"error": f"{_k} must be an integer"}); return True
+                _settings.load({_k: _v})
+                _db_enqueue(lambda _k=_k, _v=_v: db_save_settings({_k: str(_v)}))
+        if "max_workers_executor" in body:
+            try:
+                _mw = max(4, min(512, int(body["max_workers_executor"])))
+            except (ValueError, TypeError):
+                h._json(400, {"error": "max_workers_executor must be 4-512"}); return True
+            _settings.load({"max_workers_executor": _mw})
+            _db_enqueue(lambda _v=_mw: db_save_settings({"max_workers_executor": str(_v)}))
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
         h._json(200, {"ok": True})
         return True
@@ -431,10 +456,12 @@ def handle(h, method, path, body):
                         "logs": {
                             "path": "PostgreSQL (logs schema)",
                             "size": logs_sz,
-                            "samples": _pg_cnt("sensor_samples"),
-                            "flaps":   _pg_cnt("flap_log"),
-                            "traps":   _pg_cnt("snmp_traps"),
-                            "errors":  _pg_cnt("sensor_err_log"),
+                            "samples":    _pg_cnt("sensor_samples"),
+                            "samples_5m": _pg_cnt("sensor_samples_5m"),
+                            "samples_1h": _pg_cnt("sensor_samples_1h"),
+                            "flaps":      _pg_cnt("flap_log"),
+                            "traps":      _pg_cnt("snmp_traps"),
+                            "errors":     _pg_cnt("sensor_err_log"),
                         },
                     })
             except Exception as e:
@@ -464,6 +491,8 @@ def handle(h, method, path, body):
                 "path":         str(LOGS_DB_PATH),
                 "size":         _db_size(LOGS_DB_PATH),
                 "samples":      _row_count(LOGS_DB_PATH, "sensor_samples"),
+                "samples_5m":   _row_count(LOGS_DB_PATH, "sensor_samples_5m"),
+                "samples_1h":   _row_count(LOGS_DB_PATH, "sensor_samples_1h"),
                 "flaps":        _row_count(LOGS_DB_PATH, "flap_log"),
                 "traps":        _row_count(LOGS_DB_PATH, "snmp_traps"),
                 "errors":       _row_count(LOGS_DB_PATH, "sensor_err_log"),

@@ -72,10 +72,24 @@ async function openSettings(){
         <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
         <div style="font-size:11px;color:var(--text3);margin-top:5px">Current: ${Math.round((sr.session_ttl||86400)/3600*10)/10}h — takes effect on next login</div>
       </div>
-      <div class="fr" style="margin-top:12px">
-        <label class="fl">Sample Retention (days)</label>
-        <input type="number" id="st-ret" value="${sr.retention_days||365}" min="1" max="365" style="max-width:120px"/>
-        <div style="font-size:11px;color:var(--text3);margin-top:5px">How long to keep latency history samples (default: 365 days)</div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Data Retention</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Raw Samples (days)</label>
+            <input type="number" id="st-ret-raw" value="${sr.retention_raw_days||7}" min="1" max="365" style="max-width:100px"/>
+            <div style="font-size:11px;color:var(--text3);margin-top:3px">Full-resolution probe data (default: 7)</div></div>
+          <div class="fr"><label class="fl">5-Min Aggregates (days)</label>
+            <input type="number" id="st-ret-5m" value="${sr.retention_5m_days||90}" min="7" max="1825" style="max-width:100px"/>
+            <div style="font-size:11px;color:var(--text3);margin-top:3px">5-minute rollups (default: 90)</div></div>
+          <div class="fr"><label class="fl">Hourly Aggregates (days)</label>
+            <input type="number" id="st-ret-1h" value="${sr.retention_1h_days||1095}" min="30" max="3650" style="max-width:120px"/>
+            <div style="font-size:11px;color:var(--text3);margin-top:3px">Hourly rollups for long-term history (default: 1095 / 3 years)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <label class="fl">Probe Workers</label>
+        <input type="number" id="st-mw" value="${sr.max_workers_executor||64}" min="4" max="512" style="max-width:100px"/>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px">Concurrent probe threads (default: 64, restart required)</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
@@ -1002,12 +1016,19 @@ function renderUserTable(users){
 
 async function saveSettings(){
   const ttl=parseInt(document.getElementById('st-ttl')?.value);
-  const ret=parseInt(document.getElementById('st-ret')?.value);
   if(!ttl||ttl<60){toast('Session timeout must be at least 60 seconds','err');return;}
   const btn=[...document.querySelectorAll('[onclick="saveSettings()"]')].find(el=>el.offsetParent!==null);
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const body={session_ttl:ttl};
-  if(ret&&ret>=1)body.retention_days=ret;
+  // Data rollup retention tiers (v0.8.0)
+  const retRaw=parseInt(document.getElementById('st-ret-raw')?.value);
+  const ret5m =parseInt(document.getElementById('st-ret-5m')?.value);
+  const ret1h =parseInt(document.getElementById('st-ret-1h')?.value);
+  if(retRaw>=1)  body.retention_raw_days=retRaw;
+  if(ret5m>=7)   body.retention_5m_days=ret5m;
+  if(ret1h>=30)  body.retention_1h_days=ret1h;
+  const mw=parseInt(document.getElementById('st-mw')?.value);
+  if(mw>=4) body.max_workers_executor=mw;
   const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
   const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
   const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);

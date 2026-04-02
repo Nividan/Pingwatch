@@ -22,6 +22,7 @@ from db.samples     import (
     db_load_summary,
     db_load_availability,
     db_clean_samples,
+    db_rollup_backfill,
 )
 
 # events — flap log, SNMP trap log, sensor error log
@@ -111,6 +112,7 @@ __all__ = [
     # samples
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
+    "db_rollup_backfill",
     # events
     "db_log_flap", "db_load_flaps", "db_ack_flap", "db_resolve_flap",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",

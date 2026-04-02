@@ -3,7 +3,13 @@ db/pg_schema.py — PostgreSQL DDL for both schemas (main + logs).
 
 Creates all tables with the full column set so no incremental ALTER TABLE
 migrations are needed.  Called once at first PG startup.
+
+v0.8.0: Added sensor_samples_5m, sensor_samples_1h, rollup_state tables.
+        sensor_samples is now range-partitioned by ts (monthly partitions).
 """
+
+import datetime
+import time
 
 from core.logger import log
 
@@ -352,23 +358,83 @@ def pg_create_logs_schema(cur):
     cur.execute("CREATE SCHEMA IF NOT EXISTS logs")
     cur.execute("SET search_path TO logs, public")
 
+    # sensor_samples — partitioned by month on ts (v0.8.0+).
+    # For existing non-partitioned tables, pg_migrate_to_partitioned() handles
+    # the conversion at startup.  Fresh installs get the partitioned version.
+    cur.execute(
+        "SELECT 1 FROM pg_class WHERE relname = 'sensor_samples' "
+        "AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'logs')"
+    )
+    if not cur.fetchone():
+        cur.execute("""
+            CREATE TABLE sensor_samples (
+                id    BIGSERIAL,
+                ts    DOUBLE PRECISION NOT NULL,
+                did   TEXT NOT NULL,
+                sid   TEXT NOT NULL,
+                ok    INTEGER NOT NULL,
+                ms    DOUBLE PRECISION,
+                value TEXT
+            ) PARTITION BY RANGE (ts)""")
+        pg_ensure_sample_partitions(cur)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_ds "
+            "ON sensor_samples(did, sid, ts)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
+            "ON sensor_samples(did, sid, ts, ok, ms)"
+        )
+
+    # ── Rollup tables (v0.8.0) ──────────────────────────────────────
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS sensor_samples (
-            id    BIGSERIAL PRIMARY KEY,
-            ts    DOUBLE PRECISION NOT NULL,
-            did   TEXT NOT NULL,
-            sid   TEXT NOT NULL,
-            ok    INTEGER NOT NULL,
-            ms    DOUBLE PRECISION,
-            value TEXT
+        CREATE TABLE IF NOT EXISTS sensor_samples_5m (
+            ts           DOUBLE PRECISION NOT NULL,
+            did          TEXT NOT NULL,
+            sid          TEXT NOT NULL,
+            ok_count     INTEGER NOT NULL DEFAULT 0,
+            fail_count   INTEGER NOT NULL DEFAULT 0,
+            avg_ms       DOUBLE PRECISION,
+            min_ms       DOUBLE PRECISION,
+            max_ms       DOUBLE PRECISION,
+            avg_ms_sq    DOUBLE PRECISION DEFAULT 0,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (did, sid, ts)
         )""")
     cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_samples_ds "
-        "ON sensor_samples(did, sid, ts)"
+        "CREATE INDEX IF NOT EXISTS idx_s5m_ts ON sensor_samples_5m(ts)"
+    )
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sensor_samples_1h (
+            ts           DOUBLE PRECISION NOT NULL,
+            did          TEXT NOT NULL,
+            sid          TEXT NOT NULL,
+            ok_count     INTEGER NOT NULL DEFAULT 0,
+            fail_count   INTEGER NOT NULL DEFAULT 0,
+            avg_ms       DOUBLE PRECISION,
+            min_ms       DOUBLE PRECISION,
+            max_ms       DOUBLE PRECISION,
+            avg_ms_sq    DOUBLE PRECISION DEFAULT 0,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (did, sid, ts)
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_s1h_ts ON sensor_samples_1h(ts)"
+    )
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rollup_state (
+            tier    TEXT PRIMARY KEY,
+            last_ts DOUBLE PRECISION NOT NULL DEFAULT 0
+        )""")
+    cur.execute(
+        "INSERT INTO rollup_state (tier, last_ts) VALUES ('5m', 0) "
+        "ON CONFLICT (tier) DO NOTHING"
     )
     cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
-        "ON sensor_samples(did, sid, ts, ok, ms)"
+        "INSERT INTO rollup_state (tier, last_ts) VALUES ('1h', 0) "
+        "ON CONFLICT (tier) DO NOTHING"
     )
 
     cur.execute("""
@@ -503,6 +569,10 @@ def pg_seed_defaults(cur):
         ("ldap_timeout",        "10"),
         ("ldap_debug",          "0"),
         ("db_split_complete",   "1"),
+        ("retention_raw_days",     "7"),
+        ("retention_5m_days",      "90"),
+        ("retention_1h_days",      "1095"),
+        ("max_workers_executor",   "64"),
     ]
     for k, v in _defaults:
         cur.execute(
@@ -518,5 +588,194 @@ def pg_seed_defaults(cur):
         cur.execute(
             "INSERT INTO logs_schema_version VALUES (1, NOW()::text, 'initial — PostgreSQL')"
         )
+    cur.execute("SELECT 1 FROM logs_schema_version WHERE version = 2")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO logs_schema_version VALUES "
+            "(2, NOW()::text, 'v0.8.0 — rollup tables + partitioned sensor_samples')"
+        )
 
     log.info("PG defaults seeded")
+
+
+# ── Partition management (v0.8.0) ───────────────────────────────────────
+
+
+def pg_ensure_sample_partitions(cur):
+    """Create monthly partitions for sensor_samples covering prev month
+    through 2 months ahead.  Safe to call repeatedly (IF NOT EXISTS)."""
+    cur.execute("SET search_path TO logs, public")
+    now = datetime.datetime.utcnow()
+    for delta in range(-1, 3):
+        month = now.month + delta
+        year = now.year + (month - 1) // 12
+        month = ((month - 1) % 12) + 1
+        start = datetime.datetime(year, month, 1)
+        if month == 12:
+            end = datetime.datetime(year + 1, 1, 1)
+        else:
+            end = datetime.datetime(year, month + 1, 1)
+        name = f"sensor_samples_{start.strftime('%Y%m')}"
+        start_ts = start.timestamp()
+        end_ts = end.timestamp()
+        try:
+            cur.execute(
+                f"CREATE TABLE IF NOT EXISTS {name} "
+                f"PARTITION OF sensor_samples "
+                f"FOR VALUES FROM ({start_ts}) TO ({end_ts})"
+            )
+        except Exception as e:
+            # Partition may overlap with an existing one — skip silently
+            if "overlap" not in str(e).lower():
+                log.warning(f"Partition {name}: {e}")
+
+
+def _pg_is_partitioned(cur):
+    """Return True if logs.sensor_samples is a partitioned table."""
+    cur.execute("""
+        SELECT 1 FROM pg_partitioned_table pt
+        JOIN pg_class c ON c.oid = pt.partrelid
+        WHERE c.relname = 'sensor_samples'
+          AND c.relnamespace = (
+              SELECT oid FROM pg_namespace WHERE nspname = 'logs')
+    """)
+    return cur.fetchone() is not None
+
+
+def pg_migrate_to_partitioned(pg_con):
+    """Convert a non-partitioned sensor_samples table to range-partitioned.
+
+    Called once at startup.  If the table is already partitioned this is a
+    no-op.  The migration:
+      1. Rename old table → sensor_samples_old
+      2. Create new partitioned sensor_samples
+      3. Create monthly partitions covering the data range
+      4. Copy data in monthly chunks
+      5. Recreate indexes
+      6. Drop old table
+    """
+    cur = pg_con.cursor()
+    cur.execute("SET search_path TO logs, public")
+
+    if _pg_is_partitioned(cur):
+        pg_ensure_sample_partitions(cur)
+        pg_con.commit()
+        return  # already partitioned
+
+    # Check if the table exists at all (fresh install already partitioned)
+    cur.execute(
+        "SELECT 1 FROM pg_class WHERE relname = 'sensor_samples' "
+        "AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'logs')"
+    )
+    if not cur.fetchone():
+        pg_con.commit()
+        return  # table doesn't exist yet — pg_create_logs_schema will create it
+
+    log.info("Migrating sensor_samples to partitioned table …")
+
+    # 1. Find data range
+    cur.execute("SELECT MIN(ts), MAX(ts), COUNT(*) FROM sensor_samples")
+    row = cur.fetchone()
+    min_ts, max_ts, total = row[0], row[1], row[2]
+    if total == 0:
+        min_ts = time.time()
+        max_ts = time.time()
+    log.info(f"  {total} rows, ts range {min_ts} — {max_ts}")
+
+    # 2. Rename old table
+    cur.execute("ALTER TABLE sensor_samples RENAME TO sensor_samples_old")
+    # Drop old indexes (they are on the old table now)
+    cur.execute("DROP INDEX IF EXISTS idx_samples_ds")
+    cur.execute("DROP INDEX IF EXISTS idx_samples_ds_cov")
+    pg_con.commit()
+
+    # 3. Create new partitioned table
+    cur.execute("""
+        CREATE TABLE sensor_samples (
+            id    BIGSERIAL,
+            ts    DOUBLE PRECISION NOT NULL,
+            did   TEXT NOT NULL,
+            sid   TEXT NOT NULL,
+            ok    INTEGER NOT NULL,
+            ms    DOUBLE PRECISION,
+            value TEXT
+        ) PARTITION BY RANGE (ts)""")
+    pg_con.commit()
+
+    # 4. Create partitions covering the data range + future
+    dt_start = datetime.datetime.utcfromtimestamp(min_ts).replace(day=1)
+    dt_end = datetime.datetime.utcfromtimestamp(max_ts)
+    # Extend 2 months into the future
+    dt_future = datetime.datetime.utcnow()
+    for _ in range(3):
+        m = dt_future.month + 1
+        y = dt_future.year + (m - 1) // 12
+        m = ((m - 1) % 12) + 1
+        dt_future = dt_future.replace(year=y, month=m, day=1)
+    if dt_future > dt_end:
+        dt_end = dt_future
+
+    dt = dt_start
+    while dt <= dt_end:
+        m_next = dt.month + 1
+        y_next = dt.year + (m_next - 1) // 12
+        m_next = ((m_next - 1) % 12) + 1
+        dt_next = datetime.datetime(y_next, m_next, 1)
+        name = f"sensor_samples_{dt.strftime('%Y%m')}"
+        try:
+            cur.execute(
+                f"CREATE TABLE IF NOT EXISTS {name} "
+                f"PARTITION OF sensor_samples "
+                f"FOR VALUES FROM ({dt.timestamp()}) TO ({dt_next.timestamp()})"
+            )
+        except Exception:
+            pass  # overlap — skip
+        dt = dt_next
+    pg_con.commit()
+
+    # 5. Copy data in monthly chunks
+    copied = 0
+    dt = dt_start
+    while dt.timestamp() <= max_ts + 86400:
+        m_next = dt.month + 1
+        y_next = dt.year + (m_next - 1) // 12
+        m_next = ((m_next - 1) % 12) + 1
+        dt_next = datetime.datetime(y_next, m_next, 1)
+        cur.execute(
+            "INSERT INTO sensor_samples (id, ts, did, sid, ok, ms, value) "
+            "SELECT id, ts, did, sid, ok, ms, value "
+            "FROM sensor_samples_old WHERE ts >= %s AND ts < %s",
+            (dt.timestamp(), dt_next.timestamp()),
+        )
+        chunk = cur.rowcount
+        copied += chunk
+        if chunk > 0:
+            log.info(f"  Copied {chunk} rows for {dt.strftime('%Y-%m')} ({copied}/{total})")
+        pg_con.commit()
+        dt = dt_next
+
+    # 6. Recreate indexes on partitioned table
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_samples_ds "
+        "ON sensor_samples(did, sid, ts)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
+        "ON sensor_samples(did, sid, ts, ok, ms)"
+    )
+    pg_con.commit()
+
+    # 7. Reset sequence to continue from max id
+    cur.execute("SELECT MAX(id) FROM sensor_samples")
+    max_id = cur.fetchone()[0] or 0
+    cur.execute(
+        "SELECT setval(pg_get_serial_sequence('sensor_samples', 'id'), %s, true)",
+        (max(max_id, 1),),
+    )
+    pg_con.commit()
+
+    # 8. Drop old table
+    cur.execute("DROP TABLE sensor_samples_old")
+    pg_con.commit()
+
+    log.info(f"Partition migration complete — {copied} rows migrated")
