@@ -20,8 +20,17 @@ function openAddDevice(){
       <details class="dev-creds" style="margin-top:10px">
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
-          <div class="fr"><label class="fl">SNMP Community</label>
-            <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">SNMP Community</label>
+              <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">SNMP Version</label>
+              <select id="ad-snmp-ver">
+                <option value="">— any —</option>
+                <option value="2c">v2c</option>
+                <option value="1">v1</option>
+                <option value="3">v3 (community)</option>
+              </select></div>
+          </div>
           <div class="fgrid">
             <div class="fr"><label class="fl">VMware Username</label>
               <input type="text" id="ad-vmw-user" placeholder="administrator@vsphere.local" autocomplete="off"/></div>
@@ -47,6 +56,7 @@ async function submitAddDevice(){
   const group=(document.getElementById('ad-g')?.value||'Default Group').trim();
   const webhook_url=(document.getElementById('ad-wh')?.value||'').trim();
   const snmp_community_default=(document.getElementById('ad-snmp-comm')?.value||'').trim();
+  const snmp_version_default=document.getElementById('ad-snmp-ver')?.value||'';
   const vmware_user_default=(document.getElementById('ad-vmw-user')?.value||'').trim();
   const vmware_password_default=document.getElementById('ad-vmw-pass')?.value||'';
   if(!name||!host){toast('Name and host are required','err');return;}
@@ -54,6 +64,7 @@ async function submitAddDevice(){
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
   const payload={name,host,group,webhook_url};
   if(snmp_community_default) payload.snmp_community_default=snmp_community_default;
+  if(snmp_version_default) payload.snmp_version_default=snmp_version_default;
   if(vmware_user_default) payload.vmware_user_default=vmware_user_default;
   if(vmware_password_default) payload.vmware_password_default=vmware_password_default;
   let r;
@@ -125,8 +136,17 @@ function openEditDevice(did){
       <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default)?' open':''}>
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
-          <div class="fr"><label class="fl">SNMP Community</label>
-            <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">SNMP Community</label>
+              <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">SNMP Version</label>
+              <select id="ed-snmp-ver">
+                <option value="" ${!dev.snmp_version_default?'selected':''}>— any —</option>
+                <option value="2c" ${dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
+                <option value="1"  ${dev.snmp_version_default==='1'?'selected':''}>v1</option>
+                <option value="3"  ${dev.snmp_version_default==='3'?'selected':''}>v3 (community)</option>
+              </select></div>
+          </div>
           <div class="fgrid">
             <div class="fr"><label class="fl">VMware Username</label>
               <input type="text" id="ed-vmw-user" value="${esc(dev.vmware_user_default||'')}" placeholder="administrator@vsphere.local" autocomplete="off"/></div>
@@ -157,13 +177,14 @@ async function submitEditDevice(did){
   const webhook_url  = (document.getElementById('ed-wh')?.value || '').trim();
   const alerts_muted = document.getElementById('ed-am')?.checked || false;
   const snmp_community_default = (document.getElementById('ed-snmp-comm')?.value || '').trim();
+  const snmp_version_default   = document.getElementById('ed-snmp-ver')?.value || '';
   const vmware_user_default    = (document.getElementById('ed-vmw-user')?.value || '').trim();
   const vmware_password_default = document.getElementById('ed-vmw-pass')?.value || '';
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const payload = {name, host, group, webhook_url, alerts_muted,
-    snmp_community_default, vmware_user_default};
+    snmp_community_default, snmp_version_default, vmware_user_default};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   let r;
   try{
@@ -177,7 +198,7 @@ async function submitEditDevice(did){
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   renderSidebar();
   updatePills();
   refreshGroupCounts();

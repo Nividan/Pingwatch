@@ -423,7 +423,7 @@ def db_init():
             except Exception:
                 pass
         # Device-level default credentials
-        for col in ("snmp_community_default", "vmware_user_default", "vmware_password_default"):
+        for col in ("snmp_community_default", "snmp_version_default", "vmware_user_default", "vmware_password_default"):
             try:
                 con.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
                 con.commit()

@@ -275,6 +275,7 @@ class Device:
         self._sid_ctr     = 0
         # Device-level default credentials (pre-fill for new sensors)
         self.snmp_community_default  = ""
+        self.snmp_version_default    = ""
         self.vmware_user_default     = ""
         self.vmware_password_default = ""
 
@@ -300,6 +301,7 @@ class Device:
             "status":       self.status,
             "sensors":      [s.to_dict() for s in self.sensors.values()],
             "snmp_community_default":      self.snmp_community_default,
+            "snmp_version_default":        self.snmp_version_default,
             "vmware_user_default":         self.vmware_user_default,
             "has_vmware_password_default":  bool(self.vmware_password_default),
         }

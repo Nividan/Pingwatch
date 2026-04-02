@@ -48,6 +48,7 @@ def pg_create_main_schema(cur):
             webhook_url              TEXT DEFAULT '',
             alerts_muted             INTEGER DEFAULT 0,
             snmp_community_default   TEXT DEFAULT '',
+            snmp_version_default     TEXT DEFAULT '',
             vmware_user_default      TEXT DEFAULT '',
             vmware_password_default  TEXT DEFAULT ''
         )""")
@@ -99,6 +100,7 @@ def pg_create_main_schema(cur):
         ("sensors", "vmware_vm_id",            "TEXT DEFAULT ''"),
         ("sensors", "vmware_metric",           "TEXT DEFAULT ''"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
         ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
     ]
