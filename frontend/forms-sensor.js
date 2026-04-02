@@ -886,18 +886,22 @@ async function discoverVMs(){
   }
   const metricOpts=(_vmwareMetrics||[]).map(m=>`<option value="${m.v}">${esc(m.l)}</option>`).join('');
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">';
-  html+='<div style="overflow-x:auto;max-height:260px;overflow-y:auto">';
-  html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
-  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
+  let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:4px">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border)">';
+  html+='<input type="text" id="as-vm-search" placeholder="Search VM names…" oninput="filterVMs(this.value)" autocomplete="off" style="width:100%;box-sizing:border-box;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
+  html+='</div>';
+  html+='<div style="overflow-y:auto;max-height:280px">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">';
+  html+='<colgroup><col style="width:32px"/><col/><col style="width:44px"/><col style="width:130px"/><col style="width:44px"/><col style="width:64px"/><col style="width:155px"/></colgroup>';
+  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
   html+='<th style="padding:5px 8px;text-align:center"><input type="checkbox" id="as-vm-all" title="Select all" onchange="toggleAllVMs(this)"/></th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">VM Name</th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Power</th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Guest OS</th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">CPUs</th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Memory</th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Metric</th>';
-  html+='</tr></thead><tbody>';
+  html+='<th style="padding:5px 8px;text-align:left">VM Name</th>';
+  html+='<th style="padding:5px 8px;text-align:left">Power</th>';
+  html+='<th style="padding:5px 8px;text-align:left">Guest OS</th>';
+  html+='<th style="padding:5px 8px;text-align:center">CPUs</th>';
+  html+='<th style="padding:5px 8px;text-align:left">Memory</th>';
+  html+='<th style="padding:5px 8px;text-align:left">Metric</th>';
+  html+='</tr></thead><tbody id="as-vm-tbody">';
 
   vms.forEach((vm,i)=>{
     const pwClr=vm.power_state==='poweredOn'?'var(--up)':'var(--down)';
@@ -906,17 +910,12 @@ async function discoverVMs(){
     const rowBg=i%2?'background:var(--bg2)':'';
     html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
     html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-vm-cb" data-vmid="${esc(vm.vm_id)}" data-name="${esc(vm.name)}" onchange="updateVMSelCount()"/></td>`;
-    html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap">${esc(vm.name)}</td>`;
+    html+=`<td style="padding:4px 8px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(vm.name)}">${esc(vm.name)}</td>`;
     html+=`<td style="padding:4px 8px;color:${pwClr};white-space:nowrap">${pwTxt}</td>`;
-    html+=`<td style="padding:4px 8px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis">${esc(vm.guest_os)}</td>`;
-    html+=`<td style="padding:4px 8px;color:var(--text3)">${vm.num_cpu}</td>`;
-    html+=`<td style="padding:4px 8px;color:var(--text3)">${memStr}</td>`;
-    html+=`<td style="padding:4px 8px">
-      <select class="as-vm-metric" data-vmid="${esc(vm.vm_id)}"
-              style="font-size:11px;padding:2px 4px;max-width:160px">
-        <option value="">— metric —</option>${metricOpts}
-      </select>
-    </td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(vm.guest_os)}">${esc(vm.guest_os)}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);text-align:center">${vm.num_cpu}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${memStr}</td>`;
+    html+=`<td style="padding:4px 8px"><select class="as-vm-metric" data-vmid="${esc(vm.vm_id)}" style="font-size:11px;padding:2px 4px;width:100%"><option value="">— metric —</option>${metricOpts}</select></td>`;
     html+='</tr>';
   });
 
@@ -930,8 +929,16 @@ async function discoverVMs(){
 }
 
 function toggleAllVMs(cb){
-  document.querySelectorAll('.as-vm-cb').forEach(c=>c.checked=cb.checked);
+  document.querySelectorAll('#as-vm-tbody tr:not([style*="display: none"]) .as-vm-cb').forEach(c=>c.checked=cb.checked);
   updateVMSelCount();
+}
+
+function filterVMs(q){
+  const term=q.toLowerCase();
+  document.querySelectorAll('#as-vm-tbody tr').forEach(tr=>{
+    const name=tr.querySelector('td:nth-child(2)')?.textContent.toLowerCase()||'';
+    tr.style.display=name.includes(term)?'':'none';
+  });
 }
 
 function updateVMSelCount(){

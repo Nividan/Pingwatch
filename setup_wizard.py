@@ -230,6 +230,14 @@ _PACKAGES = [
         "desc":     "server CPU / RAM / disk monitoring widget",
         "required": False,
     },
+    {
+        "import":   "pyVmomi",
+        "name":     "pyvmomi",
+        "install":  "pyvmomi>=8.0.0",
+        "pip":      True,
+        "desc":     "VMware vCenter / ESXi VM metrics",
+        "required": False,
+    },
 ]
 
 _SNMP_TOOL = "snmpget"
@@ -273,6 +281,19 @@ def _pip_install(package_spec: str) -> "tuple[bool, str]":
             if r2.returncode == 0:
                 return True, ""
             last_err = (r2.stderr or r2.stdout or last_err).strip()
+        except Exception:
+            pass
+
+    # Try 3: --break-system-packages (PEP 668 — Debian/Ubuntu 23.04+ with Python 3.12+)
+    if sys.platform != "win32" and "externally-managed-environment" in last_err:
+        try:
+            r3 = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--break-system-packages", package_spec],
+                capture_output=True, text=True,
+            )
+            if r3.returncode == 0:
+                return True, ""
+            last_err = (r3.stderr or r3.stdout or last_err).strip()
         except Exception:
             pass
 
