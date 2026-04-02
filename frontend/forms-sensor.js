@@ -443,7 +443,13 @@ function _applyTypeDefaults(t){
   _sv('as-tmo', d.timeout);
   _sv('as-fa',  d.fail_after);
   _sv('as-ra',  d.recover_after);
-  if(t !== 'vmware'){
+  if(t === 'vmware'){
+    // Clear generic defaults — metric-specific auto-fill sets correct values
+    const _wi=document.getElementById('as-wms');
+    const _ci=document.getElementById('as-cms');
+    if(_wi) _wi.value='';
+    if(_ci) _ci.value='';
+  } else {
     _sv('as-wms', d.warn_ms  ?? _SDR_WARN_DEF[t]);
     _sv('as-cms', d.crit_ms  ?? _SDR_CRIT_DEF[t]);
   }
@@ -1191,6 +1197,7 @@ async function addSelectedVMSensors(){
   const ra=parseInt(document.getElementById('as-ra')?.value)||1;
   const wms=parseInt(document.getElementById('as-wms')?.value)||null;
   const cms=parseInt(document.getElementById('as-cms')?.value)||null;
+  const alertsMuted=document.getElementById('as-am')?.checked||false;
 
   // Expand checked VMs × their selected metrics into individual sensor rows
   const rows=[];
@@ -1231,6 +1238,7 @@ async function addSelectedVMSensors(){
       const r=await api('POST',`/api/device/${did}/sensor`,{
         name:sname,type:'vmware',host,port,interval:iv,timeout:tmo,
         verify_ssl:vssl,fail_after:fa,recover_after:ra,warn_ms:row.wms,crit_ms:row.cms,
+        alerts_muted:alertsMuted,
         vmware_user:username,vmware_password:password,
         vmware_vm_id:row.vmid,vmware_vm_name:row.vmname,vmware_metric:row.metric
       });
