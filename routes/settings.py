@@ -388,9 +388,18 @@ def handle(h, method, path, body):
         if is_pg():
             from db.pg_pool import pg_cursor
             try:
-                with pg_cursor("main") as cur:
-                    cur.execute("SELECT pg_database_size(current_database()) AS sz")
-                    db_sz = cur.fetchone()["sz"]
+                def _schema_size(schema):
+                    """Sum of all table + index sizes within a schema."""
+                    with pg_cursor(schema) as cur:
+                        cur.execute(
+                            "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0) AS sz "
+                            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                            "WHERE n.nspname = %s AND c.relkind = 'r'",
+                            (schema,)
+                        )
+                        return cur.fetchone()["sz"]
+                main_sz = _schema_size("main")
+                logs_sz = _schema_size("logs")
                 with pg_cursor("logs") as cur:
                     def _pg_cnt(table):
                         try:
@@ -399,10 +408,10 @@ def handle(h, method, path, body):
                         except Exception:
                             return 0
                     h._json(200, {
-                        "main": {"path": "PostgreSQL", "size": db_sz},
+                        "main": {"path": "PostgreSQL", "size": main_sz},
                         "logs": {
                             "path": "PostgreSQL (logs schema)",
-                            "size": db_sz,
+                            "size": logs_sz,
                             "samples": _pg_cnt("sensor_samples"),
                             "flaps":   _pg_cnt("flap_log"),
                             "traps":   _pg_cnt("snmp_traps"),
