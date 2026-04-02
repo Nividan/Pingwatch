@@ -1,5 +1,5 @@
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? SENSOR TILES �?�?�?�?�?�?�?�?�?�?�?�?
-function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':'◈'}
+function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':t==='vmware'?'V':'◈'}
 function msC(ms,s){if(ms===null)return'b';const _td=window._snrTypeDefaults?.[s?.stype]||{};const w=s?.warn_ms>0?s.warn_ms:(_td.warn_ms>0?_td.warn_ms:0);const c=s?.crit_ms>0?s.crit_ms:(_td.crit_ms>0?_td.crit_ms:0);if(w>0||c>0){if(c>0&&ms>=c)return'b';if(w>0&&ms>=w)return'w';return'g';}if(ms<(window._lGood||100))return'g';if(ms<(window._lWarn||300))return'w';return'b'}
 function fmtTs(ts){try{return new Date(ts).toLocaleTimeString('en-GB');}catch(e){return ts;}}
 
@@ -9,9 +9,10 @@ function tileHTML(s){
   const isDns  =s.stype==='dns';
   const isTls  =s.stype==='tls';
   const isBanner=s.stype==='banner';
-  const rawVal = (isSnmp||isDns) ? (s.last_value||s.last_detail||'—')
+  const isVmware=s.stype==='vmware';
+  const rawVal = (isSnmp||isDns||isVmware) ? (s.last_value||s.last_detail||'—')
                : isTls ? (s.last_value!=null?s.last_value+'d':null) : null;
-  const vt = (isSnmp||isDns)
+  const vt = (isSnmp||isDns||isVmware)
     ? (s.alive===false?'FAIL':(rawVal.length>14?rawVal.slice(0,14)+'…':rawVal))
     : isTls ? (s.alive===false?'FAIL':(rawVal||'—'))
     : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
@@ -23,8 +24,8 @@ function tileHTML(s){
   const _snmpThrColor = isSnmp && !_isCounter && s.threshold_state && s.threshold_state !== 'ok' && s.alive !== false
     ? (s.threshold_state==='crit'?'r':'w') : null;
   const _counterThrColor = _isCounter ? (s.threshold_state==='crit'?'r':s.threshold_state==='warn'?'w':'g') : null;
-  const vc=s.alive===false?'b':(_isCounter?_counterThrColor:_snmpThrColor||((isSnmp||isDns||isTls)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
-  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
+  const vc=s.alive===false?'b':(_isCounter?_counterThrColor:_snmpThrColor||((isSnmp||isDns||isTls||isVmware)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
+  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.stype==='vmware'?`${s.host} · ${s.vmware_vm_id}`:s.host;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-40);
   const thrHist=(s.thr_history||[]).slice(-40);
@@ -33,7 +34,7 @@ function tileHTML(s){
     if(idx<0)return'<div class="ub-s"></div>';
     const v=hist[idx];
     if(v===null)return`<div class="ub-s" style="background:var(--down)"></div>`;
-    const _mc=msC(v,s);const _thr=isSnmp&&!_isCounter?thrHist[idx]||'ok':'ok';const _snmpDotC=_thr==='crit'?'var(--down)':_thr==='warn'?'var(--warn)':'var(--up)';const c=(isSnmp||isDns||isTls)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
+    const _mc=msC(v,s);const _thr=isSnmp&&!_isCounter?thrHist[idx]||'ok':'ok';const _snmpDotC=_thr==='crit'?'var(--down)':_thr==='warn'?'var(--warn)':'var(--up)';const c=(isSnmp||isDns||isTls||isVmware)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
     return`<div class="ub-s" style="background:${c}"></div>`;
   }).join('');
   return`
@@ -642,7 +643,7 @@ function _fmtRateThrLabel(displayVal, snmpUnit) {
 function openDetail(did,sid,initialTab){
   const key=`${did}/${sid}`;
   const s=S.sensors[key];if(!s)return;
-  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host}:${s.port||161} · ${s.snmp_community} · OID ${s.snmp_oid}`:s.stype==='dns'?`${s.dns_query||s.host} · ${s.dns_record_type||'A'}${s.dns_server?' via '+s.dns_server:''}`:s.host;
+  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host}:${s.port||161} · ${s.snmp_community} · OID ${s.snmp_oid}`:s.stype==='dns'?`${s.dns_query||s.host} · ${s.dns_record_type||'A'}${s.dns_server?' via '+s.dns_server:''}`:s.stype==='vmware'?`${s.host}:${s.port||443} · VM ${s.vmware_vm_id} · ${s.vmware_metric}`:s.host;
   closeM('dm');
   const o=document.createElement('div');
   o.className='dmo';o.id='dm';

@@ -17,6 +17,19 @@ function openAddDevice(){
       </div>
       <div class="fr"><label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional — POST on status change)</span></label>
         <input type="text" id="ad-wh" placeholder="https://hooks.slack.com/…" autocomplete="off"/></div>
+      <details class="dev-creds" style="margin-top:10px">
+        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+          <div class="fr"><label class="fl">SNMP Community</label>
+            <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">VMware Username</label>
+              <input type="text" id="ad-vmw-user" placeholder="administrator@vsphere.local" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">VMware Password</label>
+              <input type="password" id="ad-vmw-pass" placeholder="" autocomplete="new-password"/></div>
+          </div>
+        </div>
+      </details>
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('mad')">Cancel</button>
@@ -33,12 +46,19 @@ async function submitAddDevice(){
   const host=(document.getElementById('ad-h')?.value||'').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
   const group=(document.getElementById('ad-g')?.value||'Default Group').trim();
   const webhook_url=(document.getElementById('ad-wh')?.value||'').trim();
+  const snmp_community_default=(document.getElementById('ad-snmp-comm')?.value||'').trim();
+  const vmware_user_default=(document.getElementById('ad-vmw-user')?.value||'').trim();
+  const vmware_password_default=document.getElementById('ad-vmw-pass')?.value||'';
   if(!name||!host){toast('Name and host are required','err');return;}
   const btn=document.querySelector('#mad .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
+  const payload={name,host,group,webhook_url};
+  if(snmp_community_default) payload.snmp_community_default=snmp_community_default;
+  if(vmware_user_default) payload.vmware_user_default=vmware_user_default;
+  if(vmware_password_default) payload.vmware_password_default=vmware_password_default;
   let r;
   try{
-    r=await api('POST','/api/device',{name,host,group,webhook_url});
+    r=await api('POST','/api/device',payload);
   }catch(e){
     toast('Failed to add device','err');
     return;
@@ -102,6 +122,19 @@ function openEditDevice(did){
         </label>
         <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Silences DOWN / recovery / threshold alerts for every sensor in this device.</div>
       </div>
+      <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default)?' open':''}>
+        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+          <div class="fr"><label class="fl">SNMP Community</label>
+            <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">VMware Username</label>
+              <input type="text" id="ed-vmw-user" value="${esc(dev.vmware_user_default||'')}" placeholder="administrator@vsphere.local" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">VMware Password</label>
+              <input type="password" id="ed-vmw-pass" placeholder="${dev.has_vmware_password_default?'(unchanged)':''}" autocomplete="new-password"/></div>
+          </div>
+        </div>
+      </details>
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('med')">Cancel</button>
@@ -123,12 +156,18 @@ async function submitEditDevice(did){
   const group = (document.getElementById('ed-g')?.value || 'Default Group').trim();
   const webhook_url  = (document.getElementById('ed-wh')?.value || '').trim();
   const alerts_muted = document.getElementById('ed-am')?.checked || false;
+  const snmp_community_default = (document.getElementById('ed-snmp-comm')?.value || '').trim();
+  const vmware_user_default    = (document.getElementById('ed-vmw-user')?.value || '').trim();
+  const vmware_password_default = document.getElementById('ed-vmw-pass')?.value || '';
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  const payload = {name, host, group, webhook_url, alerts_muted,
+    snmp_community_default, vmware_user_default};
+  if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   let r;
   try{
-    r = await api('PATCH', `/api/device/${did}`, {name, host, group, webhook_url, alerts_muted});
+    r = await api('PATCH', `/api/device/${did}`, payload);
   }catch(e){
     toast('Failed to save changes','err');
     return;
@@ -138,7 +177,7 @@ async function submitEditDevice(did){
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   renderSidebar();
   updatePills();
   refreshGroupCounts();

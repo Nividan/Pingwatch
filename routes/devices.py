@@ -153,10 +153,19 @@ def handle(h, method, path, body):
             h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
             h._json(400, {"error": "invalid host — use a hostname or IP address"}); return True
+        snmp_community_default  = body.get("snmp_community_default", "").strip()
+        vmware_user_default     = body.get("vmware_user_default", "").strip()
+        vmware_password_default = body.get("vmware_password_default", "")
+        if vmware_password_default:
+            from db.backups import encrypt_pw
+            vmware_password_default = encrypt_pw(vmware_password_default)
         did = STATE.add_device(name, host, group)
         with STATE._lock:
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url
+                STATE.devices[did].snmp_community_default  = snmp_community_default
+                STATE.devices[did].vmware_user_default     = vmware_user_default
+                STATE.devices[did].vmware_password_default = vmware_password_default
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
@@ -283,6 +292,16 @@ def handle(h, method, path, body):
                     h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
                 dev.webhook_url = _w
             if "alerts_muted" in body: dev.alerts_muted = bool(body["alerts_muted"])
+            if "snmp_community_default" in body:
+                dev.snmp_community_default = str(body["snmp_community_default"]).strip()
+            if "vmware_user_default" in body:
+                dev.vmware_user_default = str(body["vmware_user_default"]).strip()
+            if "vmware_password_default" in body:
+                _vpw = body["vmware_password_default"]
+                if _vpw:
+                    from db.backups import encrypt_pw
+                    dev.vmware_password_default = encrypt_pw(_vpw)
+                # empty string = keep existing (don't clear)
             if "host" in body:
                 h2 = body["host"].strip()
                 if len(h2) > 253:
@@ -386,8 +405,13 @@ def handle(h, method, path, body):
                   "fail_after", "recover_after", "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
-                  "snmp_unit"]:
+                  "snmp_unit",
+                  "vmware_user", "vmware_vm_id", "vmware_metric"]:
             if k in body: kwargs[k] = body[k]
+        # VMware password: encrypt if provided, skip if empty (keep existing)
+        if body.get("vmware_password"):
+            from db.backups import encrypt_pw
+            kwargs["vmware_password"] = encrypt_pw(body["vmware_password"])
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
         if "interval" in kwargs:
@@ -460,6 +484,21 @@ def handle(h, method, path, body):
         kw    = body.get("keyword", "")
         kwc   = bool(body.get("keyword_case", False))
         bnr   = body.get("banner_regex", "")
+        # VMware fields
+        vm_user   = body.get("vmware_user", "")
+        vm_pw     = body.get("vmware_password", "")
+        vm_vmid   = body.get("vmware_vm_id", "")
+        vm_metric = body.get("vmware_metric", "")
+        _vm_pw_from_device = False
+        if stype == "vmware" and dev:
+            if not vm_user and dev.vmware_user_default:
+                vm_user = dev.vmware_user_default
+            if not vm_pw and dev.vmware_password_default:
+                vm_pw = dev.vmware_password_default  # already encrypted
+                _vm_pw_from_device = True
+        if stype == "vmware" and vm_pw and not _vm_pw_from_device:
+            from db.backups import encrypt_pw
+            vm_pw = encrypt_pw(vm_pw)
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -477,7 +516,9 @@ def handle(h, method, path, body):
                                warn_ms=wms, crit_ms=cms,
                                loss_warn_pct=lwp, loss_crit_pct=lcp,
                                keyword=kw, keyword_case=kwc, banner_regex=bnr,
-                               snmp_unit=sunit)
+                               snmp_unit=sunit,
+                               vmware_user=vm_user, vmware_password=vm_pw,
+                               vmware_vm_id=vm_vmid, vmware_metric=vm_metric)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
