@@ -1243,6 +1243,15 @@ function collectSensorForm(did){
 }
 
 async function submitAddSensor(did){
+  // If VMware type with discovery table open and VMs checked, delegate to addSelectedVMSensors()
+  const _asType=document.getElementById('as-t')?.value||'ping';
+  if(_asType==='vmware'){
+    const _listEl=document.getElementById('as-vm-list');
+    if(_listEl&&_listEl.style.display!=='none'){
+      const _checked=[...document.querySelectorAll('.as-vm-cb:checked')];
+      if(_checked.length){await addSelectedVMSensors();return;}
+    }
+  }
   const payload=collectSensorForm(did);
   if(!payload)return;
   const start=document.getElementById('as-si')?.value==='1';
