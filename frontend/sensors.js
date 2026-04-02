@@ -210,8 +210,9 @@ function updateTile(s){
     const dot=tile.querySelector('.stl-sdot');
     if(dot) dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
     const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
-    const rawVal=s.last_value||s.last_detail||'—';
-    const vt=s.alive===false?'FAIL':(rawVal.length>12?rawVal.slice(0,12)+'…':rawVal);
+    const _rv=s.last_value||s.last_detail||'—';
+    const _rv2=parseFloat(s.last_value);
+    const vt=s.alive===false?'FAIL':(!isNaN(_rv2)?_fmtVmVal(_rv2,_VM_UNITS[s.vmware_metric]||''):(_rv.length>12?_rv.slice(0,12)+'…':_rv));
     const vel=document.getElementById(`stv-${sk}`);
     if(vel){vel.textContent=vt;vel.className=`vm-row-val ${vc}`;}
     const mutedBadge=document.getElementById(`sm-muted-${sk}`);
@@ -370,8 +371,9 @@ function openAddVmMetric(did,vmid,vmName){
 function vmRowHTML(s){
   const sk=`${s.device_id}_${s.sensor_id}`;
   const st=s.alive===true?'up':s.alive===false?'down':'';
-  const rawVal=s.last_value||s.last_detail||'—';
-  const vt=s.alive===false?'FAIL':(rawVal.length>12?rawVal.slice(0,12)+'…':rawVal);
+  const _vmRaw=s.last_value||s.last_detail||'—';
+  const _vmV=parseFloat(s.last_value);
+  const vt=s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw));
   const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
   const metricLabel=(_vmwareMetrics||[]).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
