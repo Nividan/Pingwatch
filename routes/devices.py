@@ -154,6 +154,9 @@ def handle(h, method, path, body):
         if not h._valid_host(host):
             h._json(400, {"error": "invalid host — use a hostname or IP address"}); return True
         snmp_community_default  = body.get("snmp_community_default", "").strip()
+        snmp_version_default    = body.get("snmp_version_default", "").strip()
+        if snmp_version_default not in ("", "1", "2c", "3"):
+            snmp_version_default = ""
         vmware_user_default     = body.get("vmware_user_default", "").strip()
         vmware_password_default = body.get("vmware_password_default", "")
         if vmware_password_default:
@@ -164,6 +167,7 @@ def handle(h, method, path, body):
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url
                 STATE.devices[did].snmp_community_default  = snmp_community_default
+                STATE.devices[did].snmp_version_default    = snmp_version_default
                 STATE.devices[did].vmware_user_default     = vmware_user_default
                 STATE.devices[did].vmware_password_default = vmware_password_default
         _db_enqueue(lambda: db_save(STATE))
@@ -294,6 +298,10 @@ def handle(h, method, path, body):
             if "alerts_muted" in body: dev.alerts_muted = bool(body["alerts_muted"])
             if "snmp_community_default" in body:
                 dev.snmp_community_default = str(body["snmp_community_default"]).strip()
+            if "snmp_version_default" in body:
+                _sv = str(body["snmp_version_default"]).strip()
+                if _sv in ("", "1", "2c", "3"):
+                    dev.snmp_version_default = _sv
             if "vmware_user_default" in body:
                 dev.vmware_user_default = str(body["vmware_user_default"]).strip()
             if "vmware_password_default" in body:

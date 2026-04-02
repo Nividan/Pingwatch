@@ -110,9 +110,10 @@ function sensorFormHTML(dev, s=null) {
         <input type="text" id="as-sc" value="${esc(s?.snmp_community||dev?.snmp_community_default||'public')}" placeholder="public" autocomplete="off"/></div>
       <div class="fr"><label class="fl">SNMP Version</label>
         <select id="as-sv">
-          <option value="2c" ${(s?.snmp_version||'2c')==='2c'?'selected':''}>v2c</option>
-          <option value="1"  ${s?.snmp_version==='1'?'selected':''}>v1</option>
-          <option value="3"  ${s?.snmp_version==='3'?'selected':''}>v3 (community)</option>
+          ${(()=>{const dv=s?.snmp_version||dev?.snmp_version_default||'2c';
+            return `<option value="2c" ${dv==='2c'?'selected':''}>v2c</option>
+          <option value="1"  ${dv==='1'?'selected':''}>v1</option>
+          <option value="3"  ${dv==='3'?'selected':''}>v3 (community)</option>`;})()}
         </select>
       </div>
     </div>

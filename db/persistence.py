@@ -25,6 +25,7 @@ def _pg_save(state):
              getattr(dev, "webhook_url", ""),
              int(getattr(dev, "alerts_muted", False)),
              getattr(dev, "snmp_community_default", ""),
+             getattr(dev, "snmp_version_default", ""),
              getattr(dev, "vmware_user_default", ""),
              getattr(dev, "vmware_password_default", ""))
             for dev in state.devices.values()
@@ -64,13 +65,14 @@ def _pg_save(state):
                 psycopg2.extras.execute_values(
                     cur,
                     "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
-                    "snmp_community_default,vmware_user_default,vmware_password_default) "
+                    "snmp_community_default,snmp_version_default,vmware_user_default,vmware_password_default) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
                     "did_ctr=EXCLUDED.did_ctr, webhook_url=EXCLUDED.webhook_url, "
                     "alerts_muted=EXCLUDED.alerts_muted, "
                     "snmp_community_default=EXCLUDED.snmp_community_default, "
+                    "snmp_version_default=EXCLUDED.snmp_version_default, "
                     "vmware_user_default=EXCLUDED.vmware_user_default, "
                     "vmware_password_default=EXCLUDED.vmware_password_default",
                     dev_rows,
@@ -141,6 +143,7 @@ def db_save(state):
              getattr(dev, "webhook_url", ""),
              int(getattr(dev, "alerts_muted", False)),
              getattr(dev, "snmp_community_default", ""),
+             getattr(dev, "snmp_version_default", ""),
              getattr(dev, "vmware_user_default", ""),
              getattr(dev, "vmware_password_default", ""))
             for dev in state.devices.values()
@@ -176,7 +179,7 @@ def db_save(state):
     try:
         con = sqlite3.connect(DB_PATH, timeout=15)
         cur = con.cursor()
-        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?,?,?,?)", dev_rows)
+        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -223,6 +226,7 @@ def _pg_load(state):
             cur.execute(
                 "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
                 "COALESCE(snmp_community_default,'') AS snmp_community_default,"
+                "COALESCE(snmp_version_default,'') AS snmp_version_default,"
                 "COALESCE(vmware_user_default,'') AS vmware_user_default,"
                 "COALESCE(vmware_password_default,'') AS vmware_password_default "
                 "FROM devices"
@@ -265,8 +269,9 @@ def _pg_load(state):
         dev.webhook_url   = row[5] or ""
         dev.alerts_muted  = bool(row[6] or 0)
         dev.snmp_community_default  = row[7] or ""
-        dev.vmware_user_default     = row[8] or ""
-        dev.vmware_password_default = row[9] or ""
+        dev.snmp_version_default    = row[8] or ""
+        dev.vmware_user_default     = row[9] or ""
+        dev.vmware_password_default = row[10] or ""
         state.devices[did] = dev
 
     for row in srows:
@@ -384,7 +389,7 @@ def db_load(state):
 
     max_did = 0
     for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
-         snmp_community_default, vmware_user_default, vmware_password_default) in devs:
+         snmp_community_default, snmp_version_default, vmware_user_default, vmware_password_default) in devs:
         dev = Device(did, name, host, grp)
         try:
             n = int(did.replace("d", ""))
@@ -395,6 +400,7 @@ def db_load(state):
         dev.webhook_url   = webhook_url or ""
         dev.alerts_muted  = bool(alerts_muted or 0)
         dev.snmp_community_default  = snmp_community_default or ""
+        dev.snmp_version_default    = snmp_version_default or ""
         dev.vmware_user_default     = vmware_user_default or ""
         dev.vmware_password_default = vmware_password_default or ""
         state.devices[did] = dev
