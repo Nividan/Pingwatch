@@ -666,6 +666,29 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .dc-snr-ico.tls         {background:rgba(6,182,212,.2);color:#22d3ee}
 .dc-snr-ico.http_keyword{background:rgba(234,179,8,.2); color:#fde047}
 .dc-snr-ico.banner      {background:rgba(251,146,60,.2);color:#fb923c}
+.stl-tbdg.vmware   {background:rgba(168,85,247,.15);color:#c084fc;border:1px solid rgba(168,85,247,.25)}
+.s-ico.vmware      {background:rgba(168,85,247,.2);color:#c084fc}
+.dc-snr-ico.vmware {background:rgba(168,85,247,.2);color:#c084fc}
+/* ── VMware VM sensor groups ─────────────────────────────────────── */
+.vm-grp{grid-column:1/-1;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:rgba(22,27,34,.85)}
+.vm-grp-hdr{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg2);cursor:pointer;user-select:none}
+.vm-grp-hdr:hover{background:var(--bg3)}
+.vm-grp-arr{font-size:10px;color:var(--text3);transition:transform .15s;width:10px;flex-shrink:0}
+.vm-grp-arr.open{transform:rotate(90deg)}
+.vm-grp-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;background:rgba(168,85,247,.15);color:#c084fc;border:1px solid rgba(168,85,247,.25);flex-shrink:0}
+.vm-grp-nm{font-size:13px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-grp-cnt{font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0}
+.vm-grp-dot{width:8px;height:8px;border-radius:50%;background:var(--text3);flex-shrink:0}
+.vm-grp-dot.up{background:var(--up)}.vm-grp-dot.down{background:var(--down)}.vm-grp-dot.warn{background:var(--warn)}
+.vm-grp-body{overflow:hidden}.vm-grp-body.collapsed{display:none}
+.vm-row{display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer;border-top:1px solid var(--border);transition:background .1s}
+.vm-row:hover{background:var(--bg3)}
+.vm-row .stl-sdot{flex-shrink:0}
+.vm-row-nm{font-size:12px;color:var(--text2);flex-shrink:0;min-width:170px}
+.vm-row-val{font-size:13px;font-weight:600;min-width:64px;text-align:right;flex-shrink:0}
+.vm-row-val.g{color:var(--up)}.vm-row-val.b,.vm-row-val.r{color:var(--down)}.vm-row-val.w{color:var(--warn)}.vm-row-val.m{color:var(--text3)}
+.vm-ub{flex:1;min-width:0;gap:1px!important}
+.vm-row canvas.spk{flex:0 0 60px;width:60px;height:28px;display:block;opacity:.7}
 /* History button on tile */
 .stl-hist{background:transparent;border:none;cursor:pointer;font-size:13px;
           padding:1px 3px;border-radius:3px;flex-shrink:0;line-height:1;opacity:.75;transition:opacity .15s}

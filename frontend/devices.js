@@ -137,25 +137,55 @@ function sSnrPreview(did){
       return (ai<0?9999:ai)-(bi<0?9999:bi);
     });
   }
-  const shown=snrs.slice(0,3);
   const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
   const snrVal=s=>{
+    if(s.stype==='vmware') return s.last_value!=null?(s.last_value+'').slice(0,10):'—';
     if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'—').slice(0,10);
     return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   };
   const vc=s=>{
     if(s.alive===false)return'b';
+    if(s.stype==='vmware')return s.alive===true?'g':'m';
     if(isSnmp(s))return s.alive===true?'g':'m';
     return s.last_ms!=null?msC(s.last_ms,s):'m';
   };
-  let html=shown.map(s=>`
-    <div class="dc-snr">
+  // Group VMware sensors by vmware_vm_id into synthetic preview rows
+  const vmGroups={};
+  const nonVm=[];
+  snrs.forEach(s=>{
+    if(s.stype==='vmware'&&s.vmware_vm_id){ (vmGroups[s.vmware_vm_id]=vmGroups[s.vmware_vm_id]||[]).push(s); }
+    else nonVm.push(s);
+  });
+  // Build preview items: non-VM sensors first, then one row per VM group
+  const previewItems=[];
+  nonVm.forEach(s=>previewItems.push({type:'snr',s}));
+  Object.entries(vmGroups).forEach(([vmid,vms])=>{
+    const worst=vms.find(s=>s.alive===false)||vms.find(s=>s.threshold_state&&s.threshold_state!=='ok')||vms[0];
+    previewItems.push({type:'vmgrp',vmid,vms,worst});
+  });
+  const shown=previewItems.slice(0,3);
+  let html=shown.map(item=>{
+    if(item.type==='vmgrp'){
+      const {vmid,vms,worst}=item;
+      const st=worst.alive===false?'down':worst.alive===true?'up':'';
+      const nm=vms[0]?.name?.replace(/ \S+$/,'')??vmid; // strip last word (metric label)
+      return `<div class="dc-snr">
+        <div class="dc-snr-ico vmware">V</div>
+        <div class="dc-snr-nm">${esc(nm)} <span style="color:var(--text3);font-size:10px">${vms.length}m</span></div>
+        <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${snrVal(worst)}</div>
+        <div class="dc-snr-dot ${st}" id="csd-${worst.device_id}_${worst.sensor_id}"></div>
+      </div>`;
+    }
+    const s=item.s;
+    return `<div class="dc-snr">
       <div class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</div>
       <div class="dc-snr-nm">${esc(s.name)}</div>
       <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</div>
       <div class="dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}" id="csd-${s.device_id}_${s.sensor_id}"></div>
-    </div>`).join('');
-  if(snrs.length>3) html+=`<div class="dc-more">+${snrs.length-3} more sensor${snrs.length-3>1?'s':''}</div>`;
+    </div>`;
+  }).join('');
+  const total=nonVm.length+Object.keys(vmGroups).length;
+  if(total>3) html+=`<div class="dc-more">+${total-3} more</div>`;
   return html;
 }
 
