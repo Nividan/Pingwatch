@@ -134,7 +134,7 @@ function sensorFormHTML(dev, s=null) {
     <div class="fr"><label class="fl">OID</label>
       <input type="text" id="as-oid" value="${esc(s?.snmp_oid||'1.3.6.1.2.1.1.1.0')}" placeholder="1.3.6.1.2.1.1.1.0" autocomplete="off"/>
       <input type="hidden" id="as-snmp-unit" value="${esc(s?.snmp_unit||'')}"/>
-      <div class="fh" id="as-oid-unit2" style="min-height:14px">${s?.snmp_unit?'Unit: '+esc(s.snmp_unit):'Type or paste an OID, choose from picker above, or use Discover Interfaces.'}</div>
+      <div class="fh" id="as-oid-unit2" style="min-height:14px">${s?.snmp_unit?'<b>Unit: '+esc(s.snmp_unit)+'</b>':'Type or paste an OID, choose from picker above, or use Discover Interfaces.'}</div>
     </div>
   </div>
   <!-- DNS -->
@@ -443,8 +443,11 @@ function _snmpTryMatchCurrentOid(){
       const base=m[1], idx=m[2];
       const metric=ifaceMetrics.find(mm=>mm.oid===base);
       if(metric){
+        // Try to resolve index to interface name from last discovery
+        const cached=(window._ifaceDiscovery||[]).find(f=>String(f.index)===idx);
+        const ifaceLabel=cached?(cached.name||cached.descr||idx):idx;
         const unitEl2=document.getElementById('as-oid-unit2');
-        if(unitEl2) unitEl2.textContent=`${metric.l} (interface ${idx}) · Unit: ${metric.u}`;
+        if(unitEl2) unitEl2.innerHTML=`<b>${metric.l} (interface ${esc(ifaceLabel)})</b> · Unit: ${esc(metric.u)}`;
       }
     }
   }
@@ -539,6 +542,8 @@ async function discoverInterfaces(){
     return;
   }
   const ifaces=r.interfaces||[];
+  window._ifaceDiscovery=ifaces;  // cache for OID reverse-lookup
+  _snmpTryMatchCurrentOid();       // re-run now that interface names are available
   if(!ifaces.length){
     if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No interfaces returned.'; }
     return;
@@ -631,7 +636,7 @@ function updateIfaceSelCount(){
       oidEl.value=metric.oid+idx;
       const ifaceName=cb.dataset.name||('interface '+idx);
       const unitEl=document.getElementById('as-oid-unit2');
-      if(unitEl) unitEl.textContent=`${metric.l} on ${ifaceName} · Unit: ${metric.u}`;
+      if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
       const sunitEl=document.getElementById('as-snmp-unit');
       if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
     }
@@ -658,7 +663,7 @@ async function addSelectedIfaceSensors(){
     if(oidEl) oidEl.value=metric.oid+idx;
     if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
     const unitEl2=document.getElementById('as-oid-unit2');
-    if(unitEl2) unitEl2.textContent=`${metric.l} on ${ifaceName} · Unit: ${metric.u}`;
+    if(unitEl2) unitEl2.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
     const listEl=document.getElementById('as-iface-list');
     if(listEl) listEl.style.display='none';
     const statusEl=document.getElementById('as-iface-status');
