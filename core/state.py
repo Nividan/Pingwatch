@@ -99,7 +99,9 @@ class Sensor:
                  fail_after=2, recover_after=1,
                  warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                  keyword="", keyword_case=False, banner_regex="",
-                 alerts_muted=False, snmp_unit=""):
+                 alerts_muted=False, snmp_unit="",
+                 vmware_user="", vmware_password="",
+                 vmware_vm_id="", vmware_metric=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -132,6 +134,11 @@ class Sensor:
         self.alerts_muted  = bool(alerts_muted)
         self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
         self.host_override = False   # True = host was manually set; don't sync from device
+        # VMware fields
+        self.vmware_user     = vmware_user or ""
+        self.vmware_password = vmware_password or ""   # Fernet-encrypted ciphertext
+        self.vmware_vm_id    = vmware_vm_id or ""      # VM managed-object ID (e.g. "vm-123")
+        self.vmware_metric   = vmware_metric or ""     # metric key from VM_METRICS
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -194,6 +201,15 @@ class Sensor:
         if self.stype == "banner": return probe_banner(
                                                     self.host, self.port or 21,
                                                     self.banner_regex, self.timeout)
+        if self.stype == "vmware":
+            from vmware import vmware_probe
+            from db.backups import decrypt_pw
+            return vmware_probe(self.host, self.vmware_user,
+                                decrypt_pw(self.vmware_password),
+                                self.vmware_vm_id, self.vmware_metric,
+                                port=self.port or 443,
+                                verify_ssl=self.verify_ssl,
+                                timeout=self.timeout)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -227,6 +243,10 @@ class Sensor:
             "alerts_muted":          self.alerts_muted,
             "host_override":         self.host_override,
             "snmp_unit":             self.snmp_unit,
+            "vmware_user":           self.vmware_user,
+            "vmware_vm_id":          self.vmware_vm_id,
+            "vmware_metric":         self.vmware_metric,
+            "has_vmware_password":   bool(self.vmware_password),
             "threshold_state":       self._threshold_state,
             "alive":          self.alive,
             "last_ms":        self.last_ms,
@@ -253,6 +273,10 @@ class Device:
         self.alerts_muted = False
         self.sensors      = {}
         self._sid_ctr     = 0
+        # Device-level default credentials (pre-fill for new sensors)
+        self.snmp_community_default  = ""
+        self.vmware_user_default     = ""
+        self.vmware_password_default = ""
 
     def next_sid(self):
         self._sid_ctr += 1
@@ -275,6 +299,9 @@ class Device:
             "alerts_muted": self.alerts_muted,
             "status":       self.status,
             "sensors":      [s.to_dict() for s in self.sensors.values()],
+            "snmp_community_default":      self.snmp_community_default,
+            "vmware_user_default":         self.vmware_user_default,
+            "has_vmware_password_default":  bool(self.vmware_password_default),
         }
 
 
@@ -359,7 +386,9 @@ class MonitorState:
                    snmp_oid="1.3.6.1.2.1.1.1.0", snmp_version="2c",
                    fail_after=1, recover_after=1,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
-                   keyword="", keyword_case=False, banner_regex="", snmp_unit=""):
+                   keyword="", keyword_case=False, banner_regex="", snmp_unit="",
+                   vmware_user="", vmware_password="",
+                   vmware_vm_id="", vmware_metric=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -373,7 +402,9 @@ class MonitorState:
                        warn_ms=warn_ms, crit_ms=crit_ms,
                        loss_warn_pct=loss_warn_pct, loss_crit_pct=loss_crit_pct,
                        keyword=keyword, keyword_case=keyword_case, banner_regex=banner_regex,
-                       snmp_unit=snmp_unit)
+                       snmp_unit=snmp_unit,
+                       vmware_user=vmware_user, vmware_password=vmware_password,
+                       vmware_vm_id=vmware_vm_id, vmware_metric=vmware_metric)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -401,7 +432,9 @@ class MonitorState:
                         "fail_after", "recover_after",
                         "warn_ms", "crit_ms", "loss_warn_pct", "loss_crit_pct",
                         "keyword", "keyword_case", "banner_regex", "alerts_muted",
-                        "snmp_unit"]
+                        "snmp_unit",
+                        "vmware_user", "vmware_password",
+                        "vmware_vm_id", "vmware_metric"]
             for k, v in kwargs.items():
                 if k in editable and v is not None:
                     if k == 'host':

@@ -2,7 +2,8 @@
 routes/monitoring.py — Real-time event stream, flap/trap queries, SNMP helpers.
 
 Handles: /events (SSE), /api/flaps, /api/traps,
-         /api/snmp/catalog, /api/snmp/interfaces.
+         /api/snmp/catalog, /api/snmp/interfaces,
+         /api/vmware/vms, /api/vmware/metrics.
 """
 
 import datetime
@@ -265,6 +266,57 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid id"}); return True
         ok = db_resolve_flap(flap_id)
         h._json(200, {"ok": ok})
+        return True
+
+    # ── /api/vmware/metrics GET ─────────────────────────────────
+    if path == "/api/vmware/metrics" and method == "GET":
+        if not h._auth(): return True
+        from vmware.client import VM_METRICS
+        h._json(200, {"metrics": [
+            {"v": m["v"], "l": m["l"], "unit": m["unit"], "group": m["group"]}
+            for m in VM_METRICS
+        ]})
+        return True
+
+    # ── /api/vmware/vms POST ─────────────────────────────────────
+    if path == "/api/vmware/vms" and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        _host = (body.get("host") or "").strip()
+        _user = (body.get("username") or "").strip()
+        _pw   = body.get("password") or ""
+        _vssl = body.get("verify_ssl", False)
+        try:
+            _port = int(body.get("port") or 443)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "port must be an integer"}); return True
+        if not _host:
+            h._json(400, {"error": "host required"}); return True
+        if not _user:
+            h._json(400, {"error": "username required"}); return True
+        # Fall back to device-level stored password
+        if not _pw:
+            _did = body.get("did", "")
+            if _did:
+                _dev = STATE.devices.get(_did)
+                if _dev and _dev.vmware_password_default:
+                    from db.backups import decrypt_pw
+                    _pw = decrypt_pw(_dev.vmware_password_default)
+        if not _pw:
+            h._json(400, {"error": "password required"}); return True
+        try:
+            from vmware import vmware_discover_vms
+            _vms = vmware_discover_vms(_host, _user, _pw, port=_port, verify_ssl=_vssl)
+        except RuntimeError as e:
+            h._json(503, {"error": str(e)}); return True
+        except PermissionError:
+            h._json(401, {"error": "Authentication failed"}); return True
+        except ConnectionError as e:
+            h._json(502, {"error": str(e)}); return True
+        except Exception as e:
+            log.error(f"VMware discovery error: {e}")
+            h._json(500, {"error": "VMware connection failed"}); return True
+        h._json(200, {"vms": _vms})
         return True
 
     return False

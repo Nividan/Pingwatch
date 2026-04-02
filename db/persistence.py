@@ -23,7 +23,10 @@ def _pg_save(state):
         dev_rows = [
             (dev.device_id, dev.name, dev.host, dev.group, dev._sid_ctr,
              getattr(dev, "webhook_url", ""),
-             int(getattr(dev, "alerts_muted", False)))
+             int(getattr(dev, "alerts_muted", False)),
+             getattr(dev, "snmp_community_default", ""),
+             getattr(dev, "vmware_user_default", ""),
+             getattr(dev, "vmware_password_default", ""))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -40,7 +43,11 @@ def _pg_save(state):
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
              int(getattr(s, "host_override", False)),
-             getattr(s, "snmp_unit", ""))
+             getattr(s, "snmp_unit", ""),
+             getattr(s, "vmware_user", ""),
+             getattr(s, "vmware_password", ""),
+             getattr(s, "vmware_vm_id", ""),
+             getattr(s, "vmware_metric", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -56,12 +63,16 @@ def _pg_save(state):
             if dev_rows:
                 psycopg2.extras.execute_values(
                     cur,
-                    "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted) "
+                    "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
+                    "snmp_community_default,vmware_user_default,vmware_password_default) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
                     "did_ctr=EXCLUDED.did_ctr, webhook_url=EXCLUDED.webhook_url, "
-                    "alerts_muted=EXCLUDED.alerts_muted",
+                    "alerts_muted=EXCLUDED.alerts_muted, "
+                    "snmp_community_default=EXCLUDED.snmp_community_default, "
+                    "vmware_user_default=EXCLUDED.vmware_user_default, "
+                    "vmware_password_default=EXCLUDED.vmware_password_default",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -82,7 +93,8 @@ def _pg_save(state):
                     "dns_query,dns_record_type,dns_server,http_expected_status,"
                     "fail_after,recover_after,warn_ms,crit_ms,"
                     "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
-                    "alerts_muted,host_override,snmp_unit) "
+                    "alerts_muted,host_override,snmp_unit,"
+                    "vmware_user,vmware_password,vmware_vm_id,vmware_metric) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -97,7 +109,9 @@ def _pg_save(state):
                     "loss_warn_pct=EXCLUDED.loss_warn_pct, loss_crit_pct=EXCLUDED.loss_crit_pct, "
                     "keyword=EXCLUDED.keyword, keyword_case=EXCLUDED.keyword_case, "
                     "banner_regex=EXCLUDED.banner_regex, alerts_muted=EXCLUDED.alerts_muted, "
-                    "host_override=EXCLUDED.host_override, snmp_unit=EXCLUDED.snmp_unit",
+                    "host_override=EXCLUDED.host_override, snmp_unit=EXCLUDED.snmp_unit, "
+                    "vmware_user=EXCLUDED.vmware_user, vmware_password=EXCLUDED.vmware_password, "
+                    "vmware_vm_id=EXCLUDED.vmware_vm_id, vmware_metric=EXCLUDED.vmware_metric",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -125,7 +139,10 @@ def db_save(state):
         dev_rows = [
             (dev.device_id, dev.name, dev.host, dev.group, dev._sid_ctr,
              getattr(dev, "webhook_url", ""),
-             int(getattr(dev, "alerts_muted", False)))
+             int(getattr(dev, "alerts_muted", False)),
+             getattr(dev, "snmp_community_default", ""),
+             getattr(dev, "vmware_user_default", ""),
+             getattr(dev, "vmware_password_default", ""))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -142,7 +159,11 @@ def db_save(state):
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
              int(getattr(s, "host_override", False)),
-             getattr(s, "snmp_unit", ""))
+             getattr(s, "snmp_unit", ""),
+             getattr(s, "vmware_user", ""),
+             getattr(s, "vmware_password", ""),
+             getattr(s, "vmware_vm_id", ""),
+             getattr(s, "vmware_metric", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -155,7 +176,7 @@ def db_save(state):
     try:
         con = sqlite3.connect(DB_PATH, timeout=15)
         cur = con.cursor()
-        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?)", dev_rows)
+        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -170,8 +191,9 @@ def db_save(state):
             "dns_query,dns_record_type,dns_server,http_expected_status,"
             "fail_after,recover_after,warn_ms,crit_ms,"
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
-            "alerts_muted,host_override,snmp_unit) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "alerts_muted,host_override,snmp_unit,"
+            "vmware_user,vmware_password,vmware_vm_id,vmware_metric) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -199,7 +221,11 @@ def _pg_load(state):
         with pg_conn("main") as con:
             cur = con.cursor()
             cur.execute(
-                "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted FROM devices"
+                "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
+                "COALESCE(snmp_community_default,'') AS snmp_community_default,"
+                "COALESCE(vmware_user_default,'') AS vmware_user_default,"
+                "COALESCE(vmware_password_default,'') AS vmware_password_default "
+                "FROM devices"
             )
             devs = cur.fetchall()
             cur.execute(
@@ -208,7 +234,11 @@ def _pg_load(state):
                 "dns_query,dns_record_type,dns_server,http_expected_status,"
                 "fail_after,recover_after,warn_ms,crit_ms,"
                 "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
-                "alerts_muted,host_override,COALESCE(snmp_unit,'') AS snmp_unit "
+                "alerts_muted,host_override,COALESCE(snmp_unit,'') AS snmp_unit,"
+                "COALESCE(vmware_user,'') AS vmware_user,"
+                "COALESCE(vmware_password,'') AS vmware_password,"
+                "COALESCE(vmware_vm_id,'') AS vmware_vm_id,"
+                "COALESCE(vmware_metric,'') AS vmware_metric "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -234,6 +264,9 @@ def _pg_load(state):
         dev._sid_ctr      = row[4] or 0
         dev.webhook_url   = row[5] or ""
         dev.alerts_muted  = bool(row[6] or 0)
+        dev.snmp_community_default  = row[7] or ""
+        dev.vmware_user_default     = row[8] or ""
+        dev.vmware_password_default = row[9] or ""
         state.devices[did] = dev
 
     for row in srows:
@@ -258,6 +291,10 @@ def _pg_load(state):
         s.http_expected_status = int(row[17] or 0)
         s.alerts_muted         = bool(row[27] or 0)
         s.host_override        = bool(row[28] or 0)
+        s.vmware_user          = row[30] or ""
+        s.vmware_password      = row[31] or ""
+        s.vmware_vm_id         = row[32] or ""
+        s.vmware_metric        = row[33] or ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -328,7 +365,9 @@ def db_load(state):
             "dns_query,dns_record_type,dns_server,http_expected_status,"
             "fail_after,recover_after,warn_ms,crit_ms,"
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted,host_override,"
-            "COALESCE(snmp_unit,'') "
+            "COALESCE(snmp_unit,''),"
+            "COALESCE(vmware_user,''),COALESCE(vmware_password,''),"
+            "COALESCE(vmware_vm_id,''),COALESCE(vmware_metric,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -344,7 +383,8 @@ def db_load(state):
         return
 
     max_did = 0
-    for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted) in devs:
+    for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
+         snmp_community_default, vmware_user_default, vmware_password_default) in devs:
         dev = Device(did, name, host, grp)
         try:
             n = int(did.replace("d", ""))
@@ -354,6 +394,9 @@ def db_load(state):
         dev._sid_ctr      = sid_ctr or 0
         dev.webhook_url   = webhook_url or ""
         dev.alerts_muted  = bool(alerts_muted or 0)
+        dev.snmp_community_default  = snmp_community_default or ""
+        dev.vmware_user_default     = vmware_user_default or ""
+        dev.vmware_password_default = vmware_password_default or ""
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,
@@ -361,7 +404,8 @@ def db_load(state):
          dns_query, dns_record_type, dns_server, http_expected_status,
          fail_after, recover_after, warn_ms, crit_ms,
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
-         alerts_muted, host_override, snmp_unit) in srows:
+         alerts_muted, host_override, snmp_unit,
+         vmware_user, vmware_password, vmware_vm_id, vmware_metric) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -382,6 +426,10 @@ def db_load(state):
         s.http_expected_status = int(http_expected_status or 0)
         s.alerts_muted         = bool(alerts_muted or 0)
         s.host_override        = bool(host_override or 0)
+        s.vmware_user          = vmware_user or ""
+        s.vmware_password      = vmware_password or ""
+        s.vmware_vm_id         = vmware_vm_id or ""
+        s.vmware_metric        = vmware_metric or ""
         dev.sensors[sid] = s
 
     state._did_ctr = max_did

@@ -45,6 +45,9 @@ function sensorFormHTML(dev, s=null) {
       <div class="stpo ${curType==='banner'?'sel':''}" data-t="banner" onclick="selType('banner')">
         <div class="stpo-ico">B</div><div class="stpo-nm">BANNER</div><div class="stpo-ds">TCP banner</div>
       </div>
+      <div class="stpo ${curType==='vmware'?'sel':''}" data-t="vmware" onclick="selType('vmware')">
+        <div class="stpo-ico">V</div><div class="stpo-nm">VMWARE</div><div class="stpo-ds">VM metrics</div>
+      </div>
     </div>
     <input type="hidden" id="as-t" value="${curType}"/>
   </div>
@@ -104,7 +107,7 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fgrid">
       <div class="fr"><label class="fl">Community String</label>
-        <input type="text" id="as-sc" value="${esc(s?.snmp_community||'public')}" placeholder="public" autocomplete="off"/></div>
+        <input type="text" id="as-sc" value="${esc(s?.snmp_community||dev?.snmp_community_default||'public')}" placeholder="public" autocomplete="off"/></div>
       <div class="fr"><label class="fl">SNMP Version</label>
         <select id="as-sv">
           <option value="2c" ${(s?.snmp_version||'2c')==='2c'?'selected':''}>v2c</option>
@@ -203,6 +206,45 @@ function sensorFormHTML(dev, s=null) {
     <div class="fr"><label class="fl">Banner Regex <span style="color:var(--text3);font-weight:400">(optional)</span></label>
       <input type="text" id="as-bnr" value="${esc(s?.banner_regex||'')}" placeholder="Leave blank — any banner = UP" autocomplete="off"/></div>
   </div>
+  <!-- VMWARE -->
+  <div class="fg ${curType==='vmware'?'vis':''}" id="fg-vmware">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">vCenter / ESXi Host</label>
+        <input type="text" id="as-vmh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-vmp" value="${s?.port||443}" min="1" max="65535"/></div>
+    </div>
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Username</label>
+        <input type="text" id="as-vmu" value="${esc(s?.vmware_user||dev?.vmware_user_default||'')}" placeholder="administrator@vsphere.local" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Password</label>
+        <input type="password" id="as-vmpw" value="" placeholder="${s?.has_vmware_password?'(unchanged — leave blank to keep)':dev?.has_vmware_password_default?'(uses device default — leave blank)':'vCenter password'}" autocomplete="new-password"/></div>
+    </div>
+    <div class="fr" style="margin-top:4px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+        <input type="checkbox" id="as-vmssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        Verify SSL certificate
+      </label>
+    </div>
+    <div class="fr" style="margin-top:4px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="dp-btn" type="button" onclick="discoverVMs()" id="as-vm-disc-btn">⊕ Discover VMs</button>
+        <span id="as-vm-status" style="font-size:11px;color:var(--text3)"></span>
+      </div>
+      <div id="as-vm-list" style="display:none;margin-top:8px"></div>
+    </div>
+    <div class="fgrid" style="margin-top:4px">
+      <div class="fr"><label class="fl">VM ID</label>
+        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123 (from discovery)" autocomplete="off" readonly/>
+        <div class="fh">Managed Object ID — use Discover VMs above</div>
+      </div>
+      <div class="fr"><label class="fl">Metric</label>
+        <select id="as-vmmet"><option value="">— select metric —</option></select>
+        <input type="hidden" id="as-vmmet-v" value="${esc(s?.vmware_metric||'')}"/>
+      </div>
+    </div>
+  </div>
   <!-- Alert Thresholds & Debounce -->
   <details style="margin-top:8px">
     <summary style="cursor:pointer;font-size:12px;color:var(--text2);padding:4px 0;user-select:none">
@@ -293,6 +335,7 @@ function openAddSensor(did){
     const initType = document.getElementById('as-t')?.value || 'ping';
     _applyTypeDefaults(initType);
     if(initType==='snmp') _snmpLoadVendors();
+    if(initType==='vmware') _vmwareLoadMetrics();
   },50);
 }
 
@@ -324,7 +367,9 @@ function openEditSensor(did, sid){
   document.body.appendChild(o);
   setTimeout(()=>{
     document.getElementById('as-n')?.focus();
-    if(document.getElementById('as-t')?.value==='snmp') _snmpLoadVendors();
+    const _et=document.getElementById('as-t')?.value;
+    if(_et==='snmp') _snmpLoadVendors();
+    if(_et==='vmware') _vmwareLoadMetrics();
   },50);
 }
 
@@ -363,8 +408,9 @@ async function submitEditSensor(did, sid){
 function selType(t){
   document.getElementById('as-t').value=t;
   document.querySelectorAll('.stpo').forEach(o=>o.classList.toggle('sel',o.dataset.t===t));
-  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
+  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
+  if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);
 }
 
@@ -755,6 +801,253 @@ async function addSelectedIfaceSensors(){
   }
 }
 
+// ── VMware VM Discovery ──────────────────────────────────────────────────
+
+let _vmwareMetrics=null;
+
+async function _vmwareLoadMetrics(){
+  const sel=document.getElementById('as-vmmet');
+  if(!sel||sel.options.length>1) return;
+  if(!_vmwareMetrics){
+    try{
+      const r=await fetch('/api/vmware/metrics');
+      const d=await r.json();
+      _vmwareMetrics=d.metrics||[];
+    }catch(e){ return; }
+  }
+  _vmwareMetrics.forEach(m=>{
+    const o=document.createElement('option');
+    o.value=m.v;
+    o.textContent=m.l+' ('+m.unit+')';
+    sel.appendChild(o);
+  });
+  const cur=document.getElementById('as-vmmet-v')?.value;
+  if(cur) sel.value=cur;
+}
+
+async function discoverVMs(){
+  const did      =window._ifaceDid;
+  const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
+  const username =document.getElementById('as-vmu')?.value.trim()||'';
+  const password =document.getElementById('as-vmpw')?.value||'';
+  const port     =parseInt(document.getElementById('as-vmp')?.value)||443;
+  const vssl     =document.getElementById('as-vmssl')?.checked!==false;
+  const btn      =document.getElementById('as-vm-disc-btn');
+  const statusEl =document.getElementById('as-vm-status');
+  const listEl   =document.getElementById('as-vm-list');
+  const dev=did?S.devices[did]:null;
+  if(!host){ toast('Enter a Host / IP first','err'); return; }
+  if(!username){ toast('Enter a Username','err'); return; }
+  if(!password && !dev?.has_vmware_password_default){ toast('Enter a Password','err'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Connecting to vCenter…'; }
+  if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  const payload={host,username,password,port,verify_ssl:vssl};
+  if(!password && did) payload.did=did;
+  let r;
+  try{
+    r=await api('POST','/api/vmware/vms',payload);
+  }catch(e){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    return;
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover VMs'; }
+  }
+  if(r.error){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
+    return;
+  }
+  const vms=r.vms||[];
+  if(!vms.length){
+    if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No VMs found.'; }
+    return;
+  }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${vms.length} VM${vms.length!==1?'s':''} discovered`; }
+
+  // Ensure metrics are loaded
+  if(!_vmwareMetrics){
+    try{
+      const mr=await fetch('/api/vmware/metrics');
+      const md=await mr.json();
+      _vmwareMetrics=md.metrics||[];
+    }catch(e){}
+  }
+  const metricOpts=(_vmwareMetrics||[]).map(m=>`<option value="${m.v}">${esc(m.l)}</option>`).join('');
+
+  let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">';
+  html+='<div style="overflow-x:auto;max-height:260px;overflow-y:auto">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
+  html+='<th style="padding:5px 8px;text-align:center"><input type="checkbox" id="as-vm-all" title="Select all" onchange="toggleAllVMs(this)"/></th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">VM Name</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Power</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Guest OS</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">CPUs</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Memory</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Metric</th>';
+  html+='</tr></thead><tbody>';
+
+  vms.forEach((vm,i)=>{
+    const pwClr=vm.power_state==='poweredOn'?'var(--up)':'var(--down)';
+    const pwTxt=vm.power_state==='poweredOn'?'on':'off';
+    const memStr=vm.memory_mb>=1024?Math.round(vm.memory_mb/1024)+'GB':vm.memory_mb+'MB';
+    const rowBg=i%2?'background:var(--bg2)':'';
+    html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
+    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-vm-cb" data-vmid="${esc(vm.vm_id)}" data-name="${esc(vm.name)}" onchange="updateVMSelCount()"/></td>`;
+    html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap">${esc(vm.name)}</td>`;
+    html+=`<td style="padding:4px 8px;color:${pwClr};white-space:nowrap">${pwTxt}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis">${esc(vm.guest_os)}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3)">${vm.num_cpu}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3)">${memStr}</td>`;
+    html+=`<td style="padding:4px 8px">
+      <select class="as-vm-metric" data-vmid="${esc(vm.vm_id)}"
+              style="font-size:11px;padding:2px 4px;max-width:160px">
+        <option value="">— metric —</option>${metricOpts}
+      </select>
+    </td>`;
+    html+='</tr>';
+  });
+
+  html+='</tbody></table></div>';
+  html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedVMSensors()" id="as-vm-add-btn">Add Selected as Sensors</button>';
+  html+='<span id="as-vm-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
+  html+='</div></div>';
+  listEl.innerHTML=html;
+  listEl.style.display='';
+}
+
+function toggleAllVMs(cb){
+  document.querySelectorAll('.as-vm-cb').forEach(c=>c.checked=cb.checked);
+  updateVMSelCount();
+}
+
+function updateVMSelCount(){
+  const cbs=[...document.querySelectorAll('.as-vm-cb')];
+  const checked=cbs.filter(c=>c.checked);
+  const n=checked.length;
+  const el=document.getElementById('as-vm-sel-count');
+  if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
+  const all=document.getElementById('as-vm-all');
+  if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
+  const addBtn=document.getElementById('as-vm-add-btn');
+  if(addBtn) addBtn.textContent=(n===1)?'Apply to Form':'Add Selected as Sensors';
+}
+
+async function addSelectedVMSensors(){
+  const did=window._ifaceDid;
+  if(!did){toast('Device context lost — reopen the sensor form','err');return;}
+  const checked=[...document.querySelectorAll('.as-vm-cb:checked')];
+  if(!checked.length){toast('Select at least one VM','err');return;}
+
+  // ── Single selection: apply to form ──
+  if(checked.length===1){
+    const cb=checked[0];
+    const vmid=cb.dataset.vmid;
+    const vmname=cb.dataset.name;
+    const sel=document.querySelector(`.as-vm-metric[data-vmid="${CSS.escape(vmid)}"]`);
+    if(!sel||!sel.value){toast('Choose a metric for the selected VM','err');return;}
+    const metricDef=(_vmwareMetrics||[]).find(m=>m.v===sel.value);
+    const oidEl=document.getElementById('as-vmid');
+    if(oidEl) oidEl.value=vmid;
+    const metSel=document.getElementById('as-vmmet');
+    if(metSel){ metSel.value=sel.value; }
+    const metV=document.getElementById('as-vmmet-v');
+    if(metV) metV.value=sel.value;
+    // Auto-fill sensor name
+    const nameEl=document.getElementById('as-n');
+    if(nameEl&&(!nameEl.value||nameEl.value.startsWith('Ping,')))
+      nameEl.value=`${vmname} ${metricDef?metricDef.l:sel.value}`;
+    const listEl=document.getElementById('as-vm-list');
+    if(listEl) listEl.style.display='none';
+    const statusEl=document.getElementById('as-vm-status');
+    if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=`Applied: ${metricDef?metricDef.l:sel.value} on ${vmname} — save to confirm`;}
+    return;
+  }
+
+  // ── Edit mode with multiple: not supported
+  if(!window._snrAddMode){toast('Select exactly one VM to apply to the form','err');return;}
+
+  // ── Add mode with multiple: create all via API ──
+  const host=document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
+  const username=document.getElementById('as-vmu')?.value.trim()||'';
+  const password=document.getElementById('as-vmpw')?.value||'';
+  const port=parseInt(document.getElementById('as-vmp')?.value)||443;
+  const vssl=document.getElementById('as-vmssl')?.checked!==false;
+  const iv=parseInt(document.getElementById('as-iv')?.value)||60;
+  const tmo=parseInt(document.getElementById('as-tmo')?.value)||30;
+  const startNow=document.getElementById('as-si')?.value==='1';
+  const fa=parseInt(document.getElementById('as-fa')?.value)||1;
+  const ra=parseInt(document.getElementById('as-ra')?.value)||1;
+
+  // Collect rows
+  const rows=[];
+  let noMetric=0;
+  checked.forEach(cb=>{
+    const vmid=cb.dataset.vmid;
+    const vmname=cb.dataset.name;
+    const sel=document.querySelector(`.as-vm-metric[data-vmid="${CSS.escape(vmid)}"]`);
+    if(!sel||!sel.value){noMetric++;return;}
+    const metricDef=(_vmwareMetrics||[]).find(m=>m.v===sel.value);
+    rows.push({vmid,vmname,metric:sel.value,metricLabel:metricDef?metricDef.l:sel.value});
+  });
+  if(noMetric) toast(`${noMetric} row${noMetric>1?'s':''} skipped — no metric chosen`,'info');
+  if(!rows.length){toast('Choose a metric for each checked VM','err');return;}
+  const btn=document.getElementById('as-vm-add-btn');
+  if(btn){btn.disabled=true;btn.textContent=`Adding ${rows.length}…`;}
+  let added=0,failed=0;
+  const addedSids=[];
+  for(const row of rows){
+    const sname=`${row.vmname} ${row.metricLabel}`;
+    try{
+      const r=await api('POST',`/api/device/${did}/sensor`,{
+        name:sname,type:'vmware',host,port,interval:iv,timeout:tmo,
+        verify_ssl:vssl,fail_after:fa,recover_after:ra,
+        vmware_user:username,vmware_password:password,
+        vmware_vm_id:row.vmid,vmware_metric:row.metric
+      });
+      if(r&&r.sid){
+        added++;addedSids.push(r.sid);
+        if(startNow) await api('POST',`/api/device/${did}/sensor/${r.sid}/start`);
+      }else{ failed++; }
+    }catch(e){ failed++; }
+  }
+  if(btn){btn.disabled=false;btn.textContent='Add Selected as Sensors';}
+  if(added){
+    try{
+      const devR=await fetch(`/api/device/${did}`);
+      if(devR.ok){
+        const dev=await devR.json();
+        S.devices[did]=dev;
+        const newSensors=(dev.sensors||[]).filter(s=>addedSids.includes(s.sensor_id));
+        newSensors.forEach(ns=>{
+          S.sensors[`${did}/${ns.sensor_id}`]=ns;
+          S.logs[`${did}/${ns.sensor_id}`]=[];
+          if(document.getElementById('dwo')&&document.getElementById(`sg-${did}`)){
+            renderTile(did,ns);setupCharts(dev);
+          }
+          const sbsl=document.getElementById(`sbsl-${did}`);
+          if(sbsl){
+            const r2=document.createElement('div');
+            r2.className='snr-row';r2.id=`sbsr-${did}_${ns.sensor_id}`;
+            r2.onclick=()=>openDetail(did,ns.sensor_id);
+            r2.innerHTML=`<div class="s-ico ${ns.stype}">${sIco(ns.stype)}</div><div class="s-snm">${esc(ns.name)}</div><div class="s-sdot unknown" id="sbsd-${did}_${ns.sensor_id}"></div>`;
+            sbsl.appendChild(r2);
+          }
+        });
+        const cnt=document.querySelector(`#sbn-${did} .dev-cnt`);
+        if(cnt) cnt.textContent=dev.sensors.length;
+        const previewEl=document.getElementById(`dcsnr-${did}`);
+        if(previewEl) previewEl.innerHTML=sSnrPreview(did);
+      }
+    }catch(e){}
+    toast(`Added ${added} sensor${added>1?'s':''}${failed?`, ${failed} failed`:''}`, 'ok');
+    closeM('mas');
+  }else{
+    toast('Failed to add sensors','err');
+  }
+}
+
 function collectSensorForm(did){
   const type=document.getElementById('as-t')?.value||'ping';
   const name=(document.getElementById('as-n')?.value||'').trim();
@@ -809,6 +1102,10 @@ function collectSensorForm(did){
     port=parseInt(document.getElementById('as-bnp')?.value)||21;
     banner_regex=document.getElementById('as-bnr')?.value.trim()||'';
     if(!host && !_devHost){toast('Host required','err');return null;}
+  } else if(type==='vmware'){
+    host=document.getElementById('as-vmh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-vmp')?.value)||443;
+    verify_ssl=document.getElementById('as-vmssl')?.checked!==false;
   }
   const fail_after   =Math.max(1,parseInt(document.getElementById('as-fa')?.value)||1);
   const recover_after=Math.max(1,parseInt(document.getElementById('as-ra')?.value)||1);
@@ -818,11 +1115,20 @@ function collectSensorForm(did){
   const loss_crit_pct=parseInt(document.getElementById('as-lcp')?.value)||0;
   const alerts_muted =document.getElementById('as-am')?.checked||false;
   if(!name){toast('Sensor name required','err');return null;}
-  return {type,name,host,port,url,interval:iv,timeout:tmo,
+  const payload={type,name,host,port,url,interval:iv,timeout:tmo,
           verify_ssl,snmp_community,snmp_oid,snmp_version,snmp_unit,
           dns_query,dns_record_type,dns_server,http_expected_status,
           fail_after,recover_after,warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
+  if(type==='vmware'){
+    payload.vmware_user=document.getElementById('as-vmu')?.value.trim()||'';
+    payload.vmware_password=document.getElementById('as-vmpw')?.value||'';
+    payload.vmware_vm_id=document.getElementById('as-vmid')?.value.trim()||'';
+    payload.vmware_metric=document.getElementById('as-vmmet')?.value||'';
+    if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
+    if(!payload.vmware_metric){toast('Select a metric','err');return null;}
+  }
+  return payload;
 }
 
 async function submitAddSensor(did){
@@ -832,17 +1138,38 @@ async function submitAddSensor(did){
   const btn=document.querySelector('#mas .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
   try{
-    await addSensorDirect(did, payload.name, payload.type,
-      payload.host, payload.port, payload.url,
-      payload.interval, payload.timeout, start,
-      payload.verify_ssl, payload.snmp_community,
-      payload.snmp_oid, payload.snmp_version,
-      payload.dns_query, payload.dns_record_type, payload.dns_server,
-      payload.http_expected_status,
-      payload.fail_after, payload.recover_after,
-      payload.warn_ms, payload.crit_ms, payload.loss_warn_pct, payload.loss_crit_pct,
-      payload.keyword, payload.keyword_case, payload.banner_regex);
+    const r=await api('POST',`/api/device/${did}/sensor`,payload);
+    if(!r||!r.sid){toast(r?.error||'Failed to add sensor','err');return;}
+    if(start) await api('POST',`/api/device/${did}/sensor/${r.sid}/start`);
+    try{
+      const devR=await fetch(`/api/device/${did}`);
+      if(devR.ok){
+        const dev=await devR.json();
+        S.devices[did]=dev;
+        const ns=(dev.sensors||[]).find(s=>s.sensor_id===r.sid);
+        if(ns){
+          S.sensors[`${did}/${r.sid}`]=ns;
+          S.logs[`${did}/${r.sid}`]=[];
+          if(document.getElementById('dwo')&&document.getElementById(`sg-${did}`)){
+            renderTile(did,ns);setupCharts(dev);
+          }
+        }
+        const sbsl=document.getElementById(`sbsl-${did}`);
+        if(sbsl&&ns){
+          const row=document.createElement('div');
+          row.className='snr-row';row.id=`sbsr-${did}_${r.sid}`;
+          row.onclick=()=>openDetail(did,r.sid);
+          row.innerHTML=`<div class="s-ico ${ns.stype}">${sIco(ns.stype)}</div><div class="s-snm">${esc(ns.name)}</div><div class="s-sdot unknown" id="sbsd-${did}_${r.sid}"></div>`;
+          sbsl.appendChild(row);
+        }
+        const cnt=document.querySelector(`#sbn-${did} .dev-cnt`);
+        if(cnt) cnt.textContent=(dev.sensors||[]).length;
+        const previewEl=document.getElementById(`dcsnr-${did}`);
+        if(previewEl) previewEl.innerHTML=sSnrPreview(did);
+      }
+    }catch(e2){}
     closeM('mas');
+    toast('Sensor added','ok');
   }catch(e){
     toast('Failed to add sensor: '+e.message,'err');
   }finally{

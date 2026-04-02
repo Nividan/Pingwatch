@@ -415,6 +415,20 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # VMware sensor fields
+        for col in ("vmware_user", "vmware_password", "vmware_vm_id", "vmware_metric"):
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col} TEXT DEFAULT ''")
+                con.commit()
+            except Exception:
+                pass
+        # Device-level default credentials
+        for col in ("snmp_community_default", "vmware_user_default", "vmware_password_default"):
+            try:
+                con.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
+                con.commit()
+            except Exception:
+                pass
         # backup_devices — replace per-device schedule with global-schedule flag
         try:
             con.execute("ALTER TABLE backup_devices ADD COLUMN in_schedule INTEGER DEFAULT 0")

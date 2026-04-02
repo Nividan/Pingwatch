@@ -40,13 +40,16 @@ def pg_create_main_schema(cur):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (
-            did          TEXT PRIMARY KEY,
-            name         TEXT,
-            host         TEXT,
-            grp          TEXT,
-            did_ctr      INTEGER DEFAULT 0,
-            webhook_url  TEXT DEFAULT '',
-            alerts_muted INTEGER DEFAULT 0
+            did                      TEXT PRIMARY KEY,
+            name                     TEXT,
+            host                     TEXT,
+            grp                      TEXT,
+            did_ctr                  INTEGER DEFAULT 0,
+            webhook_url              TEXT DEFAULT '',
+            alerts_muted             INTEGER DEFAULT 0,
+            snmp_community_default   TEXT DEFAULT '',
+            vmware_user_default      TEXT DEFAULT '',
+            vmware_password_default  TEXT DEFAULT ''
         )""")
 
     cur.execute("""
@@ -81,8 +84,26 @@ def pg_create_main_schema(cur):
             alerts_muted         INTEGER DEFAULT 0,
             host_override        INTEGER DEFAULT 0,
             snmp_unit            TEXT DEFAULT '',
+            vmware_user          TEXT DEFAULT '',
+            vmware_password      TEXT DEFAULT '',
+            vmware_vm_id         TEXT DEFAULT '',
+            vmware_metric        TEXT DEFAULT '',
             PRIMARY KEY (did, sid)
         )""")
+
+    # VMware columns — migration for existing installs
+    for col in ("vmware_user", "vmware_password", "vmware_vm_id", "vmware_metric"):
+        try:
+            cur.execute(f"ALTER TABLE sensors ADD COLUMN {col} TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+    # Device-level default credentials — migration for existing installs
+    for col in ("snmp_community_default", "vmware_user_default", "vmware_password_default"):
+        try:
+            cur.execute(f"ALTER TABLE main.devices ADD COLUMN {col} TEXT DEFAULT ''")
+        except Exception:
+            pass
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
