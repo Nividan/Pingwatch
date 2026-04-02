@@ -451,6 +451,20 @@ def topo_upsert_setting(key, value_obj):
         )
 
 
+def topo_prune_pw_links(did):
+    """Remove all pw_links entries that reference the given device_id (src or tgt).
+    Called automatically when a device is deleted so stale links don't survive."""
+    did_str = str(did)
+    row = topo_get_setting('pw_links')
+    if not row or not isinstance(row.get('value'), list):
+        return
+    pruned = [lk for lk in row['value']
+              if str(lk.get('src_did', '')) != did_str
+              and str(lk.get('tgt_did', '')) != did_str]
+    if len(pruned) != len(row['value']):
+        topo_upsert_setting('pw_links', pruned)
+
+
 # ── Migration ──────────────────────────────────────────────────────────────
 
 def migrate_topo_from_file():

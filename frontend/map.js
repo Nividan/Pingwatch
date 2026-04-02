@@ -599,7 +599,10 @@ function _pwAnimateTrace(pathDids, color) {
   const pts = pathDids.map(did => {
     const node = nodeMap[_pwNodeId(did)];
     return node ? nodeCenter(node) : null;
-  }).filter(Boolean);
+  });
+  // Abort if any hop resolves to null (stale link pointing at a deleted device).
+  // Silently filtering nulls would draw an arc that skips intermediate nodes.
+  if (pts.some(p => p === null)) return;
   if (pts.length < 2) return;
   const layer = document.getElementById('anim-layer');
   if (!layer) return;
