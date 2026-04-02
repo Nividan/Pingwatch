@@ -10,12 +10,14 @@ function tileHTML(s){
   const isTls  =s.stype==='tls';
   const isBanner=s.stype==='banner';
   const isVmware=s.stype==='vmware';
-  const rawVal = (isSnmp||isDns||isVmware) ? (s.last_value||s.last_detail||'—')
+  const rawVal = (isSnmp||isDns) ? (s.last_value||s.last_detail||'—')
                : isTls ? (s.last_value!=null?s.last_value+'d':null) : null;
-  const vt = (isSnmp||isDns||isVmware)
-    ? (s.alive===false?'FAIL':(rawVal.length>14?rawVal.slice(0,14)+'…':rawVal))
-    : isTls ? (s.alive===false?'FAIL':(rawVal||'—'))
-    : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
+  const vt = isVmware
+    ? (s.alive===false?'FAIL':(()=>{const _v=parseFloat(s.last_value);return isNaN(_v)?(s.last_value||'—').slice(0,10):_fmtVmVal(_v,_VM_UNITS[s.vmware_metric]||'');})())
+    : (isSnmp||isDns)
+      ? (s.alive===false?'FAIL':(rawVal.length>14?rawVal.slice(0,14)+'…':rawVal))
+      : isTls ? (s.alive===false?'FAIL':(rawVal||'—'))
+      : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
   // For SNMP: warn (orange) if alive but value is a non-numeric string — likely wrong OID
   // Warn (orange) when SNMP is alive but value is a plain string (e.g. wrong OID → sysDescr).
   // Don't warn for formatted rates ("5.8 KB/s", "1.2 MB/s") — those end with /s.
@@ -227,12 +229,15 @@ function updateTile(s){
   const isDns2  =s.stype==='dns';
   const isTls2  =s.stype==='tls';
   const isBanner2=s.stype==='banner';
+  const isVmware2=s.stype==='vmware';
   const rawVal2 = (isSnmp||isDns2)?(s.last_value||s.last_detail||'—')
                : isTls2?(s.last_value!=null?s.last_value+'d':null):null;
-  const vt = (isSnmp||isDns2)
-    ? (s.alive===false?'FAIL':(rawVal2.length>14?rawVal2.slice(0,14)+'…':rawVal2))
-    : isTls2 ? (s.alive===false?'FAIL':(rawVal2||'—'))
-    : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
+  const vt = isVmware2
+    ? (s.alive===false?'FAIL':(()=>{const _v=parseFloat(s.last_value);return isNaN(_v)?(s.last_value||'—').slice(0,10):_fmtVmVal(_v,_VM_UNITS[s.vmware_metric]||'');})())
+    : (isSnmp||isDns2)
+      ? (s.alive===false?'FAIL':(rawVal2.length>14?rawVal2.slice(0,14)+'…':rawVal2))
+      : isTls2 ? (s.alive===false?'FAIL':(rawVal2||'—'))
+      : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
   const _snmpStrVal2 = isSnmp && s.alive===true && rawVal2 && rawVal2!=='—' && isNaN(rawVal2) && !/bps$|\/s$/.test(rawVal2);
   const _isCounter2 = isSnmp && s.last_rate != null;
   const _snmpThrColor2 = isSnmp && !_isCounter2 && s.threshold_state && s.threshold_state !== 'ok' && s.alive !== false
