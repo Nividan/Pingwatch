@@ -597,6 +597,14 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .stl:active{transform:translateY(0)}
 .stl.up  {border-color:var(--up-border)}
 .stl.down{border-color:var(--down-border)}
+.stl[draggable]{cursor:grab;}
+.stl[draggable]:active{cursor:grabbing;}
+.stl.stl-dragging{opacity:.35;transform:scale(.97);}
+.stl.stl-drop-ind{
+  background:transparent;border:2px dashed var(--accent);
+  opacity:.5;pointer-events:none;min-height:80px;
+}
+.sg.sg-drag-over{background:rgba(47,129,247,.03);}
 .stl-hd{
   display:flex;align-items:center;gap:7px;
   padding:13px 14px 10px;
