@@ -245,6 +245,7 @@ async function submitLogin(){
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
     S.role=d.role||'viewer';
     hideLogin();
+    try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
     onAuthenticated(d.username);
   }catch(e){
     const msg=e.name==='AbortError'?'Server is taking too long — it may still be loading. Try again.':'Server error. Try again.';
