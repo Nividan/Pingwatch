@@ -16,6 +16,16 @@ function sensorFormHTML(dev, s=null) {
         ? `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`
         : `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom host · clear field to re-link to device</div>`)
     : '';
+  // SNMP community — blank means "use device default" (same pattern as host)
+  const devComm   = dev?.snmp_community_default || '';
+  const commHint  = devComm ? `leave blank — uses device (${esc(devComm)})` : 'public';
+  const commVal   = s?.snmp_community || '';
+  const commIsCustom = commVal && devComm && commVal !== devComm;
+  const commStatusHtml = devComm
+    ? (commIsCustom
+        ? `<div class="fh" style="color:#fbbf24;font-size:10px;margin-top:2px">⚠ custom · clear field to use device default (${esc(devComm)})</div>`
+        : `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`)
+    : '';
   const curType = s?.stype || 'ping';
   return `
   <div class="fr">
@@ -107,7 +117,8 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fgrid">
       <div class="fr"><label class="fl">Community String</label>
-        <input type="text" id="as-sc" value="${esc(s?.snmp_community||dev?.snmp_community_default||'public')}" placeholder="public" autocomplete="off"/></div>
+        <input type="text" id="as-sc" value="${esc(commVal)}" placeholder="${commHint}" autocomplete="off"/>
+        ${commStatusHtml}</div>
       <div class="fr"><label class="fl">SNMP Version</label>
         <select id="as-sv">
           ${(()=>{const dv=s?.snmp_version||dev?.snmp_version_default||'2c';
@@ -726,7 +737,7 @@ async function addSelectedIfaceSensors(){
 
   // ── Add mode with multiple: create all via API ─────────────────────────
   const host=document.getElementById('as-sh')?.value.trim()||S.devices[did]?.host||'';
-  const community=document.getElementById('as-sc')?.value.trim()||'public';
+  const community=document.getElementById('as-sc')?.value.trim()||'';
   const port=parseInt(document.getElementById('as-sp')?.value)||161;
   const version=document.getElementById('as-sv')?.value||'2c';
   const iv=parseInt(document.getElementById('as-iv')?.value)||5;
@@ -1074,7 +1085,7 @@ function collectSensorForm(did){
   } else if(type==='snmp'){
     host=document.getElementById('as-sh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-sp')?.value)||161;
-    snmp_community=document.getElementById('as-sc')?.value.trim()||'public';
+    snmp_community=document.getElementById('as-sc')?.value.trim()||'';
     snmp_oid=document.getElementById('as-oid')?.value.trim()||'1.3.6.1.2.1.1.1.0';
     snmp_version=document.getElementById('as-sv')?.value||'2c';
     snmp_unit=document.getElementById('as-snmp-unit')?.value||'';
