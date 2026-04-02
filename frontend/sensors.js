@@ -312,6 +312,7 @@ function _ensureVmGrp(did,s){
       <div class="vm-grp-dot" id="vgdot-${did}-${sfx}"></div>
       <div class="vm-grp-cnt" id="vgcnt-${did}-${sfx}">0 metrics</div>
       <button class="dp-btn vm-add-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add another metric for this VM">+ Metric</button>
+      <button class="dp-btn vm-mute-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" id="vgmute-${did}-${sfx}" title="Mute alerts for all metrics">🔕 Mute</button>
       <button class="dp-btn d vm-del-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" title="Remove all metrics for this VM">✕ Remove</button>
     </div>
     <div class="vm-grp-body${collapsed?' collapsed':''}" id="vgbody-${did}-${sfx}"></div>`;
@@ -322,6 +323,10 @@ function _ensureVmGrp(did,s){
   grp.querySelector('.vm-add-btn').addEventListener('click',e=>{
     e.stopPropagation();
     openAddVmMetric(did,vmid,vmName);
+  });
+  grp.querySelector('.vm-mute-btn').addEventListener('click',e=>{
+    e.stopPropagation();
+    toggleVmGrpMute(did,vmid);
   });
   grp.querySelector('.vm-del-btn').addEventListener('click',e=>{
     e.stopPropagation();
@@ -343,6 +348,7 @@ function _updateVmGrpStatus(did,vmid){
     return sn?.alive===false?'down':(sn?.threshold_state&&sn.threshold_state!=='ok'?'warn':(sn?.alive===true?'up':''));
   });
   dotEl.className='vm-grp-dot '+(states.includes('down')?'down':states.includes('warn')?'warn':states.includes('up')?'up':'');
+  _updateVmGrpMuteBtn(did,vmid);
 }
 
 function toggleVmGrp(did,vmid){
@@ -765,6 +771,47 @@ function delVmGrp(did,vmid){
     for(const sid of sids) await delSensor(did,sid);
     document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
   });
+}
+
+async function toggleVmGrpMute(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  if(!body) return;
+  const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
+  if(!sids.length) return;
+  // Determine target state: if ANY sensor is unmuted → mute all; else unmute all
+  const anyUnmuted=sids.some(sid=>{const s=S.sensors[`${did}/${sid}`];return s&&!s.alerts_muted;});
+  const mute=anyUnmuted;
+  const btn=document.getElementById(`vgmute-${did}-${sfx}`);
+  if(btn){btn.disabled=true;btn.textContent='...';}
+  let ok=0;
+  for(const sid of sids){
+    try{
+      const r=await api('PATCH',`/api/device/${did}/sensor/${sid}`,{alerts_muted:mute});
+      if(r.status==='updated'){
+        const s=S.sensors[`${did}/${sid}`];
+        if(s) s.alerts_muted=mute;
+        const badge=document.getElementById(`sm-muted-${did}_${sid}`);
+        if(badge) badge.style.display=mute?'':'none';
+        ok++;
+      }
+    }catch(e){}
+  }
+  _updateVmGrpMuteBtn(did,vmid);
+  if(btn) btn.disabled=false;
+  toast(`${mute?'Muted':'Unmuted'} ${ok} sensor${ok===1?'':'s'}`,'ok');
+}
+
+function _updateVmGrpMuteBtn(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  const btn=document.getElementById(`vgmute-${did}-${sfx}`);
+  if(!btn) return;
+  if(!body){btn.textContent='🔕 Mute';return;}
+  const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
+  const allMuted=sids.length>0&&sids.every(sid=>{const s=S.sensors[`${did}/${sid}`];return s?.alerts_muted;});
+  btn.textContent=allMuted?'🔔 Unmute':'🔕 Mute';
+  btn.title=allMuted?'Unmute alerts for all metrics':'Mute alerts for all metrics';
 }
 
 // ── Logs ─────────────────────────────────────────────────────────
