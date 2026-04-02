@@ -139,6 +139,28 @@ function _snrDragLeave(e){
 }
 
 function renderTile(did,s){
+  // ── VMware sensors go into a VM group row, not a full tile ──────
+  if(s.stype==='vmware'&&s.vmware_vm_id){
+    _ensureVmGrp(did,s);
+    const sfx=_vmGrpSfx(s.vmware_vm_id);
+    const body=document.getElementById(`vgbody-${did}-${sfx}`);
+    if(!body) return;
+    const key=`${did}/${s.sensor_id}`;
+    const old=document.getElementById(`t-${key.replace('/','_')}`);
+    if(old) old.remove();
+    const t=document.createElement('div');
+    t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    t.id=`t-${key.replace('/','_')}`;
+    t.dataset.sid=s.sensor_id;
+    t.onclick=()=>openDetail(did,s.sensor_id);
+    t.innerHTML=vmRowHTML(s);
+    body.appendChild(t);
+    _updateVmGrpStatus(did,s.vmware_vm_id);
+    const cvs=t.querySelector('canvas.spk');
+    if(cvs){ cvs.width=60; S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')}; if(s.history&&s.history.length>1)drawSpk(key,s.history); }
+    return;
+  }
+  // ── Normal tile ─────────────────────────────────────────────────
   const grid=document.getElementById(`sg-${did}`);
   if(!grid)return;
   const key=`${did}/${s.sensor_id}`;
@@ -181,6 +203,22 @@ function updateTile(s){
   const sk=`${s.device_id}_${s.sensor_id}`;
   const tile=document.getElementById(`t-${key.replace('/','_')}`);
   if(!tile)return;
+  if(s.stype==='vmware'&&s.vmware_vm_id){
+    tile.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    const dot=tile.querySelector('.stl-sdot');
+    if(dot) dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
+    const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
+    const rawVal=s.last_value||s.last_detail||'—';
+    const vt=s.alive===false?'FAIL':(rawVal.length>12?rawVal.slice(0,12)+'…':rawVal);
+    const vel=document.getElementById(`stv-${sk}`);
+    if(vel){vel.textContent=vt;vel.className=`vm-row-val ${vc}`;}
+    const mutedBadge=document.getElementById(`sm-muted-${sk}`);
+    if(mutedBadge){const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted?'':'none';}
+    drawSpk(key,s.history||[]);
+    _updateVmGrpStatus(s.device_id,s.vmware_vm_id);
+    updateDetailWin(s.device_id,s.sensor_id,s);
+    return;
+  }
   const _newThr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
   tile.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_newThr}`;
   const dot=tile.querySelector('.stl-sdot');
@@ -235,6 +273,115 @@ function updateTile(s){
 
 function setupCharts(dev){
   setupChartsByDid(dev.device_id);
+}
+
+// ── VMware VM sensor groups ───────────────────────────────────────
+function _vmGrpSfx(vmid){ return vmid.replace(/[^a-z0-9]/gi,'-'); }
+
+function _vmNameFromSensor(s){
+  // Try to strip the metric label suffix to recover the VM name from sensor.name
+  // Auto-naming is "<vmname> <metricLabel>", e.g. "dc0.bslab.local CPU Usage (%)"
+  const m=(_vmwareMetrics||[]).find(x=>x.v===s.vmware_metric);
+  if(m&&s.name.endsWith(' '+m.l)) return s.name.slice(0,s.name.length-m.l.length-1);
+  return s.vmware_vm_id||s.name;
+}
+
+function _ensureVmGrp(did,s){
+  const vmid=s.vmware_vm_id; if(!vmid) return;
+  const sfx=_vmGrpSfx(vmid);
+  if(document.getElementById(`vmgrp-${did}-${sfx}`)) return;
+  const grid=document.getElementById(`sg-${did}`); if(!grid) return;
+  const vmName=_vmNameFromSensor(s);
+  const colState=_lsGet('pw-vmgrp-col',{})||{};
+  const collapsed=!!(colState[`${did}/${vmid}`]);
+  const grp=document.createElement('div');
+  grp.className='vm-grp stl-enter';
+  grp.id=`vmgrp-${did}-${sfx}`;
+  grp.dataset.vmid=vmid; grp.dataset.did=did;
+  grp.innerHTML=`
+    <div class="vm-grp-hdr">
+      <div class="vm-grp-arr${collapsed?'':' open'}">▶</div>
+      <div class="vm-grp-badge">V</div>
+      <div class="vm-grp-nm">${esc(vmName)}</div>
+      <div class="vm-grp-dot" id="vgdot-${did}-${sfx}"></div>
+      <div class="vm-grp-cnt" id="vgcnt-${did}-${sfx}">0 metrics</div>
+      <button class="dp-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add another metric for this VM">+ Metric</button>
+    </div>
+    <div class="vm-grp-body${collapsed?' collapsed':''}" id="vgbody-${did}-${sfx}"></div>`;
+  grp.querySelector('.vm-grp-hdr').addEventListener('click',e=>{
+    if(e.target.closest('button')) return;
+    toggleVmGrp(did,vmid);
+  });
+  grp.querySelector('button').addEventListener('click',e=>{
+    e.stopPropagation();
+    openAddVmMetric(did,vmid,vmName);
+  });
+  grid.appendChild(grp);
+  grp.addEventListener('animationend',()=>grp.classList.remove('stl-enter'),{once:true});
+}
+
+function _updateVmGrpStatus(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`); if(!body) return;
+  const rows=[...body.querySelectorAll('.vm-row')];
+  const cntEl=document.getElementById(`vgcnt-${did}-${sfx}`);
+  if(cntEl) cntEl.textContent=rows.length===1?'1 metric':`${rows.length} metrics`;
+  const dotEl=document.getElementById(`vgdot-${did}-${sfx}`); if(!dotEl) return;
+  const states=rows.map(r=>{
+    const sn=S.sensors[`${did}/${r.dataset.sid}`];
+    return sn?.alive===false?'down':(sn?.threshold_state&&sn.threshold_state!=='ok'?'warn':(sn?.alive===true?'up':''));
+  });
+  dotEl.className='vm-grp-dot '+(states.includes('down')?'down':states.includes('warn')?'warn':states.includes('up')?'up':'');
+}
+
+function toggleVmGrp(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`); if(!body) return;
+  const grp=document.getElementById(`vmgrp-${did}-${sfx}`); if(!grp) return;
+  const collapsed=body.classList.toggle('collapsed');
+  const arr=grp.querySelector('.vm-grp-arr');
+  if(arr) arr.classList.toggle('open',!collapsed);
+  const state=_lsGet('pw-vmgrp-col',{})||{};
+  if(collapsed) state[`${did}/${vmid}`]=1; else delete state[`${did}/${vmid}`];
+  _lsSet('pw-vmgrp-col',state);
+}
+
+function openAddVmMetric(did,vmid,vmName){
+  openAddSensor(did);
+  setTimeout(()=>{
+    selType('vmware');
+    const el=document.getElementById('as-vmid');
+    if(el){ el.value=vmid; }
+    // Pre-fill sensor name prefix so auto-name works
+    window._vmGrpPrefillName=vmName||vmid;
+  },80);
+}
+
+function vmRowHTML(s){
+  const sk=`${s.device_id}_${s.sensor_id}`;
+  const st=s.alive===true?'up':s.alive===false?'down':'';
+  const rawVal=s.last_value||s.last_detail||'—';
+  const vt=s.alive===false?'FAIL':(rawVal.length>12?rawVal.slice(0,12)+'…':rawVal);
+  const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
+  const metricLabel=(_vmwareMetrics||[]).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
+  const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
+  const hist=(s.history||[]).slice(-24);
+  const ub=Array(24).fill(0).map((_,i)=>{
+    const idx=i-(24-hist.length);
+    if(idx<0) return'<div class="ub-s"></div>';
+    const v=hist[idx];
+    if(v===null) return`<div class="ub-s" style="background:var(--down)"></div>`;
+    return`<div class="ub-s" style="background:var(--up)"></div>`;
+  }).join('');
+  return `
+  <div class="stl-sdot ${st}"></div>
+  <div class="vm-row-nm">${esc(metricLabel)}</div>
+  <span class="stl-muted" id="sm-muted-${sk}" title="Alerts muted" style="${isMuted?'':'display:none'}">🔕</span>
+  <div class="vm-row-val ${vc}" id="stv-${sk}">${vt}</div>
+  <div class="ub vm-ub" id="ub-${sk}">${ub}</div>
+  <canvas class="spk" height="28" style="flex:0 0 60px"></canvas>
+  <button class="stl-hist" onclick="event.stopPropagation();openDetail('${s.device_id}','${s.sensor_id}','history')" title="History">⌚</button>
+  <span id="std-${sk}" style="display:none">${esc(s.last_detail||'')}</span>`;
 }
 
 // ── Sparkline ────────────────────────────────────────────────────
