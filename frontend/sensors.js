@@ -849,15 +849,18 @@ function openDetail(did,sid,initialTab){
   o.innerHTML=`
   <div class="dmbox">
     <div class="dm-hd">
-      <div class="dm-tbdg ${s.stype}">${sIco(s.stype)} ${s.stype.toUpperCase()}</div>
-      <div class="dm-ttl">${esc(s.name)}</div>
-      <div class="dm-tgt">${esc(tgt)}</div>
-      <div style="display:flex;gap:6px;margin-left:auto">
+      <div class="dm-tbdg ${s.stype}">${sIco(s.stype)}<br>${s.stype.toUpperCase()}</div>
+      <div class="dm-hd-info">
+        <div class="dm-ttl">${esc(S.devices[did]?.name||did)}</div>
+        <div class="dm-sname">${esc(s.name)}</div>
+        <div class="dm-tgt">${esc(tgt)}</div>
+      </div>
+      <div class="dm-hd-actions">
         <button class="dp-btn s" onclick="startDev('${did}')">▶</button>
         <button class="dp-btn" onclick="openEditSensor('${did}','${sid}')">✎ Edit</button>
         <button class="dp-btn d" onclick="delSensor('${did}','${sid}');closeM('dm')">✕ Remove</button>
-        <button class="mclose" onclick="closeM('dm')">✕</button>
       </div>
+      <button class="mclose" onclick="closeM('dm')">✕</button>
     </div>
     <div class="dm-tabs">
       <button class="dm-tab active" id="dm-tabn-overview-${did}-${sid}"
