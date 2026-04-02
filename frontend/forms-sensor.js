@@ -290,7 +290,7 @@ function sensorFormHTML(dev, s=null) {
         const _ph=_vmph?_vmph.w:_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 50':curType==='snmp'||curType==='tls'?'e.g. 100':'e.g. 200';
         const _phc=_vmph?_vmph.c:_su==='bytes'||_su===''&&curType==='snmp'?'e.g. 200':curType==='snmp'||curType==='tls'?'e.g. 50':'e.g. 500';
         const _cur=curType==='snmp'&&s?.last_value!=null?`<div class="fh" style="margin-top:2px">Current: <strong>${esc(String(s.last_value))}</strong></div>`:'';
-        const _noThr=curType==='vmware'&&(_vmm==='uptime'||_vmm==='on');
+        const _noThr=curType==='vmware'&&['uptime','on','disk_read','disk_write','disk_usage'].includes(_vmm);
         return`<div class="fgrid">
         <div class="fr" id="as-wms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-wms-lbl">${_wLbl}</label>
           <input type="number" id="as-wms" value="${s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||'')}" placeholder="${_ph}" min="1" style="max-width:100px"/>
@@ -881,7 +881,7 @@ function _vmwareThrUpdateLabels(){
   const cl=document.getElementById('as-cms-lbl');
   if(wl) wl.textContent=_vmwareThrLabel(sel.value,true);
   if(cl) cl.textContent=_vmwareThrLabel(sel.value,false);
-  const _noThr2=sel.value==='uptime'||sel.value==='on';
+  const _noThr2=['uptime','on','disk_read','disk_write','disk_usage'].includes(sel.value);
   const wr=document.getElementById('as-wms-row');
   const cr=document.getElementById('as-cms-row');
   if(wr) wr.style.display=_noThr2?'none':'';
@@ -1329,7 +1329,7 @@ function collectSensorForm(did){
     payload.vmware_vm_name=document.getElementById('as-vmnm')?.value.trim()||'';
     payload.vmware_metric=document.getElementById('as-vmmet')?.value||'';
     payload.vmware_disk_path=document.getElementById('as-vm-diskpath')?.value.trim()||'';
-    if(['uptime','on'].includes(payload.vmware_metric)){ payload.warn_ms=null; payload.crit_ms=null; }
+    if(['uptime','on','disk_read','disk_write','disk_usage'].includes(payload.vmware_metric)){ payload.warn_ms=null; payload.crit_ms=null; }
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}
   }
