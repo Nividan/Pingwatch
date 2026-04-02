@@ -44,6 +44,7 @@ VM_METRICS = [
     {"v": "net_tx",           "l": "Network Transmitted",       "group": "net",       "counter": "net.transmitted.average",                 "unit": "KBps"},
     {"v": "net_usage",        "l": "Network Usage",             "group": "net",       "counter": "net.usage.average",                       "unit": "KBps"},
     {"v": "uptime",           "l": "Uptime",                    "group": "sys",       "counter": "sys.uptime.latest",                       "unit": "seconds"},
+    {"v": "on",               "l": "Power State",               "group": "sys",       "counter": None,                                      "unit": ""},
 ]
 
 # Quick lookup: metric key → definition
@@ -204,6 +205,8 @@ def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
     metric_ids = []
     counter_key_to_metric = {}  # counterId → metric def
     for m in VM_METRICS:
+        if not m.get("counter"):
+            continue  # runtime-only metrics (e.g. power state) have no perf counter
         cid = cmap.get(m["counter"])
         if cid is not None:
             metric_ids.append(
@@ -318,13 +321,22 @@ def vmware_probe(host, user, password, vm_id, metric,
         return {"ok": False, "ms": None,
                 "detail": f"VM {vm_id} not found"}
 
-    # Check power state
+    # Power state — used both as a guard and as the "on" metric value
     try:
-        if vm_moref.runtime and str(vm_moref.runtime.powerState) != "poweredOn":
-            return {"ok": False, "ms": None,
-                    "detail": "VM powered off"}
+        power_state = str(vm_moref.runtime.powerState) if vm_moref.runtime else "unknown"
     except Exception:
-        pass
+        power_state = "unknown"
+
+    # "on" metric: just report power state, no perf counters needed
+    if metric == "on":
+        elapsed = round((time.time() - t0) * 1000, 1)
+        is_on = (power_state == "poweredOn")
+        return {"ok": is_on, "ms": elapsed,
+                "detail": f"Power State: {power_state}",
+                "value": power_state}
+
+    if power_state != "poweredOn":
+        return {"ok": False, "ms": None, "detail": "VM powered off"}
 
     # Query all metrics (cached for other sensors targeting same VM)
     data = _query_all_vm_metrics(si, vm_moref, num_cpu)
