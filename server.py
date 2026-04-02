@@ -503,6 +503,27 @@ def main():
 
     db_init()
     logs_db_init()
+
+    # PG partition migration (v0.8.0) — convert flat sensor_samples to partitioned
+    if is_pg():
+        try:
+            from db.pg_pool import _pool as _raw_pool
+            from db.pg_schema import pg_migrate_to_partitioned
+            _raw_con = _raw_pool.getconn()
+            try:
+                pg_migrate_to_partitioned(_raw_con)
+            finally:
+                _raw_pool.putconn(_raw_con)
+        except Exception as _pe:
+            log.error(f"PG partition migration: {_pe}")
+
+    # Rollup backfill (v0.8.0) — populate rollup tables from existing data
+    try:
+        from db.samples import db_rollup_backfill
+        db_rollup_backfill()
+    except Exception as _re:
+        log.error(f"Rollup backfill: {_re}")
+
     try:
         init_topo_db()
     except Exception as _e:
@@ -518,6 +539,16 @@ def main():
     except Exception as _se:
         log.error(f"SNMP seed load failed: {_se}")
     _settings.load(db_load_settings())
+
+    # Resize probe executor if user changed max_workers_executor (v0.8.0)
+    _mw = int(_settings.get("max_workers_executor", 64) or 64)
+    if _mw != 64:
+        import concurrent.futures
+        STATE._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=_mw, thread_name_prefix='pw-sensor'
+        )
+        STATE._scheduler._executor = STATE._executor
+        log.info(f"Probe executor resized to {_mw} workers")
 
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))

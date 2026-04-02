@@ -332,6 +332,11 @@ def db_init():
             # Dual-DB split: '1' means logs tables live in pingwatch_logs.db
             # Seeded here so fresh installs never trigger an unnecessary migration
             ("db_split_complete",   "1"),
+            # Data rollup (v0.8.0)
+            ("retention_raw_days",     "7"),
+            ("retention_5m_days",      "90"),
+            ("retention_1h_days",      "1095"),
+            ("max_workers_executor",   "64"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -793,6 +798,60 @@ def logs_db_init():
         if not con.execute("SELECT 1 FROM logs_schema_version").fetchone():
             con.execute(
                 "INSERT INTO logs_schema_version VALUES (1, datetime('now'), 'initial split')"
+            )
+
+        # ── Rollup tables (v0.8.0) ─────────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_samples_5m (
+                ts           REAL    NOT NULL,
+                did          TEXT    NOT NULL,
+                sid          TEXT    NOT NULL,
+                ok_count     INTEGER NOT NULL DEFAULT 0,
+                fail_count   INTEGER NOT NULL DEFAULT 0,
+                avg_ms       REAL,
+                min_ms       REAL,
+                max_ms       REAL,
+                avg_ms_sq    REAL    DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (did, sid, ts)
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_s5m_ts ON sensor_samples_5m(ts)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_samples_1h (
+                ts           REAL    NOT NULL,
+                did          TEXT    NOT NULL,
+                sid          TEXT    NOT NULL,
+                ok_count     INTEGER NOT NULL DEFAULT 0,
+                fail_count   INTEGER NOT NULL DEFAULT 0,
+                avg_ms       REAL,
+                min_ms       REAL,
+                max_ms       REAL,
+                avg_ms_sq    REAL    DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (did, sid, ts)
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_s1h_ts ON sensor_samples_1h(ts)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS rollup_state (
+                tier    TEXT PRIMARY KEY,
+                last_ts REAL NOT NULL DEFAULT 0
+            )""")
+        con.execute(
+            "INSERT OR IGNORE INTO rollup_state (tier, last_ts) VALUES ('5m', 0)"
+        )
+        con.execute(
+            "INSERT OR IGNORE INTO rollup_state (tier, last_ts) VALUES ('1h', 0)"
+        )
+        if not con.execute(
+            "SELECT 1 FROM logs_schema_version WHERE version = 2"
+        ).fetchone():
+            con.execute(
+                "INSERT INTO logs_schema_version VALUES "
+                "(2, datetime('now'), 'v0.8.0 — rollup tables')"
             )
         con.commit()
     finally:

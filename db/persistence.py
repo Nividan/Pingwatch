@@ -437,16 +437,24 @@ def db_load(state):
 # ── Background autosave ──────────────────────────────────────────
 
 def autosave_loop(state):
-    """Save state to DB every 60 s; clean old samples every ~1 hour."""
+    """Save state to DB every 60 s; clean old samples every ~1 hour;
+    maintain PG partitions daily."""
     import time as _time
     from db.samples import db_clean_samples
-    from db.users   import db_load_settings
     _iter = 0
     while True:
         _time.sleep(60)
         _db_enqueue(lambda: db_save(state))
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
-            _days = db_load_settings().get("retention_days", 365)
-            _d = _days
-            _logs_enqueue(lambda d=_d: db_clean_samples(d))
+            _logs_enqueue(db_clean_samples)
+        if _iter % 1440 == 0:  # every ~24 hours — maintain PG partitions
+            if is_pg():
+                try:
+                    from db.pg_pool import pg_conn
+                    from db.pg_schema import pg_ensure_sample_partitions
+                    with pg_conn("logs") as con:
+                        pg_ensure_sample_partitions(con.cursor())
+                except Exception as e:
+                    from core.logger import log
+                    log.warning(f"Partition maintenance error: {e}")
