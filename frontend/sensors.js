@@ -1864,7 +1864,7 @@ function dmToggleAutoRefresh(did, sid) {
     delete S._arTimers[key];
     if (btn) { btn.textContent = 'Auto-Refresh'; btn.classList.remove('active'); }
   } else {
-    S._arTimers[key] = setInterval(() => dmHistReload(did, sid), 30000);
+    S._arTimers[key] = setInterval(() => dmHistReload(did, sid), 10000);
     if (btn) { btn.textContent = 'Auto-Refresh ●'; btn.classList.add('active'); }
   }
 }
