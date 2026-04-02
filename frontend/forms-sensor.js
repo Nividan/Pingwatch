@@ -134,7 +134,7 @@ function sensorFormHTML(dev, s=null) {
     <div class="fr"><label class="fl">OID</label>
       <input type="text" id="as-oid" value="${esc(s?.snmp_oid||'1.3.6.1.2.1.1.1.0')}" placeholder="1.3.6.1.2.1.1.1.0" autocomplete="off"/>
       <input type="hidden" id="as-snmp-unit" value="${esc(s?.snmp_unit||'')}"/>
-      <div class="fh" id="as-oid-unit2" style="min-height:14px">Type or paste an OID, choose from picker above, or use Discover Interfaces.</div>
+      <div class="fh" id="as-oid-unit2" style="min-height:14px">${s?.snmp_unit?'Unit: '+esc(s.snmp_unit):'Type or paste an OID, choose from picker above, or use Discover Interfaces.'}</div>
     </div>
   </div>
   <!-- DNS -->
@@ -399,6 +399,7 @@ async function _snmpLoadVendors(){
       o.value=v.vendor; o.textContent=v.vendor;
       vsel.appendChild(o);
     });
+    _snmpTryMatchCurrentOid();
     return;
   }
   try{
@@ -410,7 +411,29 @@ async function _snmpLoadVendors(){
       o.value=v.vendor; o.textContent=v.vendor;
       vsel.appendChild(o);
     });
+    _snmpTryMatchCurrentOid();
   }catch(e){}
+}
+
+function _snmpTryMatchCurrentOid(){
+  if(!_snmpCatalog) return;
+  const oidEl=document.getElementById('as-oid');
+  if(!oidEl) return;
+  const currentOid=oidEl.value.trim();
+  if(!currentOid) return;
+  for(const vendor of _snmpCatalog){
+    for(const o of vendor.oids){
+      if(o.oid===currentOid){
+        const vsel=document.getElementById('as-oid-vendor');
+        if(vsel){ vsel.value=vendor.vendor; snmpVendorChange(); }
+        const psel=document.getElementById('as-oid-pick');
+        if(psel){ psel.value=o.oid; }
+        const unitEl=document.getElementById('as-oid-unit');
+        if(unitEl) unitEl.textContent=o.unit?'Unit: '+o.unit:'';
+        return;
+      }
+    }
+  }
 }
 
 // Normalize metric u-field to canonical snmp_unit value stored in DB
@@ -561,8 +584,7 @@ async function discoverInterfaces(){
 
   html+='</tbody></table></div>';
   html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
-  const _ifBtnLabel=window._snrAddMode?'Add Selected as Sensors':'Apply to Form';
-  html+=`<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedIfaceSensors()">${_ifBtnLabel}</button>`;
+  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedIfaceSensors()" id="as-iface-add-btn">Add Selected as Sensors</button>';
   html+='<span id="as-iface-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
   html+='</div></div>';
   listEl.innerHTML=html;
@@ -582,6 +604,8 @@ function updateIfaceSelCount(){
   if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
   const all=document.getElementById('as-iface-all');
   if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
+  const addBtn=document.getElementById('as-iface-add-btn');
+  if(addBtn) addBtn.textContent=(n===1)?'Apply to Form':'Add Selected as Sensors';
   // When exactly 1 interface+metric is selected, sync the OID and snmp_unit fields
   const oidEl=document.getElementById('as-oid');
   if(oidEl && n===1){
@@ -605,9 +629,8 @@ async function addSelectedIfaceSensors(){
   const checked=[...document.querySelectorAll('.as-iface-cb:checked')];
   if(!checked.length){toast('Select at least one interface','err');return;}
 
-  // ── Edit mode: apply selection to current form fields, don't POST ──────
-  if(!window._snrAddMode){
-    if(checked.length>1){toast('Select exactly one interface to apply to the form','err');return;}
+  // ── Single selection: apply OID to form and let user continue editing ──
+  if(checked.length===1){
     const cb=checked[0];
     const idx=cb.dataset.idx;
     const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
@@ -625,7 +648,10 @@ async function addSelectedIfaceSensors(){
     return;
   }
 
-  // ── Add mode: create sensors via API ──────────────────────────────────
+  // ── Edit mode with multiple: not supported ─────────────────────────────
+  if(!window._snrAddMode){toast('Select exactly one interface to apply to the form','err');return;}
+
+  // ── Add mode with multiple: create all via API ─────────────────────────
   const host=document.getElementById('as-sh')?.value.trim()||S.devices[did]?.host||'';
   const community=document.getElementById('as-sc')?.value.trim()||'public';
   const port=parseInt(document.getElementById('as-sp')?.value)||161;
