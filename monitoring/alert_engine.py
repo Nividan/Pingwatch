@@ -112,6 +112,16 @@ def _process(event_type: str, data: dict):
                            "threshold_ok"):
         return
 
+    # Skip if the sensor/device was deleted between enqueue and processing
+    did = data.get("did")
+    sid = data.get("sid")
+    if did and sid:
+        from core.app_state import STATE
+        with STATE._lock:
+            dev = STATE.devices.get(did)
+            if not dev or sid not in dev.sensors:
+                return
+
     rules = _get_rules()
     if not rules:
         return

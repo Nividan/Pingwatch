@@ -176,6 +176,22 @@ async function _evtFlapResolve(flapId) {
   _renderEvtView();
 }
 
+async function _evtResolveAll() {
+  const count = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
+  if (!count) { toast('No active alerts to resolve', 'info'); return; }
+  _pwConfirm(`Resolve all active alerts and flaps?`, async () => {
+    try {
+      const d = await api('POST', '/api/alert/events/resolve-all');
+      if (!d.ok) { toast('Failed to resolve', 'err'); return; }
+      const total = (d.alerts || 0) + (d.flaps || 0);
+      toast(`Resolved ${total} event${total === 1 ? '' : 's'}`, 'ok');
+      await _refreshAlertCache();
+      await _refreshFlapList();
+      _renderEvtView();
+    } catch(e) { toast('Failed to resolve all', 'err'); }
+  }, 'Resolve All');
+}
+
 // ── Events sub-tab state ──────────────────────────────────────────
 let _evtActiveSubTab = (() => {
   try { return localStorage.getItem('pw_evt_subtab') || 'sensor-events'; } catch { return 'sensor-events'; }

@@ -287,6 +287,39 @@ def db_resolve_flap(flap_id):
         if con: con.close()
 
 
+def db_resolve_all_flaps() -> int:
+    """Resolve all active/acknowledged flaps.  Returns count resolved."""
+    import time as _time
+    now = _time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                cur.execute(
+                    "UPDATE flap_log SET ack_state='resolved', ack_at=%s "
+                    "WHERE ack_state IN ('active','acknowledged')", (now,)
+                )
+                return cur.rowcount
+        except Exception as e:
+            log.error(f"db_resolve_all_flaps error: {e}")
+            return 0
+    # SQLite
+    con = None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        cur = con.execute(
+            "UPDATE flap_log SET ack_state='resolved', ack_at=? "
+            "WHERE ack_state IN ('active','acknowledged')", (now,)
+        )
+        con.commit()
+        return cur.rowcount
+    except Exception as e:
+        log.error(f"db_resolve_all_flaps error: {e}")
+        return 0
+    finally:
+        if con: con.close()
+
+
 # ── SNMP trap log ────────────────────────────────────────────────
 
 def db_log_trap(t):
