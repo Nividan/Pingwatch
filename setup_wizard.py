@@ -487,6 +487,59 @@ def step1_packages():
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
 
     print()
+    import shutil as _sh2, platform as _plat2
+    _has_psql    = _sh2.which("psql")    is not None
+    _has_pg_dump = _sh2.which("pg_dump") is not None
+    if _has_psql and _has_pg_dump:
+        _tag("ok", "PostgreSQL client tools (psql, pg_dump) — DB export/import support")
+    else:
+        _missing = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
+        _tag("warn", f"PostgreSQL client tools ({_missing}) are not installed.")
+        _tag("info",  "Required for database export and import when using PostgreSQL backend.")
+        if _ask_yn("Install PostgreSQL client tools now?", default=True):
+            _sys2 = _plat2.system()
+            _ok_pg = False
+            if _sys2 == "Windows":
+                _tag("info", "Trying Chocolatey ...")
+                r = subprocess.run(["choco", "install", "postgresql", "-y"], capture_output=True)
+                if r.returncode == 0:
+                    _tag("ok", "PostgreSQL client tools installed via Chocolatey")
+                    _ok_pg = True
+                else:
+                    _tag("info", "Trying winget ...")
+                    r2 = subprocess.run(["winget", "install", "PostgreSQL.PostgreSQL"], capture_output=True)
+                    if r2.returncode == 0:
+                        _tag("ok", "PostgreSQL client tools installed via winget")
+                        _ok_pg = True
+            elif _sys2 == "Linux":
+                if _sh2.which("apt-get"):
+                    r = subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql-client"], capture_output=True)
+                    _ok_pg = r.returncode == 0
+                elif _sh2.which("dnf"):
+                    r = subprocess.run(["sudo", "dnf", "install", "-y", "postgresql"], capture_output=True)
+                    _ok_pg = r.returncode == 0
+                elif _sh2.which("yum"):
+                    r = subprocess.run(["sudo", "yum", "install", "-y", "postgresql"], capture_output=True)
+                    _ok_pg = r.returncode == 0
+                if _ok_pg:
+                    _tag("ok", "PostgreSQL client tools installed")
+            elif _sys2 == "Darwin":
+                if _sh2.which("brew"):
+                    r = subprocess.run(["brew", "install", "libpq"], capture_output=True)
+                    _ok_pg = r.returncode == 0
+                    if _ok_pg:
+                        _tag("ok", "PostgreSQL client tools installed via Homebrew")
+                        _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
+            if not _ok_pg:
+                _tag("warn", "Automatic install failed.")
+                _tag("info",  "Windows: choco install postgresql  OR  winget install PostgreSQL.PostgreSQL")
+                _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
+                _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
+                _tag("warn",  "DB export/import will not work until psql and pg_dump are in PATH.")
+        else:
+            _tag("warn", "Skipping — DB export/import will not be available for PostgreSQL backend")
+
+    print()
     if not all_ok:
         _tag("error", "One or more required packages could not be installed.")
         _tag("info",  f"Fix the issues above and run '{_launcher_hint()}' again.")
