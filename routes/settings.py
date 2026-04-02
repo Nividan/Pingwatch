@@ -18,6 +18,13 @@ from db          import _db_enqueue, db_log_audit, db_save_settings, db_get_dash
 from core.logger import log
 import core.settings as _settings
 
+# Prime psutil CPU counter so first real call returns a meaningful value
+try:
+    import psutil as _psutil
+    _psutil.cpu_percent(interval=None)
+except Exception:
+    pass
+
 
 def _local_ip() -> str:
     """Return the LAN IP used to reach the outside world.
@@ -273,7 +280,7 @@ def handle(h, method, path, body):
         if not user: return True
         try:
             import psutil
-            cpu  = psutil.cpu_percent(interval=0.1)
+            cpu  = psutil.cpu_percent(interval=None)
             ram  = psutil.virtual_memory()
             _dp  = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             disk = psutil.disk_usage(_dp)
