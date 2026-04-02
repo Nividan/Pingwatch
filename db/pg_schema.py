@@ -88,6 +88,7 @@ def pg_create_main_schema(cur):
             vmware_user          TEXT DEFAULT '',
             vmware_password      TEXT DEFAULT '',
             vmware_vm_id         TEXT DEFAULT '',
+            vmware_vm_name       TEXT DEFAULT '',
             vmware_metric        TEXT DEFAULT '',
             PRIMARY KEY (did, sid)
         )""")
@@ -98,6 +99,7 @@ def pg_create_main_schema(cur):
         ("sensors", "vmware_user",            "TEXT DEFAULT ''"),
         ("sensors", "vmware_password",         "TEXT DEFAULT ''"),
         ("sensors", "vmware_vm_id",            "TEXT DEFAULT ''"),
+        ("sensors", "vmware_vm_name",          "TEXT DEFAULT ''"),
         ("sensors", "vmware_metric",           "TEXT DEFAULT ''"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),

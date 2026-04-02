@@ -249,6 +249,7 @@ function sensorFormHTML(dev, s=null) {
     <div class="fgrid" style="margin-top:4px">
       <div class="fr"><label class="fl">VM ID</label>
         <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123 (from discovery)" autocomplete="off" readonly/>
+        <input type="hidden" id="as-vmnm" value="${esc(s?.vmware_vm_name||'')}"/>
         <div class="fh">Managed Object ID — use Discover VMs above</div>
       </div>
       <div class="fr"><label class="fl">Metric</label>
@@ -1056,6 +1057,8 @@ async function addSelectedVMSensors(){
     const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
     const oidEl=document.getElementById('as-vmid');
     if(oidEl) oidEl.value=vmid;
+    const nmEl=document.getElementById('as-vmnm');
+    if(nmEl) nmEl.value=vmname;
     const metSel=document.getElementById('as-vmmet');
     if(metSel) metSel.value=metric;
     const metV=document.getElementById('as-vmmet-v');
@@ -1111,7 +1114,7 @@ async function addSelectedVMSensors(){
         name:sname,type:'vmware',host,port,interval:iv,timeout:tmo,
         verify_ssl:vssl,fail_after:fa,recover_after:ra,
         vmware_user:username,vmware_password:password,
-        vmware_vm_id:row.vmid,vmware_metric:row.metric
+        vmware_vm_id:row.vmid,vmware_vm_name:row.vmname,vmware_metric:row.metric
       });
       if(r&&r.sid){
         added++;addedSids.push(r.sid);
@@ -1231,6 +1234,7 @@ function collectSensorForm(did){
     payload.vmware_user=document.getElementById('as-vmu')?.value.trim()||'';
     payload.vmware_password=document.getElementById('as-vmpw')?.value||'';
     payload.vmware_vm_id=document.getElementById('as-vmid')?.value.trim()||'';
+    payload.vmware_vm_name=document.getElementById('as-vmnm')?.value.trim()||'';
     payload.vmware_metric=document.getElementById('as-vmmet')?.value||'';
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}

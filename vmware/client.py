@@ -226,15 +226,19 @@ def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
     except Exception:
         return {}
 
-    data = {}
+    # Pre-fill 0 for every counter we requested — counters with no samples
+    # (e.g. idle VM with no IO) return empty lists in vSphere; 0 is correct.
+    data = {m["v"]: 0 for m in counter_key_to_metric.values()}
+
     for result in results:
         for val in result.value:
             m = counter_key_to_metric.get(val.id.counterId)
             if not m:
                 continue
-            raw = val.value[-1] if val.value else None
-            if raw is None:
-                continue
+            # vSphere uses -1 as a sentinel for "no data this interval"
+            raw = val.value[-1] if val.value else -1
+            if raw == -1:
+                continue  # keep the 0 default
 
             # Unit conversions
             if m.get("convert") == "ready_pct":
