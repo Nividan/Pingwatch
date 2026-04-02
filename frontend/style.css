@@ -689,6 +689,13 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .vm-row-val.g{color:var(--up)}.vm-row-val.b,.vm-row-val.r{color:var(--down)}.vm-row-val.w{color:var(--warn)}.vm-row-val.m{color:var(--text3)}
 .vm-ub{flex:1;min-width:0;gap:1px!important}
 .vm-row canvas.spk{flex:0 0 60px;width:60px;height:28px;display:block;opacity:.7}
+/* VM metric multi-picker */
+.vm-met-wrap{position:relative;display:inline-block}
+.vm-met-btn{font-size:11px;padding:3px 7px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text2);cursor:pointer;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.vm-met-btn:hover{border-color:var(--accent)}
+.vm-met-drop{position:absolute;top:calc(100% + 3px);left:0;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px;z-index:200;min-width:210px;max-height:220px;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.vm-met-item{display:flex;align-items:center;gap:7px;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--text2);white-space:nowrap;user-select:none}
+.vm-met-item:hover{background:var(--bg3)}
 /* History button on tile */
 .stl-hist{background:transparent;border:none;cursor:pointer;font-size:13px;
           padding:1px 3px;border-radius:3px;flex-shrink:0;line-height:1;opacity:.75;transition:opacity .15s}

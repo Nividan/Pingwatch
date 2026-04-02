@@ -884,22 +884,28 @@ async function discoverVMs(){
       _vmwareMetrics=md.metrics||[];
     }catch(e){}
   }
-  const metricOpts=(_vmwareMetrics||[]).map(m=>`<option value="${m.v}">${esc(m.l)}</option>`).join('');
+  const metricCheckboxes=
+    `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:3px;padding-bottom:6px"><input type="checkbox" class="vm-met-all-cb" onchange="vmMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+    (_vmwareMetrics||[]).map(m=>
+      `<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="vmMetChanged(this)"> ${esc(m.l)}</label>`
+    ).join('');
 
   let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:4px">';
-  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border)">';
-  html+='<input type="text" id="as-vm-search" placeholder="Search VM names…" oninput="filterVMs(this.value)" autocomplete="off" style="width:100%;box-sizing:border-box;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<input type="text" id="as-vm-search" placeholder="Search VM names…" oninput="filterVMs(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
+  html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">Set for checked:</span>';
+  html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none;right:0">${metricCheckboxes}</div></div>`;
   html+='</div>';
-  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:280px">';
+  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:260px">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
-  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap"><input type="checkbox" id="as-vm-all" title="Select all" onchange="toggleAllVMs(this)"/></th>';
+  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap"><input type="checkbox" id="as-vm-all" title="Select all visible" onchange="toggleAllVMs(this)"/></th>';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:160px">VM Name</th>';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Power</th>';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;max-width:120px">Guest OS</th>';
   html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap">CPUs</th>';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Mem</th>';
-  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:150px">Metric</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:170px">Metrics</th>';
   html+='</tr></thead><tbody id="as-vm-tbody">';
 
   vms.forEach((vm,i)=>{
@@ -914,14 +920,14 @@ async function discoverVMs(){
     html+=`<td style="padding:4px 8px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(vm.guest_os)}">${esc(vm.guest_os)}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3);text-align:center;white-space:nowrap">${vm.num_cpu}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${memStr}</td>`;
-    html+=`<td style="padding:4px 8px"><select class="as-vm-metric" data-vmid="${esc(vm.vm_id)}" style="font-size:11px;padding:2px 4px;min-width:145px"><option value="">— metric —</option>${metricOpts}</select></td>`;
+    html+=`<td style="padding:4px 8px;position:relative"><div class="vm-met-wrap" data-vmid="${esc(vm.vm_id)}"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— pick metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div></td>`;
     html+='</tr>';
   });
 
   html+='</tbody></table></div>';
   html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
   html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedVMSensors()" id="as-vm-add-btn">Add Selected as Sensors</button>';
-  html+='<span id="as-vm-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
+  html+='<span id="as-vm-sel-count" style="font-size:11px;color:var(--text3)">0 VMs · 0 sensors</span>';
   html+='</div></div>';
   listEl.innerHTML=html;
   listEl.style.display='';
@@ -940,16 +946,97 @@ function filterVMs(q){
   });
 }
 
+function _getVmMetrics(vmid){
+  // Returns array of selected metric values for a given VM row picker
+  const wrap=document.querySelector(`.vm-met-wrap[data-vmid="${CSS.escape(vmid)}"]`);
+  if(!wrap) return [];
+  return [...wrap.querySelectorAll('.vm-met-drop input:checked')].map(c=>c.value);
+}
+
 function updateVMSelCount(){
-  const cbs=[...document.querySelectorAll('.as-vm-cb')];
-  const checked=cbs.filter(c=>c.checked);
-  const n=checked.length;
+  const visibleCbs=[...document.querySelectorAll('#as-vm-tbody tr:not([style*="display: none"]) .as-vm-cb')];
+  const allCbs=[...document.querySelectorAll('.as-vm-cb')];
+  const checked=allCbs.filter(c=>c.checked);
+  const nVms=checked.length;
+  // Count total sensors = sum of metrics per checked VM
+  let nSensors=0;
+  checked.forEach(cb=>{ const m=_getVmMetrics(cb.dataset.vmid); nSensors+=m.length||1; });
   const el=document.getElementById('as-vm-sel-count');
-  if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
+  if(el) el.textContent=nVms?`${nVms} VM${nVms>1?'s':''} · ${nSensors} sensor${nSensors!==1?'s':''}`:' 0 VMs · 0 sensors';
   const all=document.getElementById('as-vm-all');
-  if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
+  if(all){all.indeterminate=(nVms>0&&nVms<visibleCbs.length);all.checked=(visibleCbs.length>0&&checked.length>=visibleCbs.length);}
   const addBtn=document.getElementById('as-vm-add-btn');
-  if(addBtn) addBtn.textContent=(n===1)?'Apply to Form':'Add Selected as Sensors';
+  if(addBtn) addBtn.textContent=(nVms===1&&nSensors<=1)?'Apply to Form':'Add Selected as Sensors';
+}
+
+// ── Metric picker dropdown ────────────────────────────────────────
+let _vmMetPickerOpen=null;
+function toggleVmMetPicker(btn){
+  const drop=btn.nextElementSibling;
+  const isOpen=drop.style.display!=='none';
+  // Close any other open picker
+  if(_vmMetPickerOpen&&_vmMetPickerOpen!==drop) _vmMetPickerOpen.style.display='none';
+  drop.style.display=isOpen?'none':'block';
+  _vmMetPickerOpen=isOpen?null:drop;
+}
+// Close picker on outside click
+document.addEventListener('click',e=>{
+  if(_vmMetPickerOpen&&!e.target.closest('.vm-met-wrap')){
+    _vmMetPickerOpen.style.display='none';
+    _vmMetPickerOpen=null;
+  }
+});
+function vmMetSelectAll(allCb){
+  const drop=allCb.closest('.vm-met-drop');
+  if(!drop) return;
+  drop.querySelectorAll('input[value]').forEach(c=>c.checked=allCb.checked);
+  vmMetChanged(allCb); // reuse label update + bulk apply logic
+}
+function vmMetChanged(cb){
+  // Update the button label for this picker
+  const drop=cb.closest('.vm-met-drop');
+  const wrap=drop?.parentElement;
+  if(!wrap) return;
+  // Keep "All metrics" checkbox in sync
+  const allCb=drop.querySelector('.vm-met-all-cb');
+  if(allCb&&cb!==allCb){
+    const metCbs=[...drop.querySelectorAll('input[value]')];
+    const nChecked=metCbs.filter(c=>c.checked).length;
+    allCb.checked=nChecked===metCbs.length;
+    allCb.indeterminate=nChecked>0&&nChecked<metCbs.length;
+  }
+  const checked=[...drop.querySelectorAll('input[value]:checked')];
+  const btn=wrap.querySelector('.vm-met-btn');
+  if(btn){
+    if(!checked.length) btn.textContent='— pick metrics —';
+    else if(checked.length===1) btn.textContent=checked[0].parentElement.textContent.trim();
+    else btn.textContent=`${checked.length} metrics`;
+  }
+  // If this is the bulk picker (in header, no data-vmid), apply to all checked rows
+  if(!wrap.dataset.vmid){
+    const checkedVmIds=[...document.querySelectorAll('.as-vm-cb:checked')].map(c=>c.dataset.vmid);
+    checkedVmIds.forEach(vmid=>{
+      const rowWrap=document.querySelector(`.vm-met-wrap[data-vmid="${CSS.escape(vmid)}"]`);
+      if(!rowWrap) return;
+      // Mirror the bulk selection to this row
+      rowWrap.querySelectorAll('.vm-met-drop input').forEach(rowCb=>{
+        rowCb.checked=!!drop.querySelector(`input[value="${rowCb.value}"]:checked`);
+      });
+      // Update row button label (count real metric checkboxes only)
+      const rowChecked=[...rowWrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      const rowBtn=rowWrap.querySelector('.vm-met-btn');
+      if(rowBtn){
+        if(!rowChecked.length) rowBtn.textContent='— pick metrics —';
+        else if(rowChecked.length===1) rowBtn.textContent=rowChecked[0].parentElement.textContent.trim();
+        else rowBtn.textContent=`${rowChecked.length} metrics`;
+      }
+      // Sync "All" checkbox in row
+      const rowAllCb=rowWrap.querySelector('.vm-met-all-cb');
+      const rowAllMetCbs=[...rowWrap.querySelectorAll('.vm-met-drop input[value]')];
+      if(rowAllCb){rowAllCb.checked=rowChecked.length===rowAllMetCbs.length;rowAllCb.indeterminate=rowChecked.length>0&&rowChecked.length<rowAllMetCbs.length;}
+    });
+  }
+  updateVMSelCount();
 }
 
 async function addSelectedVMSensors(){
@@ -958,35 +1045,35 @@ async function addSelectedVMSensors(){
   const checked=[...document.querySelectorAll('.as-vm-cb:checked')];
   if(!checked.length){toast('Select at least one VM','err');return;}
 
-  // ── Single selection: apply to form ──
-  if(checked.length===1){
+  // ── Single VM, single metric: apply to form ──
+  const firstMetrics=_getVmMetrics(checked[0].dataset.vmid);
+  if(checked.length===1&&firstMetrics.length<=1){
     const cb=checked[0];
     const vmid=cb.dataset.vmid;
     const vmname=cb.dataset.name;
-    const sel=document.querySelector(`.as-vm-metric[data-vmid="${CSS.escape(vmid)}"]`);
-    if(!sel||!sel.value){toast('Choose a metric for the selected VM','err');return;}
-    const metricDef=(_vmwareMetrics||[]).find(m=>m.v===sel.value);
+    const metric=firstMetrics[0]||'';
+    if(!metric){toast('Pick at least one metric for this VM','err');return;}
+    const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
     const oidEl=document.getElementById('as-vmid');
     if(oidEl) oidEl.value=vmid;
     const metSel=document.getElementById('as-vmmet');
-    if(metSel){ metSel.value=sel.value; }
+    if(metSel) metSel.value=metric;
     const metV=document.getElementById('as-vmmet-v');
-    if(metV) metV.value=sel.value;
-    // Auto-fill sensor name
+    if(metV) metV.value=metric;
     const nameEl=document.getElementById('as-n');
     if(nameEl&&(!nameEl.value||nameEl.value.startsWith('Ping,')))
-      nameEl.value=`${vmname} ${metricDef?metricDef.l:sel.value}`;
+      nameEl.value=`${vmname} ${metricDef?metricDef.l:metric}`;
     const listEl=document.getElementById('as-vm-list');
     if(listEl) listEl.style.display='none';
     const statusEl=document.getElementById('as-vm-status');
-    if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=`Applied: ${metricDef?metricDef.l:sel.value} on ${vmname} — save to confirm`;}
+    if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=`Applied: ${metricDef?metricDef.l:metric} on ${vmname} — save to confirm`;}
     return;
   }
 
   // ── Edit mode with multiple: not supported
-  if(!window._snrAddMode){toast('Select exactly one VM to apply to the form','err');return;}
+  if(!window._snrAddMode){toast('Select exactly one VM (1 metric) to apply to the form','err');return;}
 
-  // ── Add mode with multiple: create all via API ──
+  // ── Add mode: create one sensor per VM × metric ──
   const host=document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
   const username=document.getElementById('as-vmu')?.value.trim()||'';
   const password=document.getElementById('as-vmpw')?.value||'';
@@ -998,19 +1085,21 @@ async function addSelectedVMSensors(){
   const fa=parseInt(document.getElementById('as-fa')?.value)||1;
   const ra=parseInt(document.getElementById('as-ra')?.value)||1;
 
-  // Collect rows
+  // Expand checked VMs × their selected metrics into individual sensor rows
   const rows=[];
   let noMetric=0;
   checked.forEach(cb=>{
     const vmid=cb.dataset.vmid;
     const vmname=cb.dataset.name;
-    const sel=document.querySelector(`.as-vm-metric[data-vmid="${CSS.escape(vmid)}"]`);
-    if(!sel||!sel.value){noMetric++;return;}
-    const metricDef=(_vmwareMetrics||[]).find(m=>m.v===sel.value);
-    rows.push({vmid,vmname,metric:sel.value,metricLabel:metricDef?metricDef.l:sel.value});
+    const metrics=_getVmMetrics(vmid);
+    if(!metrics.length){noMetric++;return;}
+    metrics.forEach(metric=>{
+      const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
+      rows.push({vmid,vmname,metric,metricLabel:metricDef?metricDef.l:metric});
+    });
   });
-  if(noMetric) toast(`${noMetric} row${noMetric>1?'s':''} skipped — no metric chosen`,'info');
-  if(!rows.length){toast('Choose a metric for each checked VM','err');return;}
+  if(noMetric) toast(`${noMetric} VM${noMetric>1?'s':''} skipped — no metrics chosen`,'info');
+  if(!rows.length){toast('Pick at least one metric for each checked VM','err');return;}
   const btn=document.getElementById('as-vm-add-btn');
   if(btn){btn.disabled=true;btn.textContent=`Adding ${rows.length}…`;}
   let added=0,failed=0;
