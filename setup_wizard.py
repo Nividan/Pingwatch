@@ -520,6 +520,7 @@ def _fix_file_ownership():
         str(LOGS_DB_PATH) + "-shm",
         str(LOGS_DB_PATH) + ".pending_logs_import",
         str(CERTS_DIR),
+        os.path.join(_BASE, "pingwatch.conf"),
     ]
     # Also chown any cert files inside CERTS_DIR
     try:
@@ -527,6 +528,15 @@ def _fix_file_ownership():
             targets.append(os.path.join(str(CERTS_DIR), _f))
     except Exception:
         pass
+    # Chown the logs directory and all files inside it
+    _logs_dir = os.path.join(_BASE, "logs")
+    if os.path.isdir(_logs_dir):
+        targets.append(_logs_dir)
+        try:
+            for _f in os.listdir(_logs_dir):
+                targets.append(os.path.join(_logs_dir, _f))
+        except Exception:
+            pass
     changed = 0
     for path in targets:
         if os.path.exists(path):

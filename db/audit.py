@@ -28,14 +28,16 @@ def db_log_audit(actor: str, ip: str, action: str, target: str = '', detail: str
                             "(SELECT id FROM audit_log ORDER BY ts DESC LIMIT 2000)")
         else:
             con = sqlite3.connect(DB_PATH)
-            con.execute(
-                "INSERT INTO audit_log(ts,actor,ip,action,target,detail) VALUES(?,?,?,?,?,?)",
-                (time.time(), actor, ip, action, target, detail)
-            )
-            con.execute("DELETE FROM audit_log WHERE id NOT IN "
-                        "(SELECT id FROM audit_log ORDER BY ts DESC LIMIT 2000)")
-            con.commit()
-            con.close()
+            try:
+                con.execute(
+                    "INSERT INTO audit_log(ts,actor,ip,action,target,detail) VALUES(?,?,?,?,?,?)",
+                    (time.time(), actor, ip, action, target, detail)
+                )
+                con.execute("DELETE FROM audit_log WHERE id NOT IN "
+                            "(SELECT id FROM audit_log ORDER BY ts DESC LIMIT 2000)")
+                con.commit()
+            finally:
+                con.close()
     _db_enqueue(_write)
 
 

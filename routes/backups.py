@@ -35,12 +35,6 @@ _TRIGGER_COOLDOWN = 30  # seconds
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
-    # Phase 2: Config backup not yet available on PostgreSQL backend
-    from db.backend import is_pg
-    if is_pg() and path.startswith('/api/backups'):
-        h._json(503, {"error": "Config backup is not yet available with PostgreSQL backend (coming in Phase 2)"})
-        return True
-
     # ── GET /api/backups — list all devices ───────────────────────
     if _RE_BACKUPS.match(path) and method == 'GET':
         user, _ = h._require('viewer')

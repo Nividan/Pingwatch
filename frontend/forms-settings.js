@@ -252,7 +252,11 @@ async function openSettings(){
       </div>
 
       <div style="margin-top:4px;padding-top:16px;border-top:1px solid var(--border)">
-        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Scheduled Database Backup</div>
+        <div onclick="_toggleDbBackup()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
+          <div style="font-size:12px;font-weight:600;color:var(--text2)">Scheduled Database Backup</div>
+          <span id="dbk-chevron" style="font-size:10px;color:var(--text3);transition:transform .2s;transform:rotate(-90deg)">&#9660;</span>
+        </div>
+        <div id="dbk-collapse" style="display:none;margin-top:16px">
         <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
           <div style="flex:1">
             <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Scheduled Backup</div>
@@ -290,6 +294,7 @@ async function openSettings(){
           <span id="dbk-run-result" style="font-size:12px;color:var(--text3)"></span>
         </div>
         <div id="dbk-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_last_ts?`Last backup: ${esc(sr.db_backup_last_ts)} \u2014 ${esc(sr.db_backup_last_result)}`:''}</div>
+        </div><!-- /dbk-collapse -->
       </div>
     </div>
     <div class="mft" id="stab-footer-database" style="display:none">
@@ -1113,6 +1118,15 @@ async function saveBackupScheduleSettings(){
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save Config Backup'; }
   }
+}
+
+function _toggleDbBackup(){
+  const body = document.getElementById('dbk-collapse');
+  const chevron = document.getElementById('dbk-chevron');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  chevron.style.transform = open ? 'rotate(-90deg)' : 'rotate(0deg)';
 }
 
 function _dbkFreqChange(){

@@ -225,10 +225,17 @@ def handle(h, method, path, body):
         from monitoring.probes import snmpwalk_interfaces
         _host = (body.get("host")      or "").strip()
         _comm = (body.get("community") or "public").strip()
-        _port = int(body.get("port")   or 161)
+        try:
+            _port = int(body.get("port") or 161)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "port must be an integer"}); return True
         _ver  = (body.get("version")   or "2c").strip()
         if not _host:
             h._json(400, {"error": "host required"}); return True
+        if not (1 <= _port <= 65535):
+            h._json(400, {"error": "port must be 1-65535"}); return True
+        if _ver not in ("1", "2c", "3"):
+            h._json(400, {"error": "version must be 1, 2c, or 3"}); return True
         _ifaces = snmpwalk_interfaces(_host, _comm, _port, timeout=10, version=_ver)
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True

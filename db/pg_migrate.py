@@ -35,6 +35,11 @@ _MAIN_TABLES = [
     "alert_dedup",
     "maintenance_windows",
     "user_groups",
+    "topo_pages",
+    "topo_nodes",
+    "topo_links",
+    "topo_groups",
+    "topo_settings",
 ]
 
 # Tables to migrate from Logs DB → PG 'logs' schema
@@ -55,6 +60,10 @@ _SERIAL_TABLES = {
         ("alert_events", "id"),
         ("maintenance_windows", "id"),
         ("user_groups", "id"),
+        ("topo_pages", "id"),
+        ("topo_nodes", "id"),
+        ("topo_links", "id"),
+        ("topo_groups", "id"),
     ],
     "logs": [
         ("sensor_samples", "id"),

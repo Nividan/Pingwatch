@@ -257,6 +257,9 @@ async function _bkOpenSettings(did) {
               <option value="ssh"    ${s.method==='ssh'?'selected':''}>SSH</option>
               <option value="telnet" ${s.method==='telnet'?'selected':''}>Telnet</option>
             </select>
+            <div id="bks-telnet-warn" style="display:${s.method==='telnet'?'block':'none'};margin-top:4px;font-size:11px;color:var(--warn,#e8a735)">
+              Telnet transmits credentials in plaintext. Use SSH when possible.
+            </div>
           </div>
           <div class="fr"><label class="fl">Port</label>
             <input type="number" id="bks-port" value="${s.port || 22}" min="1" max="65535"/>
@@ -301,6 +304,11 @@ async function _bkOpenSettings(did) {
       </div>
     </div>`;
   document.body.appendChild(o);
+  const _mSel = document.getElementById('bks-method');
+  if (_mSel) _mSel.onchange = () => {
+    const w = document.getElementById('bks-telnet-warn');
+    if (w) w.style.display = _mSel.value === 'telnet' ? 'block' : 'none';
+  };
 }
 
 async function _bkSaveSettings(did) {

@@ -58,6 +58,11 @@ _FAIL_LOG: dict = {}   # ip → [timestamp, ...]
 _FAIL_WINDOW = 60
 _FAIL_MAX    = 5
 
+# ── Admin password-reset rate-limiting (per-target) ──────────────
+_PW_RESET_LOCK = threading.Lock()
+_PW_RESET_LOG: dict = {}   # username → last_reset_timestamp
+_PW_RESET_COOLDOWN  = 10   # seconds between resets for the same user
+
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
@@ -200,7 +205,14 @@ def handle(h, method, path, body):
         if len(password) < 8:
             h._json(400, {"error": "Password must be at least 8 characters"})
             return True
+        with _PW_RESET_LOCK:
+            last = _PW_RESET_LOG.get(username, 0)
+            if time.time() - last < _PW_RESET_COOLDOWN:
+                h._json(429, {"error": "Password was just reset for this user. Try again shortly."})
+                return True
         db_set_password(username, password)
+        with _PW_RESET_LOCK:
+            _PW_RESET_LOG[username] = time.time()
         auth_revoke_user_sessions(username)
         log.info(f"Password reset for user: {username}")
         db_log_audit(user, h.client_address[0], 'pass_reset', username)
