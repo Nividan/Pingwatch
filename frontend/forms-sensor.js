@@ -390,6 +390,21 @@ function _applyTypeDefaults(t){
 // ── SNMP OID catalog picker ───────────────────────────────────────────────
 let _snmpCatalog=null;
 
+// Interface metrics — defined at module level so reverse-lookup works before discovery runs
+const _IFACE_METRICS=[
+  {v:'status',   l:'Oper Status',         oid:'1.3.6.1.2.1.2.2.1.8.',    u:'1=up 2=down'},
+  {v:'in_oct',   l:'In Traffic',          oid:'1.3.6.1.2.1.2.2.1.10.',   u:'bytes (32-bit)'},
+  {v:'out_oct',  l:'Out Traffic',         oid:'1.3.6.1.2.1.2.2.1.16.',   u:'bytes (32-bit)'},
+  {v:'in_hc',    l:'In Traffic (64-bit)', oid:'1.3.6.1.2.1.31.1.1.1.6.', u:'bytes (64-bit)'},
+  {v:'out_hc',   l:'Out Traffic (64-bit)',oid:'1.3.6.1.2.1.31.1.1.1.10.',u:'bytes (64-bit)'},
+  {v:'in_err',   l:'In Errors',           oid:'1.3.6.1.2.1.2.2.1.14.',   u:'errors'},
+  {v:'out_err',  l:'Out Errors',          oid:'1.3.6.1.2.1.2.2.1.20.',   u:'errors'},
+  {v:'in_disc',  l:'In Discards',         oid:'1.3.6.1.2.1.2.2.1.13.',   u:'packets'},
+  {v:'out_disc', l:'Out Discards',        oid:'1.3.6.1.2.1.2.2.1.19.',   u:'packets'},
+  {v:'speed',    l:'Link Speed',          oid:'1.3.6.1.2.1.2.2.1.5.',    u:'bits/sec'},
+  {v:'admin_st', l:'Admin Status',        oid:'1.3.6.1.2.1.2.2.1.7.',    u:'1=up 2=down'},
+];
+
 async function _snmpLoadVendors(){
   const vsel=document.getElementById('as-oid-vendor');
   if(!vsel||vsel.options.length>1) return;
@@ -436,7 +451,7 @@ function _snmpTryMatchCurrentOid(){
     }
   }
   // Fallback: interface-discovered OID (base + numeric index, e.g. "1.3.6.1.2.1.2.2.1.14.44")
-  const ifaceMetrics=window._ifaceMetrics;
+  const ifaceMetrics=_IFACE_METRICS;
   if(ifaceMetrics){
     const m=currentOid.match(/^(.+\.)(\d+)$/);
     if(m){
@@ -550,20 +565,8 @@ async function discoverInterfaces(){
   }
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${ifaces.length} interface${ifaces.length!==1?'s':''} discovered`; }
 
-  const METRICS=[
-    {v:'status',     l:'Oper Status',        oid:'1.3.6.1.2.1.2.2.1.8.',    u:'1=up 2=down'},
-    {v:'in_oct',     l:'In Traffic',         oid:'1.3.6.1.2.1.2.2.1.10.',   u:'bytes (32-bit)'},
-    {v:'out_oct',    l:'Out Traffic',        oid:'1.3.6.1.2.1.2.2.1.16.',   u:'bytes (32-bit)'},
-    {v:'in_hc',      l:'In Traffic (64-bit)',oid:'1.3.6.1.2.1.31.1.1.1.6.', u:'bytes (64-bit)'},
-    {v:'out_hc',     l:'Out Traffic (64-bit)',oid:'1.3.6.1.2.1.31.1.1.1.10.',u:'bytes (64-bit)'},
-    {v:'in_err',     l:'In Errors',          oid:'1.3.6.1.2.1.2.2.1.14.',   u:'errors'},
-    {v:'out_err',    l:'Out Errors',         oid:'1.3.6.1.2.1.2.2.1.20.',   u:'errors'},
-    {v:'in_disc',    l:'In Discards',        oid:'1.3.6.1.2.1.2.2.1.13.',   u:'packets'},
-    {v:'out_disc',   l:'Out Discards',       oid:'1.3.6.1.2.1.2.2.1.19.',   u:'packets'},
-    {v:'speed',      l:'Link Speed',         oid:'1.3.6.1.2.1.2.2.1.5.',    u:'bits/sec'},
-    {v:'admin_st',   l:'Admin Status',       oid:'1.3.6.1.2.1.2.2.1.7.',    u:'1=up 2=down'},
-  ];
-  window._ifaceMetrics = METRICS;
+  const METRICS=_IFACE_METRICS;
+  window._ifaceMetrics=METRICS;
 
   let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">';
   html+='<div style="overflow-x:auto;max-height:220px;overflow-y:auto">';
