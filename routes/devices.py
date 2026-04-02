@@ -371,6 +371,8 @@ def handle(h, method, path, body):
             iv = int(kwargs.get("interval", body.get("interval", 5)))
             kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
         if kwargs.get("banner_regex"):
+            if len(kwargs["banner_regex"]) > 200:
+                h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
             try:
                 re.compile(kwargs["banner_regex"])
             except re.error as _re_err:
@@ -433,6 +435,8 @@ def handle(h, method, path, body):
         kwc   = bool(body.get("keyword_case", False))
         bnr   = body.get("banner_regex", "")
         if bnr:
+            if len(bnr) > 200:
+                h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
             try:
                 re.compile(bnr)
             except re.error as _re_err:

@@ -86,7 +86,18 @@ def pg_conn(schema="main"):
     con = _pool.getconn()
     try:
         cur = con.cursor()
+        # Health check: detect stale connections after PG restart
+        try:
+            cur.execute("SELECT 1")
+        except Exception:
+            try:
+                con.close()
+            except Exception:
+                pass
+            con = _pool.getconn()
+            cur = con.cursor()
         cur.execute("SET search_path TO %s, public", (schema,))
+        cur.execute("SET statement_timeout TO '30s'")
         cur.close()
         yield con
         con.commit()

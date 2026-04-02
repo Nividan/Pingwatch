@@ -66,6 +66,8 @@ def load_config() -> dict:
                 pass
 
     _cfg = cfg
+    if cfg.get("db_backend") == "postgresql" and not cfg.get("pg_password"):
+        log.warning("PostgreSQL backend selected but pg_password is empty — connection may fail")
     return cfg
 
 

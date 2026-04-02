@@ -15,6 +15,7 @@ from pathlib import Path
 
 from core.config import DB_PATH
 from core.logger import log
+from db.backend  import is_pg
 
 # ── Fernet encryption ────────────────────────────────────────────────
 _fernet_instance = None
@@ -30,6 +31,25 @@ def _get_fernet():
     except ImportError:
         log.error("cryptography package not installed — run: pip install cryptography")
         raise
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        with pg_cursor('main') as cur:
+            cur.execute("SELECT value FROM app_settings WHERE key='backup_enc_key'")
+            row = cur.fetchone()
+        if row:
+            key = row["value"].encode()
+        else:
+            key = Fernet.generate_key()
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "INSERT INTO app_settings(key,value) VALUES('backup_enc_key',%s) "
+                    "ON CONFLICT(key) DO NOTHING",
+                    (key.decode(),)
+                )
+            log.info("Backup encryption key generated and stored in app_settings")
+        _fernet_instance = Fernet(key)
+        return _fernet_instance
 
     con = sqlite3.connect(DB_PATH, timeout=15)
     try:
@@ -87,6 +107,55 @@ def db_get_backup_list() -> list:
     Return list of all devices joined with their latest backup run metadata.
     Never includes decrypted passwords.
     """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT did, enabled, method, port, username, password_enc, "
+                    "enable_enc, commands, paging_cmd, timeout, "
+                    "COALESCE(in_schedule, 0) AS in_schedule "
+                    "FROM backup_devices"
+                )
+                cfg_map = {r["did"]: r for r in cur.fetchall()}
+
+                cur.execute(
+                    "SELECT did, id, ts, success, size_bytes, error_msg "
+                    "FROM backup_runs "
+                    "WHERE id IN (SELECT MAX(id) FROM backup_runs GROUP BY did)"
+                )
+                latest_map = {r["did"]: r for r in cur.fetchall()}
+
+                cur.execute("SELECT did, COUNT(*) AS cnt FROM backup_runs GROUP BY did")
+                count_map = {r["did"]: r["cnt"] for r in cur.fetchall()}
+
+            result = []
+            for did, cfg in cfg_map.items():
+                lr = latest_map.get(did)
+                result.append({
+                    "did": did,
+                    "enabled": bool(cfg["enabled"]),
+                    "method": cfg["method"],
+                    "port": cfg["port"],
+                    "username": cfg["username"],
+                    "has_password": bool(cfg["password_enc"]),
+                    "has_enable": bool(cfg["enable_enc"]),
+                    "commands": _parse_cmds(cfg["commands"]),
+                    "paging_cmd": cfg["paging_cmd"],
+                    "timeout": cfg["timeout"],
+                    "in_schedule": bool(cfg["in_schedule"]),
+                    "last_run_id": lr["id"] if lr else None,
+                    "last_ts": lr["ts"] if lr else None,
+                    "last_success": bool(lr["success"]) if lr else None,
+                    "last_size": lr["size_bytes"] if lr else None,
+                    "last_error": lr["error_msg"] if lr else None,
+                    "run_count": count_map.get(did, 0),
+                })
+            return result
+        except Exception as e:
+            log.error(f"backup get_list error: {e}")
+            return []
+
     con = _con()
     try:
         rows = con.execute(
@@ -149,6 +218,35 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
     also include the raw password_enc / enable_enc ciphertext fields so
     the engine can decrypt them.
     """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT did, enabled, method, port, username, password_enc, "
+                    "enable_enc, commands, paging_cmd, timeout, "
+                    "COALESCE(in_schedule, 0) AS in_schedule "
+                    "FROM backup_devices WHERE did=%s", (did,)
+                )
+                r = cur.fetchone()
+            if not r:
+                return None
+            result = {
+                "did": r["did"], "enabled": bool(r["enabled"]), "method": r["method"],
+                "port": r["port"], "username": r["username"],
+                "has_password": bool(r["password_enc"]), "has_enable": bool(r["enable_enc"]),
+                "commands": _parse_cmds(r["commands"]),
+                "paging_cmd": r["paging_cmd"], "timeout": r["timeout"],
+                "in_schedule": bool(r["in_schedule"]),
+            }
+            if with_secrets:
+                result["password_enc"] = r["password_enc"] or ''
+                result["enable_enc"]   = r["enable_enc"] or ''
+            return result
+        except Exception as e:
+            log.error(f"backup get_settings error (did={did}): {e}")
+            return None
+
     con = _con()
     try:
         r = con.execute(
@@ -180,6 +278,56 @@ def db_save_backup_settings(did: str, data: dict):
     UPSERT backup settings for a device.
     Pass password='' to keep the existing encrypted value.
     """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT password_enc, enable_enc FROM backup_devices WHERE did=%s", (did,)
+                )
+                existing = cur.fetchone()
+            old_pw = existing["password_enc"] if existing else ''
+            old_en = existing["enable_enc"] if existing else ''
+
+            new_pw_plain = data.get('password', '')
+            new_en_plain = data.get('enable_password', '')
+            password_enc = encrypt_pw(new_pw_plain) if new_pw_plain else old_pw
+            enable_enc   = encrypt_pw(new_en_plain) if new_en_plain else old_en
+
+            commands_json = json.dumps(
+                data.get('commands', ['show running-config'])
+                if isinstance(data.get('commands'), list)
+                else [data.get('commands', 'show running-config')]
+            )
+            with pg_cursor('main') as cur:
+                cur.execute("""
+                    INSERT INTO backup_devices
+                        (did, enabled, method, port, username, password_enc, enable_enc,
+                         commands, paging_cmd, timeout, in_schedule)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT(did) DO UPDATE SET
+                        enabled=EXCLUDED.enabled, method=EXCLUDED.method, port=EXCLUDED.port,
+                        username=EXCLUDED.username, password_enc=EXCLUDED.password_enc,
+                        enable_enc=EXCLUDED.enable_enc, commands=EXCLUDED.commands,
+                        paging_cmd=EXCLUDED.paging_cmd, timeout=EXCLUDED.timeout,
+                        in_schedule=EXCLUDED.in_schedule
+                """, (
+                    did,
+                    1 if data.get('enabled') else 0,
+                    data.get('method', 'ssh'),
+                    int(data.get('port', 22)),
+                    data.get('username', ''),
+                    password_enc, enable_enc,
+                    commands_json,
+                    data.get('paging_cmd', ''),
+                    int(data.get('timeout', 30)),
+                    1 if data.get('in_schedule') else 0,
+                ))
+        except Exception as e:
+            log.error(f"backup save_settings error (did={did}): {e}")
+            raise
+        return
+
     con = _con()
     try:
         existing = con.execute(
@@ -231,6 +379,25 @@ def db_save_backup_settings(did: str, data: dict):
 
 def db_get_backup_history(did: str) -> list:
     """Return list of backup run metadata (no config text) for one device."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT id, ts, success, method, size_bytes, sha256, error_msg "
+                    "FROM backup_runs WHERE did=%s ORDER BY ts DESC",
+                    (did,)
+                )
+                return [
+                    {"id": r["id"], "ts": r["ts"], "success": bool(r["success"]),
+                     "method": r["method"], "size_bytes": r["size_bytes"],
+                     "sha256": r["sha256"], "error_msg": r["error_msg"]}
+                    for r in cur.fetchall()
+                ]
+        except Exception as e:
+            log.error(f"backup get_history error (did={did}): {e}")
+            return []
+
     con = _con()
     try:
         rows = con.execute(
@@ -249,6 +416,26 @@ def db_get_backup_history(did: str) -> list:
 
 def db_get_backup_run(run_id: int) -> dict | None:
     """Return full backup run including config text."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT id, did, ts, success, method, size_bytes, sha256, config, error_msg "
+                    "FROM backup_runs WHERE id=%s", (run_id,)
+                )
+                r = cur.fetchone()
+            if not r:
+                return None
+            return {
+                "id": r["id"], "did": r["did"], "ts": r["ts"], "success": bool(r["success"]),
+                "method": r["method"], "size_bytes": r["size_bytes"], "sha256": r["sha256"],
+                "config": r["config"], "error_msg": r["error_msg"],
+            }
+        except Exception as e:
+            log.error(f"backup get_run error (id={run_id}): {e}")
+            return None
+
     con = _con()
     try:
         r = con.execute(
@@ -274,6 +461,36 @@ def db_save_backup_run(did: str, result: dict) -> int:
     """
     from core.settings import get as _cfg
     keep = max(1, int(_cfg('backup_keep', 3)))
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "INSERT INTO backup_runs (did, ts, success, method, size_bytes, sha256, config, error_msg) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (
+                        did,
+                        result.get('ts', ''),
+                        1 if result.get('success') else 0,
+                        result.get('method', ''),
+                        result.get('size_bytes', 0),
+                        result.get('sha256', ''),
+                        result.get('config', ''),
+                        result.get('error_msg', ''),
+                    )
+                )
+                new_id = cur.fetchone()["id"]
+                # Enforce configurable retention
+                cur.execute(
+                    "DELETE FROM backup_runs WHERE did=%s AND id NOT IN "
+                    "(SELECT id FROM backup_runs WHERE did=%s ORDER BY ts DESC LIMIT %s)",
+                    (did, did, keep)
+                )
+            return new_id
+        except Exception as e:
+            log.error(f"backup save_run error (did={did}): {e}")
+            raise
 
     con = _con()
     try:
@@ -341,6 +558,15 @@ def db_write_config_file(did: str, device_name: str, ts_str: str, config_text: s
 
 def db_delete_backup_run(run_id: int):
     """Delete a specific backup run."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute("DELETE FROM backup_runs WHERE id=%s", (run_id,))
+        except Exception as e:
+            log.error(f"backup delete_run error (id={run_id}): {e}")
+        return
+
     con = _con()
     try:
         con.execute("DELETE FROM backup_runs WHERE id=?", (run_id,))
@@ -355,6 +581,35 @@ def db_search_configs(q: str, limit: int = 50) -> list:
     Returns up to *limit* matches as [{run_id, did, ts, line_no, line_text}].
     Scans the most recent 200 successful runs to keep response times bounded.
     """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        rows = []
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT id, did, ts, config FROM backup_runs "
+                    "WHERE success=1 AND config LIKE %s ORDER BY ts DESC LIMIT 200",
+                    (f'%{q}%',)
+                )
+                ql = q.lower()
+                for r in cur.fetchall():
+                    for i, line in enumerate((r["config"] or '').splitlines(), 1):
+                        if ql in line.lower():
+                            rows.append({
+                                'run_id':    r["id"],
+                                'did':       r["did"],
+                                'ts':        r["ts"],
+                                'line_no':   i,
+                                'line_text': line.strip(),
+                            })
+                            if len(rows) >= limit:
+                                break
+                    if len(rows) >= limit:
+                        break
+        except Exception as e:
+            log.error(f"backup search_configs error: {e}")
+        return rows
+
     con = _con()
     rows = []
     try:
@@ -385,6 +640,18 @@ def db_search_configs(q: str, limit: int = 50) -> list:
 
 def db_ensure_backup_device(did: str):
     """Ensure a backup_devices row exists for a device (with defaults)."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "INSERT INTO backup_devices(did) VALUES(%s) ON CONFLICT(did) DO NOTHING",
+                    (did,)
+                )
+        except Exception as e:
+            log.error(f"backup ensure_device error (did={did}): {e}")
+        return
+
     con = _con()
     try:
         con.execute(

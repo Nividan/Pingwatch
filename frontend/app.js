@@ -45,6 +45,17 @@ function _sseSchedule(){
 // ── Clock ────────────────────────────────────────────────────────
 setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),1000);
 
+// ── SSE refresh coalescing (prevents flood during flap storms) ───
+let _refreshTimer=null;
+function _scheduleRefresh(){
+  if(_refreshTimer) return;
+  _refreshTimer=setTimeout(()=>{
+    _refreshTimer=null;
+    if(typeof _refreshAlertCache==='function') _refreshAlertCache();
+    _refreshFlapList();
+  },3000);
+}
+
 // ── SSE helpers ──────────────────────────────────────────────────
 function _parseSSE(e){
   try{ return JSON.parse(e.data); }
@@ -91,32 +102,26 @@ function connectSSE(){
   sse.addEventListener('flap_down',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
-    // Refresh alert cache after alert engine has had time to process (3s delay)
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('threshold_ok',e=>{
     const d=_parseSSE(e); if(!d) return;
     d._direction='threshold_ok';
     pushFlap(d);
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);

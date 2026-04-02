@@ -123,10 +123,7 @@ def db_clean_samples(retention_days=365):
                 (total - 10_000_000,)
             )
         con.commit()
-        # VACUUM inside the same connection (serialised via _logs_enqueue caller)
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        con.execute("VACUUM")
-        log.debug("DB vacuum complete")
+        log.debug("DB sample cleanup complete")
     except Exception as e:
         log.error(f"DB clean samples error: {e}")
         if "malformed" in str(e).lower():
@@ -138,6 +135,17 @@ def db_clean_samples(retention_days=365):
     finally:
         if con:
             con.close()
+    # VACUUM in a separate thread so sample writes are not blocked
+    def _vacuum_bg():
+        try:
+            _vcon = sqlite3.connect(LOGS_DB_PATH, timeout=60)
+            _vcon.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _vcon.execute("VACUUM")
+            _vcon.close()
+            log.debug("DB vacuum complete (background)")
+        except Exception as _ve:
+            log.warning(f"Background vacuum failed (non-fatal): {_ve}")
+    threading.Thread(target=_vacuum_bg, daemon=True, name="db-vacuum").start()
 
 
 def db_load_availability(minutes: int = 1440):

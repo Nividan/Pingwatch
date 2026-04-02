@@ -167,7 +167,7 @@ def handle(h, method, path, body):
             h._json(200, {"ok": True, "restart_required": True})
         except Exception as e:
             log.error(f"Setup PG init failed: {e}")
-            h._json(500, {"ok": False, "error": str(e)})
+            h._json(500, {"ok": False, "error": "PostgreSQL setup failed — check server logs"})
         return True
 
     return False

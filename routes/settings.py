@@ -289,7 +289,8 @@ def handle(h, method, path, body):
         except ImportError:
             h._json(503, {"error": "psutil not installed — run: pip install psutil"})
         except Exception as e:
-            h._json(500, {"error": str(e)})
+            log.error(f"System stats error: {e}")
+            h._json(500, {"error": "Failed to collect system stats — check server logs"})
         return True
 
     # ── /api/dashboard GET ────────────────────────────────────────
@@ -403,7 +404,7 @@ def handle(h, method, path, body):
                     })
             except Exception as e:
                 log.error(f"db/stats PG error: {e}")
-                h._json(500, {"error": str(e)})
+                h._json(500, {"error": "Failed to collect database stats — check server logs"})
             return True
         import sqlite3 as _sq3
         def _db_size(p):
@@ -512,7 +513,7 @@ def handle(h, method, path, body):
                 h._json(500, {"ok": False, "error": msg})
         except Exception as e:
             log.error(f"Migration failed: {e}")
-            h._json(500, {"ok": False, "error": str(e)})
+            h._json(500, {"ok": False, "error": "Migration failed — check server logs"})
         return True
 
     return False

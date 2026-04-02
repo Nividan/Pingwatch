@@ -296,6 +296,52 @@ def pg_create_main_schema(cur):
             description TEXT DEFAULT ''
         )""")
 
+    # ── Topology map tables ──────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS topo_pages (
+            id   SERIAL PRIMARY KEY,
+            name TEXT NOT NULL
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS topo_nodes (
+            id         SERIAL PRIMARY KEY,
+            name       TEXT NOT NULL,
+            type       TEXT NOT NULL,
+            x          DOUBLE PRECISION DEFAULT 200,
+            y          DOUBLE PRECISION DEFAULT 200,
+            properties TEXT DEFAULT '{}',
+            page_id    INTEGER DEFAULT 1
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS topo_links (
+            id        SERIAL PRIMARY KEY,
+            source_id INTEGER NOT NULL,
+            target_id INTEGER NOT NULL,
+            label     TEXT DEFAULT '',
+            link_type TEXT DEFAULT 'trunk',
+            page_id   INTEGER DEFAULT 1
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS topo_groups (
+            id      SERIAL PRIMARY KEY,
+            name    TEXT NOT NULL,
+            color   TEXT DEFAULT '#00d4ff',
+            x       DOUBLE PRECISION,
+            y       DOUBLE PRECISION,
+            w       DOUBLE PRECISION,
+            h       DOUBLE PRECISION,
+            page_id INTEGER DEFAULT 1
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS topo_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )""")
+    # Seed default topology page if missing
+    cur.execute(
+        "INSERT INTO topo_pages (id, name) VALUES (1, 'Main') ON CONFLICT (id) DO NOTHING"
+    )
+
     # ── LDAP domain-user support (column already part of users above) ──
 
     log.info("PG main schema created")
