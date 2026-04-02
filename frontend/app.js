@@ -391,6 +391,7 @@ async function api(method,path,body=null){
 // ── Pills ────────────────────────────────────────────────────────
 function updatePills(){
   _hbUpdate();
+  if(typeof _updateStatusPills==='function') _updateStatusPills();
 }
 
 // ── Global Network Health Bar ─────────────────────────────────────

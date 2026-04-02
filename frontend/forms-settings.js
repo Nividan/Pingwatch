@@ -88,8 +88,8 @@ async function openSettings(){
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <label class="fl">Probe Workers</label>
-        <input type="number" id="st-mw" value="${sr.max_workers_executor||64}" min="4" max="512" style="max-width:100px"/>
-        <div style="font-size:11px;color:var(--text3);margin-top:5px">Concurrent probe threads (default: 64, restart required)</div>
+        <input type="number" id="st-mw" value="${sr.max_workers_executor||''}" min="4" max="512" placeholder="Auto" style="max-width:100px"/>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px">Leave blank for auto-scaling (currently: ${sr.max_workers_executor_effective||64} workers). Set 4–512 to override.</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
@@ -1027,8 +1027,9 @@ async function saveSettings(){
   if(retRaw>=1)  body.retention_raw_days=retRaw;
   if(ret5m>=7)   body.retention_5m_days=ret5m;
   if(ret1h>=30)  body.retention_1h_days=ret1h;
-  const mw=parseInt(document.getElementById('st-mw')?.value);
-  if(mw>=4) body.max_workers_executor=mw;
+  const mwRaw=document.getElementById('st-mw')?.value?.trim();
+  const mw=mwRaw ? parseInt(mwRaw) : 0;
+  body.max_workers_executor = (mw>=4) ? mw : 0;  // 0 = auto
   const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
   const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
   const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);

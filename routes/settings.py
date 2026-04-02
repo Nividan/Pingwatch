@@ -26,6 +26,14 @@ except Exception:
     pass
 
 
+def _get_effective_workers() -> int:
+    """Return the number of probe workers currently in use."""
+    try:
+        return app_state.STATE._executor._max_workers
+    except Exception:
+        return 64
+
+
 def _local_ip() -> str:
     """Return the LAN IP used to reach the outside world.
     Falls back to BIND if detection fails."""
@@ -111,7 +119,8 @@ def handle(h, method, path, body):
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
             "retention_1h_days":     int(_settings.get("retention_1h_days", 1095) or 1095),
-            "max_workers_executor":  int(_settings.get("max_workers_executor", 64) or 64),
+            "max_workers_executor":  int(_settings.get("max_workers_executor", 0) or 0),
+            "max_workers_executor_effective": _get_effective_workers(),
         })
         return True
 
@@ -239,9 +248,11 @@ def handle(h, method, path, body):
                 _db_enqueue(lambda _k=_k, _v=_v: db_save_settings({_k: str(_v)}))
         if "max_workers_executor" in body:
             try:
-                _mw = max(4, min(512, int(body["max_workers_executor"])))
+                _mw_raw = int(body["max_workers_executor"])
+                # 0 = auto; 4-512 = manual override
+                _mw = 0 if _mw_raw < 4 else min(512, _mw_raw)
             except (ValueError, TypeError):
-                h._json(400, {"error": "max_workers_executor must be 4-512"}); return True
+                h._json(400, {"error": "max_workers_executor must be 0 (auto) or 4-512"}); return True
             _settings.load({"max_workers_executor": _mw})
             _db_enqueue(lambda _v=_mw: db_save_settings({"max_workers_executor": str(_v)}))
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))

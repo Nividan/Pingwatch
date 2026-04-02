@@ -489,6 +489,43 @@ body.sidebar-collapsed #sidebarExpandTab{display:flex}
 .dev-search-inp::-webkit-search-cancel-button{cursor:pointer;}
 .dev-search-inp::placeholder{color:var(--text3);}
 
+/* ── Status filter pills ──────────────────────────────────────────── */
+.dev-pills{display:flex;gap:4px;align-items:center;flex-shrink:0;}
+.dev-status-pill{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 9px;border-radius:12px;font-size:11px;font-weight:500;
+  border:1px solid var(--border2);background:var(--bg3);color:var(--text2);
+  cursor:pointer;transition:background .12s,border-color .12s,color .12s;
+  white-space:nowrap;line-height:1.4;
+}
+.dev-status-pill:hover{background:var(--bg4);color:var(--text);}
+.dev-status-pill.active{border-color:var(--accent);background:rgba(47,129,247,.13);color:var(--accent);}
+.dev-status-pill[data-st="down"].active{border-color:var(--down);background:var(--down-bg);color:var(--down);}
+.dev-status-pill[data-st="warn"].active{border-color:var(--warn);background:var(--warn-bg);color:var(--warn);}
+.dev-status-pill[data-st="up"].active{border-color:var(--up);background:var(--up-bg);color:var(--up);}
+.dev-status-pill[data-st="pause"].active{border-color:var(--pause);background:rgba(110,118,129,.12);color:var(--pause);}
+.pill-ct{font-size:10px;opacity:.75;}
+
+/* ── Device list pagination ───────────────────────────────────────── */
+#devPagination{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:10px 20px;border-top:1px solid var(--border);
+  font-size:12px;color:var(--text2);flex-shrink:0;
+}
+.dev-pg-btn{
+  padding:3px 10px;border-radius:6px;font-size:12px;
+  border:1px solid var(--border2);background:var(--bg3);color:var(--text2);
+  cursor:pointer;transition:background .12s,border-color .12s;
+}
+.dev-pg-btn:hover:not(:disabled){background:var(--bg4);border-color:var(--accent);color:var(--accent);}
+.dev-pg-btn:disabled{opacity:.35;cursor:default;}
+.dev-pg-info{color:var(--text3);font-size:11px;}
+.dev-pg-size{
+  padding:2px 4px;border-radius:4px;font-size:11px;
+  border:1px solid var(--border2);background:var(--bg3);color:var(--text2);
+  cursor:pointer;
+}
+
 .dev-no-results{
   padding:32px 20px;text-align:center;color:var(--text3);
   font-size:13px;font-style:italic;

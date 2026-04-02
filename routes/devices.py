@@ -86,6 +86,27 @@ def _get_scan_targets():
     return targets or _SCAN_TARGETS
 
 
+def _maybe_resize_executor():
+    """Re-evaluate auto worker count after sensor count changes.
+
+    No-op when max_workers_executor is set to a manual value (>= 4).
+    Called via _db_enqueue so it runs after the STATE is already saved.
+    """
+    import concurrent.futures as _cf
+    import core.settings as _settings
+    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
+    if _mw_override >= 4:
+        return  # manual override in effect
+    _count = sum(len(d.sensors) for d in STATE.devices.values())
+    _mw = max(64, min(512, _count // 4 or 64))
+    if STATE._executor._max_workers != _mw:
+        STATE._executor = _cf.ThreadPoolExecutor(
+            max_workers=_mw, thread_name_prefix='pw-sensor'
+        )
+        STATE._scheduler._executor = STATE._executor
+        log.info(f"Executor auto-resized to {_mw} workers ({_count} sensors)")
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE  # always current reference
@@ -137,6 +158,7 @@ def handle(h, method, path, body):
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
         _db_enqueue(lambda: ipam_sync_device_add(_did, _name, _host))
         db_log_audit(user, h.client_address[0], 'device_create', name)
@@ -292,6 +314,7 @@ def handle(h, method, path, body):
             ddname = dd.name if dd else ddid
         STATE.remove_device(ddid)
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         _dd = ddid
         _db_enqueue(lambda: ipam_sync_device_delete(_dd))
         _db_enqueue(lambda: topo_prune_pw_links(_dd))
@@ -403,6 +426,7 @@ def handle(h, method, path, body):
             ssname = sd.sensors[ssid].name if sd and ssid in sd.sensors else ssid
         STATE.remove_sensor(sdid, ssid)
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         db_log_audit(user, h.client_address[0], 'sensor_delete', f"{sdname}/{ssname}")
         h._json(200, {"status": "ok"})
         return True
@@ -465,6 +489,7 @@ def handle(h, method, path, body):
                 s2.dns_server           = body.get("dns_server", "")
                 s2.http_expected_status = xstat
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         _dev_name = dev.name if dev else did
         db_log_audit(user, h.client_address[0], 'sensor_create', f"{_dev_name}/{name}")
         h._json(200, {"sid": sid})

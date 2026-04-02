@@ -644,37 +644,78 @@ function setupChartsByDid(did){
   },50);
 }
 
+// ── Status filter + pagination state ─────────────────────────────
+let _activeStatusFilter='all';
+let _devPage=0;
+let _devPageSize=parseInt(localStorage.getItem('pw_page_size')||'50');
+let _filteredDids=[];
+
+// ── Status filter pills ───────────────────────────────────────────
+function _setStatusFilter(st){
+  _activeStatusFilter=st;
+  document.querySelectorAll('.dev-status-pill').forEach(p=>
+    p.classList.toggle('active', p.dataset.st===st));
+  _applyDevFilter(document.getElementById('devSearch')?.value||'');
+}
+
+function _updateStatusPills(){
+  const counts={all:0,up:0,down:0,warn:0,pause:0};
+  for(const did in S.devices){
+    counts.all++;
+    const st=(S.devices[did].status||'unknown').toLowerCase();
+    if(counts[st]!==undefined) counts[st]++;
+  }
+  document.querySelectorAll('.dev-status-pill').forEach(p=>{
+    const ct=p.querySelector('.pill-ct');
+    if(ct) ct.textContent=counts[p.dataset.st]??0;
+  });
+}
+
 // ── Device search / filter ────────────────────────────────────────
 function _applyDevFilter(query){
   const q=(query||'').trim().toLowerCase();
-  let anyVisible=false;
+  const sf=_activeStatusFilter;
+  // Build ordered list of matching device IDs (preserving DOM order)
+  _filteredDids=[];
+  document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+    const did=card.id.replace('dp-','');
+    if(!S.devices[did]) return;
+    const dev=S.devices[did];
+    const stMatch=sf==='all'||(dev.status||'unknown').toLowerCase()===sf;
+    if(!stMatch) return;
+    if(q){
+      const nameMatch=dev.name.toLowerCase().includes(q);
+      const sensorMatch=S._devSensors[did]&&[...S._devSensors[did]]
+        .some(k=>S.sensors[k]&&S.sensors[k].name.toLowerCase().includes(q));
+      if(!nameMatch&&!sensorMatch) return;
+    }
+    _filteredDids.push(did);
+  });
+  _devPage=0;
+  _renderPage();
+}
+
+function _renderPage(){
+  const start=_devPage*_devPageSize;
+  const visible=new Set(_filteredDids.slice(start,start+_devPageSize));
+  const allDids=new Set(_filteredDids);
+  // Show/hide individual cards
+  document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+    const did=card.id.replace('dp-','');
+    card.style.display=visible.has(did)?'':'none';
+  });
+  // Hide groups with no visible cards on this page; hide groups not in filter
   document.querySelectorAll('.grp-wrap').forEach(wrap=>{
     const grid=wrap.querySelector('.grp-grid');
     if(!grid){wrap.style.display='';return;}
-    if(!q){
-      wrap.style.display='';
-      grid.querySelectorAll('.dc:not(.dc-add)').forEach(c=>c.style.display='');
-      anyVisible=true;
-      return;
-    }
-    let groupHasMatch=false;
-    grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
-      const did=card.id.replace('dp-','');
-      const dev=S.devices[did];
-      const nameMatch=dev&&dev.name.toLowerCase().includes(q);
-      const sensorMatch=Object.values(S.sensors)
-        .filter(s=>s.device_id===did)
-        .some(s=>s.name.toLowerCase().includes(q));
-      const show=nameMatch||sensorMatch;
-      card.style.display=show?'':'none';
-      if(show) groupHasMatch=true;
-    });
-    wrap.style.display=groupHasMatch?'':'none';
-    if(groupHasMatch) anyVisible=true;
+    const hasVisible=[...grid.querySelectorAll('.dc:not(.dc-add)')]
+      .some(c=>c.style.display!=='none');
+    wrap.style.display=hasVisible?'':'none';
   });
-  // Show / hide empty state message
+  // No-results message
   let noRes=document.getElementById('devNoResults');
-  if(q && !anyVisible){
+  const anyVisible=visible.size>0;
+  if(!anyVisible){
     if(!noRes){
       noRes=document.createElement('div');
       noRes.id='devNoResults';
@@ -682,11 +723,46 @@ function _applyDevFilter(query){
       const dp=document.getElementById('dpanels');
       if(dp) dp.parentNode.insertBefore(noRes,dp.nextSibling);
     }
-    noRes.textContent='No devices or sensors match "'+query+'"';
+    const q=document.getElementById('devSearch')?.value||'';
+    noRes.textContent=q||_activeStatusFilter!=='all'
+      ?'No devices match the current filter.'
+      :'No devices yet.';
     noRes.style.display='';
   } else if(noRes){
     noRes.style.display='none';
   }
+  _renderPagination();
+}
+
+function _renderPagination(){
+  const pg=document.getElementById('devPagination');
+  if(!pg) return;
+  const total=_filteredDids.length;
+  const pages=Math.ceil(total/_devPageSize)||1;
+  if(total<=_devPageSize){pg.style.display='none';return;}
+  pg.style.display='flex';
+  const start=_devPage*_devPageSize+1;
+  const end=Math.min(start+_devPageSize-1,total);
+  pg.innerHTML=`
+    <button class="dev-pg-btn" onclick="_devGoPage(${_devPage-1})" ${_devPage===0?'disabled':''}>‹ Prev</button>
+    <span class="dev-pg-info">${start}–${end} of ${total} devices</span>
+    <button class="dev-pg-btn" onclick="_devGoPage(${_devPage+1})" ${_devPage>=pages-1?'disabled':''}>Next ›</button>
+    <select class="dev-pg-size" onchange="_devSetPageSize(+this.value)" title="Devices per page">
+      ${[25,50,100].map(n=>`<option value="${n}"${n===_devPageSize?' selected':''}>${n}/page</option>`).join('')}
+    </select>`;
+}
+
+function _devGoPage(p){
+  const pages=Math.ceil(_filteredDids.length/_devPageSize)||1;
+  _devPage=Math.max(0,Math.min(p,pages-1));
+  _renderPage();
+}
+
+function _devSetPageSize(n){
+  _devPageSize=n;
+  localStorage.setItem('pw_page_size',n);
+  _devPage=0;
+  _renderPage();
 }
 
 // Ctrl+F / Cmd+F focuses the device search when the devices tab is active

@@ -533,15 +533,17 @@ def main():
         log.error(f"SNMP seed load failed: {_se}")
     _settings.load(db_load_settings())
 
-    # Resize probe executor if user changed max_workers_executor (v0.8.0)
-    _mw = int(_settings.get("max_workers_executor", 64) or 64)
+    # Auto-scale probe executor: 1 worker per 4 sensors, clamped [64, 512].
+    # Manual override: set max_workers_executor to 4-512 in settings.
+    # Setting it to 0 (or blank in UI) returns to auto mode.
+    import concurrent.futures as _cf
+    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
+    _sensor_count = sum(len(d.sensors) for d in STATE.devices.values())
+    _mw = _mw_override if _mw_override >= 4 else max(64, min(512, _sensor_count // 4 or 64))
     if _mw != 64:
-        import concurrent.futures
-        STATE._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=_mw, thread_name_prefix='pw-sensor'
-        )
+        STATE._executor = _cf.ThreadPoolExecutor(max_workers=_mw, thread_name_prefix='pw-sensor')
         STATE._scheduler._executor = STATE._executor
-        log.info(f"Probe executor resized to {_mw} workers")
+    log.info(f"Probe executor: {_mw} workers ({'manual' if _mw_override >= 4 else 'auto'}, {_sensor_count} sensors)")
 
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))
