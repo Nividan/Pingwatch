@@ -1329,6 +1329,7 @@ function collectSensorForm(did){
     payload.vmware_vm_name=document.getElementById('as-vmnm')?.value.trim()||'';
     payload.vmware_metric=document.getElementById('as-vmmet')?.value||'';
     payload.vmware_disk_path=document.getElementById('as-vm-diskpath')?.value.trim()||'';
+    if(['uptime','on'].includes(payload.vmware_metric)){ payload.warn_ms=null; payload.crit_ms=null; }
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}
   }
