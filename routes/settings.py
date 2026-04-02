@@ -262,14 +262,34 @@ def handle(h, method, path, body):
             for f in os.listdir(_log_dir)
             if os.path.isfile(os.path.join(_log_dir, f))
         ) if os.path.isdir(_log_dir) else 0
+        from db.backend import is_pg
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            _sz_q = (
+                "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::bigint AS sz "
+                "FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = %s AND c.relkind = 'r'"
+            )
+            try:
+                with pg_cursor("main") as _cur:
+                    _cur.execute(_sz_q, ("main",))
+                    _main_sz = _cur.fetchone()["sz"]
+                    _cur.execute(_sz_q, ("logs",))
+                    _logs_sz = _cur.fetchone()["sz"]
+            except Exception:
+                _main_sz = _logs_sz = 0
+        else:
+            _main_sz = os.path.getsize(DB_PATH)      if os.path.exists(DB_PATH)      else 0
+            _logs_sz = os.path.getsize(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else 0
         h._json(200, {
             "version":        app_state.APP_VERSION,
             "version_name":   app_state.APP_VERSION_NAME,
             "uptime_s":       int(time.time() - app_state.SERVER_START),
             "devices":        len(STATE.devices),
             "sensors":        sum(len(d.sensors) for d in STATE.devices.values()),
-            "db_size_bytes":      os.path.getsize(DB_PATH)      if os.path.exists(DB_PATH)      else 0,
-            "logs_db_size_bytes": os.path.getsize(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else 0,
+            "db_size_bytes":      _main_sz,
+            "logs_db_size_bytes": _logs_sz,
             "log_size_bytes":     _log_bytes,
         })
         return True
