@@ -34,7 +34,7 @@ VM_METRICS = [
     {"v": "cpu_ready",        "l": "CPU Ready (Percent)",       "group": "cpu",       "counter": "cpu.ready.summation",                     "unit": "%",      "convert": "ready_pct"},
     {"v": "mem_active",       "l": "Memory Active",             "group": "mem",       "counter": "mem.active.average",                      "unit": "MB",     "divisor": 1024},
     {"v": "mem_consumed",     "l": "Memory Consumed",           "group": "mem",       "counter": "mem.consumed.average",                    "unit": "MB",     "divisor": 1024},
-    {"v": "mem_consumed_pct", "l": "Memory Consumed (Percent)", "group": "mem",       "counter": "mem.usage.average",                       "unit": "%",      "divisor": 100},
+    {"v": "mem_consumed_pct", "l": "Memory Consumed (Percent)", "group": "mem",       "counter": None,                                      "unit": "%"},
     {"v": "disk_read",        "l": "Disk Read",                 "group": "disk",      "counter": "disk.read.average",                       "unit": "KBps"},
     {"v": "disk_write",       "l": "Disk Write",                "group": "disk",      "counter": "disk.write.average",                      "unit": "KBps"},
     {"v": "disk_usage",       "l": "Disk Usage",                "group": "disk",      "counter": "disk.usage.average",                      "unit": "KBps"},
@@ -303,6 +303,7 @@ def vmware_probe(host, user, password, vm_id, metric,
     content = si.RetrieveContent()
     vm_moref = None
     num_cpu = 1
+    memory_mb = 0
     try:
         view = content.viewManager.CreateContainerView(
             content.rootFolder, [vim.VirtualMachine], recursive=True
@@ -312,6 +313,7 @@ def vmware_probe(host, user, password, vm_id, metric,
                 vm_moref = vm
                 if vm.config and vm.config.hardware:
                     num_cpu = vm.config.hardware.numCPU or 1
+                    memory_mb = vm.config.hardware.memoryMB or 0
                 break
         view.Destroy()
     except Exception:
@@ -368,6 +370,10 @@ def vmware_probe(host, user, password, vm_id, metric,
 
     # Query all metrics (cached for other sensors targeting same VM)
     data = _query_all_vm_metrics(si, vm_moref, num_cpu)
+
+    # Compute mem_consumed_pct from consumed MB vs total VM RAM (matches guest OS view)
+    if memory_mb > 0 and data.get('mem_consumed') is not None:
+        data['mem_consumed_pct'] = round(data['mem_consumed'] / memory_mb * 100, 2)
 
     with _metric_cache_lock:
         _metric_cache[cache_key] = {"ts": time.monotonic(), "data": data}
