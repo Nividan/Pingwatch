@@ -54,17 +54,17 @@ async function openSettings(){
       <button class="mclose" onclick="closeM('mset')">✕</button>
     </div>
     <div class="dw-tabs" style="padding:0 4px">
-      <button class="dw-tab active" id="stab-btn-general" onclick="switchSettingsTab('general')">General</button>
-      <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">Users</button>
-      <button class="dw-tab" id="stab-btn-groups" onclick="switchSettingsTab('groups')">Groups</button>
-      <button class="dw-tab" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">SMTP</button>
-      <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">Database</button>
-      <button class="dw-tab" id="stab-btn-logs" onclick="switchSettingsTab('logs')">Logs</button>
-      <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">Sensors</button>
-      <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">Networking</button>
-      <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">Config Backup</button>
-      <button class="dw-tab" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">Syslog</button>
-      <button class="dw-tab" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">Alert Rules</button>
+      <button class="dw-tab active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
+      <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
+      <button class="dw-tab" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
+      <button class="dw-tab" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">📧 SMTP</button>
+      <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
+      <button class="dw-tab" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
+      <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
+      <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
+      <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
+      <button class="dw-tab" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">📤 Syslog</button>
+      <button class="dw-tab" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
     </div>
     <div class="mbdy stab-fade" id="stab-general" style="max-height:72vh;overflow-y:auto">
       <div class="fr">

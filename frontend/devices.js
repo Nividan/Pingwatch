@@ -280,6 +280,14 @@ function cardHTML(dev){
 function listRowHTML(dev){
   const st=dev.device_id ? (dev.status||'unknown') : 'unknown';
   const snrs=Object.values(S.sensors).filter(s=>s.device_id===dev.device_id);
+  // Apply saved sensor drag order (same as sSnrPreview)
+  const _ord=_lsGet(`pw_snr_order_${dev.device_id}`,[]);
+  if(_ord.length){
+    snrs.sort((a,b)=>{
+      const ai=_ord.indexOf(a.sensor_id),bi=_ord.indexOf(b.sensor_id);
+      return (ai<0?9999:ai)-(bi<0?9999:bi);
+    });
+  }
   const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
   const snrVal=s=>{
     if(s.stype==='vmware'){
