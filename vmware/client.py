@@ -355,14 +355,7 @@ def vmware_probe(host, user, password, vm_id, metric,
     """
     is_host = metric.startswith("host_")
 
-    # Power State ("on") is valid for both VMs and hosts — route by entity moId
-    if metric == "on" and vm_id.startswith("host-"):
-        is_host = True
-
     mdef = (_HOST_METRIC_BY_KEY if is_host else _METRIC_BY_KEY).get(metric)
-    if not mdef:
-        # "on" lives in VM metrics but is valid for hosts too
-        mdef = _METRIC_BY_KEY.get(metric)
     if not mdef:
         return {"ok": False, "ms": None,
                 "detail": f"Unknown metric: {metric}"}
@@ -478,6 +471,29 @@ def vmware_probe(host, user, password, vm_id, metric,
         pass
 
     if vm_moref is None:
+        # "on" (Power State) is valid for hosts too — try HostSystem fallback
+        if metric == "on":
+            host_moref = None
+            try:
+                view = content.viewManager.CreateContainerView(
+                    content.rootFolder, [vim.HostSystem], recursive=True
+                )
+                for h in view.view:
+                    if h._moId == vm_id:
+                        host_moref = h
+                        break
+                view.Destroy()
+            except Exception:
+                pass
+            if host_moref is not None:
+                try:
+                    power = str(host_moref.runtime.powerState) if host_moref.runtime else "unknown"
+                except Exception:
+                    power = "unknown"
+                is_on = (power == "poweredOn")
+                return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
+                        "detail": f"Power State: {power}",
+                        "value": power}
         return {"ok": False, "ms": None,
                 "detail": f"VM {vm_id} not found"}
 
