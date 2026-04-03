@@ -395,27 +395,52 @@ body{
 .grp-grid.list-view .dc{display:none}
 .grp-grid.list-view .dc-add{display:none}
 .dc-list-row{
-  display:flex;align-items:center;gap:12px;
-  padding:8px 14px;border-radius:8px;
-  background:rgba(13,17,23,.5);border:1px solid var(--border);
-  cursor:pointer;transition:background .15s, border-color .15s;
+  display:flex;align-items:center;gap:14px;
+  padding:9px 16px;border-radius:10px;
+  background:rgba(13,17,23,.55);
+  border:1px solid var(--border);
+  border-left:3px solid var(--text3);
+  cursor:pointer;
+  transition:background .15s, border-color .15s, box-shadow .2s, transform .15s;
 }
-.dc-list-row:hover{background:var(--bg3);border-color:var(--border2)}
-.dc-list-row.down{border-color:var(--down-border)}
-.dc-list-row.warn{border-color:var(--warn-border)}
-.dc-list-row .dlr-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--text3);transition:all .4s}
-.dc-list-row.up .dlr-dot{background:var(--up);box-shadow:0 0 6px rgba(35,209,139,.7)}
-.dc-list-row.down .dlr-dot{background:var(--down);box-shadow:0 0 6px rgba(248,81,73,.7)}
-.dc-list-row.warn .dlr-dot{background:var(--warn);box-shadow:0 0 6px rgba(240,165,0,.7)}
+.dc-list-row:hover{
+  background:rgba(28,35,51,.7);
+  border-color:var(--border2);
+  box-shadow:0 2px 12px rgba(0,0,0,.3);
+  transform:translateX(2px);
+}
+.dc-list-row.up{border-left-color:var(--up)}
+.dc-list-row.down{border-left-color:var(--down);border-color:var(--down-border);background:rgba(248,81,73,.03)}
+.dc-list-row.warn{border-left-color:var(--warn);border-color:var(--warn-border);background:rgba(240,165,0,.03)}
+.dc-list-row .dlr-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--text3);transition:all .4s}
+.dc-list-row.up .dlr-dot{background:var(--up);box-shadow:0 0 8px rgba(35,209,139,.6);animation:pulse-up 2s ease-in-out infinite}
+.dc-list-row.down .dlr-dot{background:var(--down);box-shadow:0 0 8px rgba(248,81,73,.6)}
+.dc-list-row.warn .dlr-dot{background:var(--warn);box-shadow:0 0 8px rgba(240,165,0,.6)}
 .dc-list-row .dlr-name{font-size:13px;font-weight:600;color:var(--text);width:180px;flex-shrink:0;
-                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dc-list-row .dlr-host{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3);
-                        width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dc-list-row .dlr-sensors{flex:1;display:flex;gap:8px;overflow:hidden;align-items:center}
-.dc-list-row .dlr-snr{font-size:10px;display:flex;align-items:center;gap:4px;
-                       padding:2px 6px;border-radius:4px;background:rgba(255,255,255,.03);
-                       border:1px solid rgba(255,255,255,.05);white-space:nowrap}
-.dc-list-row .dlr-more{font-size:9px;color:var(--text3);white-space:nowrap}
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.1px}
+.dc-list-row .dlr-host{
+  font-family:'JetBrains Mono',monospace;font-size:11px;
+  color:var(--accent);opacity:.75;
+  width:135px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.dc-list-row .dlr-sensors{flex:1;display:flex;gap:6px;overflow:hidden;align-items:center;flex-wrap:wrap}
+.dc-list-row .dlr-snr{
+  font-size:10px;display:flex;align-items:center;gap:4px;
+  padding:3px 8px;border-radius:6px;
+  background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.06);
+  white-space:nowrap;
+  transition:background .12s;
+}
+.dc-list-row:hover .dlr-snr{background:rgba(255,255,255,.07)}
+.dc-list-row .dlr-more{font-size:9px;color:var(--text3);white-space:nowrap;padding:2px 4px}
+/* Alternating row tint */
+.dc-list-row:nth-child(even){background:rgba(13,17,23,.35)}
+.dc-list-row:nth-child(even):hover{background:rgba(28,35,51,.6)}
+.dc-list-row.down:nth-child(even){background:rgba(248,81,73,.02)}
+.dc-list-row.warn:nth-child(even){background:rgba(240,165,0,.02)}
+/* Sensor type icon colors in list rows */
+.dlr-snr .dc-snr-ico.vmware{background:rgba(99,102,241,.2);color:#818cf8}
 .grp-grid:not(.list-view) .dc-list-row{display:none}
 
 /* ── Group collapsed summary ── */
