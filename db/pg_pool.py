@@ -6,33 +6,37 @@ Provides pg_conn() and pg_cursor() context managers that replace the
 SQLite backend.
 """
 
+import threading
 from contextlib import contextmanager
 
 from core.logger import log
 
 _pool = None   # psycopg2.pool.ThreadedConnectionPool (created by pg_init_pool)
+_pool_sema = None  # threading.Semaphore — gates getconn() so callers block instead of crashing
 
 
 def pg_init_pool():
     """Create the connection pool using settings from db.backend config."""
-    global _pool
+    global _pool, _pool_sema
     import psycopg2.pool
     from db.backend import get_config
 
     cfg = get_config()
+    maxconn = cfg.get("pg_pool_max", 30)
     _pool = psycopg2.pool.ThreadedConnectionPool(
         minconn=cfg.get("pg_pool_min", 2),
-        maxconn=cfg.get("pg_pool_max", 20),
+        maxconn=maxconn,
         host=cfg["pg_host"],
         port=cfg["pg_port"],
         dbname=cfg["pg_database"],
         user=cfg["pg_user"],
         password=cfg["pg_password"],
     )
+    _pool_sema = threading.Semaphore(maxconn)
     log.info(
         "PostgreSQL pool ready: %s:%s/%s (min=%d max=%d)",
         cfg["pg_host"], cfg["pg_port"], cfg["pg_database"],
-        cfg.get("pg_pool_min", 2), cfg.get("pg_pool_max", 20),
+        cfg.get("pg_pool_min", 2), maxconn,
     )
 
 
@@ -82,30 +86,42 @@ def pg_conn(schema="main"):
 
     On clean exit the transaction is committed; on exception it is
     rolled back.  The connection is always returned to the pool.
+
+    A semaphore gates access so callers block (up to 30 s) instead of
+    getting an immediate ``PoolError`` when the pool is fully checked out.
     """
-    con = _pool.getconn()
+    if not _pool_sema.acquire(timeout=30):
+        raise Exception("connection pool timeout")
+    con = None
     try:
-        cur = con.cursor()
+        con = _pool.getconn()
         # Health check: detect stale connections after PG restart
         try:
-            cur.execute("SELECT 1")
+            con.cursor().execute("SELECT 1")
         except Exception:
-            try:
-                con.close()
-            except Exception:
-                pass
+            _pool.putconn(con, close=True)   # properly discard stale connection
+            con = None
             con = _pool.getconn()
-            cur = con.cursor()
+        cur = con.cursor()
         cur.execute("SET search_path TO %s, public", (schema,))
         cur.execute("SET statement_timeout TO '30s'")
         cur.close()
         yield con
         con.commit()
     except Exception:
-        con.rollback()
+        if con:
+            try:
+                con.rollback()
+            except Exception:
+                pass
         raise
     finally:
-        _pool.putconn(con)
+        if con:
+            try:
+                _pool.putconn(con)
+            except Exception:
+                pass
+        _pool_sema.release()
 
 
 @contextmanager
