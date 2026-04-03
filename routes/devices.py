@@ -556,6 +556,8 @@ def handle(h, method, path, body):
         _db_enqueue(_maybe_resize_executor)
         _dev_name = dev.name if dev else did
         db_log_audit(user, h.client_address[0], 'sensor_create', f"{_dev_name}/{name}")
+        if stype == "vmware" and not vssl:
+            log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", host or "unknown")
         h._json(200, {"sid": sid})
         return True
 

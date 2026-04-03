@@ -353,7 +353,7 @@ function _showBrowserNotif(d) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification(d.title || 'PingWatch Alert', {
     body: d.body || '',
-    icon: '/static/favicon.ico',
+    icon: '/favicon.ico',
     tag:  'pingwatch-alert',
   });
   n.onclick = () => { window.focus(); n.close(); };

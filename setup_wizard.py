@@ -1602,10 +1602,12 @@ def step6_shortcut():
         return
 
     target = os.path.join(_BASE, "start.bat")
+    icon   = os.path.join(_BASE, "frontend", "favicon.ico")
     ps_cmd = (
         f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
         f'$s.TargetPath="{target}";'
         f'$s.WorkingDirectory="{_BASE}";'
+        f'$s.IconLocation="{icon},0";'
         f'$s.Description="PingWatch Network Monitor";'
         f'$s.Save()'
     )

@@ -137,7 +137,7 @@ class StatusWindow:
 
         try:
             import os
-            ico = os.path.join(os.path.dirname(__file__), "favicon.ico")
+            ico = os.path.join(os.path.dirname(__file__), "frontend", "favicon.ico")
             if os.path.exists(ico):
                 r.iconbitmap(ico)
         except Exception:
