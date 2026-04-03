@@ -32,7 +32,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 ## Features
 
 - 📡 Real-time device monitoring via Server-Sent Events (SSE)
-- 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner
+- 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner, VMware
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
 - 🚨 Rules-based alert engine — conditions, multi-action dispatch (email, webhook, syslog, browser push), cooldown, maintenance windows
@@ -58,6 +58,8 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
 - 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
 - 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
+- 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
+- ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
 
 ### Supported Sensor Types
 
@@ -70,6 +72,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 | **SNMP** | OID polling (v1/v2c); Counter32/Counter64 traffic OIDs display live rate (B/s – GB/s); interface discovery with metric auto-select; wrong-OID detection |
 | **DNS** | Record lookup and resolution-time checks |
 | **Banner** | Raw TCP banner capture with optional regex match |
+| **VMware** | vSphere VM monitoring — CPU, memory, disk, datastore latency, network, uptime, power state; auto-discovery from vCenter/ESXi |
 
 ---
 
@@ -84,6 +87,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - **SSH backup:** `paramiko`
 - **PostgreSQL:** `psycopg2` *(optional — only needed when PostgreSQL backend is enabled)*
 - **System tray:** `pystray` + `Pillow` *(optional)*
+- **VMware:** `pyvmomi` *(optional — only needed when VMware sensors are enabled)*
 - **LDAP/AD:** `ldap3` *(optional — only needed when LDAP auth is enabled)*
 
 ---
@@ -257,6 +261,7 @@ Browser / Desktop GUI
         │
         ├── core/                 ← Config, state, auth, TLS, logging
         ├── monitoring/           ← Probes, alerting, syslog, topology
+        ├── vmware/               ← vSphere VM discovery + metric probing
         ├── backup/               ← SSH/Telnet backup engine + scheduler
         ├── snmp/                 ← Trap receiver, enricher, OID catalog
         └── db/                   ← SQLite persistence (dual write-queues)
@@ -264,7 +269,7 @@ Browser / Desktop GUI
 
 - **`server.py`** — HTTP(S) dispatcher, starts all background threads
 - **`setup_wizard.py`** — cross-platform first-run wizard (packages, ports, TLS, firewall)
-- **`monitoring/probes.py`** — all sensor probe types on per-sensor threads
+- **`monitoring/probes.py`** — all sensor probe types on per-sensor threads (VMware probes via `vmware/client.py`)
 - **`backup/engine.py`** — SSH/Telnet connections, TOFU host key verification, enable-mode escalation
 - **`core/auth.py`** — PBKDF2-SHA256 local auth + LDAP branch via `core/ldap_auth.py`
 - **`snmp/`** — UDP trap listener, OID enrichment, vendor fingerprinting
