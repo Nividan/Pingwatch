@@ -285,9 +285,9 @@ function setupCharts(dev){
 function _vmGrpSfx(vmid){ return vmid.replace(/[^a-z0-9]/gi,'-'); }
 
 function _vmNameFromSensor(s){
-  // Prefer stored VM display name; fall back to stripping metric label from sensor name
+  // Prefer stored VM/host display name; fall back to stripping metric label from sensor name
   if(s.vmware_vm_name) return s.vmware_vm_name;
-  const m=(_vmwareMetrics||[]).find(x=>x.v===s.vmware_metric);
+  const m=(typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[])).find(x=>x.v===s.vmware_metric);
   if(m&&s.name.endsWith(' '+m.l)) return s.name.slice(0,s.name.length-m.l.length-1);
   return s.name||s.vmware_vm_id;
 }
@@ -304,10 +304,11 @@ function _ensureVmGrp(did,s){
   grp.className='vm-grp stl-enter';
   grp.id=`vmgrp-${did}-${sfx}`;
   grp.dataset.vmid=vmid; grp.dataset.did=did;
+  const _isHost=!!(s.vmware_metric&&s.vmware_metric.startsWith('host_'));
   grp.innerHTML=`
     <div class="vm-grp-hdr">
       <div class="vm-grp-arr${collapsed?'':' open'}">▶</div>
-      <div class="vm-grp-badge">V</div>
+      <div class="vm-grp-badge">${_isHost?'H':'V'}</div>
       <div class="vm-grp-nm">${esc(vmName)}</div>
       <div class="vm-grp-dot" id="vgdot-${did}-${sfx}"></div>
       <div class="vm-grp-cnt" id="vgcnt-${did}-${sfx}">0 metrics</div>
@@ -381,7 +382,7 @@ function vmRowHTML(s){
   const _vmV=parseFloat(s.last_value);
   const vt=s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw));
   const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
-  const metricLabel=(_vmwareMetrics||[]).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
+  const metricLabel=(typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[])).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-24);
   const ub=Array(24).fill(0).map((_,i)=>{
@@ -893,7 +894,11 @@ function _fmtRateThrLabel(displayVal, snmpUnit) {
 }
 
 // ── VMware metric unit helpers ───────────────────────────────────
-const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',disk_used_pct:'%',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:''};
+const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',disk_used_pct:'%',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:'',
+  host_cpu_usage:'%',host_cpu_ready:'%',host_mem_active:'MB',host_mem_consumed:'MB',host_mem_usage_pct:'%',host_mem_swap:'MB',
+  host_disk_read:'KBps',host_disk_write:'KBps',host_disk_usage:'KBps',host_disk_dev_lat:'ms',host_disk_kern_lat:'ms',
+  host_ds_read_lat:'ms',host_ds_write_lat:'ms',host_net_rx:'KBps',host_net_tx:'KBps',host_net_usage:'KBps',
+  host_power:'watt',host_uptime:'seconds'};
 function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
 function _fmtVmVal(v,u){
   if(v==null)return'—';
@@ -904,10 +909,11 @@ function _fmtVmVal(v,u){
     case'KBps':return v>=1024?(v/1024).toFixed(1)+' MBps':v.toFixed(1)+' KBps';
     case'ms':return v.toFixed(1)+' ms';
     case'seconds':{const d=Math.floor(v/86400),h=Math.floor((v%86400)/3600),m=Math.floor((v%3600)/60);return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m`;}
+    case'watt':return v.toFixed(0)+' W';
     default:return String(v);
   }
 }
-function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':'';}
+function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':u==='watt'?'W':'';}
 function _fmtVmYLabel(v,u){
   switch(u){
     case'%':return Math.round(v)+'%';
@@ -916,6 +922,7 @@ function _fmtVmYLabel(v,u){
     case'KBps':return v>=1024?(v/1024).toFixed(1)+'MBps':Math.round(v)+'KBps';
     case'ms':return Math.round(v)+'ms';
     case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v/60)+'m';
+    case'watt':return Math.round(v)+'W';
     default:return String(Math.round(v));
   }
 }

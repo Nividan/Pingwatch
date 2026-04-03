@@ -175,8 +175,9 @@ function sSnrPreview(did){
       const {vmid,vms,worst}=item;
       const st=worst.alive===false?'down':worst.alive===true?'up':'';
       const nm=vms[0]?.name?.replace(/ \S+$/,'')??vmid; // strip last word (metric label)
+      const _isH=!!(vms[0]?.vmware_metric&&vms[0].vmware_metric.startsWith('host_'));
       return `<div class="dc-snr">
-        <div class="dc-snr-ico vmware">V</div>
+        <div class="dc-snr-ico vmware">${_isH?'H':'V'}</div>
         <div class="dc-snr-nm">${esc(nm)} <span style="color:var(--text3);font-size:10px">${vms.length}m</span></div>
         <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${snrVal(worst)}</div>
         <div class="dc-snr-dot ${st}" id="csd-${worst.device_id}_${worst.sensor_id}"></div>
