@@ -371,23 +371,12 @@ def vmware_probe(host, user, password, vm_id, metric,
     # Query all metrics (cached for other sensors targeting same VM)
     data = _query_all_vm_metrics(si, vm_moref, num_cpu)
 
-    # Compute mem_consumed_pct — use hostMemoryUsage from quickStats, which
-    # reflects actual host-side memory granted to the VM and closely matches
-    # what the guest OS reports (e.g. Windows Task Manager "In Use").
-    # guestMemoryUsage (VMware Tools) often under-reports because it tracks
-    # only "active" pages, not committed/standby memory.
-    if memory_mb > 0:
-        host_mem_mb = 0
-        try:
-            qs = vm_moref.summary.quickStats
-            host_mem_mb = int(qs.hostMemoryUsage or 0)
-        except Exception:
-            pass
-        if host_mem_mb > 0:
-            data['mem_consumed_pct'] = round(host_mem_mb / memory_mb * 100, 2)
-        elif data.get('mem_consumed'):
-            # Fallback: mem.consumed.average (perf counter) / configured RAM
-            data['mem_consumed_pct'] = round(data['mem_consumed'] / memory_mb * 100, 2)
+    # Compute mem_consumed_pct from mem.consumed.average perf counter
+    # (already fetched as data['mem_consumed'] in MB).  This is host-side
+    # physical memory consumed by the VM — excludes hypervisor overhead so
+    # it won't exceed 100%, and closely tracks guest OS "In Use" memory.
+    if memory_mb > 0 and data.get('mem_consumed'):
+        data['mem_consumed_pct'] = round(data['mem_consumed'] / memory_mb * 100, 2)
 
     with _metric_cache_lock:
         _metric_cache[cache_key] = {"ts": time.monotonic(), "data": data}
