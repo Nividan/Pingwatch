@@ -21,7 +21,8 @@ from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_u
                          db_delete_user, db_set_password, db_get_user_auth_type,
                          db_update_profile, db_update_own_profile)
 from db.backend  import is_pg
-from core.logger import log
+from core.logger    import log
+from core.app_state import tls_active
 import core.settings as _settings
 
 _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -275,9 +276,10 @@ def handle(h, method, path, body):
         db_log_audit(username, ip, 'login_ok', username)
         log.info(f"Login OK: {username!r} from {ip}")
         role = auth_check_role(token) or "viewer"
+        _sec = "; Secure" if tls_active else ""
         h._send_with_cookie(
             200, {"ok": True, "username": username, "role": role},
-            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}"
+            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}{_sec}"
         )
         return True
 
@@ -287,7 +289,8 @@ def handle(h, method, path, body):
         me_logout = auth_check(token) or "anonymous"
         if token: auth_logout(token)
         db_log_audit(me_logout, h.client_address[0], 'logout', me_logout)
-        h._send_with_cookie(200, {"ok": True}, "session=; HttpOnly; Path=/; Max-Age=0")
+        _sec = "; Secure" if tls_active else ""
+        h._send_with_cookie(200, {"ok": True}, f"session=; HttpOnly; Path=/; Max-Age=0{_sec}")
         return True
 
     return False

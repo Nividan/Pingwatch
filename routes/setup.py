@@ -96,7 +96,10 @@ def handle(h, method, path, body):
     # ── /api/setup/test-connection POST ──────────────────────────
     if path == "/api/setup/test-connection" and method == "POST":
         host   = str(body.get("host", "localhost")).strip()
-        port   = int(body.get("port", 5432))
+        try:
+            port = int(body.get("port", 5432))
+        except (TypeError, ValueError):
+            h._json(400, {"ok": False, "error": "port must be an integer"}); return True
         dbname = str(body.get("database", "pingwatch")).strip()
         user   = str(body.get("user", "pingwatch")).strip()
         pw     = str(body.get("password", ""))
@@ -131,7 +134,10 @@ def handle(h, method, path, body):
 
         # PostgreSQL setup
         host   = str(body.get("host", "localhost")).strip()
-        port   = int(body.get("port", 5432))
+        try:
+            port = int(body.get("port", 5432))
+        except (TypeError, ValueError):
+            h._json(400, {"ok": False, "error": "port must be an integer"}); return True
         dbname = str(body.get("database", "pingwatch")).strip()
         user   = str(body.get("user", "pingwatch")).strip()
         pw     = str(body.get("password", ""))

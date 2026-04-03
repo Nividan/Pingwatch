@@ -839,7 +839,6 @@ let _vmSelectedMemMB=0;  // memory of currently selected VM (MB), for smart thre
 const _VM_THR_DEFAULTS={
   cpu_usage:       {w:80,  c:95},
   cpu_ready:       {w:10,  c:20},
-  mem_consumed_pct:{w:80,  c:90},
   disk_used_pct:   {w:80,  c:90},
   ds_read_lat:     {w:20,  c:50},
   ds_write_lat:    {w:20,  c:50},
@@ -880,7 +879,6 @@ function _vmwareThrLabel(metric, isWarn){
 const _VM_THR_PH = {
   cpu_usage:       {w:'e.g. 80',  c:'e.g. 90'},
   cpu_ready:       {w:'e.g. 10',  c:'e.g. 20'},
-  mem_consumed_pct:{w:'e.g. 80',  c:'e.g. 90'},
   mem_active:      {w:'e.g. 4096',c:'e.g. 6144'},   // MB (4GB / 6GB)
   mem_consumed:    {w:'e.g. 12288',c:'e.g. 14336'}, // MB (12GB / 14GB)
   disk_used_pct:   {w:'e.g. 80',  c:'e.g. 90'},
