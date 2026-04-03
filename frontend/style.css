@@ -310,6 +310,20 @@ body{
 .dc-snr-ico.http{background:rgba(245,158,11,.2); color:#fbbf24}
 .dc-snr-ico.snmp{background:rgba(168,85,247,.2); color:#c084fc}
 .dc-snr-ico.dns {background:rgba(20,184,166,.2); color:#2dd4bf}
+.dc-snr-ico.tls         {background:rgba(6,182,212,.2);  color:#22d3ee}
+.dc-snr-ico.http_keyword{background:rgba(234,179,8,.2);  color:#fde047}
+.dc-snr-ico.banner      {background:rgba(251,146,60,.2); color:#fb923c}
+.dc-snr-ico.vmware      {background:rgba(99,102,241,.2); color:#818cf8}
+/* Type-specific border accent for tile card sensor rows */
+.dc-snr.snr-t-ping        {border-color:rgba(59,130,246,.22)}
+.dc-snr.snr-t-tcp         {border-color:rgba(16,185,129,.22)}
+.dc-snr.snr-t-http        {border-color:rgba(245,158,11,.22)}
+.dc-snr.snr-t-snmp        {border-color:rgba(168,85,247,.22)}
+.dc-snr.snr-t-dns         {border-color:rgba(20,184,166,.22)}
+.dc-snr.snr-t-tls         {border-color:rgba(6,182,212,.22)}
+.dc-snr.snr-t-http_keyword{border-color:rgba(234,179,8,.22)}
+.dc-snr.snr-t-banner      {border-color:rgba(251,146,60,.22)}
+.dc-snr.snr-t-vmware      {border-color:rgba(99,102,241,.22)}
 .dc-snr-nm{font-size:10px;color:var(--text2);flex:1;min-width:0;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-snr-val{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;flex-shrink:0}
@@ -439,9 +453,47 @@ body{
 .dc-list-row:nth-child(even):hover{background:rgba(28,35,51,.6)}
 .dc-list-row.down:nth-child(even){background:rgba(248,81,73,.02)}
 .dc-list-row.warn:nth-child(even){background:rgba(240,165,0,.02)}
-/* Sensor type icon colors in list rows */
+/* Sensor type icon + pill colors in list rows */
 .dlr-snr .dc-snr-ico.vmware{background:rgba(99,102,241,.2);color:#818cf8}
+/* Type-specific pill tint for list rows */
+.dlr-snr.snr-t-ping       {border-color:rgba(59,130,246,.3); background:rgba(59,130,246,.07)}
+.dlr-snr.snr-t-tcp        {border-color:rgba(16,185,129,.3); background:rgba(16,185,129,.07)}
+.dlr-snr.snr-t-http       {border-color:rgba(245,158,11,.3); background:rgba(245,158,11,.07)}
+.dlr-snr.snr-t-snmp       {border-color:rgba(168,85,247,.3); background:rgba(168,85,247,.07)}
+.dlr-snr.snr-t-dns        {border-color:rgba(20,184,166,.3); background:rgba(20,184,166,.07)}
+.dlr-snr.snr-t-tls        {border-color:rgba(6,182,212,.3);  background:rgba(6,182,212,.07)}
+.dlr-snr.snr-t-http_keyword{border-color:rgba(234,179,8,.3); background:rgba(234,179,8,.07)}
+.dlr-snr.snr-t-banner     {border-color:rgba(251,146,60,.3); background:rgba(251,146,60,.07)}
+.dlr-snr.snr-t-vmware     {border-color:rgba(99,102,241,.3); background:rgba(99,102,241,.07)}
+/* Per-device status summary badge */
+.dlr-summary{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:6px;padding:0 4px}
+.dls-chip{display:flex;align-items:center;gap:3px;padding:2px 6px;border-radius:4px;
+          font-size:9px;font-family:'JetBrains Mono',monospace;font-weight:600;white-space:nowrap}
+.dls-chip.up  {background:rgba(35,209,139,.12); color:var(--up)}
+.dls-chip.warn{background:rgba(240,165,0,.12);  color:var(--warn)}
+.dls-chip.down{background:rgba(248,81,73,.12);  color:var(--down)}
+.dls-chip .dls-dot{width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
 .grp-grid:not(.list-view) .dc-list-row{display:none}
+
+/* ── Devices tab context menu ────────────────────────────────────── */
+.dev-ctx-menu{
+  position:fixed;z-index:9999;display:none;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:10px;
+  padding:5px 0;min-width:185px;
+  box-shadow:0 8px 28px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.3);
+}
+.dci{
+  padding:9px 16px;font-size:12px;cursor:pointer;
+  display:flex;align-items:center;gap:9px;
+  color:var(--text2);transition:background .1s,color .1s;
+  user-select:none;
+}
+.dci:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.dci.dci-accent{color:var(--accent)}
+.dci.dci-warn  {color:var(--warn)}
+.dci.dci-danger{color:var(--down)}
+.dci.dci-green {color:var(--up)}
+.dci-sep{height:1px;background:var(--border);margin:4px 0;pointer-events:none}
 
 /* ── Group collapsed summary ── */
 .grp-summary{display:none;font-size:10px;color:var(--text3);margin-left:4px;gap:6px;align-items:center}
@@ -849,10 +901,27 @@ body{
 }
 .mclose:hover{background:var(--down-bg);border-color:var(--down-border);color:var(--down)}
 .mbdy{padding:20px}
-/* Settings tab crossfade + height animation */
+/* Settings sidebar layout */
+.stab-layout{display:flex;flex:1;min-height:0;overflow:hidden}
+.stab-sidebar{
+  display:flex;flex-direction:column;gap:2px;
+  width:160px;min-width:160px;padding:8px;
+  border-right:1px solid var(--border);
+  background:rgba(0,0,0,.15);overflow-y:auto;
+}
+.stab-nav{
+  display:flex;align-items:center;gap:6px;
+  padding:8px 12px;font-size:12.5px;font-weight:500;
+  color:var(--text3);background:transparent;border:none;
+  border-radius:6px;cursor:pointer;text-align:left;
+  white-space:nowrap;transition:all .15s;
+}
+.stab-nav:hover{color:var(--text);background:rgba(255,255,255,.06)}
+.stab-nav.active{color:var(--accent);background:rgba(47,129,247,.12)}
+.stab-content{display:flex;flex-direction:column;flex:1;min-width:0}
+/* Settings tab crossfade */
 .mbdy.stab-fade{transition:opacity .2s ease}
 .mbdy.stab-out{opacity:0}
-.mbox.stab-anim{transition:height .25s ease;overflow:hidden}
 .mft {display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
 
 /* Forms */
