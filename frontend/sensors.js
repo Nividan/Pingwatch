@@ -437,7 +437,6 @@ function recalcDevStatus(did){
   else if(alives.some(a=>a===true))st='warn';
   if(S.devices[did])S.devices[did].status=st;
   updateDpHeader(did,st);
-  updateSbDevDot(did,st);
 }
 function updateDpHeader(did,st){
   updateCardStatus(did,st);
@@ -446,104 +445,6 @@ function updateDpHeader(did,st){
   if(bar) bar.className=`dw-bar ${st}`;
 }
 
-// ── Sidebar ──────────────────────────────────────────────────────
-function renderSidebar(){
-  const tree=document.getElementById('devTree');
-  const devs=Object.values(S.devices);
-  if(!devs.length){
-    tree.innerHTML=`<div style="padding:18px 14px;color:var(--text3);font-size:11px;text-align:center;line-height:1.8">No devices yet.<br>Click <strong>＋ Add Device</strong>.</div>`;
-    return;
-  }
-  const _devCol=new Set(JSON.parse(localStorage.getItem('pw-tree-collapsed')||'[]'));
-  const _grpCol=new Set(JSON.parse(localStorage.getItem('pw-sb-grp-collapsed')||'[]'));
-  // Build group map
-  const grpMap={};
-  devs.forEach(dev=>{
-    const g=dev.group||'Default Group';
-    if(!grpMap[g]) grpMap[g]=[];
-    grpMap[g].push(dev);
-  });
-  // Order groups to match main panel order
-  const panelOrder=[...document.querySelectorAll('.grp-grid')].map(g=>g.dataset.group).filter(Boolean);
-  const allGrps=Object.keys(grpMap);
-  const finalGrps=[...new Set([...panelOrder.filter(g=>grpMap[g]),...allGrps])];
-
-  function devNodeHTML(dev){
-    const col=_devCol.has(dev.device_id);
-    return`
-    <div class="dev-node" id="sbn-${dev.device_id}">
-      <div class="dev-row" onclick="scrollToDev('${dev.device_id}')">
-        <div class="dev-arr ${col?'':'open'}" title="${col?'Expand':'Collapse'}"
-             onclick="event.stopPropagation();toggleDevTree('${dev.device_id}')">▶</div>
-        <div class="dev-sdot ${dev.status||'unknown'}" id="sbdd-${dev.device_id}"></div>
-        <div class="dev-info">
-          <div class="dev-name">${esc(dev.name)}</div>
-          <div class="dev-host">${esc(dev.host)}</div>
-        </div>
-        <div class="dev-cnt">${dev.sensors.length}</div>
-      </div>
-      <div class="snr-list${col?' collapsed':''}" id="sbsl-${dev.device_id}">
-        ${dev.sensors.map(s=>`
-          <div class="snr-row" id="sbsr-${dev.device_id}_${s.sensor_id}"
-               onclick="openDetail('${dev.device_id}','${s.sensor_id}')">
-            <div class="s-ico ${s.stype}">${sIco(s.stype)}</div>
-            <div class="s-snm">${esc(s.name)}</div>
-            <div class="s-sdot ${s.alive===true?'up':s.alive===false?'down':''}"
-                 id="sbsd-${dev.device_id}_${s.sensor_id}"></div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-  }
-
-  if(finalGrps.length<=1 && finalGrps[0]==='Default Group'){
-    // Single default group — no group header, flat list
-    tree.innerHTML=(grpMap['Default Group']||[]).map(devNodeHTML).join('');
-  } else {
-    tree.innerHTML=finalGrps.map(grp=>{
-      const gdevs=grpMap[grp]||[];
-      const gid=grpId(grp);
-      const grpCol=_grpCol.has(grp);
-      return`
-      <div class="sb-grp" id="sbg-${gid}">
-        <div class="sb-grp-hdr" data-grp="${esc(grp)}" onclick="toggleSbGrp(this.dataset.grp)">
-          <div class="sb-grp-arr ${grpCol?'':'open'}">▶</div>
-          <div class="sb-grp-name">${esc(grp)}</div>
-          <div class="sb-grp-cnt">${gdevs.length}</div>
-        </div>
-        <div class="sb-grp-body${grpCol?' collapsed':''}" id="sbgb-${gid}">
-          ${gdevs.map(devNodeHTML).join('')}
-        </div>
-      </div>`;
-    }).join('');
-  }
-}
-
-function toggleSbGrp(grp){
-  const gid=grpId(grp);
-  const body=document.getElementById('sbgb-'+gid);
-  const arr=document.querySelector('#sbg-'+gid+' .sb-grp-arr');
-  if(!body) return;
-  const nowCol=body.classList.toggle('collapsed');
-  if(arr) arr.classList.toggle('open',!nowCol);
-  const set=new Set(JSON.parse(localStorage.getItem('pw-sb-grp-collapsed')||'[]'));
-  if(nowCol) set.add(grp); else set.delete(grp);
-  localStorage.setItem('pw-sb-grp-collapsed',JSON.stringify([...set]));
-}
-
-function toggleDevTree(did){
-  const list=document.getElementById(`sbsl-${did}`);
-  const arr=document.querySelector(`#sbn-${did} .dev-arr`);
-  if(!list) return;
-  const nowCollapsed=list.classList.toggle('collapsed');
-  if(arr){arr.classList.toggle('open',!nowCollapsed);arr.title=nowCollapsed?'Expand':'Collapse';}
-  const set=new Set(JSON.parse(localStorage.getItem('pw-tree-collapsed')||'[]'));
-  if(nowCollapsed) set.add(did); else set.delete(did);
-  localStorage.setItem('pw-tree-collapsed',JSON.stringify([...set]));
-}
-function updateSbDevDot(did,st){const d=document.getElementById(`sbdd-${did}`);if(d)d.className=`dev-sdot ${st}`;}
-function updateSbSensorDot(s){const d=document.getElementById(`sbsd-${s.device_id}_${s.sensor_id}`);if(d)d.className=`s-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;}
-function scrollToDev(did){openDevWin(did);}
-
 // ── Device actions ───────────────────────────────────────────────
 async function startDev(did){await api('POST',`/api/device/${did}/start`);toast('Monitoring started','ok')}
 async function stopDev(did) {await api('POST',`/api/device/${did}/stop`); toast('Monitoring stopped','info')}
@@ -551,13 +452,14 @@ async function delDev(did){
   if(!confirm('Delete device and all its sensors?'))return;
   await api('DELETE',`/api/device/${did}`);
   document.getElementById(`dp-${did}`)?.remove();
+  document.getElementById(`dpl-${did}`)?.remove();
   closeM('dwo');
   delete S.devices[did];
   Object.keys(S.sensors).filter(k=>k.startsWith(did+'/')).forEach(k=>{delete S.sensors[k];delete S.charts[k];delete S.logs[k];});
   delete S._devSensors[did];
   pruneEmptyGroups();
   refreshGroupCounts();
-  renderSidebar();updatePills();
+  updatePills();
   if(!Object.keys(S.devices).length){
     document.getElementById('emptyMain').style.display='flex';
     document.getElementById('dpanels').style.display='none';

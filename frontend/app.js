@@ -14,13 +14,13 @@ function _sseFlush(){
   // Per-sensor DOM updates
   for(const key in _sseBatch.sensors){
     const d=_sseBatch.sensors[key];
-    updateTile(d); updateCardSensor(d); updateSbSensorDot(d);
+    updateTile(d); updateCardSensor(d);
     devIds.add(d.device_id);
   }
   // Per-device-status DOM updates
   for(const did in _sseBatch.devStatuses){
     const st=_sseBatch.devStatuses[did];
-    updateCardStatus(did,st); updateSbDevDot(did,st);
+    updateCardStatus(did,st);
     devIds.add(did);
   }
   // Once per batch (not per event)
@@ -860,7 +860,6 @@ async function _refreshDevices(){
       renderDp(dev);
     });
     updatePills();
-    renderSidebar();
   }catch(e){}
 }
 
@@ -905,15 +904,6 @@ async function _loadTrapFilters(){
       });
     }
   }catch(e){}
-}
-
-function toggleSidebar(){
-  const collapsed=document.body.classList.toggle('sidebar-collapsed');
-  localStorage.setItem('sidebarCollapsed', collapsed);
-}
-// Restore sidebar state across sessions
-if(localStorage.getItem('sidebarCollapsed')==='true'){
-  document.body.classList.add('sidebar-collapsed');
 }
 
 function flashDownPill(){
@@ -1016,7 +1006,11 @@ async function loadAll(){
   renderFlaps(); // re-render events now that S.devices (groups) is populated
   updatePills();
   restoreGroupOrder();
-  renderSidebar();
+  _restoreViewToggle();
+  // Update group summaries for collapsed groups
+  document.querySelectorAll('.grp-grid.collapsed').forEach(g=>{
+    if(g.dataset.group) _updateGrpSummary(g.dataset.group);
+  });
   // Backfill per-device trap log from historical FLAPS (devices now loaded)
   FLAPS.filter(f=>f._direction==='trap').forEach(t=>{
     const dev=Object.values(S.devices).find(v=>v.host===t.src_ip);

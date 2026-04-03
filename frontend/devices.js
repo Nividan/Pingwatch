@@ -4,6 +4,32 @@ function grpId(g){ return 'grp-'+btoa(unescape(encodeURIComponent(g))).replace(/
 function gridId(g){ return 'gg-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 function cntId(g){  return 'gc-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 
+// ── View mode (grid / list) ─────────────────────────────────────
+let _devView = localStorage.getItem('pw-dev-view') || 'grid';
+
+function _setView(mode){
+  _devView = mode;
+  localStorage.setItem('pw-dev-view', mode);
+  document.getElementById('vtGrid')?.classList.toggle('active', mode==='grid');
+  document.getElementById('vtList')?.classList.toggle('active', mode==='list');
+  _applyViewMode();
+}
+
+function _applyViewMode(){
+  const isList = _devView==='list';
+  document.querySelectorAll('.grp-grid').forEach(g => g.classList.toggle('list-view', isList));
+  // Re-apply filter so visibility is correct
+  _applyDevFilter(document.getElementById('devSearch')?.value||'');
+}
+
+function _restoreViewToggle(){
+  if(_devView==='list'){
+    document.getElementById('vtGrid')?.classList.remove('active');
+    document.getElementById('vtList')?.classList.add('active');
+    document.querySelectorAll('.grp-grid').forEach(g => g.classList.add('list-view'));
+  }
+}
+
 /** Safe localStorage JSON reader — returns fallback on parse error or missing key. */
 function _lsGet(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; }
@@ -53,12 +79,15 @@ function ensureGroupSection(group){
   const line2=document.createElement('div');
   line2.className='grp-line';
 
+  const summary=document.createElement('span');
+  summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
+
   hdr.appendChild(dragH); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
-  hdr.appendChild(cnt);   hdr.appendChild(line2);
+  hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
 
   // Grid
   const grid=document.createElement('div');
-  grid.className='grp-grid'+(isCol?' collapsed':''); grid.id=gid; grid.dataset.group=group;
+  grid.className='grp-grid'+(isCol?' collapsed':'')+((_devView==='list')?' list-view':''); grid.id=gid; grid.dataset.group=group;
   grid.addEventListener('dragover',onDragOver);
   grid.addEventListener('drop',onDrop);
   grid.addEventListener('dragleave',onDragLeave);
@@ -94,6 +123,28 @@ function toggleGroup(group){
   const set=new Set(_lsGet('pw-grp-collapsed', []));
   if(nowCol) set.add(group); else set.delete(group);
   _lsSet('pw-grp-collapsed', [...set]);
+  _updateGrpSummary(group);
+}
+
+function _updateGrpSummary(group){
+  const gid=gridId(group).replace('gg-','');
+  const el=document.getElementById('gsum-'+gid);
+  if(!el) return;
+  const grid=document.getElementById(gridId(group));
+  if(!grid||!grid.classList.contains('collapsed')){el.style.display='none';return;}
+  // Count devices by status in this group
+  const counts={up:0,down:0,warn:0};
+  grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+    const did=card.id.replace('dp-','');
+    const dev=S.devices[did];
+    if(dev){const st=dev.status||'unknown';if(counts[st]!==undefined)counts[st]++;}
+  });
+  let html='';
+  if(counts.up)   html+=`<span class="grp-sum-dot up"></span> ${counts.up}`;
+  if(counts.down)  html+=`${html?' ':''}  <span class="grp-sum-dot down"></span> ${counts.down}`;
+  if(counts.warn)  html+=`${html?' ':''}  <span class="grp-sum-dot warn"></span> ${counts.warn}`;
+  el.innerHTML=html;
+  el.style.display=html?'inline-flex':'none';
 }
 
 function pruneEmptyGroups(){
@@ -109,15 +160,23 @@ function renderDp(dev){
   if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
   const old=document.getElementById('dp-'+dev.device_id);
   if(old) old.remove();
+  const oldLr=document.getElementById('dpl-'+dev.device_id);
+  if(oldLr) oldLr.remove();
   const group=dev.group||'Default Group';
   ensureGroupSection(group);
   const grid=document.getElementById(gridId(group));
   const addBtn=grid.querySelector('.dc-add');
+  // Card (grid view)
   const el=document.createElement('div');
   el.innerHTML=cardHTML(dev);
   const card=el.firstElementChild;
   grid.insertBefore(card,addBtn);
   applyDrag(card);
+  // List row (list view)
+  const lr=document.createElement('div');
+  lr.innerHTML=listRowHTML(dev);
+  const row=lr.firstElementChild;
+  grid.insertBefore(row,addBtn);
   dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
   refreshGroupCounts();
   applyRbac();
@@ -218,6 +277,42 @@ function cardHTML(dev){
   </div>`;
 }
 
+function listRowHTML(dev){
+  const st=dev.device_id ? (dev.status||'unknown') : 'unknown';
+  const snrs=Object.values(S.sensors).filter(s=>s.device_id===dev.device_id);
+  const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
+  const snrVal=s=>{
+    if(s.stype==='vmware'){
+      if(s.last_value==null) return '\u2014';
+      const v=parseFloat(s.last_value);
+      if(isNaN(v)) return (s.last_value+'').slice(0,10);
+      return _fmtVmVal(v,_VM_UNITS[s.vmware_metric]||'');
+    }
+    if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'\u2014').slice(0,10);
+    return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'\u2014');
+  };
+  const vc=s=>{
+    if(s.alive===false)return'b';
+    if(s.stype==='vmware'||isSnmp(s))return s.alive===true?'g':'m';
+    return s.last_ms!=null?msC(s.last_ms,s):'m';
+  };
+  let snrHtml='';
+  snrs.slice(0,5).forEach(s=>{
+    snrHtml+=`<span class="dlr-snr">
+      <span class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</span>
+      <span class="dc-snr-nm">${esc(s.name)}</span>
+      <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</span>
+    </span>`;
+  });
+  if(snrs.length>5) snrHtml+=`<span class="dlr-more">+${snrs.length-5}</span>`;
+  return `<div class="dc-list-row ${st}" id="dpl-${dev.device_id}" onclick="openDevWin('${dev.device_id}')">
+    <div class="dlr-dot"></div>
+    <div class="dlr-name">${esc(dev.name)}</div>
+    <div class="dlr-host">${esc(dev.host)}</div>
+    <div class="dlr-sensors">${snrHtml}</div>
+  </div>`;
+}
+
 function updateCardStatus(did,st){
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
   const card=document.getElementById(`dp-${did}`);
@@ -228,6 +323,9 @@ function updateCardStatus(did,st){
     const badge=document.getElementById(`dcst-${did}`);
     if(badge){badge.className=`dc-status ${st}`;badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}`;}
   }
+  // Also update list row
+  const lr=document.getElementById(`dpl-${did}`);
+  if(lr) lr.className=`dc-list-row ${st}`;
 }
 
 function updateCardSensor(s){
@@ -250,9 +348,21 @@ function updateCardSensor(s){
     vEl.textContent=v; vEl.className=`dc-snr-val ${c}`;
   }
   if(dEl) dEl.className=`dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
+  // Also update list row sensor value
+  const lsv=document.getElementById(`lsv-${s.device_id}_${s.sensor_id}`);
+  if(lsv){
+    const isSnmp2=full.stype==='snmp'||full.stype==='dns';
+    const isVm2=full.stype==='vmware';
+    let v2;
+    if(isVm2){ if(full.last_value==null) v2='\u2014'; else { const nv=parseFloat(full.last_value); v2=isNaN(nv)?(full.last_value+'').slice(0,10):_fmtVmVal(nv,_VM_UNITS[full.vmware_metric]||''); } }
+    else if(isSnmp2){ v2=full.alive===false?'FAIL':(full.last_value||'\u2014').slice(0,10); }
+    else { v2=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'\u2014'); }
+    const c2=full.alive===false?'b':((isSnmp2||isVm2)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
+    lsv.textContent=v2; lsv.className=`dc-snr-val ${c2}`;
+  }
 }
 
-// �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DRAG AND DROP �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
+//�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DRAG AND DROP �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
 let dragDid=null, dragEl=null, dropIndicator=null;
 let _dragGrp=null, _dragGrpEl=null, _grpDragOK=false, _grpDragging=false;
 // Reset drag-from-handle flag on any mouseup (handles aborted drags)
@@ -342,7 +452,6 @@ function onDrop(e){
   if((dev.group||'Default Group')!==group){
     dev.group=group;
     api('PATCH','/api/device/'+did,{group});
-    renderSidebar();
   }
   refreshGroupCounts();
   pruneEmptyGroups();
@@ -753,17 +862,21 @@ function _renderPage(){
   const start=_devPage*_devPageSize;
   const visible=new Set(_filteredDids.slice(start,start+_devPageSize));
   const allDids=new Set(_filteredDids);
-  // Show/hide individual cards
+  // Show/hide individual cards and list rows
   document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
     const did=card.id.replace('dp-','');
     card.style.display=visible.has(did)?'':'none';
   });
-  // Hide groups with no visible cards on this page; hide groups not in filter
+  document.querySelectorAll('.dc-list-row').forEach(row=>{
+    const did=row.id.replace('dpl-','');
+    row.style.display=visible.has(did)?'':'none';
+  });
+  // Hide groups with no visible devices on this page
   document.querySelectorAll('.grp-wrap').forEach(wrap=>{
     const grid=wrap.querySelector('.grp-grid');
     if(!grid){wrap.style.display='';return;}
     const hasVisible=[...grid.querySelectorAll('.dc:not(.dc-add)')]
-      .some(c=>c.style.display!=='none');
+      .some(c=>visible.has(c.id.replace('dp-','')));
     wrap.style.display=hasVisible?'':'none';
   });
   // No-results message
