@@ -34,7 +34,6 @@ VM_METRICS = [
     {"v": "cpu_ready",        "l": "CPU Ready (Percent)",       "group": "cpu",       "counter": "cpu.ready.summation",                     "unit": "%",      "convert": "ready_pct"},
     {"v": "mem_active",       "l": "Memory Active",             "group": "mem",       "counter": "mem.active.average",                      "unit": "MB",     "divisor": 1024},
     {"v": "mem_consumed",     "l": "Memory Consumed",           "group": "mem",       "counter": "mem.consumed.average",                    "unit": "MB",     "divisor": 1024},
-    {"v": "mem_consumed_pct", "l": "Memory Consumed (Percent)", "group": "mem",       "counter": "mem.usage.average",                       "unit": "%",      "divisor": 100},
     {"v": "disk_read",        "l": "Disk Read",                 "group": "disk",      "counter": "disk.read.average",                       "unit": "KBps"},
     {"v": "disk_write",       "l": "Disk Write",                "group": "disk",      "counter": "disk.write.average",                      "unit": "KBps"},
     {"v": "disk_usage",       "l": "Disk Usage",                "group": "disk",      "counter": "disk.usage.average",                      "unit": "KBps"},
@@ -74,6 +73,9 @@ def _make_ssl_ctx(verify_ssl):
 
 def _get_session(host, user, password, port=443, verify_ssl=False):
     """Return a cached or fresh ServiceInstance."""
+    if not verify_ssl:
+        from core.logger import log
+        log.warning("VMware: SSL certificate verification disabled for %s — enable in sensor settings for production use", host)
     SmartConnect, Disconnect, vim, vmodl = _require_pyvmomi()
 
     key = (host, user)

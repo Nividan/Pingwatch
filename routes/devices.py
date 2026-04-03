@@ -423,11 +423,14 @@ def handle(h, method, path, body):
             kwargs["vmware_password"] = encrypt_pw(body["vmware_password"])
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
-        if "interval" in kwargs:
-            kwargs["interval"] = max(1, min(3600, int(kwargs["interval"])))
-        if "timeout" in kwargs:
-            iv = int(kwargs.get("interval", body.get("interval", 5)))
-            kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
+        try:
+            if "interval" in kwargs:
+                kwargs["interval"] = max(1, min(3600, int(kwargs["interval"])))
+            if "timeout" in kwargs:
+                iv = int(kwargs.get("interval", body.get("interval", 5)))
+                kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
+        except (TypeError, ValueError):
+            h._json(400, {"error": "interval and timeout must be integers"}); return True
         if kwargs.get("banner_regex"):
             if len(kwargs["banner_regex"]) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -476,8 +479,11 @@ def handle(h, method, path, body):
         host  = body.get("host") or (dev.host if dev else None)
         port  = body.get("port")
         url   = (body.get("url") or "").strip() or None
-        iv    = max(1, min(3600, int(body.get("interval", 5))))
-        to    = max(1, min(iv, int(body.get("timeout", 4))))
+        try:
+            iv    = max(1, min(3600, int(body.get("interval", 5))))
+            to    = max(1, min(iv, int(body.get("timeout", 4))))
+        except (TypeError, ValueError):
+            h._json(400, {"error": "interval and timeout must be integers"}); return True
         vssl  = bool(body.get("verify_ssl", True))
         comm  = (body.get("snmp_community") or "").strip()
         if not comm:
@@ -485,13 +491,16 @@ def handle(h, method, path, body):
         oid   = body.get("snmp_oid", "1.3.6.1.2.1.1.1.0")
         sver  = body.get("snmp_version", "2c")
         sunit = body.get("snmp_unit", "")
-        xstat = int(body.get("http_expected_status", 0))
-        fa    = max(1, int(body.get("fail_after",    1) or 1))
-        ra    = max(1, int(body.get("recover_after", 1) or 1))
-        wms   = int(body["warn_ms"])  if body.get("warn_ms")  else None
-        cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
-        lwp   = int(body.get("loss_warn_pct", 0) or 0)
-        lcp   = int(body.get("loss_crit_pct", 0) or 0)
+        try:
+            xstat = int(body.get("http_expected_status", 0))
+            fa    = max(1, int(body.get("fail_after",    1) or 1))
+            ra    = max(1, int(body.get("recover_after", 1) or 1))
+            wms   = int(body["warn_ms"])  if body.get("warn_ms")  else None
+            cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
+            lwp   = int(body.get("loss_warn_pct", 0) or 0)
+            lcp   = int(body.get("loss_crit_pct", 0) or 0)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "Numeric fields must be integers"}); return True
         kw    = body.get("keyword", "")
         kwc   = bool(body.get("keyword_case", False))
         bnr   = body.get("banner_regex", "")

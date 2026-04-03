@@ -538,9 +538,13 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         from db.pg_pool import pg_test_connection
+        try:
+            _pg_port = int(body.get("port", 5432))
+        except (TypeError, ValueError):
+            h._json(400, {"ok": False, "error": "port must be an integer"}); return True
         ok, err = pg_test_connection(
             str(body.get("host", "localhost")).strip(),
-            int(body.get("port", 5432)),
+            _pg_port,
             str(body.get("database", "pingwatch")).strip(),
             str(body.get("user", "pingwatch")).strip(),
             str(body.get("password", "")),
@@ -554,7 +558,10 @@ def handle(h, method, path, body):
         if not user: return True
         from db.pg_pool import pg_test_connection
         host   = str(body.get("host", "localhost")).strip()
-        port   = int(body.get("port", 5432))
+        try:
+            port = int(body.get("port", 5432))
+        except (TypeError, ValueError):
+            h._json(400, {"ok": False, "error": "port must be an integer"}); return True
         dbname = str(body.get("database", "pingwatch")).strip()
         pg_user = str(body.get("user", "pingwatch")).strip()
         pw     = str(body.get("password", ""))

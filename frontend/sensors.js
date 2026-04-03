@@ -893,7 +893,7 @@ function _fmtRateThrLabel(displayVal, snmpUnit) {
 }
 
 // ── VMware metric unit helpers ───────────────────────────────────
-const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',mem_consumed_pct:'%',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',disk_used_pct:'%',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:''};
+const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',disk_used_pct:'%',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:''};
 function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
 function _fmtVmVal(v,u){
   if(v==null)return'—';
