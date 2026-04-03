@@ -28,6 +28,7 @@ function _restoreViewToggle(){
     document.getElementById('vtList')?.classList.add('active');
     document.querySelectorAll('.grp-grid').forEach(g => g.classList.add('list-view'));
   }
+  _initDevCtxMenu();
 }
 
 /** Safe localStorage JSON reader — returns fallback on parse error or missing key. */
@@ -147,6 +148,89 @@ function _updateGrpSummary(group){
   el.style.display=html?'inline-flex':'none';
 }
 
+function _devSnrSummaryHtml(did){
+  const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
+  if(!snrs.length) return '';
+  let ok=0,warn=0,down=0;
+  snrs.forEach(s=>{
+    if(s.alive===false) down++;
+    else if(s.threshold_state&&s.threshold_state!=='ok') warn++;
+    else if(s.alive===true) ok++;
+  });
+  let h='';
+  if(ok)   h+=`<span class="dls-chip up"><span class="dls-dot"></span>${ok}</span>`;
+  if(warn) h+=`<span class="dls-chip warn"><span class="dls-dot"></span>${warn}</span>`;
+  if(down) h+=`<span class="dls-chip down"><span class="dls-dot"></span>${down}</span>`;
+  return h?`<div class="dlr-summary" id="dlr-sum-${did}">${h}</div>`:'';
+}
+
+// ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
+let _dcm=null;
+
+function _showDcm(x,y){
+  if(!_dcm) return;
+  _dcm.style.display='block';
+  const mw=_dcm.offsetWidth||185,mh=_dcm.offsetHeight||160;
+  _dcm.style.left=(x+mw>innerWidth?x-mw:x)+'px';
+  _dcm.style.top =(y+mh>innerHeight?y-mh:y)+'px';
+}
+
+function _hideDcm(){ if(_dcm) _dcm.style.display='none'; }
+
+function _initDevCtxMenu(){
+  if(_dcm) return; // already initialized
+  _dcm=document.getElementById('dev-ctx-menu');
+  if(!_dcm) return;
+  document.addEventListener('click',_hideDcm);
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') _hideDcm(); });
+  const panels=document.getElementById('dpanels');
+  if(!panels) return;
+  panels.addEventListener('contextmenu',e=>{
+    e.preventDefault();
+    const card=e.target.closest('.dc:not(.dc-add)');
+    const row =e.target.closest('.dc-list-row');
+    const raw =(card?.id||row?.id||'');
+    const did =raw.replace(/^dp-|^dpl-/,'') || null;
+    if(did&&S.devices[did]){
+      const dev=S.devices[did];
+      const muted=dev.alerts_muted;
+      _dcm.innerHTML=`
+        <div class="dci dci-accent" onclick="_hideDcm();openDevWin('${did}')">📊 Open Details</div>
+        <div class="dci" onclick="_hideDcm();openEditDevice('${did}')">⚙️ Edit Device</div>
+        <div class="dci-sep"></div>
+        <div class="dci ${muted?'dci-green':'dci-warn'}" onclick="_hideDcm();_toggleMuteDevice('${did}')">
+          ${muted?'🔔 Unmute Alerts':'🔕 Mute Alerts'}
+        </div>`;
+    } else {
+      _dcm.innerHTML=`
+        <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
+        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup()">👥 Add Group</div>`;
+    }
+    _showDcm(e.clientX+2,e.clientY+2);
+  });
+}
+
+async function _toggleMuteDevice(did){
+  const dev=S.devices[did];
+  if(!dev) return;
+  const newMuted=!dev.alerts_muted;
+  try{
+    await api('PATCH',`/api/device/${did}`,{
+      name:dev.name,host:dev.host,
+      group:dev.group||'Default Group',
+      webhook_url:dev.webhook_url||'',
+      alerts_muted:newMuted,
+      snmp_community_default:dev.snmp_community_default||'',
+      snmp_version_default:dev.snmp_version_default||'',
+      vmware_user_default:dev.vmware_user_default||''
+    });
+    dev.alerts_muted=newMuted;
+    toast(newMuted?`🔕 Alerts muted: ${dev.name}`:`🔔 Alerts unmuted: ${dev.name}`,'ok');
+  }catch(e){
+    toast('Failed to update alert setting','err');
+  }
+}
+
 function pruneEmptyGroups(){
   document.querySelectorAll('.grp-wrap').forEach(w=>{
     const grid=w.querySelector('.grp-grid');
@@ -243,7 +327,7 @@ function sSnrPreview(did){
       </div>`;
     }
     const s=item.s;
-    return `<div class="dc-snr">
+    return `<div class="dc-snr snr-t-${s.stype}">
       <div class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</div>
       <div class="dc-snr-nm">${esc(s.name)}</div>
       <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</div>
@@ -306,7 +390,7 @@ function listRowHTML(dev){
   };
   let snrHtml='';
   snrs.slice(0,5).forEach(s=>{
-    snrHtml+=`<span class="dlr-snr">
+    snrHtml+=`<span class="dlr-snr snr-t-${s.stype}">
       <span class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</span>
       <span class="dc-snr-nm">${esc(s.name)}</span>
       <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</span>
@@ -318,6 +402,7 @@ function listRowHTML(dev){
     <div class="dlr-name">${esc(dev.name)}</div>
     <div class="dlr-host">${esc(dev.host)}</div>
     <div class="dlr-sensors">${snrHtml}</div>
+    ${_devSnrSummaryHtml(dev.device_id)}
   </div>`;
 }
 
@@ -334,6 +419,9 @@ function updateCardStatus(did,st){
   // Also update list row
   const lr=document.getElementById(`dpl-${did}`);
   if(lr) lr.className=`dc-list-row ${st}`;
+  // Refresh summary badge
+  const sumEl=document.getElementById(`dlr-sum-${did}`);
+  if(sumEl){ const h=_devSnrSummaryHtml(did); if(h) sumEl.outerHTML=h; }
 }
 
 function updateCardSensor(s){
@@ -368,6 +456,9 @@ function updateCardSensor(s){
     const c2=full.alive===false?'b':((isSnmp2||isVm2)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
     lsv.textContent=v2; lsv.className=`dc-snr-val ${c2}`;
   }
+  // Refresh summary badge for this device
+  const sumEl2=document.getElementById(`dlr-sum-${s.device_id}`);
+  if(sumEl2){ const h=_devSnrSummaryHtml(s.device_id); if(h) sumEl2.outerHTML=h; }
 }
 
 //�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DRAG AND DROP �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?

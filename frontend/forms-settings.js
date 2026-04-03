@@ -48,25 +48,27 @@ async function openSettings(){
     '<input type="checkbox" id="st-dbk-d' + v + '" value="' + v + '"' + (_dbkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
   ).join('');
   o.innerHTML=`
-  <div class="mbox" style="width:900px;max-width:96vw">
+  <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
     <div class="mhd">
       <div class="mttl">⚙ Settings</div>
       <button class="mclose" onclick="closeM('mset')">✕</button>
     </div>
-    <div class="dw-tabs" style="padding:0 4px">
-      <button class="dw-tab active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
-      <button class="dw-tab" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
-      <button class="dw-tab" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
-      <button class="dw-tab" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">📧 SMTP</button>
-      <button class="dw-tab" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
-      <button class="dw-tab" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
-      <button class="dw-tab" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
-      <button class="dw-tab" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
-      <button class="dw-tab" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
-      <button class="dw-tab" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">📤 Syslog</button>
-      <button class="dw-tab" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
-    </div>
-    <div class="mbdy stab-fade" id="stab-general" style="max-height:72vh;overflow-y:auto">
+    <div class="stab-layout">
+    <nav class="stab-sidebar">
+      <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
+      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
+      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
+      <button class="stab-nav" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">📧 SMTP</button>
+      <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
+      <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
+      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
+      <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
+      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
+      <button class="stab-nav" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">📤 Syslog</button>
+      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
+    </nav>
+    <div class="stab-content">
+    <div class="mbdy stab-fade" id="stab-general" style="overflow-y:auto;flex:1">
       <div class="fr">
         <label class="fl">Session Timeout (seconds)</label>
         <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
@@ -138,7 +140,7 @@ async function openSettings(){
         <div class="fh" style="margin-top:8px">Restart applies pending settings changes. Shutdown stops the server process entirely.</div>
       </div>
     </div>
-    <div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px">
+    <div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px;overflow-y:auto;flex:1">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
@@ -169,14 +171,14 @@ async function openSettings(){
         </div>
       </div>
     </div>
-    <div class="mbdy stab-fade" id="stab-groups" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-groups" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr" style="margin-bottom:10px">
         <span style="color:var(--text3);font-size:12px">Manage alert recipient groups. Assign users to groups and use groups in alert rule email actions.</span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="_groupsOpenEditor(null)">＋ New Group</button>
       </div>
       <div id="group-list"><div class="alrt-loading">Loading…</div></div>
     </div>
-    <div class="mbdy stab-fade" id="stab-smtp" style="display:none">
+    <div class="mbdy stab-fade" id="stab-smtp" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
       <div class="fgrid">
         <div class="fr"><label class="fl">SMTP Host</label>
@@ -230,7 +232,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-database" style="display:none">
+    <div class="mbdy stab-fade" id="stab-database" style="display:none;overflow-y:auto;flex:1">
 
       <!-- Database Backend -->
       <div id="db-backend-section" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
@@ -315,7 +317,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0">
+    <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
       <div class="log-subtab-bar">
         <button class="log-stab active" id="lstab-btn-app"     onclick="_switchLogTab('app')">Application</button>
         <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
@@ -328,7 +330,7 @@ async function openSettings(){
     <div class="mft" id="stab-footer-logs" style="display:none">
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
     </div>
-    <div class="mbdy stab-fade" id="stab-sensors" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
         <div class="fl" style="margin-bottom:6px">Global Defaults</div>
         <div class="fh" style="margin-bottom:10px">Fallback values applied to all new sensors — override per type below.</div>
@@ -365,7 +367,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-networking" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-networking" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Ports</div>
       <div class="fr">
         <label class="fl">HTTP Port</label>
@@ -431,7 +433,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-backup" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-backup" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Global Backup Schedule</div>
       <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="flex:1">
@@ -474,7 +476,7 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-syslog" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-syslog" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Syslog Forwarding</div>
       <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="flex:1">
@@ -520,7 +522,7 @@ async function openSettings(){
       <button class="btn-s" onclick="testSyslog()">Send Test Message</button>
       <button class="btn-p" onclick="saveSyslogSettings()">Save Syslog</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;max-height:72vh;overflow-y:auto">
+    <div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr">
         <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
         <button class="btn-p rbac-admin" onclick="_alertingOpenEditor(null)">＋ New Rule</button>
@@ -540,6 +542,8 @@ async function openSettings(){
     <div class="mft" id="stab-footer-alert-rules" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
+    </div><!-- /stab-content -->
+    </div><!-- /stab-layout -->
   </div>`;
   document.body.appendChild(o);
 }
@@ -563,11 +567,6 @@ function switchSettingsTab(tab){
 
   _stabSwitching = true;
   if (curEl) {
-    // Lock current height so the box doesn't jump
-    const startH = mbox.offsetHeight;
-    mbox.style.height = startH + 'px';
-    mbox.classList.add('stab-anim');
-
     // Phase 1: fade out current tab
     curEl.classList.add('stab-out');
     setTimeout(() => {
@@ -580,20 +579,11 @@ function switchSettingsTab(tab){
       nextEl.classList.add('stab-out');
       document.getElementById(`stab-footer-${tab}`).style.display = '';
 
-      // Measure target height against placeholder ("Loading…") state — before content loads
-      mbox.style.height = 'auto';
-      const endH = mbox.offsetHeight;
-      mbox.style.height = startH + 'px';
-
-      // Animate height + fade in (double-rAF ensures browser paints opacity:0 before transitioning)
+      // Fade in
       requestAnimationFrame(() => {
-        mbox.style.height = endH + 'px';
         requestAnimationFrame(() => {
           nextEl.classList.remove('stab-out');
-          // Load content AFTER animation so it never races with the height transition
           setTimeout(() => {
-            mbox.style.height = '';
-            mbox.classList.remove('stab-anim');
             _stabSwitching = false;
             if (tab === 'logs')        _loadLogTab();
             if (tab === 'sensors')     loadSensorsDefaultsTab();
@@ -601,7 +591,7 @@ function switchSettingsTab(tab){
             if (tab === 'database')    _loadDbBackupSettings();
             if (tab === 'alert-rules') { _alertingLoadRules(); _alertingLoadMaint(); }
             if (tab === 'groups')      _groupsLoad();
-          }, 280);
+          }, 220);
         });
       });
     }, 200);
