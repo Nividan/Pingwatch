@@ -319,4 +319,54 @@ def handle(h, method, path, body):
         h._json(200, {"vms": _vms})
         return True
 
+    # ── /api/vmware/host-metrics GET ────────────────────────────────
+    if path == "/api/vmware/host-metrics" and method == "GET":
+        if not h._auth(): return True
+        from vmware.client import HOST_METRICS
+        h._json(200, {"metrics": [
+            {"v": m["v"], "l": m["l"], "unit": m["unit"], "group": m["group"]}
+            for m in HOST_METRICS
+        ]})
+        return True
+
+    # ── /api/vmware/hosts POST ──────────────────────────────────────
+    if path == "/api/vmware/hosts" and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        _host = (body.get("host") or "").strip()
+        _user = (body.get("username") or "").strip()
+        _pw   = body.get("password") or ""
+        _vssl = body.get("verify_ssl", False)
+        try:
+            _port = int(body.get("port") or 443)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "port must be an integer"}); return True
+        if not _host:
+            h._json(400, {"error": "host required"}); return True
+        if not _user:
+            h._json(400, {"error": "username required"}); return True
+        if not _pw:
+            _did = body.get("did", "")
+            if _did:
+                _dev = STATE.devices.get(_did)
+                if _dev and _dev.vmware_password_default:
+                    from db.backups import decrypt_pw
+                    _pw = decrypt_pw(_dev.vmware_password_default)
+        if not _pw:
+            h._json(400, {"error": "password required"}); return True
+        try:
+            from vmware import vmware_discover_hosts
+            _hosts = vmware_discover_hosts(_host, _user, _pw, port=_port, verify_ssl=_vssl)
+        except RuntimeError as e:
+            h._json(503, {"error": str(e)}); return True
+        except PermissionError:
+            h._json(401, {"error": "Authentication failed"}); return True
+        except ConnectionError as e:
+            h._json(502, {"error": str(e)}); return True
+        except Exception as e:
+            log.error(f"VMware host discovery error: {e}")
+            h._json(500, {"error": "VMware connection failed"}); return True
+        h._json(200, {"hosts": _hosts})
+        return True
+
     return False

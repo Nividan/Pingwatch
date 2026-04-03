@@ -47,8 +47,36 @@ VM_METRICS = [
     {"v": "on",               "l": "Power State",               "group": "sys",       "counter": None,                                      "unit": ""},
 ]
 
+HOST_METRICS = [
+    # CPU
+    {"v": "host_cpu_usage",      "l": "CPU Usage",              "group": "cpu",       "counter": "cpu.usage.average",                    "unit": "%",      "divisor": 100},
+    {"v": "host_cpu_ready",      "l": "CPU Ready (%)",          "group": "cpu",       "counter": "cpu.ready.summation",                  "unit": "%",      "convert": "ready_pct"},
+    # Memory
+    {"v": "host_mem_active",     "l": "Memory Active",          "group": "mem",       "counter": "mem.active.average",                   "unit": "MB",     "divisor": 1024},
+    {"v": "host_mem_consumed",   "l": "Memory Consumed",        "group": "mem",       "counter": "mem.consumed.average",                 "unit": "MB",     "divisor": 1024},
+    {"v": "host_mem_usage_pct",  "l": "Memory Usage (%)",       "group": "mem",       "counter": "mem.usage.average",                    "unit": "%",      "divisor": 100},
+    {"v": "host_mem_swap",       "l": "Memory Swap Used",       "group": "mem",       "counter": "mem.swapused.average",                 "unit": "MB",     "divisor": 1024},
+    # Disk
+    {"v": "host_disk_read",      "l": "Disk Read",              "group": "disk",      "counter": "disk.read.average",                    "unit": "KBps"},
+    {"v": "host_disk_write",     "l": "Disk Write",             "group": "disk",      "counter": "disk.write.average",                   "unit": "KBps"},
+    {"v": "host_disk_usage",     "l": "Disk Usage",             "group": "disk",      "counter": "disk.usage.average",                   "unit": "KBps"},
+    {"v": "host_disk_dev_lat",   "l": "Disk Device Latency",    "group": "disk",      "counter": "disk.deviceLatency.average",            "unit": "ms"},
+    {"v": "host_disk_kern_lat",  "l": "Disk Kernel Latency",    "group": "disk",      "counter": "disk.kernelLatency.average",            "unit": "ms"},
+    # Datastore
+    {"v": "host_ds_read_lat",    "l": "Datastore Read Latency", "group": "datastore", "counter": "datastore.totalReadLatency.average",    "unit": "ms"},
+    {"v": "host_ds_write_lat",   "l": "Datastore Write Latency","group": "datastore", "counter": "datastore.totalWriteLatency.average",   "unit": "ms"},
+    # Network
+    {"v": "host_net_rx",         "l": "Network Received",       "group": "net",       "counter": "net.received.average",                 "unit": "KBps"},
+    {"v": "host_net_tx",         "l": "Network Transmitted",    "group": "net",       "counter": "net.transmitted.average",               "unit": "KBps"},
+    {"v": "host_net_usage",      "l": "Network Usage",          "group": "net",       "counter": "net.usage.average",                    "unit": "KBps"},
+    # System
+    {"v": "host_power",          "l": "Power Consumption",      "group": "sys",       "counter": "power.power.average",                  "unit": "watt"},
+    {"v": "host_uptime",         "l": "Uptime",                 "group": "sys",       "counter": "sys.uptime.latest",                    "unit": "seconds"},
+]
+
 # Quick lookup: metric key → definition
-_METRIC_BY_KEY = {m["v"]: m for m in VM_METRICS}
+_METRIC_BY_KEY      = {m["v"]: m for m in VM_METRICS}
+_HOST_METRIC_BY_KEY = {m["v"]: m for m in HOST_METRICS}
 
 # pyvmomi counter name → metric key
 _COUNTER_TO_KEY = {m["counter"]: m["v"] for m in VM_METRICS}
@@ -179,7 +207,57 @@ def vmware_discover_vms(host, user, password, port=443, verify_ssl=False):
 
 
 # ---------------------------------------------------------------------------
-# Metric cache — avoids redundant QueryPerf when many sensors target same VM
+# ESXi host discovery
+# ---------------------------------------------------------------------------
+
+def vmware_discover_hosts(host, user, password, port=443, verify_ssl=False):
+    """Connect to vCenter/ESXi and return a list of ESXi host dicts.
+
+    Each dict: {host_id, name, connection_state, cpu_model, cpu_count,
+                cpu_cores, memory_mb, num_vms, version}
+    """
+    _, _, vim, _ = _require_pyvmomi()
+
+    try:
+        si = _get_session(host, user, password, port, verify_ssl)
+    except (PermissionError, ConnectionError):
+        _invalidate_session(host, user)
+        raise
+
+    content = si.RetrieveContent()
+    view = content.viewManager.CreateContainerView(
+        content.rootFolder, [vim.HostSystem], recursive=True
+    )
+
+    hosts = []
+    try:
+        for h in view.view:
+            try:
+                rt  = h.runtime
+                hw  = h.summary.hardware if h.summary else None
+                cfg = h.summary.config   if h.summary else None
+                hosts.append({
+                    "host_id":          h._moId,
+                    "name":             h.name or "",
+                    "connection_state": str(rt.connectionState) if rt else "unknown",
+                    "cpu_model":        hw.cpuModel if hw else "",
+                    "cpu_count":        hw.numCpuPkgs if hw else 0,
+                    "cpu_cores":        hw.numCpuCores if hw else 0,
+                    "memory_mb":        int(hw.memorySize / (1024 * 1024)) if hw and hw.memorySize else 0,
+                    "num_vms":          len(h.vm) if h.vm else 0,
+                    "version":          (cfg.product.fullName if cfg and cfg.product else ""),
+                })
+            except Exception:
+                continue
+    finally:
+        view.Destroy()
+
+    hosts.sort(key=lambda x: x["name"].lower())
+    return hosts
+
+
+# ---------------------------------------------------------------------------
+# Metric cache — avoids redundant QueryPerf when many sensors target same VM/Host
 # ---------------------------------------------------------------------------
 
 _metric_cache = {}          # (host, vm_id) → {"ts": monotonic, "data": {key: value}}
@@ -196,8 +274,8 @@ def _build_counter_map(perf_manager):
     return cmap
 
 
-def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
-    """Query all VM_METRICS for a single VM in one QueryPerf call.
+def _query_all_metrics(si, entity_moref, metrics, num_cpu=1):
+    """Query perf counters from *metrics* list for a managed entity (VM or Host).
 
     Returns dict {metric_key: numeric_value} with unit conversions applied.
     """
@@ -209,7 +287,7 @@ def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
     # Build metric IDs for the counters we care about
     metric_ids = []
     counter_key_to_metric = {}  # counterId → metric def
-    for m in VM_METRICS:
+    for m in metrics:
         if not m.get("counter"):
             continue  # runtime-only metrics (e.g. power state) have no perf counter
         cid = cmap.get(m["counter"])
@@ -223,7 +301,7 @@ def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
         return {}
 
     query = vim.PerformanceManager.QuerySpec(
-        entity=vm_moref,
+        entity=entity_moref,
         metricId=metric_ids,
         intervalId=20,      # realtime (20-second samples)
         maxSample=1,
@@ -267,11 +345,16 @@ def _query_all_vm_metrics(si, vm_moref, num_cpu=1):
 
 def vmware_probe(host, user, password, vm_id, metric,
                  port=443, verify_ssl=False, timeout=30, disk_path=""):
-    """Probe a single VMware metric for a specific VM.
+    """Probe a single VMware metric for a VM or ESXi host.
+
+    Host metrics are identified by the ``host_`` prefix on the metric key.
+    The *vm_id* parameter carries either a VM moId (``vm-123``) or a host
+    moId (``host-28``).
 
     Returns {ok, ms, detail, value} matching the PingWatch probe contract.
     """
-    mdef = _METRIC_BY_KEY.get(metric)
+    is_host = metric.startswith("host_")
+    mdef = (_HOST_METRIC_BY_KEY if is_host else _METRIC_BY_KEY).get(metric)
     if not mdef:
         return {"ok": False, "ms": None,
                 "detail": f"Unknown metric: {metric}"}
@@ -303,8 +386,60 @@ def vmware_probe(host, user, password, vm_id, metric,
         _invalidate_session(host, user)
         return {"ok": False, "ms": None, "detail": str(e)}
 
-    # Find VM by moId
     content = si.RetrieveContent()
+
+    # ══════════════════════════════════════════════════════════════════
+    # ESXi host metric branch
+    # ══════════════════════════════════════════════════════════════════
+    if is_host:
+        host_moref = None
+        num_pcpu = 1
+        try:
+            view = content.viewManager.CreateContainerView(
+                content.rootFolder, [vim.HostSystem], recursive=True
+            )
+            for h in view.view:
+                if h._moId == vm_id:
+                    host_moref = h
+                    hw = h.summary.hardware if h.summary else None
+                    if hw:
+                        num_pcpu = hw.numCpuPkgs or 1
+                    break
+            view.Destroy()
+        except Exception:
+            pass
+
+        if host_moref is None:
+            return {"ok": False, "ms": None,
+                    "detail": f"Host {vm_id} not found"}
+
+        # Connection state guard
+        try:
+            conn_state = str(host_moref.runtime.connectionState) if host_moref.runtime else "unknown"
+        except Exception:
+            conn_state = "unknown"
+
+        if conn_state != "connected":
+            return {"ok": False, "ms": None,
+                    "detail": f"Host {conn_state}"}
+
+        data = _query_all_metrics(si, host_moref, HOST_METRICS, num_pcpu)
+
+        with _metric_cache_lock:
+            _metric_cache[cache_key] = {"ts": time.monotonic(), "data": data}
+
+        val = data.get(metric)
+        if val is None:
+            return {"ok": False, "ms": None,
+                    "detail": f"Metric {mdef['l']} not available for this host"}
+
+        return {"ok": True, "ms": float(val),
+                "detail": f"{mdef['l']}: {val} {mdef['unit']}",
+                "value": str(val)}
+
+    # ══════════════════════════════════════════════════════════════════
+    # VM metric branch (existing logic)
+    # ══════════════════════════════════════════════════════════════════
     vm_moref = None
     num_cpu = 1
     memory_mb = 0
@@ -373,7 +508,7 @@ def vmware_probe(host, user, password, vm_id, metric,
                 "value": str(pct)}
 
     # Query all metrics (cached for other sensors targeting same VM)
-    data = _query_all_vm_metrics(si, vm_moref, num_cpu)
+    data = _query_all_metrics(si, vm_moref, VM_METRICS, num_cpu)
 
     with _metric_cache_lock:
         _metric_cache[cache_key] = {"ts": time.monotonic(), "data": data}

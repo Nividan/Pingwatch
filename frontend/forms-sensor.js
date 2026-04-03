@@ -240,17 +240,18 @@ function sensorFormHTML(dev, s=null) {
       </label>
     </div>
     <div class="fr" style="margin-top:4px">
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="dp-btn" type="button" onclick="discoverVMs()" id="as-vm-disc-btn">⊕ Discover VMs</button>
+        <button class="dp-btn" type="button" onclick="discoverHosts()" id="as-vmh-disc-btn">⊕ Discover Hosts</button>
         <span id="as-vm-status" style="font-size:11px;color:var(--text3)"></span>
       </div>
       <div id="as-vm-list" style="display:none;margin-top:8px"></div>
     </div>
     <div class="fgrid" style="margin-top:4px">
-      <div class="fr"><label class="fl">VM ID</label>
-        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123 (from discovery)" autocomplete="off" readonly/>
+      <div class="fr"><label class="fl">VM / Host ID</label>
+        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123 or host-28 (from discovery)" autocomplete="off" readonly/>
         <input type="hidden" id="as-vmnm" value="${esc(s?.vmware_vm_name||'')}"/>
-        <div class="fh">Managed Object ID — use Discover VMs above</div>
+        <div class="fh">Managed Object ID — use Discover VMs or Discover Hosts above</div>
       </div>
       <div class="fr"><label class="fl">Metric</label>
         <select id="as-vmmet"><option value="">— select metric —</option></select>
@@ -842,6 +843,14 @@ const _VM_THR_DEFAULTS={
   disk_used_pct:   {w:80,  c:90},
   ds_read_lat:     {w:20,  c:50},
   ds_write_lat:    {w:20,  c:50},
+  // Host metrics
+  host_cpu_usage:      {w:80, c:95},
+  host_cpu_ready:      {w:10, c:20},
+  host_mem_usage_pct:  {w:80, c:95},
+  host_ds_read_lat:    {w:20, c:50},
+  host_ds_write_lat:   {w:20, c:50},
+  host_disk_dev_lat:   {w:20, c:50},
+  host_disk_kern_lat:  {w:10, c:30},
 };
 
 // Auto-fill warn/crit thresholds based on VM specs and metric type.
@@ -851,10 +860,10 @@ function _vmwareThrAutoFill(metric, memMB){
   const ci=document.getElementById('as-cms');
   if(!wi||!ci||wi.value||ci.value) return;
   let w=null,c=null;
-  // Memory metrics: compute from VM RAM
+  // Memory metrics: compute from VM/host RAM
   if(memMB>0){
-    if(metric==='mem_consumed'){ w=Math.round(memMB*0.80); c=Math.round(memMB*0.90); }
-    else if(metric==='mem_active'){ w=Math.round(memMB*0.50); c=Math.round(memMB*0.70); }
+    if(metric==='mem_consumed'||metric==='host_mem_consumed'){ w=Math.round(memMB*0.80); c=Math.round(memMB*0.90); }
+    else if(metric==='mem_active'||metric==='host_mem_active'){ w=Math.round(memMB*0.50); c=Math.round(memMB*0.70); }
   }
   // All other metrics: use fixed defaults
   if(w==null){ const def=_VM_THR_DEFAULTS[metric]; if(def){w=def.w;c=def.c;} }
@@ -864,7 +873,7 @@ function _vmwareThrAutoFill(metric, memMB){
 function _vmwareThrLabel(metric, isWarn){
   const pfx=isWarn?'Warn':'Crit';
   if(!metric) return pfx+' Value';
-  const m=(_vmwareMetrics||[]).find(x=>x.v===metric);
+  const m=_allVmwareMetrics().find(x=>x.v===metric);
   const u=m?.unit||'';
   if(u==='%')       return pfx+' %';
   if(u==='MB')      return pfx+' MB';
@@ -872,6 +881,7 @@ function _vmwareThrLabel(metric, isWarn){
   if(u==='KBps')    return pfx+' KBps';
   if(u==='ms')      return pfx+' ms';
   if(u==='seconds') return pfx+' seconds';
+  if(u==='watt')    return pfx+' watt';
   return pfx+' Value';
 }
 
@@ -891,6 +901,16 @@ const _VM_THR_PH = {
   net_tx:          {w:'e.g. 500', c:'e.g. 1000'},
   net_usage:       {w:'e.g. 500', c:'e.g. 1000'},
   uptime:          {w:'e.g. 86400',c:'e.g. 3600'},
+  // Host metrics
+  host_cpu_usage:      {w:'e.g. 80',  c:'e.g. 95'},
+  host_cpu_ready:      {w:'e.g. 10',  c:'e.g. 20'},
+  host_mem_active:     {w:'e.g. 32768',c:'e.g. 49152'},
+  host_mem_consumed:   {w:'e.g. 49152',c:'e.g. 57344'},
+  host_mem_usage_pct:  {w:'e.g. 80',  c:'e.g. 95'},
+  host_ds_read_lat:    {w:'e.g. 20',  c:'e.g. 50'},
+  host_ds_write_lat:   {w:'e.g. 20',  c:'e.g. 50'},
+  host_disk_dev_lat:   {w:'e.g. 20',  c:'e.g. 50'},
+  host_disk_kern_lat:  {w:'e.g. 10',  c:'e.g. 30'},
 };
 
 function _vmwareThrUpdateLabels(){
@@ -900,7 +920,9 @@ function _vmwareThrUpdateLabels(){
   const cl=document.getElementById('as-cms-lbl');
   if(wl) wl.textContent=_vmwareThrLabel(sel.value,true);
   if(cl) cl.textContent=_vmwareThrLabel(sel.value,false);
-  const _noThr2=['uptime','on','disk_read','disk_write','disk_usage'].includes(sel.value);
+  const _noThr2=['uptime','on','disk_read','disk_write','disk_usage',
+    'host_disk_read','host_disk_write','host_disk_usage','host_net_rx','host_net_tx','host_net_usage',
+    'host_power','host_uptime','host_mem_swap'].includes(sel.value);
   const wr=document.getElementById('as-wms-row');
   const cr=document.getElementById('as-cms-row');
   if(wr) wr.style.display=_noThr2?'none':'';
@@ -916,30 +938,37 @@ function _vmwareThrUpdateLabels(){
   _vmwareThrAutoFill(sel.value, _vmSelectedMemMB);
 }
 
+let _vmwareHostMetrics=null;
 async function _vmwareLoadMetrics(){
   const sel=document.getElementById('as-vmmet');
   if(!sel) return;
   sel.onchange=()=>_vmwareThrUpdateLabels();
   if(sel.options.length>1){ _vmwareThrUpdateLabels(); return; }
-  if(!_vmwareMetrics){
+  if(!_vmwareMetrics||!_vmwareHostMetrics){
     try{
-      const r=await fetch('/api/vmware/metrics');
-      const d=await r.json();
-      _vmwareMetrics=d.metrics||[];
+      const [vmR,hostR]=await Promise.all([fetch('/api/vmware/metrics'),fetch('/api/vmware/host-metrics')]);
+      const vmD=await vmR.json(), hostD=await hostR.json();
+      _vmwareMetrics=vmD.metrics||[];
+      _vmwareHostMetrics=hostD.metrics||[];
     }catch(e){ return; }
   }
-  _vmwareMetrics.forEach(m=>{
-    const o=document.createElement('option');
-    o.value=m.v;
-    o.textContent=m.l+' ('+m.unit+')';
-    sel.appendChild(o);
-  });
+  const vmGrp=document.createElement('optgroup');
+  vmGrp.label='VM Metrics';
+  _vmwareMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';vmGrp.appendChild(o);});
+  sel.appendChild(vmGrp);
+  const hostGrp=document.createElement('optgroup');
+  hostGrp.label='Host Metrics';
+  _vmwareHostMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';hostGrp.appendChild(o);});
+  sel.appendChild(hostGrp);
   const cur=document.getElementById('as-vmmet-v')?.value;
   if(cur) sel.value=cur;
   _vmwareThrUpdateLabels();
 }
+function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[])]; }
 
+let _discHostMode=false;  // true when host discovery table is shown
 async function discoverVMs(){
+  _discHostMode=false;
   const did      =window._ifaceDid;
   const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
   const username =document.getElementById('as-vmu')?.value.trim()||'';
@@ -979,11 +1008,12 @@ async function discoverVMs(){
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${vms.length} VM${vms.length!==1?'s':''} discovered`; }
 
   // Ensure metrics are loaded
-  if(!_vmwareMetrics){
+  if(!_vmwareMetrics||!_vmwareHostMetrics){
     try{
-      const mr=await fetch('/api/vmware/metrics');
-      const md=await mr.json();
-      _vmwareMetrics=md.metrics||[];
+      const [vmR,hostR]=await Promise.all([fetch('/api/vmware/metrics'),fetch('/api/vmware/host-metrics')]);
+      const vmD=await vmR.json(), hostD=await hostR.json();
+      _vmwareMetrics=vmD.metrics||[];
+      _vmwareHostMetrics=hostD.metrics||[];
     }catch(e){}
   }
   const _grpNames={cpu:'CPU',mem:'Memory',disk:'Disk',datastore:'Datastore',net:'Network',sys:'System'};
@@ -1039,6 +1069,109 @@ async function discoverVMs(){
   listEl.style.display='';
 }
 
+async function discoverHosts(){
+  _discHostMode=true;
+  const did      =window._ifaceDid;
+  const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
+  const username =document.getElementById('as-vmu')?.value.trim()||'';
+  const password =document.getElementById('as-vmpw')?.value||'';
+  const port     =parseInt(document.getElementById('as-vmp')?.value)||443;
+  const vssl     =document.getElementById('as-vmssl')?.checked!==false;
+  const btn      =document.getElementById('as-vmh-disc-btn');
+  const statusEl =document.getElementById('as-vm-status');
+  const listEl   =document.getElementById('as-vm-list');
+  const dev=did?S.devices[did]:null;
+  if(!host){ toast('Enter a Host / IP first','err'); return; }
+  if(!username){ toast('Enter a Username','err'); return; }
+  if(!password && !dev?.has_vmware_password_default){ toast('Enter a Password','err'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Connecting to vCenter…'; }
+  if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  const payload={host,username,password,port,verify_ssl:vssl};
+  if(!password && did) payload.did=did;
+  let r;
+  try{
+    r=await api('POST','/api/vmware/hosts',payload);
+  }catch(e){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    return;
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover Hosts'; }
+  }
+  if(r.error){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
+    return;
+  }
+  const hosts=r.hosts||[];
+  if(!hosts.length){
+    if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No ESXi hosts found.'; }
+    return;
+  }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${hosts.length} host${hosts.length!==1?'s':''} discovered`; }
+
+  // Ensure host metrics are loaded
+  if(!_vmwareHostMetrics){
+    try{
+      const mr=await fetch('/api/vmware/host-metrics');
+      const md=await mr.json();
+      _vmwareHostMetrics=md.metrics||[];
+    }catch(e){}
+  }
+  const _grpNames={cpu:'CPU',mem:'Memory',disk:'Disk',datastore:'Datastore',net:'Network',sys:'System'};
+  const _metByGrp={};
+  (_vmwareHostMetrics||[]).forEach(m=>{(_metByGrp[m.group]=_metByGrp[m.group]||[]).push(m);});
+  const metricCheckboxes=
+    `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="vm-met-all-cb" onchange="vmMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+    Object.entries(_metByGrp).map(([grp,mets])=>
+      `<div class="vm-met-grp-hdr">${_grpNames[grp]||grp}</div>`+
+      mets.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="vmMetChanged(this)"> ${esc(m.l)}</label>`).join('')
+    ).join('');
+
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<input type="text" id="as-vm-search" placeholder="Search host names…" oninput="filterVMs(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
+  html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">Set for checked:</span>';
+  html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
+  html+='</div>';
+  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:260px">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
+  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap"><input type="checkbox" id="as-vm-all" title="Select all visible" onchange="toggleAllVMs(this)"/></th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:160px">Host Name</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">State</th>';
+  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap">Cores</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Memory</th>';
+  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap">VMs</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;max-width:140px">Version</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:170px">Metrics</th>';
+  html+='</tr></thead><tbody id="as-vm-tbody">';
+
+  hosts.forEach((h,i)=>{
+    const stClr=h.connection_state==='connected'?'var(--up)':'var(--down)';
+    const memStr=h.memory_mb>=1024?Math.round(h.memory_mb/1024)+'GB':h.memory_mb+'MB';
+    const verShort=(h.version||'').replace(/^VMware\s+/i,'');
+    const rowBg=i%2?'background:var(--bg2)':'';
+    html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
+    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-vm-cb" data-vmid="${esc(h.host_id)}" data-name="${esc(h.name)}" data-mem-mb="${h.memory_mb||0}" data-num-cpu="${h.cpu_count||0}" onchange="updateVMSelCount()"/></td>`;
+    html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap" title="${esc(h.name)}">${esc(h.name)}</td>`;
+    html+=`<td style="padding:4px 8px;color:${stClr};white-space:nowrap">${esc(h.connection_state)}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);text-align:center;white-space:nowrap">${h.cpu_cores}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${memStr}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);text-align:center;white-space:nowrap">${h.num_vms}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h.version)}">${esc(verShort)}</td>`;
+    html+=`<td style="padding:4px 8px;position:relative"><div class="vm-met-wrap" data-vmid="${esc(h.host_id)}"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— pick metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div></td>`;
+    html+='</tr>';
+  });
+
+  html+='</tbody></table></div>';
+  html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedVMSensors()" id="as-vm-add-btn">Add Selected as Sensors</button>';
+  html+='<span id="as-vm-sel-count" style="font-size:11px;color:var(--text3)">0 hosts · 0 sensors</span>';
+  html+='</div></div>';
+  listEl.innerHTML=html;
+  listEl.style.display='';
+}
+
 function toggleAllVMs(cb){
   document.querySelectorAll('#as-vm-tbody tr:not([style*="display: none"]) .as-vm-cb').forEach(c=>c.checked=cb.checked);
   updateVMSelCount();
@@ -1068,7 +1201,8 @@ function updateVMSelCount(){
   let nSensors=0;
   checked.forEach(cb=>{ const m=_getVmMetrics(cb.dataset.vmid); nSensors+=m.length||1; });
   const el=document.getElementById('as-vm-sel-count');
-  if(el) el.textContent=nVms?`${nVms} VM${nVms>1?'s':''} · ${nSensors} sensor${nSensors!==1?'s':''}`:' 0 VMs · 0 sensors';
+  const _lbl=_discHostMode?'host':'VM';
+  if(el) el.textContent=nVms?`${nVms} ${_lbl}${nVms>1?'s':''} · ${nSensors} sensor${nSensors!==1?'s':''}`:` 0 ${_lbl}s · 0 sensors`;
   const all=document.getElementById('as-vm-all');
   if(all){all.indeterminate=(nVms>0&&nVms<visibleCbs.length);all.checked=(visibleCbs.length>0&&checked.length>=visibleCbs.length);}
   const addBtn=document.getElementById('as-vm-add-btn');
@@ -1159,8 +1293,8 @@ async function addSelectedVMSensors(){
     const vmname=cb.dataset.name;
     _vmSelectedMemMB=parseInt(cb.dataset.memMb)||0;
     const metric=firstMetrics[0]||'';
-    if(!metric){toast('Pick at least one metric for this VM','err');return;}
-    const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
+    if(!metric){toast('Pick at least one metric','err');return;}
+    const metricDef=_allVmwareMetrics().find(m=>m.v===metric);
     const oidEl=document.getElementById('as-vmid');
     if(oidEl) oidEl.value=vmid;
     const nmEl=document.getElementById('as-vmnm');
@@ -1207,16 +1341,19 @@ async function addSelectedVMSensors(){
     const metrics=_getVmMetrics(vmid);
     if(!metrics.length){noMetric++;return;}
     metrics.forEach(metric=>{
-      const metricDef=(_vmwareMetrics||[]).find(m=>m.v===metric);
-      // Smart per-VM threshold: only if user left warn/crit blank
+      const metricDef=_allVmwareMetrics().find(m=>m.v===metric);
+      // Smart threshold: only if user left warn/crit blank
       let rowWms=wms, rowCms=cms;
       // Skip thresholds for info-only metrics
-      if(['uptime','on','disk_read','disk_write','disk_usage'].includes(metric)){ rowWms=null; rowCms=null; }
+      const _INFO_ONLY=['uptime','on','disk_read','disk_write','disk_usage',
+        'host_disk_read','host_disk_write','host_disk_usage','host_net_rx','host_net_tx','host_net_usage',
+        'host_power','host_uptime','host_mem_swap'];
+      if(_INFO_ONLY.includes(metric)){ rowWms=null; rowCms=null; }
       else if(!rowWms&&!rowCms){
-        // Memory metrics: compute from VM RAM
+        // Memory metrics: compute from VM/host RAM
         if(vmMemMB>0){
-          if(metric==='mem_consumed'){ rowWms=Math.round(vmMemMB*0.80); rowCms=Math.round(vmMemMB*0.90); }
-          else if(metric==='mem_active'){ rowWms=Math.round(vmMemMB*0.50); rowCms=Math.round(vmMemMB*0.70); }
+          if(metric==='mem_consumed'||metric==='host_mem_consumed'){ rowWms=Math.round(vmMemMB*0.80); rowCms=Math.round(vmMemMB*0.90); }
+          else if(metric==='mem_active'||metric==='host_mem_active'){ rowWms=Math.round(vmMemMB*0.50); rowCms=Math.round(vmMemMB*0.70); }
         }
         // Other metrics: use fixed per-metric defaults
         if(!rowWms){ const def=_VM_THR_DEFAULTS[metric]; if(def){rowWms=def.w;rowCms=def.c;} }
@@ -1361,7 +1498,9 @@ function collectSensorForm(did){
     payload.vmware_vm_name=document.getElementById('as-vmnm')?.value.trim()||'';
     payload.vmware_metric=document.getElementById('as-vmmet')?.value||'';
     payload.vmware_disk_path=document.getElementById('as-vm-diskpath')?.value.trim()||'';
-    if(['uptime','on','disk_read','disk_write','disk_usage'].includes(payload.vmware_metric)){ payload.warn_ms=null; payload.crit_ms=null; }
+    if(['uptime','on','disk_read','disk_write','disk_usage',
+        'host_disk_read','host_disk_write','host_disk_usage','host_net_rx','host_net_tx','host_net_usage',
+        'host_power','host_uptime','host_mem_swap'].includes(payload.vmware_metric)){ payload.warn_ms=null; payload.crit_ms=null; }
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}
   }
