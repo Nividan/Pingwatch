@@ -61,6 +61,7 @@ _COUNTER_TO_KEY = {m["counter"]: m["v"] for m in VM_METRICS}
 _sessions = {}          # (host, user) → (ServiceInstance, expiry_mono)
 _sessions_lock = threading.Lock()
 _SESSION_TTL = 25 * 60  # 25 min (vCenter default timeout = 30 min)
+_ssl_warned = set()     # hosts already warned about verify_ssl=False
 
 
 def _make_ssl_ctx(verify_ssl):
@@ -73,7 +74,8 @@ def _make_ssl_ctx(verify_ssl):
 
 def _get_session(host, user, password, port=443, verify_ssl=False):
     """Return a cached or fresh ServiceInstance."""
-    if not verify_ssl:
+    if not verify_ssl and host not in _ssl_warned:
+        _ssl_warned.add(host)
         from core.logger import log
         log.warning("VMware: SSL certificate verification disabled for %s — enable in sensor settings for production use", host)
     SmartConnect, Disconnect, vim, vmodl = _require_pyvmomi()
