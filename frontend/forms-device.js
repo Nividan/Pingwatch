@@ -86,7 +86,7 @@ async function submitAddDevice(){
     document.getElementById('dpanels').style.display='';
     document.getElementById('devActBar').style.display='';
   }
-  renderDp(dev);renderSidebar();updatePills();
+  renderDp(dev);updatePills();
   refreshGroupCounts();
   toast(`Added: ${name}`,'ok');
   openScanModal(r.did);
@@ -199,7 +199,6 @@ async function submitEditDevice(did){
   closeM('med');
   const dev = S.devices[did];
   if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
-  renderSidebar();
   updatePills();
   refreshGroupCounts();
   toast(`Saved: ${name}`, 'ok');
