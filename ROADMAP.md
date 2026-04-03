@@ -99,6 +99,23 @@
   - Sensor tile drag-to-reorder — HTML5 drag inside device detail window; order saved to `localStorage` per device; device card top-3 preview respects custom order
   - Fixed 3d history showing only ~14h — `_pick_table` boundary moved from 4320 → 1440 min so 3d routes to `sensor_samples_5m` (full 3-day coverage) instead of raw table (10k-row-capped)
   - Fixed rollup backfill triggering on every restart — condition now checks `sensor_samples_5m` row count instead of stale `MIN(ts)` gap detection
+- VMware vSphere monitoring
+  - New sensor type: VMware — connects to vCenter/ESXi via pyvmomi (optional dependency)
+  - VM discovery — browse and bulk-select VMs with per-VM metric checkboxes grouped by category (CPU, Memory, Disk, Datastore, Network, System)
+  - 16 metrics: cpu_usage, cpu_ready, mem_active, mem_consumed, mem_consumed_pct, disk_read, disk_write, disk_usage, disk_used_pct, ds_read_lat, ds_write_lat, net_rx, net_tx, net_usage, uptime, power state
+  - Session caching with 25-minute TTL; metric caching with 20-second TTL (matches vSphere realtime interval) — avoids redundant QueryPerf when multiple sensors target the same VM
+  - Grouped VM display — collapsible VM groups with status dot, metric count, sparklines, and uptime bars per metric row
+  - Smart per-metric threshold defaults (cpu_usage→80/95%, ds_read_lat→20/50ms, etc.); RAM-aware thresholds for memory metrics
+  - Informational metrics (uptime, power state, disk_read, disk_write, disk_usage) — no warn/crit thresholds; skipped in threshold evaluation
+  - `mem_consumed_pct` uses `guestMemoryUsage` from VMware Tools (matches guest OS Task Manager), not vSphere host-level `mem.consumed.average`
+  - Formatted value display across all rendering paths — `Xd Xh Xm` for uptime, `%` for CPU/memory, `KBps`/`MBps` for disk/network, `ms` for latency
+  - VM group header actions: + Metric, 🔕 Mute / 🔔 Unmute (bulk toggle for all sensors in group), ✕ Remove
+  - Bulk add: `alerts_muted` field included in payload; per-metric threshold nulling for info metrics
+  - Metric chooser dropdown — grouped by category with headers, fixed clipping issue
+- Alert engine hardening
+  - Delayed DOWN emails skip sending if sensor was deleted or stopped during the delay window
+  - Rule-based alert engine verifies sensor/device still exists before dispatching (prevents ghost alerts after deletion)
+- Bulk resolve — "Resolve All" button on Events tab resolves all active alert events and flaps in one click with confirmation dialog; `POST /api/alert/events/resolve-all` endpoint
 
 ## 🔴 High Priority
 
