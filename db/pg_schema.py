@@ -485,8 +485,22 @@ def pg_create_logs_schema(cur):
             direction TEXT DEFAULT 'down',
             ack_state TEXT DEFAULT 'active',
             ack_by    TEXT DEFAULT '',
-            ack_at    DOUBLE PRECISION DEFAULT 0
+            ack_at    DOUBLE PRECISION DEFAULT 0,
+            resolved_at DOUBLE PRECISION DEFAULT 0,
+            duration    DOUBLE PRECISION DEFAULT 0
         )""")
+
+    # flap_log migrations for existing databases
+    for _col, _typedef in [
+        ("resolved_at", "DOUBLE PRECISION DEFAULT 0"),
+        ("duration",    "DOUBLE PRECISION DEFAULT 0"),
+    ]:
+        try:
+            cur.execute("SAVEPOINT _flog_alter")
+            cur.execute(f"ALTER TABLE flap_log ADD COLUMN {_col} {_typedef}")
+            cur.execute("RELEASE SAVEPOINT _flog_alter")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT _flog_alter")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sensor_err_log (

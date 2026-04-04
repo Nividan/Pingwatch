@@ -516,6 +516,7 @@ class MonitorState:
     def _run_once(self, did, sid):
         # Import here to avoid circular import at module load time
         from db import db_log_err, db_log_flap, db_buffer_sample, _db_enqueue
+        from db.events import db_auto_resolve_flap
 
         with self._lock:
             dev = self.devices.get(did)
@@ -599,7 +600,10 @@ class MonitorState:
                     self._broadcast("flap_recovered", rec_data)
                     log_sensors.info(f"RECOVERED: {dev.name}/{s.name} ({s.host})")
                     _rec_cap = dict(rec_data)
-                    _db_enqueue(lambda: db_log_flap(_rec_cap))
+                    _db_enqueue(lambda: db_auto_resolve_flap(
+                        _rec_cap["did"], _rec_cap["sid"], _rec_cap["ts"],
+                        directions=("down",)
+                    ))
                     if s._email_sent_down:
                         _smtp_cap = dict(rec_data)
                         threading.Thread(target=send_alert_email, args=('recovered', _smtp_cap), daemon=True).start()
@@ -742,7 +746,7 @@ class MonitorState:
                 _thr_flap["detail"]    = _val_disp
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
-                # Threshold recovered — broadcast and persist
+                # Threshold recovered — broadcast and resolve existing event
                 s._threshold_recovery_pending = True
                 _thr_rec_data = {
                     "did": did, "sid": sid, "dname": dev.name,
@@ -754,10 +758,13 @@ class MonitorState:
                 }
                 self._broadcast("threshold_ok", _thr_rec_data)
                 log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
-                _thr_rec_flap = dict(_thr_rec_data)
-                _thr_rec_flap["direction"] = "threshold_ok"
-                _thr_rec_flap["detail"]    = s.last_value or ""
-                _db_enqueue(lambda _f=_thr_rec_flap: db_log_flap(_f))
+                _thr_rec_ts = _ts
+                _thr_rec_did = did
+                _thr_rec_sid = sid
+                _db_enqueue(lambda: db_auto_resolve_flap(
+                    _thr_rec_did, _thr_rec_sid, _thr_rec_ts,
+                    directions=("threshold_warn", "threshold_crit")
+                ))
         else:
             # SAME state as previous probe — increment counter, engine only
             s._consec_threshold += 1

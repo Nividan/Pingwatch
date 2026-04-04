@@ -105,7 +105,8 @@ function connectSSE(){
     _scheduleRefresh();
   });
   sse.addEventListener('flap_recovered',e=>{
-    const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
+    const d=_parseSSE(e); if(!d) return;
+    resolveFlap(d,'down');
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
   });
@@ -119,8 +120,7 @@ function connectSSE(){
   });
   sse.addEventListener('threshold_ok',e=>{
     const d=_parseSSE(e); if(!d) return;
-    d._direction='threshold_ok';
-    pushFlap(d);
+    resolveFlap(d,'threshold');
     _scheduleRefresh();
   });
   sse.addEventListener('snmp_trap',e=>{
@@ -694,6 +694,23 @@ function pushFlap(d){
   flashDownPill();
 }
 
+function resolveFlap(d, matchDir){
+  for(let i=0;i<FLAPS.length;i++){
+    const f=FLAPS[i];
+    if(f.did===d.did && f.sid===d.sid
+       && (f._direction===matchDir || f.direction===matchDir)
+       && !f.resolved_at){
+      const downMs=new Date(f.ts).getTime();
+      const recMs=new Date(d.ts).getTime();
+      f.resolved_at=recMs/1000;
+      f.duration=Math.max(0,(recMs-downMs)/1000);
+      f.ack_state='resolved';
+      break;
+    }
+  }
+  renderFlaps();
+}
+
 function pushThresholdEvent(d, level){
   const entry=Object.assign({},d,{_direction:'threshold',_thr_level:level});
   const k=_flapKey(entry); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
@@ -758,15 +775,18 @@ async function _refreshFlapList(){
     const fd=await fetch('/api/flaps').then(r=>r.json());
     const byKey={};
     (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
-      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       byKey[_flapKey(f)]=f;
     });
     for(let i=0;i<FLAPS.length;i++){
       const k=_flapKey(FLAPS[i]);
-      if(byKey[k]) Object.assign(FLAPS[i],{id:byKey[k].id,ack_state:byKey[k].ack_state});
+      if(byKey[k]) Object.assign(FLAPS[i],{
+        id:byKey[k].id, ack_state:byKey[k].ack_state,
+        resolved_at:byKey[k].resolved_at, duration:byKey[k].duration
+      });
     }
     renderFlaps();
   }catch(_){}
@@ -871,9 +891,9 @@ async function _refreshEvents(){
       fetch('/api/traps').then(r=>r.json()),
     ]);
     (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
-      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
@@ -961,9 +981,9 @@ async function loadAll(){
     const fr=await fetch('/api/flaps');
     const fd=await fr.json();
     (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
-      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });

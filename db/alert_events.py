@@ -265,6 +265,39 @@ def db_resolve_event(event_id: int) -> bool:
         con.close()
 
 
+def db_auto_resolve_event(rule_id: int, did: str, sid: str) -> bool:
+    """Auto-resolve active alert_event for rule+device+sensor on recovery."""
+    now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_events SET state='resolved', resolved_at=%s "
+                    "WHERE rule_id=%s AND did=%s AND sid=%s AND state IN ('active','acknowledged')",
+                    (now, rule_id, did, sid)
+                )
+                return cur.rowcount > 0
+        except Exception as e:
+            log.error(f"db_auto_resolve_event error: {e}")
+            return False
+    # SQLite
+    con = _con()
+    try:
+        con.execute(
+            "UPDATE alert_events SET state='resolved', resolved_at=? "
+            "WHERE rule_id=? AND did=? AND sid=? AND state IN ('active','acknowledged')",
+            (now, rule_id, did, sid)
+        )
+        con.commit()
+        return True
+    except Exception as e:
+        log.error(f"db_auto_resolve_event error: {e}")
+        return False
+    finally:
+        con.close()
+
+
 def db_resolve_all_active() -> int:
     """Resolve all active/acknowledged alert events.  Returns count resolved."""
     now = time.time()

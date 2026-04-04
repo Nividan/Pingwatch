@@ -438,7 +438,7 @@ function _buildEvtCard(d) {
     ? (icon + ' ' + esc(_trapLabel(d)))
     : (icon + ' ' + esc(d.sname||''));
   const dispHost = isTrap ? esc(d.src_ip||'') : esc(d.host||'');
-  const durStr   = d._duration != null ? _fmtDuration(d._duration) : null;
+  const durStr   = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : null);
   const unknownCls = (isTrap && !d.enriched) ? ' evt-trap-unknown' : '';
 
   const row = document.createElement('div');
@@ -484,7 +484,7 @@ function _buildEvtTable(events) {
     const vendorCell = isTrap
       ? (d.vendor && d.vendor !== 'Unknown' ? _vendorBadge(d) + (d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') : '—')
       : '—';
-    const durStr = d._duration != null ? _fmtDuration(d._duration) : '—';
+    const durStr = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : '—');
     // Build alert tag cell
     const alertEvt = _matchAlertEvt(d);
     let alertCell = '<td></td>';

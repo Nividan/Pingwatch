@@ -182,8 +182,12 @@ def _process(event_type: str, data: dict):
             if not _check_cooldown(rule, ctx):
                 continue
             _dispatch(rule, ctx)
-            from db.alert_events import db_log_event
-            db_log_event(rule["id"], rule["name"], ctx, state='active')
+            if event_type in ("flap_recovered", "threshold_ok"):
+                from db.alert_events import db_auto_resolve_event
+                db_auto_resolve_event(rule["id"], ctx.get("did", ""), ctx.get("sid", ""))
+            else:
+                from db.alert_events import db_log_event
+                db_log_event(rule["id"], rule["name"], ctx, state='active')
         except Exception as e:
             log.error(f"alert_engine: rule {rule.get('id')} error: {e}")
 

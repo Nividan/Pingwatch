@@ -180,8 +180,83 @@ def db_log_flap(flap):
             con.close()
 
 
+def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
+    """Find the most recent unresolved flap for did+sid and mark it resolved.
+
+    Computes duration from original ts.  Returns dict {id, duration} or None.
+    """
+    import time as _time
+    from datetime import datetime, timezone
+    now = _time.time()
+
+    def _parse_ts(s):
+        s = s.replace("Z", "+00:00") if s.endswith("Z") else s
+        return datetime.fromisoformat(s)
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                ph = ",".join(["%s"] * len(directions))
+                cur.execute(
+                    f"SELECT id, ts FROM flap_log "
+                    f"WHERE did=%s AND sid=%s AND direction IN ({ph}) "
+                    f"AND (resolved_at IS NULL OR resolved_at=0) "
+                    f"AND ack_state != 'resolved' "
+                    f"ORDER BY id DESC LIMIT 1",
+                    (did, sid, *directions)
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                try:
+                    dur = max(0, (_parse_ts(resolved_ts) - _parse_ts(row["ts"])).total_seconds())
+                except Exception:
+                    dur = 0
+                cur.execute(
+                    "UPDATE flap_log SET resolved_at=%s, duration=%s, ack_state='resolved' WHERE id=%s",
+                    (now, dur, row["id"])
+                )
+                return {"id": row["id"], "duration": dur}
+        except Exception as e:
+            log.error(f"db_auto_resolve_flap error: {e}")
+            return None
+    # SQLite
+    con = None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        ph = ",".join(["?"] * len(directions))
+        row = con.execute(
+            f"SELECT id, ts FROM flap_log "
+            f"WHERE did=? AND sid=? AND direction IN ({ph}) "
+            f"AND (resolved_at IS NULL OR resolved_at=0) "
+            f"AND ack_state != 'resolved' "
+            f"ORDER BY id DESC LIMIT 1",
+            (did, sid, *directions)
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            dur = max(0, (_parse_ts(resolved_ts) - _parse_ts(row[1])).total_seconds())
+        except Exception:
+            dur = 0
+        con.execute(
+            "UPDATE flap_log SET resolved_at=?, duration=?, ack_state='resolved' WHERE id=?",
+            (now, dur, row[0])
+        )
+        con.commit()
+        return {"id": row[0], "duration": dur}
+    except Exception as e:
+        log.error(f"db_auto_resolve_flap error: {e}")
+        return None
+    finally:
+        if con:
+            con.close()
+
+
 def db_load_flaps():
-    """Return last 500 flap/recovery events, newest first."""
+    """Return last 500 flap events, newest first.  Excludes legacy recovery rows."""
+    _filter = "WHERE direction NOT IN ('recovered','threshold_ok') "
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -190,15 +265,19 @@ def db_load_flaps():
                     "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
                     "COALESCE(ack_state,'active') AS ack_state,"
                     "COALESCE(ack_by,'') AS ack_by,"
-                    "COALESCE(ack_at,0) AS ack_at "
-                    "FROM flap_log ORDER BY id DESC LIMIT 500"
+                    "COALESCE(ack_at,0) AS ack_at,"
+                    "COALESCE(resolved_at,0) AS resolved_at,"
+                    "COALESCE(duration,0) AS duration "
+                    "FROM flap_log " + _filter +
+                    "ORDER BY id DESC LIMIT 500"
                 )
                 rows = cur.fetchall()
             return [{"id": r["id"], "ts": r["ts"], "did": r["did"], "sid": r["sid"],
                      "dname": r["dname"], "sname": r["sname"], "host": r["host"],
                      "stype": r["stype"], "detail": r["detail"],
                      "direction": r["direction"] or "down",
-                     "ack_state": r["ack_state"], "ack_by": r["ack_by"], "ack_at": r["ack_at"]}
+                     "ack_state": r["ack_state"], "ack_by": r["ack_by"], "ack_at": r["ack_at"],
+                     "resolved_at": r["resolved_at"], "duration": r["duration"]}
                     for r in rows]
         except Exception as e:
             log.error(f"DB load flaps error: {e}")
@@ -208,13 +287,16 @@ def db_load_flaps():
     try:
         rows = con.execute(
             "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
-            "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0) "
-            "FROM flap_log ORDER BY id DESC LIMIT 500"
+            "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0),"
+            "COALESCE(resolved_at,0),COALESCE(duration,0) "
+            "FROM flap_log " + _filter +
+            "ORDER BY id DESC LIMIT 500"
         ).fetchall()
         return [{"id": r[0], "ts": r[1], "did": r[2], "sid": r[3],
                  "dname": r[4], "sname": r[5], "host": r[6], "stype": r[7],
                  "detail": r[8], "direction": r[9] or "down",
-                 "ack_state": r[10], "ack_by": r[11], "ack_at": r[12]}
+                 "ack_state": r[10], "ack_by": r[11], "ack_at": r[12],
+                 "resolved_at": r[13], "duration": r[14]}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load flaps error: {e}")

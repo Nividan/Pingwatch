@@ -760,13 +760,17 @@ def logs_db_init():
                 direction TEXT DEFAULT 'down',
                 ack_state TEXT DEFAULT 'active',
                 ack_by    TEXT DEFAULT '',
-                ack_at    REAL DEFAULT 0
+                ack_at    REAL DEFAULT 0,
+                resolved_at REAL DEFAULT 0,
+                duration    REAL DEFAULT 0
             )""")
-        # Migration: add ack columns to existing flap_log tables
+        # Migration: add columns to existing flap_log tables
         for _col, _def in [
             ("ack_state", "TEXT DEFAULT 'active'"),
             ("ack_by",    "TEXT DEFAULT ''"),
             ("ack_at",    "REAL DEFAULT 0"),
+            ("resolved_at", "REAL DEFAULT 0"),
+            ("duration",    "REAL DEFAULT 0"),
         ]:
             try:
                 con.execute(f"ALTER TABLE flap_log ADD COLUMN {_col} {_def}")
