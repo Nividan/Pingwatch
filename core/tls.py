@@ -170,9 +170,14 @@ def discover_or_generate_cert(org_name: str = "PingWatch",
 
     # ── Step 1: check DB ─────────────────────────────────────────────────────
     current_settings = db_load_settings()
+    cert_source  = current_settings.get("tls_cert_source", "")
     cert_pem     = current_settings.get("tls_cert_pem", "")
     key_pem_enc  = current_settings.get("tls_key_pem_enc", "")
-    if cert_pem and key_pem_enc:
+    if cert_source == "csr_pending":
+        # A CSR has been generated: the stored key belongs to the pending CSR,
+        # not to any existing cert. Skip DB to avoid a key-mismatch SSL error.
+        log.info("TLS: CSR pending — skipping DB cert, falling back to folder/generate")
+    elif cert_pem and key_pem_enc:
         key_pem = decrypt_pw(key_pem_enc)
         if key_pem:
             log.info("TLS: loaded certificate from database")
