@@ -406,6 +406,10 @@ async function openSettings(){
           <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Certificate</div>
           ${(()=>{
             const c=tr.cert||{};
+            if(tr.csr_pending) return `
+              <div style="padding:10px 12px;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);border-radius:6px;font-size:12px;color:var(--warn)">
+                <strong>CSR Pending</strong> — A Certificate Signing Request has been generated and the private key is stored. Upload the signed certificate from your CA to complete the installation.
+              </div>`;
             if(!c.subject) return '<div style="font-size:12px;color:var(--text3)">No certificate loaded. Enable HTTPS and save — a self-signed certificate will be generated automatically on the next startup.</div>';
             const daysLeft=c.days_left??0;
             const badgeColor=daysLeft<0?'var(--err)':daysLeft<=30?'var(--warn)':'var(--ok)';
@@ -419,9 +423,14 @@ async function openSettings(){
             </div>`;
           })()}
           <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-            <button class="btn-s" onclick="openUploadCert()">Upload Certificate</button>
-            <button class="btn-s" onclick="openGenerateCSR()">Generate CSR</button>
-            <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate Self-Signed</button>
+            ${tr.csr_pending?`
+              <button class="btn-p" style="font-size:12px" onclick="openInstallSigned()">Install Signed Certificate</button>
+              <button class="btn-s" onclick="openGenerateCSR()">Regenerate CSR</button>
+            `:`
+              <button class="btn-s" onclick="openUploadCert()">Upload Certificate</button>
+              <button class="btn-s" onclick="openGenerateCSR()">Generate CSR</button>
+              <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate Self-Signed</button>
+            `}
           </div>
         </div>
       </div>
@@ -947,6 +956,96 @@ function _downloadCSR(){
   a.download='pingwatch.csr';
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// ── Install Signed Certificate modal ────────────────────────────────────────
+// Used after a CSR has been generated — accepts only the signed cert (cert only
+// or cert + chain). The private key is already stored from CSR generation.
+
+let _isTab='pem';
+function _switchIsTab(tab){
+  _isTab=tab;
+  ['pem','file'].forEach(t=>{
+    document.getElementById(`is-tab-${t}`)?.classList.toggle('active',t===tab);
+    const p=document.getElementById(`is-pane-${t}`);
+    if(p) p.style.display=t===tab?'':'none';
+  });
+  const errEl=document.getElementById('is-err');
+  if(errEl) errEl.style.display='none';
+}
+
+function openInstallSigned(){
+  closeM('mis');
+  _isTab='pem';
+  const o=document.createElement('div');o.className='mo';o.id='mis';
+  _overlayClose(o,()=>closeM('mis'));
+  o.innerHTML=`
+  <div class="mbox" style="width:560px;max-width:96vw">
+    <div class="mhd"><div class="mttl">Install Signed Certificate</div><button class="mclose" onclick="closeM('mis')">✕</button></div>
+    <div class="mbdy">
+      <div style="padding:8px 12px;background:rgba(35,209,139,.08);border:1px solid rgba(35,209,139,.2);border-radius:6px;font-size:12px;color:var(--text2);margin-bottom:14px">
+        The private key from your CSR is already stored. Paste or upload the signed certificate (and optionally the CA chain) below.
+      </div>
+      <div class="uc-tabs">
+        <button class="uc-tab active" id="is-tab-pem" onclick="_switchIsTab('pem')">Paste PEM</button>
+        <button class="uc-tab" id="is-tab-file" onclick="_switchIsTab('file')">Upload File</button>
+      </div>
+
+      <!-- Paste pane -->
+      <div id="is-pane-pem">
+        <div class="fr">
+          <label class="fl">Certificate (PEM)</label>
+          <div class="fh" style="margin-bottom:6px">Paste the signed certificate. You may include intermediate CA certificates below it (full chain).</div>
+          <textarea id="is-cert" rows="10" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN CERTIFICATE-----&#10;(your signed certificate)&#10;-----END CERTIFICATE-----&#10;&#10;-----BEGIN CERTIFICATE-----&#10;(intermediate CA — optional)&#10;-----END CERTIFICATE-----"></textarea>
+        </div>
+      </div>
+
+      <!-- File pane -->
+      <div id="is-pane-file" style="display:none">
+        <div class="fr">
+          <label class="fl">Certificate File</label>
+          <div class="fh" style="margin-bottom:6px">.cer, .crt, .pem — DER or PEM. PEM files may contain the full chain.</div>
+          <input type="file" id="is-f-cert" accept=".cer,.crt,.pem,.der"/>
+          <div id="is-f-cert-name" class="uc-file-label"></div>
+        </div>
+      </div>
+
+      <div id="is-err" style="display:none;margin-top:10px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--err)"></div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('mis')">Cancel</button>
+      <button class="btn-p" id="btn-is-save" onclick="submitInstallSigned()">Install Certificate</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('is-cert')?.focus(),50);
+}
+
+async function submitInstallSigned(){
+  const errEl=document.getElementById('is-err');
+  const btn=document.getElementById('btn-is-save');
+  const showErr=msg=>{errEl.textContent=msg;errEl.style.display='';};
+  btn.disabled=true;btn.textContent='Validating...';
+  errEl.style.display='none';
+  try{
+    let r;
+    if(_isTab==='pem'){
+      const cert_pem=(document.getElementById('is-cert')?.value||'').trim();
+      if(!cert_pem){showErr('Certificate is required.');btn.disabled=false;btn.textContent='Install Certificate';return;}
+      r=await api('POST','/api/tls/install-signed',{cert_pem});
+    } else {
+      const certEl=document.getElementById('is-f-cert');
+      if(!certEl?.files?.length){showErr('Select a certificate file.');btn.disabled=false;btn.textContent='Install Certificate';return;}
+      const cert_b64=await _readFileAsB64(certEl);
+      r=await api('POST','/api/tls/install-signed',{cert_b64});
+    }
+    if(r.error){showErr(r.error);btn.disabled=false;btn.textContent='Install Certificate';return;}
+    closeM('mis');
+    toast('Certificate installed — restart the server to apply','ok');
+  }catch(e){
+    showErr('Request failed — check server connectivity.');
+    btn.disabled=false;btn.textContent='Install Certificate';
+  }
 }
 
 let _activeLogTab = 'app';
