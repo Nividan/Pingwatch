@@ -448,6 +448,7 @@ function _buildEvtCard(d) {
   row.innerHTML =
     '<div class="evt-top">' +
       `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span>` +
+      (d.ack_state === 'resolved' || d.resolved_at > 0 ? `<span class="evt-res-tag">✓ Resolved</span>` : '') +
       '<div class="evt-name' + unknownCls + '">' + (isTrap ? _vendorBadge(d) : '') + dispName + ' · ' + dispSub + '</div>' +
       (isTrap && d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') +
       (durStr ? `<span class="evt-dur">${durStr}</span>` : '') +
@@ -538,7 +539,9 @@ function _buildEvtTable(events) {
     tr.style.cursor = 'pointer';
     tr.onclick = () => _openEvtDetail(d);
     tr.innerHTML =
-      `<td><span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span></td>` +
+      `<td><span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span>` +
+      (d.ack_state === 'resolved' || d.resolved_at > 0 ? `<br><span class="evt-res-tag">✓ Resolved</span>` : '') +
+      `</td>` +
       `<td class="evt-td-time">${dispTime}<br><span style="color:var(--text3);font-size:10px">${dispDate}</span></td>` +
       `<td>${esc(isTrap ? (d.dname||d.src_ip||'Unknown') : (d.dname||''))}</td>` +
       `<td>${dispSub}</td>` +

@@ -163,12 +163,19 @@ def _process(event_type: str, data: dict):
 
     ctx = _build_ctx(event_type, data)
     consec = int(data.get("consec_count", 1))
+    is_recovery = event_type in ("flap_recovered", "threshold_ok")
 
     for rule in rules:
         try:
-            if not _match_conditions(rule, ctx):
-                continue
             dkey = f"{rule['id']}:{ctx.get('did', '')}:{ctx.get('sid', '')}"
+            if is_recovery:
+                # Skip condition re-match for recoveries — only process rules that previously fired
+                _state = _debounce.get(dkey)
+                if not _state or not _state.get("fired"):
+                    continue
+            else:
+                if not _match_conditions(rule, ctx):
+                    continue
             if not _debounce_check(rule, dkey, event_type, consec):
                 continue
             in_maintenance, mw_name = _check_maintenance(ctx)
