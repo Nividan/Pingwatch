@@ -45,8 +45,8 @@ def db_log_event(rule_id: int, rule_name: str, ctx: dict, state: str = 'active')
                 existing = cur.fetchone()
                 if existing and state == 'active':
                     cur.execute(
-                        "UPDATE alert_events SET repeat_count=repeat_count+1 WHERE id=%s",
-                        (existing['id'],)
+                        "UPDATE alert_events SET repeat_count=repeat_count+1, triggered_at=%s WHERE id=%s",
+                        (now, existing['id'])
                     )
                     eid = existing['id']
                 else:
@@ -80,8 +80,8 @@ def db_log_event(rule_id: int, rule_name: str, ctx: dict, state: str = 'active')
         ).fetchone()
         if existing and state == 'active':
             con.execute(
-                "UPDATE alert_events SET repeat_count=repeat_count+1 WHERE id=?",
-                (existing['id'],)
+                "UPDATE alert_events SET repeat_count=repeat_count+1, triggered_at=? WHERE id=?",
+                (now, existing['id'])
             )
             eid = existing['id']
         else:

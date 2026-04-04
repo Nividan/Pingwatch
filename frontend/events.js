@@ -448,7 +448,6 @@ function _buildEvtCard(d) {
   row.innerHTML =
     '<div class="evt-top">' +
       `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span>` +
-      (d.ack_state === 'resolved' || d.resolved_at > 0 ? `<span class="evt-res-tag">✓ Resolved</span>` : '') +
       '<div class="evt-name' + unknownCls + '">' + (isTrap ? _vendorBadge(d) : '') + dispName + ' · ' + dispSub + '</div>' +
       (isTrap && d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') +
       (durStr ? `<span class="evt-dur">${durStr}</span>` : '') +
@@ -504,6 +503,7 @@ function _buildEvtTable(events) {
             `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">◉ Resolve</button>` +
           `</div>`
         : '';
+      const resTag = alertEvt.state === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
       alertCell =
         `<td class="aev-cell">` +
           `<div class="${tagCls}">` +
@@ -512,6 +512,7 @@ function _buildEvtTable(events) {
             `<span class="aev-st ${stCls}">${stLabel}</span>` +
             repeatBadge +
           `</div>` +
+          resTag +
           btns +
         `</td>`;
     } else if (d.id) {
@@ -526,12 +527,14 @@ function _buildEvtTable(events) {
             `<button class="aev-btn-res" onclick="event.stopPropagation();_evtFlapResolve(${d.id})">◉ Resolve</button>` +
           `</div>`
         : '';
+      const resTag = flapState === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
       alertCell =
         `<td class="aev-cell">` +
           `<div class="aev-tag aev-tag-info${isActive?' aev-tag-active':''}">` +
             `<span class="aev-dot"></span>` +
             `<span class="aev-st ${stCls}">${stLabel}</span>` +
           `</div>` +
+          resTag +
           btns +
         `</td>`;
     }
@@ -539,9 +542,7 @@ function _buildEvtTable(events) {
     tr.style.cursor = 'pointer';
     tr.onclick = () => _openEvtDetail(d);
     tr.innerHTML =
-      `<td><span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span>` +
-      (d.ack_state === 'resolved' || d.resolved_at > 0 ? `<br><span class="evt-res-tag">✓ Resolved</span>` : '') +
-      `</td>` +
+      `<td><span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev]||sev.toUpperCase()}</span></td>` +
       `<td class="evt-td-time">${dispTime}<br><span style="color:var(--text3);font-size:10px">${dispDate}</span></td>` +
       `<td>${esc(isTrap ? (d.dname||d.src_ip||'Unknown') : (d.dname||''))}</td>` +
       `<td>${dispSub}</td>` +
