@@ -184,8 +184,17 @@ def discover_or_generate_cert(org_name: str = "PingWatch",
             if err:
                 log.warning(f"TLS: cert/key in DB are invalid ({err}) — will try folder/generate")
             else:
-                log.info("TLS: loaded certificate from database")
-                return cert_pem, key_pem, "db"
+                # Also probe with the real ssl module — cryptography and OpenSSL
+                # parsers can disagree on edge cases (line endings, encoding, etc.)
+                try:
+                    build_ssl_context(cert_pem, key_pem)
+                    log.info("TLS: loaded certificate from database")
+                    return cert_pem, key_pem, "db"
+                except Exception as probe_err:
+                    log.warning(
+                        f"TLS: cert/key in DB failed SSL-layer probe ({probe_err}) — "
+                        "will try folder/generate"
+                    )
         else:
             log.warning("TLS: cert found in DB but key decryption failed — will try folder/generate")
 
@@ -221,6 +230,11 @@ def build_ssl_context(cert_pem: str, key_pem: str) -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.options |= ssl.OP_NO_COMPRESSION
+
+    # Normalize PEM line endings — OpenSSL's ssl module is stricter than the
+    # cryptography library and rejects \r\n or stray \r characters.
+    cert_pem = cert_pem.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
+    key_pem  = key_pem.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
 
     # Write PEMs to temp files so SSLContext.load_cert_chain() can read them
     fd_cert = fd_key = None
