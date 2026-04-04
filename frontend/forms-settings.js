@@ -1,5 +1,47 @@
 // ── Settings modal (General, Alerts, Database, Audit, Sensors, Networking) ─
 
+function _renderCertSection(tr){
+  const c=tr.cert||{};
+  let infoHtml;
+  if(tr.csr_pending){
+    infoHtml=`<div style="padding:10px 12px;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);border-radius:6px;font-size:12px;color:var(--warn)">
+      <strong>CSR Pending</strong> — A Certificate Signing Request has been generated and the private key is stored. Upload the signed certificate from your CA to complete the installation.
+    </div>`;
+  } else if(!c.subject){
+    infoHtml='<div style="font-size:12px;color:var(--text3)">No certificate loaded. Enable HTTPS and save — a self-signed certificate will be generated automatically on the next startup.</div>';
+  } else {
+    const daysLeft=c.days_left??0;
+    const badgeColor=daysLeft<0?'var(--err)':daysLeft<=30?'var(--warn)':'var(--ok)';
+    const badgeTxt=daysLeft<0?'EXPIRED':(daysLeft<=30?`⚠ ${daysLeft}d left`:`✓ ${daysLeft}d`);
+    const srcLabel={'generated':'Auto-generated (self-signed)','imported':'Imported from certs/ folder','uploaded':'Manually uploaded','db':'Loaded from database'}[c.source]||c.source||'—';
+    infoHtml=`<div style="display:grid;grid-template-columns:130px 1fr;gap:5px 10px;font-size:12px">
+      <span style="color:var(--text3)">Subject</span><span>${esc(c.subject||'—')}</span>
+      <span style="color:var(--text3)">Issuer</span><span>${esc(c.issuer||'—')}${c.self_signed?' <span style="color:var(--text3)">(self-signed)</span>':''}</span>
+      <span style="color:var(--text3)">Expires</span><span>${esc(c.not_after||'—')} <span style="color:${badgeColor};font-weight:600">${badgeTxt}</span></span>
+      <span style="color:var(--text3)">Source</span><span>${esc(srcLabel)}</span>
+    </div>`;
+  }
+  const btnsHtml=tr.csr_pending?`
+    <button class="btn-p" style="font-size:12px" onclick="openInstallSigned()">Install Signed Certificate</button>
+    <button class="btn-s" onclick="openGenerateCSR()">Regenerate CSR</button>
+  `:`
+    <button class="btn-s" onclick="openUploadCert()">Upload Certificate</button>
+    <button class="btn-s" onclick="openGenerateCSR()">Generate CSR</button>
+    <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate Self-Signed</button>
+  `;
+  return `<div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Certificate</div>
+    ${infoHtml}
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${btnsHtml}</div>`;
+}
+
+async function _refreshCertSection(){
+  const sec=document.getElementById('net-cert-section');
+  if(!sec) return;
+  const tr=await api('GET','/api/tls');
+  window._tlsSettings={...window._tlsSettings,...tr};
+  sec.innerHTML=_renderCertSection(tr);
+}
+
 async function openSettings(){
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
@@ -402,36 +444,8 @@ async function openSettings(){
           <div class="fh">When enabled, a redirect server runs on the HTTP port and sends browsers to HTTPS automatically.</div>
         </div>
 
-        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Certificate</div>
-          ${(()=>{
-            const c=tr.cert||{};
-            if(tr.csr_pending) return `
-              <div style="padding:10px 12px;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);border-radius:6px;font-size:12px;color:var(--warn)">
-                <strong>CSR Pending</strong> — A Certificate Signing Request has been generated and the private key is stored. Upload the signed certificate from your CA to complete the installation.
-              </div>`;
-            if(!c.subject) return '<div style="font-size:12px;color:var(--text3)">No certificate loaded. Enable HTTPS and save — a self-signed certificate will be generated automatically on the next startup.</div>';
-            const daysLeft=c.days_left??0;
-            const badgeColor=daysLeft<0?'var(--err)':daysLeft<=30?'var(--warn)':'var(--ok)';
-            const badgeTxt=daysLeft<0?'EXPIRED':(daysLeft<=30?`⚠ ${daysLeft}d left`:`✓ ${daysLeft}d`);
-            const srcLabel={'generated':'Auto-generated (self-signed)','imported':'Imported from certs/ folder','uploaded':'Manually uploaded','db':'Loaded from database'}[c.source]||c.source||'—';
-            return `<div style="display:grid;grid-template-columns:130px 1fr;gap:5px 10px;font-size:12px">
-              <span style="color:var(--text3)">Subject</span><span>${esc(c.subject||'—')}</span>
-              <span style="color:var(--text3)">Issuer</span><span>${esc(c.issuer||'—')}${c.self_signed?' <span style="color:var(--text3)">(self-signed)</span>':''}</span>
-              <span style="color:var(--text3)">Expires</span><span>${esc(c.not_after||'—')} <span style="color:${badgeColor};font-weight:600">${badgeTxt}</span></span>
-              <span style="color:var(--text3)">Source</span><span>${esc(srcLabel)}</span>
-            </div>`;
-          })()}
-          <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-            ${tr.csr_pending?`
-              <button class="btn-p" style="font-size:12px" onclick="openInstallSigned()">Install Signed Certificate</button>
-              <button class="btn-s" onclick="openGenerateCSR()">Regenerate CSR</button>
-            `:`
-              <button class="btn-s" onclick="openUploadCert()">Upload Certificate</button>
-              <button class="btn-s" onclick="openGenerateCSR()">Generate CSR</button>
-              <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate Self-Signed</button>
-            `}
-          </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)" id="net-cert-section">
+          ${_renderCertSection(tr)}
         </div>
       </div>
 
@@ -931,6 +945,8 @@ async function submitGenerateCSR(){
   }
   if(btn){btn.disabled=false;btn.textContent='Generate CSR';}
   if(r.error){toast(r.error,'err');return;}
+  // Refresh cert section in networking tab so CSR-pending state shows immediately
+  _refreshCertSection();
   // Show result pane
   document.getElementById('csr-form').style.display='none';
   document.getElementById('csr-footer-form').style.display='none';
@@ -1041,6 +1057,7 @@ async function submitInstallSigned(){
     }
     if(r.error){showErr(r.error);btn.disabled=false;btn.textContent='Install Certificate';return;}
     closeM('mis');
+    _refreshCertSection();
     toast('Certificate installed — restart the server to apply','ok');
   }catch(e){
     showErr('Request failed — check server connectivity.');
