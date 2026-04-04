@@ -324,21 +324,26 @@ def canonicalize_cert_pem(cert_pem: str) -> str:
     library so the output is guaranteed to be clean, canonical PEM that
     OpenSSL's ssl module can always parse.
 
-    Handles chains (multiple -----BEGIN CERTIFICATE----- blocks).
-    Strips any BOM, CRLF, trailing whitespace, or non-standard encoding.
-    Raises ValueError if any block cannot be parsed.
+    Handles:
+    - Chains (multiple -----BEGIN CERTIFICATE----- blocks)
+    - PKCS#7 / CMS SignedData blobs wrapped in CERTIFICATE headers (some
+      CAs distribute chains this way — certs are extracted and flattened)
+    - BOM, CRLF, trailing whitespace, non-standard encoding
+
+    Blocks that cannot be parsed as X.509 or PKCS#7 are skipped silently.
+    Raises ValueError only if no valid certificate is found at all.
     """
+    import base64 as _b64
     from cryptography import x509
     from cryptography.hazmat.primitives.serialization import Encoding
 
-    # Normalise line endings first so the PEM header/footer scan works
     pem = cert_pem.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
 
-    # Split on the PEM end-of-cert marker to handle chains
     canonical_blocks = []
     BEGIN = "-----BEGIN CERTIFICATE-----"
     END   = "-----END CERTIFICATE-----"
     idx = 0
+
     while True:
         start = pem.find(BEGIN, idx)
         if start == -1:
@@ -347,12 +352,36 @@ def canonicalize_cert_pem(cert_pem: str) -> str:
         if end == -1:
             break
         block = pem[start : end + len(END)]
+        idx = end + len(END)
+
+        # ── Try as a plain X.509 certificate ─────────────────────────────────
         try:
             cert = x509.load_pem_x509_certificate(block.encode("utf-8"))
             canonical_blocks.append(cert.public_bytes(Encoding.PEM).decode("utf-8").strip())
-        except Exception as e:
-            raise ValueError(f"Failed to parse certificate block: {e}")
-        idx = end + len(END)
+            continue
+        except Exception:
+            pass
+
+        # ── Try as a PKCS#7 / CMS SignedData (extract embedded certs) ────────
+        # Some CAs wrap a PKCS#7 chain blob in CERTIFICATE PEM headers.
+        # Decode the base64 body and try the PKCS#7 DER parser.
+        try:
+            b64_body = (block
+                        .replace(BEGIN, "")
+                        .replace(END, "")
+                        .replace("\n", "")
+                        .strip())
+            der = _b64.b64decode(b64_body)
+            from cryptography.hazmat.primitives.serialization import pkcs7 as _pkcs7
+            extracted = _pkcs7.load_der_pkcs7_certificates(der)
+            for c in extracted:
+                canonical_blocks.append(c.public_bytes(Encoding.PEM).decode("utf-8").strip())
+            continue
+        except Exception:
+            pass
+
+        # ── Block is unrecognised — skip it silently ──────────────────────────
+        log.debug(f"TLS canonicalize_cert_pem: skipped unrecognised PEM block")
 
     if not canonical_blocks:
         raise ValueError("No valid certificate found in PEM")
