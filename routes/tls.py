@@ -113,8 +113,16 @@ def handle(h, method, path, body):
             h._json(400, {"error": "cert_pem and key_pem are required"})
             return True
 
-        from core.tls import validate_cert_key_pair, parse_cert_info
+        from core.tls import (validate_cert_key_pair, parse_cert_info,
+                               canonicalize_cert_pem, canonicalize_key_pem)
         from db.backups import encrypt_pw
+
+        try:
+            cert_pem = canonicalize_cert_pem(cert_pem)
+            key_pem  = canonicalize_key_pem(key_pem)
+        except ValueError as e:
+            h._json(400, {"error": str(e)})
+            return True
 
         err = validate_cert_key_pair(cert_pem, key_pem)
         if err:
@@ -200,11 +208,14 @@ def handle(h, method, path, body):
             h._json(400, {"error": "Invalid base64 encoding"})
             return True
 
-        from core.tls import parse_pfx, validate_cert_key_pair, parse_cert_info
+        from core.tls import (parse_pfx, validate_cert_key_pair, parse_cert_info,
+                               canonicalize_cert_pem, canonicalize_key_pem)
         from db.backups import encrypt_pw
 
         try:
             cert_pem, key_pem = parse_pfx(pfx_bytes, password)
+            cert_pem = canonicalize_cert_pem(cert_pem)
+            key_pem  = canonicalize_key_pem(key_pem)
         except ValueError as e:
             h._json(400, {"error": str(e)})
             return True
@@ -294,7 +305,8 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
 
-        from core.tls import load_der_cert, validate_cert_key_pair, parse_cert_info
+        from core.tls import (load_der_cert, validate_cert_key_pair, parse_cert_info,
+                               canonicalize_cert_pem, canonicalize_key_pem)
         from db.backups import decrypt_pw, encrypt_pw
 
         # Resolve certificate PEM
@@ -311,6 +323,13 @@ def handle(h, method, path, body):
             h._json(400, {"error": "cert_pem or cert_b64 is required"})
             return True
 
+        # Canonicalise the cert so it's always clean PEM when stored
+        try:
+            cert_pem = canonicalize_cert_pem(cert_pem)
+        except ValueError as e:
+            h._json(400, {"error": str(e)})
+            return True
+
         # Retrieve stored private key (generated during CSR)
         key_enc = _settings.get("tls_key_pem_enc", "")
         if not key_enc:
@@ -321,14 +340,23 @@ def handle(h, method, path, body):
             h._json(400, {"error": "Stored private key could not be decrypted."})
             return True
 
+        # Also canonicalise the key before re-storing (cleans any legacy artefacts)
+        try:
+            key_pem = canonicalize_key_pem(key_pem)
+        except ValueError as e:
+            h._json(400, {"error": f"Stored private key is invalid: {e}"})
+            return True
+
         # Validate certificate matches the stored key
         err = validate_cert_key_pair(cert_pem, key_pem)
         if err:
             h._json(400, {"error": err})
             return True
 
+        key_enc = encrypt_pw(key_pem)
         updates = {
             "tls_cert_pem":    cert_pem,
+            "tls_key_pem_enc": key_enc,  # re-store canonicalised key
             "tls_cert_source": "uploaded",
             "tls_csr_pem":     "",   # clear the pending CSR
         }

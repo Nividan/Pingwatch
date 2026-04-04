@@ -316,6 +316,71 @@ def parse_cert_info(cert_pem: str) -> dict:
         return {}
 
 
+# ── PEM canonicalisation ─────────────────────────────────────────────────────
+
+def canonicalize_cert_pem(cert_pem: str) -> str:
+    """
+    Re-encode every certificate in a PEM string through the cryptography
+    library so the output is guaranteed to be clean, canonical PEM that
+    OpenSSL's ssl module can always parse.
+
+    Handles chains (multiple -----BEGIN CERTIFICATE----- blocks).
+    Strips any BOM, CRLF, trailing whitespace, or non-standard encoding.
+    Raises ValueError if any block cannot be parsed.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    # Normalise line endings first so the PEM header/footer scan works
+    pem = cert_pem.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+
+    # Split on the PEM end-of-cert marker to handle chains
+    canonical_blocks = []
+    BEGIN = "-----BEGIN CERTIFICATE-----"
+    END   = "-----END CERTIFICATE-----"
+    idx = 0
+    while True:
+        start = pem.find(BEGIN, idx)
+        if start == -1:
+            break
+        end = pem.find(END, start)
+        if end == -1:
+            break
+        block = pem[start : end + len(END)]
+        try:
+            cert = x509.load_pem_x509_certificate(block.encode("utf-8"))
+            canonical_blocks.append(cert.public_bytes(Encoding.PEM).decode("utf-8").strip())
+        except Exception as e:
+            raise ValueError(f"Failed to parse certificate block: {e}")
+        idx = end + len(END)
+
+    if not canonical_blocks:
+        raise ValueError("No valid certificate found in PEM")
+
+    return "\n".join(canonical_blocks) + "\n"
+
+
+def canonicalize_key_pem(key_pem: str) -> str:
+    """
+    Re-encode a private key through the cryptography library into canonical
+    PKCS#1 RSA PRIVATE KEY PEM.  Strips BOM, CRLF, and other artefacts.
+    Raises ValueError if the key cannot be parsed.
+    """
+    from cryptography.hazmat.primitives.serialization import (
+        load_pem_private_key, Encoding, PrivateFormat, NoEncryption,
+    )
+    pem = key_pem.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+    try:
+        key = load_pem_private_key(pem.encode("utf-8"), password=None)
+        return key.private_bytes(
+            encoding=Encoding.PEM,
+            format=PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=NoEncryption(),
+        ).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to parse private key: {e}")
+
+
 # ── Cert / key pair validator ─────────────────────────────────────────────────
 
 def validate_cert_key_pair(cert_pem: str, key_pem: str) -> "str | None":
