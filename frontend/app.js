@@ -309,7 +309,7 @@ function onAuthenticated(username){
 let _alertEvtBadgeCount = 0;
 
 function _updateEvtBadge() {
-  const n = unseenFlaps + _alertEvtBadgeCount;
+  const n = unseenFlaps;
   const b = document.getElementById('evtBadge');
   if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
 }
@@ -320,7 +320,6 @@ async function _alertEvtBadgePoll() {
     if (!r.ok) return;
     const d = await r.json();
     _alertEvtBadgeCount = d.count || 0;
-    _updateEvtBadge();
   } catch (_) {}
 }
 
