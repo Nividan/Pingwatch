@@ -1779,7 +1779,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .evt-sev-badge.warning {background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border);}
 .evt-sev-badge.recovery{background:var(--up-bg);  color:var(--up);  border:1px solid var(--up-border);}
 .evt-sev-badge.info    {background:rgba(56,139,253,.1);color:var(--info);border:1px solid rgba(56,139,253,.28);}
-.evt-res-tag{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;background:var(--up-bg);color:var(--up);border:1px solid var(--up-border);margin-top:3px;white-space:nowrap;}
+.evt-res-tag{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;background:var(--up-bg);color:var(--up);border:1px solid var(--up-border);margin-top:4px;white-space:nowrap;}
 
 /* Duration pill */
 .evt-dur{font-size:11px;color:var(--text3);padding:1px 7px;border:1px solid var(--border);border-radius:8px;white-space:nowrap;flex-shrink:0;}

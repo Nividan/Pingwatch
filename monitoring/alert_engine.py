@@ -184,9 +184,9 @@ def _process(event_type: str, data: dict):
                 db_log_event(rule["id"], rule["name"], ctx, state='suppressed')
                 log.debug(f"alert_engine: rule {rule['id']} suppressed by window '{mw_name}'")
                 continue
-            if _is_acked(rule, ctx):
+            if not is_recovery and _is_acked(rule, ctx):
                 continue
-            if not _check_cooldown(rule, ctx):
+            if not is_recovery and not _check_cooldown(rule, ctx):
                 continue
             _dispatch(rule, ctx)
             if event_type in ("flap_recovered", "threshold_ok"):
