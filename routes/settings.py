@@ -76,8 +76,6 @@ def handle(h, method, path, body):
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
             "snr_timeout":       int(_settings.get("snr_timeout",       4)),
-            "snr_fail_after":    int(_settings.get("snr_fail_after",    1)),
-            "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
             # Group B — event & history limits
             "max_flaps_display": int(_settings.get("max_flaps_display", 20)),
             "max_flap_entries":  int(_settings.get("max_flap_entries",  500)),
@@ -217,7 +215,7 @@ def handle(h, method, path, body):
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to", "smtp_down_delay",
-            "snr_interval", "snr_timeout", "snr_fail_after", "snr_recover_after",
+            "snr_interval", "snr_timeout",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window",
             "org_name", "latency_good_ms", "latency_warn_ms",

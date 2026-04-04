@@ -264,22 +264,12 @@ function sensorFormHTML(dev, s=null) {
       <div class="fh">Partition to monitor — leave blank for most-used disk</div>
     </div>
   </div>
-  <!-- Alert Thresholds & Debounce -->
+  <!-- Alert Thresholds -->
   <details style="margin-top:8px">
     <summary style="cursor:pointer;font-size:12px;color:var(--text2);padding:4px 0;user-select:none">
-      &#9658; Alert Thresholds &amp; Debounce
+      &#9658; Alert Thresholds
     </summary>
     <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
-      <div class="fgrid">
-        <div class="fr"><label class="fl">Fail After (probes)</label>
-          <input type="number" id="as-fa" value="${s?.fail_after||(window._snrDef?.fail_after||1)}" min="1" max="60" style="max-width:100px"/>
-          <div class="fh">Consecutive failures before DOWN alert</div>
-        </div>
-        <div class="fr"><label class="fl">Recover After (probes)</label>
-          <input type="number" id="as-ra" value="${s?.recover_after||(window._snrDef?.recover_after||1)}" min="1" max="60" style="max-width:100px"/>
-          <div class="fh">Consecutive successes before RECOVERED</div>
-        </div>
-      </div>
       ${(()=>{
         const _su=s?.snmp_unit||'';
         const _isStr=curType==='snmp'&&_su==='string';
@@ -442,8 +432,6 @@ function _applyTypeDefaults(t){
   const _sc = (id,v) => { if(v==null) return; const e=document.getElementById(id); if(e) e.checked=!!v; };
   _sv('as-iv',  d.interval);
   _sv('as-tmo', d.timeout);
-  _sv('as-fa',  d.fail_after);
-  _sv('as-ra',  d.recover_after);
   if(t === 'vmware'){
     // Clear generic defaults — metric-specific auto-fill sets correct values
     const _wi=document.getElementById('as-wms');
@@ -760,8 +748,6 @@ async function addSelectedIfaceSensors(){
   const version=document.getElementById('as-sv')?.value||'2c';
   const iv=parseInt(document.getElementById('as-iv')?.value)||5;
   const tmo=parseInt(document.getElementById('as-tmo')?.value)||4;
-  const fail_after=Math.max(1,parseInt(document.getElementById('as-fa')?.value)||1);
-  const recover_after=Math.max(1,parseInt(document.getElementById('as-ra')?.value)||1);
   const warn_ms=parseInt(document.getElementById('as-wms')?.value)||null;
   const crit_ms=parseInt(document.getElementById('as-cms')?.value)||null;
   const start=document.getElementById('as-si')?.value==='1';
@@ -787,7 +773,7 @@ async function addSelectedIfaceSensors(){
       snmp_unit:_normSnmpUnit(row.metric.u),
       interval:iv, timeout:tmo, verify_ssl:true, url:null,
       dns_query:'',dns_record_type:'A',dns_server:'',http_expected_status:0,
-      fail_after,recover_after,warn_ms,crit_ms,
+      warn_ms,crit_ms,
       loss_warn_pct:0,loss_crit_pct:0,keyword:'',keyword_case:false,banner_regex:''
     });
     if(r?.sid){
@@ -1325,8 +1311,6 @@ async function addSelectedVMSensors(){
   const iv=parseInt(document.getElementById('as-iv')?.value)||60;
   const tmo=parseInt(document.getElementById('as-tmo')?.value)||30;
   const startNow=document.getElementById('as-si')?.value==='1';
-  const fa=parseInt(document.getElementById('as-fa')?.value)||1;
-  const ra=parseInt(document.getElementById('as-ra')?.value)||1;
   const wms=parseInt(document.getElementById('as-wms')?.value)||null;
   const cms=parseInt(document.getElementById('as-cms')?.value)||null;
   const alertsMuted=document.getElementById('as-am')?.checked||false;
@@ -1372,7 +1356,7 @@ async function addSelectedVMSensors(){
     try{
       const r=await api('POST',`/api/device/${did}/sensor`,{
         name:sname,type:'vmware',host,port,interval:iv,timeout:tmo,
-        verify_ssl:vssl,fail_after:fa,recover_after:ra,warn_ms:row.wms,crit_ms:row.cms,
+        verify_ssl:vssl,warn_ms:row.wms,crit_ms:row.cms,
         alerts_muted:alertsMuted,
         vmware_user:username,vmware_password:password,
         vmware_vm_id:row.vmid,vmware_vm_name:row.vmname,vmware_metric:row.metric
@@ -1478,8 +1462,6 @@ function collectSensorForm(did){
     port=parseInt(document.getElementById('as-vmp')?.value)||443;
     verify_ssl=document.getElementById('as-vmssl')?.checked!==false;
   }
-  const fail_after   =Math.max(1,parseInt(document.getElementById('as-fa')?.value)||1);
-  const recover_after=Math.max(1,parseInt(document.getElementById('as-ra')?.value)||1);
   const warn_ms      =parseInt(document.getElementById('as-wms')?.value)||null;
   const crit_ms      =parseInt(document.getElementById('as-cms')?.value)||null;
   const loss_warn_pct=parseInt(document.getElementById('as-lwp')?.value)||0;
@@ -1489,7 +1471,7 @@ function collectSensorForm(did){
   const payload={type,name,host,port,url,interval:iv,timeout:tmo,
           verify_ssl,snmp_community,snmp_oid,snmp_version,snmp_unit,
           dns_query,dns_record_type,dns_server,http_expected_status,
-          fail_after,recover_after,warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
+          warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
   if(type==='vmware'){
     payload.vmware_user=document.getElementById('as-vmu')?.value.trim()||'';
@@ -1565,11 +1547,11 @@ async function submitAddSensor(did){
 async function addSensorDirect(did,name,type,host,port,url,interval,timeout,startNow=true,
   verify_ssl=true,snmp_community='public',snmp_oid='1.3.6.1.2.1.1.1.0',snmp_version='2c',
   dns_query='',dns_record_type='A',dns_server='',http_expected_status=0,
-  fail_after=1,recover_after=1,warn_ms=null,crit_ms=null,loss_warn_pct=0,loss_crit_pct=0,
+  warn_ms=null,crit_ms=null,loss_warn_pct=0,loss_crit_pct=0,
   keyword='',keyword_case=false,banner_regex=''){
   const r=await api('POST',`/api/device/${did}/sensor`,{name,type,host,port,url,interval,timeout,
     verify_ssl,snmp_community,snmp_oid,snmp_version,dns_query,dns_record_type,dns_server,http_expected_status,
-    fail_after,recover_after,warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
+    warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
     keyword,keyword_case,banner_regex});
   if(!r||!r.sid){toast(r?.error||'Failed to add sensor','err');return;}
   if(startNow)await api('POST',`/api/device/${did}/sensor/${r.sid}/start`);

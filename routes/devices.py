@@ -410,7 +410,7 @@ def handle(h, method, path, body):
                   "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                   "dns_query", "dns_record_type", "dns_server",
                   "http_expected_status",
-                  "fail_after", "recover_after", "warn_ms", "crit_ms",
+                  "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
                   "snmp_unit",
@@ -493,8 +493,6 @@ def handle(h, method, path, body):
         sunit = body.get("snmp_unit", "")
         try:
             xstat = int(body.get("http_expected_status", 0))
-            fa    = max(1, int(body.get("fail_after",    1) or 1))
-            ra    = max(1, int(body.get("recover_after", 1) or 1))
             wms   = int(body["warn_ms"])  if body.get("warn_ms")  else None
             cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
             lwp   = int(body.get("loss_warn_pct", 0) or 0)
@@ -534,7 +532,6 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid host"}); return True
         sid = STATE.add_sensor(did, name, stype, host, port, url,
                                iv, to, vssl, comm, oid, sver,
-                               fail_after=fa, recover_after=ra,
                                warn_ms=wms, crit_ms=cms,
                                loss_warn_pct=lwp, loss_crit_pct=lcp,
                                keyword=kw, keyword_case=kwc, banner_regex=bnr,

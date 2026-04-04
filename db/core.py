@@ -590,6 +590,8 @@ def db_init():
                 severity        TEXT    DEFAULT 'warning',
                 condition_logic TEXT    DEFAULT 'AND',
                 cooldown_s      INTEGER DEFAULT 300,
+                trigger_count   INTEGER DEFAULT 1,
+                recover_count   INTEGER DEFAULT 1,
                 sort_order      INTEGER DEFAULT 0,
                 created_at      REAL    DEFAULT 0,
                 updated_at      REAL    DEFAULT 0
@@ -657,6 +659,15 @@ def db_init():
                 name        TEXT    NOT NULL UNIQUE,
                 description TEXT    DEFAULT ''
             )""")
+        # alert_rules — debounce columns (moved from per-sensor to per-rule)
+        for _col_def in [
+            "trigger_count INTEGER DEFAULT 1",
+            "recover_count INTEGER DEFAULT 1",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE alert_rules ADD COLUMN {_col_def}")
+            except Exception:
+                pass
         con.commit()
     finally:
         con.close()

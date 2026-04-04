@@ -105,6 +105,8 @@ def pg_create_main_schema(cur):
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
         ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
+        ("alert_rules", "trigger_count",           "INTEGER DEFAULT 1"),
+        ("alert_rules", "recover_count",           "INTEGER DEFAULT 1"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -260,6 +262,8 @@ def pg_create_main_schema(cur):
             severity        TEXT DEFAULT 'warning',
             condition_logic TEXT DEFAULT 'AND',
             cooldown_s      INTEGER DEFAULT 300,
+            trigger_count   INTEGER DEFAULT 1,
+            recover_count   INTEGER DEFAULT 1,
             sort_order      INTEGER DEFAULT 0,
             created_at      DOUBLE PRECISION DEFAULT 0,
             updated_at      DOUBLE PRECISION DEFAULT 0

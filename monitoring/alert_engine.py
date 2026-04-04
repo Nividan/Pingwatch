@@ -33,6 +33,11 @@ _rules_cache: list = []
 _rules_cache_ts: float = 0.0
 _CACHE_TTL = 30.0
 
+# Debounce state: key = "rule_id:did:sid", value = {"fired": bool}
+# Tracks whether a rule has already dispatched for a given sensor incident.
+# Only accessed from the single _worker_loop thread — no lock needed.
+_debounce: dict = {}
+
 
 # ── Public API ────────────────────────────────────────────────────
 
@@ -105,6 +110,36 @@ def invalidate_rules_cache():
     _rules_cache_ts = 0.0
 
 
+def _debounce_check(rule: dict, dkey: str, event_type: str, consec: int) -> bool:
+    """Return True if this event should trigger dispatch for this rule.
+
+    Uses per-(rule, device, sensor) state to track whether the rule has already
+    dispatched for the current incident.  The sensor provides ``consec`` (the
+    consecutive probe count) and the rule defines trigger_count / recover_count.
+    """
+    tc = int(rule.get("trigger_count", 1))
+    rc = int(rule.get("recover_count", 1))
+    state = _debounce.get(dkey)
+
+    if event_type in ("flap_down", "threshold_warning", "threshold_critical"):
+        if state and state.get("fired"):
+            return False        # already dispatched, waiting for recovery
+        if consec >= tc:
+            _debounce[dkey] = {"fired": True}
+            return True         # dispatch
+        return False            # not enough consecutive events yet
+
+    if event_type in ("flap_recovered", "threshold_ok"):
+        if not state or not state.get("fired"):
+            return False        # was never dispatched, nothing to recover
+        if consec >= rc:
+            _debounce.pop(dkey, None)
+            return True         # dispatch recovery
+        return False            # not enough consecutive recoveries yet
+
+    return True                 # unknown events pass through
+
+
 def _process(event_type: str, data: dict):
     """Evaluate all enabled rules against this event and dispatch matches."""
     if event_type not in ("flap_down", "flap_recovered",
@@ -127,10 +162,14 @@ def _process(event_type: str, data: dict):
         return
 
     ctx = _build_ctx(event_type, data)
+    consec = int(data.get("consec_count", 1))
 
     for rule in rules:
         try:
             if not _match_conditions(rule, ctx):
+                continue
+            dkey = f"{rule['id']}:{ctx.get('did', '')}:{ctx.get('sid', '')}"
+            if not _debounce_check(rule, dkey, event_type, consec):
                 continue
             in_maintenance, mw_name = _check_maintenance(ctx)
             if in_maintenance:
@@ -188,6 +227,7 @@ def _build_ctx(event_type: str, data: dict) -> dict:
     ctx.setdefault("loss_pct", 0)
     ctx.setdefault("ts", "")
     ctx.setdefault("detail", "")
+    ctx.setdefault("consec_count", 1)
     return ctx
 
 
