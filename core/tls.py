@@ -180,9 +180,14 @@ def discover_or_generate_cert(org_name: str = "PingWatch",
     elif cert_pem and key_pem_enc:
         key_pem = decrypt_pw(key_pem_enc)
         if key_pem:
-            log.info("TLS: loaded certificate from database")
-            return cert_pem, key_pem, "db"
-        log.warning("TLS: cert found in DB but key decryption failed — will try folder/generate")
+            err = validate_cert_key_pair(cert_pem, key_pem)
+            if err:
+                log.warning(f"TLS: cert/key in DB are invalid ({err}) — will try folder/generate")
+            else:
+                log.info("TLS: loaded certificate from database")
+                return cert_pem, key_pem, "db"
+        else:
+            log.warning("TLS: cert found in DB but key decryption failed — will try folder/generate")
 
     # ── Step 2: check certs/ folder ──────────────────────────────────────────
     cert_file = _certs_dir() / "cert.pem"
