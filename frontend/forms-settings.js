@@ -420,7 +420,8 @@ async function openSettings(){
           })()}
           <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
             <button class="btn-s" onclick="openUploadCert()">Upload Certificate</button>
-            <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate New Self-Signed</button>
+            <button class="btn-s" onclick="openGenerateCSR()">Generate CSR</button>
+            <button class="btn-s" id="btn-gen-cert" onclick="generateNewCert()">Generate Self-Signed</button>
           </div>
         </div>
       </div>
@@ -636,22 +637,77 @@ async function saveNetworkingSettings(){
   toast('Saved — restart the server for changes to take effect','ok');
 }
 
+// ── Upload Certificate (tabbed modal: PEM paste / file upload / PFX) ────────
+
+let _ucTab='pem';
+function _switchUcTab(tab){
+  _ucTab=tab;
+  ['pem','file','pfx'].forEach(t=>{
+    document.getElementById(`uc-tab-${t}`)?.classList.toggle('active',t===tab);
+    const p=document.getElementById(`uc-pane-${t}`);
+    if(p) p.style.display=t===tab?'':'none';
+  });
+  const errEl=document.getElementById('uc-err');
+  if(errEl) errEl.style.display='none';
+}
+
 function openUploadCert(){
   closeM('muc');
+  _ucTab='pem';
   const o=document.createElement('div');o.className='mo';o.id='muc';
   _overlayClose(o,()=>closeM('muc'));
   o.innerHTML=`
-  <div class="mbox" style="width:560px;max-width:96vw">
+  <div class="mbox" style="width:580px;max-width:96vw">
     <div class="mhd"><div class="mttl">Upload Certificate</div><button class="mclose" onclick="closeM('muc')">✕</button></div>
     <div class="mbdy">
-      <div class="fr">
-        <label class="fl">Certificate (PEM)</label>
-        <textarea id="uc-cert" rows="7" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+      <div class="uc-tabs">
+        <button class="uc-tab active" id="uc-tab-pem" onclick="_switchUcTab('pem')">Paste PEM</button>
+        <button class="uc-tab" id="uc-tab-file" onclick="_switchUcTab('file')">Upload Files</button>
+        <button class="uc-tab" id="uc-tab-pfx" onclick="_switchUcTab('pfx')">PFX / PKCS#12</button>
       </div>
-      <div class="fr" style="margin-top:12px">
-        <label class="fl">Private Key (PEM)</label>
-        <textarea id="uc-key" rows="7" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+
+      <!-- PEM paste pane -->
+      <div id="uc-pane-pem">
+        <div class="fr">
+          <label class="fl">Certificate (PEM)</label>
+          <textarea id="uc-cert" rows="6" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+        </div>
+        <div class="fr" style="margin-top:10px">
+          <label class="fl">Private Key (PEM)</label>
+          <textarea id="uc-key" rows="6" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+        </div>
       </div>
+
+      <!-- File upload pane -->
+      <div id="uc-pane-file" style="display:none">
+        <div class="fr">
+          <label class="fl">Certificate File</label>
+          <div class="fh" style="margin-bottom:6px">.cer, .crt, .pem — DER or PEM encoded</div>
+          <input type="file" id="uc-f-cert" accept=".cer,.crt,.pem,.der"/>
+          <div id="uc-f-cert-name" class="uc-file-label"></div>
+        </div>
+        <div class="fr" style="margin-top:10px">
+          <label class="fl">Private Key File</label>
+          <div class="fh" style="margin-bottom:6px">.key or .pem — PEM encoded</div>
+          <input type="file" id="uc-f-key" accept=".key,.pem"/>
+          <div id="uc-f-key-name" class="uc-file-label"></div>
+        </div>
+      </div>
+
+      <!-- PFX pane -->
+      <div id="uc-pane-pfx" style="display:none">
+        <div class="fr">
+          <label class="fl">PFX / P12 File</label>
+          <div class="fh" style="margin-bottom:6px">PKCS#12 bundle containing certificate + private key</div>
+          <input type="file" id="uc-f-pfx" accept=".pfx,.p12"/>
+          <div id="uc-f-pfx-name" class="uc-file-label"></div>
+        </div>
+        <div class="fr" style="margin-top:10px">
+          <label class="fl">Password <span style="color:var(--text3);font-weight:400">(leave empty if none)</span></label>
+          <input type="password" id="uc-pfx-pw" placeholder="" autocomplete="new-password"/>
+        </div>
+      </div>
+
       <div id="uc-err" style="display:none;margin-top:10px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--err)"></div>
     </div>
     <div class="mft">
@@ -662,29 +718,63 @@ function openUploadCert(){
   document.body.appendChild(o);
 }
 
+function _readFileAsText(fileEl){
+  return new Promise((res,rej)=>{
+    const f=fileEl?.files?.[0];
+    if(!f){rej('No file selected');return;}
+    const r=new FileReader();
+    r.onload=()=>res(r.result);
+    r.onerror=()=>rej('Failed to read file');
+    r.readAsText(f);
+  });
+}
+function _readFileAsB64(fileEl){
+  return new Promise((res,rej)=>{
+    const f=fileEl?.files?.[0];
+    if(!f){rej('No file selected');return;}
+    const r=new FileReader();
+    r.onload=()=>res(r.result.split(',')[1]||'');
+    r.onerror=()=>rej('Failed to read file');
+    r.readAsDataURL(f);
+  });
+}
+
 async function submitUploadCert(){
-  const cert_pem=(document.getElementById('uc-cert')?.value||'').trim();
-  const key_pem =(document.getElementById('uc-key')?.value||'').trim();
   const errEl=document.getElementById('uc-err');
   const btn=document.getElementById('btn-uc-save');
-  if(!cert_pem||!key_pem){errEl.textContent='Both certificate and private key are required.';errEl.style.display='';return;}
+  const showErr=msg=>{errEl.textContent=msg;errEl.style.display='';};
   btn.disabled=true;btn.textContent='Validating...';
   errEl.style.display='none';
-  let r;
+
   try{
-    r=await api('POST','/api/tls/upload',{cert_pem,key_pem});
+    let r;
+    if(_ucTab==='pem'){
+      const cert_pem=(document.getElementById('uc-cert')?.value||'').trim();
+      const key_pem =(document.getElementById('uc-key')?.value||'').trim();
+      if(!cert_pem||!key_pem){showErr('Both certificate and private key are required.');btn.disabled=false;btn.textContent='Validate & Save';return;}
+      r=await api('POST','/api/tls/upload',{cert_pem,key_pem});
+    } else if(_ucTab==='file'){
+      const certEl=document.getElementById('uc-f-cert');
+      const keyEl =document.getElementById('uc-f-key');
+      if(!certEl?.files?.length||!keyEl?.files?.length){showErr('Both certificate and key files are required.');btn.disabled=false;btn.textContent='Validate & Save';return;}
+      // Read cert as base64 (may be DER binary), key as text (always PEM)
+      const [cert_b64, key_pem] = await Promise.all([_readFileAsB64(certEl), _readFileAsText(keyEl)]);
+      // Send both: cert_b64 for DER support, key_pem as text
+      r=await api('POST','/api/tls/upload',{cert_b64, key_pem:key_pem.trim()});
+    } else {
+      const pfxEl=document.getElementById('uc-f-pfx');
+      if(!pfxEl?.files?.length){showErr('Select a PFX/P12 file.');btn.disabled=false;btn.textContent='Validate & Save';return;}
+      const pfx_b64=await _readFileAsB64(pfxEl);
+      const password=document.getElementById('uc-pfx-pw')?.value||'';
+      r=await api('POST','/api/tls/upload-pfx',{pfx_b64,password});
+    }
+    if(r.error){showErr(r.error);btn.disabled=false;btn.textContent='Validate & Save';return;}
+    closeM('muc');
+    toast('Certificate uploaded — restart the server to apply','ok');
   }catch(e){
-    errEl.textContent='Request failed — check server connectivity.';errEl.style.display='';
+    showErr('Request failed — check server connectivity.');
     btn.disabled=false;btn.textContent='Validate & Save';
-    return;
   }
-  if(r.error){
-    errEl.textContent=r.error;errEl.style.display='';
-    btn.disabled=false;btn.textContent='Validate & Save';
-    return;
-  }
-  closeM('muc');
-  toast('Certificate uploaded — restart the server to apply','ok');
 }
 
 function generateNewCert(){
@@ -746,6 +836,117 @@ async function submitGenerateCert(){
   if(r.error){toast(r.error,'err');return;}
   closeM('mgc');
   toast('New self-signed certificate generated — restart the server to apply','ok');
+}
+
+// ── Generate CSR modal ──────────────────────────────────────────────────────
+
+function openGenerateCSR(){
+  closeM('mcsr');
+  const _tr=window._tlsSettings||{};
+  const _defaultCn=(_tr.cert&&_tr.cert.subject)||'';
+  const o=document.createElement('div');o.className='mo';o.id='mcsr';
+  _overlayClose(o,()=>closeM('mcsr'));
+  o.innerHTML=`
+  <div class="mbox" style="width:520px;max-width:96vw">
+    <div class="mhd"><div class="mttl">Generate Certificate Signing Request</div><button class="mclose" onclick="closeM('mcsr')">✕</button></div>
+    <div class="mbdy" id="csr-form">
+      <div class="fr">
+        <label class="fl">Common Name (CN)</label>
+        <input type="text" id="csr-cn" value="${esc(_defaultCn)}" placeholder="e.g. pingwatch.example.com" autocomplete="off"/>
+        <div class="fh">The hostname your CA will issue the certificate for.</div>
+      </div>
+      <div class="fgrid" style="margin-top:10px">
+        <div class="fr">
+          <label class="fl">Organization (O)</label>
+          <input type="text" id="csr-org" value="${esc(_tr.org_name||'')}" placeholder="e.g. My Company" autocomplete="off"/>
+        </div>
+        <div class="fr">
+          <label class="fl">Key Size</label>
+          <select id="csr-ks">
+            <option value="2048" selected>RSA 2048</option>
+            <option value="4096">RSA 4096</option>
+          </select>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:10px">
+        <label class="fl">Subject Alternative Names</label>
+        <textarea id="csr-sans" rows="3" placeholder="One per line — DNS name or IP address" autocomplete="off" style="resize:vertical;font-family:monospace;font-size:12px"></textarea>
+        <div class="fh">Optional. The CN is always included automatically.</div>
+      </div>
+      <div style="margin-top:12px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--text3)">
+        A new private key will be generated and stored securely. After your CA signs the CSR, upload the signed certificate using <strong>Upload Certificate</strong>.
+      </div>
+    </div>
+    <div class="mbdy" id="csr-result" style="display:none">
+      <div style="font-size:12px;font-weight:600;color:var(--ok);margin-bottom:10px">CSR generated successfully</div>
+      <div class="fr">
+        <label class="fl">CSR (PEM) — send this to your Certificate Authority</label>
+        <textarea id="csr-out" rows="12" readonly style="font-family:monospace;font-size:11px;resize:vertical;background:var(--bg3);cursor:text"></textarea>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn-s" onclick="_copyCSR()">Copy to Clipboard</button>
+        <button class="btn-s" onclick="_downloadCSR()">Download .csr</button>
+      </div>
+      <div style="margin-top:12px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--text3)">
+        The private key has been saved. When your CA returns the signed certificate, use <strong>Upload Certificate</strong> to install it — the key will be matched automatically.
+      </div>
+    </div>
+    <div class="mft" id="csr-footer-form">
+      <button class="btn-s" onclick="closeM('mcsr')">Cancel</button>
+      <button class="btn-p" id="btn-csr-submit" onclick="submitGenerateCSR()">Generate CSR</button>
+    </div>
+    <div class="mft" id="csr-footer-done" style="display:none">
+      <button class="btn-p" onclick="closeM('mcsr')">Done</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('csr-cn')?.focus(),50);
+}
+
+async function submitGenerateCSR(){
+  const hostname=(document.getElementById('csr-cn')?.value||'').trim();
+  const org_name=(document.getElementById('csr-org')?.value||'').trim();
+  const key_size=parseInt(document.getElementById('csr-ks')?.value||'2048');
+  const extra_sans=(document.getElementById('csr-sans')?.value||'')
+    .split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!hostname){toast('Common Name is required','err');return;}
+  const btn=document.getElementById('btn-csr-submit');
+  if(btn){btn.disabled=true;btn.textContent='Generating...';}
+  let r;
+  try{
+    r=await api('POST','/api/tls/csr',{hostname,org_name,key_size,extra_sans});
+  }catch(e){
+    toast('CSR generation failed','err');
+    if(btn){btn.disabled=false;btn.textContent='Generate CSR';}
+    return;
+  }
+  if(btn){btn.disabled=false;btn.textContent='Generate CSR';}
+  if(r.error){toast(r.error,'err');return;}
+  // Show result pane
+  document.getElementById('csr-form').style.display='none';
+  document.getElementById('csr-footer-form').style.display='none';
+  document.getElementById('csr-result').style.display='';
+  document.getElementById('csr-footer-done').style.display='';
+  document.getElementById('csr-out').value=r.csr_pem||'';
+}
+
+function _copyCSR(){
+  const ta=document.getElementById('csr-out');
+  if(!ta) return;
+  navigator.clipboard.writeText(ta.value).then(()=>toast('CSR copied to clipboard','ok')).catch(()=>{
+    ta.select();document.execCommand('copy');toast('CSR copied','ok');
+  });
+}
+
+function _downloadCSR(){
+  const pem=document.getElementById('csr-out')?.value||'';
+  if(!pem) return;
+  const blob=new Blob([pem],{type:'application/pkcs10'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='pingwatch.csr';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 let _activeLogTab = 'app';

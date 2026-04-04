@@ -337,6 +337,159 @@ def validate_cert_key_pair(cert_pem: str, key_pem: str) -> "str | None":
         return f"Invalid certificate or key: {e}"
 
 
+# ── PFX / PKCS#12 parsing ────────────────────────────────────────────────────
+
+def parse_pfx(pfx_bytes: bytes, password: str = "") -> "tuple[str, str]":
+    """
+    Extract certificate PEM and private key PEM from a PKCS#12 (.pfx / .p12) file.
+
+    Args:
+        pfx_bytes: Raw bytes of the PFX file.
+        password:  Optional password protecting the PFX (empty string = no password).
+
+    Returns (cert_pem: str, key_pem: str).
+    Raises ValueError on any parsing failure.
+    """
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PrivateFormat, NoEncryption, pkcs12,
+    )
+
+    pwd = password.encode("utf-8") if password else None
+    try:
+        private_key, certificate, chain = pkcs12.load_key_and_certificates(pfx_bytes, pwd)
+    except Exception as e:
+        raise ValueError(f"Failed to parse PFX file: {e}")
+
+    if certificate is None:
+        raise ValueError("PFX file does not contain a certificate")
+    if private_key is None:
+        raise ValueError("PFX file does not contain a private key")
+
+    cert_pem = certificate.public_bytes(Encoding.PEM).decode("utf-8")
+    # Append any intermediate CA certs in the chain
+    if chain:
+        for ca in chain:
+            cert_pem += ca.public_bytes(Encoding.PEM).decode("utf-8")
+
+    key_pem = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=NoEncryption(),
+    ).decode("utf-8")
+
+    return cert_pem, key_pem
+
+
+# ── DER certificate conversion ──────────────────────────────────────────────
+
+def load_der_cert(der_bytes: bytes) -> str:
+    """
+    Convert a DER-encoded certificate (.cer / .der) to PEM string.
+    Also accepts PEM input (returns it unchanged).
+
+    Returns cert_pem string.
+    Raises ValueError on failure.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    # If it already looks like PEM, try PEM first
+    if der_bytes.lstrip().startswith(b"-----BEGIN"):
+        try:
+            cert = x509.load_pem_x509_certificate(der_bytes)
+            return cert.public_bytes(Encoding.PEM).decode("utf-8")
+        except Exception:
+            pass
+
+    # Try DER
+    try:
+        cert = x509.load_der_x509_certificate(der_bytes)
+        return cert.public_bytes(Encoding.PEM).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to parse certificate file: {e}")
+
+
+# ── CSR generation ───────────────────────────────────────────────────────────
+
+def generate_csr(
+    hostname:   str = "localhost",
+    org_name:   str = "",
+    org_unit:   str = "",
+    country:    str = "",
+    state:      str = "",
+    locality:   str = "",
+    key_size:   int = 2048,
+    extra_sans: list = None,
+) -> "tuple[str, str]":
+    """
+    Generate a new RSA private key and Certificate Signing Request (CSR).
+
+    Returns (csr_pem: str, key_pem: str).
+    """
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key_size = max(2048, min(4096, int(key_size)))
+
+    import inspect as _inspect
+    _backend_kwargs = {}
+    if 'backend' in _inspect.signature(rsa.generate_private_key).parameters:
+        from cryptography.hazmat.backends import default_backend as _default_backend
+        _backend_kwargs = {'backend': _default_backend()}
+    key = rsa.generate_private_key(public_exponent=65537, key_size=key_size,
+                                   **_backend_kwargs)
+
+    # ── Subject ──────────────────────────────────────────────────────────────
+    name_attrs = []
+    if country:
+        name_attrs.append(x509.NameAttribute(NameOID.COUNTRY_NAME, country[:2].upper()))
+    if state:
+        name_attrs.append(x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, state))
+    if locality:
+        name_attrs.append(x509.NameAttribute(NameOID.LOCALITY_NAME, locality))
+    if org_name:
+        name_attrs.append(x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_name))
+    if org_unit:
+        name_attrs.append(x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, org_unit))
+    name_attrs.append(x509.NameAttribute(NameOID.COMMON_NAME, hostname or "localhost"))
+    subject = x509.Name(name_attrs)
+
+    # ── SAN entries ──────────────────────────────────────────────────────────
+    san_entries = [x509.DNSName(hostname or "localhost")]
+    _seen = {hostname or "localhost"}
+    for san in (extra_sans or []):
+        san = san.strip()
+        if not san or san in _seen:
+            continue
+        try:
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(san)))
+        except ValueError:
+            san_entries.append(x509.DNSName(san))
+        _seen.add(san)
+
+    builder = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(subject)
+        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+    )
+    csr = builder.sign(key, hashes.SHA256(), **_backend_kwargs)
+
+    csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    log.info(
+        f"TLS: generated CSR — CN={hostname}, key_size={key_size}, "
+        f"SANs={len(san_entries)}"
+    )
+    return csr_pem, key_pem
+
+
 # ── Expiry warning on startup ─────────────────────────────────────────────────
 
 def check_cert_expiry_warn(cert_pem: str, warn_days: int = 30) -> None:
