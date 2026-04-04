@@ -120,9 +120,10 @@ class Sensor:
         self.dns_record_type       = "A"
         self.dns_server            = ""
         self.http_expected_status  = 0
-        # Debounce
-        self.fail_after    = max(1, int(fail_after or 1))
-        self.recover_after = max(1, int(recover_after or 1))
+        # Debounce — now handled by alert rules (trigger_count / recover_count).
+        # Hardcoded to 1 so sensor fires events immediately on first state change.
+        self.fail_after    = 1
+        self.recover_after = 1
         # Thresholds
         self.warn_ms       = warn_ms
         self.crit_ms       = crit_ms
@@ -151,7 +152,10 @@ class Sensor:
         self._consec_ok       = 0
         self._alerted_down    = False
         self._email_sent_down = False   # True only after the delayed DOWN email was actually sent
-        self._threshold_state = "ok"
+        self._recovery_pending            = False   # keep sending recovery events to alert engine
+        self._threshold_state             = "ok"
+        self._consec_threshold            = 0       # consecutive probes in current threshold state
+        self._threshold_recovery_pending  = False   # keep sending threshold_ok events to engine
         self.history               = collections.deque(maxlen=self.MAX)
         self.thr_history           = collections.deque(maxlen=self.MAX)
         self.total          = 0
@@ -439,7 +443,6 @@ class MonitorState:
                         "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                         "dns_query", "dns_record_type", "dns_server",
                         "http_expected_status",
-                        "fail_after", "recover_after",
                         "warn_ms", "crit_ms", "loss_warn_pct", "loss_crit_pct",
                         "keyword", "keyword_case", "banner_regex", "alerts_muted",
                         "snmp_unit",
@@ -590,6 +593,7 @@ class MonitorState:
                     "host": s.host, "stype": s.stype, "ts": _ts,
                     "detail": "Recovered", "direction": "recovered",
                     "grp": dev.group,
+                    "consec_count": s._consec_ok,
                 }
                 if not _muted:
                     self._broadcast("flap_recovered", rec_data)
@@ -601,7 +605,24 @@ class MonitorState:
                         threading.Thread(target=send_alert_email, args=('recovered', _smtp_cap), daemon=True).start()
                 s._alerted_down    = False
                 s._email_sent_down = False
+                s._recovery_pending = True
                 s._consec_ok       = 0
+            elif s._recovery_pending and not _muted:
+                # Subsequent successes after recovery — alert engine only (skip SSE/syslog)
+                _eng_data = {
+                    "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                    "host": s.host, "stype": s.stype, "ts": _ts,
+                    "detail": "Recovered", "direction": "recovered",
+                    "grp": dev.group,
+                    "consec_count": s._consec_ok,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send("flap_recovered", _eng_data)
+                except Exception:
+                    pass
+                if s._consec_ok >= 60:
+                    s._recovery_pending = False
         else:
             s.alive       = False
             s.last_ms     = None
@@ -617,12 +638,14 @@ class MonitorState:
             # ── Debounce: track consecutive failures ──
             s._consec_ok   = 0
             s._consec_fail += 1
+            s._recovery_pending = False
             if not s._alerted_down and s._consec_fail >= s.fail_after:
                 flap_data = {
                     "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
                     "host": s.host, "stype": s.stype, "ts": _ts,
                     "detail": result["detail"], "direction": "down",
                     "grp": dev.group,
+                    "consec_count": s._consec_fail,
                 }
                 if not _muted:
                     self._broadcast("flap_down", flap_data)
@@ -640,6 +663,20 @@ class MonitorState:
                     s._email_sent_down = False
                     threading.Thread(target=_smtp_down_delayed, args=(s, _smtp_cap), daemon=True).start()
                 s._alerted_down = True
+            elif s._alerted_down and not _muted:
+                # Subsequent failures — alert engine only (skip SSE/syslog)
+                _eng_data = {
+                    "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                    "host": s.host, "stype": s.stype, "ts": _ts,
+                    "detail": result["detail"], "direction": "down",
+                    "grp": dev.group,
+                    "consec_count": s._consec_fail,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send("flap_down", _eng_data)
+                except Exception:
+                    pass
 
         # ── Threshold state check (transitions only) ──
         _new_thr = "ok"
@@ -669,9 +706,12 @@ class MonitorState:
         elif s.loss_warn_pct and s.loss_pct >= s.loss_warn_pct:
             if _new_thr != "crit": _new_thr = "warn"
         if _new_thr != s._threshold_state:
+            # State CHANGED — reset counter, do full broadcast
             _prev_thr = s._threshold_state
             s._threshold_state = _new_thr
+            s._consec_threshold = 1
             if _new_thr != "ok" and not _muted:
+                s._threshold_recovery_pending = False
                 _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
                 _thr_evt_data = {
                     "did": did, "sid": sid, "dname": dev.name,
@@ -679,6 +719,7 @@ class MonitorState:
                     "state": _new_thr, "ts": _ts,
                     "ms": s.last_ms, "loss_pct": s.loss_pct,
                     "grp": dev.group,
+                    "consec_count": 1,
                 }
                 self._broadcast(_tevt, _thr_evt_data)
                 if s._last_rate is not None:
@@ -702,12 +743,14 @@ class MonitorState:
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
                 # Threshold recovered — broadcast and persist
+                s._threshold_recovery_pending = True
                 _thr_rec_data = {
                     "did": did, "sid": sid, "dname": dev.name,
                     "sname": s.name, "host": s.host, "stype": s.stype,
                     "state": "ok", "ts": _ts,
                     "ms": s.last_ms, "loss_pct": s.loss_pct,
                     "grp": dev.group,
+                    "consec_count": 1,
                 }
                 self._broadcast("threshold_ok", _thr_rec_data)
                 log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
@@ -715,6 +758,40 @@ class MonitorState:
                 _thr_rec_flap["direction"] = "threshold_ok"
                 _thr_rec_flap["detail"]    = s.last_value or ""
                 _db_enqueue(lambda _f=_thr_rec_flap: db_log_flap(_f))
+        else:
+            # SAME state as previous probe — increment counter, engine only
+            s._consec_threshold += 1
+            if s._threshold_state != "ok" and not _muted:
+                _tevt = "threshold_critical" if s._threshold_state == "crit" else "threshold_warning"
+                _eng_thr = {
+                    "did": did, "sid": sid, "dname": dev.name,
+                    "sname": s.name, "host": s.host, "stype": s.stype,
+                    "state": s._threshold_state, "ts": _ts,
+                    "ms": s.last_ms, "loss_pct": s.loss_pct,
+                    "grp": dev.group,
+                    "consec_count": s._consec_threshold,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send(_tevt, _eng_thr)
+                except Exception:
+                    pass
+            elif s._threshold_state == "ok" and s._threshold_recovery_pending and not _muted:
+                _eng_thr_ok = {
+                    "did": did, "sid": sid, "dname": dev.name,
+                    "sname": s.name, "host": s.host, "stype": s.stype,
+                    "state": "ok", "ts": _ts,
+                    "ms": s.last_ms, "loss_pct": s.loss_pct,
+                    "grp": dev.group,
+                    "consec_count": s._consec_threshold,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send("threshold_ok", _eng_thr_ok)
+                except Exception:
+                    pass
+                if s._consec_threshold >= 60:
+                    s._threshold_recovery_pending = False
 
         s.thr_history.append(s._threshold_state)
         if result["ok"]:

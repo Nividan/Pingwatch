@@ -256,7 +256,7 @@ async function openSettings(){
         <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
       </div>
       <div style="margin-top:12px;font-size:11px;color:var(--text3)">
-        Emails are sent on sensor DOWN and RECOVERED events (after fail_after / recover_after debounce).
+        Emails are sent on sensor DOWN and RECOVERED events.
       </div>
     </div>
     <div class="mft" id="stab-footer-general">
@@ -381,12 +381,6 @@ async function openSettings(){
             <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
           <div class="fr"><label class="fl">Timeout (s)</label>
             <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
-        </div>
-        <div class="fgrid" style="margin-top:6px">
-          <div class="fr"><label class="fl">Fail After (probes)</label>
-            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||1}" min="1" max="60" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl">Recover After (probes)</label>
-            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="60" style="max-width:100px"/></div>
         </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
@@ -1200,8 +1194,6 @@ async function loadSensorsDefaultsTab(){
     const cnt = typeCounts[t];
     const iv  = d.interval      != null ? d.interval      : (window._snrDef?.interval||5);
     const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||4);
-    const fa  = d.fail_after    != null ? d.fail_after    : (window._snrDef?.fail_after||1);
-    const ra  = d.recover_after != null ? d.recover_after : (window._snrDef?.recover_after||1);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
     const cm  = d.crit_ms  != null ? d.crit_ms  : (_SDR_CRIT_DEF[t] || '');
     const warnUnit = t==='tls'?'days':t==='snmp'?'val':'ms';
@@ -1211,18 +1203,16 @@ async function loadSensorsDefaultsTab(){
       <td style="text-align:center"><span class="sdr-cnt">${cnt}</span></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_interval" value="${iv}" min="1" max="300"/><span class="sdr-unit">s</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/><span class="sdr-unit">s</span></div></td>
-      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_fail_after" value="${fa}" min="1" max="60"/><span class="sdr-unit">×</span></div></td>
-      <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_recover_after" value="${ra}" min="1" max="60"/><span class="sdr-unit">×</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
       <td style="text-align:center">${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
     </tr>
-    ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="9"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
+    ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="7"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
   }).join('');
   el.innerHTML = `<table class="sdr-tbl">
     <thead><tr>
       <th>Type</th><th>#</th>
-      <th>Interval</th><th>Timeout</th><th>Fail After</th><th>Recover After</th>
+      <th>Interval</th><th>Timeout</th>
       <th>Warn</th><th>Crit</th><th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -1246,8 +1236,6 @@ async function saveSensorTypeDefaults(){
     const d = {};
     const iv=_n(`sdr_${t}_interval`);      if(iv  !=null&&iv  >0) d.interval     =iv;
     const to=_n(`sdr_${t}_timeout`);       if(to  !=null&&to  >0) d.timeout      =to;
-    const fa=_n(`sdr_${t}_fail_after`);    if(fa  !=null&&fa  >0) d.fail_after   =fa;
-    const ra=_n(`sdr_${t}_recover_after`); if(ra  !=null&&ra  >0) d.recover_after=ra;
     const wm=_n(`sdr_${t}_warn_ms`);       if(wm  !=null&&wm  >0) d.warn_ms      =wm;
     const cm=_n(`sdr_${t}_crit_ms`);       if(cm  !=null&&cm  >0) d.crit_ms      =cm;
     if(t==='tcp')         { const p=_n('sdr_tcp_port');                   if(p>0)    d.port=p; }
@@ -1267,13 +1255,9 @@ async function saveSensorTypeDefaults(){
   });
   const snrIv  = parseInt(document.getElementById('st-snr-iv')?.value);
   const snrTmo = parseInt(document.getElementById('st-snr-tmo')?.value);
-  const snrFa  = parseInt(document.getElementById('st-snr-fa')?.value);
-  const snrRa  = parseInt(document.getElementById('st-snr-ra')?.value);
   const globalDefaults = {};
   if(snrIv  >= 1) globalDefaults.snr_interval     = snrIv;
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
-  if(snrFa  >= 1) globalDefaults.snr_fail_after    = snrFa;
-  if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
   // Collect scan_ports from checkboxes + custom input
   const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
   const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();
@@ -1286,8 +1270,6 @@ async function saveSensorTypeDefaults(){
   window._snrDef = window._snrDef || {};
   if(globalDefaults.snr_interval)     window._snrDef.interval     = globalDefaults.snr_interval;
   if(globalDefaults.snr_timeout)      window._snrDef.timeout      = globalDefaults.snr_timeout;
-  if(globalDefaults.snr_fail_after)   window._snrDef.fail_after   = globalDefaults.snr_fail_after;
-  if(globalDefaults.snr_recover_after)window._snrDef.recover_after = globalDefaults.snr_recover_after;
   toast('Sensor defaults saved','ok');
 }
 

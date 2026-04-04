@@ -29,6 +29,15 @@ def _rule_row_to_dict(row) -> dict:
         r = row
     else:
         r = dict(row) if row else {}
+    # trigger_count / recover_count may not exist in older DBs
+    try:
+        tc = r["trigger_count"]
+    except (KeyError, IndexError):
+        tc = 1
+    try:
+        rc = r["recover_count"]
+    except (KeyError, IndexError):
+        rc = 1
     return {
         "id":              r["id"],
         "name":            r["name"],
@@ -36,6 +45,8 @@ def _rule_row_to_dict(row) -> dict:
         "severity":        r["severity"],
         "condition_logic": r["condition_logic"],
         "cooldown_s":      r["cooldown_s"],
+        "trigger_count":   int(tc or 1),
+        "recover_count":   int(rc or 1),
         "sort_order":      r["sort_order"],
         "created_at":      r["created_at"],
         "updated_at":      r["updated_at"],
@@ -174,14 +185,16 @@ def db_create_rule(data: dict) -> int:
         try:
             with pg_cursor("main") as cur:
                 cur.execute(
-                    "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, sort_order, created_at, updated_at) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, trigger_count, recover_count, sort_order, created_at, updated_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                     (
                         data["name"],
                         1 if data.get("enabled", True) else 0,
                         data.get("severity", "warning"),
                         data.get("condition_logic", "AND"),
                         int(data.get("cooldown_s", 300)),
+                        int(data.get("trigger_count", 1)),
+                        int(data.get("recover_count", 1)),
                         int(data.get("sort_order", 0)),
                         now, now,
                     )
@@ -197,14 +210,16 @@ def db_create_rule(data: dict) -> int:
     con = _con()
     try:
         cur = con.execute(
-            "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, sort_order, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, trigger_count, recover_count, sort_order, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 data["name"],
                 1 if data.get("enabled", True) else 0,
                 data.get("severity", "warning"),
                 data.get("condition_logic", "AND"),
                 int(data.get("cooldown_s", 300)),
+                int(data.get("trigger_count", 1)),
+                int(data.get("recover_count", 1)),
                 int(data.get("sort_order", 0)),
                 now, now,
             )
@@ -230,13 +245,15 @@ def db_update_rule(rule_id: int, data: dict) -> bool:
             with pg_cursor("main") as cur:
                 cur.execute(
                     "UPDATE alert_rules SET name=%s, enabled=%s, severity=%s, condition_logic=%s, "
-                    "cooldown_s=%s, sort_order=%s, updated_at=%s WHERE id=%s",
+                    "cooldown_s=%s, trigger_count=%s, recover_count=%s, sort_order=%s, updated_at=%s WHERE id=%s",
                     (
                         data["name"],
                         1 if data.get("enabled", True) else 0,
                         data.get("severity", "warning"),
                         data.get("condition_logic", "AND"),
                         int(data.get("cooldown_s", 300)),
+                        int(data.get("trigger_count", 1)),
+                        int(data.get("recover_count", 1)),
                         int(data.get("sort_order", 0)),
                         now, rule_id,
                     )
@@ -254,13 +271,15 @@ def db_update_rule(rule_id: int, data: dict) -> bool:
     try:
         con.execute(
             "UPDATE alert_rules SET name=?, enabled=?, severity=?, condition_logic=?, "
-            "cooldown_s=?, sort_order=?, updated_at=? WHERE id=?",
+            "cooldown_s=?, trigger_count=?, recover_count=?, sort_order=?, updated_at=? WHERE id=?",
             (
                 data["name"],
                 1 if data.get("enabled", True) else 0,
                 data.get("severity", "warning"),
                 data.get("condition_logic", "AND"),
                 int(data.get("cooldown_s", 300)),
+                int(data.get("trigger_count", 1)),
+                int(data.get("recover_count", 1)),
                 int(data.get("sort_order", 0)),
                 now, rule_id,
             )
