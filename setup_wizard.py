@@ -441,11 +441,14 @@ def step1_packages():
                 elif _sys == "Darwin":
                     _tag("info", "Install with: brew install python-tk")
                     if _ask_yn("Try to install python-tk via brew now?", default=True):
-                        r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
-                        if r.returncode == 0:
-                            _tag("ok", "python-tk installed — restart the wizard to confirm")
-                        else:
-                            _tag("warn", "Install failed — try manually, then re-run setup")
+                        try:
+                            r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
+                            if r.returncode == 0:
+                                _tag("ok", "python-tk installed — restart the wizard to confirm")
+                            else:
+                                _tag("warn", "Install failed — try manually, then re-run setup")
+                        except FileNotFoundError:
+                            _tag("warn", "brew not found — install Homebrew first, then re-run setup")
                 _tag("warn", "The GUI status window will be unavailable until tkinter is installed.")
                 _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
             continue
@@ -1421,17 +1424,23 @@ def step2_database():
             _sys2 = _plat2.system()
             _ok_pg = False
             if _sys2 == "Windows":
-                _tag("info", "Trying Chocolatey ...")
-                r = subprocess.run(["choco", "install", "postgresql", "-y"], capture_output=True)
-                if r.returncode == 0:
-                    _tag("ok", "PostgreSQL client tools installed via Chocolatey")
-                    _ok_pg = True
-                else:
-                    _tag("info", "Trying winget ...")
-                    r2 = subprocess.run(["winget", "install", "PostgreSQL.PostgreSQL"], capture_output=True)
-                    if r2.returncode == 0:
-                        _tag("ok", "PostgreSQL client tools installed via winget")
+                try:
+                    _tag("info", "Trying Chocolatey ...")
+                    r = subprocess.run(["choco", "install", "postgresql", "-y"], capture_output=True)
+                    if r.returncode == 0:
+                        _tag("ok", "PostgreSQL client tools installed via Chocolatey")
                         _ok_pg = True
+                except FileNotFoundError:
+                    pass  # choco not installed
+                if not _ok_pg:
+                    try:
+                        _tag("info", "Trying winget ...")
+                        r2 = subprocess.run(["winget", "install", "PostgreSQL.PostgreSQL"], capture_output=True)
+                        if r2.returncode == 0:
+                            _tag("ok", "PostgreSQL client tools installed via winget")
+                            _ok_pg = True
+                    except FileNotFoundError:
+                        pass  # winget not installed
             elif _sys2 == "Linux":
                 if _sh2.which("apt-get"):
                     r = subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql-client"], capture_output=False)
