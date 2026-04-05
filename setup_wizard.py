@@ -1537,8 +1537,8 @@ def step2_database():
                         _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
             if not _ok_pg:
                 _tag("warn", "Automatic install failed. Install manually:")
-                _tag("info",  "Download: https://www.postgresql.org/download/")
-                _tag("info",  "Windows: choco install postgresql  OR  winget install PostgreSQL.PostgreSQL")
+                _tag("info",  "Windows: Download the installer from EDB (select 'Command Line Tools' during setup):")
+                _tag("info",  "         https://www.enterprisedb.com/downloads/postgres-postgresql-downloads")
                 _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
                 _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
                 print()
