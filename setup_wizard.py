@@ -1514,12 +1514,14 @@ def step2_database():
                     _tag("info", f"  {_pg_bin_dir}")
                     _tag("info", "Or run in PowerShell (as Administrator) to add permanently:")
                     _tag("info", f'  [Environment]::SetEnvironmentVariable("Path", $env:Path + ";{_pg_bin_dir}", "Machine")')
-                    # Add to current process PATH so rescan works
+                    # Add to current process PATH so the rest of setup can use them
                     os.environ["PATH"] = _pg_bin_dir + os.pathsep + os.environ.get("PATH", "")
                     _ok_pg = True
-                    _tag("ok", "Added to PATH for this session.")
+                    _tag("ok", "Added to PATH for this session. DB export/import is available.")
 
-        if not _ok_pg and _ask_yn("Install PostgreSQL client tools now?", default=True):
+        if _ok_pg:
+            pass  # Already resolved — skip install prompt
+        elif _ask_yn("Install PostgreSQL client tools now?", default=True):
             if _sys2 == "Windows":
                 try:
                     _tag("info", "Trying Chocolatey ...")
