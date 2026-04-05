@@ -581,10 +581,22 @@ def step1_packages():
                     if _ok_snmp:
                         _tag("ok", "net-snmp installed via Homebrew")
             if not _ok_snmp:
-                _tag("warn", "Automatic install failed.")
+                _tag("warn", "Automatic install failed. Install manually:")
                 _tag("info",  "Windows: choco install net-snmp  OR  winget install net-snmp.net-snmp")
                 _tag("info",  "Linux:   sudo apt install snmp  OR  sudo dnf install net-snmp-utils")
                 _tag("info",  "macOS:   brew install net-snmp")
+                print()
+                _tag("info", "After installing, press Enter to check again.")
+                _tag("info", "Or type 's' to skip (SNMP sensors will not be available).")
+                while True:
+                    raw = _ask("Press Enter to check, or type 's' to skip", "")
+                    if raw.lower() == "s":
+                        _tag("warn", "Skipping — SNMP polling sensors will not be available")
+                        break
+                    if _check_snmpget():
+                        _tag("ok", "net-snmp (snmpget) detected — SNMP sensor support")
+                        break
+                    _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
         else:
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
 
@@ -597,6 +609,7 @@ def step1_packages():
         _tag("warn", "ping binary not found.")
         _tag("info",  "Required for ICMP ping sensors (most common sensor type).")
         _sys_ic = _plat_ic.system()
+        _ok_ping = False
         if _sys_ic == "Linux":
             _mgr_ic = ("apt-get" if _sh_ic.which("apt-get") else
                        "dnf"     if _sh_ic.which("dnf")     else
@@ -607,15 +620,29 @@ def step1_packages():
                                    capture_output=False)
                 if r.returncode == 0:
                     _tag("ok", "ping installed")
-                else:
-                    _tag("warn", f"Install failed. Run: sudo {_mgr_ic} install {_pkg_ic}")
-            else:
-                _tag("warn", "Skipping — ICMP ping sensors will not work")
-        elif _sys_ic == "Windows":
-            _tag("info", "ping.exe should be present on all Windows installations.")
-            _tag("info", "If missing, check your Windows installation.")
-        elif _sys_ic == "Darwin":
-            _tag("info", "ping should be available. Try: brew install inetutils")
+                    _ok_ping = True
+        if not _ok_ping:
+            if _sys_ic == "Windows":
+                _tag("info", "ping.exe should be present on all Windows installations.")
+                _tag("info", "If missing, check your Windows installation or repair Windows.")
+            elif _sys_ic == "Linux":
+                _tag("warn", "Install manually:")
+                _tag("info",  "Debian/Ubuntu: sudo apt install iputils-ping")
+                _tag("info",  "RHEL/Fedora:   sudo dnf install iputils")
+            elif _sys_ic == "Darwin":
+                _tag("info", "Install with: brew install inetutils")
+            print()
+            _tag("info", "After installing, press Enter to check again.")
+            _tag("info", "Or type 's' to skip (ICMP ping sensors will not work).")
+            while True:
+                raw = _ask("Press Enter to check, or type 's' to skip", "")
+                if raw.lower() == "s":
+                    _tag("warn", "Skipping — ICMP ping sensors will not work")
+                    break
+                if _sh_ic.which("ping"):
+                    _tag("ok", "ping detected — ICMP ping sensor support")
+                    break
+                _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
 
     print()
     if not all_ok:
@@ -1461,11 +1488,25 @@ def step2_database():
                         _tag("ok", "PostgreSQL client tools installed via Homebrew")
                         _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
             if not _ok_pg:
-                _tag("warn", "Automatic install failed.")
+                _tag("warn", "Automatic install failed. Install manually:")
                 _tag("info",  "Windows: choco install postgresql  OR  winget install PostgreSQL.PostgreSQL")
                 _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
                 _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
-                _tag("warn",  "DB export/import will not work until psql and pg_dump are in PATH.")
+                print()
+                _tag("info", "After installing, press Enter to check again.")
+                _tag("info", "Or type 's' to skip (DB export/import will not be available).")
+                while True:
+                    raw = _ask("Press Enter to check, or type 's' to skip", "")
+                    if raw.lower() == "s":
+                        _tag("warn", "Skipping — DB export/import will not be available")
+                        break
+                    _has_psql    = _sh2.which("psql")    is not None
+                    _has_pg_dump = _sh2.which("pg_dump") is not None
+                    if _has_psql and _has_pg_dump:
+                        _tag("ok", "PostgreSQL client tools (psql, pg_dump) detected")
+                        break
+                    _still = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
+                    _tag("warn", f"Still missing: {_still}. Install and press Enter again, or type 's' to skip.")
         else:
             _tag("warn", "Skipping — DB export/import will not be available")
     print()
