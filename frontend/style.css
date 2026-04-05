@@ -1,5 +1,6 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
+  color-scheme: dark;
   --bg:    #0d1117;
   --bg2:   #161b22;
   --bg3:   #1c2333;
@@ -937,7 +938,7 @@ body{
 .fr{margin-bottom:14px}
 .fl{font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;display:block}
 .fh{font-size:10px;color:var(--text3);margin-top:3px}
-input[type=text],input[type=number],input[type=password],input[type=email],textarea,select{
+input[type=text],input[type=number],input[type=password],input[type=email],input[type=time],textarea,select{
   width:100%;background:var(--bg);border:1px solid var(--border);
   border-radius:4px;color:var(--text);font-family:'Exo 2',sans-serif;font-size:13px;
   padding:8px 12px;outline:none;transition:border-color .15s,box-shadow .15s;
