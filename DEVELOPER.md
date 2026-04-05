@@ -157,7 +157,7 @@ pingwatch/
     ├── app.js              ← Bootstrap, tab routing, shared helpers
     ├── dashboard.js        ← Customizable widget dashboard
     ├── devices.js          ← Device list and detail panel
-    ├── sensors.js          ← Sensor list and detail panel
+    ├── sensors.js          ← Sensor list, detail panel, history chart; KPI tiles reflect selected time range
     ├── events.js           ← Flap/trap/error event log viewer
     ├── backups.js          ← Backup table, config viewer, diff, rollback
     ├── forms-device.js     ← Add/edit device form
@@ -307,7 +307,7 @@ The frontend is served as static files — no build step.
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`) |
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
-| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle |
+| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
 | `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; bulk "Resolve All" button |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |

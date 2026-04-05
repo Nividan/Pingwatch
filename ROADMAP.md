@@ -116,6 +116,13 @@
   - Delayed DOWN emails skip sending if sensor was deleted or stopped during the delay window
   - Rule-based alert engine verifies sensor/device still exists before dispatching (prevents ghost alerts after deletion)
 - Bulk resolve — "Resolve All" button on Events tab resolves all active alert events and flaps in one click with confirmation dialog; `POST /api/alert/events/resolve-all` endpoint
+- Sensor history KPI tiles time-range correlation
+  - Avg ms / Min ms / Max ms tiles now reflect the selected time window (12h / 3d / 7d / 30d / 90d)
+  - Tiles compute from the same sample data as the stats bar so values visibly change with time range
+  - Avail, Loss%, and Jitter remain computed from hourly summary aggregates (more accurate for those metrics)
+- Bug fixes
+  - Event detail panel "Open Device" and "Sensor History" buttons restored — navigate to device panel and open sensor history modal respectively
+  - Backup schedule dark mode styling fixed — frequency dropdown, days-of-week checkboxes, and time input render correctly in dark theme
 
 ## 🔴 High Priority
 

@@ -60,6 +60,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
 - 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
 - ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
+- 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
 
 ### Supported Sensor Types
 
