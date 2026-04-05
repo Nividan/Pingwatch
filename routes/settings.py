@@ -118,7 +118,6 @@ def handle(h, method, path, body):
             "db_backup_last_ts":     _settings.get("db_backup_last_ts",     ""),
             "db_backup_last_result": _settings.get("db_backup_last_result", ""),
             # Group H — syslog forwarding
-            "syslog_enabled":      int(_settings.get("syslog_enabled",      0)),
             "syslog_host":         _settings.get("syslog_host",         ""),
             "syslog_port":         int(_settings.get("syslog_port",         514) or 514),
             "syslog_proto":        _settings.get("syslog_proto",        "udp"),
@@ -198,10 +197,6 @@ def handle(h, method, path, body):
             _settings.load({"scan_ports": _sp_raw})
             _db_enqueue(lambda _v=_sp_raw: db_save_settings({"scan_ports": _v}))
         # Backup scheduler settings
-        if "syslog_enabled" in body:
-            _sye = "1" if body["syslog_enabled"] else "0"
-            _settings.load({"syslog_enabled": _sye})
-            _db_enqueue(lambda _v=_sye: db_save_settings({"syslog_enabled": _v}))
         if "syslog_app_logs" in body:
             _sal = "1" if body["syslog_app_logs"] else "0"
             _settings.load({"syslog_app_logs": _sal})

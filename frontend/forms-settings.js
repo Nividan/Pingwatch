@@ -279,14 +279,7 @@ async function openSettings(){
       <div id="ipanel-syslog" style="display:none">
         <div id="syslog-status-bar"></div>
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Alert Event Forwarding</div>
-        <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-          <div style="flex:1">
-            <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Syslog Forwarding</div>
-            <div class="fh" style="margin:0">Send events (device down/up, SNMP traps) to an external syslog or SIEM server in real time</div>
-          </div>
-          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-sl-enabled" ${sr.syslog_enabled?'checked':''}><span class="tsl"></span></label>
-        </div>
-        <div class="fr" style="margin-top:14px">
+        <div class="fr" style="margin-top:0">
           <label class="fl">Server IP / Hostname</label>
           <input type="text" id="st-sl-host" value="${esc(sr.syslog_host||'')}" placeholder="192.168.1.100 or syslog.example.com" style="max-width:280px"/>
           <div class="fh">Syslog or SIEM server address</div>
@@ -1776,7 +1769,6 @@ async function _saveIntegrations() {
 }
 
 async function saveSyslogSettings(){
-  const enabled  = document.getElementById('st-sl-enabled')?.checked ? 1 : 0;
   const host     = (document.getElementById('st-sl-host')?.value   || '').trim();
   const port     = parseInt(document.getElementById('st-sl-port')?.value) || 514;
   const proto    = document.getElementById('st-sl-proto')?.value   || 'udp';
@@ -1784,12 +1776,11 @@ async function saveSyslogSettings(){
   const appLogs  = document.getElementById('st-sl-applogs')?.checked ? 1 : 0;
   const logLevel = document.getElementById('st-sl-loglevel')?.value || 'info';
   const logSources = ['app','audit','backup'].filter(s => document.getElementById(`st-sl-src-${s}`)?.checked);
-  if(enabled && !host){ toast('Enter a syslog server address','err'); return; }
+  if(!host){ toast('Enter a syslog server address','err'); return; }
   const btn = document.getElementById('integ-btn-save');
   if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
   try {
     const r = await api('PATCH', '/api/settings', {
-      syslog_enabled:         enabled,
       syslog_host:            host,
       syslog_port:            port,
       syslog_proto:           proto,

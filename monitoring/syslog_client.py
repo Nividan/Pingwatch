@@ -135,7 +135,6 @@ def _ensure_started():
 def _reload() -> dict:
     """Return current syslog settings from the live settings cache."""
     return {
-        "enabled":      str(_cfg("syslog_enabled", "0")).strip() == "1",
         "host":         str(_cfg("syslog_host",    "")).strip(),
         "port":         int(_cfg("syslog_port",    514) or 514),
         "proto":        str(_cfg("syslog_proto",   "udp")).strip().lower(),
@@ -153,7 +152,7 @@ def syslog_send(event_type: str, data: dict) -> None:
     Non-blocking. Called from MonitorState._broadcast().
     """
     cfg = _reload()
-    if not cfg["enabled"] or not cfg["host"]:
+    if not cfg["host"]:
         return
 
     sev = _event_severity(event_type, data)
@@ -197,9 +196,8 @@ def send_test_syslog() -> tuple:
 
 def get_syslog_status() -> dict:
     """Return connection status dict for the Settings API."""
-    enabled = str(_cfg('syslog_enabled', '0')).strip() == '1'
-    host    = str(_cfg('syslog_host', '')).strip()
-    if not enabled or not host:
+    host = str(_cfg('syslog_host', '')).strip()
+    if not host:
         state = 'unconfigured'
     elif _last_err['ts'] and (not _last_ok_ts or _last_err['ts'] > _last_ok_ts):
         state = 'error'
@@ -247,8 +245,6 @@ class SyslogAppLogHandler(_logging.Handler):
     def emit(self, record: _logging.LogRecord) -> None:
         try:
             if not int(_cfg('syslog_app_logs', 0) or 0):
-                return
-            if not int(_cfg('syslog_enabled', 0) or 0):
                 return
             host = str(_cfg('syslog_host', '')).strip()
             if not host:
