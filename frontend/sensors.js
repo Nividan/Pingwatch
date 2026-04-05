@@ -1102,62 +1102,6 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
   const _vmU3 = _vmUnit(did, sid);
   const _isVmware3 = _vmU3 !== null;
 
-  // Evaluate the quadratic Bézier curve (same as _drawLine) at a given canvas X.
-  // pts = [{x, y}] where y is the data value (not canvas Y).
-  // Returns the interpolated data value, or null if outside range.
-  function _evalQuadCurveAtX(pts, px) {
-    if (!pts || pts.length === 0) return null;
-    if (pts.length === 1) return pts[0].y;
-    // Find which segment px falls in.
-    // The curve goes: moveTo(pts[0]), then for j=1..n-2: quadraticCurveTo(pts[j], mid(j,j+1)), lineTo(pts[n-1]).
-    // Segment 0: linear pts[0] → mid(1,2)  (control=pts[1])
-    // Segment j (1..n-3): quad mid(j,j+1) → mid(j+1,j+2) (control=pts[j+1])
-    // Last segment: linear mid(n-2,n-1) → pts[n-1] (or lineTo for 2-point case)
-    const n = pts.length;
-    if (n === 2) {
-      // Simple linear
-      const t = (px - pts[0].x) / (pts[1].x - pts[0].x);
-      if (t < 0 || t > 1) return t < 0 ? pts[0].y : pts[1].y;
-      return pts[0].y + t * (pts[1].y - pts[0].y);
-    }
-    // Build segment list with start/control/end x,y
-    const segs = [];
-    // First segment: pts[0] to mid(1,2), control=pts[1]
-    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-    segs.push({ p0: pts[0], p1: pts[1], p2: mid(pts[1], pts[2]) });
-    for (let j = 2; j < n - 2; j++) {
-      segs.push({ p0: mid(pts[j-1], pts[j]), p1: pts[j], p2: mid(pts[j], pts[j+1]) });
-    }
-    if (n > 3) segs.push({ p0: mid(pts[n-3], pts[n-2]), p1: pts[n-2], p2: pts[n-1] });
-    // Last: lineTo — already handled as last quad seg ends at pts[n-1]
-
-    for (const s of segs) {
-      if (px >= Math.min(s.p0.x, s.p2.x) - 1 && px <= Math.max(s.p0.x, s.p2.x) + 1) {
-        // Solve for t where quadBezier_x(t) ≈ px
-        // B(t) = (1-t)²·p0 + 2(1-t)t·p1 + t²·p2
-        const a = s.p0.x - 2 * s.p1.x + s.p2.x;
-        const b = 2 * (s.p1.x - s.p0.x);
-        const c = s.p0.x - px;
-        let t = 0.5;
-        if (Math.abs(a) > 0.001) {
-          const disc = b * b - 4 * a * c;
-          if (disc >= 0) {
-            const t1 = (-b + Math.sqrt(disc)) / (2 * a);
-            const t2 = (-b - Math.sqrt(disc)) / (2 * a);
-            t = (t1 >= -0.01 && t1 <= 1.01) ? Math.max(0, Math.min(1, t1))
-              : Math.max(0, Math.min(1, t2));
-          }
-        } else if (Math.abs(b) > 0.001) {
-          t = Math.max(0, Math.min(1, -c / b));
-        }
-        const u = 1 - t;
-        return u * u * s.p0.y + 2 * u * t * s.p1.y + t * t * s.p2.y;
-      }
-    }
-    // Fallback: nearest endpoint
-    return Math.abs(px - pts[0].x) < Math.abs(px - pts[n-1].x) ? pts[0].y : pts[n-1].y;
-  }
-
   canvas.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -1265,51 +1209,17 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
       const _xOf2 = ts => LEFT + (ts - _winStart) / (minutes * 60) * _plotW2;
       const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
 
+      // Look up the drawn avg line's canvas-Y at this pixel X
+      const _lineMap = cache.avgLineY || {};
+      const _rpx = Math.round(mx);
+      let dotCanvasY = _lineMap[_rpx] ?? _lineMap[_rpx - 1] ?? _lineMap[_rpx + 1] ?? null;
+
+      // Convert canvas-Y back to data value for the tooltip
       let dotVal = null;
-      if (_isCounter) {
-        // Counter mode: follow drawn quadratic curve
-        const _rateBuckets = cache.rateBuckets;
-        if (_rateBuckets) {
-          const _rPts = [];
-          for (let i = 0; i < TARGET; i++) {
-            if (_rateBuckets[i].n > 0) {
-              _rPts.push({ x: _xOf2(_winStart + (i + 0.5) * _bucketSec),
-                           y: _rateBuckets[i].sum / _rateBuckets[i].n });
-            }
-          }
-          dotVal = _evalQuadCurveAtX(_rPts, mx);
-          if (dotVal === null) dotVal = 0;
-        } else {
-          const sorted = cache.sortedRateSamples || [];
-          const _rPts = sorted.map(p => ({ x: _xOf2(p.ts), y: p.displayRate }));
-          dotVal = _evalQuadCurveAtX(_rPts, mx);
-          if (dotVal === null) dotVal = (sorted[0] || {}).displayRate ?? null;
-        }
-      } else {
-        // ms mode: original interpolation logic
-        const okSp = cache.samples.filter(p => p.ok && p.ms != null);
-        const _allBuckets = cache.buckets;
-        const bucketAvg = (_allBuckets && _allBuckets[_cursorBi].n > 0)
-          ? _allBuckets[_cursorBi].sum / _allBuckets[_cursorBi].n : null;
-        const usingBuckets = okSp.length > TARGET;
-        if (usingBuckets) {
-          // Build point list matching the drawn line (bucket centers with data)
-          const _bPts = [];
-          for (let i = 0; i < TARGET; i++) {
-            if (_allBuckets[i].n > 0) {
-              _bPts.push({ x: _xOf2(_winStart + (i + 0.5) * _bucketSec),
-                           y: _allBuckets[i].sum / _allBuckets[i].n });
-            }
-          }
-          dotVal = _evalQuadCurveAtX(_bPts, mx);
-          if (dotVal === null) dotVal = bucketAvg ?? 0;
-        } else {
-          // Build point list matching the drawn line (raw samples)
-          const sorted = cache.sortedOkSamples || [...okSp].sort((a,b)=>a.ts-b.ts);
-          const _rPts = sorted.map(p => ({ x: _xOf2(p.ts), y: p.ms }));
-          dotVal = _evalQuadCurveAtX(_rPts, mx);
-          if (dotVal === null) dotVal = (sorted[0] || {}).ms ?? null;
-        }
+      if (dotCanvasY != null) {
+        const _plotH2 = canvas.height - BOT - TOP;
+        const _maxY2 = cache.maxY || 1;
+        dotVal = Math.max(0, ((canvas.height - BOT) - dotCanvasY) / _plotH2 * _maxY2);
       }
 
       // Exact value tooltip
@@ -1320,10 +1230,9 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
         else exactEl.textContent = dotVal!=null ? Math.round(dotVal)+' ms' : '— ms';
       }
 
-      // Draw dot on the drawn line
-      if (dotVal != null) {
-        const dotY = _yOf(dotVal);
-        cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
+      // Draw dot exactly on the drawn line
+      if (dotCanvasY != null) {
+        cctx.beginPath(); cctx.arc(mx, dotCanvasY, 5, 0, Math.PI * 2);
         cctx.fillStyle = '#7ec8ff'; cctx.fill();
         cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
       }
@@ -1529,6 +1438,9 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
 
   // ── 7. Avg/Rate line — main focus ────────────────────────────
   if (togAvg) {
+    // Pixel-X → data-value lookup for hover dot (filled by _drawLine)
+    const _avgLineY = {};  // { pixelX: dataValue }
+
     const _drawLine = (pts, gapMult) => {
       if (pts.length < 2) return;
       const gapThresh = (tsRange / pts.length) * gapMult;
@@ -1545,11 +1457,28 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
           if (seg.length > 1) {
             ctx.beginPath();
             ctx.moveTo(seg[0].x, seg[0].y);
+            // Sample the line for hover lookup: first point
+            _avgLineY[Math.round(seg[0].x)] = seg[0].y;
             for (let j = 1; j < seg.length - 1; j++) {
-              ctx.quadraticCurveTo(seg[j].x, seg[j].y,
-                (seg[j].x + seg[j+1].x) / 2, (seg[j].y + seg[j+1].y) / 2);
+              const cx = seg[j].x, cy = seg[j].y;
+              const ex = (seg[j].x + seg[j+1].x) / 2, ey = (seg[j].y + seg[j+1].y) / 2;
+              const sx = j === 1 ? seg[0].x : (seg[j-1].x + seg[j].x) / 2;
+              const sy = j === 1 ? seg[0].y : (seg[j-1].y + seg[j].y) / 2;
+              ctx.quadraticCurveTo(cx, cy, ex, ey);
+              // Sample the quadratic curve at each pixel X
+              const xMin = Math.floor(Math.min(sx, ex));
+              const xMax = Math.ceil(Math.max(sx, ex));
+              for (let px = xMin; px <= xMax; px++) {
+                const xRange = ex - sx;
+                if (Math.abs(xRange) < 0.5) { _avgLineY[px] = ey; continue; }
+                // Approximate t from x (linear approximation is fine for per-pixel)
+                const tApprox = Math.max(0, Math.min(1, (px - sx) / xRange));
+                const u = 1 - tApprox;
+                _avgLineY[px] = u * u * sy + 2 * u * tApprox * cy + tApprox * tApprox * ey;
+              }
             }
             ctx.lineTo(seg[seg.length-1].x, seg[seg.length-1].y);
+            _avgLineY[Math.round(seg[seg.length-1].x)] = seg[seg.length-1].y;
             ctx.stroke();
           }
           segStart = i;
@@ -1653,6 +1582,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
         _drawLine(pts, 4);
       }
     }
+    // Store pixel lookup for hover dot
+    if (_histCache[_ckey]) _histCache[_ckey].avgLineY = _avgLineY;
   }
 
   // ── 8. Threshold lines ────────────────────────────────────────
