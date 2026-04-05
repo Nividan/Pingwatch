@@ -1510,14 +1510,22 @@ def step2_database():
                 if _psql_found and _pgdump_found:
                     _tag("ok", f"Found client tools in: {_pg_bin_dir}")
                     _tag("warn", "They are not in your system PATH.")
-                    _tag("info", f"Add this to your PATH environment variable:")
-                    _tag("info", f"  {_pg_bin_dir}")
-                    _tag("info", "Or run in PowerShell (as Administrator) to add permanently:")
-                    _tag("info", f'  [Environment]::SetEnvironmentVariable("Path", $env:Path + ";{_pg_bin_dir}", "Machine")')
-                    # Add to current process PATH so the rest of setup can use them
+                    if _ask_yn(f"Add '{_pg_bin_dir}' to system PATH permanently?", default=True):
+                        try:
+                            subprocess.run([
+                                "powershell", "-Command",
+                                f'[Environment]::SetEnvironmentVariable("Path",'
+                                f' [Environment]::GetEnvironmentVariable("Path","Machine") + ";{_pg_bin_dir}", "Machine")'
+                            ], capture_output=True, check=True)
+                            _tag("ok", "Added to system PATH permanently.")
+                        except Exception:
+                            _tag("warn", "Could not modify system PATH (requires Administrator).")
+                            _tag("info", "Run this in an elevated PowerShell to add manually:")
+                            _tag("info", f'  [Environment]::SetEnvironmentVariable("Path", $env:Path + ";{_pg_bin_dir}", "Machine")')
+                    # Always add to current process PATH so the rest of setup works
                     os.environ["PATH"] = _pg_bin_dir + os.pathsep + os.environ.get("PATH", "")
                     _ok_pg = True
-                    _tag("ok", "Added to PATH for this session. DB export/import is available.")
+                    _tag("ok", "DB export/import is available.")
 
         if _ok_pg:
             pass  # Already resolved — skip install prompt
