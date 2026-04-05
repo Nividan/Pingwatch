@@ -1495,9 +1495,31 @@ def step2_database():
         _missing = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
         _tag("warn", f"PostgreSQL client tools ({_missing}) are not installed.")
         _tag("info",  "Required for database export and import.")
-        if _ask_yn("Install PostgreSQL client tools now?", default=True):
-            _sys2 = _plat2.system()
-            _ok_pg = False
+        _sys2 = _plat2.system()
+        _ok_pg = False
+
+        # On Windows, check if PG is already installed but just not in PATH
+        _pg_bin_dir = None
+        if _sys2 == "Windows":
+            import glob as _gl2
+            _bins = _gl2.glob(r"C:\Program Files\PostgreSQL\*\bin")
+            if _bins:
+                _pg_bin_dir = sorted(_bins)[-1]  # highest version
+                _psql_found = os.path.isfile(os.path.join(_pg_bin_dir, "psql.exe"))
+                _pgdump_found = os.path.isfile(os.path.join(_pg_bin_dir, "pg_dump.exe"))
+                if _psql_found and _pgdump_found:
+                    _tag("ok", f"Found client tools in: {_pg_bin_dir}")
+                    _tag("warn", "They are not in your system PATH.")
+                    _tag("info", f"Add this to your PATH environment variable:")
+                    _tag("info", f"  {_pg_bin_dir}")
+                    _tag("info", "Or run in PowerShell (as Administrator) to add permanently:")
+                    _tag("info", f'  [Environment]::SetEnvironmentVariable("Path", $env:Path + ";{_pg_bin_dir}", "Machine")')
+                    # Add to current process PATH so rescan works
+                    os.environ["PATH"] = _pg_bin_dir + os.pathsep + os.environ.get("PATH", "")
+                    _ok_pg = True
+                    _tag("ok", "Added to PATH for this session.")
+
+        if not _ok_pg and _ask_yn("Install PostgreSQL client tools now?", default=True):
             if _sys2 == "Windows":
                 try:
                     _tag("info", "Trying Chocolatey ...")
@@ -1537,10 +1559,16 @@ def step2_database():
                         _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
             if not _ok_pg:
                 _tag("warn", "Automatic install failed. Install manually:")
-                _tag("info",  "Windows: Download the installer from EDB (select 'Command Line Tools' during setup):")
-                _tag("info",  "         https://www.enterprisedb.com/downloads/postgres-postgresql-downloads")
-                _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
-                _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
+                if _sys2 == "Windows":
+                    _tag("info", "psql and pg_dump come with the PostgreSQL server installer.")
+                    _tag("info", "If PG is on another machine, install it locally and select")
+                    _tag("info", "'Command Line Tools' only during setup:")
+                    _tag("info", "  https://www.enterprisedb.com/downloads/postgres-postgresql-downloads")
+                    _tag("info", "After install, add the bin folder to PATH:")
+                    _tag("info", r"  C:\Program Files\PostgreSQL\<version>\bin")
+                else:
+                    _tag("info", "Linux: sudo apt install postgresql-client  OR  sudo dnf install postgresql")
+                    _tag("info", "macOS: brew install libpq && brew link --force libpq")
                 print()
                 _tag("info", "After installing, press Enter to check again.")
                 _tag("info", "Or type 's' to skip (DB export/import will not be available).")
@@ -1549,6 +1577,12 @@ def step2_database():
                     if raw.lower() == "s":
                         _tag("warn", "Skipping — DB export/import will not be available")
                         break
+                    # Also re-check the PG bin directory on Windows
+                    if _sys2 == "Windows":
+                        _bins2 = _gl2.glob(r"C:\Program Files\PostgreSQL\*\bin")
+                        if _bins2:
+                            _d = sorted(_bins2)[-1]
+                            os.environ["PATH"] = _d + os.pathsep + os.environ.get("PATH", "")
                     _has_psql    = _sh2.which("psql")    is not None
                     _has_pg_dump = _sh2.which("pg_dump") is not None
                     if _has_psql and _has_pg_dump:
