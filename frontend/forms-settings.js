@@ -1,5 +1,13 @@
 // ── Settings modal (General, Alerts, Database, Audit, Sensors, Networking) ─
 
+function _fmtTtl(s){
+  s=parseInt(s)||86400;
+  if(s<60)  return s+'s';
+  if(s<3600)return Math.round(s/60)+'m';
+  const h=s/3600;
+  return (h===Math.floor(h)?h:Math.round(h*10)/10)+'h';
+}
+
 function _renderCertSection(tr){
   const c=tr.cert||{};
   let infoHtml;
@@ -114,7 +122,7 @@ async function openSettings(){
       <div class="fr">
         <label class="fl">Session Timeout (seconds)</label>
         <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
-        <div style="font-size:11px;color:var(--text3);margin-top:5px">Current: ${Math.round((sr.session_ttl||86400)/3600*10)/10}h — takes effect on next login</div>
+        <div id="st-ttl-hint" style="font-size:11px;color:var(--text3);margin-top:5px">Current: ${_fmtTtl(sr.session_ttl||86400)} — takes effect on next login</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Data Retention</div>
@@ -1352,6 +1360,11 @@ async function saveSettings(){
     if(btn){btn.disabled=false;btn.textContent='Save Settings';}
   }
   if(!r.ok){toast('Failed to save settings','err');return;}
+  if(body.session_ttl){
+    const hint=document.getElementById('st-ttl-hint');
+    if(hint) hint.textContent=`Current: ${_fmtTtl(body.session_ttl)} — takes effect on next login`;
+    if(typeof _sessionTtl!=='undefined') _sessionTtl=body.session_ttl;
+  }
   if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
   if(body.latency_good_ms)   window._lGood=body.latency_good_ms;
   if(body.latency_warn_ms)   window._lWarn=body.latency_warn_ms;
