@@ -95,7 +95,6 @@ def handle(h, method, path, body):
             return True
         _last_trigger[did] = now
         db_log_audit(user, h.client_address[0], 'backup_run', did)
-        log.info(f"Backup: manual trigger for device {did!r} by {user!r}")
 
         def _run_backup(device_id):
             try:

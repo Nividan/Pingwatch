@@ -21,7 +21,6 @@ from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_u
                          db_delete_user, db_set_password, db_get_user_auth_type,
                          db_update_profile, db_update_own_profile)
 from db.backend  import is_pg
-from core.logger    import log
 from core.app_state import tls_active
 import core.settings as _settings
 
@@ -166,7 +165,14 @@ def handle(h, method, path, body):
         if not ok:
             h._json(409, {"error": "username already exists"})
             return True
-        log.info(f"User created: {username} (role={new_role}, auth_type={auth_type})")
+        # Optionally assign to a group at creation time
+        _gid = body.get("group_id")
+        if _gid is not None:
+            try:
+                _gid = int(_gid) if _gid != "" else None
+            except (ValueError, TypeError):
+                _gid = None
+            db_update_profile(username, '', '', group_id=_gid)
         db_log_audit(user, h.client_address[0], 'user_create', username,
                      f"role={new_role},auth_type={auth_type}")
         h._json(200, {"ok": True})
@@ -215,7 +221,6 @@ def handle(h, method, path, body):
         with _PW_RESET_LOCK:
             _PW_RESET_LOG[username] = time.time()
         auth_revoke_user_sessions(username)
-        log.info(f"Password reset for user: {username}")
         db_log_audit(user, h.client_address[0], 'pass_reset', username)
         h._json(200, {"ok": True})
         return True
@@ -241,7 +246,6 @@ def handle(h, method, path, body):
             h._json(400, {"error": "Current password is incorrect"})
             return True
         db_set_password(me, new_pw)
-        log.info(f"User {me} changed their own password")
         db_log_audit(me, h.client_address[0], 'pass_change', me)
         h._json(200, {"ok": True})
         return True
@@ -268,13 +272,11 @@ def handle(h, method, path, body):
             with _FAIL_LOCK:
                 _FAIL_LOG.setdefault(ip, []).append(time.time())
             db_log_audit(username, ip, 'login_fail', username)
-            log.warning(f"Login FAILED: {username!r} from {ip}")
             h._json(401, {"error": "Invalid username or password"})
             return True
         with _FAIL_LOCK:
             _FAIL_LOG.pop(ip, None)
         db_log_audit(username, ip, 'login_ok', username)
-        log.info(f"Login OK: {username!r} from {ip}")
         role = auth_check_role(token) or "viewer"
         _sec = "; Secure" if tls_active else ""
         h._send_with_cookie(
