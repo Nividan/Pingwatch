@@ -1853,8 +1853,13 @@ document.addEventListener('fullscreenchange', () => {
     fsBtn.textContent = '⊠';
     fsBtn.title = 'Exit full screen';
     setTimeout(() => {
-      if (canvas) { canvas.height = canvas.offsetHeight || 620; dmHistRedraw(did, sid); }
-    }, 80);
+      if (canvas) {
+        // Let flex layout determine size, then sync canvas drawing height
+        const parent = canvas.parentElement;
+        canvas.height = parent ? parent.clientHeight : 620;
+        dmHistRedraw(did, sid);
+      }
+    }, 100);
   } else {
     fsBtn.textContent = '⤢';
     fsBtn.title = 'Full screen';
