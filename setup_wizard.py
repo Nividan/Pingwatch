@@ -99,16 +99,63 @@ def _ask(prompt: str, default: str = "") -> str:
 
 
 def _ask_password(prompt: str, default: str = "") -> str:
-    """Prompt for a password with hidden input (no echo). Returns default on empty Enter."""
-    import getpass
+    """Prompt for a password, echoing '*' per character. Returns default on empty Enter."""
     if not sys.stdin.isatty():
         return default
     hint = " [press Enter to use generated password]" if default else ""
+    sys.stdout.write(f"       {prompt}{hint}: ")
+    sys.stdout.flush()
+    chars = []
     try:
-        val = getpass.getpass(f"       {prompt}{hint}: ")
-        return val if val else default
-    except (EOFError, KeyboardInterrupt):
-        raise
+        if sys.platform == "win32":
+            import msvcrt
+            while True:
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    break
+                if ch == "\x03":
+                    raise KeyboardInterrupt
+                if ch in ("\x08", "\x7f"):   # backspace
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                elif ch >= " ":
+                    chars.append(ch)
+                    sys.stdout.write("*")
+                    sys.stdout.flush()
+        else:
+            import tty, termios
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                while True:
+                    ch = sys.stdin.read(1)
+                    if ch in ("\r", "\n"):
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        break
+                    if ch == "\x03":
+                        raise KeyboardInterrupt
+                    if ch in ("\x08", "\x7f"):   # backspace
+                        if chars:
+                            chars.pop()
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                    elif ch >= " ":
+                        chars.append(ch)
+                        sys.stdout.write("*")
+                        sys.stdout.flush()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except EOFError:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    val = "".join(chars)
+    return val if val else default
 
 
 def _ask_yn(prompt: str, default: bool = True) -> bool:
@@ -582,6 +629,7 @@ def step1_packages():
                         _tag("ok", "net-snmp installed via Homebrew")
             if not _ok_snmp:
                 _tag("warn", "Automatic install failed. Install manually:")
+                _tag("info",  "Download: https://sourceforge.net/projects/net-snmp/files/net-snmp/")
                 _tag("info",  "Windows: choco install net-snmp  OR  winget install net-snmp.net-snmp")
                 _tag("info",  "Linux:   sudo apt install snmp  OR  sudo dnf install net-snmp-utils")
                 _tag("info",  "macOS:   brew install net-snmp")
@@ -1489,6 +1537,7 @@ def step2_database():
                         _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
             if not _ok_pg:
                 _tag("warn", "Automatic install failed. Install manually:")
+                _tag("info",  "Download: https://www.postgresql.org/download/")
                 _tag("info",  "Windows: choco install postgresql  OR  winget install PostgreSQL.PostgreSQL")
                 _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
                 _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
