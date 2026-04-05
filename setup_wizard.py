@@ -98,6 +98,19 @@ def _ask(prompt: str, default: str = "") -> str:
         raise
 
 
+def _ask_password(prompt: str, default: str = "") -> str:
+    """Prompt for a password with hidden input (no echo). Returns default on empty Enter."""
+    import getpass
+    if not sys.stdin.isatty():
+        return default
+    hint = " [press Enter to use generated password]" if default else ""
+    try:
+        val = getpass.getpass(f"       {prompt}{hint}: ")
+        return val if val else default
+    except (EOFError, KeyboardInterrupt):
+        raise
+
+
 def _ask_yn(prompt: str, default: bool = True) -> bool:
     """Prompt for yes/no; return default on Enter."""
     if not sys.stdin.isatty():
@@ -529,17 +542,23 @@ def step1_packages():
             _sys = _plat.system()
             _ok_snmp = False
             if _sys == "Windows":
-                _tag("info", "Trying Chocolatey ...")
-                r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
-                if r.returncode == 0:
-                    _tag("ok", "net-snmp installed via Chocolatey")
-                    _ok_snmp = True
-                else:
-                    _tag("info", "Trying winget ...")
-                    r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
-                    if r2.returncode == 0:
-                        _tag("ok", "net-snmp installed via winget")
+                try:
+                    _tag("info", "Trying Chocolatey ...")
+                    r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
+                    if r.returncode == 0:
+                        _tag("ok", "net-snmp installed via Chocolatey")
                         _ok_snmp = True
+                except FileNotFoundError:
+                    pass  # choco not installed
+                if not _ok_snmp:
+                    try:
+                        _tag("info", "Trying winget ...")
+                        r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
+                        if r2.returncode == 0:
+                            _tag("ok", "net-snmp installed via winget")
+                            _ok_snmp = True
+                    except FileNotFoundError:
+                        pass  # winget not installed
             elif _sys == "Linux":
                 if _sh.which("apt-get"):
                     r = subprocess.run(["sudo", "apt-get", "install", "-y", "snmp"], capture_output=True)
@@ -660,6 +679,12 @@ def _fix_file_ownership():
 
 # ── Service management (Linux/systemd) ───────────────────────────────────────
 
+def _systemctl(*args) -> list:
+    """Return a systemctl command list, omitting sudo when already root."""
+    prefix = [] if (sys.platform != "win32" and os.getuid() == 0) else ["sudo"]
+    return prefix + ["systemctl"] + list(args)
+
+
 def _is_service_active() -> bool:
     """Return True if the pingwatch systemd service is currently running."""
     if sys.platform == "win32":
@@ -680,10 +705,8 @@ def _is_service_active() -> bool:
 def _stop_service() -> bool:
     """Stop the pingwatch systemd service. Returns True on success."""
     try:
-        r = subprocess.run(
-            ["sudo", "systemctl", "stop", "pingwatch"],
-            capture_output=True, text=True,
-        )
+        r = subprocess.run(_systemctl("stop", "pingwatch"),
+                           capture_output=True, text=True)
         return r.returncode == 0
     except Exception:
         return False
@@ -692,10 +715,8 @@ def _stop_service() -> bool:
 def _restart_service() -> bool:
     """Start the pingwatch systemd service. Returns True on success."""
     try:
-        r = subprocess.run(
-            ["sudo", "systemctl", "start", "pingwatch"],
-            capture_output=True, text=True,
-        )
+        r = subprocess.run(_systemctl("start", "pingwatch"),
+                           capture_output=True, text=True)
         return r.returncode == 0
     except Exception:
         return False
@@ -1213,7 +1234,7 @@ def step2_database():
         print(_C["cyan"] +  "         \\q" + _C["reset"])
         print()
         _tag("info", "Copy the password above or enter a custom one below.")
-        _pw = _ask("Password for the 'pingwatch' user", _gen_pw)
+        _pw = _ask_password("Password for the 'pingwatch' user", _gen_pw)
         print()
 
     # 2d. Connection details ─────────────────────────────────────────────────────
@@ -1285,7 +1306,7 @@ def step2_database():
             _port = 5432
         _dbname   = _ask("Database name", _dbname)
         _user     = _ask("Username",      _user)
-        _password = _ask("Password",      _password)
+        _password = _ask_password("Password", _password)
         print()
         _tag("info", "Retrying connection...")
         print()
@@ -1873,14 +1894,14 @@ def step7_init_db():
     if not _existing_users:
         _admin_user = _ask("Admin username", "admin")
         while True:
-            _admin_pw = _ask("Admin password (min 8 characters)", "")
+            _admin_pw = _ask_password("Admin password (min 8 characters)", "")
             if not sys.stdin.isatty():
                 # Non-interactive: generate a password
                 import secrets as _sec_adm
                 _admin_pw = _sec_adm.token_urlsafe(9)
                 break
             if len(_admin_pw) >= 8:
-                _admin_pw2 = _ask("Confirm password", "")
+                _admin_pw2 = _ask_password("Confirm password", "")
                 if _admin_pw == _admin_pw2:
                     break
                 _tag("error", "Passwords do not match — try again.")
@@ -2017,9 +2038,9 @@ def step8_service():
     # Reload, enable, start
     all_ok = True
     for cmd in [
-        ["sudo", "systemctl", "daemon-reload"],
-        ["sudo", "systemctl", "enable", "pingwatch"],
-        ["sudo", "systemctl", "start",  "pingwatch"],
+        _systemctl("daemon-reload"),
+        _systemctl("enable", "pingwatch"),
+        _systemctl("start",  "pingwatch"),
     ]:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
@@ -2030,8 +2051,9 @@ def step8_service():
     if all_ok:
         _tag("ok", "Service installed, enabled, and started.")
         _tag("info", "Auto-starts on boot. Useful commands:")
-        _tag("info", "  sudo systemctl status pingwatch")
-        _tag("info", "  sudo systemctl restart pingwatch")
+        _pfx = "" if (sys.platform != "win32" and os.getuid() == 0) else "sudo "
+        _tag("info", f"  {_pfx}systemctl status pingwatch")
+        _tag("info", f"  {_pfx}systemctl restart pingwatch")
         _tag("info", "  journalctl -u pingwatch -f")
     else:
         _tag("warn", "Service install may be incomplete — check errors above.")
@@ -2118,8 +2140,9 @@ def main():
         # For PostgreSQL the pool was already opened inside step2_database();
         # db_init() here is idempotent (creates schemas if missing, no-ops otherwise).
         try:
-            from db.core import db_init
+            from db.core import db_init, logs_db_init
             db_init()
+            logs_db_init()
         except Exception as _e:
             _tag("error", f"Failed to initialise database schema: {_e}")
             sys.exit(1)
@@ -2152,7 +2175,8 @@ def main():
             _tag("info", "Follow logs: journalctl -u pingwatch -f")
         else:
             _tag("warn", "Could not restart service automatically.")
-            _tag("info", "Start it manually: sudo systemctl start pingwatch")
+            _pfx = "" if (sys.platform != "win32" and os.getuid() == 0) else "sudo "
+            _tag("info", f"Start it manually: {_pfx}systemctl start pingwatch")
         print()
 
     sys.exit(0)
