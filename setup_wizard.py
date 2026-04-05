@@ -1075,10 +1075,12 @@ def step2_database():
 
     # ── Check / start PostgreSQL service before attempting auto-create ─────────
     import shutil as _sh
+    _is_root = sys.platform != "win32" and os.getuid() == 0
+    _sctl = ["systemctl"] if _is_root else ["sudo", "systemctl"]
     if sys.platform != "win32" and _pg_installed:
         _svc_running = False
         try:
-            r = subprocess.run(["sudo", "systemctl", "is-active", "postgresql"],
+            r = subprocess.run(_sctl + ["is-active", "postgresql"],
                                capture_output=True, text=True)
             _svc_running = r.stdout.strip() == "active"
         except Exception:
@@ -1096,7 +1098,7 @@ def step2_database():
             _tag("warn", "PostgreSQL service does not appear to be running.")
             if _ask_yn("Try to start the PostgreSQL service now?", default=True):
                 _tag("info", "Starting PostgreSQL ...")
-                r = subprocess.run(["sudo", "systemctl", "start", "postgresql"],
+                r = subprocess.run(_sctl + ["start", "postgresql"],
                                    capture_output=True, text=True)
                 if r.returncode == 0:
                     _tag("ok", "PostgreSQL service started.")
@@ -1106,15 +1108,17 @@ def step2_database():
                         _tag("warn", f"Start failed: {_err_svc}")
                     else:
                         _tag("warn", "Could not start PostgreSQL service.")
-                    _tag("info", "Try manually: sudo systemctl start postgresql")
-                    _tag("info", "Then check:   sudo systemctl status postgresql")
+                    _pfx = "" if _is_root else "sudo "
+                    _tag("info", f"Try manually: {_pfx}systemctl start postgresql")
+                    _tag("info", f"Then check:   {_pfx}systemctl status postgresql")
 
     # Offer to create the DB/user automatically via sudo -u postgres psql
     _db_auto_ok = False
     _pw = _gen_pw
     if sys.platform != "win32" and _pg_installed:
         print(_C["bold"] + "       The wizard can create the database and user automatically." + _C["reset"])
-        print(_C["bold"] + "       It will run (requires sudo / postgres access):" + _C["reset"])
+        _access = "as root" if _is_root else "requires sudo / postgres access"
+        print(_C["bold"] + f"       It will run ({_access}):" + _C["reset"])
         print()
         print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '****';" + _C["reset"])
         print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
@@ -1131,8 +1135,14 @@ def step2_database():
                 ]
                 _all_ok = True
                 for _sql in _cmds:
+                    if _is_root:
+                        # Already root — use su to switch to postgres user
+                        # Password is alphanumeric so double-quoting the SQL is safe
+                        _pg_cmd = ["su", "-", "postgres", "-c", f'{_psql} -c "{_sql}"']
+                    else:
+                        _pg_cmd = ["sudo", "-u", "postgres", _psql, "-c", _sql]
                     r = subprocess.run(
-                        ["sudo", "-u", "postgres", _psql, "-c", _sql],
+                        _pg_cmd,
                         capture_output=True, text=True,
                     )
                     if r.returncode != 0:
@@ -1157,7 +1167,8 @@ def step2_database():
         # Fall back to showing manual instructions
         print(_C["bold"] + "       Run these commands in a terminal:" + _C["reset"])
         print()
-        print(_C["cyan"] + "         sudo -u postgres psql" + _C["reset"])
+        _pg_login = "         su - postgres" if _is_root else "         sudo -u postgres psql"
+        print(_C["cyan"] + _pg_login + _C["reset"])
         print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';" + _C["reset"])
         print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
         print(_C["cyan"] +  "         \\q" + _C["reset"])
@@ -1216,14 +1227,15 @@ def step2_database():
             return
         if _opt == "4" and sys.platform != "win32":
             _tag("info", "Starting PostgreSQL service ...")
-            r = subprocess.run(["sudo", "systemctl", "start", "postgresql"],
+            r = subprocess.run(_sctl + ["start", "postgresql"],
                                capture_output=True, text=True)
             if r.returncode == 0:
                 _tag("ok", "Service started — retrying connection ...")
             else:
                 _err_svc = (r.stderr or r.stdout or "").strip()
                 _tag("warn", f"Could not start service: {_err_svc}" if _err_svc else "Could not start service.")
-                _tag("info", "Check: sudo systemctl status postgresql")
+                _pfx = "" if _is_root else "sudo "
+                _tag("info", f"Check: {_pfx}systemctl status postgresql")
             continue
         # re-ask details
         _host     = _ask("PostgreSQL host", _host)
