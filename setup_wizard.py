@@ -311,6 +311,60 @@ def step1_packages():
     _separator()
     print()
 
+    # ── Verify pip is available before any pip install attempts ──────────────
+    import shutil as _sh_pre, platform as _plat_pre
+    _pip_ok = False
+    try:
+        r = subprocess.run([sys.executable, "-m", "pip", "--version"],
+                           capture_output=True, text=True)
+        _pip_ok = r.returncode == 0
+    except Exception:
+        pass
+
+    if _pip_ok:
+        _tag("ok", "pip — Python package installer")
+    else:
+        _tag("warn", "pip is not installed or not functional.")
+        _sys_pre = _plat_pre.system()
+        if _sys_pre == "Linux":
+            _mgr_pre = ("apt-get" if _sh_pre.which("apt-get") else
+                        "dnf"     if _sh_pre.which("dnf")     else
+                        "yum"     if _sh_pre.which("yum")     else None)
+            if _mgr_pre:
+                _tag("info", f"Installing python3-pip via {_mgr_pre} ...")
+                _pkg_pip = "python3-pip"
+                r = subprocess.run(["sudo", _mgr_pre, "install", "-y", _pkg_pip],
+                                   capture_output=False)
+                _pip_ok = r.returncode == 0
+                if _pip_ok:
+                    _tag("ok", "pip installed successfully")
+                else:
+                    _tag("error", "Could not install pip automatically.")
+                    _tag("info",  f"Install manually: sudo {_mgr_pre} install python3-pip")
+                    _tag("info",  "Then re-run setup.")
+                    sys.exit(1)
+            else:
+                _tag("error", "No package manager found (apt-get/dnf/yum). Install pip manually.")
+                sys.exit(1)
+        elif _sys_pre == "Windows":
+            _tag("info", "Attempting: python -m ensurepip --upgrade ...")
+            try:
+                r = subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"],
+                                   capture_output=True, text=True)
+                _pip_ok = r.returncode == 0
+            except Exception:
+                pass
+            if _pip_ok:
+                _tag("ok", "pip bootstrapped successfully")
+            else:
+                _tag("error", "pip is not available.")
+                _tag("info",  "Re-install Python from python.org (tick 'pip' during install),")
+                _tag("info",  "or run: python -m ensurepip --upgrade")
+                sys.exit(1)
+        else:
+            _tag("warn", "pip not found — package installs will likely fail. Continuing.")
+    print()
+
     all_ok = True
     _headless = False   # set True when user opts out of desktop GUI
     for pkg in _PACKAGES:
@@ -506,6 +560,35 @@ def step1_packages():
                 _tag("info",  "macOS:   brew install net-snmp")
         else:
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
+
+    # ── ping binary (ICMP sensors) ────────────────────────────────────────────
+    print()
+    import shutil as _sh_ic, platform as _plat_ic
+    if _sh_ic.which("ping"):
+        _tag("ok", "ping — ICMP ping sensor support")
+    else:
+        _tag("warn", "ping binary not found.")
+        _tag("info",  "Required for ICMP ping sensors (most common sensor type).")
+        _sys_ic = _plat_ic.system()
+        if _sys_ic == "Linux":
+            _mgr_ic = ("apt-get" if _sh_ic.which("apt-get") else
+                       "dnf"     if _sh_ic.which("dnf")     else
+                       "yum"     if _sh_ic.which("yum")     else None)
+            if _mgr_ic and _ask_yn("Install ping (iputils-ping) now?", default=True):
+                _pkg_ic = "iputils-ping" if _mgr_ic == "apt-get" else "iputils"
+                r = subprocess.run(["sudo", _mgr_ic, "install", "-y", _pkg_ic],
+                                   capture_output=False)
+                if r.returncode == 0:
+                    _tag("ok", "ping installed")
+                else:
+                    _tag("warn", f"Install failed. Run: sudo {_mgr_ic} install {_pkg_ic}")
+            else:
+                _tag("warn", "Skipping — ICMP ping sensors will not work")
+        elif _sys_ic == "Windows":
+            _tag("info", "ping.exe should be present on all Windows installations.")
+            _tag("info", "If missing, check your Windows installation.")
+        elif _sys_ic == "Darwin":
+            _tag("info", "ping should be available. Try: brew install inetutils")
 
     print()
     import shutil as _sh2, platform as _plat2
@@ -1667,6 +1750,47 @@ def step7_init_db():
         _tag("error", f"Failed to save settings: {e}")
         sys.exit(1)
     _tag("ok", "Settings saved to database")
+
+    # ── Create initial admin account ──────────────────────────────────────────
+    print()
+    _separator("·")
+    _tag("info", "Create your admin account for the web dashboard.")
+    print()
+    from db.users import db_add_user, db_list_users
+    try:
+        _existing_users = db_list_users()
+    except Exception:
+        _existing_users = []
+
+    if not _existing_users:
+        _admin_user = _ask("Admin username", "admin")
+        while True:
+            _admin_pw = _ask("Admin password (min 8 characters)", "")
+            if not sys.stdin.isatty():
+                # Non-interactive: generate a password
+                import secrets as _sec_adm
+                _admin_pw = _sec_adm.token_urlsafe(9)
+                break
+            if len(_admin_pw) >= 8:
+                _admin_pw2 = _ask("Confirm password", "")
+                if _admin_pw == _admin_pw2:
+                    break
+                _tag("error", "Passwords do not match — try again.")
+            else:
+                _tag("error", "Password must be at least 8 characters — try again.")
+        try:
+            ok = db_add_user(_admin_user, _admin_pw, "admin")
+            if ok:
+                _tag("ok", f"Admin account '{_admin_user}' created.")
+                _tag("info", "Use these credentials to log in to the web dashboard.")
+            else:
+                _tag("warn", f"Account '{_admin_user}' may already exist — skipping.")
+        except Exception as _ae:
+            _tag("warn", f"Could not create admin account: {_ae}")
+            _tag("info", "A randomly-generated password will appear at first server start.")
+    else:
+        _tag("info", f"Existing accounts found ({len(_existing_users)}) — skipping admin creation.")
+    print()
 
     # Print summary
     print()
