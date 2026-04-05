@@ -346,6 +346,33 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .dash-bar-fill  { height:100%; border-radius:2px; transition:width 0.5s ease; opacity:0.75; }
 .dash-bar-count { font-family:'Share Tech Mono',monospace; font-size:8px; color:rgba(255,255,255,0.25); width:14px; text-align:right; flex-shrink:0; }
 
+/* ── Incident cards (PingWatch Live panel) ───────────────────────── */
+.inc-list { display:flex; flex-direction:column; gap:7px; }
+.inc-card { border-radius:4px; padding:9px 11px; border-left:3px solid; }
+.inc-card-down { background:rgba(255,51,51,0.08); border-color:#ff3333; }
+.inc-card-crit { background:rgba(168,85,247,0.08); border-color:#a855f7; }
+.inc-card-warn { background:rgba(255,140,0,0.08); border-color:#ff8c00; }
+.inc-card-hdr { display:flex; align-items:center; gap:6px; margin-bottom:5px; }
+.inc-hdr-txt { font-family:'Share Tech Mono',monospace; font-size:8px; letter-spacing:1.5px; }
+.inc-card-down .inc-hdr-txt { color:#ff6666; }
+.inc-card-crit .inc-hdr-txt { color:#c084fc; }
+.inc-card-warn .inc-hdr-txt { color:#ffaa40; }
+.inc-name { font-family:'Orbitron',monospace; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.inc-meta { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(255,255,255,0.4); margin-top:2px; }
+.inc-sensors { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(255,100,100,0.7); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.inc-val { font-family:'Orbitron',monospace; font-size:12px; font-weight:700; margin-top:3px; color:#a855f7; }
+.inc-val-warn { color:#ff8c00; }
+.inc-pulse { display:inline-block; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.inc-pulse-down { background:#ff3333; animation:inc-pd 1.4s infinite; }
+.inc-pulse-crit { background:#a855f7; animation:inc-pc 1.8s infinite; }
+.inc-pulse-warn { background:#ff8c00; animation:inc-pw 2s infinite; }
+@keyframes inc-pd { 0%{box-shadow:0 0 0 0 rgba(255,51,51,0.5)} 70%{box-shadow:0 0 0 6px rgba(255,51,51,0)} 100%{box-shadow:0 0 0 0 rgba(255,51,51,0)} }
+@keyframes inc-pc { 0%{box-shadow:0 0 0 0 rgba(168,85,247,0.5)} 70%{box-shadow:0 0 0 6px rgba(168,85,247,0)} 100%{box-shadow:0 0 0 0 rgba(168,85,247,0)} }
+@keyframes inc-pw { 0%{box-shadow:0 0 0 0 rgba(255,140,0,0.5)} 70%{box-shadow:0 0 0 6px rgba(255,140,0,0)} 100%{box-shadow:0 0 0 0 rgba(255,140,0,0)} }
+.inc-all-clear { text-align:center; padding:18px 0 8px; }
+.inc-all-clear-icon { font-size:26px; color:#00ff9d; text-shadow:0 0 10px #00ff9d; margin-bottom:6px; }
+.inc-all-clear-txt { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(0,255,157,0.55); letter-spacing:1.5px; line-height:1.8; }
+
 /* ── Header stats pills ──────────────────────────────────────────── */
 #header-stats { display:flex; gap:6px; align-items:center; }
 .h-stat-pill  { font-family:'Share Tech Mono',monospace; font-size:9px; letter-spacing:1px; padding:3px 9px; border-radius:3px; border:1px solid; background:rgba(0,0,0,0.3); white-space:nowrap; }
