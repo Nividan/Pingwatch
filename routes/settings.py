@@ -26,6 +26,16 @@ except Exception:
     pass
 
 
+def _get_smtp_status() -> dict:
+    from monitoring.smtp_alert import get_smtp_status
+    return get_smtp_status()
+
+
+def _get_syslog_status() -> dict:
+    from monitoring.syslog_client import get_syslog_status
+    return get_syslog_status()
+
+
 def _get_effective_workers() -> int:
     """Return the number of probe workers currently in use."""
     try:
@@ -113,6 +123,16 @@ def handle(h, method, path, body):
             "syslog_port":         int(_settings.get("syslog_port",         514) or 514),
             "syslog_proto":        _settings.get("syslog_proto",        "udp"),
             "syslog_min_severity": _settings.get("syslog_min_severity", "warning"),
+            # Group H2 — syslog app-log forwarding
+            "syslog_app_logs":        int(_settings.get("syslog_app_logs", 0) or 0),
+            "syslog_app_log_level":   _settings.get("syslog_app_log_level",   "info"),
+            "syslog_app_log_sources": json.loads(
+                _settings.get("syslog_app_log_sources", '["app","audit","backup"]') or
+                '["app","audit","backup"]'
+            ),
+            # Integration runtime status (in-memory, resets on restart)
+            "smtp_status":   _get_smtp_status(),
+            "syslog_status": _get_syslog_status(),
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
@@ -182,6 +202,24 @@ def handle(h, method, path, body):
             _sye = "1" if body["syslog_enabled"] else "0"
             _settings.load({"syslog_enabled": _sye})
             _db_enqueue(lambda _v=_sye: db_save_settings({"syslog_enabled": _v}))
+        if "syslog_app_logs" in body:
+            _sal = "1" if body["syslog_app_logs"] else "0"
+            _settings.load({"syslog_app_logs": _sal})
+            _db_enqueue(lambda _v=_sal: db_save_settings({"syslog_app_logs": _v}))
+        if "syslog_app_log_level" in body:
+            _sall = str(body["syslog_app_log_level"]).lower().strip()
+            if _sall not in ("debug", "info", "warning", "error"):
+                h._json(400, {"error": "syslog_app_log_level must be debug/info/warning/error"}); return True
+            _settings.load({"syslog_app_log_level": _sall})
+            _db_enqueue(lambda _v=_sall: db_save_settings({"syslog_app_log_level": _v}))
+        if "syslog_app_log_sources" in body:
+            _sals_raw = body["syslog_app_log_sources"]
+            if isinstance(_sals_raw, list):
+                _sals = json.dumps([s for s in _sals_raw if s in ("app", "audit", "backup")])
+            else:
+                _sals = '["app","audit","backup"]'
+            _settings.load({"syslog_app_log_sources": _sals})
+            _db_enqueue(lambda _v=_sals: db_save_settings({"syslog_app_log_sources": _v}))
         if "backup_sched_enabled" in body:
             _bse = "1" if body["backup_sched_enabled"] else "0"
             _settings.load({"backup_sched_enabled": _bse})
