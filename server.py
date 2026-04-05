@@ -662,7 +662,7 @@ def main():
     # ── GUI ────────────────────────────────────────────────────────
     from core.logger import log_buffer
     _headless_stop = threading.Event()
-    _headless_mode = int(_settings.get("headless", "0"))
+    _headless_mode = ("--headless" in sys.argv) or int(_settings.get("headless", "0"))
 
     if _headless_mode:
         # User explicitly chose server/headless mode during setup — skip all GUI

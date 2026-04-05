@@ -10,7 +10,7 @@ the --setup flag is passed.  Guides the user through:
   5. Windows Firewall rules
   6. Desktop shortcut
   7. Database initialisation & settings persistence
-  8. systemd service install (Linux only)
+  8. Startup service install (systemd on Linux, Task Scheduler on Windows)
 
 Exit codes:
   0 — setup completed successfully (start.bat will launch server.py)
@@ -2145,8 +2145,115 @@ def step7_init_db():
 
 
 def step8_service():
-    """Offer to install PingWatch as a systemd service (Linux only)."""
+    """Offer to install PingWatch as a startup service/task (Windows or Linux)."""
     import platform as _plat, shutil as _sh
+
+    # ── Windows: Task Scheduler ───────────────────────────────────────────────
+    if _plat.system() == "Windows":
+        _separator()
+        _tag("setup", f"{_C['bold']}Step 9 — Windows Auto-Start (Task Scheduler){_C['reset']}")
+        _separator()
+        _tag("info", "Install PingWatch as a startup task so it starts automatically at boot.")
+        print()
+
+        _task_name = "PingWatch"
+
+        # Check if the task already exists
+        _already = False
+        try:
+            r = subprocess.run(["schtasks", "/query", "/tn", _task_name],
+                               capture_output=True, text=True)
+            _already = (r.returncode == 0)
+        except Exception:
+            pass
+
+        if _already:
+            _tag("ok", f"Startup task '{_task_name}' is already installed.")
+            if not _ask_yn("Reinstall / update the task?", default=False):
+                print()
+                return
+        else:
+            if not _ask_yn("Install PingWatch as a Windows startup task?", default=True):
+                _tag("info", "Skipping. To install later, re-run: start.bat --setup")
+                print()
+                return
+
+        # Decide how to run: as SYSTEM (boot, headless) or current user (logon, tray)
+        print()
+        _tag("info", "Choose how to run the startup task:")
+        _tag("info", "  [1] As SYSTEM — starts at boot, no login required, no tray icon")
+        _tag("info", "  [2] As current user — starts when you log in, tray icon works")
+        print()
+        _run_as = _ask("Run as [1/2]", "1").strip()
+        _use_system = (_run_as != "2")
+
+        # Find pythonw.exe (no console window)
+        _python_exe = sys.executable  # e.g. C:\Python312\python.exe
+        _pythonw = _python_exe.replace("python.exe", "pythonw.exe")
+        if not os.path.isfile(_pythonw):
+            _pythonw = _python_exe  # fallback to python.exe
+        _server_py = os.path.join(_BASE, "server.py")
+
+        # Escape single quotes in paths for PowerShell single-quoted strings
+        def _pse(s): return s.replace("'", "''")
+
+        _args = f'"{_pse(_server_py)}"'
+        if _use_system:
+            _args += " --headless"
+            _principal = "$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest"
+        else:
+            import getpass as _gp
+            _cur_user = os.environ.get("USERNAME") or _gp.getuser()
+            _principal = (
+                f"$p = New-ScheduledTaskPrincipal "
+                f"-UserId '{_pse(_cur_user)}' -RunLevel Highest -LogonType Interactive"
+            )
+
+        _ps_lines = [
+            f"$a = New-ScheduledTaskAction -Execute '{_pse(_pythonw)}' "
+            f"-Argument '{_args}' -WorkingDirectory '{_pse(_BASE)}'",
+            "$t = New-ScheduledTaskTrigger -AtStartup" if _use_system
+                else "$t = New-ScheduledTaskTrigger -AtLogOn",
+            _principal,
+            "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries",
+            f"Register-ScheduledTask -TaskName '{_task_name}' "
+            f"-Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null",
+        ]
+        _ps_script = "; ".join(_ps_lines)
+
+        _tag("info", f"Registering task '{_task_name}' ...")
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", _ps_script],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0:
+                _tag("ok", f"Startup task '{_task_name}' installed.")
+                if _use_system:
+                    _tag("info", "PingWatch will start automatically at next boot (SYSTEM, headless).")
+                else:
+                    _tag("info", "PingWatch will start automatically when you log in.")
+                _tag("info", f"To start now:   schtasks /run /tn {_task_name}")
+                _tag("info", f"To stop:        schtasks /end /tn {_task_name}")
+                _tag("info", f"To remove:      schtasks /delete /tn {_task_name} /f")
+                _tag("info", "Manage via:     Task Scheduler → Task Scheduler Library")
+            else:
+                _err = (r.stderr or r.stdout or "").strip().splitlines()
+                _tag("warn", "Task registration failed.")
+                for _line in _err[:5]:
+                    _tag("warn", f"  {_line}")
+                _tag("info", "To install manually, open PowerShell as Administrator and run:")
+                _tag("info", f"  {_ps_lines[0]}")
+                _tag("info", f"  {_ps_lines[1]}")
+                _tag("info", f"  {_ps_lines[2]}")
+                _tag("info", f"  {_ps_lines[3]}")
+                _tag("info", f"  {_ps_lines[4]}")
+        except Exception as _e:
+            _tag("warn", f"Could not register task: {_e}")
+        print()
+        return
+
+    # ── Linux: systemd ────────────────────────────────────────────────────────
     if _plat.system() != "Linux" or not _sh.which("systemctl"):
         return
 
