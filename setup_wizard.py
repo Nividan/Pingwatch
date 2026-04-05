@@ -961,6 +961,9 @@ def step2_database():
     # ── PostgreSQL ─────────────────────────────────────────────────────────────
     _tag("info", "PostgreSQL selected.")
     print()
+    import shutil as _sh
+    _is_root = sys.platform != "win32" and os.getuid() == 0
+    _sctl = ["systemctl"] if _is_root else ["sudo", "systemctl"]
 
     # 2a. Install psycopg2-binary ───────────────────────────────────────────────
     try:
@@ -1030,15 +1033,15 @@ def step2_database():
         if sys.platform != "win32" and _instructions.startswith("sudo apt"):
             if _ask_yn("Install PostgreSQL automatically now?", default=True):
                 _tag("info", "Installing PostgreSQL (this may take a minute) ...")
-                import shutil as _sh
                 _mgr = "apt-get" if _sh.which("apt-get") else "apt"
+                _apt_cmd = [_mgr] if _is_root else ["sudo", _mgr]
                 r = subprocess.run(
-                    ["sudo", _mgr, "install", "-y", "postgresql", "postgresql-contrib"],
+                    _apt_cmd + ["install", "-y", "postgresql", "postgresql-contrib"],
                     capture_output=False,
                 )
                 if r.returncode == 0:
                     # Ensure service is running
-                    subprocess.run(["sudo", "systemctl", "start", "postgresql"],
+                    subprocess.run(_sctl + ["start", "postgresql"],
                                    capture_output=True)
                     _pg_installed, _pg_ver = _detect_pg_server()
                     if _pg_installed:
@@ -1074,9 +1077,6 @@ def step2_database():
     _gen_pw = _generate_pg_password()
 
     # ── Check / start PostgreSQL service before attempting auto-create ─────────
-    import shutil as _sh
-    _is_root = sys.platform != "win32" and os.getuid() == 0
-    _sctl = ["systemctl"] if _is_root else ["sudo", "systemctl"]
     if sys.platform != "win32" and _pg_installed:
         _svc_running = False
         try:
@@ -1112,7 +1112,46 @@ def step2_database():
                     _tag("info", f"Try manually: {_pfx}systemctl start postgresql")
                     _tag("info", f"Then check:   {_pfx}systemctl status postgresql")
 
-    # Offer to create the DB/user automatically via sudo -u postgres psql
+    # ── Verify postgres OS user exists (server installed, not just client tools) ─
+    if sys.platform != "win32" and _pg_installed:
+        try:
+            _id_r = subprocess.run(["id", "postgres"], capture_output=True, text=True)
+            _pg_user_exists = _id_r.returncode == 0
+        except Exception:
+            _pg_user_exists = True  # assume OK if 'id' not available
+        if not _pg_user_exists:
+            _tag("warn", "The 'postgres' system user does not exist.")
+            _tag("warn", "The PostgreSQL server package is not installed (only client tools were found).")
+            _inst = _pg_install_instructions()
+            _tag("info", f"Install the server with: {_inst}")
+            print()
+            _pg_installed = False  # skip auto-create — server not ready
+            # Offer automatic install on apt-based systems (same as "not found" path)
+            _mgr2 = "apt-get" if _sh.which("apt-get") else ("apt" if _sh.which("apt") else None)
+            if _mgr2:
+                if _ask_yn("Install PostgreSQL server automatically now?", default=True):
+                    _tag("info", "Installing PostgreSQL (this may take a minute) ...")
+                    _apt_cmd2 = [_mgr2] if _is_root else ["sudo", _mgr2]
+                    r = subprocess.run(
+                        _apt_cmd2 + ["install", "-y", "postgresql", "postgresql-contrib"],
+                        capture_output=False,
+                    )
+                    if r.returncode == 0:
+                        subprocess.run(_sctl + ["start", "postgresql"], capture_output=True)
+                        try:
+                            _id_r2 = subprocess.run(["id", "postgres"],
+                                                     capture_output=True, text=True)
+                            if _id_r2.returncode == 0:
+                                _tag("ok", "PostgreSQL server installed successfully.")
+                                _pg_installed = True
+                            else:
+                                _tag("warn", "Installed but postgres user still missing — check service.")
+                        except Exception:
+                            _pg_installed = True  # best-effort
+                    else:
+                        _tag("warn", "Automatic install failed — install manually then re-run the wizard.")
+
+    # Offer to create the DB/user automatically via su/sudo as postgres
     _db_auto_ok = False
     _pw = _gen_pw
     if sys.platform != "win32" and _pg_installed:
