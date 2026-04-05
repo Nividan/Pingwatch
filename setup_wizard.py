@@ -910,6 +910,21 @@ def _detect_pg_server() -> "tuple[bool, str]":
                 return True, ver
             except Exception:
                 return True, cmd[0]
+    # Windows: psql is rarely in PATH — scan default install directories
+    if sys.platform == "win32":
+        import glob as _glob
+        _candidates = _glob.glob(
+            r"C:\Program Files\PostgreSQL\*\bin\psql.exe"
+        )
+        if _candidates:
+            _psql_exe = sorted(_candidates)[-1]  # highest version
+            try:
+                r = subprocess.run([_psql_exe, "--version"],
+                                   capture_output=True, text=True, timeout=5)
+                ver = (r.stdout or r.stderr or "").strip().splitlines()[0]
+                return True, ver
+            except Exception:
+                return True, _psql_exe
     return False, ""
 
 

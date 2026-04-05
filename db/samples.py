@@ -327,13 +327,17 @@ def _rollup_loop():
         try:
             _rollup_5m()
         except Exception as e:
-            log.error(f"Rollup 5m error: {e}")
+            _emsg = str(e)
+            if "no such table" not in _emsg and "does not exist" not in _emsg:
+                log.error(f"Rollup 5m error: {e}")
         _iter += 1
         if _iter % 6 == 0:  # every ~30 min
             try:
                 _rollup_1h()
             except Exception as e:
-                log.error(f"Rollup 1h error: {e}")
+                _emsg = str(e)
+                if "no such table" not in _emsg and "does not exist" not in _emsg:
+                    log.error(f"Rollup 1h error: {e}")
         time.sleep(300)
 
 
