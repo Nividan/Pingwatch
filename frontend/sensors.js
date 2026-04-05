@@ -1101,6 +1101,63 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   const _vmU3 = _vmUnit(did, sid);
   const _isVmware3 = _vmU3 !== null;
+
+  // Evaluate the quadratic Bézier curve (same as _drawLine) at a given canvas X.
+  // pts = [{x, y}] where y is the data value (not canvas Y).
+  // Returns the interpolated data value, or null if outside range.
+  function _evalQuadCurveAtX(pts, px) {
+    if (!pts || pts.length === 0) return null;
+    if (pts.length === 1) return pts[0].y;
+    // Find which segment px falls in.
+    // The curve goes: moveTo(pts[0]), then for j=1..n-2: quadraticCurveTo(pts[j], mid(j,j+1)), lineTo(pts[n-1]).
+    // Segment 0: linear pts[0] → mid(1,2)  (control=pts[1])
+    // Segment j (1..n-3): quad mid(j,j+1) → mid(j+1,j+2) (control=pts[j+1])
+    // Last segment: linear mid(n-2,n-1) → pts[n-1] (or lineTo for 2-point case)
+    const n = pts.length;
+    if (n === 2) {
+      // Simple linear
+      const t = (px - pts[0].x) / (pts[1].x - pts[0].x);
+      if (t < 0 || t > 1) return t < 0 ? pts[0].y : pts[1].y;
+      return pts[0].y + t * (pts[1].y - pts[0].y);
+    }
+    // Build segment list with start/control/end x,y
+    const segs = [];
+    // First segment: pts[0] to mid(1,2), control=pts[1]
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    segs.push({ p0: pts[0], p1: pts[1], p2: mid(pts[1], pts[2]) });
+    for (let j = 2; j < n - 2; j++) {
+      segs.push({ p0: mid(pts[j-1], pts[j]), p1: pts[j], p2: mid(pts[j], pts[j+1]) });
+    }
+    if (n > 3) segs.push({ p0: mid(pts[n-3], pts[n-2]), p1: pts[n-2], p2: pts[n-1] });
+    // Last: lineTo — already handled as last quad seg ends at pts[n-1]
+
+    for (const s of segs) {
+      if (px >= Math.min(s.p0.x, s.p2.x) - 1 && px <= Math.max(s.p0.x, s.p2.x) + 1) {
+        // Solve for t where quadBezier_x(t) ≈ px
+        // B(t) = (1-t)²·p0 + 2(1-t)t·p1 + t²·p2
+        const a = s.p0.x - 2 * s.p1.x + s.p2.x;
+        const b = 2 * (s.p1.x - s.p0.x);
+        const c = s.p0.x - px;
+        let t = 0.5;
+        if (Math.abs(a) > 0.001) {
+          const disc = b * b - 4 * a * c;
+          if (disc >= 0) {
+            const t1 = (-b + Math.sqrt(disc)) / (2 * a);
+            const t2 = (-b - Math.sqrt(disc)) / (2 * a);
+            t = (t1 >= -0.01 && t1 <= 1.01) ? Math.max(0, Math.min(1, t1))
+              : Math.max(0, Math.min(1, t2));
+          }
+        } else if (Math.abs(b) > 0.001) {
+          t = Math.max(0, Math.min(1, -c / b));
+        }
+        const u = 1 - t;
+        return u * u * s.p0.y + 2 * u * t * s.p1.y + t * t * s.p2.y;
+      }
+    }
+    // Fallback: nearest endpoint
+    return Math.abs(px - pts[0].x) < Math.abs(px - pts[n-1].x) ? pts[0].y : pts[n-1].y;
+  }
+
   canvas.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -1210,31 +1267,23 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
 
       let dotVal = null;
       if (_isCounter) {
-        // Counter mode: interpolate from rateBuckets or sortedRateSamples
+        // Counter mode: follow drawn quadratic curve
         const _rateBuckets = cache.rateBuckets;
         if (_rateBuckets) {
-          const bucketAvgR = _rateBuckets[_cursorBi]?.n > 0
-            ? _rateBuckets[_cursorBi].sum / _rateBuckets[_cursorBi].n : null;
-          const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
-          if (bucketAvgR !== null) {
-            let adjV=null, adjX=null;
-            if (mx >= _bcX) {
-              for (let i=_cursorBi+1;i<TARGET;i++) { if(_rateBuckets[i].n>0){adjV=_rateBuckets[i].sum/_rateBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
-            } else {
-              for (let i=_cursorBi-1;i>=0;i--) { if(_rateBuckets[i].n>0){adjV=_rateBuckets[i].sum/_rateBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
+          const _rPts = [];
+          for (let i = 0; i < TARGET; i++) {
+            if (_rateBuckets[i].n > 0) {
+              _rPts.push({ x: _xOf2(_winStart + (i + 0.5) * _bucketSec),
+                           y: _rateBuckets[i].sum / _rateBuckets[i].n });
             }
-            if (adjV!==null&&adjX!==null&&Math.abs(adjX-_bcX)>0) {
-              dotVal = bucketAvgR + (mx-_bcX)/(adjX-_bcX)*(adjV-bucketAvgR);
-            } else { dotVal=bucketAvgR; }
-          } else { dotVal=0; }
+          }
+          dotVal = _evalQuadCurveAtX(_rPts, mx);
+          if (dotVal === null) dotVal = 0;
         } else {
           const sorted = cache.sortedRateSamples || [];
-          let p1=null, p2=null;
-          for (const p of sorted) {
-            if (_xOf2(p.ts)<=mx) p1=p; else if(!p2){p2=p;break;}
-          }
-          if (p1&&p2) { const x1=_xOf2(p1.ts),x2=_xOf2(p2.ts),t=(mx-x1)/(x2-x1); dotVal=p1.displayRate+t*(p2.displayRate-p1.displayRate); }
-          else dotVal=(p1||p2)?.displayRate??null;
+          const _rPts = sorted.map(p => ({ x: _xOf2(p.ts), y: p.displayRate }));
+          dotVal = _evalQuadCurveAtX(_rPts, mx);
+          if (dotVal === null) dotVal = (sorted[0] || {}).displayRate ?? null;
         }
       } else {
         // ms mode: original interpolation logic
@@ -1244,26 +1293,22 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
           ? _allBuckets[_cursorBi].sum / _allBuckets[_cursorBi].n : null;
         const usingBuckets = okSp.length > TARGET;
         if (usingBuckets) {
-          const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
-          if (bucketAvg !== null) {
-            let adjMs=null, adjX=null;
-            if (mx >= _bcX) {
-              for (let i=_cursorBi+1;i<TARGET;i++) { if(_allBuckets[i].n>0){adjMs=_allBuckets[i].sum/_allBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
-            } else {
-              for (let i=_cursorBi-1;i>=0;i--) { if(_allBuckets[i].n>0){adjMs=_allBuckets[i].sum/_allBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
+          // Build point list matching the drawn line (bucket centers with data)
+          const _bPts = [];
+          for (let i = 0; i < TARGET; i++) {
+            if (_allBuckets[i].n > 0) {
+              _bPts.push({ x: _xOf2(_winStart + (i + 0.5) * _bucketSec),
+                           y: _allBuckets[i].sum / _allBuckets[i].n });
             }
-            if (adjMs!==null&&adjX!==null&&Math.abs(adjX-_bcX)>0) {
-              dotVal = bucketAvg + (mx-_bcX)/(adjX-_bcX)*(adjMs-bucketAvg);
-            } else { dotVal=bucketAvg; }
-          } else { dotVal=0; }
-        } else {
-          const sorted = cache.sortedOkSamples || [...okSp].sort((a,b)=>a.ts-b.ts);
-          let p1=null, p2=null;
-          for (const p of sorted) {
-            if (_xOf2(p.ts)<=mx) p1=p; else if(!p2){p2=p;break;}
           }
-          if (p1&&p2) { const x1=_xOf2(p1.ts),x2=_xOf2(p2.ts),t=(mx-x1)/(x2-x1); dotVal=p1.ms+t*(p2.ms-p1.ms); }
-          else dotVal=(p1||p2)?.ms??null;
+          dotVal = _evalQuadCurveAtX(_bPts, mx);
+          if (dotVal === null) dotVal = bucketAvg ?? 0;
+        } else {
+          // Build point list matching the drawn line (raw samples)
+          const sorted = cache.sortedOkSamples || [...okSp].sort((a,b)=>a.ts-b.ts);
+          const _rPts = sorted.map(p => ({ x: _xOf2(p.ts), y: p.ms }));
+          dotVal = _evalQuadCurveAtX(_rPts, mx);
+          if (dotVal === null) dotVal = (sorted[0] || {}).ms ?? null;
         }
       }
 
