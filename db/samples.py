@@ -135,6 +135,9 @@ def _rollup_5m():
         return
 
     # SQLite
+    import os as _os
+    if not _os.path.exists(LOGS_DB_PATH):
+        return  # DB not yet initialised — skip silently
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
@@ -219,6 +222,9 @@ def _rollup_1h():
         return
 
     # SQLite
+    import os as _os
+    if not _os.path.exists(LOGS_DB_PATH):
+        return  # DB not yet initialised — skip silently
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
