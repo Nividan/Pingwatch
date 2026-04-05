@@ -1005,7 +1005,7 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   const _statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`) || statsEl;
   const _sumEl   = document.getElementById(`dm-hist-summary-${did}-${sid}`) || sumEl;
   if (!c) return; // genuinely not found (modal closed mid-flight)
-  _buildKpiBar(summary, did, sid, rateSamples, _snmpUnit);
+  _buildKpiBar(summary, samples, did, sid, rateSamples, _snmpUnit);
   _setupHistTooltip(c, summary, did, sid, minutes, rateSamples, _snmpUnit);
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
   if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit, did, sid);
@@ -1023,7 +1023,7 @@ function dmHistRedraw(did, sid) {
     cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
 }
 
-function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
+function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
   const _setKpi = (id, label, val, cls) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1066,33 +1066,27 @@ function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
   // VMware metric-value KPIs
   const _vmU = _vmUnit(did, sid);
   if (_vmU !== null) {
-    if (!summary.length) return;
+    if (!samples.length) return;
     const _lbl2 = _vmUnitLabel(_vmU);
-    let _ws2=0, _wc2=0, _mnV=Infinity, _mxV=-Infinity;
-    for (const r of summary) {
-      if(r.avg_ms!=null){_ws2+=r.avg_ms*r.ok;_wc2+=r.ok;}
-      if(r.min_ms!=null) _mnV=Math.min(_mnV,r.min_ms);
-      if(r.max_ms!=null) _mxV=Math.max(_mxV,r.max_ms);
-    }
-    const _av2=_wc2>0?_ws2/_wc2:null;
+    const vmVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
+    const _av2 = vmVals.length ? vmVals.reduce((a,b)=>a+b,0)/vmVals.length : null;
+    const _mnV = vmVals.length ? Math.min(...vmVals) : null;
+    const _mxV = vmVals.length ? Math.max(...vmVals) : null;
     _setKpi(`kpi-avg-${did}-${sid}`,'Avg '+_lbl2,_fmtVmVal(_av2,_vmU));
-    _setKpi(`kpi-min-${did}-${sid}`,'Min '+_lbl2,_mnV!==Infinity?_fmtVmVal(_mnV,_vmU):'—');
-    _setKpi(`kpi-max-${did}-${sid}`,'Max '+_lbl2,_mxV!==-Infinity?_fmtVmVal(_mxV,_vmU):'—');
+    _setKpi(`kpi-min-${did}-${sid}`,'Min '+_lbl2,_mnV!=null?_fmtVmVal(_mnV,_vmU):'—');
+    _setKpi(`kpi-max-${did}-${sid}`,'Max '+_lbl2,_mxV!=null?_fmtVmVal(_mxV,_vmU):'—');
     _setKpi(`kpi-jitter-${did}-${sid}`,'Jitter',_fmtVmVal(avgJitt,_vmU),'dm-kpi-info');
     return;
   }
-  // ms-based KPIs
-  if (!summary.length) return;
-  let wsum=0, wcnt=0, minMs=Infinity, maxMs=-Infinity;
-  for (const r of summary) {
-    if(r.avg_ms!=null){wsum+=r.avg_ms*r.ok;wcnt+=r.ok;}
-    if(r.min_ms!=null) minMs=Math.min(minMs,r.min_ms);
-    if(r.max_ms!=null) maxMs=Math.max(maxMs,r.max_ms);
-  }
-  const avg = wcnt>0 ? Math.round(wsum/wcnt*10)/10 : null;
-  _setKpi(`kpi-avg-${did}-${sid}`, 'Avg ms', avg!=null?avg+'ms':'—');
-  _setKpi(`kpi-min-${did}-${sid}`, 'Min ms', minMs!==Infinity?minMs+'ms':'—');
-  _setKpi(`kpi-max-${did}-${sid}`, 'Max ms', maxMs!==-Infinity?maxMs+'ms':'—');
+  // ms-based KPIs — compute from samples (matches stats bar, reflects selected time range)
+  const msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
+  if (!msVals.length) return;
+  const avg = Math.round(msVals.reduce((a,b)=>a+b,0)/msVals.length*10)/10;
+  const minMs = Math.round(Math.min(...msVals)*10)/10;
+  const maxMs = Math.round(Math.max(...msVals)*10)/10;
+  _setKpi(`kpi-avg-${did}-${sid}`, 'Avg ms', avg+'ms');
+  _setKpi(`kpi-min-${did}-${sid}`, 'Min ms', minMs+'ms');
+  _setKpi(`kpi-max-${did}-${sid}`, 'Max ms', maxMs+'ms');
   _setKpi(`kpi-jitter-${did}-${sid}`, 'Jitter', avgJitt.toFixed(1)+'ms', 'dm-kpi-info');
 }
 
