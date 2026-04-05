@@ -189,7 +189,6 @@ def handle(h, method, path, body):
         if not ok:
             h._json(404, {"error": "user not found"})
             return True
-        log.info(f"User deleted: {username}")
         db_log_audit(me, h.client_address[0], 'user_delete', username)
         h._json(200, {"ok": True})
         return True

@@ -543,6 +543,10 @@ def main():
         log.error(f"SNMP seed load failed: {_se}")
     _settings.load(db_load_settings())
 
+    # Apply debug mode from saved settings
+    from core.logger import set_debug_mode as _set_dbg
+    _set_dbg(int(_settings.get("debug_mode", 0) or 0) == 1)
+
     # Auto-scale probe executor: 1 worker per 4 sensors, clamped [64, 512].
     # Manual override: set max_workers_executor to 4-512 in settings.
     # Setting it to 0 (or blank in UI) returns to auto mode.

@@ -119,6 +119,8 @@ def handle(h, method, path, body):
             "retention_1h_days":     int(_settings.get("retention_1h_days", 1095) or 1095),
             "max_workers_executor":  int(_settings.get("max_workers_executor", 0) or 0),
             "max_workers_executor_effective": _get_effective_workers(),
+            # Group K — debug mode
+            "debug_mode": int(_settings.get("debug_mode", 0) or 0),
         })
         return True
 
@@ -253,6 +255,12 @@ def handle(h, method, path, body):
                 h._json(400, {"error": "max_workers_executor must be 0 (auto) or 4-512"}); return True
             _settings.load({"max_workers_executor": _mw})
             _db_enqueue(lambda _v=_mw: db_save_settings({"max_workers_executor": str(_v)}))
+        if "debug_mode" in body:
+            _dm = "1" if body["debug_mode"] else "0"
+            _settings.load({"debug_mode": _dm})
+            _db_enqueue(lambda _v=_dm: db_save_settings({"debug_mode": _v}))
+            from core.logger import set_debug_mode
+            set_debug_mode(_dm == "1")
         db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
         h._json(200, {"ok": True})
         return True

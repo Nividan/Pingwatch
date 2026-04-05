@@ -368,6 +368,13 @@ async function openSettings(){
       <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
     </div>
     <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
+      <div style="padding:10px 14px 6px;border-bottom:1px solid var(--border)">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''}/>
+          <span style="font-size:12px;font-weight:600;color:var(--text2)">Debug Mode</span>
+        </label>
+        <div class="fh" style="margin-top:4px">Enable verbose debug logging. When off, only INFO and above is written to log files.</div>
+      </div>
       <div class="log-subtab-bar">
         <button class="log-stab active" id="lstab-btn-app"     onclick="_switchLogTab('app')">Application</button>
         <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
@@ -1350,6 +1357,7 @@ async function saveSettings(){
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
   Object.assign(body,smtp);
+  body.debug_mode=document.getElementById('st-debug-mode')?.checked?1:0;
   let r;
   try{
     r=await api('PATCH','/api/settings',body);
