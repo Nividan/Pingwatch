@@ -281,7 +281,7 @@ def handle(h, method, path, body):
         h._send_with_cookie(
             200, {"ok": True, "username": username, "role": role,
                   "session_ttl": int(_settings.get("session_ttl", 86400))},
-            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}{_sec}"
+            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
         )
         return True
 
