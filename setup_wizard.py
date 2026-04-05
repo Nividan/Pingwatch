@@ -187,6 +187,7 @@ def _separator(char: str = "─", width: int = 56):
 
 # ── Wizard state (collected across steps) ────────────────────────────────────
 _state = {
+    "http_enabled":    True,
     "http_port":       PORT,
     "snmp_port":       SNMP_TRAP_PORT,
     "tls_enabled":     True,
@@ -1647,58 +1648,72 @@ def step2_database():
 
 def step2_http_port():
     _separator()
-    _tag("setup", f"{_C['bold']}Step 3 — HTTP Port{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 3 — HTTP & HTTPS{_C['reset']}")
     _separator()
-    _tag("info", "The HTTP dashboard port (used for HTTP access or redirect to HTTPS).")
     print()
-    _state["http_port"] = _ask_port("HTTP port", PORT)
-    _tag("ok", f"HTTP port set to {_state['http_port']}")
+
+    # ── Enable HTTP? ──────────────────────────────────────────────────────────
+    _state["http_enabled"] = _ask_yn("Enable HTTP?", default=_state["http_enabled"])
+    if _state["http_enabled"]:
+        _state["http_port"] = _ask_port("HTTP port", _state["http_port"])
+        _tag("ok", f"HTTP enabled on port {_state['http_port']}")
+    else:
+        _tag("info", "HTTP disabled — HTTPS will be the only access method.")
+    print()
+
+    # ── Enable HTTPS? ─────────────────────────────────────────────────────────
+    _enable_https = _ask_yn("Enable HTTPS?", default=_state["tls_enabled"])
+    if _enable_https:
+        print()
+        print("       Certificate options:")
+        print("         [1] Generate a new self-signed certificate  (recommended)")
+        print("         [2] Import existing certificate from the certs/ folder")
+        print()
+        _cert_choice = _ask("Choose", "1")
+        if _cert_choice == "2":
+            _step3_import()
+        else:
+            _step3_generate()
+    else:
+        if not _state["http_enabled"]:
+            # Neither HTTP nor HTTPS — force HTTP as fallback
+            _tag("warn", "Both HTTP and HTTPS cannot be disabled. Enabling HTTP.")
+            _state["http_enabled"] = True
+            _state["http_port"] = _ask_port("HTTP port", _state["http_port"])
+        _step3_http_only()
+
+    # ── Redirect? (only when both HTTP and HTTPS are enabled) ─────────────────
+    if _state["http_enabled"] and _state["tls_enabled"]:
+        print()
+        _tag("info", "HTTP → HTTPS redirect: when enabled, visiting the HTTP port")
+        _tag("info", "automatically redirects browsers to the HTTPS port.")
+        _state["http_redirect"] = _ask_yn("Enable HTTP → HTTPS redirect?", default=_state["http_redirect"])
+        if _state["http_redirect"]:
+            _tag("info", "Enabled — HTTP port will redirect to HTTPS.")
+        else:
+            _tag("info", "Disabled — both ports will serve the dashboard independently.")
+
     print()
 
 
 def step3_tls():
-    _separator()
-    _tag("setup", f"{_C['bold']}Step 4 — HTTPS / TLS{_C['reset']}")
-    _separator()
-    print()
-    print("       Options:")
-    print("         [1] Generate a new self-signed certificate  (recommended)")
-    print("         [2] Import existing certificate from the certs/ folder")
-    print("         [3] Disable HTTPS — HTTP only  (not recommended)")
-    print()
-    choice = _ask("Choose", "1")
-
-    if choice == "2":
-        _step3_import()
-    elif choice == "3":
-        _step3_http_only()
-    else:
-        _step3_generate()
-
-    if _state["tls_enabled"]:
-        print()
-        _tag("info", "HTTP → HTTPS redirect: when enabled, visiting the HTTP port")
-        _tag("info", "automatically redirects browsers to the HTTPS port.")
-        _state["http_redirect"] = _ask_yn("Enable HTTP → HTTPS redirect?", default=True)
-        if not _state["http_redirect"]:
-            _tag("info", "Disabled — both ports will serve the dashboard independently.")
-
-    print()
+    """Merged into step2_http_port — retained for call-site compatibility."""
+    pass
 
 
 def _step3_generate():
     _tag("setup", "Certificate details — press Enter to accept the default")
     print()
 
-    default_cn = socket.gethostname() or "localhost"
+    default_cn = _state.get("tls_cn") or socket.gethostname() or "localhost"
     cn       = _ask("Common Name / hostname (CN)", default_cn)
-    org      = _ask("Organization (O)",            "PingWatch")
+    org      = _ask("Organization (O)",            _state.get("org_name", "PingWatch"))
     org_unit = _ask("Organizational Unit (OU)",    "")
     country  = _ask("Country (2-letter code, C)",  "")
     state    = _ask("State / Province (ST)",       "")
     locality = _ask("Locality / City (L)",         "")
     days_raw = _ask("Validity period (days)",      "825")
-    tls_port = _ask_port("HTTPS port", TLS_PORT_DEFAULT)
+    tls_port = _ask_port("HTTPS port", _state["tls_port"])
     _tag("info", "Additional SANs — extra DNS names or IP addresses to include in the")
     _tag("info", "certificate (comma-separated). Press Enter to skip.")
     sans_raw = _ask("Extra SANs (DNS/IP, comma-separated)", "")
@@ -1864,18 +1879,23 @@ def step5_firewall():
     # ── Check which rules already exist ──────────────────────
     def _win_has(name):
         r = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
             capture_output=True,
         )
         return r.returncode == 0
 
-    def _ufw_status():
-        """Return ufw status text, or '' if unavailable."""
-        try:
-            r = subprocess.run(["sudo", "ufw", "status"], capture_output=True, text=True)
-            return r.stdout if r.returncode == 0 else ""
-        except Exception:
-            return ""
+    def _ufw_has(port, proto):
+        """Return True if a ufw rule for port/proto exists (active or inactive)."""
+        _needle = f"{port}/{proto.lower()}"
+        for _cmd in (["ufw", "status"], ["ufw", "show", "added"]):
+            for _pfx in ([], ["sudo"]):
+                try:
+                    _r = subprocess.run([*_pfx, *_cmd], capture_output=True, text=True)
+                    if _r.returncode == 0 and _needle in _r.stdout:
+                        return True
+                except Exception:
+                    pass
+        return False
 
     def _fcmd_ports():
         """Return firewall-cmd --list-ports text, or '' if unavailable."""
@@ -1892,10 +1912,23 @@ def step5_firewall():
         for rule in rules:
             (existing if _win_has(rule[2]) else missing).append(rule)
     elif _sys == "Linux" and _sh.which("ufw"):
-        _ufw = _ufw_status()
+        # Warn if ufw is installed but inactive (rules exist but have no effect)
+        try:
+            _ufw_active = False
+            for _pfx in ([], ["sudo"]):
+                _sr = subprocess.run([*_pfx, "ufw", "status"], capture_output=True, text=True)
+                if _sr.returncode == 0:
+                    _ufw_active = "Status: active" in _sr.stdout
+                    break
+            if not _ufw_active:
+                _tag("warn", "ufw is installed but currently INACTIVE — firewall rules have no effect.")
+                _tag("info", "Enable it with:  sudo ufw enable")
+                print()
+        except Exception:
+            pass
         for rule in rules:
             proto, port, name = rule
-            (existing if f"{port}/{proto.lower()}" in _ufw else missing).append(rule)
+            (existing if _ufw_has(port, proto) else missing).append(rule)
     elif _sys == "Linux" and _sh.which("firewall-cmd"):
         _fcmd = _fcmd_ports()
         for rule in rules:
@@ -2065,6 +2098,7 @@ def step7_init_db():
 
     # Build settings dict from wizard state
     settings = {
+        "http_enabled": "1" if _state.get("http_enabled", True) else "0",
         "http_port":   str(_state["http_port"]),
         "snmp_port":   str(_state["snmp_port"]),
         "tls_enabled": "1" if _state["tls_enabled"] else "0",
@@ -2130,11 +2164,15 @@ def step7_init_db():
     # Print summary
     print()
     _tag("info", "Configuration summary:")
-    _tag("info", f"  HTTP port    : {_state['http_port']}")
+    if _state.get("http_enabled", True):
+        _tag("info", f"  HTTP port    : {_state['http_port']}")
+    else:
+        _tag("info",  "  HTTP         : disabled")
     if _state["tls_enabled"]:
         _tag("info", f"  HTTPS port   : {_state['tls_port']}")
         _tag("info", f"  Certificate  : {_state['tls_cert_source']} (CN={_state['tls_cn']})")
-        _tag("info", f"  HTTP redirect: {'yes' if _state['http_redirect'] else 'no'}")
+        if _state.get("http_enabled", True):
+            _tag("info", f"  HTTP redirect: {'yes' if _state['http_redirect'] else 'no'}")
     else:
         _tag("info",  "  HTTPS        : disabled")
     _tag("info", f"  SNMP port    : {_state['snmp_port']}")
@@ -2401,6 +2439,7 @@ def main():
         try:
             from db.users import db_load_settings
             existing = db_load_settings()
+            _state["http_enabled"] = bool(int(existing.get("http_enabled", 1)))
             _state["http_port"]    = int(existing.get("http_port",    PORT))
             _state["snmp_port"]    = int(existing.get("snmp_port",    SNMP_TRAP_PORT))
             _state["tls_enabled"]  = bool(int(existing.get("tls_enabled", 1)))
