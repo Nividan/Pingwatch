@@ -244,6 +244,7 @@ async function submitLogin(){
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
     S.role=d.role||'viewer';
+    if(d.session_ttl)_sessionTtl=d.session_ttl;
     hideLogin();
     try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
     onAuthenticated(d.username);
@@ -253,6 +254,7 @@ async function submitLogin(){
   }finally{clearTimeout(slowHint);}
 }
 async function doLogout(){
+  _stopIdleCheck();
   await fetch('/api/logout',{method:'POST'});
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
@@ -304,9 +306,26 @@ function onAuthenticated(username){
   _alertEvtBadgePoll();
   if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
   window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, 60000);
+  _lastActivity = Date.now();
+  _startIdleCheck();
 }
 
 let _alertEvtBadgeCount = 0;
+
+let _sessionTtl   = 86400;
+let _lastActivity = Date.now();
+let _idleTimer    = null;
+function _onUserActivity(){ _lastActivity = Date.now(); }
+function _startIdleCheck(){
+  if(_idleTimer) clearInterval(_idleTimer);
+  _idleTimer = setInterval(()=>{
+    if((Date.now()-_lastActivity)/1000 >= _sessionTtl){
+      clearInterval(_idleTimer); _idleTimer=null;
+      doLogout().then(()=>showLogin('Session timed out due to inactivity.'));
+    }
+  },30000);
+}
+function _stopIdleCheck(){ if(_idleTimer){clearInterval(_idleTimer);_idleTimer=null;} }
 
 function _updateEvtBadge() {
   const n = unseenFlaps;
@@ -369,13 +388,16 @@ async function checkAuth(){
   document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
-    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; onAuthenticated(d.username);}
+    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; onAuthenticated(d.username);}
     else{showLogin();}
   }catch(e){showLogin();}
 }
 // Enter key on login inputs
 ['login-user','login-pass'].forEach(id=>{
   document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')submitLogin();});
+});
+['click','keydown','mousemove','touchstart'].forEach(ev=>{
+  document.addEventListener(ev,_onUserActivity,{passive:true});
 });
 
 // ── API ──────────────────────────────────────────────────────────
