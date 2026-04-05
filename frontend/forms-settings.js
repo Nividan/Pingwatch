@@ -108,13 +108,12 @@ async function openSettings(){
       <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
       <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
-      <button class="stab-nav" id="stab-btn-smtp" onclick="switchSettingsTab('smtp')">📧 SMTP</button>
+      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
       <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
       <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
-      <button class="stab-nav" id="stab-btn-syslog" onclick="switchSettingsTab('syslog')">📤 Syslog</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
     </nav>
     <div class="stab-content">
@@ -228,43 +227,130 @@ async function openSettings(){
       </div>
       <div id="group-list"><div class="alrt-loading">Loading…</div></div>
     </div>
-    <div class="mbdy stab-fade" id="stab-smtp" style="display:none;overflow-y:auto;flex:1">
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">SMTP Email Alerts</div>
-      <div class="fgrid">
-        <div class="fr"><label class="fl">SMTP Host</label>
-          <input type="text" id="st-smtp-host" value="${sr.smtp_host||''}" placeholder="smtp.gmail.com"/></div>
-        <div class="fr"><label class="fl">Port</label>
-          <input type="number" id="st-smtp-port" value="${sr.smtp_port||587}" style="max-width:100px"/></div>
+    <div class="mbdy stab-fade" id="stab-integrations" style="display:none;overflow-y:auto;flex:1">
+      <!-- Sub-tab bar -->
+      <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+        <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
+        <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
       </div>
-      <div class="fr" style="margin-top:8px"><label class="fl">Security</label>
-        <select id="st-smtp-tls" style="max-width:180px">
-          <option value="starttls" ${sr.smtp_tls==='starttls'?'selected':''}>STARTTLS (port 587)</option>
-          <option value="ssl"      ${sr.smtp_tls==='ssl'     ?'selected':''}>SSL/TLS  (port 465)</option>
-          <option value="none"     ${sr.smtp_tls==='none'    ?'selected':''}>None     (port 25)</option>
-        </select>
+
+      <!-- ── SMTP sub-panel ── -->
+      <div id="ipanel-smtp">
+        <div id="smtp-status-bar"></div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">SMTP Host</label>
+            <input type="text" id="st-smtp-host" value="${sr.smtp_host||''}" placeholder="smtp.gmail.com"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="st-smtp-port" value="${sr.smtp_port||587}" style="max-width:100px"/></div>
+        </div>
+        <div class="fr" style="margin-top:8px"><label class="fl">Security</label>
+          <select id="st-smtp-tls" style="max-width:180px">
+            <option value="starttls" ${sr.smtp_tls==='starttls'?'selected':''}>STARTTLS (port 587)</option>
+            <option value="ssl"      ${sr.smtp_tls==='ssl'     ?'selected':''}>SSL/TLS  (port 465)</option>
+            <option value="none"     ${sr.smtp_tls==='none'    ?'selected':''}>None     (port 25)</option>
+          </select>
+        </div>
+        <div class="fgrid" style="margin-top:8px">
+          <div class="fr"><label class="fl">Username</label>
+            <input type="text"     id="st-smtp-user" value="${sr.smtp_user||''}" placeholder="user@gmail.com"/></div>
+          <div class="fr"><label class="fl">Password</label>
+            <input type="password" id="st-smtp-pass" placeholder="${sr.smtp_pass_set?'\u25cf\u25cf\u25cf\u25cf\u25cf (set \u2014 leave blank to keep)':'enter password'}"/></div>
+        </div>
+        <div class="fgrid" style="margin-top:8px">
+          <div class="fr"><label class="fl">From</label>
+            <input type="text" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
+          <div class="fr"><label class="fl">To</label>
+            <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
+        </div>
+        <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
+          <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>
+          <div class="fh">Wait this many seconds before sending a DOWN email — if sensor recovers in time, no email is sent. Set to 0 to alert immediately.</div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+          <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
+          <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
+        </div>
+        <div style="margin-top:12px;font-size:11px;color:var(--text3)">
+          Emails are sent on sensor DOWN and RECOVERED events.
+        </div>
       </div>
-      <div class="fgrid" style="margin-top:8px">
-        <div class="fr"><label class="fl">Username</label>
-          <input type="text"     id="st-smtp-user" value="${sr.smtp_user||''}" placeholder="user@gmail.com"/></div>
-        <div class="fr"><label class="fl">Password</label>
-          <input type="password" id="st-smtp-pass" placeholder="${sr.smtp_pass_set?'\u25cf\u25cf\u25cf\u25cf\u25cf (set \u2014 leave blank to keep)':'enter password'}"/></div>
-      </div>
-      <div class="fgrid" style="margin-top:8px">
-        <div class="fr"><label class="fl">From</label>
-          <input type="text" id="st-smtp-from" value="${sr.smtp_from||''}" placeholder="pingwatch@yourdomain.com"/></div>
-        <div class="fr"><label class="fl">To</label>
-          <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
-      </div>
-      <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
-        <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>
-        <div class="fh">Wait this many seconds before sending a DOWN email — if sensor recovers in time, no email is sent. Set to 0 to alert immediately.</div>
-      </div>
-      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
-        <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
-        <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
-      </div>
-      <div style="margin-top:12px;font-size:11px;color:var(--text3)">
-        Emails are sent on sensor DOWN and RECOVERED events.
+
+      <!-- ── Syslog sub-panel ── -->
+      <div id="ipanel-syslog" style="display:none">
+        <div id="syslog-status-bar"></div>
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Alert Event Forwarding</div>
+        <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div style="flex:1">
+            <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Syslog Forwarding</div>
+            <div class="fh" style="margin:0">Send events (device down/up, SNMP traps) to an external syslog or SIEM server in real time</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-sl-enabled" ${sr.syslog_enabled?'checked':''}><span class="tsl"></span></label>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Server IP / Hostname</label>
+          <input type="text" id="st-sl-host" value="${esc(sr.syslog_host||'')}" placeholder="192.168.1.100 or syslog.example.com" style="max-width:280px"/>
+          <div class="fh">Syslog or SIEM server address</div>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Port</label>
+          <input type="number" id="st-sl-port" value="${sr.syslog_port||514}" min="1" max="65535" style="max-width:120px"/>
+          <div class="fh">Default: 514</div>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Protocol</label>
+          <select id="st-sl-proto" style="max-width:120px">
+            <option value="udp" ${(sr.syslog_proto||'udp')==='udp'?'selected':''}>UDP</option>
+            <option value="tcp" ${(sr.syslog_proto||'udp')==='tcp'?'selected':''}>TCP</option>
+          </select>
+          <div class="fh">UDP is standard for syslog; use TCP for reliable delivery</div>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Minimum Severity</label>
+          <select id="st-sl-minsev" style="max-width:160px">
+            <option value="critical" ${(sr.syslog_min_severity||'warning')==='critical'?'selected':''}>Critical only</option>
+            <option value="warning"  ${(sr.syslog_min_severity||'warning')==='warning'?'selected':''}>Warning and above</option>
+            <option value="info"     ${(sr.syslog_min_severity||'warning')==='info'?'selected':''}>All events</option>
+          </select>
+          <div class="fh">Events below this severity are not forwarded</div>
+        </div>
+        <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
+          Messages are sent in <strong style="color:var(--text2)">RFC 5424</strong> format with facility LOCAL0.
+          Forwarding is non-blocking — syslog errors will not affect monitoring.
+        </div>
+
+        <!-- Application Log Forwarding -->
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:14px">Application Log Forwarding</div>
+          <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="flex:1">
+              <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Forward Application Logs</div>
+              <div class="fh" style="margin:0">Send PingWatch application log entries to the syslog server (facility LOCAL1)</div>
+            </div>
+            <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-sl-applogs" ${sr.syslog_app_logs?'checked':''}><span class="tsl"></span></label>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Minimum Level</label>
+            <select id="st-sl-loglevel" style="max-width:140px">
+              <option value="debug"   ${(sr.syslog_app_log_level||'info')==='debug'  ?'selected':''}>DEBUG</option>
+              <option value="info"    ${(sr.syslog_app_log_level||'info')==='info'   ?'selected':''}>INFO</option>
+              <option value="warning" ${(sr.syslog_app_log_level||'info')==='warning'?'selected':''}>WARNING</option>
+              <option value="error"   ${(sr.syslog_app_log_level||'info')==='error'  ?'selected':''}>ERROR</option>
+            </select>
+            <div class="fh">Only log entries at or above this level are forwarded</div>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Log Sources</label>
+            <div style="display:flex;gap:20px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
+                <input type="checkbox" id="st-sl-src-app" ${(sr.syslog_app_log_sources||[]).includes('app')?'checked':''}> Application</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
+                <input type="checkbox" id="st-sl-src-audit" ${(sr.syslog_app_log_sources||[]).includes('audit')?'checked':''}> Audit</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
+                <input type="checkbox" id="st-sl-src-backup" ${(sr.syslog_app_log_sources||[]).includes('backup')?'checked':''}> Backup</label>
+            </div>
+            <div class="fh">Requires syslog forwarding to be enabled and configured above</div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="mft" id="stab-footer-general">
@@ -278,9 +364,11 @@ async function openSettings(){
     <div class="mft" id="stab-footer-groups" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
-    <div class="mft" id="stab-footer-smtp" style="display:none">
+    <div class="mft" id="stab-footer-integrations" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveSettings()">Save Settings</button>
+      <button id="integ-btn-test" class="btn-s" onclick="testSmtp()" style="display:none">Send Test Email</button>
+      <button id="integ-btn-test-syslog" class="btn-s" onclick="testSyslog()" style="display:none">Send Test Message</button>
+      <button id="integ-btn-save" class="btn-p" onclick="_saveIntegrations()">Save</button>
     </div>
     <div class="mbdy stab-fade" id="stab-database" style="display:none;overflow-y:auto;flex:1">
 
@@ -509,52 +597,6 @@ async function openSettings(){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
     </div>
-    <div class="mbdy stab-fade" id="stab-syslog" style="display:none;overflow-y:auto;flex:1">
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Syslog Forwarding</div>
-      <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <div style="flex:1">
-          <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Syslog Forwarding</div>
-          <div class="fh" style="margin:0">Send events (device down/up, SNMP traps) to an external syslog or SIEM server in real time</div>
-        </div>
-        <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-sl-enabled" ${sr.syslog_enabled?'checked':''}><span class="tsl"></span></label>
-      </div>
-      <div class="fr" style="margin-top:14px">
-        <label class="fl">Server IP / Hostname</label>
-        <input type="text" id="st-sl-host" value="${esc(sr.syslog_host||'')}" placeholder="192.168.1.100 or syslog.example.com" style="max-width:280px"/>
-        <div class="fh">Syslog or SIEM server address</div>
-      </div>
-      <div class="fr" style="margin-top:14px">
-        <label class="fl">Port</label>
-        <input type="number" id="st-sl-port" value="${sr.syslog_port||514}" min="1" max="65535" style="max-width:120px"/>
-        <div class="fh">Default: 514</div>
-      </div>
-      <div class="fr" style="margin-top:14px">
-        <label class="fl">Protocol</label>
-        <select id="st-sl-proto" style="max-width:120px">
-          <option value="udp" ${(sr.syslog_proto||'udp')==='udp'?'selected':''}>UDP</option>
-          <option value="tcp" ${(sr.syslog_proto||'udp')==='tcp'?'selected':''}>TCP</option>
-        </select>
-        <div class="fh">UDP is standard for syslog; use TCP for reliable delivery</div>
-      </div>
-      <div class="fr" style="margin-top:14px">
-        <label class="fl">Minimum Severity</label>
-        <select id="st-sl-minsev" style="max-width:160px">
-          <option value="critical" ${(sr.syslog_min_severity||'warning')==='critical'?'selected':''}>Critical only</option>
-          <option value="warning"  ${(sr.syslog_min_severity||'warning')==='warning'?'selected':''}>Warning and above</option>
-          <option value="info"     ${(sr.syslog_min_severity||'warning')==='info'?'selected':''}>All events</option>
-        </select>
-        <div class="fh">Events below this severity are not forwarded</div>
-      </div>
-      <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
-        Messages are sent in <strong style="color:var(--text2)">RFC 5424</strong> format with facility LOCAL0.
-        Forwarding is non-blocking — syslog errors will not affect monitoring.
-      </div>
-    </div>
-    <div class="mft" id="stab-footer-syslog" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-s" onclick="testSyslog()">Send Test Message</button>
-      <button class="btn-p" onclick="saveSyslogSettings()">Save Syslog</button>
-    </div>
     <div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr">
         <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
@@ -584,7 +626,7 @@ async function openSettings(){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','smtp','database','logs','sensors','networking','backup','syslog','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','logs','sensors','networking','backup','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -618,12 +660,13 @@ function switchSettingsTab(tab){
           nextEl.classList.remove('stab-out');
           setTimeout(() => {
             _stabSwitching = false;
-            if (tab === 'logs')        _loadLogTab();
-            if (tab === 'sensors')     loadSensorsDefaultsTab();
-            if (tab === 'backup')      _loadBackupScheduleSettings();
-            if (tab === 'database')    _loadDbBackupSettings();
-            if (tab === 'alert-rules') { _alertingLoadRules(); _alertingLoadMaint(); }
-            if (tab === 'groups')      _groupsLoad();
+            if (tab === 'logs')         _loadLogTab();
+            if (tab === 'sensors')      loadSensorsDefaultsTab();
+            if (tab === 'backup')       _loadBackupScheduleSettings();
+            if (tab === 'database')     _loadDbBackupSettings();
+            if (tab === 'alert-rules')  { _alertingLoadRules(); _alertingLoadMaint(); }
+            if (tab === 'groups')       _groupsLoad();
+            if (tab === 'integrations') _loadIntegrationsStatus();
           }, 220);
         });
       });
@@ -637,8 +680,9 @@ function switchSettingsTab(tab){
     if (tab === 'backup')      _loadBackupScheduleSettings();
     if (tab === 'database')    _loadDbBackupSettings();
     if (tab === 'alert-rules') _alertingLoadRules();
-    if (tab === 'maint')       _alertingLoadMaint();
-    if (tab === 'groups')      _groupsLoad();
+    if (tab === 'maint')        _alertingLoadMaint();
+    if (tab === 'groups')       _groupsLoad();
+    if (tab === 'integrations') _loadIntegrationsStatus();
   }
 }
 
@@ -1658,39 +1702,120 @@ async function runDbBackupNow(){
   }
 }
 
+// ── Integrations tab helpers ─────────────────────────────────────────────
+
+function _timeAgo(ts) {
+  const s = Math.floor(Date.now() / 1000 - ts);
+  if (s < 5)     return 'just now';
+  if (s < 60)    return `${s}s ago`;
+  if (s < 3600)  return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+function _renderIntegStatus(id, status) {
+  const el = document.getElementById(`${id}-status-bar`);
+  if (!el) return;
+  const icons   = {ok:'🟢', error:'⚠️', unconfigured:'🔴', configured:'🟡'};
+  const labels  = {ok:'Connected', error:'Misconfigured', unconfigured:'Not configured', configured:'Configured'};
+  const icon    = icons[status.state]  || '🔴';
+  const label   = labels[status.state] || status.state;
+  const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
+  const noun    = id === 'smtp' ? 'email' : 'syslog';
+  const errHtml = (status.state === 'error' && status.last_err_msg)
+    ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(status.last_err_msg)}</div>` : '';
+  el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
+    <span style="font-size:16px;line-height:1.3">${icon}</span>
+    <div>
+      <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:10px">Last ${noun} sent: ${lastOk}</span>
+      ${errHtml}
+    </div>
+  </div>`;
+  const badge = document.getElementById(`ibadge-${id}`);
+  if (badge) badge.textContent = ' ' + icon;
+}
+
+function switchIntegTab(name) {
+  ['smtp', 'syslog'].forEach(t => {
+    document.getElementById(`itab-${t}`)?.classList.toggle('itab-active', t === name);
+    const p = document.getElementById(`ipanel-${t}`);
+    if (p) p.style.display = t === name ? '' : 'none';
+  });
+  // Swap footer action buttons
+  const testSmtpBtn   = document.getElementById('integ-btn-test');
+  const testSyslogBtn = document.getElementById('integ-btn-test-syslog');
+  if (testSmtpBtn)   testSmtpBtn.style.display   = name === 'smtp'   ? '' : 'none';
+  if (testSyslogBtn) testSyslogBtn.style.display  = name === 'syslog' ? '' : 'none';
+}
+
+async function _loadIntegrationsStatus() {
+  try {
+    const r = await api('GET', '/api/settings');
+    if (r.smtp_status)   _renderIntegStatus('smtp',   r.smtp_status);
+    if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
+  } catch(e) { /* non-critical */ }
+  // Show correct footer buttons for the currently visible sub-tab
+  const activeSubTab = document.getElementById('ipanel-smtp')?.style.display !== 'none' ? 'smtp' : 'syslog';
+  switchIntegTab(activeSubTab);
+}
+
+async function _saveIntegrations() {
+  const btn = document.getElementById('integ-btn-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    const activeSubTab = document.getElementById('ipanel-smtp')?.style.display !== 'none' ? 'smtp' : 'syslog';
+    if (activeSubTab === 'smtp') {
+      await saveSettings();
+    } else {
+      await saveSyslogSettings();
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  }
+}
+
 async function saveSyslogSettings(){
   const enabled  = document.getElementById('st-sl-enabled')?.checked ? 1 : 0;
   const host     = (document.getElementById('st-sl-host')?.value   || '').trim();
   const port     = parseInt(document.getElementById('st-sl-port')?.value) || 514;
   const proto    = document.getElementById('st-sl-proto')?.value   || 'udp';
   const minSev   = document.getElementById('st-sl-minsev')?.value  || 'warning';
+  const appLogs  = document.getElementById('st-sl-applogs')?.checked ? 1 : 0;
+  const logLevel = document.getElementById('st-sl-loglevel')?.value || 'info';
+  const logSources = ['app','audit','backup'].filter(s => document.getElementById(`st-sl-src-${s}`)?.checked);
   if(enabled && !host){ toast('Enter a syslog server address','err'); return; }
-  const btn = document.querySelector('#stab-footer-syslog .btn-p');
+  const btn = document.getElementById('integ-btn-save');
   if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
   try {
     const r = await api('PATCH', '/api/settings', {
-      syslog_enabled:      enabled,
-      syslog_host:         host,
-      syslog_port:         port,
-      syslog_proto:        proto,
-      syslog_min_severity: minSev,
+      syslog_enabled:         enabled,
+      syslog_host:            host,
+      syslog_port:            port,
+      syslog_proto:           proto,
+      syslog_min_severity:    minSev,
+      syslog_app_logs:        appLogs,
+      syslog_app_log_level:   logLevel,
+      syslog_app_log_sources: logSources,
     });
     if(!r?.ok){ toast('Failed to save syslog settings','err'); return; }
     toast('Syslog settings saved','ok');
+    _loadIntegrationsStatus();
   } catch(e) {
     toast('Failed to save syslog settings','err');
   } finally {
-    if(btn){ btn.disabled=false; btn.textContent='Save Syslog'; }
+    if(btn){ btn.disabled=false; btn.textContent='Save'; }
   }
 }
 
 async function testSyslog(){
-  const btn = document.querySelector('[onclick="testSyslog()"]');
+  const btn = document.getElementById('integ-btn-test-syslog');
   if(btn){ btn.disabled=true; btn.textContent='Sending...'; }
   try {
     const r = await api('POST', '/api/settings/syslog_test', {});
     toast(r?.ok ? r.msg || 'Test message sent' : `Failed: ${r?.msg||'Unknown error'}`,
           r?.ok ? 'ok' : 'err');
+    setTimeout(_loadIntegrationsStatus, 500);
   } catch(e) {
     toast('Syslog test failed','err');
   } finally {
@@ -1716,6 +1841,7 @@ async function testSmtp(){
   if(btn){btn.disabled=false;btn.textContent='Send Test Email';}
   if(res) res.style.color=r.ok?'var(--up)':'var(--down)';
   if(res) res.textContent=r.msg||'Unknown error';
+  setTimeout(_loadIntegrationsStatus, 500);
 }
 
 async function serverRestart(){

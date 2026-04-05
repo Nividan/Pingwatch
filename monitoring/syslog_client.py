@@ -12,9 +12,12 @@ Design:
 """
 
 import datetime
+import json
+import logging as _logging
 import queue
 import socket
 import threading
+import time
 
 from core.logger import log
 from core.settings import get as _cfg
@@ -23,6 +26,10 @@ from core.settings import get as _cfg
 _Q: queue.Queue = queue.Queue(maxsize=500)
 _started = False
 _start_lock = threading.Lock()
+
+# Connection status tracking (in-memory, resets on restart)
+_last_ok_ts: float = 0
+_last_err: dict = {'ts': 0.0, 'msg': ''}
 
 # ── Severity maps ─────────────────────────────────────────────────────────
 # Syslog facility LOCAL0 = 16; PRI = facility*8 + severity_level
@@ -60,10 +67,10 @@ def _above_min(sev: str, min_sev: str) -> bool:
     return _SEV_ORDER.get(sev, 99) <= _SEV_ORDER.get(min_sev, 99)
 
 
-def _format_rfc5424(pri: int, hostname: str, msg: str) -> bytes:
+def _format_rfc5424(pri: int, hostname: str, msg: str, app_name: str = 'PingWatch') -> bytes:
     """Format an RFC 5424 syslog message."""
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    line = f"<{pri}>1 {ts} {hostname} PingWatch - - - {msg}"
+    line = f"<{pri}>1 {ts} {hostname} {app_name} - - - {msg}"
     return line.encode("utf-8", errors="replace")
 
 
@@ -98,6 +105,7 @@ def _send_one(payload: bytes, host: str, port: int, proto: str):
 
 def _worker_loop():
     """Daemon thread - dequeues and sends syslog messages."""
+    global _last_ok_ts, _last_err
     while True:
         try:
             payload, host, port, proto = _Q.get(timeout=5)
@@ -105,7 +113,9 @@ def _worker_loop():
             continue
         try:
             _send_one(payload, host, port, proto)
+            _last_ok_ts = time.time()
         except Exception as e:
+            _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
             log.warning(f"Syslog send failed ({host}:{port}/{proto}): {e}")
         finally:
             _Q.task_done()
@@ -168,6 +178,7 @@ def send_test_syslog() -> tuple:
     Send a test syslog message using current settings.
     Returns (ok: bool, message: str).
     """
+    global _last_ok_ts, _last_err
     cfg = _reload()
     if not cfg["host"]:
         return False, "Syslog host is not configured."
@@ -177,6 +188,103 @@ def send_test_syslog() -> tuple:
         payload  = _format_rfc5424(pri, hostname,
                                    "PingWatch test message - syslog forwarding is working.")
         _send_one(payload, cfg["host"], cfg["port"], cfg["proto"])
+        _last_ok_ts = time.time()
         return True, f"Test message sent to {cfg['host']}:{cfg['port']}/{cfg['proto'].upper()}"
     except Exception as e:
+        _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
         return False, str(e)
+
+
+def get_syslog_status() -> dict:
+    """Return connection status dict for the Settings API."""
+    enabled = str(_cfg('syslog_enabled', '0')).strip() == '1'
+    host    = str(_cfg('syslog_host', '')).strip()
+    if not enabled or not host:
+        state = 'unconfigured'
+    elif _last_err['ts'] and (not _last_ok_ts or _last_err['ts'] > _last_ok_ts):
+        state = 'error'
+    elif _last_ok_ts:
+        state = 'ok'
+    else:
+        state = 'configured'   # enabled+host set but nothing sent yet
+    return {
+        'state':        state,
+        'last_ok_ts':   _last_ok_ts or None,
+        'last_err_ts':  _last_err['ts'] or None,
+        'last_err_msg': _last_err['msg'],
+    }
+
+
+# ── Application log forwarding ────────────────────────────────────────────
+
+class SyslogAppLogHandler(_logging.Handler):
+    """Forwards Python log records to the configured syslog server.
+
+    Attached once at startup to the app/audit/backup loggers.
+    All settings are read on every emit — no restart needed for changes.
+    Uses facility LOCAL1 (17) to distinguish from sensor alert events (LOCAL0).
+    """
+
+    _FACILITY = 17  # LOCAL1
+    _PY_TO_SEV = {
+        _logging.DEBUG:    7,  # DEBUG
+        _logging.INFO:     6,  # INFO
+        _logging.WARNING:  4,  # WARNING
+        _logging.ERROR:    3,  # ERR
+        _logging.CRITICAL: 2,  # CRIT
+    }
+    _LEVEL_MAP = {
+        'debug':   _logging.DEBUG,
+        'info':    _logging.INFO,
+        'warning': _logging.WARNING,
+        'error':   _logging.ERROR,
+    }
+
+    def __init__(self, source_key: str):
+        super().__init__()
+        self.source_key = source_key  # 'app', 'audit', or 'backup'
+
+    def emit(self, record: _logging.LogRecord) -> None:
+        try:
+            if not int(_cfg('syslog_app_logs', 0) or 0):
+                return
+            if not int(_cfg('syslog_enabled', 0) or 0):
+                return
+            host = str(_cfg('syslog_host', '')).strip()
+            if not host:
+                return
+            # Source filter
+            try:
+                sources = json.loads(
+                    _cfg('syslog_app_log_sources', '["app","audit","backup"]') or
+                    '["app","audit","backup"]'
+                )
+            except Exception:
+                sources = ['app', 'audit', 'backup']
+            if self.source_key not in sources:
+                return
+            # Level filter
+            min_level_str = str(_cfg('syslog_app_log_level', 'info') or 'info').lower()
+            min_level = self._LEVEL_MAP.get(min_level_str, _logging.INFO)
+            if record.levelno < min_level:
+                return
+            port  = int(_cfg('syslog_port', 514) or 514)
+            proto = str(_cfg('syslog_proto', 'udp')).strip().lower()
+            _ensure_started()
+            sev     = self._PY_TO_SEV.get(record.levelno, 6)
+            pri     = self._FACILITY * 8 + sev
+            hostname = socket.gethostname()
+            msg     = f"[{record.levelname}] {self.format(record)}"
+            payload = _format_rfc5424(pri, hostname, msg,
+                                      app_name=f'pingwatch-{self.source_key}')
+            _Q.put_nowait((payload, host, port, proto))
+        except Exception:
+            pass  # logging handlers must never raise
+
+
+def _attach_app_log_handlers() -> None:
+    """Attach SyslogAppLogHandler to each app logger. Called once at startup."""
+    from core.logger import log as _al, log_audit as _aul, log_backup as _abl
+    for lgr, key in [(_al, 'app'), (_aul, 'audit'), (_abl, 'backup')]:
+        if not any(isinstance(h, SyslogAppLogHandler) for h in lgr.handlers):
+            lgr.addHandler(SyslogAppLogHandler(key))

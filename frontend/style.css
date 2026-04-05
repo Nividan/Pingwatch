@@ -923,6 +923,10 @@ body{
 /* Settings tab crossfade */
 .mbdy.stab-fade{transition:opacity .2s ease}
 .mbdy.stab-out{opacity:0}
+/* Integrations sub-tab buttons */
+.itab{display:flex;align-items:center;gap:5px;padding:5px 14px;font-size:12px;font-weight:500;color:var(--text2);background:var(--bg3);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all .15s}
+.itab:hover{background:var(--bg4);color:var(--text)}
+.itab.itab-active{background:var(--accent);border-color:var(--accent);color:#fff}
 .mft {display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
 
 /* Upload Certificate tabs */

@@ -675,6 +675,8 @@ def main():
     start_scheduler()
     from monitoring.alert_engine import alert_engine_start
     alert_engine_start()
+    from monitoring.syslog_client import _attach_app_log_handlers
+    _attach_app_log_handlers()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
