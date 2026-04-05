@@ -1187,21 +1187,70 @@ def step2_database():
                     else:
                         _tag("warn", "Automatic install failed — install manually then re-run the wizard.")
 
-    # Offer to create the DB/user automatically via su/sudo as postgres
+    # Offer to create the DB/user automatically
     _db_auto_ok = False
     _pw = _gen_pw
-    if sys.platform != "win32" and _pg_installed:
+
+    # Find psql executable (may not be in PATH on Windows)
+    def _find_psql():
+        import shutil as _sh2, glob as _glob2
+        _p = _sh2.which("psql")
+        if _p:
+            return _p
+        if sys.platform == "win32":
+            _cands = sorted(_glob2.glob(r"C:\Program Files\PostgreSQL\*\bin\psql.exe"))
+            if _cands:
+                return _cands[-1]
+        return None
+
+    if _pg_installed:
         print(_C["bold"] + "       The wizard can create the database and user automatically." + _C["reset"])
-        _access = "as root" if _is_root else "requires sudo / postgres access"
-        print(_C["bold"] + f"       It will run ({_access}):" + _C["reset"])
+        if sys.platform == "win32":
+            print(_C["bold"] + "       It will connect as the 'postgres' superuser." + _C["reset"])
+        else:
+            _access = "as root" if _is_root else "requires sudo / postgres access"
+            print(_C["bold"] + f"       It will run ({_access}):" + _C["reset"])
         print()
         print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '****';" + _C["reset"])
         print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
         print()
         if _ask_yn("Create database and user automatically?", default=True):
-            _psql = _sh.which("psql")
+            _psql = _find_psql()
             if not _psql:
-                _tag("warn", "psql not found in PATH — cannot run automatically.")
+                _tag("warn", "psql not found — cannot run automatically.")
+            elif sys.platform == "win32":
+                # Windows: connect as postgres superuser (needs its password)
+                _pg_sa_pw = _ask_password("Password for the PostgreSQL 'postgres' superuser", "")
+                if not _pg_sa_pw:
+                    _tag("warn", "No password entered — skipping auto-create.")
+                else:
+                    _tag("info", "Creating PostgreSQL user and database ...")
+                    _cmds = [
+                        f"CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';",
+                        "CREATE DATABASE pingwatch OWNER pingwatch;",
+                    ]
+                    _all_ok = True
+                    _env = {**os.environ, "PGPASSWORD": _pg_sa_pw}
+                    for _sql in _cmds:
+                        r = subprocess.run(
+                            [_psql, "-U", "postgres", "-h", "localhost", "-c", _sql],
+                            capture_output=True, text=True, env=_env,
+                        )
+                        if r.returncode != 0:
+                            _err_out = (r.stderr or r.stdout or "").strip()
+                            if "already exists" in _err_out.lower():
+                                _tag("ok", f"Already exists (skipping): {_sql.split()[2]}")
+                            else:
+                                _tag("warn", f"Command failed: {_err_out}")
+                                _all_ok = False
+                        else:
+                            _tag("ok", _sql.split(";")[0])
+                    if _all_ok:
+                        _tag("ok", "Database and user created successfully.")
+                        _pw = _gen_pw
+                        _db_auto_ok = True
+                    else:
+                        _tag("warn", "Some commands failed. You can create them manually.")
             else:
                 _tag("info", "Creating PostgreSQL user and database ...")
                 _cmds = [
@@ -1211,18 +1260,12 @@ def step2_database():
                 _all_ok = True
                 for _sql in _cmds:
                     if _is_root:
-                        # Already root — use su to switch to postgres user
-                        # Password is alphanumeric so double-quoting the SQL is safe
                         _pg_cmd = ["su", "-", "postgres", "-c", f'{_psql} -c "{_sql}"']
                     else:
                         _pg_cmd = ["sudo", "-u", "postgres", _psql, "-c", _sql]
-                    r = subprocess.run(
-                        _pg_cmd,
-                        capture_output=True, text=True,
-                    )
+                    r = subprocess.run(_pg_cmd, capture_output=True, text=True)
                     if r.returncode != 0:
                         _err_out = (r.stderr or r.stdout or "").strip()
-                        # "already exists" errors are safe to ignore
                         if "already exists" in _err_out.lower():
                             _tag("ok", f"Already exists (skipping): {_sql.split()[2]}")
                         else:
@@ -1242,8 +1285,13 @@ def step2_database():
         # Fall back to showing manual instructions
         print(_C["bold"] + "       Run these commands in a terminal:" + _C["reset"])
         print()
-        _pg_login = "         su - postgres" if _is_root else "         sudo -u postgres psql"
-        print(_C["cyan"] + _pg_login + _C["reset"])
+        if sys.platform == "win32":
+            _psql_path = _find_psql() or r'"C:\Program Files\PostgreSQL\<version>\bin\psql.exe"'
+            print(_C["cyan"] + f'         {_psql_path} -U postgres' + _C["reset"])
+        elif _is_root:
+            print(_C["cyan"] + "         su - postgres" + _C["reset"])
+        else:
+            print(_C["cyan"] + "         sudo -u postgres psql" + _C["reset"])
         print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';" + _C["reset"])
         print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
         print(_C["cyan"] +  "         \\q" + _C["reset"])
