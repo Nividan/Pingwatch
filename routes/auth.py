@@ -76,8 +76,9 @@ def handle(h, method, path, body):
             role    = auth_check_role(token) or "viewer"
             profile = _get_user_profile(user)
             h._json(200, {"username": user, "role": role,
-                          "full_name": profile.get("full_name", ""),
-                          "email":     profile.get("email", "")})
+                          "full_name":   profile.get("full_name", ""),
+                          "email":       profile.get("email", ""),
+                          "session_ttl": int(_settings.get("session_ttl", 86400))})
         else:
             h._json(401, {"error": "unauthorized"})
         return True
@@ -278,7 +279,8 @@ def handle(h, method, path, body):
         role = auth_check_role(token) or "viewer"
         _sec = "; Secure" if tls_active else ""
         h._send_with_cookie(
-            200, {"ok": True, "username": username, "role": role},
+            200, {"ok": True, "username": username, "role": role,
+                  "session_ttl": int(_settings.get("session_ttl", 86400))},
             f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}{_sec}"
         )
         return True

@@ -216,6 +216,11 @@ def auth_check(token: str):
         if s["expires"] < time.time():
             auth_logout(token)
             return None
+        # Slide the expiry forward on each valid check (idle timeout semantics)
+        ttl = _settings.get("session_ttl", 86400)
+        with _SESSIONS_LOCK:
+            if token in _SESSIONS:
+                _SESSIONS[token]["expires"] = time.time() + ttl
         return s["username"]
     # Not in memory — may have survived a restart; check the DB.
     if is_pg():
