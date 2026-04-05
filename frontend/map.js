@@ -382,10 +382,8 @@ function showPwDashboardPanel() {
       </div>
     </div>
     <div class="dash-section" style="margin-top:12px">
-      <div class="dash-section-title" style="margin-bottom:6px">LIVE STATUS</div>
-      <div style="font-family:'Share Tech Mono',monospace;font-size:9px;color:rgba(0,212,255,0.4);letter-spacing:0.5px;line-height:1.8">
-        Auto-updates via SSE.<br>Click a device node<br>to see sensor details.
-      </div>
+      <div class="dash-section-title" style="margin-bottom:8px">ACTIVE INCIDENTS</div>
+      <div id="pw-incident-list">${_buildIncidentList()}</div>
     </div>
     <div style="margin-top:14px;text-align:center">
       <button class="btn btn-primary" style="font-size:9px;padding:5px 12px;letter-spacing:1px" onclick="loadPingWatchPage()">REFRESH</button>
@@ -398,6 +396,66 @@ function showPwDashboardPanel() {
     </div>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
   `;
+}
+
+function _buildIncidentList() {
+  const downDevs = pwDevices.filter(d => d.status === 'down');
+  const threshInc = [];
+  for (const key of Object.keys(_pwSensorState)) {
+    const state = _pwSensorState[key];
+    if (state === 'ok') continue;
+    const slash = key.indexOf('/');
+    const did = key.slice(0, slash);
+    const sid = key.slice(slash + 1);
+    const dev = _pwDevMap[did];
+    if (!dev) continue;
+    const sensor = (dev.sensors || []).find(s => s.sensor_id === sid);
+    if (!sensor) continue;
+    threshInc.push({ dev, sensor, state });
+  }
+  const critInc = threshInc.filter(x => x.state === 'crit');
+  const warnInc = threshInc.filter(x => x.state === 'warn');
+  if (!downDevs.length && !critInc.length && !warnInc.length) {
+    return `<div class="inc-all-clear">
+      <div class="inc-all-clear-icon">✓</div>
+      <div class="inc-all-clear-txt">ALL SYSTEMS<br>OPERATIONAL</div>
+    </div>`;
+  }
+  let html = '<div class="inc-list">';
+  for (const dev of downDevs) {
+    const failed = (dev.sensors || []).filter(s => s.alive === false).map(s => escXml(s.name)).join(' · ');
+    html += `<div class="inc-card inc-card-down">
+      <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-down"></span><span class="inc-hdr-txt">DEVICE DOWN</span></div>
+      <div class="inc-name">${escXml(dev.name)}</div>
+      <div class="inc-meta">${escXml(dev.host)}</div>
+      ${failed ? `<div class="inc-sensors">${failed}</div>` : ''}
+    </div>`;
+  }
+  for (const { dev, sensor } of critInc) {
+    const val = sensor.last_value ? escXml(String(sensor.last_value)) : '';
+    html += `<div class="inc-card inc-card-crit">
+      <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-crit"></span><span class="inc-hdr-txt">THRESHOLD CRIT</span></div>
+      <div class="inc-name">${escXml(dev.name)}</div>
+      <div class="inc-meta">${escXml(sensor.name)}</div>
+      ${val ? `<div class="inc-val">${val}</div>` : ''}
+    </div>`;
+  }
+  for (const { dev, sensor } of warnInc) {
+    const val = sensor.last_value ? escXml(String(sensor.last_value)) : '';
+    html += `<div class="inc-card inc-card-warn">
+      <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-warn"></span><span class="inc-hdr-txt">THRESHOLD WARN</span></div>
+      <div class="inc-name">${escXml(dev.name)}</div>
+      <div class="inc-meta">${escXml(sensor.name)}</div>
+      ${val ? `<div class="inc-val inc-val-warn">${val}</div>` : ''}
+    </div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function _refreshIncidentList() {
+  const el = document.getElementById('pw-incident-list');
+  if (el) el.innerHTML = _buildIncidentList();
 }
 
 function showPwNodePanel(did) {
@@ -534,6 +592,7 @@ function _pwSensorThresholdUpdate(did, sid, state) {
     const srcD = _pwDevMap[lk.src_did], tgtD = _pwDevMap[lk.tgt_did];
     _pwApplyLinkEl(lineEl, lk, srcD, tgtD);
   });
+  if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) _refreshIncidentList();
 }
 
 function stopPwSSE() {
