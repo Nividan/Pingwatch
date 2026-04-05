@@ -331,35 +331,45 @@ def step1_packages():
                         "dnf"     if _sh_pre.which("dnf")     else
                         "yum"     if _sh_pre.which("yum")     else None)
             if _mgr_pre:
-                _tag("info", f"Installing python3-pip via {_mgr_pre} ...")
-                _pkg_pip = "python3-pip"
-                r = subprocess.run(["sudo", _mgr_pre, "install", "-y", _pkg_pip],
-                                   capture_output=False)
-                _pip_ok = r.returncode == 0
-                if _pip_ok:
-                    _tag("ok", "pip installed successfully")
+                _tag("info", f"pip can be installed via {_mgr_pre}.")
+                if _ask_yn("Install python3-pip now?", default=True):
+                    _tag("info", f"Installing python3-pip via {_mgr_pre} ...")
+                    r = subprocess.run(["sudo", _mgr_pre, "install", "-y", "python3-pip"],
+                                       capture_output=False)
+                    _pip_ok = r.returncode == 0
+                    if _pip_ok:
+                        _tag("ok", "pip installed successfully")
+                    else:
+                        _tag("error", "Could not install pip automatically.")
+                        _tag("info",  f"Install manually: sudo {_mgr_pre} install python3-pip")
+                        _tag("info",  "Then re-run setup.")
+                        sys.exit(1)
                 else:
-                    _tag("error", "Could not install pip automatically.")
+                    _tag("error", "pip is required to install packages. Cannot continue without it.")
                     _tag("info",  f"Install manually: sudo {_mgr_pre} install python3-pip")
-                    _tag("info",  "Then re-run setup.")
                     sys.exit(1)
             else:
                 _tag("error", "No package manager found (apt-get/dnf/yum). Install pip manually.")
                 sys.exit(1)
         elif _sys_pre == "Windows":
-            _tag("info", "Attempting: python -m ensurepip --upgrade ...")
-            try:
-                r = subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"],
-                                   capture_output=True, text=True)
-                _pip_ok = r.returncode == 0
-            except Exception:
-                pass
-            if _pip_ok:
-                _tag("ok", "pip bootstrapped successfully")
+            _tag("info", "pip can be bootstrapped using Python's built-in ensurepip.")
+            if _ask_yn("Run 'python -m ensurepip --upgrade' to install pip?", default=True):
+                try:
+                    r = subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"],
+                                       capture_output=True, text=True)
+                    _pip_ok = r.returncode == 0
+                except Exception:
+                    pass
+                if _pip_ok:
+                    _tag("ok", "pip bootstrapped successfully")
+                else:
+                    _tag("error", "pip is not available.")
+                    _tag("info",  "Re-install Python from python.org (tick 'pip' during install),")
+                    _tag("info",  "or run: python -m ensurepip --upgrade")
+                    sys.exit(1)
             else:
-                _tag("error", "pip is not available.")
-                _tag("info",  "Re-install Python from python.org (tick 'pip' during install),")
-                _tag("info",  "or run: python -m ensurepip --upgrade")
+                _tag("error", "pip is required to install packages. Cannot continue without it.")
+                _tag("info",  "Re-install Python from python.org and ensure pip is included.")
                 sys.exit(1)
         else:
             _tag("warn", "pip not found — package installs will likely fail. Continuing.")
@@ -450,42 +460,37 @@ def step1_packages():
 
                 _sys_ok = False
                 if _sys == "Linux" and _apt_entry:
-                    # pip missing entirely or pip failed — try system package manager
-                    _no_pip = "No module named pip" in err
-                    if _no_pip:
-                        _tag("warn", "pip is not installed — trying system package manager ...")
-                    else:
-                        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
-                        if err_lines:
-                            _tag("info", f"  pip: {err_lines[-1]}")
-                        _tag("info", "pip failed — trying system package manager ...")
+                    err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                    if err_lines:
+                        _tag("info", f"  pip: {err_lines[-1]}")
+                    _tag("info", "pip failed — system package manager may have a compatible version.")
 
                     _apt_pkg = _apt_entry[0]
                     _mgr = ("apt-get" if _sh.which("apt-get") else
                             "dnf"     if _sh.which("dnf")     else
                             "yum"     if _sh.which("yum")     else None)
-                    if _mgr == "apt-get":
-                        r = subprocess.run(
-                            ["sudo", "apt-get", "install", "-y", _apt_pkg],
-                            capture_output=False,
-                        )
-                        _sys_ok = r.returncode == 0
-                    elif _mgr in ("dnf", "yum"):
-                        # dnf/yum package names differ — map if known
-                        _dnf_map = {
-                            "python3-pystray":      "python3-pystray",
-                            "python3-pil":          "python3-pillow",
-                            "python3-paramiko":     "python3-paramiko",
-                            "python3-cryptography": "python3-cryptography",
-                            "python3-ldap3":        "python3-ldap3",
-                            "python3-psutil":       "python3-psutil",
-                        }
-                        _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
-                        r = subprocess.run(
-                            ["sudo", _mgr, "install", "-y", _dnf_pkg],
-                            capture_output=False,
-                        )
-                        _sys_ok = r.returncode == 0
+                    if _mgr and _ask_yn(f"Try installing '{_apt_pkg}' via {_mgr}?", default=True):
+                        if _mgr == "apt-get":
+                            r = subprocess.run(
+                                ["sudo", "apt-get", "install", "-y", _apt_pkg],
+                                capture_output=False,
+                            )
+                            _sys_ok = r.returncode == 0
+                        elif _mgr in ("dnf", "yum"):
+                            _dnf_map = {
+                                "python3-pystray":      "python3-pystray",
+                                "python3-pil":          "python3-pillow",
+                                "python3-paramiko":     "python3-paramiko",
+                                "python3-cryptography": "python3-cryptography",
+                                "python3-ldap3":        "python3-ldap3",
+                                "python3-psutil":       "python3-psutil",
+                            }
+                            _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
+                            r = subprocess.run(
+                                ["sudo", _mgr, "install", "-y", _dnf_pkg],
+                                capture_output=False,
+                            )
+                            _sys_ok = r.returncode == 0
 
                     if _sys_ok:
                         _tag("ok", f"{pkg['name']} installed via system package manager")
@@ -518,7 +523,7 @@ def step1_packages():
     else:
         _tag("warn", "net-snmp (snmpget) is not installed.")
         _tag("info",  "This enables SNMP OID polling sensors.")
-        install_snmp = _ask_yn("Install net-snmp now?", default=False)
+        install_snmp = _ask_yn("Install net-snmp now?", default=True)
         if install_snmp:
             import platform as _plat, shutil as _sh
             _sys = _plat.system()
@@ -589,59 +594,6 @@ def step1_packages():
             _tag("info", "If missing, check your Windows installation.")
         elif _sys_ic == "Darwin":
             _tag("info", "ping should be available. Try: brew install inetutils")
-
-    print()
-    import shutil as _sh2, platform as _plat2
-    _has_psql    = _sh2.which("psql")    is not None
-    _has_pg_dump = _sh2.which("pg_dump") is not None
-    if _has_psql and _has_pg_dump:
-        _tag("ok", "PostgreSQL client tools (psql, pg_dump) — DB export/import support")
-    else:
-        _missing = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
-        _tag("warn", f"PostgreSQL client tools ({_missing}) are not installed.")
-        _tag("info",  "Required for database export and import when using PostgreSQL backend.")
-        if _ask_yn("Install PostgreSQL client tools now?", default=True):
-            _sys2 = _plat2.system()
-            _ok_pg = False
-            if _sys2 == "Windows":
-                _tag("info", "Trying Chocolatey ...")
-                r = subprocess.run(["choco", "install", "postgresql", "-y"], capture_output=True)
-                if r.returncode == 0:
-                    _tag("ok", "PostgreSQL client tools installed via Chocolatey")
-                    _ok_pg = True
-                else:
-                    _tag("info", "Trying winget ...")
-                    r2 = subprocess.run(["winget", "install", "PostgreSQL.PostgreSQL"], capture_output=True)
-                    if r2.returncode == 0:
-                        _tag("ok", "PostgreSQL client tools installed via winget")
-                        _ok_pg = True
-            elif _sys2 == "Linux":
-                if _sh2.which("apt-get"):
-                    r = subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql-client"], capture_output=True)
-                    _ok_pg = r.returncode == 0
-                elif _sh2.which("dnf"):
-                    r = subprocess.run(["sudo", "dnf", "install", "-y", "postgresql"], capture_output=True)
-                    _ok_pg = r.returncode == 0
-                elif _sh2.which("yum"):
-                    r = subprocess.run(["sudo", "yum", "install", "-y", "postgresql"], capture_output=True)
-                    _ok_pg = r.returncode == 0
-                if _ok_pg:
-                    _tag("ok", "PostgreSQL client tools installed")
-            elif _sys2 == "Darwin":
-                if _sh2.which("brew"):
-                    r = subprocess.run(["brew", "install", "libpq"], capture_output=True)
-                    _ok_pg = r.returncode == 0
-                    if _ok_pg:
-                        _tag("ok", "PostgreSQL client tools installed via Homebrew")
-                        _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
-            if not _ok_pg:
-                _tag("warn", "Automatic install failed.")
-                _tag("info",  "Windows: choco install postgresql  OR  winget install PostgreSQL.PostgreSQL")
-                _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
-                _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
-                _tag("warn",  "DB export/import will not work until psql and pg_dump are in PATH.")
-        else:
-            _tag("warn", "Skipping — DB export/import will not be available for PostgreSQL backend")
 
     print()
     if not all_ok:
@@ -1026,11 +978,13 @@ def step2_database():
                 import shutil as _sh
                 _sys_ok = False
                 if sys.platform != "win32" and _sh.which("apt-get"):
-                    r = subprocess.run(
-                        ["sudo", "apt-get", "install", "-y", "python3-psycopg2"],
-                        capture_output=False,
-                    )
-                    _sys_ok = r.returncode == 0
+                    _tag("info", "pip failed — system package python3-psycopg2 may work.")
+                    if _ask_yn("Try installing python3-psycopg2 via apt-get?", default=True):
+                        r = subprocess.run(
+                            ["sudo", "apt-get", "install", "-y", "python3-psycopg2"],
+                            capture_output=False,
+                        )
+                        _sys_ok = r.returncode == 0
                 if _sys_ok:
                     _tag("ok", "psycopg2 installed via system package manager")
                 else:
@@ -1119,6 +1073,42 @@ def step2_database():
     print()
     _gen_pw = _generate_pg_password()
 
+    # ── Check / start PostgreSQL service before attempting auto-create ─────────
+    import shutil as _sh
+    if sys.platform != "win32" and _pg_installed:
+        _svc_running = False
+        try:
+            r = subprocess.run(["sudo", "systemctl", "is-active", "postgresql"],
+                               capture_output=True, text=True)
+            _svc_running = r.stdout.strip() == "active"
+        except Exception:
+            pass
+        if not _svc_running:
+            # Try pg_isready as a lighter check (works without systemd)
+            _pgready = _sh.which("pg_isready")
+            if _pgready:
+                try:
+                    r = subprocess.run([_pgready], capture_output=True, text=True)
+                    _svc_running = r.returncode == 0
+                except Exception:
+                    pass
+        if not _svc_running:
+            _tag("warn", "PostgreSQL service does not appear to be running.")
+            if _ask_yn("Try to start the PostgreSQL service now?", default=True):
+                _tag("info", "Starting PostgreSQL ...")
+                r = subprocess.run(["sudo", "systemctl", "start", "postgresql"],
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    _tag("ok", "PostgreSQL service started.")
+                else:
+                    _err_svc = (r.stderr or r.stdout or "").strip()
+                    if _err_svc:
+                        _tag("warn", f"Start failed: {_err_svc}")
+                    else:
+                        _tag("warn", "Could not start PostgreSQL service.")
+                    _tag("info", "Try manually: sudo systemctl start postgresql")
+                    _tag("info", "Then check:   sudo systemctl status postgresql")
+
     # Offer to create the DB/user automatically via sudo -u postgres psql
     _db_auto_ok = False
     _pw = _gen_pw
@@ -1130,7 +1120,6 @@ def step2_database():
         print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
         print()
         if _ask_yn("Create database and user automatically?", default=True):
-            import shutil as _sh
             _psql = _sh.which("psql")
             if not _psql:
                 _tag("warn", "psql not found in PATH — cannot run automatically.")
@@ -1210,6 +1199,8 @@ def step2_database():
         print("           [1] Edit connection details and try again")
         print("           [2] Continue anyway (skip validation)")
         print("           [3] Switch to SQLite instead")
+        if sys.platform != "win32":
+            print("           [4] Start PostgreSQL service and retry")
         print()
         _opt = _ask("Choose", "1")
         if _opt == "2":
@@ -1223,6 +1214,17 @@ def step2_database():
             load_config()
             _state["db_backend"] = "sqlite"
             return
+        if _opt == "4" and sys.platform != "win32":
+            _tag("info", "Starting PostgreSQL service ...")
+            r = subprocess.run(["sudo", "systemctl", "start", "postgresql"],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                _tag("ok", "Service started — retrying connection ...")
+            else:
+                _err_svc = (r.stderr or r.stdout or "").strip()
+                _tag("warn", f"Could not start service: {_err_svc}" if _err_svc else "Could not start service.")
+                _tag("info", "Check: sudo systemctl status postgresql")
+            continue
         # re-ask details
         _host     = _ask("PostgreSQL host", _host)
         _port_raw = _ask("PostgreSQL port", str(_port))
@@ -1269,7 +1271,62 @@ def step2_database():
             _tag("error", f"PostgreSQL init failed: {_e}")
             _tag("info", "You can retry later or use Settings → Database to migrate.")
 
-    # 2f. Migration offer (existing SQLite data) ────────────────────────────────
+    # 2f. PostgreSQL client tools (psql / pg_dump) ─────────────────────────────
+    import shutil as _sh2, platform as _plat2
+    _has_psql    = _sh2.which("psql")    is not None
+    _has_pg_dump = _sh2.which("pg_dump") is not None
+    _separator("·")
+    if _has_psql and _has_pg_dump:
+        _tag("ok", "PostgreSQL client tools (psql, pg_dump) — DB export/import support")
+    else:
+        _missing = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
+        _tag("warn", f"PostgreSQL client tools ({_missing}) are not installed.")
+        _tag("info",  "Required for database export and import.")
+        if _ask_yn("Install PostgreSQL client tools now?", default=True):
+            _sys2 = _plat2.system()
+            _ok_pg = False
+            if _sys2 == "Windows":
+                _tag("info", "Trying Chocolatey ...")
+                r = subprocess.run(["choco", "install", "postgresql", "-y"], capture_output=True)
+                if r.returncode == 0:
+                    _tag("ok", "PostgreSQL client tools installed via Chocolatey")
+                    _ok_pg = True
+                else:
+                    _tag("info", "Trying winget ...")
+                    r2 = subprocess.run(["winget", "install", "PostgreSQL.PostgreSQL"], capture_output=True)
+                    if r2.returncode == 0:
+                        _tag("ok", "PostgreSQL client tools installed via winget")
+                        _ok_pg = True
+            elif _sys2 == "Linux":
+                if _sh2.which("apt-get"):
+                    r = subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql-client"], capture_output=False)
+                    _ok_pg = r.returncode == 0
+                elif _sh2.which("dnf"):
+                    r = subprocess.run(["sudo", "dnf", "install", "-y", "postgresql"], capture_output=False)
+                    _ok_pg = r.returncode == 0
+                elif _sh2.which("yum"):
+                    r = subprocess.run(["sudo", "yum", "install", "-y", "postgresql"], capture_output=False)
+                    _ok_pg = r.returncode == 0
+                if _ok_pg:
+                    _tag("ok", "PostgreSQL client tools installed")
+            elif _sys2 == "Darwin":
+                if _sh2.which("brew"):
+                    r = subprocess.run(["brew", "install", "libpq"], capture_output=True)
+                    _ok_pg = r.returncode == 0
+                    if _ok_pg:
+                        _tag("ok", "PostgreSQL client tools installed via Homebrew")
+                        _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
+            if not _ok_pg:
+                _tag("warn", "Automatic install failed.")
+                _tag("info",  "Windows: choco install postgresql  OR  winget install PostgreSQL.PostgreSQL")
+                _tag("info",  "Linux:   sudo apt install postgresql-client  OR  sudo dnf install postgresql")
+                _tag("info",  "macOS:   brew install libpq && brew link --force libpq")
+                _tag("warn",  "DB export/import will not work until psql and pg_dump are in PATH.")
+        else:
+            _tag("warn", "Skipping — DB export/import will not be available")
+    print()
+
+    # 2g. Migration offer (existing SQLite data) ────────────────────────────────
     if os.path.isfile(DB_PATH) and _conn_ok:
         _sz = os.path.getsize(DB_PATH)
         _sz_str = f"{_sz / 1048576:.1f} MB" if _sz >= 1048576 else f"{_sz // 1024} KB"
