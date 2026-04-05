@@ -631,11 +631,20 @@ def main():
         except Exception as _tls_err:
             log.error(f"TLS startup failed — falling back to HTTP: {_tls_err}", exc_info=True)
 
-    # ── Optional HTTP → HTTPS redirect server ───────────────────────
-    if app_state.tls_active and int(_settings.get("http_redirect", 0)):
+    # ── Optional HTTP server (redirect or independent) ──────────────
+    if app_state.tls_active and int(_settings.get("http_enabled", 1)):
         _http_port = int(_settings.get("http_port", PORT))
         _https_port = app_state.effective_port
-        _start_http_redirect(_http_port, _https_port)
+        if int(_settings.get("http_redirect", 0)):
+            _start_http_redirect(_http_port, _https_port)
+        else:
+            # Both HTTP and HTTPS: serve dashboard independently on HTTP port
+            try:
+                _http_srv = QuietServer((BIND, _http_port), Handler)
+                threading.Thread(target=_http_srv.serve_forever, daemon=True).start()
+                log.info(f"HTTP server ready on port {_http_port}")
+            except Exception as _he:
+                log.warning(f"HTTP server could not bind to port {_http_port}: {_he}")
 
     # ── Load state & start background threads ──────────────────────
     _t0 = time.time()
