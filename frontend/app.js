@@ -910,6 +910,7 @@ async function _refreshEvents(){
     const [fd,td]=await Promise.all([
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
+      typeof _refreshAlertCache==='function' ? _refreshAlertCache() : Promise.resolve(),
     ]);
     (fd.flaps||[]).forEach(f=>{
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
