@@ -719,8 +719,8 @@ function _buildIIP(d, alertEvt) {
       ${_iipDebug(d)}
     </div>
     <div class="iip-actions">
-      <button class="iip-act-btn" onclick="_iipOpenDevice(${JSON.stringify(d.did||'')})">🖥 Open Device</button>
-      ${!isTrap ? `<button class="iip-act-btn" onclick="_iipOpenHistory(${JSON.stringify(d.did||'')},${JSON.stringify(d.sid||'')})">📊 Sensor History</button>` : ''}
+      <button class="iip-act-btn" onclick="_iipOpenDevice('${esc(d.did||'')}')">🖥 Open Device</button>
+      ${!isTrap ? `<button class="iip-act-btn" onclick="_iipOpenHistory('${esc(d.did||'')}','${esc(d.sid||'')}')">📊 Sensor History</button>` : ''}
     </div>`;
 }
 
