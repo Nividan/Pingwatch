@@ -163,18 +163,22 @@ def migrate_sqlite_to_pg(main_db_path, logs_db_path, pg_config, progress_cb=None
         logs_con.close()
 
         # Reset sequences
+        from psycopg2 import sql as _sql
         for schema, tables in _SERIAL_TABLES.items():
-            cur.execute(f"SET search_path TO {schema}, public")
+            cur.execute(_sql.SQL("SET search_path TO {}, public").format(_sql.Identifier(schema)))
             for table, col in tables:
                 try:
-                    cur.execute(
-                        f"SELECT setval(pg_get_serial_sequence('{table}', '{col}'), "
-                        f"COALESCE((SELECT MAX({col}) FROM {table}), 0) + 1, false)"
-                    )
+                    cur.execute(_sql.SQL(
+                        "SELECT setval(pg_get_serial_sequence({tbl}, {col_name}), "
+                        "COALESCE((SELECT MAX({col_id}) FROM {tbl_id}), 0) + 1, false)"
+                    ).format(
+                        tbl=_sql.Literal(table), col_name=_sql.Literal(col),
+                        col_id=_sql.Identifier(col), tbl_id=_sql.Identifier(table),
+                    ))
                 except Exception as e:
                     log.warning(f"Migration: sequence reset for {schema}.{table}.{col}: {e}")
                     pg_con.rollback()
-                    cur.execute(f"SET search_path TO {schema}, public")
+                    cur.execute(_sql.SQL("SET search_path TO {}, public").format(_sql.Identifier(schema)))
             pg_con.commit()
 
         # Validate row counts
@@ -183,13 +187,13 @@ def migrate_sqlite_to_pg(main_db_path, logs_db_path, pg_config, progress_cb=None
         mismatches = []
         for table in _MAIN_TABLES:
             sq_count = _safe_count(main_con, table)
-            cur.execute(f"SET search_path TO main, public")
+            cur.execute(_sql.SQL("SET search_path TO {}, public").format(_sql.Identifier("main")))
             pg_count = _safe_count_pg(cur, table)
             if sq_count > 0 and pg_count < sq_count:
                 mismatches.append(f"main.{table}: SQLite={sq_count}, PG={pg_count}")
         for table in _LOGS_TABLES:
             sq_count = _safe_count(logs_con, table)
-            cur.execute(f"SET search_path TO logs, public")
+            cur.execute(_sql.SQL("SET search_path TO {}, public").format(_sql.Identifier("logs")))
             pg_count = _safe_count_pg(cur, table)
             if sq_count > 0 and pg_count < sq_count:
                 mismatches.append(f"logs.{table}: SQLite={sq_count}, PG={pg_count}")
@@ -231,7 +235,8 @@ def _migrate_table(sq_con, pg_cur, schema, table, progress_cb):
     if total == 0:
         return
 
-    pg_cur.execute(f"SET search_path TO {schema}, public")
+    from psycopg2 import sql as _sql
+    pg_cur.execute(_sql.SQL("SET search_path TO {}, public").format(_sql.Identifier(schema)))
 
     # Find which columns are numeric in PG so we can coerce "" → None.
     # SQLite's loose typing allows storing "" in INTEGER columns; PG rejects it.

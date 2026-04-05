@@ -1,4 +1,5 @@
 """smtp_alert.py — stdlib SMTP email alerting for PingWatch."""
+import datetime
 import smtplib
 import time
 from email.mime.text import MIMEText
@@ -40,6 +41,18 @@ def _status_style(event_type: str, severity: str):
     if sv == 'warning':
         return '#d68910', '\U0001f7e0', 'WARNING'      # orange
     return '#2c6fad',   '\U0001f535', 'INFO'           # blue
+
+
+def _fmt_ts(ts_str: str) -> str:
+    """Convert ISO timestamp (e.g. '2026-04-05T16:42:31Z') to 'DD-MM-YYYY HH:MM:SS'."""
+    if not ts_str:
+        return ''
+    try:
+        s = str(ts_str).replace('Z', '+00:00')
+        dt = datetime.datetime.fromisoformat(s)
+        return dt.strftime('%d-%m-%Y %H:%M:%S')
+    except Exception:
+        return str(ts_str)
 
 
 def _build_alert_html(rows: list, event_type: str, severity: str,
@@ -132,7 +145,7 @@ def send_alert_email(direction, evt):
         ('Sensor',   f"{sname} ({_safe(evt.get('stype'))})"),
         ('Host',     _safe(evt.get('host'))),
         ('Severity', sev),
-        ('Time',     _safe(evt.get('ts'))),
+        ('Time',     _fmt_ts(evt.get('ts'))),
         ('Detail',   _safe(evt.get('detail'))),
     ]
     body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
@@ -206,7 +219,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
             ('Sensor',   f"{sname} ({_safe(ctx.get('stype', ''))})"),
             ('Host',     _safe(ctx.get('host',   ''))),
             ('Severity', severity),
-            ('Time',     _safe(ctx.get('ts',     ''))),
+            ('Time',     _fmt_ts(ctx.get('ts', ''))),
             ('Detail',   _safe(ctx.get('detail', ''))),
         ]
         body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)

@@ -434,8 +434,13 @@ def _dispatch_email(cfg: dict, ctx: dict):
 
 
 def _is_safe_url(url: str) -> bool:
-    """Return True if url is safe to request (not localhost/link-local/private)."""
+    """Return True if url is safe to request (not localhost/link-local/private).
+
+    Resolves hostnames to IP addresses before checking — prevents DNS-based
+    SSRF where an external hostname points to an internal IP.
+    """
     import ipaddress
+    import socket
     from urllib.parse import urlparse
     try:
         p = urlparse(url)
@@ -444,15 +449,15 @@ def _is_safe_url(url: str) -> bool:
         host = (p.hostname or "").lower()
         if not host:
             return False
-        if host in ("localhost",) or host.startswith("127.") or host == "::1":
-            return False
-        if host.endswith(".local"):
-            return False
+        # Resolve hostname to IP, then check the resolved address
         try:
-            ip = ipaddress.ip_address(host)
-            return ip.is_global
-        except ValueError:
-            return True  # hostname — allow (DNS resolves at request time)
+            addr = socket.gethostbyname(host)
+            ip = ipaddress.ip_address(addr)
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                return False
+            return True
+        except (socket.gaierror, ValueError):
+            return False  # DNS resolution failed — fail closed
     except Exception:
         return False
 

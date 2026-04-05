@@ -49,15 +49,14 @@ def db_lookup_trap(trap_oid: str) -> dict | None:
             log.error(f"db_lookup_trap error: {e}")
             return None
     # SQLite
+    con = sqlite3.connect(DB_PATH)
     try:
-        con = sqlite3.connect(DB_PATH)
         row = con.execute(
             "SELECT trap_name,vendor,product_family,severity,category,"
             "probable_cause,description,recommended_action,varbind_hints,mib_name "
             "FROM trap_definitions WHERE trap_oid=?",
             (trap_oid,)
         ).fetchone()
-        con.close()
         if not row:
             return None
         return {
@@ -75,6 +74,8 @@ def db_lookup_trap(trap_oid: str) -> dict | None:
     except Exception as e:
         log.error(f"db_lookup_trap error: {e}")
         return None
+    finally:
+        con.close()
 
 
 def db_seed_definitions(rows: list):
@@ -104,8 +105,8 @@ def db_seed_definitions(rows: list):
             log.error(f"db_seed_definitions error: {e}")
         return
     # SQLite
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
         con.executemany(
             "INSERT OR IGNORE INTO trap_definitions "
             "(trap_oid,trap_name,vendor,product_family,severity,category,"
@@ -115,9 +116,10 @@ def db_seed_definitions(rows: list):
             prepped
         )
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"db_seed_definitions error: {e}")
+    finally:
+        con.close()
 
 
 def _prep_def(r: dict) -> dict:
@@ -151,16 +153,17 @@ def db_get_trap_vendors() -> list:
             log.error(f"db_get_trap_vendors error: {e}")
             return []
     # SQLite
+    con = sqlite3.connect(DB_PATH)
     try:
-        con = sqlite3.connect(DB_PATH)
         rows = con.execute(
             "SELECT DISTINCT vendor FROM trap_definitions WHERE vendor!='' ORDER BY vendor"
         ).fetchall()
-        con.close()
         return [r[0] for r in rows]
     except Exception as e:
         log.error(f"db_get_trap_vendors error: {e}")
         return []
+    finally:
+        con.close()
 
 
 # ── Enterprise OID map ────────────────────────────────────────────────────────
@@ -189,8 +192,8 @@ def db_lookup_enterprise(enterprise_oid: str) -> dict | None:
             log.error(f"db_lookup_enterprise error: {e}")
             return None
     # SQLite
+    con = sqlite3.connect(DB_PATH)
     try:
-        con = sqlite3.connect(DB_PATH)
         parts = enterprise_oid.split(".")
         for length in range(len(parts), 5, -1):
             prefix = ".".join(parts[:length])
@@ -199,13 +202,13 @@ def db_lookup_enterprise(enterprise_oid: str) -> dict | None:
                 (prefix,)
             ).fetchone()
             if row:
-                con.close()
                 return {"vendor": row[0], "product_family": row[1]}
-        con.close()
         return None
     except Exception as e:
         log.error(f"db_lookup_enterprise error: {e}")
         return None
+    finally:
+        con.close()
 
 
 def db_seed_enterprise_map(rows: list):
@@ -231,8 +234,8 @@ def db_seed_enterprise_map(rows: list):
             log.error(f"db_seed_enterprise_map error: {e}")
         return
     # SQLite
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
         con.executemany(
             "INSERT OR IGNORE INTO enterprise_oid_map "
             "(enterprise_oid,vendor,product_family,notes) "
@@ -240,9 +243,10 @@ def db_seed_enterprise_map(rows: list):
             prepped
         )
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"db_seed_enterprise_map error: {e}")
+    finally:
+        con.close()
 
 
 def _prep_ent(r: dict) -> dict:
@@ -267,16 +271,17 @@ def db_get_trap_categories() -> list:
             log.error(f"db_get_trap_categories error: {e}")
             return []
     # SQLite
+    con = sqlite3.connect(DB_PATH)
     try:
-        con = sqlite3.connect(DB_PATH)
         rows = con.execute(
             "SELECT name,label,color FROM trap_categories ORDER BY name"
         ).fetchall()
-        con.close()
         return [{"name": r[0], "label": r[1], "color": r[2]} for r in rows]
     except Exception as e:
         log.error(f"db_get_trap_categories error: {e}")
         return []
+    finally:
+        con.close()
 
 
 def db_seed_categories(rows: list):
@@ -298,14 +303,15 @@ def db_seed_categories(rows: list):
             log.error(f"db_seed_categories error: {e}")
         return
     # SQLite
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
-        con = sqlite3.connect(DB_PATH, timeout=15)
         con.executemany(
             "INSERT OR IGNORE INTO trap_categories (name,label,color) "
             "VALUES (:name,:label,:color)",
             rows
         )
         con.commit()
-        con.close()
     except Exception as e:
         log.error(f"db_seed_categories error: {e}")
+    finally:
+        con.close()

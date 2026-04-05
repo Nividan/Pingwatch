@@ -64,25 +64,34 @@ _JS_FILES = [
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
 
+_HTML_CACHE     = None   # cached assembled index.html bytes
+_MAP_HTML_CACHE = None   # cached map.html bytes
+
 
 def _load_map_html() -> bytes:
-    with open(_MAP_HTML_PATH, 'rb') as f:
-        return f.read()
+    global _MAP_HTML_CACHE
+    if _MAP_HTML_CACHE is None:
+        with open(_MAP_HTML_PATH, 'rb') as f:
+            _MAP_HTML_CACHE = f.read()
+    return _MAP_HTML_CACHE
 
 
 def _load_html() -> bytes:
-    base  = os.path.join(FRONTEND_DIR, "index.html")
-    css_f = os.path.join(FRONTEND_DIR, "style.css")
-    with open(base, "r", encoding="utf-8") as f:
-        html = f.read()
-    with open(css_f, "r", encoding="utf-8") as f:
-        html = html.replace("<!-- STYLE_INJECT -->", f"<style>{f.read()}</style>", 1)
-    js_parts = []
-    for name in _JS_FILES:
-        with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
-            js_parts.append(f.read())
-    html = html.replace("<!-- SCRIPT_INJECT -->", f"<script>{''.join(js_parts)}</script>", 1)
-    return html.encode("utf-8")
+    global _HTML_CACHE
+    if _HTML_CACHE is None:
+        base  = os.path.join(FRONTEND_DIR, "index.html")
+        css_f = os.path.join(FRONTEND_DIR, "style.css")
+        with open(base, "r", encoding="utf-8") as f:
+            html = f.read()
+        with open(css_f, "r", encoding="utf-8") as f:
+            html = html.replace("<!-- STYLE_INJECT -->", f"<style>{f.read()}</style>", 1)
+        js_parts = []
+        for name in _JS_FILES:
+            with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
+                js_parts.append(f.read())
+        html = html.replace("<!-- SCRIPT_INJECT -->", f"<script>{''.join(js_parts)}</script>", 1)
+        _HTML_CACHE = html.encode("utf-8")
+    return _HTML_CACHE
 
 
 # ── Custom server: silences browser-disconnect noise ─────────────
@@ -145,7 +154,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     import re as _re
-    _HOST_RE = _re.compile(r'^[a-zA-Z0-9._\-]+(:\d+)?$')
+    _HOST_RE = _re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(:\d+)?$')
 
     @staticmethod
     def _valid_host(h): return bool(h and Handler._HOST_RE.match(h))

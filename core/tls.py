@@ -125,7 +125,7 @@ def generate_self_signed_cert(
         .not_valid_before(now)
         .not_valid_after(now + datetime.timedelta(days=days))
         .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .sign(key, hashes.SHA256(), **_backend_kwargs)
     )
 
