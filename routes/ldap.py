@@ -83,29 +83,10 @@ def handle(h, method, path, body):
                 h._json(500, {'error': 'Failed to encrypt bind password'}); return True
 
         if save:
-            # Log what changed at a meaningful level
-            if 'ldap_enabled' in save:
-                state = 'enabled' if save['ldap_enabled'] == '1' else 'disabled'
-                log.info(f"LDAP authentication {state} by {user!r}")
-            if 'ldap_server' in save:
-                log.info(f"LDAP server changed to {save['ldap_server']!r} by {user!r}")
-            if 'ldap_port' in save or 'ldap_ssl' in save:
-                ssl_labels = {'0': 'none', '1': 'LDAPS', '2': 'StartTLS'}
-                ssl_val = save.get('ldap_ssl', str(_settings.get('ldap_ssl', 0)))
-                log.info(f"LDAP connection parameters updated by {user!r}: "
-                         f"port={save.get('ldap_port', _settings.get('ldap_port', 389))} "
-                         f"ssl={ssl_labels.get(ssl_val, ssl_val)}")
-            if 'ldap_bind_dn' in save:
-                log.info(f"LDAP bind DN changed to {save['ldap_bind_dn']!r} by {user!r}")
-            if 'ldap_bind_pass' in save:
-                log.info(f"LDAP bind password updated by {user!r}")
-            if 'ldap_base_dn' in save:
-                log.info(f"LDAP base DN changed to {save['ldap_base_dn']!r} by {user!r}")
-            if 'ldap_user_filter' in save:
-                log.info(f"LDAP user filter changed to {save['ldap_user_filter']!r} by {user!r}")
             _settings.load(save)
             _db_enqueue(lambda s=save: db_save_settings(s))
-            db_log_audit(user, h.client_address[0], 'ldap_settings_update', '')
+            db_log_audit(user, h.client_address[0], 'ldap_settings_update', '',
+                         ','.join(save.keys()))
         else:
             log.debug(f"LDAP settings PATCH by {user!r}: no recognised fields — no-op")
 

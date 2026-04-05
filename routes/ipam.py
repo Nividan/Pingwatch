@@ -116,7 +116,6 @@ def handle(h, method, path, body):
         _sid, _cidr = new_id, canonical
         _db_enqueue(lambda: ipam_sync_subnet_add(_sid, _cidr))
         db_log_audit(user, h.client_address[0], 'ipam_subnet_add', canonical)
-        log.info(f"IPAM: subnet {canonical!r} added by {user!r}")
         h._json(201, {'ok': True, 'id': new_id, 'cidr': canonical})
         return True
 
@@ -132,7 +131,6 @@ def handle(h, method, path, body):
             h._json(404, {'error': 'Subnet not found'}); return True
         db_delete_subnet(subnet_id)
         db_log_audit(user, h.client_address[0], 'ipam_subnet_delete', sub['cidr'])
-        log.info(f"IPAM: subnet {sub['cidr']!r} deleted by {user!r}")
         h._json(200, {'ok': True})
         return True
 
