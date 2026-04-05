@@ -354,7 +354,8 @@ def _send_webhook(url: str, payload: dict):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=5)
+        with urllib.request.urlopen(req, timeout=5) as _resp:
+            _resp.read(1024)  # consume response to release socket
     except Exception as e:
         log.warning(f"Webhook failed ({url}): {e}")
 
@@ -434,6 +435,8 @@ class MonitorState:
             s.running = False
             s._stopped.clear()
         s._stopped.wait(timeout=3.0)   # wait for _run_once to exit (≤0.5s normally)
+        if not s._stopped.is_set():
+            log_sensors.warning(f"Sensor {did}/{sid} did not stop within 3s — forcing config update")
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return False

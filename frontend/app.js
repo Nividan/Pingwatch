@@ -3,6 +3,7 @@ const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devS
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
+let _reconnectDelay  = 3000; // exponential backoff: 3s → 6s → 12s → … → 60s cap
 
 // ── SSE batching: coalesce events into 250ms windows to reduce DOM mutations ──
 const _sseBatch={sensors:{},devStatuses:{},timer:null,INTERVAL:250};
@@ -68,6 +69,7 @@ function connectSSE(){
   sse=new EventSource('/events');
   sse.onopen=()=>{
     document.getElementById('cbn').style.display='none';
+    _reconnectDelay=3000;  // reset backoff on successful connect
     if(_sseFirstConnect){ _sseFirstConnect=false; return; }
     // Reconnect after drop — re-sync state and refresh widgets
     _sseResync();
@@ -139,8 +141,10 @@ function connectSSE(){
     document.getElementById('cbn').style.display='block';
     // Guard: onerror can fire multiple times (browser retries) before the timer fires.
     // Only schedule one reconnect attempt at a time to avoid a reconnect storm.
-    if(!_reconnectTimer)
-      _reconnectTimer=setTimeout(()=>{ _reconnectTimer=null; connectSSE(); },3000);
+    if(!_reconnectTimer){
+      _reconnectTimer=setTimeout(()=>{ _reconnectTimer=null; connectSSE(); },_reconnectDelay);
+      _reconnectDelay=Math.min(_reconnectDelay*2,60000);
+    }
   };
 }
 // ── Re-sync after SSE reconnect ──────────────────────────────────

@@ -110,16 +110,44 @@ def _load_actions(con, rule_id: int) -> list:
 # ── Public read functions ─────────────────────────────────────────
 
 def db_list_rules() -> list:
-    """Return all alert rules with their conditions and actions."""
+    """Return all alert rules with their conditions and actions (batch-loaded)."""
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("main") as cur:
                 cur.execute("SELECT * FROM alert_rules ORDER BY sort_order, id")
                 rules = [_rule_row_to_dict(r) for r in cur.fetchall()]
+                if not rules:
+                    return rules
+                rule_ids = [r["id"] for r in rules]
+                # Batch-load all conditions in one query
+                cur.execute(
+                    "SELECT * FROM alert_rule_conditions WHERE rule_id = ANY(%s) ORDER BY rule_id, sort_order, id",
+                    (rule_ids,)
+                )
+                conds_by_rule = {}
+                for r in cur.fetchall():
+                    conds_by_rule.setdefault(r["rule_id"], []).append(
+                        {"id": r["id"], "field": r["field"], "op": r["op"],
+                         "value": r["value"], "sort_order": r["sort_order"]})
+                # Batch-load all actions in one query
+                cur.execute(
+                    "SELECT * FROM alert_rule_actions WHERE rule_id = ANY(%s) ORDER BY rule_id, sort_order, id",
+                    (rule_ids,)
+                )
+                acts_by_rule = {}
+                for r in cur.fetchall():
+                    cfg = {}
+                    try:
+                        cfg = json.loads(r["config"])
+                    except Exception:
+                        pass
+                    acts_by_rule.setdefault(r["rule_id"], []).append(
+                        {"id": r["id"], "atype": r["atype"],
+                         "config": cfg, "sort_order": r["sort_order"]})
                 for rule in rules:
-                    rule["conditions"] = _load_conditions_pg(cur, rule["id"])
-                    rule["actions"]    = _load_actions_pg(cur, rule["id"])
+                    rule["conditions"] = conds_by_rule.get(rule["id"], [])
+                    rule["actions"]    = acts_by_rule.get(rule["id"], [])
             return rules
         except Exception as e:
             log.error(f"db_list_rules error: {e}")
@@ -130,9 +158,36 @@ def db_list_rules() -> list:
         rules = [_rule_row_to_dict(r) for r in con.execute(
             "SELECT * FROM alert_rules ORDER BY sort_order, id"
         ).fetchall()]
+        if not rules:
+            return rules
+        rule_ids = [r["id"] for r in rules]
+        placeholders = ",".join("?" * len(rule_ids))
+        # Batch-load all conditions in one query
+        conds_by_rule = {}
+        for r in con.execute(
+            f"SELECT * FROM alert_rule_conditions WHERE rule_id IN ({placeholders}) ORDER BY rule_id, sort_order, id",
+            rule_ids
+        ).fetchall():
+            conds_by_rule.setdefault(r["rule_id"], []).append(
+                {"id": r["id"], "field": r["field"], "op": r["op"],
+                 "value": r["value"], "sort_order": r["sort_order"]})
+        # Batch-load all actions in one query
+        acts_by_rule = {}
+        for r in con.execute(
+            f"SELECT * FROM alert_rule_actions WHERE rule_id IN ({placeholders}) ORDER BY rule_id, sort_order, id",
+            rule_ids
+        ).fetchall():
+            cfg = {}
+            try:
+                cfg = json.loads(r["config"])
+            except Exception:
+                pass
+            acts_by_rule.setdefault(r["rule_id"], []).append(
+                {"id": r["id"], "atype": r["atype"],
+                 "config": cfg, "sort_order": r["sort_order"]})
         for rule in rules:
-            rule["conditions"] = _load_conditions(con, rule["id"])
-            rule["actions"]    = _load_actions(con, rule["id"])
+            rule["conditions"] = conds_by_rule.get(rule["id"], [])
+            rule["actions"]    = acts_by_rule.get(rule["id"], [])
         return rules
     except Exception as e:
         log.error(f"db_list_rules error: {e}")

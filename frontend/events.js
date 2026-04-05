@@ -932,11 +932,13 @@ async function _iipAlertResolve(id) {
 
 function _iipOpenDevice(did) {
   _closeEvtDetail();
-  document.getElementById('tabDevices')?.click();
+  switchMainTab('devices');
+  if (did && typeof openDevWin === 'function') openDevWin(did);
 }
 function _iipOpenHistory(did, sid) {
   _closeEvtDetail();
-  document.getElementById('tabSensors')?.click();
+  switchMainTab('devices');
+  if (did && sid && typeof openDetail === 'function') openDetail(did, sid, 'history');
 }
 
 // ── Export ────────────────────────────────────────────────────────
