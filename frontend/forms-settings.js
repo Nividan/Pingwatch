@@ -1255,8 +1255,9 @@ async function _loadLogTab() {
     const d = await r.json();
     const searchTerm = parsed.search || '';
 
-    if (_logLiveMode && _logLastTs && d.lines) {
-      el.innerHTML += _colorLog(d.lines, searchTerm);
+    if (_logLiveMode && _logLastTs) {
+      if (d.lines) el.innerHTML += _colorLog(d.lines, searchTerm);
+      // no new lines → keep existing content
     } else {
       el.innerHTML = _colorLog(d.lines || '(empty)', searchTerm);
       _logData = (d.lines || '').split('\n').filter(l => l);
@@ -1289,7 +1290,7 @@ function _toggleLogLive() {
   const btn = document.getElementById('logLiveBtn');
   if (btn) {
     btn.classList.toggle('log-live-on', _logLiveMode);
-    btn.textContent = _logLiveMode ? '\u25cf Live' : '\u25cb Live';
+    btn.textContent = _logLiveMode ? '\uD83D\uDFE2 Live' : '\u25cb Live';
   }
   if (_logLiveMode) {
     _logLastTs = '';
@@ -1307,7 +1308,7 @@ function _stopLogLive() {
   _logLiveMode = false;
   if (_logLiveTimer) { clearInterval(_logLiveTimer); _logLiveTimer = null; }
   const btn = document.getElementById('logLiveBtn');
-  if (btn) { btn.classList.remove('log-live-on'); btn.textContent = '\u25cb Live'; }
+  if (btn) { btn.classList.remove('log-live-on'); btn.textContent = '\u25cb Live';}
 }
 
 function _exportLogCsv() {
