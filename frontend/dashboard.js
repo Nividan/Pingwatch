@@ -248,6 +248,10 @@ function _dwRenderAll() {
     const reg = _DW_REG[w.type];
     if (reg) reg.render(w.id, w.cfg);
   });
+  // Show shimmer loading overlay until first real data arrives
+  if (!Object.keys(S.sensors).length && !Object.keys(S.devices).length) {
+    grid.querySelectorAll('.dw-body').forEach(el => el.classList.add('dw-loading'));
+  }
   _dwStartTick();
 }
 
@@ -681,8 +685,22 @@ function _dwRefreshDeviceStatus(wid) {
     <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`;
 }
 
+// ── Loading shimmer clear (called when first real data arrives) ───
+let _dwDataArrived = false;
+function _dwClearLoading() {
+  if (_dwDataArrived) return;
+  _dwDataArrived = true;
+  document.querySelectorAll('.dw-body.dw-loading').forEach(el => el.classList.remove('dw-loading'));
+  // Refresh all widgets with real data
+  _dwLoad().forEach(w => {
+    const reg = _DW_REG[w.type];
+    if (reg) reg.refresh(w.id, w.cfg);
+  });
+}
+
 // ── SSE hooks (called from app.js event handlers) ─────────────────
 function _dwOnSensorUpdate(did, sid) {
+  if (!_dwDataArrived) _dwClearLoading();
   if (activeMainTab !== 'dashboard') return;
   let topLatencyDirty = false;
   _dwLoad().forEach(w => {
@@ -699,6 +717,7 @@ function _dwOnSensorUpdate(did, sid) {
     _dwLoad().filter(w => w.type === 'top_latency').forEach(w => _dwRefreshTopLatency(w.id, w.cfg));
 }
 function _dwOnDeviceUpdate() {
+  if (!_dwDataArrived) _dwClearLoading();
   if (activeMainTab !== 'dashboard') return;
   _dwLoad().forEach(w => {
     if (w.type === 'device_status')   _dwRefreshDeviceStatus(w.id);
