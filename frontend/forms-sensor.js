@@ -282,7 +282,7 @@ function sensorFormHTML(dev, s=null) {
       <div class="fr" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
           <input type="checkbox" id="as-am" ${s?.alerts_muted?'checked':''}>
-          <span class="fl" style="margin:0">Mute alerts for this sensor</span>
+          <span class="fl" style="margin:0">🔕 Mute alerts for this sensor</span>
         </label>
         <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Probing continues — no DOWN / recovery / threshold events are fired.</div>
       </div>

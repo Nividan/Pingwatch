@@ -924,8 +924,10 @@ body{
 .mbdy.stab-fade{transition:opacity .2s ease}
 .mbdy.stab-out{opacity:0}
 /* Sensor modal — Add (sidebar) / Edit (no sidebar) */
-.mbox-sensor{width:800px;max-width:96vw;height:82vh;max-height:82vh;display:flex;flex-direction:column}
-.mbox-sensor-edit{width:640px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column}
+.mbox-sensor{width:920px;max-width:96vw;height:82vh;max-height:82vh;display:flex;flex-direction:column;overflow:hidden}
+.mbox-sensor-edit{width:640px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;overflow:hidden}
+/* .mbdy must be a flex container so .stab-layout / content div can use flex:1 */
+.mbox-sensor .mbdy,.mbox-sensor-edit .mbdy{display:flex;flex-direction:column;overflow:hidden}
 .stab-nav .snav-ico{font-size:16px;width:22px;text-align:center;flex-shrink:0}
 .stab-nav .snav-lbl{display:flex;flex-direction:column;line-height:1.2}
 .stab-nav .snav-sub{font-size:9px;color:var(--text3);font-weight:400}
