@@ -585,13 +585,14 @@ function _hbSetupSparkInteractions() {
     const up  = Math.round(best.pct / 100 * tot);
     const dt  = new Date(best.ts * 1000);
     const t   = `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-    _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t);
+    const nearby = _hbSparkEvents.filter(ev => Math.abs(ev.ts - best.ts) <= 900);
+    _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t, nearby);
   });
   canvas.addEventListener('mouseleave', _hbSpkTipHide);
   canvas.addEventListener('click', () => { _hbSpkTipHide(); _hbOpenExpanded(); });
 }
 
-function _hbSpkTip(cx, cy, pct, up, down, time) {
+function _hbSpkTip(cx, cy, pct, up, down, time, events) {
   let tip = document.getElementById('hb-spk-tip');
   if (!tip) {
     tip = document.createElement('div');
@@ -600,14 +601,26 @@ function _hbSpkTip(cx, cy, pct, up, down, time) {
     document.body.appendChild(tip);
   }
   const col = pct >= 95 ? 'var(--up)' : pct >= 80 ? 'var(--warn)' : 'var(--down)';
-  tip.innerHTML =
+  let html =
     `<div class="hb-tip-time">${time}</div>` +
     `<div class="hb-tip-pct" style="color:${col}">${Math.round(pct)}%</div>` +
     `<div class="hb-tip-row"><span style="color:var(--up)">▲</span> ${up} up</div>` +
     (down ? `<div class="hb-tip-row"><span style="color:var(--down)">▼</span> ${down} down</div>` : '');
+  if (events && events.length) {
+    html += '<div class="hb-tip-sep"></div>';
+    const shown = events.slice(0, 3);
+    shown.forEach(ev => {
+      const ic = ev.type === 'outage' ? '▼' : '⚠';
+      const c  = ev.type === 'outage' ? 'var(--down)' : 'var(--warn)';
+      html += `<div class="hb-tip-ev"><span style="color:${c}">${ic}</span> ${esc(ev.label)}</div>`;
+    });
+    if (events.length > 3) html += `<div class="hb-tip-ev" style="color:var(--text3)">+${events.length - 3} more</div>`;
+  }
+  tip.innerHTML = html;
   tip.style.display = '';
-  const tw = 94;
-  let left = cx - tw / 2, top = cy - 82;
+  const tw = tip.offsetWidth || 120;
+  const th = tip.offsetHeight || 80;
+  let left = cx - tw / 2, top = cy - th - 10;
   if (left < 4) left = 4;
   if (left + tw > innerWidth - 4) left = innerWidth - tw - 4;
   if (top < 4) top = cy + 12;

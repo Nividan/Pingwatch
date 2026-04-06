@@ -1657,6 +1657,8 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .hb-tip-time{font-size:10px;color:var(--text3);margin-bottom:2px;}
 .hb-tip-pct{font-size:16px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1.2;}
 .hb-tip-row{font-size:10px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-top:2px;}
+.hb-tip-sep{border-top:1px solid var(--border);margin:4px 0 3px;}
+.hb-tip-ev{font-size:9px;color:var(--text2);display:flex;align-items:center;gap:3px;margin-top:1px;white-space:nowrap;}
 
 /* ── Health trend expanded panel ────────────────────────────────── */
 .hb-exp-panel{position:fixed;top:calc(var(--header-h) + 6px);left:50%;transform:translateX(-50%);
