@@ -1197,7 +1197,8 @@ function toggleVmMetPicker(btn){
     drop.style.display='none';
     _vmMetPickerOpen=null;
   } else {
-    // Position fixed so it escapes overflow:auto/hidden ancestors (scrollable table container)
+    // Position fixed so it escapes overflow:auto/hidden ancestors (scrollable table container).
+    // z-index must exceed the modal overlay (.mo z-index:1000) since fixed is in root stacking context.
     const r=btn.getBoundingClientRect();
     const dropW=240;
     const left=Math.max(4, r.right-dropW);
@@ -1205,7 +1206,8 @@ function toggleVmMetPicker(btn){
     drop.style.top=(r.bottom+3)+'px';
     drop.style.left=left+'px';
     drop.style.right='auto';
-    drop.style.display='';
+    drop.style.zIndex='1100';
+    drop.style.display='block';
     _vmMetPickerOpen=drop;
   }
 }

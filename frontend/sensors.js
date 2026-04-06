@@ -927,7 +927,7 @@ function openDetail(did,sid,initialTab){
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto-Refresh</button>
         <button class="dm-ar-btn" id="fs-${did}-${sid}" data-did="${did}" data-sid="${sid}" onclick="dmToggleFullscreen('${did}','${sid}')" title="Full screen">⤢</button>
       </div>
-      <div style="position:relative">
+      <div class="dm-hist-cwrap" style="position:relative">
         <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
         <div class="dm-hist-tip" id="tip-${did}-${sid}"></div>
       </div>
@@ -989,9 +989,9 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   if (!canvas) return;
   if (statsEl) statsEl.textContent = 'Loading…';
   // Fade out chart, KPIs, and table while fetching
-  const _kpiEl = document.getElementById(`kpi-${did}-${sid}`);
-  const _canvasWrap = canvas.parentElement;
-  [_kpiEl, _canvasWrap, sumEl].forEach(el => { if (el) el.classList.add('dm-hist-loading'); });
+  const _fadeEls = [document.getElementById(`kpi-${did}-${sid}`), canvas.parentElement, sumEl].filter(Boolean);
+  _fadeEls.forEach(el => el.classList.add('dm-hist-loading'));
+  const _loadT0 = performance.now();
   const dynamicLimit = Math.min(10000, Math.max(500, Math.round(minutes * 60 / 10)));
   const [hr, sr] = await Promise.all([
     fetch(`/api/device/${did}/sensor/${sid}/history?minutes=${minutes}&limit=${dynamicLimit}`)
@@ -1020,15 +1020,12 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   _setupHistTooltip(c, summary, did, sid, minutes, rateSamples, _snmpUnit);
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
   if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit, did, sid);
-  // Fade content back in
-  const _kpiEl2 = document.getElementById(`kpi-${did}-${sid}`);
-  const _canvasWrap2 = c.parentElement;
-  const _sumEl2 = document.getElementById(`dm-hist-summary-${did}-${sid}`) || sumEl;
-  [_kpiEl2, _canvasWrap2, _sumEl2].forEach(el => {
-    if (!el) return;
-    el.classList.remove('dm-hist-loading');
-    el.classList.add('dm-hist-loaded');
-  });
+  // Ensure loading fade is visible for at least 250ms, then fade back in
+  const _elapsed = performance.now() - _loadT0;
+  if (_elapsed < 250) await new Promise(r => setTimeout(r, 250 - _elapsed));
+  [document.getElementById(`kpi-${did}-${sid}`), c.parentElement,
+   document.getElementById(`dm-hist-summary-${did}-${sid}`) || _sumEl
+  ].forEach(el => { if (el) el.classList.remove('dm-hist-loading'); });
   // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
   // the next animation frame will have correct dimensions — redraw from cache.
   requestAnimationFrame(() => dmHistRedraw(did, sid));

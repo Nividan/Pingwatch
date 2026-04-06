@@ -1500,8 +1500,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   color:var(--text3);font-size:12px;letter-spacing:.04em}
 @keyframes dwShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 /* Sensor history loading fade */
-.dm-hist-loading{opacity:.3;pointer-events:none;transition:opacity .15s}
-.dm-hist-loaded{transition:opacity .25s}
+.dm-kpi-bar,.dm-hist-summary{transition:opacity .25s}
+.dm-hist-cwrap{transition:opacity .25s}
+.dm-hist-loading{opacity:.25;pointer-events:none}
 .dw-empty          {color:var(--text3);font-size:12px;padding:20px;text-align:center;grid-column:1/-1;}
 .dw-add-btn        {margin:14px auto 20px;padding:8px 22px;background:rgba(47,129,247,.12);border:1px dashed rgba(47,129,247,.35);border-radius:8px;color:var(--accent);font-size:12px;cursor:pointer;transition:all .15s;}
 .dw-add-btn:hover  {background:rgba(47,129,247,.2);border-style:solid;}
