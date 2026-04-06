@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 :: ── 0. Elevate to admin (required to bind SNMP trap port 162) ─────────────────
 net session >nul 2>&1
