@@ -1064,6 +1064,8 @@ async function loadAll(){
   updatePills();
   restoreGroupOrder();
   _restoreViewToggle();
+  // Clear dashboard loading shimmer now that device/sensor data is ready
+  if (typeof _dwClearLoading === 'function') _dwClearLoading();
   // Update group summaries for collapsed groups
   document.querySelectorAll('.grp-grid.collapsed').forEach(g=>{
     if(g.dataset.group) _updateGrpSummary(g.dataset.group);

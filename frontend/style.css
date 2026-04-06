@@ -1490,7 +1490,15 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .dw-edit:hover     {color:var(--accent);}
 .dw-exp            {background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;line-height:1;padding:0 3px;transition:color .15s;}
 .dw-exp:hover      {color:var(--text);}
-.dw-body           {flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:4px;}
+.dw-body           {flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:4px;position:relative;}
+.dw-body.dw-loading>*{opacity:0;transition:opacity .3s}
+.dw-body.dw-loading::before{content:'';position:absolute;inset:0;z-index:2;border-radius:6px;
+  background:linear-gradient(90deg,transparent 25%,rgba(255,255,255,.035) 50%,transparent 75%);
+  background-size:200% 100%;animation:dwShimmer 1.5s ease-in-out infinite}
+.dw-body.dw-loading::after{content:'Loading\2026';position:absolute;inset:0;z-index:3;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--text3);font-size:12px;letter-spacing:.04em}
+@keyframes dwShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .dw-empty          {color:var(--text3);font-size:12px;padding:20px;text-align:center;grid-column:1/-1;}
 .dw-add-btn        {margin:14px auto 20px;padding:8px 22px;background:rgba(47,129,247,.12);border:1px dashed rgba(47,129,247,.35);border-radius:8px;color:var(--accent);font-size:12px;cursor:pointer;transition:all .15s;}
 .dw-add-btn:hover  {background:rgba(47,129,247,.2);border-style:solid;}
