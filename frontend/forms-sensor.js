@@ -1184,21 +1184,29 @@ function updateVMSelCount(){
 }
 
 // ── Metric picker dropdown ────────────────────────────────────────
+// NOTE: .mbox has backdrop-filter which traps position:fixed children inside the modal.
+// Fix: teleport the .vm-met-drop to document.body when opening, return it on close.
 let _vmMetPickerOpen=null;
+function _closeVmMetPicker(){
+  if(!_vmMetPickerOpen) return;
+  const drop=_vmMetPickerOpen;
+  drop.style.display='none';
+  // Return element to its original .vm-met-wrap
+  if(drop._ownerWrap) drop._ownerWrap.appendChild(drop);
+  _vmMetPickerOpen=null;
+}
 function toggleVmMetPicker(btn){
   const drop=btn.nextElementSibling;
-  const isOpen=drop.style.display!=='none';
+  const isOpen=_vmMetPickerOpen===drop;
   // Close any other open picker
-  if(_vmMetPickerOpen&&_vmMetPickerOpen!==drop){
-    _vmMetPickerOpen.style.display='none';
-    _vmMetPickerOpen=null;
-  }
+  if(_vmMetPickerOpen&&_vmMetPickerOpen!==drop) _closeVmMetPicker();
   if(isOpen){
-    drop.style.display='none';
-    _vmMetPickerOpen=null;
+    _closeVmMetPicker();
   } else {
-    // Position fixed so it escapes overflow:auto/hidden ancestors (scrollable table container).
-    // z-index must exceed the modal overlay (.mo z-index:1000) since fixed is in root stacking context.
+    // Teleport to body so it escapes .mbox backdrop-filter containing block
+    const wrap=btn.closest('.vm-met-wrap');
+    drop._ownerWrap=wrap;
+    document.body.appendChild(drop);
     const r=btn.getBoundingClientRect();
     const dropW=240;
     const left=Math.max(4, r.right-dropW);
@@ -1206,16 +1214,15 @@ function toggleVmMetPicker(btn){
     drop.style.top=(r.bottom+3)+'px';
     drop.style.left=left+'px';
     drop.style.right='auto';
-    drop.style.zIndex='1100';
+    drop.style.zIndex='9999';
     drop.style.display='block';
     _vmMetPickerOpen=drop;
   }
 }
 // Close picker on outside click
 document.addEventListener('click',e=>{
-  if(_vmMetPickerOpen&&!e.target.closest('.vm-met-wrap')){
-    _vmMetPickerOpen.style.display='none';
-    _vmMetPickerOpen=null;
+  if(_vmMetPickerOpen&&!e.target.closest('.vm-met-wrap')&&!e.target.closest('.vm-met-drop')){
+    _closeVmMetPicker();
   }
 });
 function vmMetSelectAll(allCb){
@@ -1227,7 +1234,8 @@ function vmMetSelectAll(allCb){
 function vmMetChanged(cb){
   // Update the button label for this picker
   const drop=cb.closest('.vm-met-drop');
-  const wrap=drop?.parentElement;
+  // drop may be teleported to body — use stored owner reference
+  const wrap=drop?._ownerWrap||drop?.parentElement;
   if(!wrap) return;
   // Keep "All metrics" checkbox in sync
   const allCb=drop.querySelector('.vm-met-all-cb');
