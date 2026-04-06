@@ -23,7 +23,7 @@ class _SensorScheduler:
     def __init__(self, executor, run_fn):
         self._heap     = []          # (run_at, seq, did, sid)
         self._seq      = 0
-        self._lock     = threading.Lock()
+        self._lock     = threading.RLock()
         self._wake     = threading.Event()
         self._executor = executor
         self._run_fn   = run_fn
@@ -365,7 +365,7 @@ def _send_webhook(url: str, payload: dict):
 
 class MonitorState:
     def __init__(self):
-        self._lock     = threading.Lock()
+        self._lock     = threading.RLock()
         self.devices   = {}
         self._did_ctr  = 0
         self._sse      = []
