@@ -1189,9 +1189,25 @@ function toggleVmMetPicker(btn){
   const drop=btn.nextElementSibling;
   const isOpen=drop.style.display!=='none';
   // Close any other open picker
-  if(_vmMetPickerOpen&&_vmMetPickerOpen!==drop) _vmMetPickerOpen.style.display='none';
-  drop.style.display=isOpen?'none':'block';
-  _vmMetPickerOpen=isOpen?null:drop;
+  if(_vmMetPickerOpen&&_vmMetPickerOpen!==drop){
+    _vmMetPickerOpen.style.display='none';
+    _vmMetPickerOpen=null;
+  }
+  if(isOpen){
+    drop.style.display='none';
+    _vmMetPickerOpen=null;
+  } else {
+    // Position fixed so it escapes overflow:auto/hidden ancestors (scrollable table container)
+    const r=btn.getBoundingClientRect();
+    const dropW=240;
+    const left=Math.max(4, r.right-dropW);
+    drop.style.position='fixed';
+    drop.style.top=(r.bottom+3)+'px';
+    drop.style.left=left+'px';
+    drop.style.right='auto';
+    drop.style.display='';
+    _vmMetPickerOpen=drop;
+  }
 }
 // Close picker on outside click
 document.addEventListener('click',e=>{

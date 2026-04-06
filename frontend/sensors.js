@@ -988,6 +988,10 @@ const _histCache = {};
 async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   if (!canvas) return;
   if (statsEl) statsEl.textContent = 'Loading…';
+  // Fade out chart, KPIs, and table while fetching
+  const _kpiEl = document.getElementById(`kpi-${did}-${sid}`);
+  const _canvasWrap = canvas.parentElement;
+  [_kpiEl, _canvasWrap, sumEl].forEach(el => { if (el) el.classList.add('dm-hist-loading'); });
   const dynamicLimit = Math.min(10000, Math.max(500, Math.round(minutes * 60 / 10)));
   const [hr, sr] = await Promise.all([
     fetch(`/api/device/${did}/sensor/${sid}/history?minutes=${minutes}&limit=${dynamicLimit}`)
@@ -1016,6 +1020,15 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   _setupHistTooltip(c, summary, did, sid, minutes, rateSamples, _snmpUnit);
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
   if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit, did, sid);
+  // Fade content back in
+  const _kpiEl2 = document.getElementById(`kpi-${did}-${sid}`);
+  const _canvasWrap2 = c.parentElement;
+  const _sumEl2 = document.getElementById(`dm-hist-summary-${did}-${sid}`) || sumEl;
+  [_kpiEl2, _canvasWrap2, _sumEl2].forEach(el => {
+    if (!el) return;
+    el.classList.remove('dm-hist-loading');
+    el.classList.add('dm-hist-loaded');
+  });
   // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
   // the next animation frame will have correct dimensions — redraw from cache.
   requestAnimationFrame(() => dmHistRedraw(did, sid));
