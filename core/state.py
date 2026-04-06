@@ -298,6 +298,8 @@ class Device:
         vals = [s.alive for s in self.sensors.values()]
         if not vals or all(v is None for v in vals): return "unknown"
         if any(v is False for v in vals): return "down"
+        if any(s._threshold_state == "crit" for s in self.sensors.values()): return "down"
+        if any(s._threshold_state == "warn" for s in self.sensors.values()): return "warn"
         return "up"
 
     def to_dict(self):
@@ -736,8 +738,14 @@ class MonitorState:
                     else:
                         _unit = _u2 + '/s' if _u2 else '/s'
                     _val_disp = s.last_value or f"{s._last_rate:.2f}{_unit}"
+                elif s.stype == 'vmware':
+                    _unit = ''
+                    _val_disp = s.last_detail or s.last_value or ''
                 elif s.stype in ('snmp', 'tls'):
-                    _unit = ''; _val_disp = s.last_value or ''
+                    _u3 = s.snmp_unit if s.stype == 'snmp' else ''
+                    _unit = f" {_u3}" if _u3 else ''
+                    _rv = s.last_value or ''
+                    _val_disp = f"{_rv} {_u3}" if _u3 else _rv
                 else:
                     _unit = 'ms'; _val_disp = f"{s.last_ms}ms"
                 if _new_thr == "crit":

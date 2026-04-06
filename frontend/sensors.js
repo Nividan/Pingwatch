@@ -431,8 +431,11 @@ function recalcDevStatus(did){
   const keys=S._devSensors?.[did]||new Set();
   const sensors=[...keys].map(k=>S.sensors[k]).filter(Boolean);
   const alives=sensors.map(s=>s.alive);
+  const thresholds=sensors.map(s=>s.threshold_state);
   let st='unknown';
   if(alives.some(a=>a===false))st='down';
+  else if(thresholds.some(t=>t==='crit'))st='down';
+  else if(thresholds.some(t=>t==='warn'))st='warn';
   else if(alives.every(a=>a===true))st='up';
   else if(alives.some(a=>a===true))st='warn';
   if(S.devices[did])S.devices[did].status=st;
