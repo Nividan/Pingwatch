@@ -51,6 +51,7 @@ async function _refreshCertSection(){
 }
 
 async function openSettings(){
+  _stopLogLive();
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
     api('GET','/api/settings'),
@@ -59,7 +60,7 @@ async function openSettings(){
   ]);
   window._tlsSettings = {...tr, org_name: sr.org_name||''};
   const o=document.createElement('div'); o.className='mo'; o.id='mset';
-  _overlayClose(o, ()=>closeM('mset'));
+  _overlayClose(o, ()=>{_stopLogLive();closeM('mset');});
   // Pre-compute backup tab values so the template stays single-level
   const _bkFreq = sr.backup_sched_freq || 'daily';
   const _bkDaysActive = (_bkFreq === 'weekly') ? '' : 'none';
@@ -101,7 +102,7 @@ async function openSettings(){
   <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
     <div class="mhd">
       <div class="mttl">⚙ Settings</div>
-      <button class="mclose" onclick="closeM('mset')">✕</button>
+      <button class="mclose" onclick="_stopLogLive();closeM('mset')">✕</button>
     </div>
     <div class="stab-layout">
     <nav class="stab-sidebar">
@@ -461,12 +462,38 @@ async function openSettings(){
         <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
         <button class="log-stab"        id="lstab-btn-audit"   onclick="_switchLogTab('audit')">Audit</button>
         <button class="log-stab"        id="lstab-btn-backup"  onclick="_switchLogTab('backup')">Backup</button>
-        <button class="btn-s" onclick="_loadLogTab()" style="margin-left:auto;font-size:11px">↻ Refresh</button>
+        <div style="margin-left:auto;display:flex;gap:4px;align-items:center">
+          <button class="btn-s log-live-btn" id="logLiveBtn" onclick="_toggleLogLive()" style="font-size:11px;padding:4px 10px">\u25cb Live</button>
+          <button class="btn-s" onclick="_loadLogTab()" style="font-size:11px;padding:4px 10px">\u21bb Refresh</button>
+        </div>
       </div>
-      <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading…</span></div>
+      <div class="log-filter-bar">
+        <select id="logFTime" onchange="_onLogFilterChange()">
+          <option value="all" selected>All time</option>
+          <option value="5m">Last 5 min</option>
+          <option value="15m">Last 15 min</option>
+          <option value="1h">Last 1 hour</option>
+          <option value="24h">Last 24 hours</option>
+        </select>
+        <select id="logFLevel" onchange="_onLogFilterChange()">
+          <option value="">All Levels</option>
+          <option value="DEBUG">DEBUG</option>
+          <option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option>
+          <option value="ERROR">ERROR</option>
+          <option value="CRITICAL">CRITICAL</option>
+        </select>
+        <input id="logFSearch" type="search" placeholder="Search logs\u2026 (level:error device:FortiGate)" oninput="_onLogFilterChange()" class="log-search">
+        <button class="log-clear-btn" onclick="_clearLogFilters()" title="Clear all filters">\u2715</button>
+        <div class="log-export-group">
+          <button class="log-export-btn" onclick="_exportLogCsv()" title="Export as CSV">\u2b07 CSV</button>
+          <button class="log-export-btn" onclick="_exportLogJson()" title="Export as JSON">\u2b07 JSON</button>
+        </div>
+      </div>
+      <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading\u2026</span></div>
     </div>
     <div class="mft" id="stab-footer-logs" style="display:none">
-      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Last 500 lines · admin only</span>
+      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
     </div>
     <div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
@@ -1112,27 +1139,83 @@ async function submitInstallSigned(){
 }
 
 let _activeLogTab = 'app';
+let _logFilter = { timeRange: 'all', level: '', search: '' };
+let _logLiveMode = false;
+let _logLiveTimer = null;
+let _logLastTs = '';
+let _logData = [];
+let _logSearchDebounce = null;
 
 function _switchLogTab(key) {
   _activeLogTab = key;
   ['app','sensors','audit','backup'].forEach(k => {
     document.getElementById(`lstab-btn-${k}`)?.classList.toggle('active', k === key);
   });
+  _logLastTs = '';
+  _logData = [];
   _loadLogTab();
 }
 
-function _colorLog(text) {
+function _parseLogSearch(raw) {
+  const result = { level: '', search: '' };
+  if (!raw) return result;
+  const parts = raw.trim().split(/\s+/);
+  const textParts = [];
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (lower.startsWith('level:')) {
+      const val = part.substring(6).toUpperCase();
+      if (['DEBUG','INFO','WARNING','ERROR','CRITICAL'].includes(val)) result.level = val;
+    } else if (lower.startsWith('device:')) {
+      textParts.push(part.substring(7));
+    } else {
+      textParts.push(part);
+    }
+  }
+  result.search = textParts.join(' ');
+  return result;
+}
+
+function _onLogFilterChange() {
+  _logFilter.timeRange = document.getElementById('logFTime')?.value || 'all';
+  _logFilter.level     = document.getElementById('logFLevel')?.value || '';
+  _logFilter.search    = document.getElementById('logFSearch')?.value || '';
+  _logLastTs = '';
+  clearTimeout(_logSearchDebounce);
+  _logSearchDebounce = setTimeout(_loadLogTab, 300);
+}
+
+function _clearLogFilters() {
+  _logFilter = { timeRange: 'all', level: '', search: '' };
+  _logLastTs = '';
+  ['logFTime','logFLevel','logFSearch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? 'all' : '';
+    else el.value = '';
+  });
+  _loadLogTab();
+}
+
+function _colorLog(text, searchTerm) {
   if (!text) return '<span style="color:var(--text3)">(empty)</span>';
   const e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
+  const hl = (searchTerm && searchTerm.trim())
+    ? (s => {
+        const escaped = e(s);
+        const q = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return escaped.replace(new RegExp(`(${q})`, 'gi'), '<mark class="ll-hl">$1</mark>');
+      })
+    : e;
   return text.split('\n').map(line => {
     if (!line) return '<div class="ll-row ll-empty"></div>';
     const m = line.match(RE);
     if (m) {
       const [,ts,lvl,msg] = m;
-      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${e(ts)}</span><span class="ll-${lvl.toLowerCase()}">${e(lvl)}</span></span><span class="ll-msg">${e(msg)}</span></div>`;
+      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${e(ts)}</span><span class="ll-${lvl.toLowerCase()}">${e(lvl)}</span></span><span class="ll-msg">${hl(msg)}</span></div>`;
     }
-    return `<div class="ll-row ll-cont"><span class="ll-msg">${e(line)}</span></div>`;
+    return `<div class="ll-row ll-cont"><span class="ll-msg">${hl(line)}</span></div>`;
   }).join('');
 }
 
@@ -1140,18 +1223,123 @@ async function _loadLogTab() {
   const el  = document.getElementById('log-body');
   const lbl = document.getElementById('log-footer-label');
   if (!el) return;
+
+  const parsed = _parseLogSearch(_logFilter.search);
+  const params = new URLSearchParams();
+  const level = parsed.level || _logFilter.level;
+  if (level) params.set('level', level);
+
+  if (_logLiveMode && _logLastTs) {
+    params.set('after', _logLastTs);
+  } else if (_logFilter.timeRange !== 'all') {
+    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '24h': 86400 };
+    const sec = offsets[_logFilter.timeRange];
+    if (sec) {
+      const d = new Date(Date.now() - sec * 1000);
+      const after = d.getFullYear() + '-' +
+        String(d.getMonth()+1).padStart(2,'0') + '-' +
+        String(d.getDate()).padStart(2,'0') + ' ' +
+        String(d.getHours()).padStart(2,'0') + ':' +
+        String(d.getMinutes()).padStart(2,'0') + ':' +
+        String(d.getSeconds()).padStart(2,'0');
+      params.set('after', after);
+    }
+  }
+  if (parsed.search) params.set('search', parsed.search);
+  const qs = params.toString();
+  const url = `/api/logs/${_activeLogTab}` + (qs ? '?' + qs : '');
+
   try {
-    const r = await fetch(`/api/logs/${_activeLogTab}`);
+    const r = await fetch(url);
     if (!r.ok) { el.textContent = 'Access denied'; return; }
     const d = await r.json();
-    el.innerHTML = _colorLog(d.lines || '(empty)');
-    el.scrollTop = el.scrollHeight;
+    const searchTerm = parsed.search || '';
+
+    if (_logLiveMode && _logLastTs && d.lines) {
+      el.innerHTML += _colorLog(d.lines, searchTerm);
+    } else {
+      el.innerHTML = _colorLog(d.lines || '(empty)', searchTerm);
+      _logData = (d.lines || '').split('\n').filter(l => l);
+    }
+
+    if (d.lines) {
+      const lines = d.lines.split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const tm = lines[i].match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+        if (tm) { _logLastTs = tm[1]; break; }
+      }
+    }
+
+    if (_logLiveMode) el.scrollTop = el.scrollHeight;
+
     const names = { app:'pingwatch.log', sensors:'pingwatchsensors.log',
                     audit:'pingwatchaudit.log', backup:'pingwatchbackup.log' };
-    if (lbl) lbl.textContent = `Last 500 lines · admin only · ${names[_activeLogTab] || ''}`;
+    if (lbl) {
+      const showing = d.shown != null ? d.shown.toLocaleString() : '?';
+      const total   = d.total != null ? d.total.toLocaleString() : '?';
+      lbl.textContent = `Showing ${showing} / ${total} logs \u00b7 ${names[_activeLogTab] || ''}`;
+    }
   } catch(e) {
     el.textContent = `Failed to load: ${String(e)}`;
   }
+}
+
+function _toggleLogLive() {
+  _logLiveMode = !_logLiveMode;
+  const btn = document.getElementById('logLiveBtn');
+  if (btn) {
+    btn.classList.toggle('log-live-on', _logLiveMode);
+    btn.textContent = _logLiveMode ? '\u25cf Live' : '\u25cb Live';
+  }
+  if (_logLiveMode) {
+    _logLastTs = '';
+    _loadLogTab();
+    _logLiveTimer = setInterval(() => {
+      if (!document.getElementById('log-body')) { _stopLogLive(); return; }
+      _loadLogTab();
+    }, 3000);
+  } else {
+    _stopLogLive();
+  }
+}
+
+function _stopLogLive() {
+  _logLiveMode = false;
+  if (_logLiveTimer) { clearInterval(_logLiveTimer); _logLiveTimer = null; }
+  const btn = document.getElementById('logLiveBtn');
+  if (btn) { btn.classList.remove('log-live-on'); btn.textContent = '\u25cb Live'; }
+}
+
+function _exportLogCsv() {
+  if (!_logData.length) { toast('No log data to export','warn'); return; }
+  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
+  const header = 'Timestamp,Level,Message\n';
+  const rows = _logData.map(line => {
+    const m = line.match(RE);
+    if (m) return [m[1], m[2], m[3]].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(',');
+    return '"","","' + String(line).replace(/"/g,'""') + '"';
+  });
+  _logDownload(`pingwatch-${_activeLogTab}.csv`, header + rows.join('\n'), 'text/csv');
+}
+
+function _exportLogJson() {
+  if (!_logData.length) { toast('No log data to export','warn'); return; }
+  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
+  const out = _logData.map(line => {
+    const m = line.match(RE);
+    if (m) return { timestamp: m[1], level: m[2], message: m[3] };
+    return { timestamp: '', level: '', message: line };
+  });
+  _logDownload(`pingwatch-${_activeLogTab}.json`, JSON.stringify(out, null, 2), 'application/json');
+}
+
+function _logDownload(filename, content, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────

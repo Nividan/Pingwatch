@@ -27,7 +27,9 @@ import sys
 import tempfile
 import threading
 import time
+import re
 import zipfile
+from urllib.parse import urlparse, parse_qs
 
 from core.config import (
     DB_PATH, LOGS_DB_PATH,
@@ -36,6 +38,12 @@ from core.config import (
 )
 from db          import db_log_audit, db_get_audit
 from core.logger import log, LOG_FILES
+
+_LOG_LINE_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+'
+    r'(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+'
+    r'(.*)'
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -586,13 +594,54 @@ def handle(h, method, path, body):
         fpath = LOG_FILES.get(key)
         if not fpath:
             h._json(404, {"error": "unknown log"}); return True
+
+        qs        = parse_qs(urlparse(h.path).query)
+        f_level   = (qs.get("level", [""])[0]).upper()
+        f_after   = qs.get("after", [""])[0]
+        f_before  = qs.get("before", [""])[0]
+        f_search  = qs.get("search", [""])[0].lower()
+        f_limit   = min(int(qs.get("limit", ["2000"])[0] or 2000), 5000)
+
         try:
             with open(fpath, "r", encoding="utf-8", errors="replace") as _lf:
-                lines = _lf.readlines()
-            tail = "".join(lines[-500:])
+                all_lines = _lf.readlines()
         except FileNotFoundError:
-            tail = ""
-        h._json(200, {"log": key, "lines": tail})
+            all_lines = []
+
+        total    = len(all_lines)
+        filtered = []
+        _pass    = False      # tracks whether last primary line passed
+
+        for raw in all_lines:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            ml = _LOG_LINE_RE.match(line)
+            if not ml:
+                # Continuation line — include if previous primary passed
+                if _pass:
+                    filtered.append(line)
+                continue
+            ts, lvl, msg = ml.group(1), ml.group(2), ml.group(3)
+            _pass = True
+            if f_level and lvl != f_level:
+                _pass = False; continue
+            if f_after and ts <= f_after:
+                _pass = False; continue
+            if f_before and ts >= f_before:
+                _pass = False; continue
+            if f_search and f_search not in msg.lower():
+                _pass = False; continue
+            filtered.append(line)
+
+        shown = filtered[-f_limit:]
+        h._json(200, {
+            "log":      key,
+            "lines":    "\n".join(shown),
+            "total":    total,
+            "filtered": len(filtered),
+            "shown":    len(shown),
+        })
         return True
 
     return False
