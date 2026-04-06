@@ -32,6 +32,8 @@ from monitoring.network_map import topo_prune_pw_links
 from core.logger import log
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
 
+_vmware_ssl_warned = set()
+
 # ── Port-scan target list ─────────────────────────────────────────
 _SCAN_TARGETS = [
     {"name": "Ping",       "stype": "ping",   "port": None,  "tout": 3},
@@ -553,8 +555,10 @@ def handle(h, method, path, body):
         _db_enqueue(_maybe_resize_executor)
         _dev_name = dev.name if dev else did
         db_log_audit(user, h.client_address[0], 'sensor_create', f"{_dev_name}/{name}")
-        if stype == "vmware" and not vssl:
-            log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", host or "unknown")
+        _h = host or "unknown"
+        if stype == "vmware" and not vssl and _h not in _vmware_ssl_warned:
+            _vmware_ssl_warned.add(_h)
+            log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", _h)
         h._json(200, {"sid": sid})
         return True
 
