@@ -344,9 +344,12 @@ function _updateVmGrpStatus(did,vmid){
   const cntEl=document.getElementById(`vgcnt-${did}-${sfx}`);
   if(cntEl) cntEl.textContent=rows.length===1?'1 metric':`${rows.length} metrics`;
   const dotEl=document.getElementById(`vgdot-${did}-${sfx}`); if(!dotEl) return;
+  const devMuted=S.devices[did]?.alerts_muted;
   const states=rows.map(r=>{
     const sn=S.sensors[`${did}/${r.dataset.sid}`];
-    return sn?.alive===false?'down':(sn?.threshold_state&&sn.threshold_state!=='ok'?'warn':(sn?.alive===true?'up':''));
+    if(!sn) return '';
+    if(sn.alerts_muted||devMuted) return sn.alive===true?'up':'';
+    return sn.alive===false?'down':(sn.threshold_state&&sn.threshold_state!=='ok'?'warn':(sn.alive===true?'up':''));
   });
   dotEl.className='vm-grp-dot '+(states.includes('down')?'down':states.includes('warn')?'warn':states.includes('up')?'up':'');
   _updateVmGrpMuteBtn(did,vmid);
@@ -429,9 +432,10 @@ function drawSpk(key,history){
 // ── Device status recalc ─────────────────────────────────────────
 function recalcDevStatus(did){
   const keys=S._devSensors?.[did]||new Set();
-  const sensors=[...keys].map(k=>S.sensors[k]).filter(Boolean);
-  const alives=sensors.map(s=>s.alive);
-  const thresholds=sensors.map(s=>s.threshold_state);
+  const devMuted=S.devices[did]?.alerts_muted;
+  const active=[...keys].map(k=>S.sensors[k]).filter(s=>s&&!s.alerts_muted&&!devMuted);
+  const alives=active.map(s=>s.alive);
+  const thresholds=active.map(s=>s.threshold_state);
   let st='unknown';
   if(alives.some(a=>a===false))st='down';
   else if(thresholds.some(t=>t==='crit'))st='down';
