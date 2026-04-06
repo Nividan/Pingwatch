@@ -331,9 +331,7 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: ipam_sync_device_update(_d, _old_host, _new_host, _new_name))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
         if "alerts_muted" in body:
-            with STATE._lock:
-                _md = STATE.devices.get(did)
-                if _md: STATE._broadcast("device_status", {"did": did, "status": _md.status})
+            STATE._broadcast("device_status", {"did": did, "status": dev.status})
         h._json(200, {"status": "updated"})
         return True
 
