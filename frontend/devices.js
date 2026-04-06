@@ -149,10 +149,12 @@ function _updateGrpSummary(group){
 }
 
 function _devSnrSummaryHtml(did){
+  const dev=S.devices[did];
   const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
   if(!snrs.length) return '';
   let ok=0,warn=0,down=0;
   snrs.forEach(s=>{
+    if(s.alerts_muted||dev?.alerts_muted){if(s.alive===true)ok++;return;}
     if(s.alive===false) down++;
     else if(s.threshold_state&&s.threshold_state!=='ok') warn++;
     else if(s.alive===true) ok++;
@@ -309,7 +311,8 @@ function sSnrPreview(did){
   const previewItems=[];
   nonVm.forEach(s=>previewItems.push({type:'snr',s}));
   Object.entries(vmGroups).forEach(([vmid,vms])=>{
-    const worst=vms.find(s=>s.alive===false)||vms.find(s=>s.threshold_state&&s.threshold_state!=='ok')||vms[0];
+    const _unmuted=vms.filter(s=>!s.alerts_muted);
+    const worst=_unmuted.find(s=>s.alive===false)||_unmuted.find(s=>s.threshold_state&&s.threshold_state!=='ok')||_unmuted[0]||vms[0];
     previewItems.push({type:'vmgrp',vmid,vms,worst});
   });
   const shown=previewItems.slice(0,3);

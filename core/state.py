@@ -295,11 +295,12 @@ class Device:
 
     @property
     def status(self):
-        vals = [s.alive for s in self.sensors.values()]
+        active = [s for s in self.sensors.values() if not s.alerts_muted]
+        vals = [s.alive for s in active]
         if not vals or all(v is None for v in vals): return "unknown"
         if any(v is False for v in vals): return "down"
-        if any(s._threshold_state == "crit" for s in self.sensors.values()): return "down"
-        if any(s._threshold_state == "warn" for s in self.sensors.values()): return "warn"
+        if any(s._threshold_state == "crit" for s in active): return "down"
+        if any(s._threshold_state == "warn" for s in active): return "warn"
         return "up"
 
     def to_dict(self):
