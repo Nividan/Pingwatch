@@ -1398,6 +1398,33 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ll-error   {color:#f85149;font-weight:700;min-width:60px;}
 .ll-critical{color:#ff6e6e;font-weight:700;min-width:60px;}
 
+/* ── Log filter bar ───────────────────────────────────────────────── */
+.log-filter-bar{display:flex;flex-wrap:nowrap;overflow-x:auto;align-items:center;gap:6px;
+  padding:6px 12px;border-bottom:1px solid var(--border);background:rgba(0,0,0,.1);flex-shrink:0;}
+.log-filter-bar select{background:var(--bg3);border:1px solid var(--border);color:var(--text2);
+  border-radius:5px;padding:4px 8px;font-size:11px;outline:none;cursor:pointer;flex:0 0 auto;min-width:0;}
+.log-filter-bar select:focus{border-color:var(--accent);}
+.log-search{flex:1 1 180px;min-width:120px;background:var(--bg3);border:1px solid var(--border);
+  color:var(--text);border-radius:5px;padding:4px 10px;font-size:11px;outline:none;font-family:inherit;}
+.log-search:focus{border-color:var(--accent);}
+.log-search::placeholder{color:var(--text3);font-size:11px;}
+.log-clear-btn{flex:0 0 auto;padding:4px 8px;border-radius:5px;font-size:11px;
+  border:1px solid transparent;background:transparent;color:var(--text3);
+  cursor:pointer;transition:all .15s;white-space:nowrap;}
+.log-clear-btn:hover{color:var(--down);border-color:var(--down-border);}
+.log-export-group{display:flex;gap:4px;flex:0 0 auto;}
+.log-export-btn{padding:4px 8px;border-radius:5px;font-size:11px;
+  border:1px solid var(--border);background:var(--bg3);color:var(--text3);
+  cursor:pointer;transition:all .15s;white-space:nowrap;}
+.log-export-btn:hover{color:var(--accent);border-color:var(--accent);}
+/* ── Live mode button ─────────────────────────────────────────────── */
+.log-live-btn{transition:all .15s;}
+.log-live-on{color:#23d18b !important;border-color:#23d18b !important;
+  background:rgba(35,209,139,.1) !important;animation:log-live-pulse 2s ease-in-out infinite;}
+@keyframes log-live-pulse{0%,100%{opacity:1;}50%{opacity:.7;}}
+/* ── Search highlight ─────────────────────────────────────────────── */
+.ll-hl{background:rgba(255,213,79,.3);color:#ffd54f;border-radius:2px;padding:0 1px;}
+
 /* ── Sensor-type defaults table (Settings → Sensors tab) ──────────────── */
 .sdr-tbl                {width:100%;border-collapse:collapse;}
 .sdr-tbl thead th       {font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;
