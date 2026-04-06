@@ -27,40 +27,23 @@ function sensorFormHTML(dev, s=null) {
         : `<div class="fh" style="color:#4ade80;font-size:10px;margin-top:2px">🔗 linked to device · clear field to keep linked</div>`)
     : '';
   const curType = s?.stype || 'ping';
+  const isEdit = !!s;
+  const _types = [
+    ['ping','Ping','ICMP echo','◉'],['tcp','TCP Port','Port check','⇌'],
+    ['http','HTTP/S','Web response','◈'],['snmp','SNMP','OID polling','◎'],
+    ['dns','DNS','Record lookup','⬡'],['tls','TLS','Cert expiry','T'],
+    ['http_keyword','HTTP KW','Keyword check','K'],['banner','Banner','TCP banner','B'],
+    ['vmware','VMware','VM metrics','V']
+  ];
+  const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">${
+    _types.map(([k,nm,sub,ico])=>`<button class="stab-nav${curType===k?' active':''}" data-t="${k}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${nm}</span><span class="snav-sub">${sub}</span></span></button>`).join('')
+  }</nav>`;
+  const _contentOpen = isEdit
+    ? '<div style="overflow-y:auto;padding:20px;flex:1">'
+    : '<div class="stab-content" style="overflow-y:auto;padding:20px">';
   return `
-  <div class="fr">
-    <label class="fl">Sensor Type</label>
-    <div class="stp">
-      <div class="stpo ${curType==='ping'?'sel':''}" data-t="ping" onclick="selType('ping')">
-        <div class="stpo-ico">◉</div><div class="stpo-nm">PING</div><div class="stpo-ds">ICMP echo</div>
-      </div>
-      <div class="stpo ${curType==='tcp'?'sel':''}" data-t="tcp" onclick="selType('tcp')">
-        <div class="stpo-ico">⇌</div><div class="stpo-nm">TCP PORT</div><div class="stpo-ds">Port check</div>
-      </div>
-      <div class="stpo ${curType==='http'?'sel':''}" data-t="http" onclick="selType('http')">
-        <div class="stpo-ico">◈</div><div class="stpo-nm">HTTP/S</div><div class="stpo-ds">Web response</div>
-      </div>
-      <div class="stpo ${curType==='snmp'?'sel':''}" data-t="snmp" onclick="selType('snmp')">
-        <div class="stpo-ico">◎</div><div class="stpo-nm">SNMP</div><div class="stpo-ds">OID polling</div>
-      </div>
-      <div class="stpo ${curType==='dns'?'sel':''}" data-t="dns" onclick="selType('dns')">
-        <div class="stpo-ico">⬡</div><div class="stpo-nm">DNS</div><div class="stpo-ds">Record lookup</div>
-      </div>
-      <div class="stpo ${curType==='tls'?'sel':''}" data-t="tls" onclick="selType('tls')">
-        <div class="stpo-ico">T</div><div class="stpo-nm">TLS</div><div class="stpo-ds">Cert expiry</div>
-      </div>
-      <div class="stpo ${curType==='http_keyword'?'sel':''}" data-t="http_keyword" onclick="selType('http_keyword')">
-        <div class="stpo-ico">K</div><div class="stpo-nm">HTTP KW</div><div class="stpo-ds">Keyword check</div>
-      </div>
-      <div class="stpo ${curType==='banner'?'sel':''}" data-t="banner" onclick="selType('banner')">
-        <div class="stpo-ico">B</div><div class="stpo-nm">BANNER</div><div class="stpo-ds">TCP banner</div>
-      </div>
-      <div class="stpo ${curType==='vmware'?'sel':''}" data-t="vmware" onclick="selType('vmware')">
-        <div class="stpo-ico">V</div><div class="stpo-nm">VMWARE</div><div class="stpo-ds">VM metrics</div>
-      </div>
-    </div>
-    <input type="hidden" id="as-t" value="${curType}"/>
-  </div>
+  <input type="hidden" id="as-t" value="${curType}"/>
+  ${isEdit ? _contentOpen : `<div class="stab-layout" style="flex:1;min-height:0">${_sidebar}${_contentOpen}`}
   <div class="fr"><label class="fl">Sensor Name</label>
     <input type="text" id="as-n" value="${esc(s?.name||'')}" placeholder="Ping, HTTPS health, sysDescr…" autocomplete="off"/></div>
   <!-- PING -->
@@ -265,11 +248,8 @@ function sensorFormHTML(dev, s=null) {
     </div>
   </div>
   <!-- Alert Thresholds -->
-  <details style="margin-top:8px">
-    <summary style="cursor:pointer;font-size:12px;color:var(--text2);padding:4px 0;user-select:none">
-      &#9658; Alert Thresholds
-    </summary>
-    <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+  <div class="snr-section">
+    <div class="snr-section-lbl">Alert Thresholds</div>
       ${(()=>{
         const _su=s?.snmp_unit||'';
         const _isStr=curType==='snmp'&&_su==='string';
@@ -284,36 +264,44 @@ function sensorFormHTML(dev, s=null) {
         const _noThr=curType==='vmware'&&['uptime','on','disk_read','disk_write','disk_usage'].includes(_vmm);
         return`<div class="fgrid">
         <div class="fr" id="as-wms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-wms-lbl">${_wLbl}</label>
-          <input type="number" id="as-wms" value="${curType==='vmware'?(s?.warn_ms||''):(s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||''))}" placeholder="${_ph}" min="1" style="max-width:100px"/>
+          <input type="number" id="as-wms" value="${curType==='vmware'?(s?.warn_ms||''):(s?.warn_ms||(window._snrTypeDefaults?.[curType]?.warn_ms||_SDR_WARN_DEF[curType]||''))}" placeholder="${_ph}" min="1"/>
         </div>
         <div class="fr" id="as-cms-row"${_noThr?' style="display:none"':''}><label class="fl" id="as-cms-lbl">${_cLbl}</label>
-          <input type="number" id="as-cms" value="${curType==='vmware'?(s?.crit_ms||''):(s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||''))}" placeholder="${_phc}" min="1" style="max-width:100px"/>
+          <input type="number" id="as-cms" value="${curType==='vmware'?(s?.crit_ms||''):(s?.crit_ms||(window._snrTypeDefaults?.[curType]?.crit_ms||_SDR_CRIT_DEF[curType]||''))}" placeholder="${_phc}" min="1"/>
           ${_cur}
         </div></div>`;
       })()}
       <div class="fgrid">
         <div class="fr"><label class="fl">Warn Loss %</label>
-          <input type="number" id="as-lwp" value="${s?.loss_warn_pct||0}" min="0" max="100" style="max-width:100px"/>
+          <input type="number" id="as-lwp" value="${s?.loss_warn_pct||0}" min="0" max="100"/>
         </div>
         <div class="fr"><label class="fl">Crit Loss %</label>
-          <input type="number" id="as-lcp" value="${s?.loss_crit_pct||0}" min="0" max="100" style="max-width:100px"/>
+          <input type="number" id="as-lcp" value="${s?.loss_crit_pct||0}" min="0" max="100"/>
         </div>
       </div>
       <div class="fr" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
           <input type="checkbox" id="as-am" ${s?.alerts_muted?'checked':''}>
-          <span class="fl" style="margin:0">🔕 Mute alerts for this sensor</span>
+          <span class="fl" style="margin:0">Mute alerts for this sensor</span>
         </label>
         <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Probing continues — no DOWN / recovery / threshold events are fired.</div>
       </div>
+  </div>
+  <!-- Probe Timing -->
+  <div class="snr-section">
+    <div class="snr-section-lbl">Probe Timing</div>
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Interval (s)</label>
+        <input type="number" id="as-iv" value="${s?.interval||(window._snrDef?.interval||5)}" min="1" max="300"/></div>
+      <div class="fr"><label class="fl">Timeout (s)</label>
+        <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||4)}" min="1" max="60"/></div>
     </div>
-  </details>
-  <div class="fgrid" style="margin-top:4px">
-    <div class="fr"><label class="fl">Interval (s)</label>
-      <input type="number" id="as-iv" value="${s?.interval||(window._snrDef?.interval||5)}" min="1" max="300"/></div>
-    <div class="fr"><label class="fl">Timeout (s)</label>
-      <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||4)}" min="1" max="60"/></div>
-  </div>`;
+  </div>
+  ${isEdit ? '' : `<!-- Start Immediately -->
+  <div class="fr" style="margin-top:8px"><label class="fl">Start Immediately</label>
+    <select id="as-si"><option value="1">Yes — start now</option><option value="0">No — manual</option></select>
+  </div>`}
+  </div>${isEdit ? '' : '</div>'}`;
 }
 
 // ── ADD SENSOR MODAL ─────────────────────────────────────────────────────
@@ -325,16 +313,13 @@ function openAddSensor(did){
   const o=document.createElement('div');o.className='mo';o.id='mas';
   _overlayClose(o, ()=>closeM('mas'));
   o.innerHTML=`
-  <div class="mbox" style="max-width:560px">
+  <div class="mbox mbox-sensor">
     <div class="mhd">
       <div class="mttl">Add Sensor — <span style="color:var(--text2)">${esc(dev.name)}</span></div>
       <button class="mclose" onclick="closeM('mas')">✕</button>
     </div>
-    <div class="mbdy" style="max-height:70vh;overflow-y:auto">
+    <div class="mbdy" style="padding:0;flex:1;min-height:0">
       ${sensorFormHTML(dev)}
-      <div class="fr" style="margin-top:4px"><label class="fl">Start Immediately</label>
-        <select id="as-si"><option value="1">Yes — start now</option><option value="0">No — manual</option></select>
-      </div>
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('mas')">Cancel</button>
@@ -362,13 +347,16 @@ function openEditSensor(did, sid){
   closeM('mes');
   const o=document.createElement('div');o.className='mo';o.id='mes';
   _overlayClose(o, ()=>closeM('mes'));
+  const _tLabels={ping:'Ping',tcp:'TCP Port',http:'HTTP/S',snmp:'SNMP',dns:'DNS',tls:'TLS',http_keyword:'HTTP KW',banner:'Banner',vmware:'VMware'};
   o.innerHTML=`
-  <div class="mbox" style="max-width:560px">
+  <div class="mbox mbox-sensor-edit">
     <div class="mhd">
-      <div class="mttl">Edit Sensor — <span style="color:var(--text2)">${esc(s.name)}</span></div>
+      <div class="mttl">Edit Sensor — <span style="color:var(--text2)">${esc(s.name)}</span>
+        <span class="sensor-type-badge">${sIco(s.stype)} ${_tLabels[s.stype]||s.stype}</span>
+      </div>
       <button class="mclose" onclick="closeM('mes')">✕</button>
     </div>
-    <div class="mbdy" style="max-height:70vh;overflow-y:auto">
+    <div class="mbdy" style="flex:1;min-height:0;padding:0">
       ${sensorFormHTML(dev, s)}
     </div>
     <div class="mft">
@@ -419,7 +407,7 @@ async function submitEditSensor(did, sid){
 
 function selType(t){
   document.getElementById('as-t').value=t;
-  document.querySelectorAll('.stpo').forEach(o=>o.classList.toggle('sel',o.dataset.t===t));
+  document.querySelectorAll('#sensor-sidebar .stab-nav').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
   ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
