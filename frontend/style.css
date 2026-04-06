@@ -923,6 +923,17 @@ body{
 /* Settings tab crossfade */
 .mbdy.stab-fade{transition:opacity .2s ease}
 .mbdy.stab-out{opacity:0}
+/* Sensor modal — Add (sidebar) / Edit (no sidebar) */
+.mbox-sensor{width:800px;max-width:96vw;height:82vh;max-height:82vh;display:flex;flex-direction:column}
+.mbox-sensor-edit{width:640px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column}
+.stab-nav .snav-ico{font-size:16px;width:22px;text-align:center;flex-shrink:0}
+.stab-nav .snav-lbl{display:flex;flex-direction:column;line-height:1.2}
+.stab-nav .snav-sub{font-size:9px;color:var(--text3);font-weight:400}
+.sensor-type-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  background:rgba(47,129,247,.12);border:1px solid rgba(47,129,247,.25);border-radius:4px;
+  font-size:11px;font-weight:600;color:var(--accent);margin-left:10px}
+.snr-section{border-top:1px solid var(--border);margin-top:16px;padding-top:14px}
+.snr-section-lbl{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
 /* Integrations sub-tab buttons */
 .itab{display:flex;align-items:center;gap:5px;padding:5px 14px;font-size:12px;font-weight:500;color:var(--text2);background:var(--bg3);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all .15s}
 .itab:hover{background:var(--bg4);color:var(--text)}
