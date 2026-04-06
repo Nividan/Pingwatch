@@ -147,6 +147,8 @@ def handle(h, method, path, body):
     if path == "/api/settings" and method == "PATCH":
         user, _ = h._require("admin")
         if not user: return True
+        _MASKED_KEYS = {'smtp_pass'}
+        _old_vals = {k: ('***' if k in _MASKED_KEYS else str(_settings.get(k, ''))) for k in body}
         ttl = body.get("session_ttl")
         if ttl is not None:
             try:
@@ -294,7 +296,12 @@ def handle(h, method, path, body):
             _db_enqueue(lambda _v=_dm: db_save_settings({"debug_mode": _v}))
             from core.logger import set_debug_mode
             set_debug_mode(_dm == "1")
-        db_log_audit(user, h.client_address[0], 'settings_update', '', str(list(body.keys())))
+        _changes = '; '.join(
+            f"{k}: {_old_vals.get(k, '')} → {'***' if k in _MASKED_KEYS else str(body[k])}"
+            for k in body
+            if k in _MASKED_KEYS or str(_old_vals.get(k, '')) != str(body[k])
+        )
+        db_log_audit(user, h.client_address[0], 'settings_update', '', _changes)
         h._json(200, {"ok": True})
         return True
 

@@ -48,7 +48,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback with full interface context (`interface X / no … / end / wr`)
 - 🔗 Sensor host linking — sensors inherit the device IP by default; setting a host manually marks it as overridden; clearing the host re-links it to the device
 - 🔍 Per-device port scanner with configurable default ports (Settings → Sensors)
-- 🧙 Interactive first-run setup wizard (`start.bat` / `bash start.sh`)
+- 🧙 Interactive first-run setup wizard (`windows\start.bat` / `bash linux/start.sh`)
 - 🐧 Native Linux/macOS support — headless mode, systemd service, auto package-manager detection
 - 📨 Syslog forwarding — RFC 5424 UDP/TCP to any syslog server
 - 🔁 Server restart and shutdown from the web UI (Settings → General)
@@ -102,28 +102,28 @@ cd Pingwatch
 
 **Windows:**
 ```bat
-start.bat
+windows\start.bat
 ```
 
 **Linux / macOS:**
 ```bash
-sudo bash start.sh
+sudo bash linux/start.sh
 ```
 
 The first-run wizard checks packages, configures ports, generates a TLS certificate, sets firewall rules, and initialises the database. Subsequent launches skip the wizard. To re-run it:
 
 ```bash
-start.bat --setup          # Windows
-bash start.sh --setup      # Linux / macOS
-bash start.sh --check      # Re-check required packages only
+windows\start.bat --setup        # Windows
+bash linux/start.sh --setup      # Linux / macOS
+bash linux/start.sh --check      # Re-check required packages only
 ```
 
 **Background service (Linux):**
 ```bash
-sudo bash start.sh --install-service     # install + start systemd service
+sudo bash linux/start.sh --install-service     # install + start systemd service
 sudo systemctl start|stop|restart|status pingwatch
-journalctl -u pingwatch -f               # live logs
-sudo bash start.sh --uninstall-service
+journalctl -u pingwatch -f                     # live logs
+sudo bash linux/start.sh --uninstall-service
 ```
 
 ---
@@ -132,9 +132,9 @@ sudo bash start.sh --uninstall-service
 
 | Mode | Windows | Linux / macOS |
 |------|---------|---------------|
-| Foreground | `start.bat` | `sudo bash start.sh` |
-| Background | `pythonw pingwatch.pyw` | `sudo bash start.sh --install-service` |
-| Re-run wizard | `start.bat --setup` | `bash start.sh --setup` |
+| Foreground | `windows\start.bat` | `sudo bash linux/start.sh` |
+| Background | `pythonw windows\pingwatch.pyw` | `sudo bash linux/start.sh --install-service` |
+| Re-run wizard | `windows\start.bat --setup` | `bash linux/start.sh --setup` |
 
 After startup, PingWatch is available at **https://localhost:8443** (default). The first-run password is printed to the console — change it immediately in **Settings → Users**.
 

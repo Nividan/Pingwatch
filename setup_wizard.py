@@ -1,7 +1,7 @@
 """
 setup_wizard.py — PingWatch first-run interactive setup wizard.
 
-Called by start.bat when no database exists (first launch) or when
+Called by windows/start.bat when no database exists (first launch) or when
 the --setup flag is passed.  Guides the user through:
   1. Required package checks & installs
   2. HTTP port selection
@@ -13,7 +13,7 @@ the --setup flag is passed.  Guides the user through:
   8. Startup service install (systemd on Linux, Task Scheduler on Windows)
 
 Exit codes:
-  0 — setup completed successfully (start.bat will launch server.py)
+  0 — setup completed successfully (windows/start.bat will launch server.py)
   1 — setup failed or was aborted
 """
 
@@ -177,8 +177,8 @@ def _launcher_hint(setup: bool = False) -> str:
     import platform as _plat
     suffix = " --setup" if setup else ""
     if _plat.system() == "Windows":
-        return f"start.bat{suffix}"
-    return f"bash {os.path.join(_BASE, 'start.sh')}{suffix}"
+        return f"windows{os.sep}start.bat{suffix}"
+    return f"bash {os.path.join(_BASE, 'linux', 'start.sh')}{suffix}"
 
 
 def _separator(char: str = "─", width: int = 56):
@@ -1843,7 +1843,7 @@ def step4_snmp_port():
         _tag("info", "  Requires admin privileges (already elevated on Windows).")
     elif _sys in ("Linux", "Darwin"):
         _tag("info", "  Requires root on Linux/macOS. Options:")
-        _tag("info", "    sudo bash start.sh          (run the server as root)")
+        _tag("info", "    sudo bash linux/start.sh     (run the server as root)")
         _tag("info", "    Use port 1162 (no root) + redirect:")
         _tag("info", "      sudo iptables -t nat -A PREROUTING -p udp --dport 162 -j REDIRECT --to-ports 1162")
     _tag("info", "PingWatch auto-falls back to 1162 then 2162 if 162 cannot be bound.")
@@ -2033,7 +2033,7 @@ def step6_shortcut():
         _tag("info", "Desktop shortcut creation is only supported on Windows.")
         _tag("info", f"To start PingWatch on {_sys}, run:")
         if _sys == "Linux" or _sys == "Darwin":
-            _tag("info", f"  bash {os.path.join(_BASE, 'start.sh')}")
+            _tag("info", f"  bash {os.path.join(_BASE, 'linux', 'start.sh')}")
         else:
             _tag("info", f"  python3 {os.path.join(_BASE, 'server.py')}")
         print()
@@ -2052,7 +2052,7 @@ def step6_shortcut():
         print()
         return
 
-    target = os.path.join(_BASE, "start.bat")
+    target = os.path.join(_BASE, "windows", "start.bat")
     icon   = os.path.join(_BASE, "frontend", "favicon.ico")
     ps_cmd = (
         f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
@@ -2212,7 +2212,7 @@ def step8_service():
                 return
         else:
             if not _ask_yn("Install PingWatch as a Windows startup task?", default=True):
-                _tag("info", "Skipping. To install later, re-run: start.bat --setup")
+                _tag("info", "Skipping. To install later, re-run: windows\\start.bat --setup")
                 print()
                 return
 
@@ -2301,7 +2301,7 @@ def step8_service():
     _tag("info", "Install PingWatch as a systemd service so it starts automatically on boot.")
     print()
 
-    service_src = os.path.join(_BASE, "pingwatch.service")
+    service_src = os.path.join(_BASE, "linux", "pingwatch.service")
     service_dst = "/etc/systemd/system/pingwatch.service"
 
     if not os.path.isfile(service_src):
@@ -2319,7 +2319,7 @@ def step8_service():
     else:
         if not _ask_yn("Install PingWatch as a systemd service?", default=True):
             _tag("info", "Skipping. To install later:")
-            _tag("info", f"  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+            _tag("info", f"  sudo bash {os.path.join(_BASE, 'linux', 'start.sh')} --install-service")
             print()
             return
 
@@ -2378,7 +2378,7 @@ def step8_service():
                 wrote_ok = True
             else:
                 _tag("error", f"sudo cp failed: {r.stderr.strip()}")
-                _tag("info",  f"Retry with root:  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+                _tag("info",  f"Retry with root:  sudo bash {os.path.join(_BASE, 'linux', 'start.sh')} --install-service")
         except Exception as e:
             _tag("error", f"Could not install service file: {e}")
 
@@ -2408,7 +2408,7 @@ def step8_service():
         _tag("info", "  journalctl -u pingwatch -f")
     else:
         _tag("warn", "Service install may be incomplete — check errors above.")
-        _tag("info", f"Retry:  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+        _tag("info", f"Retry:  sudo bash {os.path.join(_BASE, 'linux', 'start.sh')} --install-service")
     print()
 
 

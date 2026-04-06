@@ -16,7 +16,7 @@ if os.name == 'nt':
         sys.exit()
 
 # ── Ensure the script's own directory is on sys.path ──────────────────────────
-_here = os.path.dirname(os.path.abspath(__file__))
+_here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 

@@ -75,10 +75,12 @@ pingwatch/
 ├── server.py               ← HTTP/HTTPS dispatcher + entry point
 ├── setup_wizard.py         ← First-run interactive setup wizard
 ├── gui.py                  ← Desktop status window (tkinter)
-├── pingwatch.pyw           ← Windows windowless launcher
-├── start.bat               ← Windows console launcher
-├── start.sh                ← Linux/macOS launcher + service installer
-├── pingwatch.service       ← systemd unit file
+├── linux/
+│   ├── start.sh            ← Linux/macOS launcher + service installer
+│   └── pingwatch.service   ← systemd unit file
+├── windows/
+│   ├── start.bat           ← Windows console launcher
+│   └── pingwatch.pyw       ← Windows windowless launcher
 ├── requirements.txt        ← Python dependencies
 ├── ssh_known_hosts.txt     ← SSH TOFU host key store (auto-created)
 │
