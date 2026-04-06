@@ -330,6 +330,10 @@ def handle(h, method, path, body):
         _d = did
         _db_enqueue(lambda: ipam_sync_device_update(_d, _old_host, _new_host, _new_name))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
+        if "alerts_muted" in body:
+            with STATE._lock:
+                _md = STATE.devices.get(did)
+                if _md: STATE._broadcast("device_status", {"did": did, "status": _md.status})
         h._json(200, {"status": "updated"})
         return True
 
@@ -450,6 +454,8 @@ def handle(h, method, path, body):
             _se_sname = (_se_dev.sensors[sid].name
                          if _se_dev and sid in _se_dev.sensors else sid)
         db_log_audit(user, h.client_address[0], 'sensor_edit', f"{_se_dname}/{_se_sname}")
+        if "alerts_muted" in body and _se_dev:
+            STATE._broadcast("device_status", {"did": did, "status": _se_dev.status})
         h._json(200, {"status": "updated"})
         return True
 
