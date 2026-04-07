@@ -236,6 +236,7 @@ function _alertEvtRow(e) {
     <button class="btn-sm rbac-op" onclick="_alertAck(${e.id})">ACK</button>
     <button class="btn-sm rbac-op" onclick="_alertResolve(${e.id})">Resolve</button>` : '';
   const sevCls = e.severity === 'critical' ? 'alrt-sev-crit'
+               : e.severity === 'recovery' ? 'alrt-sev-recovery'
                : e.severity === 'info'     ? 'alrt-sev-info' : 'alrt-sev-warn';
   return `
     <div class="alrt-evt-row">
@@ -640,7 +641,7 @@ const _AE_OPS = [
 // Known enum values for fields that have a fixed set of options
 const _AE_FIELD_VALUES = {
   event_type:      ['down','recovered','threshold_warning','threshold_critical','threshold_ok'],
-  severity:        ['critical','warning','info'],
+  severity:        ['critical','warning','recovery','info'],
   direction:       ['down','recovered','threshold'],
   threshold_state: ['warn','crit'],
 };

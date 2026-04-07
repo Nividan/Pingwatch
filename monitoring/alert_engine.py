@@ -203,10 +203,10 @@ def _build_ctx(event_type: str, data: dict) -> dict:
     """Build the unified context dict used for condition matching + templates."""
     _sev_map = {
         "flap_down":          "critical",
-        "flap_recovered":     "info",
+        "flap_recovered":     "recovery",
         "threshold_warning":  "warning",
         "threshold_critical": "critical",
-        "threshold_ok":       "info",
+        "threshold_ok":       "recovery",
     }
     # Normalize internal SSE event names to user-friendly values for condition matching
     _etype_norm = {

@@ -124,6 +124,9 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
 
     # Create new connection (outside lock — may block on network)
     ctx = _make_ssl_ctx(verify_ssl)
+    import socket
+    _prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(60)          # cap SmartConnect at 60s
     try:
         si = SmartConnect(
             host=host, user=user, pwd=password,
@@ -135,7 +138,11 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
             raise PermissionError("Authentication failed")
         if "ssl" in err.lower() or "certificate" in err.lower():
             raise ConnectionError("SSL error — try disabling Verify SSL")
+        if isinstance(e, socket.timeout) or "timed out" in err.lower():
+            raise ConnectionError("Connection timed out (60s) — check vCenter/ESXi host is reachable")
         raise ConnectionError(f"Connection failed: {err}")
+    finally:
+        socket.setdefaulttimeout(_prev_timeout)
 
     with _sessions_lock:
         _sessions[key] = (si, now + _SESSION_TTL)

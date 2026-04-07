@@ -1956,6 +1956,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-sev-warn{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);}
 .alrt-sev-crit{color:var(--down);background:var(--down-bg);border:1px solid var(--down-border);}
 .alrt-sev-info{color:var(--text2);background:var(--bg3);border:1px solid var(--border);}
+.alrt-sev-recovery{color:var(--up);background:var(--up-bg);border:1px solid var(--up-border);}
 .alrt-card-info{display:flex;gap:8px;flex-wrap:wrap;}
 .alrt-info-pill{font-size:11px;color:var(--text2);background:var(--bg3);border:1px solid var(--border);
   padding:2px 8px;border-radius:10px;}
