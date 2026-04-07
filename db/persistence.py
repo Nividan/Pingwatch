@@ -319,16 +319,23 @@ def _pg_load(state):
     try:
         with pg_conn("logs") as con:
             cur = con.cursor()
-            # Query 1: last 80 samples per (did, sid) using ROW_NUMBER window function
+            # Disable statement_timeout for this one-time startup restore.
+            # The window-function scan can take several seconds on large tables;
+            # we don't want the server's default timeout to kill it.
+            cur.execute("SET LOCAL statement_timeout = 0")
+            # Query 1: last 80 samples per (did, sid) using ROW_NUMBER window function.
+            # Filter to the retention window so only recent rows are scanned —
+            # dramatically reduces I/O on tables with months of history.
             cur.execute("""
                 SELECT did, sid, ok, ms, value FROM (
                     SELECT did, sid, ok, ms, value,
                            ROW_NUMBER() OVER (PARTITION BY did, sid ORDER BY ts DESC) AS rn
                     FROM sensor_samples
+                    WHERE ts >= %s
                 ) sub
                 WHERE rn <= 80
                 ORDER BY did, sid, rn ASC
-            """)
+            """, (_cutoff,))
             _hist_by_key = {}  # (did, sid) → list of (ok, ms, value), oldest-first
             for _row in cur.fetchall():
                 _hist_by_key.setdefault((_row[0], _row[1]), []).append((_row[2], _row[3], _row[4]))
