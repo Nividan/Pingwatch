@@ -38,8 +38,8 @@ def _status_style(event_type: str, severity: str):
     """Return (banner_color, emoji, label) based on event type / severity."""
     et = (event_type or '').lower()
     sv = (severity   or '').lower()
-    if et == 'recovered':
-        return '#1a7a4a', '\U0001f7e2', 'RECOVERED'   # green
+    if et == 'recovered' or sv == 'recovery':
+        return '#1a7a4a', '\U0001f7e2', 'RECOVERY'    # green
     if et == 'down' or sv == 'critical':
         return '#c0392b', '\U0001f534', 'DOWN'         # red
     if sv == 'warning':
@@ -138,7 +138,7 @@ def send_alert_email(direction, evt):
     to_addr   = _cfg('smtp_to',   '')
     if not (host and from_addr and to_addr):
         return
-    sev        = 'critical' if direction == 'down' else 'info'
+    sev        = 'critical' if direction == 'down' else 'recovery'
     _c, emoji, label = _status_style(direction, sev)
     dname  = _safe(evt.get('dname'))
     sname  = _safe(evt.get('sname'))

@@ -576,8 +576,9 @@ class MonitorState:
                             s.last_value = _raw_val
                             s._last_rate = None
                     else:
-                        s.last_value = None   # first poll — no rate yet
-                        s._last_rate = None
+                        s.last_value  = None  # first poll — no rate yet
+                        s._last_rate  = None
+                        s.last_detail = "—"   # suppress raw counter from UI on first poll
                     s._snmp_prev    = _cur
                     s._snmp_prev_ts = _now
                 except (ValueError, TypeError):
