@@ -1,4 +1,5 @@
 """smtp_alert.py — stdlib SMTP email alerting for PingWatch."""
+import datetime
 import smtplib
 import time
 from email.mime.text import MIMEText
@@ -9,6 +10,10 @@ from core.settings import get as _cfg
 # Rate-limit repeated SMTP failures: suppress duplicate errors for 5 minutes
 _last_error: dict = {}          # host -> (error_str, timestamp)
 _ERROR_SUPPRESS_S = 300         # seconds between identical error logs
+
+# Connection status tracking (in-memory, resets on restart)
+_last_ok_ts: float = 0          # timestamp of last successful send / test
+_last_err: dict = {'ts': 0.0, 'msg': ''}  # last error
 
 
 def _build_msg(subject, body, from_addr, to_addr, html=None):
@@ -40,6 +45,18 @@ def _status_style(event_type: str, severity: str):
     if sv == 'warning':
         return '#d68910', '\U0001f7e0', 'WARNING'      # orange
     return '#2c6fad',   '\U0001f535', 'INFO'           # blue
+
+
+def _fmt_ts(ts_str: str) -> str:
+    """Convert ISO timestamp (e.g. '2026-04-05T16:42:31Z') to 'DD-MM-YYYY HH:MM:SS'."""
+    if not ts_str:
+        return ''
+    try:
+        s = str(ts_str).replace('Z', '+00:00')
+        dt = datetime.datetime.fromisoformat(s)
+        return dt.strftime('%d-%m-%Y %H:%M:%S')
+    except Exception:
+        return str(ts_str)
 
 
 def _build_alert_html(rows: list, event_type: str, severity: str,
@@ -132,7 +149,7 @@ def send_alert_email(direction, evt):
         ('Sensor',   f"{sname} ({_safe(evt.get('stype'))})"),
         ('Host',     _safe(evt.get('host'))),
         ('Severity', sev),
-        ('Time',     _safe(evt.get('ts'))),
+        ('Time',     _fmt_ts(evt.get('ts'))),
         ('Detail',   _safe(evt.get('detail'))),
     ]
     body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
@@ -143,6 +160,7 @@ def send_alert_email(direction, evt):
         srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr, html).as_string())
         srv.quit(); srv = None
         _last_error.pop(host, None)   # clear suppression on success
+        global _last_ok_ts; _last_ok_ts = time.time()
         log.info(f"Alert email sent ({label}): {evt.get('dname')}/{evt.get('sname')}")
     except Exception as e:
         err_str = str(e)
@@ -151,6 +169,7 @@ def send_alert_email(direction, evt):
         if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
             log.error(f"SMTP alert failed (host={host}:{port}): {e}")
             _last_error[host] = (err_str, now)
+        global _last_err; _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
         # else: suppress repeated identical error
     finally:
         if srv:
@@ -206,7 +225,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
             ('Sensor',   f"{sname} ({_safe(ctx.get('stype', ''))})"),
             ('Host',     _safe(ctx.get('host',   ''))),
             ('Severity', severity),
-            ('Time',     _safe(ctx.get('ts',     ''))),
+            ('Time',     _fmt_ts(ctx.get('ts', ''))),
             ('Detail',   _safe(ctx.get('detail', ''))),
         ]
         body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
@@ -221,6 +240,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
                          _build_msg(subject, body, from_addr, rcpt, html).as_string())
         srv.quit(); srv = None
         _last_error.pop(host, None)
+        global _last_ok_ts; _last_ok_ts = time.time()
         log.info(f"Rule alert email sent to {to_addrs}: {subject[:60]}")
     except Exception as e:
         err_str = str(e)
@@ -229,6 +249,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
         if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
             log.error(f"Rule alert SMTP failed (host={host}:{port}): {e}")
             _last_error[host] = (err_str, now)
+        global _last_err; _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
     finally:
         if srv:
             try: srv.quit()
@@ -237,6 +258,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
 
 def test_smtp(cfg):
     """Test SMTP with provided config dict. Returns (ok:bool, msg:str)."""
+    global _last_ok_ts, _last_err
     srv = None
     try:
         srv = _connect(
@@ -249,10 +271,31 @@ def test_smtp(cfg):
         body      = 'This is a test email from PingWatch SMTP alert system.'
         srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr).as_string())
         srv.quit(); srv = None
+        _last_ok_ts = time.time()
         return True, 'Test email sent successfully.'
     except Exception as e:
+        _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
         return False, str(e)
     finally:
         if srv:
             try: srv.quit()
             except Exception: pass
+
+
+def get_smtp_status() -> dict:
+    """Return connection status dict for the Settings API."""
+    host = str(_cfg('smtp_host', '')).strip()
+    if not host:
+        state = 'unconfigured'
+    elif _last_err['ts'] and (not _last_ok_ts or _last_err['ts'] > _last_ok_ts):
+        state = 'error'
+    elif _last_ok_ts:
+        state = 'ok'
+    else:
+        state = 'configured'   # host is set but nothing has been sent yet
+    return {
+        'state':        state,
+        'last_ok_ts':   _last_ok_ts or None,
+        'last_err_ts':  _last_err['ts'] or None,
+        'last_err_msg': _last_err['msg'],
+    }

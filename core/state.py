@@ -23,7 +23,7 @@ class _SensorScheduler:
     def __init__(self, executor, run_fn):
         self._heap     = []          # (run_at, seq, did, sid)
         self._seq      = 0
-        self._lock     = threading.Lock()
+        self._lock     = threading.RLock()
         self._wake     = threading.Event()
         self._executor = executor
         self._run_fn   = run_fn
@@ -83,7 +83,7 @@ def _smtp_down_delayed(sensor, data):
     """Sleep smtp_down_delay seconds, then send alert only if sensor is still down."""
     delay = max(0, int(_cfg('smtp_down_delay', 10)))
     time.sleep(delay)
-    if sensor._alerted_down:
+    if sensor._alerted_down and sensor.running:
         send_alert_email('down', data)
         sensor._email_sent_down = True
 
@@ -99,7 +99,10 @@ class Sensor:
                  fail_after=2, recover_after=1,
                  warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                  keyword="", keyword_case=False, banner_regex="",
-                 alerts_muted=False, snmp_unit=""):
+                 alerts_muted=False, snmp_unit="",
+                 vmware_user="", vmware_password="",
+                 vmware_vm_id="", vmware_vm_name="", vmware_metric="",
+                 vmware_disk_path=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -117,9 +120,10 @@ class Sensor:
         self.dns_record_type       = "A"
         self.dns_server            = ""
         self.http_expected_status  = 0
-        # Debounce
-        self.fail_after    = max(1, int(fail_after or 1))
-        self.recover_after = max(1, int(recover_after or 1))
+        # Debounce — now handled by alert rules (trigger_count / recover_count).
+        # Hardcoded to 1 so sensor fires events immediately on first state change.
+        self.fail_after    = 1
+        self.recover_after = 1
         # Thresholds
         self.warn_ms       = warn_ms
         self.crit_ms       = crit_ms
@@ -132,6 +136,13 @@ class Sensor:
         self.alerts_muted  = bool(alerts_muted)
         self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
         self.host_override = False   # True = host was manually set; don't sync from device
+        # VMware fields
+        self.vmware_user     = vmware_user or ""
+        self.vmware_password = vmware_password or ""   # Fernet-encrypted ciphertext
+        self.vmware_vm_id    = vmware_vm_id or ""      # VM managed-object ID (e.g. "vm-123")
+        self.vmware_vm_name  = vmware_vm_name or ""    # VM display name (e.g. "dc0.bslab.local")
+        self.vmware_metric   = vmware_metric or ""     # metric key from VM_METRICS
+        self.vmware_disk_path = vmware_disk_path or ""  # for disk_used_pct: e.g. "C:\" or "/"
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -141,7 +152,10 @@ class Sensor:
         self._consec_ok       = 0
         self._alerted_down    = False
         self._email_sent_down = False   # True only after the delayed DOWN email was actually sent
-        self._threshold_state = "ok"
+        self._recovery_pending            = False   # keep sending recovery events to alert engine
+        self._threshold_state             = "ok"
+        self._consec_threshold            = 0       # consecutive probes in current threshold state
+        self._threshold_recovery_pending  = False   # keep sending threshold_ok events to engine
         self.history               = collections.deque(maxlen=self.MAX)
         self.thr_history           = collections.deque(maxlen=self.MAX)
         self.total          = 0
@@ -194,6 +208,16 @@ class Sensor:
         if self.stype == "banner": return probe_banner(
                                                     self.host, self.port or 21,
                                                     self.banner_regex, self.timeout)
+        if self.stype == "vmware":
+            from vmware import vmware_probe
+            from db.backups import decrypt_pw
+            return vmware_probe(self.host, self.vmware_user,
+                                decrypt_pw(self.vmware_password),
+                                self.vmware_vm_id, self.vmware_metric,
+                                port=self.port or 443,
+                                verify_ssl=self.verify_ssl,
+                                timeout=self.timeout,
+                                disk_path=self.vmware_disk_path)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -227,6 +251,12 @@ class Sensor:
             "alerts_muted":          self.alerts_muted,
             "host_override":         self.host_override,
             "snmp_unit":             self.snmp_unit,
+            "vmware_user":           self.vmware_user,
+            "vmware_vm_id":          self.vmware_vm_id,
+            "vmware_vm_name":        self.vmware_vm_name,
+            "vmware_metric":         self.vmware_metric,
+            "vmware_disk_path":      self.vmware_disk_path,
+            "has_vmware_password":   bool(self.vmware_password),
             "threshold_state":       self._threshold_state,
             "alive":          self.alive,
             "last_ms":        self.last_ms,
@@ -253,6 +283,11 @@ class Device:
         self.alerts_muted = False
         self.sensors      = {}
         self._sid_ctr     = 0
+        # Device-level default credentials (pre-fill for new sensors)
+        self.snmp_community_default  = ""
+        self.snmp_version_default    = ""
+        self.vmware_user_default     = ""
+        self.vmware_password_default = ""
 
     def next_sid(self):
         self._sid_ctr += 1
@@ -260,9 +295,12 @@ class Device:
 
     @property
     def status(self):
-        vals = [s.alive for s in self.sensors.values()]
+        active = [s for s in self.sensors.values() if not s.alerts_muted]
+        vals = [s.alive for s in active]
         if not vals or all(v is None for v in vals): return "unknown"
         if any(v is False for v in vals): return "down"
+        if any(s._threshold_state == "crit" for s in active): return "down"
+        if any(s._threshold_state == "warn" for s in active): return "warn"
         return "up"
 
     def to_dict(self):
@@ -275,6 +313,10 @@ class Device:
             "alerts_muted": self.alerts_muted,
             "status":       self.status,
             "sensors":      [s.to_dict() for s in self.sensors.values()],
+            "snmp_community_default":      self.snmp_community_default,
+            "snmp_version_default":        self.snmp_version_default,
+            "vmware_user_default":         self.vmware_user_default,
+            "has_vmware_password_default":  bool(self.vmware_password_default),
         }
 
 
@@ -315,14 +357,15 @@ def _send_webhook(url: str, payload: dict):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=5)
+        with urllib.request.urlopen(req, timeout=5) as _resp:
+            _resp.read(1024)  # consume response to release socket
     except Exception as e:
         log.warning(f"Webhook failed ({url}): {e}")
 
 
 class MonitorState:
     def __init__(self):
-        self._lock     = threading.Lock()
+        self._lock     = threading.RLock()
         self.devices   = {}
         self._did_ctr  = 0
         self._sse      = []
@@ -359,7 +402,10 @@ class MonitorState:
                    snmp_oid="1.3.6.1.2.1.1.1.0", snmp_version="2c",
                    fail_after=1, recover_after=1,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
-                   keyword="", keyword_case=False, banner_regex="", snmp_unit=""):
+                   keyword="", keyword_case=False, banner_regex="", snmp_unit="",
+                   vmware_user="", vmware_password="",
+                   vmware_vm_id="", vmware_vm_name="", vmware_metric="",
+                   vmware_disk_path=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -373,7 +419,10 @@ class MonitorState:
                        warn_ms=warn_ms, crit_ms=crit_ms,
                        loss_warn_pct=loss_warn_pct, loss_crit_pct=loss_crit_pct,
                        keyword=keyword, keyword_case=keyword_case, banner_regex=banner_regex,
-                       snmp_unit=snmp_unit)
+                       snmp_unit=snmp_unit,
+                       vmware_user=vmware_user, vmware_password=vmware_password,
+                       vmware_vm_id=vmware_vm_id, vmware_vm_name=vmware_vm_name,
+                       vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -389,6 +438,8 @@ class MonitorState:
             s.running = False
             s._stopped.clear()
         s._stopped.wait(timeout=3.0)   # wait for _run_once to exit (≤0.5s normally)
+        if not s._stopped.is_set():
+            log_sensors.warning(f"Sensor {did}/{sid} did not stop within 3s — forcing config update")
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return False
@@ -398,10 +449,12 @@ class MonitorState:
                         "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                         "dns_query", "dns_record_type", "dns_server",
                         "http_expected_status",
-                        "fail_after", "recover_after",
                         "warn_ms", "crit_ms", "loss_warn_pct", "loss_crit_pct",
                         "keyword", "keyword_case", "banner_regex", "alerts_muted",
-                        "snmp_unit"]
+                        "snmp_unit",
+                        "vmware_user", "vmware_password",
+                        "vmware_vm_id", "vmware_vm_name", "vmware_metric",
+                        "vmware_disk_path"]
             for k, v in kwargs.items():
                 if k in editable and v is not None:
                     if k == 'host':
@@ -469,6 +522,7 @@ class MonitorState:
     def _run_once(self, did, sid):
         # Import here to avoid circular import at module load time
         from db import db_log_err, db_log_flap, db_buffer_sample, _db_enqueue
+        from db.events import db_auto_resolve_flap
 
         with self._lock:
             dev = self.devices.get(did)
@@ -546,18 +600,39 @@ class MonitorState:
                     "host": s.host, "stype": s.stype, "ts": _ts,
                     "detail": "Recovered", "direction": "recovered",
                     "grp": dev.group,
+                    "consec_count": s._consec_ok,
                 }
                 if not _muted:
                     self._broadcast("flap_recovered", rec_data)
                     log_sensors.info(f"RECOVERED: {dev.name}/{s.name} ({s.host})")
                     _rec_cap = dict(rec_data)
-                    _db_enqueue(lambda: db_log_flap(_rec_cap))
+                    _db_enqueue(lambda: db_auto_resolve_flap(
+                        _rec_cap["did"], _rec_cap["sid"], _rec_cap["ts"],
+                        directions=("down",)
+                    ))
                     if s._email_sent_down:
                         _smtp_cap = dict(rec_data)
                         threading.Thread(target=send_alert_email, args=('recovered', _smtp_cap), daemon=True).start()
                 s._alerted_down    = False
                 s._email_sent_down = False
+                s._recovery_pending = True
                 s._consec_ok       = 0
+            elif s._recovery_pending and not _muted:
+                # Subsequent successes after recovery — alert engine only (skip SSE/syslog)
+                _eng_data = {
+                    "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                    "host": s.host, "stype": s.stype, "ts": _ts,
+                    "detail": "Recovered", "direction": "recovered",
+                    "grp": dev.group,
+                    "consec_count": s._consec_ok,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send("flap_recovered", _eng_data)
+                except Exception:
+                    pass
+                if s._consec_ok >= 60:
+                    s._recovery_pending = False
         else:
             s.alive       = False
             s.last_ms     = None
@@ -573,12 +648,14 @@ class MonitorState:
             # ── Debounce: track consecutive failures ──
             s._consec_ok   = 0
             s._consec_fail += 1
+            s._recovery_pending = False
             if not s._alerted_down and s._consec_fail >= s.fail_after:
                 flap_data = {
                     "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
                     "host": s.host, "stype": s.stype, "ts": _ts,
                     "detail": result["detail"], "direction": "down",
                     "grp": dev.group,
+                    "consec_count": s._consec_fail,
                 }
                 if not _muted:
                     self._broadcast("flap_down", flap_data)
@@ -596,6 +673,20 @@ class MonitorState:
                     s._email_sent_down = False
                     threading.Thread(target=_smtp_down_delayed, args=(s, _smtp_cap), daemon=True).start()
                 s._alerted_down = True
+            elif s._alerted_down and not _muted:
+                # Subsequent failures — alert engine only (skip SSE/syslog)
+                _eng_data = {
+                    "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                    "host": s.host, "stype": s.stype, "ts": _ts,
+                    "detail": result["detail"], "direction": "down",
+                    "grp": dev.group,
+                    "consec_count": s._consec_fail,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send("flap_down", _eng_data)
+                except Exception:
+                    pass
 
         # ── Threshold state check (transitions only) ──
         _new_thr = "ok"
@@ -613,6 +704,8 @@ class MonitorState:
                 else:
                     try: _thr_chk = float(s.last_value)
                     except (TypeError, ValueError): pass
+            elif s.stype == 'vmware' and s.vmware_metric in ('uptime', 'on', 'disk_read', 'disk_write', 'disk_usage'):
+                pass  # no threshold comparison for informational metrics
             elif s.last_ms is not None:
                 _thr_chk = s.last_ms
             if _thr_chk is not None:
@@ -623,9 +716,12 @@ class MonitorState:
         elif s.loss_warn_pct and s.loss_pct >= s.loss_warn_pct:
             if _new_thr != "crit": _new_thr = "warn"
         if _new_thr != s._threshold_state:
+            # State CHANGED — reset counter, do full broadcast
             _prev_thr = s._threshold_state
             s._threshold_state = _new_thr
+            s._consec_threshold = 1
             if _new_thr != "ok" and not _muted:
+                s._threshold_recovery_pending = False
                 _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
                 _thr_evt_data = {
                     "did": did, "sid": sid, "dname": dev.name,
@@ -633,6 +729,7 @@ class MonitorState:
                     "state": _new_thr, "ts": _ts,
                     "ms": s.last_ms, "loss_pct": s.loss_pct,
                     "grp": dev.group,
+                    "consec_count": 1,
                 }
                 self._broadcast(_tevt, _thr_evt_data)
                 if s._last_rate is not None:
@@ -642,8 +739,14 @@ class MonitorState:
                     else:
                         _unit = _u2 + '/s' if _u2 else '/s'
                     _val_disp = s.last_value or f"{s._last_rate:.2f}{_unit}"
+                elif s.stype == 'vmware':
+                    _unit = ''
+                    _val_disp = s.last_detail or s.last_value or ''
                 elif s.stype in ('snmp', 'tls'):
-                    _unit = ''; _val_disp = s.last_value or ''
+                    _u3 = s.snmp_unit if s.stype == 'snmp' else ''
+                    _unit = f" {_u3}" if _u3 else ''
+                    _rv = s.last_value or ''
+                    _val_disp = f"{_rv} {_u3}" if _u3 else _rv
                 else:
                     _unit = 'ms'; _val_disp = f"{s.last_ms}ms"
                 if _new_thr == "crit":
@@ -655,20 +758,59 @@ class MonitorState:
                 _thr_flap["detail"]    = _val_disp
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
-                # Threshold recovered — broadcast and persist
+                # Threshold recovered — broadcast and resolve existing event
+                s._threshold_recovery_pending = True
                 _thr_rec_data = {
                     "did": did, "sid": sid, "dname": dev.name,
                     "sname": s.name, "host": s.host, "stype": s.stype,
                     "state": "ok", "ts": _ts,
                     "ms": s.last_ms, "loss_pct": s.loss_pct,
                     "grp": dev.group,
+                    "consec_count": 1,
                 }
                 self._broadcast("threshold_ok", _thr_rec_data)
                 log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
-                _thr_rec_flap = dict(_thr_rec_data)
-                _thr_rec_flap["direction"] = "threshold_ok"
-                _thr_rec_flap["detail"]    = s.last_value or ""
-                _db_enqueue(lambda _f=_thr_rec_flap: db_log_flap(_f))
+                _thr_rec_ts = _ts
+                _thr_rec_did = did
+                _thr_rec_sid = sid
+                _db_enqueue(lambda: db_auto_resolve_flap(
+                    _thr_rec_did, _thr_rec_sid, _thr_rec_ts,
+                    directions=("threshold_warn", "threshold_crit")
+                ))
+        else:
+            # SAME state as previous probe — increment counter, engine only
+            s._consec_threshold += 1
+            if s._threshold_state != "ok" and not _muted:
+                _tevt = "threshold_critical" if s._threshold_state == "crit" else "threshold_warning"
+                _eng_thr = {
+                    "did": did, "sid": sid, "dname": dev.name,
+                    "sname": s.name, "host": s.host, "stype": s.stype,
+                    "state": s._threshold_state, "ts": _ts,
+                    "ms": s.last_ms, "loss_pct": s.loss_pct,
+                    "grp": dev.group,
+                    "consec_count": s._consec_threshold,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send(_tevt, _eng_thr)
+                except Exception:
+                    pass
+            elif s._threshold_state == "ok" and s._threshold_recovery_pending and not _muted:
+                _eng_thr_ok = {
+                    "did": did, "sid": sid, "dname": dev.name,
+                    "sname": s.name, "host": s.host, "stype": s.stype,
+                    "state": "ok", "ts": _ts,
+                    "ms": s.last_ms, "loss_pct": s.loss_pct,
+                    "grp": dev.group,
+                    "consec_count": s._consec_threshold,
+                }
+                try:
+                    from monitoring.alert_engine import alert_engine_send
+                    alert_engine_send("threshold_ok", _eng_thr_ok)
+                except Exception:
+                    pass
+                if s._consec_threshold >= 60:
+                    s._threshold_recovery_pending = False
 
         s.thr_history.append(s._threshold_state)
         if result["ok"]:

@@ -13,7 +13,7 @@ import socket
 
 from core.config import SNMP_TRAP_PORT
 from db import _db_enqueue, db_log_trap
-from core.logger import log
+from core.logger import log_sensors as log
 
 
 # ── BER / ASN.1 helpers ──────────────────────────────────────────────────────

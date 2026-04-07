@@ -35,6 +35,7 @@ from db              import (
     db_init, logs_db_init, db_load, db_seed_users,
     db_load_settings, db_save,
 )
+from db.backend      import is_pg, needs_setup
 
 import core.app_state as app_state
 from core.app_state import STATE
@@ -63,25 +64,34 @@ _JS_FILES = [
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
 
+_HTML_CACHE     = None   # cached assembled index.html bytes
+_MAP_HTML_CACHE = None   # cached map.html bytes
+
 
 def _load_map_html() -> bytes:
-    with open(_MAP_HTML_PATH, 'rb') as f:
-        return f.read()
+    global _MAP_HTML_CACHE
+    if _MAP_HTML_CACHE is None:
+        with open(_MAP_HTML_PATH, 'rb') as f:
+            _MAP_HTML_CACHE = f.read()
+    return _MAP_HTML_CACHE
 
 
 def _load_html() -> bytes:
-    base  = os.path.join(FRONTEND_DIR, "index.html")
-    css_f = os.path.join(FRONTEND_DIR, "style.css")
-    with open(base, "r", encoding="utf-8") as f:
-        html = f.read()
-    with open(css_f, "r", encoding="utf-8") as f:
-        html = html.replace("<!-- STYLE_INJECT -->", f"<style>{f.read()}</style>", 1)
-    js_parts = []
-    for name in _JS_FILES:
-        with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
-            js_parts.append(f.read())
-    html = html.replace("<!-- SCRIPT_INJECT -->", f"<script>{''.join(js_parts)}</script>", 1)
-    return html.encode("utf-8")
+    global _HTML_CACHE
+    if _HTML_CACHE is None:
+        base  = os.path.join(FRONTEND_DIR, "index.html")
+        css_f = os.path.join(FRONTEND_DIR, "style.css")
+        with open(base, "r", encoding="utf-8") as f:
+            html = f.read()
+        with open(css_f, "r", encoding="utf-8") as f:
+            html = html.replace("<!-- STYLE_INJECT -->", f"<style>{f.read()}</style>", 1)
+        js_parts = []
+        for name in _JS_FILES:
+            with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
+                js_parts.append(f.read())
+        html = html.replace("<!-- SCRIPT_INJECT -->", f"<script>{''.join(js_parts)}</script>", 1)
+        _HTML_CACHE = html.encode("utf-8")
+    return _HTML_CACHE
 
 
 # ── Custom server: silences browser-disconnect noise ─────────────
@@ -139,11 +149,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Set-Cookie", cookie)
+        self._sec_headers()
         self.end_headers()
         self.wfile.write(body)
 
     import re as _re
-    _HOST_RE = _re.compile(r'^[a-zA-Z0-9._\-]+(:\d+)?$')
+    _HOST_RE = _re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(:\d+)?$')
 
     @staticmethod
     def _valid_host(h): return bool(h and Handler._HOST_RE.match(h))
@@ -216,6 +227,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, monitoring, settings, topology, export, backups
         p = urlparse(self.path).path
 
+        # ── Setup wizard intercept (first-run) ────────────────────
+        if needs_setup():
+            if p == "/setup" or p == "/":
+                _setup_html = os.path.join(FRONTEND_DIR, "setup.html")
+                if os.path.isfile(_setup_html):
+                    with open(_setup_html, "rb") as _f:
+                        data = _f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self._json(503, {"error": "Setup wizard not found"})
+                return
+            if p.startswith("/api/setup/"):
+                from routes import setup as _setup_mod
+                if _setup_mod.handle(self, "GET", p, {}):
+                    return
+            # Serve static assets needed by setup page
+            ext = os.path.splitext(p)[1].lower()
+            if ext in _STATIC_TYPES:
+                pass  # fall through to static handler below
+            else:
+                self._json(503, {"error": "Setup required", "redirect": "/setup"})
+                return
+
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
         if p in ("/", "/index.html"):
             body = _load_html()
@@ -276,6 +314,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         from routes import auth, devices, monitoring, settings, topology, export, backups, tls as _tls_mod
         p = urlparse(self.path).path
+
+        # ── Setup wizard intercept (first-run) ────────────────────
+        if needs_setup() and p.startswith("/api/setup/"):
+            body = self._body()
+            if body is None: return
+            from routes import setup as _setup_mod
+            if _setup_mod.handle(self, "POST", p, body):
+                return
+            self._json(404, {"error": "not found"})
+            return
 
         # DB import reads its own oversized body before we call _body()
         if _RE_DB_IMPORT.match(p):
@@ -436,15 +484,49 @@ def main():
         except Exception as _pe:
             log.error(f"DB import: failed to apply pending Logs DB import — {_pe}")
 
-    # ── One-time migration: split legacy single-DB → dual-DB ─────────
-    try:
-        from db.migration import run_migration_if_needed
-        run_migration_if_needed()
-    except Exception as _me:
-        log.error(f"DB migration error (non-fatal): {_me}")
+    # ── Load database backend config ───────────────────────────────────
+    from db.backend import load_config as _load_backend_config
+    _load_backend_config()
+
+    # ── PostgreSQL pool init (if configured) ────────────────────────
+    if is_pg():
+        from db.pg_pool import pg_init_pool, pg_test_connection
+        from db.backend import get_config
+        _cfg = get_config()
+        _ok, _err = pg_test_connection(
+            _cfg["pg_host"], _cfg["pg_port"], _cfg["pg_database"],
+            _cfg["pg_user"], _cfg["pg_password"],
+        )
+        if not _ok:
+            log.error(f"PostgreSQL connection failed: {_err}")
+            log.error("Refusing to start — fix PostgreSQL configuration and restart.")
+            return
+        pg_init_pool()
+        log.info(f"PostgreSQL pool ready: {_cfg['pg_host']}:{_cfg['pg_port']}/{_cfg['pg_database']}")
 
     db_init()
     logs_db_init()
+
+    # PG partition migration (v0.8.0) — convert flat sensor_samples to partitioned
+    if is_pg():
+        try:
+            from db.pg_pool import _pool as _raw_pool
+            from db.pg_schema import pg_migrate_to_partitioned
+            _raw_con = _raw_pool.getconn()
+            try:
+                pg_migrate_to_partitioned(_raw_con)
+            finally:
+                _raw_pool.putconn(_raw_con)
+        except Exception as _pe:
+            log.error(f"PG partition migration: {_pe}")
+
+    # Rollup backfill (v0.8.0) — populate rollup tables from existing data
+    try:
+        from db.samples import db_rollup_backfill
+        db_rollup_backfill()
+    except Exception as _re:
+        log.error(f"Rollup backfill: {_re}")
+
     try:
         init_topo_db()
     except Exception as _e:
@@ -461,10 +543,31 @@ def main():
         log.error(f"SNMP seed load failed: {_se}")
     _settings.load(db_load_settings())
 
+    # Apply debug mode from saved settings
+    from core.logger import set_debug_mode as _set_dbg
+    _set_dbg(int(_settings.get("debug_mode", 0) or 0) == 1)
+
+    # Auto-scale probe executor: 1 worker per 4 sensors, clamped [64, 512].
+    # Manual override: set max_workers_executor to 4-512 in settings.
+    # Setting it to 0 (or blank in UI) returns to auto mode.
+    import concurrent.futures as _cf
+    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
+    _sensor_count = sum(len(d.sensors) for d in STATE.devices.values())
+    _mw = _mw_override if _mw_override >= 4 else max(64, min(512, _sensor_count // 4 or 64))
+    if _mw != 64:
+        STATE._executor = _cf.ThreadPoolExecutor(max_workers=_mw, thread_name_prefix='pw-sensor')
+        STATE._scheduler._executor = STATE._executor
+    log.info(f"Probe executor: {_mw} workers ({'manual' if _mw_override >= 4 else 'auto'}, {_sensor_count} sensors)")
+
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))
-    log.info(f"Database: {DB_PATH}")
-    log.info(f"Logs DB:  {LOGS_DB_PATH}")
+    if is_pg():
+        from db.backend import get_config as _get_cfg
+        _c = _get_cfg()
+        log.info(f"Database: PostgreSQL {_c['pg_host']}:{_c['pg_port']}/{_c['pg_database']}")
+    else:
+        log.info(f"Database: {DB_PATH}")
+        log.info(f"Logs DB:  {LOGS_DB_PATH}")
 
     # ── Bind HTTP port FIRST — fail fast before loading state ──────
     try:
@@ -541,11 +644,20 @@ def main():
         except Exception as _tls_err:
             log.error(f"TLS startup failed — falling back to HTTP: {_tls_err}", exc_info=True)
 
-    # ── Optional HTTP → HTTPS redirect server ───────────────────────
-    if app_state.tls_active and int(_settings.get("http_redirect", 0)):
+    # ── Optional HTTP server (redirect or independent) ──────────────
+    if app_state.tls_active and int(_settings.get("http_enabled", 1)):
         _http_port = int(_settings.get("http_port", PORT))
         _https_port = app_state.effective_port
-        _start_http_redirect(_http_port, _https_port)
+        if int(_settings.get("http_redirect", 0)):
+            _start_http_redirect(_http_port, _https_port)
+        else:
+            # Both HTTP and HTTPS: serve dashboard independently on HTTP port
+            try:
+                _http_srv = QuietServer((BIND, _http_port), Handler)
+                threading.Thread(target=_http_srv.serve_forever, daemon=True).start()
+                log.info(f"HTTP server ready on port {_http_port}")
+            except Exception as _he:
+                log.warning(f"HTTP server could not bind to port {_http_port}: {_he}")
 
     # ── Load state & start background threads ──────────────────────
     _t0 = time.time()
@@ -563,6 +675,8 @@ def main():
     start_scheduler()
     from monitoring.alert_engine import alert_engine_start
     alert_engine_start()
+    from monitoring.syslog_client import _attach_app_log_handlers
+    _attach_app_log_handlers()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
@@ -572,7 +686,7 @@ def main():
     # ── GUI ────────────────────────────────────────────────────────
     from core.logger import log_buffer
     _headless_stop = threading.Event()
-    _headless_mode = int(_settings.get("headless", "0"))
+    _headless_mode = ("--headless" in sys.argv) or int(_settings.get("headless", "0"))
 
     if _headless_mode:
         # User explicitly chose server/headless mode during setup — skip all GUI
@@ -635,6 +749,10 @@ def main():
     STATE._executor.shutdown(wait=False)
     db_save(STATE)
     log.info("Configuration saved.")
+    if is_pg():
+        from db.pg_pool import pg_close_pool
+        pg_close_pool()
+        log.info("PostgreSQL pool closed.")
     server.shutdown()
 
 

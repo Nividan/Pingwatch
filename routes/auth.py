@@ -20,7 +20,8 @@ from core.config import DB_PATH
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
                          db_delete_user, db_set_password, db_get_user_auth_type,
                          db_update_profile, db_update_own_profile)
-from core.logger import log
+from db.backend  import is_pg
+from core.app_state import tls_active
 import core.settings as _settings
 
 _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -28,6 +29,18 @@ _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 def _get_user_profile(username: str) -> dict:
     """Return {full_name, email} for username."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT full_name, email FROM users WHERE username=%s", (username,)
+                )
+                row = cur.fetchone()
+            return {"full_name": row["full_name"] or "", "email": row["email"] or ""} if row else {}
+        except Exception:
+            return {}
+    # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         row = con.execute(
@@ -45,6 +58,11 @@ _FAIL_LOG: dict = {}   # ip → [timestamp, ...]
 _FAIL_WINDOW = 60
 _FAIL_MAX    = 5
 
+# ── Admin password-reset rate-limiting (per-target) ──────────────
+_PW_RESET_LOCK = threading.Lock()
+_PW_RESET_LOG: dict = {}   # username → last_reset_timestamp
+_PW_RESET_COOLDOWN  = 10   # seconds between resets for the same user
+
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
@@ -57,8 +75,9 @@ def handle(h, method, path, body):
             role    = auth_check_role(token) or "viewer"
             profile = _get_user_profile(user)
             h._json(200, {"username": user, "role": role,
-                          "full_name": profile.get("full_name", ""),
-                          "email":     profile.get("email", "")})
+                          "full_name":   profile.get("full_name", ""),
+                          "email":       profile.get("email", ""),
+                          "session_ttl": int(_settings.get("session_ttl", 86400))})
         else:
             h._json(401, {"error": "unauthorized"})
         return True
@@ -146,7 +165,14 @@ def handle(h, method, path, body):
         if not ok:
             h._json(409, {"error": "username already exists"})
             return True
-        log.info(f"User created: {username} (role={new_role}, auth_type={auth_type})")
+        # Optionally assign to a group at creation time
+        _gid = body.get("group_id")
+        if _gid is not None:
+            try:
+                _gid = int(_gid) if _gid != "" else None
+            except (ValueError, TypeError):
+                _gid = None
+            db_update_profile(username, '', '', group_id=_gid)
         db_log_audit(user, h.client_address[0], 'user_create', username,
                      f"role={new_role},auth_type={auth_type}")
         h._json(200, {"ok": True})
@@ -169,7 +195,6 @@ def handle(h, method, path, body):
         if not ok:
             h._json(404, {"error": "user not found"})
             return True
-        log.info(f"User deleted: {username}")
         db_log_audit(me, h.client_address[0], 'user_delete', username)
         h._json(200, {"ok": True})
         return True
@@ -187,9 +212,15 @@ def handle(h, method, path, body):
         if len(password) < 8:
             h._json(400, {"error": "Password must be at least 8 characters"})
             return True
+        with _PW_RESET_LOCK:
+            last = _PW_RESET_LOG.get(username, 0)
+            if time.time() - last < _PW_RESET_COOLDOWN:
+                h._json(429, {"error": "Password was just reset for this user. Try again shortly."})
+                return True
         db_set_password(username, password)
+        with _PW_RESET_LOCK:
+            _PW_RESET_LOG[username] = time.time()
         auth_revoke_user_sessions(username)
-        log.info(f"Password reset for user: {username}")
         db_log_audit(user, h.client_address[0], 'pass_reset', username)
         h._json(200, {"ok": True})
         return True
@@ -215,7 +246,6 @@ def handle(h, method, path, body):
             h._json(400, {"error": "Current password is incorrect"})
             return True
         db_set_password(me, new_pw)
-        log.info(f"User {me} changed their own password")
         db_log_audit(me, h.client_address[0], 'pass_change', me)
         h._json(200, {"ok": True})
         return True
@@ -242,17 +272,17 @@ def handle(h, method, path, body):
             with _FAIL_LOCK:
                 _FAIL_LOG.setdefault(ip, []).append(time.time())
             db_log_audit(username, ip, 'login_fail', username)
-            log.warning(f"Login FAILED: {username!r} from {ip}")
             h._json(401, {"error": "Invalid username or password"})
             return True
         with _FAIL_LOCK:
             _FAIL_LOG.pop(ip, None)
         db_log_audit(username, ip, 'login_ok', username)
-        log.info(f"Login OK: {username!r} from {ip}")
         role = auth_check_role(token) or "viewer"
+        _sec = "; Secure" if tls_active else ""
         h._send_with_cookie(
-            200, {"ok": True, "username": username, "role": role},
-            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age={_settings.get('session_ttl', 86400)}"
+            200, {"ok": True, "username": username, "role": role,
+                  "session_ttl": int(_settings.get("session_ttl", 86400))},
+            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
         )
         return True
 
@@ -262,7 +292,8 @@ def handle(h, method, path, body):
         me_logout = auth_check(token) or "anonymous"
         if token: auth_logout(token)
         db_log_audit(me_logout, h.client_address[0], 'logout', me_logout)
-        h._send_with_cookie(200, {"ok": True}, "session=; HttpOnly; Path=/; Max-Age=0")
+        _sec = "; Secure" if tls_active else ""
+        h._send_with_cookie(200, {"ok": True}, f"session=; HttpOnly; Path=/; Max-Age=0{_sec}")
         return True
 
     return False

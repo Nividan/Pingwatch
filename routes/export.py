@@ -1,11 +1,19 @@
 """
 routes/export.py — Database export, import, and audit log endpoints.
 
-Handles:
+SQLite mode:
   GET  /api/db/export         — download Main DB (config only)
   GET  /api/db/export/logs    — download Logs DB (sensor history)
   GET  /api/db/export/bundle  — download ZIP bundle (both DBs + manifest)
   POST /api/db/import         — upload Main DB, Logs DB, or ZIP bundle
+
+PostgreSQL mode:
+  GET  /api/db/export         — pg_dump of main schema (.sql)
+  GET  /api/db/export/logs    — pg_dump of logs schema (.sql)
+  GET  /api/db/export/bundle  — ZIP bundle of both schema dumps
+  POST /api/db/import         — not supported (returns 501 with instructions)
+
+Both modes:
   GET  /api/audit             — audit log entries
   GET  /api/logs/{name}       — tail a log file
 """
@@ -19,7 +27,9 @@ import sys
 import tempfile
 import threading
 import time
+import re
 import zipfile
+from urllib.parse import urlparse, parse_qs
 
 from core.config import (
     DB_PATH, LOGS_DB_PATH,
@@ -28,6 +38,12 @@ from core.config import (
 )
 from db          import db_log_audit, db_get_audit
 from core.logger import log, LOG_FILES
+
+_LOG_LINE_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+'
+    r'(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+'
+    r'(.*)'
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,6 +60,37 @@ def _sqlite_backup_bytes(src_path) -> bytes:
                 src.backup(dst)
         finally:
             src.close()
+        with open(tmp, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _pg_dump_bytes(schema: str) -> bytes:
+    """Run pg_dump for one schema and return the SQL dump as bytes."""
+    import subprocess as _sp
+    from db.backend import get_config
+    cfg = get_config()
+    fd, tmp = tempfile.mkstemp(suffix=".sql")
+    os.close(fd)
+    try:
+        env = {**os.environ, 'PGPASSWORD': cfg.get('pg_password', '')}
+        cmd = [
+            'pg_dump',
+            '-h', cfg['pg_host'],
+            '-p', str(cfg['pg_port']),
+            '-U', cfg['pg_user'],
+            '-d', cfg['pg_database'],
+            '--schema', schema,
+            '--no-password',
+            '-f', tmp,
+        ]
+        result = _sp.run(cmd, env=env, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"pg_dump exited {result.returncode}")
         with open(tmp, "rb") as fh:
             return fh.read()
     finally:
@@ -182,10 +229,96 @@ def _do_restart(pending_main=None, pending_logs=None):
         os.execv(sys.executable, _cmd)
 
 
+def _handle_pg_bundle_import(h, raw_bytes: bytes):
+    """Restore a PG bundle ZIP (pingwatch_main.sql + pingwatch_logs.sql) via psql."""
+    import subprocess as _sp
+    from db.backend import get_config
+
+    log.info(f"DB import (PG): ZIP bundle — {len(raw_bytes):,} bytes")
+    try:
+        buf = io.BytesIO(raw_bytes)
+        with zipfile.ZipFile(buf, "r") as zf:
+            names = zf.namelist()
+            if "manifest.json" in names:
+                manifest = _json_mod.loads(zf.read("manifest.json"))
+                log.info(f"DB import (PG): manifest: {manifest}")
+                if manifest.get("backend") != "postgresql":
+                    h._json(400, {"error": "Bundle was not exported from a PostgreSQL backend"}); return True
+            tmp_main = tmp_logs = None
+            if "pingwatch_main.sql" in names:
+                fd, tmp_main = tempfile.mkstemp(suffix="_main.sql")
+                os.write(fd, zf.read("pingwatch_main.sql"))
+                os.close(fd)
+            if "pingwatch_logs.sql" in names:
+                fd, tmp_logs = tempfile.mkstemp(suffix="_logs.sql")
+                os.write(fd, zf.read("pingwatch_logs.sql"))
+                os.close(fd)
+    except Exception as e:
+        log.error(f"DB import (PG): ZIP extraction failed — {e}")
+        h._json(400, {"error": "ZIP extraction failed"}); return True
+
+    if not tmp_main and not tmp_logs:
+        h._json(400, {"error": "No PostgreSQL dumps found in bundle (expected pingwatch_main.sql / pingwatch_logs.sql)"}); return True
+
+    cfg = get_config()
+    env = {**os.environ, "PGPASSWORD": cfg.get("pg_password", "")}
+    base_cmd = [
+        "psql",
+        "-h", cfg["pg_host"],
+        "-p", str(cfg["pg_port"]),
+        "-U", cfg["pg_user"],
+        "-d", cfg["pg_database"],
+        "--no-password",
+    ]
+
+    def _restore(sql_file, schema):
+        r = _sp.run(
+            base_cmd + ["-c", f"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"],
+            env=env, capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"schema reset: {r.stderr.strip()}")
+        r = _sp.run(base_cmd + ["-f", sql_file], env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"psql restore: {r.stderr.strip()}")
+
+    try:
+        if tmp_main:
+            log.info("DB import (PG): restoring main schema…")
+            _restore(tmp_main, "main")
+            log.info("DB import (PG): main schema restored")
+        if tmp_logs:
+            log.info("DB import (PG): restoring logs schema…")
+            _restore(tmp_logs, "logs")
+            log.info("DB import (PG): logs schema restored")
+    except Exception as e:
+        log.error(f"DB import (PG): restore failed — {e}")
+        for t in (tmp_main, tmp_logs):
+            if t:
+                try: os.unlink(t)
+                except OSError: pass
+        h._json(500, {"error": "PostgreSQL restore failed — check server logs"}); return True
+
+    for t in (tmp_main, tmp_logs):
+        if t:
+            try: os.unlink(t)
+            except OSError: pass
+
+    log.info("DB import (PG): complete — restarting…")
+    h._json(200, {"ok": True, "msg": "PostgreSQL bundle imported — server is restarting…"})
+    try:
+        h.wfile.flush()
+    except Exception:
+        pass
+    threading.Thread(target=_do_restart, args=(None, None), daemon=True).start()
+    return True
+
+
 # ── Route handler ─────────────────────────────────────────────────────────────
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+    from db.backend import is_pg
 
     # ── GET /api/db/export — Main DB ─────────────────────────────
     if _RE_DB_EXPORT.match(path) and method == "GET":
@@ -193,8 +326,16 @@ def handle(h, method, path, body):
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_main")
-        data  = _sqlite_backup_bytes(DB_PATH)
-        fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
+        if is_pg():
+            try:
+                data  = _pg_dump_bytes('main')
+                fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".sql"
+            except Exception as e:
+                log.error(f"DB export (PG main): {e}")
+                h._json(500, {"error": "Database export failed — check server logs"}); return True
+        else:
+            data  = _sqlite_backup_bytes(DB_PATH)
+            fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
         _send_db(h, data, fname)
         return True
 
@@ -204,10 +345,18 @@ def handle(h, method, path, body):
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_logs")
-        if not os.path.exists(LOGS_DB_PATH):
-            h._json(404, {"error": "Logs DB does not exist yet"}); return True
-        data  = _sqlite_backup_bytes(LOGS_DB_PATH)
-        fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
+        if is_pg():
+            try:
+                data  = _pg_dump_bytes('logs')
+                fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".sql"
+            except Exception as e:
+                log.error(f"DB export (PG logs): {e}")
+                h._json(500, {"error": "Database export failed — check server logs"}); return True
+        else:
+            if not os.path.exists(LOGS_DB_PATH):
+                h._json(404, {"error": "Logs DB does not exist yet"}); return True
+            data  = _sqlite_backup_bytes(LOGS_DB_PATH)
+            fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
         _send_db(h, data, fname)
         return True
 
@@ -219,46 +368,67 @@ def handle(h, method, path, body):
         db_log_audit(user, h.client_address[0], "db_export_bundle")
         ts = time.strftime("%Y%m%d-%H%M%S")
 
-        main_data = _sqlite_backup_bytes(DB_PATH)
-        logs_data = _sqlite_backup_bytes(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else b""
-
-        # Determine schema versions
-        try:
-            _mc = sqlite3.connect(DB_PATH)
-            sv_main = (_mc.execute(
-                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
-            ).fetchone() or (1,))[0]
-            _mc.close()
-        except Exception:
-            sv_main = 1
-        sv_logs = 1
-        if logs_data:
+        if is_pg():
             try:
-                _lc = sqlite3.connect(LOGS_DB_PATH)
-                sv_logs = (_lc.execute(
-                    "SELECT version FROM logs_schema_version ORDER BY version DESC LIMIT 1"
+                main_data = _pg_dump_bytes('main')
+                logs_data = _pg_dump_bytes('logs')
+            except Exception as e:
+                log.error(f"DB export bundle (PG): {e}")
+                h._json(500, {"error": "Database export failed — check server logs"}); return True
+            manifest = {
+                "version":    1,
+                "backend":    "postgresql",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "has_main":   True,
+                "has_logs":   bool(logs_data),
+            }
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("pingwatch_main.sql",  main_data)
+                if logs_data:
+                    zf.writestr("pingwatch_logs.sql", logs_data)
+                zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
+        else:
+            main_data = _sqlite_backup_bytes(DB_PATH)
+            logs_data = _sqlite_backup_bytes(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else b""
+
+            # Determine schema versions
+            try:
+                _mc = sqlite3.connect(DB_PATH)
+                sv_main = (_mc.execute(
+                    "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
                 ).fetchone() or (1,))[0]
-                _lc.close()
+                _mc.close()
             except Exception:
-                sv_logs = 1
-
-        manifest = {
-            "version":      1,
-            "created_at":   time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "schema_main":  sv_main,
-            "schema_logs":  sv_logs,
-            "has_main":     True,
-            "has_logs":     bool(logs_data),
-        }
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("pingwatch_main.db",  main_data)
+                sv_main = 1
+            sv_logs = 1
             if logs_data:
-                zf.writestr("pingwatch_logs.db", logs_data)
-            zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
-        zip_bytes = buf.getvalue()
+                try:
+                    _lc = sqlite3.connect(LOGS_DB_PATH)
+                    sv_logs = (_lc.execute(
+                        "SELECT version FROM logs_schema_version ORDER BY version DESC LIMIT 1"
+                    ).fetchone() or (1,))[0]
+                    _lc.close()
+                except Exception:
+                    sv_logs = 1
 
+            manifest = {
+                "version":      1,
+                "backend":      "sqlite",
+                "created_at":   time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "schema_main":  sv_main,
+                "schema_logs":  sv_logs,
+                "has_main":     True,
+                "has_logs":     bool(logs_data),
+            }
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("pingwatch_main.db",  main_data)
+                if logs_data:
+                    zf.writestr("pingwatch_logs.db", logs_data)
+                zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
+
+        zip_bytes = buf.getvalue()
         fname = f"pingwatch-bundle-{ts}.zip"
         h.send_response(200)
         h.send_header("Content-Type", "application/zip")
@@ -268,7 +438,37 @@ def handle(h, method, path, body):
         h.wfile.write(zip_bytes)
         return True
 
-    # ── POST /api/db/import ───────────────────────────────────────
+    # ── POST /api/db/import (PostgreSQL) ─────────────────────────
+    if _RE_DB_IMPORT.match(path) and method == "POST" and is_pg():
+        user, _ = h._require("admin")
+        if not user:
+            return True
+        _MAX_IMPORT = 2 * 1024 * 1024 * 1024
+        n = int(h.headers.get("Content-Length", 0))
+        if n > _MAX_IMPORT:
+            h._json(413, {"error": "File too large (max 2 GB)"}); return True
+        if not n:
+            h._json(400, {"error": "No data provided"}); return True
+        content_type = h.headers.get("Content-Type", "")
+        if "application/octet-stream" in content_type:
+            raw_bytes = h.rfile.read(n)
+        else:
+            try:
+                body_imp = _json_mod.loads(h.rfile.read(n))
+            except Exception:
+                h._json(400, {"error": "Invalid JSON"}); return True
+            raw_b64 = (body_imp.get("data") or "").strip()
+            if not raw_b64:
+                h._json(400, {"error": "No data provided"}); return True
+            try:
+                raw_bytes = base64.b64decode(raw_b64)
+            except Exception:
+                h._json(400, {"error": "Invalid base64 data"}); return True
+        if raw_bytes[:4] != b"PK\x03\x04":
+            h._json(400, {"error": "PostgreSQL import requires a bundle ZIP exported from PingWatch"}); return True
+        db_log_audit(user, h.client_address[0], "db_import_pg")
+        return _handle_pg_bundle_import(h, raw_bytes)
+
     if _RE_DB_IMPORT.match(path) and method == "POST":
         user, _ = h._require("admin")
         if not user:
@@ -394,13 +594,54 @@ def handle(h, method, path, body):
         fpath = LOG_FILES.get(key)
         if not fpath:
             h._json(404, {"error": "unknown log"}); return True
+
+        qs        = parse_qs(urlparse(h.path).query)
+        f_level   = (qs.get("level", [""])[0]).upper()
+        f_after   = qs.get("after", [""])[0]
+        f_before  = qs.get("before", [""])[0]
+        f_search  = qs.get("search", [""])[0].lower()
+        f_limit   = min(int(qs.get("limit", ["2000"])[0] or 2000), 5000)
+
         try:
             with open(fpath, "r", encoding="utf-8", errors="replace") as _lf:
-                lines = _lf.readlines()
-            tail = "".join(lines[-500:])
+                all_lines = _lf.readlines()
         except FileNotFoundError:
-            tail = ""
-        h._json(200, {"log": key, "lines": tail})
+            all_lines = []
+
+        total    = len(all_lines)
+        filtered = []
+        _pass    = False      # tracks whether last primary line passed
+
+        for raw in all_lines:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            ml = _LOG_LINE_RE.match(line)
+            if not ml:
+                # Continuation line — include if previous primary passed
+                if _pass:
+                    filtered.append(line)
+                continue
+            ts, lvl, msg = ml.group(1), ml.group(2), ml.group(3)
+            _pass = True
+            if f_level and lvl != f_level:
+                _pass = False; continue
+            if f_after and ts <= f_after:
+                _pass = False; continue
+            if f_before and ts >= f_before:
+                _pass = False; continue
+            if f_search and f_search not in msg.lower():
+                _pass = False; continue
+            filtered.append(line)
+
+        shown = filtered[-f_limit:]
+        h._json(200, {
+            "log":      key,
+            "lines":    "\n".join(shown),
+            "total":    total,
+            "filtered": len(filtered),
+            "shown":    len(shown),
+        })
         return True
 
     return False

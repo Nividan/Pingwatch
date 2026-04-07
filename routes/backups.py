@@ -35,7 +35,6 @@ _TRIGGER_COOLDOWN = 30  # seconds
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
-
     # ── GET /api/backups — list all devices ───────────────────────
     if _RE_BACKUPS.match(path) and method == 'GET':
         user, _ = h._require('viewer')
@@ -96,7 +95,6 @@ def handle(h, method, path, body):
             return True
         _last_trigger[did] = now
         db_log_audit(user, h.client_address[0], 'backup_run', did)
-        log.info(f"Backup: manual trigger for device {did!r} by {user!r}")
 
         def _run_backup(device_id):
             try:

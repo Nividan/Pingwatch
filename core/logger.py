@@ -23,10 +23,10 @@ _fmt = logging.Formatter(
 log = logging.getLogger("pingwatch")
 log.setLevel(logging.DEBUG)
 
-# ── Rotating file handler (1 MB × 3 backups) — DEBUG and above ────────────
+# ── Rotating file handler (1 MB × 3 backups) — INFO by default ────────────
 _fh = RotatingFileHandler(_LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
 _fh.setFormatter(_fmt)
-_fh.setLevel(logging.DEBUG)
+_fh.setLevel(logging.INFO)
 log.addHandler(_fh)
 
 # ── Console handler — INFO and above only (skipped without a console) ──────
@@ -67,6 +67,7 @@ _bkh = RotatingFileHandler(
     maxBytes=2_000_000, backupCount=3, encoding="utf-8"
 )
 _bkh.setFormatter(_fmt)
+_bkh.setLevel(logging.INFO)
 log_backup.addHandler(_bkh)
 # propagate=False ensures no logger bleeds into pingwatch.log or log_buffer.
 
@@ -84,6 +85,19 @@ class _MemoryHandler(logging.Handler):
 
 log_buffer = _MemoryHandler()
 log.addHandler(log_buffer)
+
+# ── Debug mode toggle ─────────────────────────────────────────────────────
+def set_debug_mode(enabled: bool):
+    """Switch file handlers between DEBUG and INFO level.
+
+    Called at startup from server.py and at runtime from settings PATCH.
+    Sensor and audit loggers are unaffected (always INFO).
+    """
+    lvl = logging.DEBUG if enabled else logging.INFO
+    _fh.setLevel(lvl)
+    _bkh.setLevel(lvl)
+    log_buffer.setLevel(lvl)
+
 
 # ── Public map consumed by the log-viewer API (/api/logs/{key}) ───────────
 LOG_FILES = {

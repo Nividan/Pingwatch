@@ -2,7 +2,8 @@
 routes/monitoring.py — Real-time event stream, flap/trap queries, SNMP helpers.
 
 Handles: /events (SSE), /api/flaps, /api/traps,
-         /api/snmp/catalog, /api/snmp/interfaces.
+         /api/snmp/catalog, /api/snmp/interfaces,
+         /api/vmware/vms, /api/vmware/metrics.
 """
 
 import datetime
@@ -13,6 +14,7 @@ import time
 import core.app_state as app_state
 from core.config import DB_PATH, LOGS_DB_PATH
 from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap
+from db.backend import is_pg
 from core.logger import log
 
 
@@ -89,6 +91,34 @@ def handle(h, method, path, body):
         if not user: return True
         now = time.time()
         periods = {"1h": 3600, "24h": 86400, "7d": 604800}
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor("logs") as cur:
+                    result = {}
+                    for label, secs in periods.items():
+                        cutoff = datetime.datetime.utcfromtimestamp(now - secs).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        cur.execute(
+                            "SELECT direction, COUNT(*) AS cnt FROM flap_log WHERE ts >= %s GROUP BY direction",
+                            (cutoff,)
+                        )
+                        counts = {r["direction"]: r["cnt"] for r in cur.fetchall()}
+                        cur.execute(
+                            "SELECT COUNT(*) AS cnt FROM snmp_traps WHERE ts >= %s", (cutoff,)
+                        )
+                        trap_row = cur.fetchone()
+                        result[label] = {
+                            "down":      counts.get("down", 0),
+                            "recovered": counts.get("recovered", 0),
+                            "threshold": counts.get("threshold_crit", 0) + counts.get("threshold_warn", 0) + counts.get("threshold_ok", 0),
+                            "trap":      trap_row["cnt"] if trap_row else 0,
+                        }
+                h._json(200, {"summary": result})
+            except Exception as e:
+                log.error(f"Events summary error: {e}")
+                h._json(500, {"error": str(e)})
+            return True
+        # SQLite
         con = None
         try:
             con = sqlite3.connect(LOGS_DB_PATH)
@@ -130,30 +160,55 @@ def handle(h, method, path, body):
         cutoff      = datetime.datetime.utcfromtimestamp(
             time.time() - minutes * 60).strftime("%Y-%m-%dT%H:%M:%SZ")
         events = []
-        con = None
-        try:
-            con = sqlite3.connect(LOGS_DB_PATH)
-            rows = con.execute(
-                "SELECT ts, direction, dname, sname FROM flap_log "
-                "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
-                (cutoff,)
-            ).fetchall()
-            for ts_str, direction, dname, sname in rows:
-                try:
-                    dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
-                    epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
-                except Exception:
-                    continue
-                label = " / ".join(x for x in [dname, sname] if x)
-                events.append({
-                    "ts":    epoch,
-                    "type":  "outage" if direction == "down" else "alert",
-                    "label": label,
-                })
-        except Exception as e:
-            log.error(f"health/trend events error: {e}")
-        finally:
-            if con: con.close()
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor("logs") as cur:
+                    cur.execute(
+                        "SELECT ts, direction, dname, sname FROM flap_log "
+                        "WHERE ts >= %s AND direction IN ('down','threshold_crit') ORDER BY ts",
+                        (cutoff,)
+                    )
+                    for r in cur.fetchall():
+                        try:
+                            dt = datetime.datetime.strptime(r["ts"], "%Y-%m-%dT%H:%M:%SZ")
+                            epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
+                        except Exception:
+                            continue
+                        label = " / ".join(x for x in [r["dname"], r["sname"]] if x)
+                        events.append({
+                            "ts":    epoch,
+                            "type":  "outage" if r["direction"] == "down" else "alert",
+                            "label": label,
+                        })
+            except Exception as e:
+                log.error(f"health/trend events error: {e}")
+        else:
+            # SQLite
+            con = None
+            try:
+                con = sqlite3.connect(LOGS_DB_PATH)
+                rows = con.execute(
+                    "SELECT ts, direction, dname, sname FROM flap_log "
+                    "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
+                    (cutoff,)
+                ).fetchall()
+                for ts_str, direction, dname, sname in rows:
+                    try:
+                        dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+                        epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
+                    except Exception:
+                        continue
+                    label = " / ".join(x for x in [dname, sname] if x)
+                    events.append({
+                        "ts":    epoch,
+                        "type":  "outage" if direction == "down" else "alert",
+                        "label": label,
+                    })
+            except Exception as e:
+                log.error(f"health/trend events error: {e}")
+            finally:
+                if con: con.close()
         h._json(200, {"points": pts, "events": events, "range": range_param})
         return True
 
@@ -171,10 +226,17 @@ def handle(h, method, path, body):
         from monitoring.probes import snmpwalk_interfaces
         _host = (body.get("host")      or "").strip()
         _comm = (body.get("community") or "public").strip()
-        _port = int(body.get("port")   or 161)
+        try:
+            _port = int(body.get("port") or 161)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "port must be an integer"}); return True
         _ver  = (body.get("version")   or "2c").strip()
         if not _host:
             h._json(400, {"error": "host required"}); return True
+        if not (1 <= _port <= 65535):
+            h._json(400, {"error": "port must be 1-65535"}); return True
+        if _ver not in ("1", "2c", "3"):
+            h._json(400, {"error": "version must be 1, 2c, or 3"}); return True
         _ifaces = snmpwalk_interfaces(_host, _comm, _port, timeout=10, version=_ver)
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
@@ -204,6 +266,107 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid id"}); return True
         ok = db_resolve_flap(flap_id)
         h._json(200, {"ok": ok})
+        return True
+
+    # ── /api/vmware/metrics GET ─────────────────────────────────
+    if path == "/api/vmware/metrics" and method == "GET":
+        if not h._auth(): return True
+        from vmware.client import VM_METRICS
+        h._json(200, {"metrics": [
+            {"v": m["v"], "l": m["l"], "unit": m["unit"], "group": m["group"]}
+            for m in VM_METRICS
+        ]})
+        return True
+
+    # ── /api/vmware/vms POST ─────────────────────────────────────
+    if path == "/api/vmware/vms" and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        _host = (body.get("host") or "").strip()
+        _user = (body.get("username") or "").strip()
+        _pw   = body.get("password") or ""
+        _vssl = body.get("verify_ssl", False)
+        try:
+            _port = int(body.get("port") or 443)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "port must be an integer"}); return True
+        if not _host:
+            h._json(400, {"error": "host required"}); return True
+        if not _user:
+            h._json(400, {"error": "username required"}); return True
+        # Fall back to device-level stored password
+        if not _pw:
+            _did = body.get("did", "")
+            if _did:
+                _dev = STATE.devices.get(_did)
+                if _dev and _dev.vmware_password_default:
+                    from db.backups import decrypt_pw
+                    _pw = decrypt_pw(_dev.vmware_password_default)
+        if not _pw:
+            h._json(400, {"error": "password required"}); return True
+        try:
+            from vmware import vmware_discover_vms
+            _vms = vmware_discover_vms(_host, _user, _pw, port=_port, verify_ssl=_vssl)
+        except RuntimeError as e:
+            h._json(503, {"error": str(e)}); return True
+        except PermissionError:
+            h._json(401, {"error": "Authentication failed"}); return True
+        except ConnectionError as e:
+            h._json(502, {"error": str(e)}); return True
+        except Exception as e:
+            log.error(f"VMware discovery error: {e}")
+            h._json(500, {"error": "VMware connection failed"}); return True
+        h._json(200, {"vms": _vms})
+        return True
+
+    # ── /api/vmware/host-metrics GET ────────────────────────────────
+    if path == "/api/vmware/host-metrics" and method == "GET":
+        if not h._auth(): return True
+        from vmware.client import HOST_METRICS
+        h._json(200, {"metrics": [
+            {"v": m["v"], "l": m["l"], "unit": m["unit"], "group": m["group"]}
+            for m in HOST_METRICS
+        ]})
+        return True
+
+    # ── /api/vmware/hosts POST ──────────────────────────────────────
+    if path == "/api/vmware/hosts" and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        _host = (body.get("host") or "").strip()
+        _user = (body.get("username") or "").strip()
+        _pw   = body.get("password") or ""
+        _vssl = body.get("verify_ssl", False)
+        try:
+            _port = int(body.get("port") or 443)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "port must be an integer"}); return True
+        if not _host:
+            h._json(400, {"error": "host required"}); return True
+        if not _user:
+            h._json(400, {"error": "username required"}); return True
+        if not _pw:
+            _did = body.get("did", "")
+            if _did:
+                _dev = STATE.devices.get(_did)
+                if _dev and _dev.vmware_password_default:
+                    from db.backups import decrypt_pw
+                    _pw = decrypt_pw(_dev.vmware_password_default)
+        if not _pw:
+            h._json(400, {"error": "password required"}); return True
+        try:
+            from vmware import vmware_discover_hosts
+            _hosts = vmware_discover_hosts(_host, _user, _pw, port=_port, verify_ssl=_vssl)
+        except RuntimeError as e:
+            h._json(503, {"error": str(e)}); return True
+        except PermissionError:
+            h._json(401, {"error": "Authentication failed"}); return True
+        except ConnectionError as e:
+            h._json(502, {"error": str(e)}); return True
+        except Exception as e:
+            log.error(f"VMware host discovery error: {e}")
+            h._json(500, {"error": "VMware connection failed"}); return True
+        h._json(200, {"hosts": _hosts})
         return True
 
     return False

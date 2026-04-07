@@ -28,8 +28,11 @@ from db     import (
     db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
 )
 from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete
+from monitoring.network_map import topo_prune_pw_links
 from core.logger import log
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
+
+_vmware_ssl_warned = set()
 
 # ── Port-scan target list ─────────────────────────────────────────
 _SCAN_TARGETS = [
@@ -85,6 +88,27 @@ def _get_scan_targets():
     return targets or _SCAN_TARGETS
 
 
+def _maybe_resize_executor():
+    """Re-evaluate auto worker count after sensor count changes.
+
+    No-op when max_workers_executor is set to a manual value (>= 4).
+    Called via _db_enqueue so it runs after the STATE is already saved.
+    """
+    import concurrent.futures as _cf
+    import core.settings as _settings
+    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
+    if _mw_override >= 4:
+        return  # manual override in effect
+    _count = sum(len(d.sensors) for d in STATE.devices.values())
+    _mw = max(64, min(512, _count // 4 or 64))
+    if STATE._executor._max_workers != _mw:
+        STATE._executor = _cf.ThreadPoolExecutor(
+            max_workers=_mw, thread_name_prefix='pw-sensor'
+        )
+        STATE._scheduler._executor = STATE._executor
+        log.info(f"Executor auto-resized to {_mw} workers ({_count} sensors)")
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE  # always current reference
@@ -131,11 +155,25 @@ def handle(h, method, path, body):
             h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
             h._json(400, {"error": "invalid host — use a hostname or IP address"}); return True
+        snmp_community_default  = body.get("snmp_community_default", "").strip()
+        snmp_version_default    = body.get("snmp_version_default", "").strip()
+        if snmp_version_default not in ("", "1", "2c", "3"):
+            snmp_version_default = ""
+        vmware_user_default     = body.get("vmware_user_default", "").strip()
+        vmware_password_default = body.get("vmware_password_default", "")
+        if vmware_password_default:
+            from db.backups import encrypt_pw
+            vmware_password_default = encrypt_pw(vmware_password_default)
         did = STATE.add_device(name, host, group)
         with STATE._lock:
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url
+                STATE.devices[did].snmp_community_default  = snmp_community_default
+                STATE.devices[did].snmp_version_default    = snmp_version_default
+                STATE.devices[did].vmware_user_default     = vmware_user_default
+                STATE.devices[did].vmware_password_default = vmware_password_default
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
         _db_enqueue(lambda: ipam_sync_device_add(_did, _name, _host))
         db_log_audit(user, h.client_address[0], 'device_create', name)
@@ -260,6 +298,20 @@ def handle(h, method, path, body):
                     h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
                 dev.webhook_url = _w
             if "alerts_muted" in body: dev.alerts_muted = bool(body["alerts_muted"])
+            if "snmp_community_default" in body:
+                dev.snmp_community_default = str(body["snmp_community_default"]).strip()
+            if "snmp_version_default" in body:
+                _sv = str(body["snmp_version_default"]).strip()
+                if _sv in ("", "1", "2c", "3"):
+                    dev.snmp_version_default = _sv
+            if "vmware_user_default" in body:
+                dev.vmware_user_default = str(body["vmware_user_default"]).strip()
+            if "vmware_password_default" in body:
+                _vpw = body["vmware_password_default"]
+                if _vpw:
+                    from db.backups import encrypt_pw
+                    dev.vmware_password_default = encrypt_pw(_vpw)
+                # empty string = keep existing (don't clear)
             if "host" in body:
                 h2 = body["host"].strip()
                 if len(h2) > 253:
@@ -278,6 +330,8 @@ def handle(h, method, path, body):
         _d = did
         _db_enqueue(lambda: ipam_sync_device_update(_d, _old_host, _new_host, _new_name))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
+        if "alerts_muted" in body:
+            STATE._broadcast("device_status", {"did": did, "status": dev.status})
         h._json(200, {"status": "updated"})
         return True
 
@@ -291,8 +345,10 @@ def handle(h, method, path, body):
             ddname = dd.name if dd else ddid
         STATE.remove_device(ddid)
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         _dd = ddid
         _db_enqueue(lambda: ipam_sync_device_delete(_dd))
+        _db_enqueue(lambda: topo_prune_pw_links(_dd))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
         h._json(200, {"status": "ok"})
         return True
@@ -358,19 +414,30 @@ def handle(h, method, path, body):
                   "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                   "dns_query", "dns_record_type", "dns_server",
                   "http_expected_status",
-                  "fail_after", "recover_after", "warn_ms", "crit_ms",
+                  "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
-                  "snmp_unit"]:
+                  "snmp_unit",
+                  "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
+                  "vmware_disk_path"]:
             if k in body: kwargs[k] = body[k]
+        # VMware password: encrypt if provided, skip if empty (keep existing)
+        if body.get("vmware_password"):
+            from db.backups import encrypt_pw
+            kwargs["vmware_password"] = encrypt_pw(body["vmware_password"])
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
-        if "interval" in kwargs:
-            kwargs["interval"] = max(1, min(3600, int(kwargs["interval"])))
-        if "timeout" in kwargs:
-            iv = int(kwargs.get("interval", body.get("interval", 5)))
-            kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
+        try:
+            if "interval" in kwargs:
+                kwargs["interval"] = max(1, min(3600, int(kwargs["interval"])))
+            if "timeout" in kwargs:
+                iv = int(kwargs.get("interval", body.get("interval", 5)))
+                kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
+        except (TypeError, ValueError):
+            h._json(400, {"error": "interval and timeout must be integers"}); return True
         if kwargs.get("banner_regex"):
+            if len(kwargs["banner_regex"]) > 200:
+                h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
             try:
                 re.compile(kwargs["banner_regex"])
             except re.error as _re_err:
@@ -385,6 +452,8 @@ def handle(h, method, path, body):
             _se_sname = (_se_dev.sensors[sid].name
                          if _se_dev and sid in _se_dev.sensors else sid)
         db_log_audit(user, h.client_address[0], 'sensor_edit', f"{_se_dname}/{_se_sname}")
+        if "alerts_muted" in body and _se_dev:
+            STATE._broadcast("device_status", {"did": did, "status": _se_dev.status})
         h._json(200, {"status": "updated"})
         return True
 
@@ -399,6 +468,7 @@ def handle(h, method, path, body):
             ssname = sd.sensors[ssid].name if sd and ssid in sd.sensors else ssid
         STATE.remove_sensor(sdid, ssid)
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         db_log_audit(user, h.client_address[0], 'sensor_delete', f"{sdname}/{ssname}")
         h._json(200, {"status": "ok"})
         return True
@@ -415,24 +485,49 @@ def handle(h, method, path, body):
         host  = body.get("host") or (dev.host if dev else None)
         port  = body.get("port")
         url   = (body.get("url") or "").strip() or None
-        iv    = max(1, min(3600, int(body.get("interval", 5))))
-        to    = max(1, min(iv, int(body.get("timeout", 4))))
+        try:
+            iv    = max(1, min(3600, int(body.get("interval", 5))))
+            to    = max(1, min(iv, int(body.get("timeout", 4))))
+        except (TypeError, ValueError):
+            h._json(400, {"error": "interval and timeout must be integers"}); return True
         vssl  = bool(body.get("verify_ssl", True))
-        comm  = body.get("snmp_community", "public")
+        comm  = (body.get("snmp_community") or "").strip()
+        if not comm:
+            comm = (dev.snmp_community_default if dev and dev.snmp_community_default else "public")
         oid   = body.get("snmp_oid", "1.3.6.1.2.1.1.1.0")
         sver  = body.get("snmp_version", "2c")
         sunit = body.get("snmp_unit", "")
-        xstat = int(body.get("http_expected_status", 0))
-        fa    = max(1, int(body.get("fail_after",    1) or 1))
-        ra    = max(1, int(body.get("recover_after", 1) or 1))
-        wms   = int(body["warn_ms"])  if body.get("warn_ms")  else None
-        cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
-        lwp   = int(body.get("loss_warn_pct", 0) or 0)
-        lcp   = int(body.get("loss_crit_pct", 0) or 0)
+        try:
+            xstat = int(body.get("http_expected_status", 0))
+            wms   = int(body["warn_ms"])  if body.get("warn_ms")  else None
+            cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
+            lwp   = int(body.get("loss_warn_pct", 0) or 0)
+            lcp   = int(body.get("loss_crit_pct", 0) or 0)
+        except (TypeError, ValueError):
+            h._json(400, {"error": "Numeric fields must be integers"}); return True
         kw    = body.get("keyword", "")
         kwc   = bool(body.get("keyword_case", False))
         bnr   = body.get("banner_regex", "")
+        # VMware fields
+        vm_user      = body.get("vmware_user", "")
+        vm_pw        = body.get("vmware_password", "")
+        vm_vmid      = body.get("vmware_vm_id", "")
+        vm_vmname    = body.get("vmware_vm_name", "")
+        vm_metric    = body.get("vmware_metric", "")
+        vm_disk_path = body.get("vmware_disk_path", "")
+        _vm_pw_from_device = False
+        if stype == "vmware" and dev:
+            if not vm_user and dev.vmware_user_default:
+                vm_user = dev.vmware_user_default
+            if not vm_pw and dev.vmware_password_default:
+                vm_pw = dev.vmware_password_default  # already encrypted
+                _vm_pw_from_device = True
+        if stype == "vmware" and vm_pw and not _vm_pw_from_device:
+            from db.backups import encrypt_pw
+            vm_pw = encrypt_pw(vm_pw)
         if bnr:
+            if len(bnr) > 200:
+                h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
             try:
                 re.compile(bnr)
             except re.error as _re_err:
@@ -443,11 +538,13 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid host"}); return True
         sid = STATE.add_sensor(did, name, stype, host, port, url,
                                iv, to, vssl, comm, oid, sver,
-                               fail_after=fa, recover_after=ra,
                                warn_ms=wms, crit_ms=cms,
                                loss_warn_pct=lwp, loss_crit_pct=lcp,
                                keyword=kw, keyword_case=kwc, banner_regex=bnr,
-                               snmp_unit=sunit)
+                               snmp_unit=sunit,
+                               vmware_user=vm_user, vmware_password=vm_pw,
+                               vmware_vm_id=vm_vmid, vmware_vm_name=vm_vmname,
+                               vmware_metric=vm_metric, vmware_disk_path=vm_disk_path)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
@@ -459,8 +556,13 @@ def handle(h, method, path, body):
                 s2.dns_server           = body.get("dns_server", "")
                 s2.http_expected_status = xstat
         _db_enqueue(lambda: db_save(STATE))
+        _db_enqueue(_maybe_resize_executor)
         _dev_name = dev.name if dev else did
         db_log_audit(user, h.client_address[0], 'sensor_create', f"{_dev_name}/{name}")
+        _h = host or "unknown"
+        if stype == "vmware" and not vssl and _h not in _vmware_ssl_warned:
+            _vmware_ssl_warned.add(_h)
+            log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", _h)
         h._json(200, {"sid": sid})
         return True
 

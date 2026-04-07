@@ -1,5 +1,5 @@
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? SENSOR TILES �?�?�?�?�?�?�?�?�?�?�?�?
-function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':'◈'}
+function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':t==='vmware'?'V':'◈'}
 function msC(ms,s){if(ms===null)return'b';const _td=window._snrTypeDefaults?.[s?.stype]||{};const w=s?.warn_ms>0?s.warn_ms:(_td.warn_ms>0?_td.warn_ms:0);const c=s?.crit_ms>0?s.crit_ms:(_td.crit_ms>0?_td.crit_ms:0);if(w>0||c>0){if(c>0&&ms>=c)return'b';if(w>0&&ms>=w)return'w';return'g';}if(ms<(window._lGood||100))return'g';if(ms<(window._lWarn||300))return'w';return'b'}
 function fmtTs(ts){try{return new Date(ts).toLocaleTimeString('en-GB');}catch(e){return ts;}}
 
@@ -9,12 +9,15 @@ function tileHTML(s){
   const isDns  =s.stype==='dns';
   const isTls  =s.stype==='tls';
   const isBanner=s.stype==='banner';
+  const isVmware=s.stype==='vmware';
   const rawVal = (isSnmp||isDns) ? (s.last_value||s.last_detail||'—')
                : isTls ? (s.last_value!=null?s.last_value+'d':null) : null;
-  const vt = (isSnmp||isDns)
-    ? (s.alive===false?'FAIL':(rawVal.length>14?rawVal.slice(0,14)+'…':rawVal))
-    : isTls ? (s.alive===false?'FAIL':(rawVal||'—'))
-    : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
+  const vt = isVmware
+    ? (s.alive===false?'FAIL':(()=>{const _v=parseFloat(s.last_value);return isNaN(_v)?(s.last_value||'—').slice(0,10):_fmtVmVal(_v,_VM_UNITS[s.vmware_metric]||'');})())
+    : (isSnmp||isDns)
+      ? (s.alive===false?'FAIL':(rawVal.length>14?rawVal.slice(0,14)+'…':rawVal))
+      : isTls ? (s.alive===false?'FAIL':(rawVal||'—'))
+      : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
   // For SNMP: warn (orange) if alive but value is a non-numeric string — likely wrong OID
   // Warn (orange) when SNMP is alive but value is a plain string (e.g. wrong OID → sysDescr).
   // Don't warn for formatted rates ("5.8 KB/s", "1.2 MB/s") — those end with /s.
@@ -23,8 +26,8 @@ function tileHTML(s){
   const _snmpThrColor = isSnmp && !_isCounter && s.threshold_state && s.threshold_state !== 'ok' && s.alive !== false
     ? (s.threshold_state==='crit'?'r':'w') : null;
   const _counterThrColor = _isCounter ? (s.threshold_state==='crit'?'r':s.threshold_state==='warn'?'w':'g') : null;
-  const vc=s.alive===false?'b':(_isCounter?_counterThrColor:_snmpThrColor||((isSnmp||isDns||isTls)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
-  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
+  const vc=s.alive===false?'b':(_isCounter?_counterThrColor:_snmpThrColor||((isSnmp||isDns||isTls||isVmware)?(_snmpStrVal?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
+  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.stype==='vmware'?`${s.host} · ${s.vmware_vm_id}`:s.host;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-40);
   const thrHist=(s.thr_history||[]).slice(-40);
@@ -33,7 +36,7 @@ function tileHTML(s){
     if(idx<0)return'<div class="ub-s"></div>';
     const v=hist[idx];
     if(v===null)return`<div class="ub-s" style="background:var(--down)"></div>`;
-    const _mc=msC(v,s);const _thr=isSnmp&&!_isCounter?thrHist[idx]||'ok':'ok';const _snmpDotC=_thr==='crit'?'var(--down)':_thr==='warn'?'var(--warn)':'var(--up)';const c=(isSnmp||isDns||isTls)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
+    const _mc=msC(v,s);const _thr=isSnmp&&!_isCounter?thrHist[idx]||'ok':'ok';const _snmpDotC=_thr==='crit'?'var(--down)':_thr==='warn'?'var(--warn)':'var(--up)';const c=(isSnmp||isDns||isTls||isVmware)?_snmpDotC:(_mc==='g'?'var(--up)':_mc==='w'?'var(--warn)':'var(--down)');
     return`<div class="ub-s" style="background:${c}"></div>`;
   }).join('');
   return`
@@ -63,7 +66,169 @@ function tileHTML(s){
   </div>`;
 }
 
+// ── Sensor tile drag-to-reorder ───────────────────────────────────
+let _snrDragEl=null, _snrDragDid=null, _snrDropInd=null;
+// ── VM row drag-to-reorder ────────────────────────────────────────
+let _vmRowDragEl=null, _vmRowDragDid=null, _vmRowDragVmid=null, _vmRowDropInd=null;
+
+function _snrSaveOrder(did){
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid)return;
+  const order=[...grid.querySelectorAll('.stl:not(.stl-drop-ind)')].map(t=>t.dataset.sid);
+  _lsSet(`pw_snr_order_${did}`,order);
+}
+
+function _applySensorOrder(did){
+  const order=_lsGet(`pw_snr_order_${did}`,[]);
+  if(!order.length)return;
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid)return;
+  // Move tiles matching saved order to front, preserving unknown tiles at end
+  order.forEach(sid=>{
+    const el=grid.querySelector(`.stl[data-sid="${sid}"]`);
+    if(el) grid.appendChild(el);
+  });
+}
+
+function _vmSaveOrder(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  if(!body) return;
+  const order=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid);
+  _lsSet(`pw_vm_order_${did}_${sfx}`,order);
+}
+
+function _vmApplySavedOrders(did){
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid) return;
+  grid.querySelectorAll(`[id^="vgbody-${did}-"]`).forEach(body=>{
+    const sfx=body.id.slice((`vgbody-${did}-`).length);
+    const order=_lsGet(`pw_vm_order_${did}_${sfx}`,[]);
+    if(!order.length) return;
+    order.forEach(sid=>{
+      const el=body.querySelector(`.vm-row[data-sid="${sid}"]`);
+      if(el) body.appendChild(el);
+    });
+  });
+}
+
+function _vmRowDragOver(e){
+  if(!_vmRowDragEl) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  if(!_vmRowDropInd){
+    _vmRowDropInd=document.createElement('div');
+    _vmRowDropInd.className='vm-row vm-row-drop-ind';
+  }
+  const body=e.currentTarget;
+  const rows=[...body.querySelectorAll('.vm-row:not(.vm-row-drop-ind):not(.vm-row-dragging)')];
+  let after=null;
+  for(const r of rows){ const rb=r.getBoundingClientRect(); if(e.clientY<rb.top+rb.height/2){after=r;break;} }
+  if(after) body.insertBefore(_vmRowDropInd,after);
+  else body.appendChild(_vmRowDropInd);
+}
+
+function _vmRowDrop(e){
+  if(!_vmRowDragEl) return;
+  e.preventDefault();
+  const body=e.currentTarget;
+  if(_vmRowDropInd){ body.insertBefore(_vmRowDragEl,_vmRowDropInd); _vmRowDropInd.remove(); _vmRowDropInd=null; }
+  _vmRowDragEl.classList.remove('vm-row-dragging');
+  if(_vmRowDragDid&&_vmRowDragVmid) _vmSaveOrder(_vmRowDragDid,_vmRowDragVmid);
+  _vmRowDragEl=null; _vmRowDragDid=null; _vmRowDragVmid=null;
+}
+
+function _vmRowDragLeave(e){
+  const body=e.currentTarget;
+  if(!body.contains(e.relatedTarget)&&_vmRowDropInd&&_vmRowDropInd.parentNode===body){ _vmRowDropInd.remove(); _vmRowDropInd=null; }
+}
+
+function _initSensorGrid(did){
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid||grid._snrDragInit)return;
+  grid._snrDragInit=true;
+  grid.addEventListener('dragover',_snrDragOver);
+  grid.addEventListener('drop',_snrDrop);
+  grid.addEventListener('dragleave',_snrDragLeave);
+}
+
+function _snrDragOver(e){
+  if(!_snrDragEl)return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  const grid=e.currentTarget;
+  grid.classList.add('sg-drag-over');
+  if(!_snrDropInd){
+    _snrDropInd=document.createElement('div');
+    _snrDropInd.className='stl stl-drop-ind';
+  }
+  // Find tile after cursor (vertical layout)
+  const tiles=[...grid.querySelectorAll('.stl:not(.stl-drop-ind):not(.stl-dragging)')];
+  let after=null;
+  for(const t of tiles){
+    const r=t.getBoundingClientRect();
+    if(e.clientY<r.top+r.height/2){after=t;break;}
+  }
+  if(after) grid.insertBefore(_snrDropInd,after);
+  else       grid.appendChild(_snrDropInd);
+}
+
+function _snrDrop(e){
+  if(!_snrDragEl)return;
+  e.preventDefault();
+  const grid=e.currentTarget;
+  grid.classList.remove('sg-drag-over');
+  if(_snrDropInd){
+    grid.insertBefore(_snrDragEl,_snrDropInd);
+    _snrDropInd.remove(); _snrDropInd=null;
+  }
+  _snrDragEl.classList.remove('stl-dragging');
+  if(_snrDragDid) _snrSaveOrder(_snrDragDid);
+  _snrDragEl=null; _snrDragDid=null;
+}
+
+function _snrDragLeave(e){
+  const grid=e.currentTarget;
+  if(!grid.contains(e.relatedTarget)){
+    grid.classList.remove('sg-drag-over');
+    if(_snrDropInd&&_snrDropInd.parentNode===grid){_snrDropInd.remove();_snrDropInd=null;}
+  }
+}
+
 function renderTile(did,s){
+  // ── VMware sensors go into a VM group row, not a full tile ──────
+  if(s.stype==='vmware'&&s.vmware_vm_id){
+    _ensureVmGrp(did,s);
+    const sfx=_vmGrpSfx(s.vmware_vm_id);
+    const body=document.getElementById(`vgbody-${did}-${sfx}`);
+    if(!body) return;
+    const key=`${did}/${s.sensor_id}`;
+    const old=document.getElementById(`t-${key.replace('/','_')}`);
+    const t=document.createElement('div');
+    t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    t.id=`t-${key.replace('/','_')}`;
+    t.dataset.sid=s.sensor_id;
+    t.onclick=()=>openDetail(did,s.sensor_id);
+    t.innerHTML=vmRowHTML(s);
+    t.setAttribute('draggable','true');
+    t.addEventListener('dragstart',e=>{
+      if(e.target.tagName==='BUTTON'||e.target.closest('button')){e.preventDefault();return;}
+      _vmRowDragEl=t; _vmRowDragDid=did; _vmRowDragVmid=s.vmware_vm_id;
+      e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain',s.sensor_id);
+      setTimeout(()=>t.classList.add('vm-row-dragging'),0);
+    });
+    t.addEventListener('dragend',()=>{
+      t.classList.remove('vm-row-dragging');
+      if(_vmRowDropInd){_vmRowDropInd.remove();_vmRowDropInd=null;}
+      _vmRowDragEl=null; _vmRowDragDid=null; _vmRowDragVmid=null;
+    });
+    if(old) old.replaceWith(t); else body.appendChild(t);
+    _updateVmGrpStatus(did,s.vmware_vm_id);
+    const cvs=t.querySelector('canvas.spk');
+    if(cvs){ cvs.width=60; S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')}; if(s.history&&s.history.length>1)drawSpk(key,s.history); }
+    return;
+  }
+  // ── Normal tile ─────────────────────────────────────────────────
   const grid=document.getElementById(`sg-${did}`);
   if(!grid)return;
   const key=`${did}/${s.sensor_id}`;
@@ -73,9 +238,25 @@ function renderTile(did,s){
   const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
   t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr} stl-enter`;
   t.id=`t-${key.replace('/','_')}`;
+  t.dataset.sid=s.sensor_id;
   t.onclick=()=>openDetail(did,s.sensor_id);
   t.style.animationDelay=Math.min(grid.children.length*40,200)+'ms';
   t.innerHTML=tileHTML(s);
+  // Drag-to-reorder
+  t.setAttribute('draggable','true');
+  t.addEventListener('dragstart',e=>{
+    if(e.target.tagName==='BUTTON'||e.target.closest('button')){e.preventDefault();return;}
+    _snrDragEl=t; _snrDragDid=did;
+    e.dataTransfer.effectAllowed='move';
+    e.dataTransfer.setData('text/plain',s.sensor_id);
+    setTimeout(()=>t.classList.add('stl-dragging'),0);
+  });
+  t.addEventListener('dragend',()=>{
+    t.classList.remove('stl-dragging');
+    if(_snrDropInd){_snrDropInd.remove();_snrDropInd=null;}
+    grid.classList.remove('sg-drag-over');
+    _snrDragEl=null; _snrDragDid=null;
+  });
   grid.appendChild(t);
   t.addEventListener('animationend',()=>{t.classList.remove('stl-enter');t.style.animationDelay='';},{once:true});
   const cvs=t.querySelector('canvas.spk');
@@ -90,6 +271,23 @@ function updateTile(s){
   const sk=`${s.device_id}_${s.sensor_id}`;
   const tile=document.getElementById(`t-${key.replace('/','_')}`);
   if(!tile)return;
+  if(s.stype==='vmware'&&s.vmware_vm_id){
+    tile.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    const dot=tile.querySelector('.stl-sdot');
+    if(dot) dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
+    const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
+    const _rv=s.last_value||s.last_detail||'—';
+    const _rv2=parseFloat(s.last_value);
+    const vt=s.alive===false?'FAIL':(!isNaN(_rv2)?_fmtVmVal(_rv2,_VM_UNITS[s.vmware_metric]||''):(_rv.length>12?_rv.slice(0,12)+'…':_rv));
+    const vel=document.getElementById(`stv-${sk}`);
+    if(vel){vel.textContent=vt;vel.className=`vm-row-val ${vc}`;}
+    const mutedBadge=document.getElementById(`sm-muted-${sk}`);
+    if(mutedBadge){const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted?'':'none';}
+    drawSpk(key,s.history||[]);
+    _updateVmGrpStatus(s.device_id,s.vmware_vm_id);
+    updateDetailWin(s.device_id,s.sensor_id,s);
+    return;
+  }
   const _newThr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
   tile.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_newThr}`;
   const dot=tile.querySelector('.stl-sdot');
@@ -98,12 +296,15 @@ function updateTile(s){
   const isDns2  =s.stype==='dns';
   const isTls2  =s.stype==='tls';
   const isBanner2=s.stype==='banner';
+  const isVmware2=s.stype==='vmware';
   const rawVal2 = (isSnmp||isDns2)?(s.last_value||s.last_detail||'—')
                : isTls2?(s.last_value!=null?s.last_value+'d':null):null;
-  const vt = (isSnmp||isDns2)
-    ? (s.alive===false?'FAIL':(rawVal2.length>14?rawVal2.slice(0,14)+'…':rawVal2))
-    : isTls2 ? (s.alive===false?'FAIL':(rawVal2||'—'))
-    : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
+  const vt = isVmware2
+    ? (s.alive===false?'FAIL':(()=>{const _v=parseFloat(s.last_value);return isNaN(_v)?(s.last_value||'—').slice(0,10):_fmtVmVal(_v,_VM_UNITS[s.vmware_metric]||'');})())
+    : (isSnmp||isDns2)
+      ? (s.alive===false?'FAIL':(rawVal2.length>14?rawVal2.slice(0,14)+'…':rawVal2))
+      : isTls2 ? (s.alive===false?'FAIL':(rawVal2||'—'))
+      : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
   const _snmpStrVal2 = isSnmp && s.alive===true && rawVal2 && rawVal2!=='—' && isNaN(rawVal2) && !/bps$|\/s$/.test(rawVal2);
   const _isCounter2 = isSnmp && s.last_rate != null;
   const _snmpThrColor2 = isSnmp && !_isCounter2 && s.threshold_state && s.threshold_state !== 'ok' && s.alive !== false
@@ -146,6 +347,136 @@ function setupCharts(dev){
   setupChartsByDid(dev.device_id);
 }
 
+// ── VMware VM sensor groups ───────────────────────────────────────
+function _vmGrpSfx(vmid){ return vmid.replace(/[^a-z0-9]/gi,'-'); }
+
+function _vmNameFromSensor(s){
+  // Prefer stored VM/host display name; fall back to stripping metric label from sensor name
+  if(s.vmware_vm_name) return s.vmware_vm_name;
+  const m=(typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[])).find(x=>x.v===s.vmware_metric);
+  if(m&&s.name.endsWith(' '+m.l)) return s.name.slice(0,s.name.length-m.l.length-1);
+  return s.name||s.vmware_vm_id;
+}
+
+function _ensureVmGrp(did,s){
+  const vmid=s.vmware_vm_id; if(!vmid) return;
+  const sfx=_vmGrpSfx(vmid);
+  if(document.getElementById(`vmgrp-${did}-${sfx}`)) return;
+  const grid=document.getElementById(`sg-${did}`); if(!grid) return;
+  const vmName=_vmNameFromSensor(s);
+  const colState=_lsGet('pw-vmgrp-col',{})||{};
+  const collapsed=!!(colState[`${did}/${vmid}`]);
+  const grp=document.createElement('div');
+  grp.className='vm-grp stl-enter';
+  grp.id=`vmgrp-${did}-${sfx}`;
+  grp.dataset.vmid=vmid; grp.dataset.did=did;
+  const _isHost=!!(s.vmware_metric&&s.vmware_metric.startsWith('host_'));
+  grp.innerHTML=`
+    <div class="vm-grp-hdr">
+      <div class="vm-grp-arr${collapsed?'':' open'}">▶</div>
+      <div class="vm-grp-badge">${_isHost?'H':'V'}</div>
+      <div class="vm-grp-nm">${esc(vmName)}</div>
+      <div class="vm-grp-dot" id="vgdot-${did}-${sfx}"></div>
+      <div class="vm-grp-cnt" id="vgcnt-${did}-${sfx}">0 metrics</div>
+      <button class="dp-btn vm-add-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add another metric for this VM">+ Metric</button>
+      <button class="dp-btn vm-mute-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" id="vgmute-${did}-${sfx}" title="Mute alerts for all metrics">🔕 Mute</button>
+      <button class="dp-btn d vm-del-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" title="Remove all metrics for this VM">✕ Remove</button>
+    </div>
+    <div class="vm-grp-body${collapsed?' collapsed':''}" id="vgbody-${did}-${sfx}"></div>`;
+  grp.querySelector('.vm-grp-hdr').addEventListener('click',e=>{
+    if(e.target.closest('button')) return;
+    toggleVmGrp(did,vmid);
+  });
+  grp.querySelector('.vm-add-btn').addEventListener('click',e=>{
+    e.stopPropagation();
+    openAddVmMetric(did,vmid,vmName);
+  });
+  grp.querySelector('.vm-mute-btn').addEventListener('click',e=>{
+    e.stopPropagation();
+    toggleVmGrpMute(did,vmid);
+  });
+  grp.querySelector('.vm-del-btn').addEventListener('click',e=>{
+    e.stopPropagation();
+    delVmGrp(did,vmid);
+  });
+  grid.appendChild(grp);
+  grp.addEventListener('animationend',()=>grp.classList.remove('stl-enter'),{once:true});
+  const _body=grp.querySelector(`#vgbody-${did}-${sfx}`);
+  _body.addEventListener('dragover',_vmRowDragOver);
+  _body.addEventListener('drop',_vmRowDrop);
+  _body.addEventListener('dragleave',_vmRowDragLeave);
+}
+
+function _updateVmGrpStatus(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`); if(!body) return;
+  const rows=[...body.querySelectorAll('.vm-row')];
+  const cntEl=document.getElementById(`vgcnt-${did}-${sfx}`);
+  if(cntEl) cntEl.textContent=rows.length===1?'1 metric':`${rows.length} metrics`;
+  const dotEl=document.getElementById(`vgdot-${did}-${sfx}`); if(!dotEl) return;
+  const devMuted=S.devices[did]?.alerts_muted;
+  const states=rows.map(r=>{
+    const sn=S.sensors[`${did}/${r.dataset.sid}`];
+    if(!sn) return '';
+    if(sn.alerts_muted||devMuted) return sn.alive===true?'up':'';
+    return sn.alive===false?'down':(sn.threshold_state&&sn.threshold_state!=='ok'?'warn':(sn.alive===true?'up':''));
+  });
+  dotEl.className='vm-grp-dot '+(states.includes('down')?'down':states.includes('warn')?'warn':states.includes('up')?'up':'');
+  _updateVmGrpMuteBtn(did,vmid);
+}
+
+function toggleVmGrp(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`); if(!body) return;
+  const grp=document.getElementById(`vmgrp-${did}-${sfx}`); if(!grp) return;
+  const collapsed=body.classList.toggle('collapsed');
+  const arr=grp.querySelector('.vm-grp-arr');
+  if(arr) arr.classList.toggle('open',!collapsed);
+  const state=_lsGet('pw-vmgrp-col',{})||{};
+  if(collapsed) state[`${did}/${vmid}`]=1; else delete state[`${did}/${vmid}`];
+  _lsSet('pw-vmgrp-col',state);
+}
+
+function openAddVmMetric(did,vmid,vmName){
+  openAddSensor(did);
+  setTimeout(()=>{
+    selType('vmware');
+    const el=document.getElementById('as-vmid');
+    if(el){ el.value=vmid; }
+    // Pre-fill sensor name prefix so auto-name works
+    window._vmGrpPrefillName=vmName||vmid;
+  },80);
+}
+
+function vmRowHTML(s){
+  const sk=`${s.device_id}_${s.sensor_id}`;
+  const st=s.alive===true?'up':s.alive===false?'down':'';
+  const _vmRaw=s.last_value||s.last_detail||'—';
+  const _vmV=parseFloat(s.last_value);
+  const vt=s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw));
+  const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
+  const metricLabel=(typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[])).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
+  const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
+  const hist=(s.history||[]).slice(-24);
+  const ub=Array(24).fill(0).map((_,i)=>{
+    const idx=i-(24-hist.length);
+    if(idx<0) return'<div class="ub-s"></div>';
+    const v=hist[idx];
+    if(v===null) return`<div class="ub-s" style="background:var(--down)"></div>`;
+    return`<div class="ub-s" style="background:var(--up)"></div>`;
+  }).join('');
+  return `
+  <div class="stl-sdot ${st}"></div>
+  <div class="vm-row-nm">${esc(metricLabel)}</div>
+  <span class="stl-muted" id="sm-muted-${sk}" title="Alerts muted" style="${isMuted?'':'display:none'}">🔕</span>
+  <div class="vm-row-val ${vc}" id="stv-${sk}">${vt}</div>
+  <div class="ub vm-ub" id="ub-${sk}">${ub}</div>
+  <canvas class="spk" height="28" style="flex:0 0 60px"></canvas>
+  <button class="stl-hist" onclick="event.stopPropagation();openDetail('${s.device_id}','${s.sensor_id}','history')" title="History">⌚</button>
+  <button class="vm-row-del" onclick="event.stopPropagation();delVmRow('${s.device_id}','${s.sensor_id}')" title="Remove metric">✕</button>
+  <span id="std-${sk}" style="display:none">${esc(s.last_detail||'')}</span>`;
+}
+
 // ── Sparkline ────────────────────────────────────────────────────
 function drawSpk(key,history){
   const info=S.charts[key];if(!info)return;
@@ -171,15 +502,18 @@ function drawSpk(key,history){
 // ── Device status recalc ─────────────────────────────────────────
 function recalcDevStatus(did){
   const keys=S._devSensors?.[did]||new Set();
-  const sensors=[...keys].map(k=>S.sensors[k]).filter(Boolean);
-  const alives=sensors.map(s=>s.alive);
+  const devMuted=S.devices[did]?.alerts_muted;
+  const active=[...keys].map(k=>S.sensors[k]).filter(s=>s&&!s.alerts_muted&&!devMuted);
+  const alives=active.map(s=>s.alive);
+  const thresholds=active.map(s=>s.threshold_state);
   let st='unknown';
   if(alives.some(a=>a===false))st='down';
+  else if(thresholds.some(t=>t==='crit'))st='down';
+  else if(thresholds.some(t=>t==='warn'))st='warn';
   else if(alives.every(a=>a===true))st='up';
   else if(alives.some(a=>a===true))st='warn';
   if(S.devices[did])S.devices[did].status=st;
   updateDpHeader(did,st);
-  updateSbDevDot(did,st);
 }
 function updateDpHeader(did,st){
   updateCardStatus(did,st);
@@ -188,104 +522,6 @@ function updateDpHeader(did,st){
   if(bar) bar.className=`dw-bar ${st}`;
 }
 
-// ── Sidebar ──────────────────────────────────────────────────────
-function renderSidebar(){
-  const tree=document.getElementById('devTree');
-  const devs=Object.values(S.devices);
-  if(!devs.length){
-    tree.innerHTML=`<div style="padding:18px 14px;color:var(--text3);font-size:11px;text-align:center;line-height:1.8">No devices yet.<br>Click <strong>＋ Add Device</strong>.</div>`;
-    return;
-  }
-  const _devCol=new Set(JSON.parse(localStorage.getItem('pw-tree-collapsed')||'[]'));
-  const _grpCol=new Set(JSON.parse(localStorage.getItem('pw-sb-grp-collapsed')||'[]'));
-  // Build group map
-  const grpMap={};
-  devs.forEach(dev=>{
-    const g=dev.group||'Default Group';
-    if(!grpMap[g]) grpMap[g]=[];
-    grpMap[g].push(dev);
-  });
-  // Order groups to match main panel order
-  const panelOrder=[...document.querySelectorAll('.grp-grid')].map(g=>g.dataset.group).filter(Boolean);
-  const allGrps=Object.keys(grpMap);
-  const finalGrps=[...new Set([...panelOrder.filter(g=>grpMap[g]),...allGrps])];
-
-  function devNodeHTML(dev){
-    const col=_devCol.has(dev.device_id);
-    return`
-    <div class="dev-node" id="sbn-${dev.device_id}">
-      <div class="dev-row" onclick="scrollToDev('${dev.device_id}')">
-        <div class="dev-arr ${col?'':'open'}" title="${col?'Expand':'Collapse'}"
-             onclick="event.stopPropagation();toggleDevTree('${dev.device_id}')">▶</div>
-        <div class="dev-sdot ${dev.status||'unknown'}" id="sbdd-${dev.device_id}"></div>
-        <div class="dev-info">
-          <div class="dev-name">${esc(dev.name)}</div>
-          <div class="dev-host">${esc(dev.host)}</div>
-        </div>
-        <div class="dev-cnt">${dev.sensors.length}</div>
-      </div>
-      <div class="snr-list${col?' collapsed':''}" id="sbsl-${dev.device_id}">
-        ${dev.sensors.map(s=>`
-          <div class="snr-row" id="sbsr-${dev.device_id}_${s.sensor_id}"
-               onclick="openDetail('${dev.device_id}','${s.sensor_id}')">
-            <div class="s-ico ${s.stype}">${sIco(s.stype)}</div>
-            <div class="s-snm">${esc(s.name)}</div>
-            <div class="s-sdot ${s.alive===true?'up':s.alive===false?'down':''}"
-                 id="sbsd-${dev.device_id}_${s.sensor_id}"></div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-  }
-
-  if(finalGrps.length<=1 && finalGrps[0]==='Default Group'){
-    // Single default group — no group header, flat list
-    tree.innerHTML=(grpMap['Default Group']||[]).map(devNodeHTML).join('');
-  } else {
-    tree.innerHTML=finalGrps.map(grp=>{
-      const gdevs=grpMap[grp]||[];
-      const gid=grpId(grp);
-      const grpCol=_grpCol.has(grp);
-      return`
-      <div class="sb-grp" id="sbg-${gid}">
-        <div class="sb-grp-hdr" data-grp="${esc(grp)}" onclick="toggleSbGrp(this.dataset.grp)">
-          <div class="sb-grp-arr ${grpCol?'':'open'}">▶</div>
-          <div class="sb-grp-name">${esc(grp)}</div>
-          <div class="sb-grp-cnt">${gdevs.length}</div>
-        </div>
-        <div class="sb-grp-body${grpCol?' collapsed':''}" id="sbgb-${gid}">
-          ${gdevs.map(devNodeHTML).join('')}
-        </div>
-      </div>`;
-    }).join('');
-  }
-}
-
-function toggleSbGrp(grp){
-  const gid=grpId(grp);
-  const body=document.getElementById('sbgb-'+gid);
-  const arr=document.querySelector('#sbg-'+gid+' .sb-grp-arr');
-  if(!body) return;
-  const nowCol=body.classList.toggle('collapsed');
-  if(arr) arr.classList.toggle('open',!nowCol);
-  const set=new Set(JSON.parse(localStorage.getItem('pw-sb-grp-collapsed')||'[]'));
-  if(nowCol) set.add(grp); else set.delete(grp);
-  localStorage.setItem('pw-sb-grp-collapsed',JSON.stringify([...set]));
-}
-
-function toggleDevTree(did){
-  const list=document.getElementById(`sbsl-${did}`);
-  const arr=document.querySelector(`#sbn-${did} .dev-arr`);
-  if(!list) return;
-  const nowCollapsed=list.classList.toggle('collapsed');
-  if(arr){arr.classList.toggle('open',!nowCollapsed);arr.title=nowCollapsed?'Expand':'Collapse';}
-  const set=new Set(JSON.parse(localStorage.getItem('pw-tree-collapsed')||'[]'));
-  if(nowCollapsed) set.add(did); else set.delete(did);
-  localStorage.setItem('pw-tree-collapsed',JSON.stringify([...set]));
-}
-function updateSbDevDot(did,st){const d=document.getElementById(`sbdd-${did}`);if(d)d.className=`dev-sdot ${st}`;}
-function updateSbSensorDot(s){const d=document.getElementById(`sbsd-${s.device_id}_${s.sensor_id}`);if(d)d.className=`s-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;}
-function scrollToDev(did){openDevWin(did);}
-
 // ── Device actions ───────────────────────────────────────────────
 async function startDev(did){await api('POST',`/api/device/${did}/start`);toast('Monitoring started','ok')}
 async function stopDev(did) {await api('POST',`/api/device/${did}/stop`); toast('Monitoring stopped','info')}
@@ -293,13 +529,14 @@ async function delDev(did){
   if(!confirm('Delete device and all its sensors?'))return;
   await api('DELETE',`/api/device/${did}`);
   document.getElementById(`dp-${did}`)?.remove();
+  document.getElementById(`dpl-${did}`)?.remove();
   closeM('dwo');
   delete S.devices[did];
   Object.keys(S.sensors).filter(k=>k.startsWith(did+'/')).forEach(k=>{delete S.sensors[k];delete S.charts[k];delete S.logs[k];});
   delete S._devSensors[did];
   pruneEmptyGroups();
   refreshGroupCounts();
-  renderSidebar();updatePills();
+  updatePills();
   if(!Object.keys(S.devices).length){
     document.getElementById('emptyMain').style.display='flex';
     document.getElementById('dpanels').style.display='none';
@@ -471,6 +708,92 @@ async function delSensor(did,sid){
   toast('Sensor removed','info');
 }
 
+// ── Inline confirm (window.confirm is blocked on remote HTTP) ────
+function _pwConfirm(msg, onYes, yesLabel='Remove'){
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:22px 26px;max-width:340px;text-align:center">
+    <p style="color:var(--text);margin:0 0 16px;font-size:14px">${esc(msg)}</p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn-danger" id="_pwc-yes">${esc(yesLabel)}</button>
+      <button class="dp-btn" id="_pwc-no">Cancel</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#_pwc-no').onclick=()=>ov.remove();
+  ov.querySelector('#_pwc-yes').onclick=()=>{ov.remove();onYes();};
+  ov.onclick=e=>{if(e.target===ov)ov.remove();};
+}
+
+// ── VMware vm-row / vm-group delete ──────────────────────────────
+async function delVmRow(did,sid){
+  const s=S.sensors[`${did}/${sid}`];
+  const vmid=s?.vmware_vm_id;
+  await delSensor(did,sid);
+  if(vmid){
+    const sfx=_vmGrpSfx(vmid);
+    const body=document.getElementById(`vgbody-${did}-${sfx}`);
+    if(body&&body.querySelectorAll('.vm-row').length===0){
+      document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
+    } else {
+      _updateVmGrpStatus(did,vmid);
+    }
+  }
+}
+
+function delVmGrp(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  if(!body) return;
+  const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
+  const count=sids.length;
+  if(!count){document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();return;}
+  _pwConfirm(`Remove all ${count} metric${count===1?'':'s'} for this VM?`,async()=>{
+    for(const sid of sids) await delSensor(did,sid);
+    document.getElementById(`vmgrp-${did}-${sfx}`)?.remove();
+  });
+}
+
+async function toggleVmGrpMute(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  if(!body) return;
+  const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
+  if(!sids.length) return;
+  // Determine target state: if ANY sensor is unmuted → mute all; else unmute all
+  const anyUnmuted=sids.some(sid=>{const s=S.sensors[`${did}/${sid}`];return s&&!s.alerts_muted;});
+  const mute=anyUnmuted;
+  const btn=document.getElementById(`vgmute-${did}-${sfx}`);
+  if(btn){btn.disabled=true;btn.textContent='...';}
+  let ok=0;
+  for(const sid of sids){
+    try{
+      const r=await api('PATCH',`/api/device/${did}/sensor/${sid}`,{alerts_muted:mute});
+      if(r.status==='updated'){
+        const s=S.sensors[`${did}/${sid}`];
+        if(s) s.alerts_muted=mute;
+        const badge=document.getElementById(`sm-muted-${did}_${sid}`);
+        if(badge) badge.style.display=mute?'':'none';
+        ok++;
+      }
+    }catch(e){}
+  }
+  _updateVmGrpMuteBtn(did,vmid);
+  if(btn) btn.disabled=false;
+  toast(`${mute?'Muted':'Unmuted'} ${ok} sensor${ok===1?'':'s'}`,'ok');
+}
+
+function _updateVmGrpMuteBtn(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  const btn=document.getElementById(`vgmute-${did}-${sfx}`);
+  if(!btn) return;
+  if(!body){btn.textContent='🔕 Mute';return;}
+  const sids=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid).filter(Boolean);
+  const allMuted=sids.length>0&&sids.every(sid=>{const s=S.sensors[`${did}/${sid}`];return s?.alerts_muted;});
+  btn.textContent=allMuted?'🔔 Unmute':'🔕 Mute';
+  btn.title=allMuted?'Unmute alerts for all metrics':'Mute alerts for all metrics';
+}
+
 // ── Logs ─────────────────────────────────────────────────────────
 function pushLog(did,sid,msg,type){
   const key=`${did}/${sid}`;
@@ -549,10 +872,44 @@ function _fmtRateThrLabel(displayVal, snmpUnit) {
   return displayVal.toFixed(1)+'/s';
 }
 
+// ── VMware metric unit helpers ───────────────────────────────────
+const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',disk_read:'KBps',disk_write:'KBps',disk_usage:'KBps',disk_used_pct:'%',ds_read_lat:'ms',ds_write_lat:'ms',net_rx:'KBps',net_tx:'KBps',net_usage:'KBps',uptime:'seconds',on:'',
+  host_cpu_usage:'%',host_cpu_ready:'%',host_mem_active:'MB',host_mem_consumed:'MB',host_mem_usage_pct:'%',host_mem_swap:'MB',
+  host_disk_read:'KBps',host_disk_write:'KBps',host_disk_usage:'KBps',host_disk_dev_lat:'ms',host_disk_kern_lat:'ms',
+  host_ds_read_lat:'ms',host_ds_write_lat:'ms',host_net_rx:'KBps',host_net_tx:'KBps',host_net_usage:'KBps',
+  host_power:'watt',host_uptime:'seconds'};
+function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
+function _fmtVmVal(v,u){
+  if(v==null)return'—';
+  switch(u){
+    case'%':return v.toFixed(2)+'%';
+    case'MB':return v>=1024?(v/1024).toFixed(1)+' GB':v.toFixed(0)+' MB';
+    case'KB':return v>=1048576?(v/1048576).toFixed(1)+' GB':v>=1024?(v/1024).toFixed(1)+' MB':v+' KB';
+    case'KBps':return v>=1024?(v/1024).toFixed(1)+' MBps':v.toFixed(1)+' KBps';
+    case'ms':return v.toFixed(1)+' ms';
+    case'seconds':{const d=Math.floor(v/86400),h=Math.floor((v%86400)/3600),m=Math.floor((v%3600)/60);return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m`;}
+    case'watt':return v.toFixed(0)+' W';
+    default:return String(v);
+  }
+}
+function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':u==='watt'?'W':'';}
+function _fmtVmYLabel(v,u){
+  switch(u){
+    case'%':return Math.round(v)+'%';
+    case'MB':return v>=1024?(v/1024).toFixed(1)+'GB':Math.round(v)+'MB';
+    case'KB':return v>=1048576?(v/1048576).toFixed(1)+'GB':v>=1024?(v/1024).toFixed(0)+'MB':Math.round(v)+'KB';
+    case'KBps':return v>=1024?(v/1024).toFixed(1)+'MBps':Math.round(v)+'KBps';
+    case'ms':return Math.round(v)+'ms';
+    case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v/60)+'m';
+    case'watt':return Math.round(v)+'W';
+    default:return String(Math.round(v));
+  }
+}
+
 function openDetail(did,sid,initialTab){
   const key=`${did}/${sid}`;
   const s=S.sensors[key];if(!s)return;
-  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host}:${s.port||161} · ${s.snmp_community} · OID ${s.snmp_oid}`:s.stype==='dns'?`${s.dns_query||s.host} · ${s.dns_record_type||'A'}${s.dns_server?' via '+s.dns_server:''}`:s.host;
+  const tgt=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host}:${s.port||161} · ${s.snmp_community} · OID ${s.snmp_oid}`:s.stype==='dns'?`${s.dns_query||s.host} · ${s.dns_record_type||'A'}${s.dns_server?' via '+s.dns_server:''}`:s.stype==='vmware'?`${s.host}:${s.port||443} · VM ${s.vmware_vm_id} · ${s.vmware_metric}`:s.host;
   closeM('dm');
   const o=document.createElement('div');
   o.className='dmo';o.id='dm';
@@ -560,15 +917,18 @@ function openDetail(did,sid,initialTab){
   o.innerHTML=`
   <div class="dmbox">
     <div class="dm-hd">
-      <div class="dm-tbdg ${s.stype}">${sIco(s.stype)} ${s.stype.toUpperCase()}</div>
-      <div class="dm-ttl">${esc(s.name)}</div>
-      <div class="dm-tgt">${esc(tgt)}</div>
-      <div style="display:flex;gap:6px;margin-left:auto">
+      <div class="dm-tbdg ${s.stype}">${sIco(s.stype)}<br>${s.stype.toUpperCase()}</div>
+      <div class="dm-hd-info">
+        <div class="dm-ttl">${esc(S.devices[did]?.name||did)}</div>
+        <div class="dm-sname">${esc(s.name)}</div>
+        <div class="dm-tgt">${esc(tgt)}</div>
+      </div>
+      <div class="dm-hd-actions">
         <button class="dp-btn s" onclick="startDev('${did}')">▶</button>
         <button class="dp-btn" onclick="openEditSensor('${did}','${sid}')">✎ Edit</button>
         <button class="dp-btn d" onclick="delSensor('${did}','${sid}');closeM('dm')">✕ Remove</button>
-        <button class="mclose" onclick="closeM('dm')">✕</button>
       </div>
+      <button class="mclose" onclick="closeM('dm')">✕</button>
     </div>
     <div class="dm-tabs">
       <button class="dm-tab active" id="dm-tabn-overview-${did}-${sid}"
@@ -586,7 +946,7 @@ function openDetail(did,sid,initialTab){
       </div>
       <div class="dm-chart-wrap">
         <div class="dm-cht">
-          <span>${s.stype==='snmp'?'Poll history':s.stype==='tls'?'Check history':'Latency'} — last ${s.history?.length||0} samples</span>
+          <span>${s.stype==='snmp'?'Poll history':s.stype==='tls'?'Check history':s.stype==='vmware'?'Metric history':'Latency'} — last ${s.history?.length||0} samples</span>
           <span id="dmlbl-${did}-${sid}"></span>
         </div>
         <canvas class="dmc" id="dmc-${did}-${sid}" height="110"></canvas>
@@ -615,7 +975,9 @@ function openDetail(did,sid,initialTab){
           <button class="dm-hist-pill" data-m="10080"  onclick="dmHistPick('${did}','${sid}',10080)">7d</button>
           <button class="dm-hist-pill" data-m="43200"  onclick="dmHistPick('${did}','${sid}',43200)">30d</button>
           <button class="dm-hist-pill" data-m="129600" onclick="dmHistPick('${did}','${sid}',129600)">90d</button>
-          <button class="dm-hist-pill" data-m="525600" onclick="dmHistPick('${did}','${sid}',525600)">1y</button>
+          <button class="dm-hist-pill" data-m="525600"  onclick="dmHistPick('${did}','${sid}',525600)">1y</button>
+          <button class="dm-hist-pill" data-m="1051200" onclick="dmHistPick('${did}','${sid}',1051200)">2y</button>
+          <button class="dm-hist-pill" data-m="1576800" onclick="dmHistPick('${did}','${sid}',1576800)">3y</button>
         </div>
         <span id="dm-hist-stats-${did}-${sid}" class="dm-hist-stats"></span>
       </div>
@@ -635,7 +997,7 @@ function openDetail(did,sid,initialTab){
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto-Refresh</button>
         <button class="dm-ar-btn" id="fs-${did}-${sid}" data-did="${did}" data-sid="${sid}" onclick="dmToggleFullscreen('${did}','${sid}')" title="Full screen">⤢</button>
       </div>
-      <div style="position:relative">
+      <div class="dm-hist-cwrap" style="position:relative">
         <canvas id="dm-hist-canvas-${did}-${sid}" class="dm-hist-canvas" height="320"></canvas>
         <div class="dm-hist-tip" id="tip-${did}-${sid}"></div>
       </div>
@@ -696,6 +1058,10 @@ const _histCache = {};
 async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   if (!canvas) return;
   if (statsEl) statsEl.textContent = 'Loading…';
+  // Fade out chart, KPIs, and table while fetching
+  const _fadeEls = [document.getElementById(`kpi-${did}-${sid}`), canvas.parentElement, sumEl].filter(Boolean);
+  _fadeEls.forEach(el => el.classList.add('dm-hist-loading'));
+  const _loadT0 = performance.now();
   const dynamicLimit = Math.min(10000, Math.max(500, Math.round(minutes * 60 / 10)));
   const [hr, sr] = await Promise.all([
     fetch(`/api/device/${did}/sensor/${sid}/history?minutes=${minutes}&limit=${dynamicLimit}`)
@@ -720,10 +1086,16 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   const _statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`) || statsEl;
   const _sumEl   = document.getElementById(`dm-hist-summary-${did}-${sid}`) || sumEl;
   if (!c) return; // genuinely not found (modal closed mid-flight)
-  _buildKpiBar(summary, did, sid, rateSamples, _snmpUnit);
+  _buildKpiBar(summary, samples, did, sid, rateSamples, _snmpUnit);
   _setupHistTooltip(c, summary, did, sid, minutes, rateSamples, _snmpUnit);
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
-  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit);
+  if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit, did, sid);
+  // Ensure loading fade is visible for at least 250ms, then fade back in
+  const _elapsed = performance.now() - _loadT0;
+  if (_elapsed < 250) await new Promise(r => setTimeout(r, 250 - _elapsed));
+  [document.getElementById(`kpi-${did}-${sid}`), c.parentElement,
+   document.getElementById(`dm-hist-summary-${did}-${sid}`) || _sumEl
+  ].forEach(el => { if (el) el.classList.remove('dm-hist-loading'); });
   // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
   // the next animation frame will have correct dimensions — redraw from cache.
   requestAnimationFrame(() => dmHistRedraw(did, sid));
@@ -738,7 +1110,7 @@ function dmHistRedraw(did, sid) {
     cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
 }
 
-function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
+function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
   const _setKpi = (id, label, val, cls) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -778,18 +1150,30 @@ function _buildKpiBar(summary, did, sid, rateSamples, snmpUnit) {
     ['avg','min','max'].forEach((k,i)=>{const el=document.getElementById(`dmv-${did}-${sid}-${k}`);if(el)el.textContent=[_fr(avgR),_fr(minR),_fr(maxR)][i];});
     return;
   }
-  // ms-based KPIs
-  if (!summary.length) return;
-  let wsum=0, wcnt=0, minMs=Infinity, maxMs=-Infinity;
-  for (const r of summary) {
-    if(r.avg_ms!=null){wsum+=r.avg_ms*r.ok;wcnt+=r.ok;}
-    if(r.min_ms!=null) minMs=Math.min(minMs,r.min_ms);
-    if(r.max_ms!=null) maxMs=Math.max(maxMs,r.max_ms);
+  // VMware metric-value KPIs
+  const _vmU = _vmUnit(did, sid);
+  if (_vmU !== null) {
+    if (!samples.length) return;
+    const _lbl2 = _vmUnitLabel(_vmU);
+    const vmVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
+    const _av2 = vmVals.length ? vmVals.reduce((a,b)=>a+b,0)/vmVals.length : null;
+    const _mnV = vmVals.length ? Math.min(...vmVals) : null;
+    const _mxV = vmVals.length ? Math.max(...vmVals) : null;
+    _setKpi(`kpi-avg-${did}-${sid}`,'Avg '+_lbl2,_fmtVmVal(_av2,_vmU));
+    _setKpi(`kpi-min-${did}-${sid}`,'Min '+_lbl2,_mnV!=null?_fmtVmVal(_mnV,_vmU):'—');
+    _setKpi(`kpi-max-${did}-${sid}`,'Max '+_lbl2,_mxV!=null?_fmtVmVal(_mxV,_vmU):'—');
+    _setKpi(`kpi-jitter-${did}-${sid}`,'Jitter',_fmtVmVal(avgJitt,_vmU),'dm-kpi-info');
+    return;
   }
-  const avg = wcnt>0 ? Math.round(wsum/wcnt*10)/10 : null;
-  _setKpi(`kpi-avg-${did}-${sid}`, 'Avg ms', avg!=null?avg+'ms':'—');
-  _setKpi(`kpi-min-${did}-${sid}`, 'Min ms', minMs!==Infinity?minMs+'ms':'—');
-  _setKpi(`kpi-max-${did}-${sid}`, 'Max ms', maxMs!==-Infinity?maxMs+'ms':'—');
+  // ms-based KPIs — compute from samples (matches stats bar, reflects selected time range)
+  const msVals = samples.filter(p => p.ok && p.ms != null).map(p => p.ms);
+  if (!msVals.length) return;
+  const avg = Math.round(msVals.reduce((a,b)=>a+b,0)/msVals.length*10)/10;
+  const minMs = Math.round(Math.min(...msVals)*10)/10;
+  const maxMs = Math.round(Math.max(...msVals)*10)/10;
+  _setKpi(`kpi-avg-${did}-${sid}`, 'Avg ms', avg+'ms');
+  _setKpi(`kpi-min-${did}-${sid}`, 'Min ms', minMs+'ms');
+  _setKpi(`kpi-max-${did}-${sid}`, 'Max ms', maxMs+'ms');
   _setKpi(`kpi-jitter-${did}-${sid}`, 'Jitter', avgJitt.toFixed(1)+'ms', 'dm-kpi-info');
 }
 
@@ -802,6 +1186,9 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
   const { signal } = ac;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
+  const _vmU3 = _vmUnit(did, sid);
+  const _isVmware3 = _vmU3 !== null;
+
   canvas.addEventListener('mousemove', e => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
@@ -840,6 +1227,24 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
         `<td style="color:var(--text);text-align:right">${nearest?.ok||0}↑ ${nearest?.fail||0}↓</td></tr>` +
         `<tr><td style="color:var(--text3)">Loss</td>` +
         `<td style="color:${lossColor};text-align:right">${(nearest?.loss_pct||0).toFixed(1)}%</td></tr>` +
+        `</table>` +
+        `<div style="${_ftStyle};color:${statusColor}">${statusText}</div>`;
+    } else if (_isVmware3) {
+      tip.innerHTML =
+        `<div style="${_hdrStyle}">${lbl}</div>` +
+        `<div style="${_valStyle}" class="tip-exact">—</div>` +
+        `<table style="border-collapse:collapse;font-size:.76rem">` +
+        `<tr><td style="color:var(--text3);padding-right:18px;padding-bottom:3px">Avg</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.avg_ms != null ? _fmtVmVal(nearest.avg_ms, _vmU3) : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Min</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.min_ms != null ? _fmtVmVal(nearest.min_ms, _vmU3) : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3);padding-bottom:3px">Max</td>` +
+        `<td style="color:var(--text);text-align:right;font-variant-numeric:tabular-nums">` +
+        `${nearest.max_ms != null ? _fmtVmVal(nearest.max_ms, _vmU3) : '—'}</td></tr>` +
+        `<tr><td style="color:var(--text3)">Loss</td>` +
+        `<td style="color:${lossColor};text-align:right">${(nearest.loss_pct || 0).toFixed(1)}%</td></tr>` +
         `</table>` +
         `<div style="${_ftStyle};color:${statusColor}">${statusText}</div>`;
     } else {
@@ -891,76 +1296,30 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
       const _xOf2 = ts => LEFT + (ts - _winStart) / (minutes * 60) * _plotW2;
       const _cursorBi = Math.min(TARGET - 1, Math.max(0, Math.floor((hoverTs - _winStart) / _bucketSec)));
 
+      // Look up the drawn avg line's canvas-Y at this pixel X
+      const _lineMap = cache.avgLineY || {};
+      const _rpx = Math.round(mx);
+      let dotCanvasY = _lineMap[_rpx] ?? _lineMap[_rpx - 1] ?? _lineMap[_rpx + 1] ?? null;
+
+      // Convert canvas-Y back to data value for the tooltip
       let dotVal = null;
-      if (_isCounter) {
-        // Counter mode: interpolate from rateBuckets or sortedRateSamples
-        const _rateBuckets = cache.rateBuckets;
-        if (_rateBuckets) {
-          const bucketAvgR = _rateBuckets[_cursorBi]?.n > 0
-            ? _rateBuckets[_cursorBi].sum / _rateBuckets[_cursorBi].n : null;
-          const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
-          if (bucketAvgR !== null) {
-            let adjV=null, adjX=null;
-            if (mx >= _bcX) {
-              for (let i=_cursorBi+1;i<TARGET;i++) { if(_rateBuckets[i].n>0){adjV=_rateBuckets[i].sum/_rateBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
-            } else {
-              for (let i=_cursorBi-1;i>=0;i--) { if(_rateBuckets[i].n>0){adjV=_rateBuckets[i].sum/_rateBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
-            }
-            if (adjV!==null&&adjX!==null&&Math.abs(adjX-_bcX)>0) {
-              dotVal = bucketAvgR + (mx-_bcX)/(adjX-_bcX)*(adjV-bucketAvgR);
-            } else { dotVal=bucketAvgR; }
-          } else { dotVal=0; }
-        } else {
-          const sorted = cache.sortedRateSamples || [];
-          let p1=null, p2=null;
-          for (const p of sorted) {
-            if (_xOf2(p.ts)<=mx) p1=p; else if(!p2){p2=p;break;}
-          }
-          if (p1&&p2) { const x1=_xOf2(p1.ts),x2=_xOf2(p2.ts),t=(mx-x1)/(x2-x1); dotVal=p1.displayRate+t*(p2.displayRate-p1.displayRate); }
-          else dotVal=(p1||p2)?.displayRate??null;
-        }
-      } else {
-        // ms mode: original interpolation logic
-        const okSp = cache.samples.filter(p => p.ok && p.ms != null);
-        const _allBuckets = cache.buckets;
-        const bucketAvg = (_allBuckets && _allBuckets[_cursorBi].n > 0)
-          ? _allBuckets[_cursorBi].sum / _allBuckets[_cursorBi].n : null;
-        const usingBuckets = okSp.length > TARGET;
-        if (usingBuckets) {
-          const _bcX = _xOf2(_winStart + (_cursorBi + 0.5) * _bucketSec);
-          if (bucketAvg !== null) {
-            let adjMs=null, adjX=null;
-            if (mx >= _bcX) {
-              for (let i=_cursorBi+1;i<TARGET;i++) { if(_allBuckets[i].n>0){adjMs=_allBuckets[i].sum/_allBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
-            } else {
-              for (let i=_cursorBi-1;i>=0;i--) { if(_allBuckets[i].n>0){adjMs=_allBuckets[i].sum/_allBuckets[i].n;adjX=_xOf2(_winStart+(i+0.5)*_bucketSec);break;} }
-            }
-            if (adjMs!==null&&adjX!==null&&Math.abs(adjX-_bcX)>0) {
-              dotVal = bucketAvg + (mx-_bcX)/(adjX-_bcX)*(adjMs-bucketAvg);
-            } else { dotVal=bucketAvg; }
-          } else { dotVal=0; }
-        } else {
-          const sorted = cache.sortedOkSamples || [...okSp].sort((a,b)=>a.ts-b.ts);
-          let p1=null, p2=null;
-          for (const p of sorted) {
-            if (_xOf2(p.ts)<=mx) p1=p; else if(!p2){p2=p;break;}
-          }
-          if (p1&&p2) { const x1=_xOf2(p1.ts),x2=_xOf2(p2.ts),t=(mx-x1)/(x2-x1); dotVal=p1.ms+t*(p2.ms-p1.ms); }
-          else dotVal=(p1||p2)?.ms??null;
-        }
+      if (dotCanvasY != null) {
+        const _plotH2 = canvas.height - BOT - TOP;
+        const _maxY2 = cache.maxY || 1;
+        dotVal = Math.max(0, ((canvas.height - BOT) - dotCanvasY) / _plotH2 * _maxY2);
       }
 
       // Exact value tooltip
       const exactEl = tip.querySelector('.tip-exact');
       if (exactEl) {
         if (_isCounter) exactEl.textContent = dotVal!=null ? _fmtRateThrLabel(dotVal, snmpUnit) : '—';
+        else if (_isVmware3) exactEl.textContent = dotVal!=null ? _fmtVmVal(dotVal, _vmU3) : '—';
         else exactEl.textContent = dotVal!=null ? Math.round(dotVal)+' ms' : '— ms';
       }
 
-      // Draw dot on the drawn line
-      if (dotVal != null) {
-        const dotY = _yOf(dotVal);
-        cctx.beginPath(); cctx.arc(mx, dotY, 5, 0, Math.PI * 2);
+      // Draw dot exactly on the drawn line
+      if (dotCanvasY != null) {
+        cctx.beginPath(); cctx.arc(mx, dotCanvasY, 5, 0, Math.PI * 2);
         cctx.fillStyle = '#7ec8ff'; cctx.fill();
         cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
       }
@@ -1010,6 +1369,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   // ── Y-axis scaling ────────────────────────────────────────────────────────
   const _sen = S.sensors[`${did}/${sid}`];
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
+  const _vmU2 = _vmUnit(did, sid);
+  const _isVmware = _vmU2 !== null;
   let msVals, rawMax, maxY, yOf;
   if (_isCounter) {
     const okR = rateSamples.filter(r => r.ok && r.rate != null);
@@ -1042,6 +1403,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.fillStyle = 'rgba(200,210,220,.92)'; ctx.textAlign = 'right';
     const _yLbl = _isCounter
       ? _fmtRateYLabel(maxY * f, snmpUnit)
+      : _isVmware ? _fmtVmYLabel(maxY * f, _vmU2)
       : (Math.round(maxY * f) >= 1000 ? (Math.round(maxY * f) / 1000).toFixed(1) + 's' : Math.round(maxY * f) + 'ms');
     ctx.fillText(_yLbl, LEFT - 4, y + 4);
     if (togLoss && !_isCounter) {
@@ -1163,6 +1525,9 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
 
   // ── 7. Avg/Rate line — main focus ────────────────────────────
   if (togAvg) {
+    // Pixel-X → data-value lookup for hover dot (filled by _drawLine)
+    const _avgLineY = {};  // { pixelX: dataValue }
+
     const _drawLine = (pts, gapMult) => {
       if (pts.length < 2) return;
       const gapThresh = (tsRange / pts.length) * gapMult;
@@ -1179,11 +1544,28 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
           if (seg.length > 1) {
             ctx.beginPath();
             ctx.moveTo(seg[0].x, seg[0].y);
+            // Sample the line for hover lookup: first point
+            _avgLineY[Math.round(seg[0].x)] = seg[0].y;
             for (let j = 1; j < seg.length - 1; j++) {
-              ctx.quadraticCurveTo(seg[j].x, seg[j].y,
-                (seg[j].x + seg[j+1].x) / 2, (seg[j].y + seg[j+1].y) / 2);
+              const cx = seg[j].x, cy = seg[j].y;
+              const ex = (seg[j].x + seg[j+1].x) / 2, ey = (seg[j].y + seg[j+1].y) / 2;
+              const sx = j === 1 ? seg[0].x : (seg[j-1].x + seg[j].x) / 2;
+              const sy = j === 1 ? seg[0].y : (seg[j-1].y + seg[j].y) / 2;
+              ctx.quadraticCurveTo(cx, cy, ex, ey);
+              // Sample the quadratic curve at each pixel X
+              const xMin = Math.floor(Math.min(sx, ex));
+              const xMax = Math.ceil(Math.max(sx, ex));
+              for (let px = xMin; px <= xMax; px++) {
+                const xRange = ex - sx;
+                if (Math.abs(xRange) < 0.5) { _avgLineY[px] = ey; continue; }
+                // Approximate t from x (linear approximation is fine for per-pixel)
+                const tApprox = Math.max(0, Math.min(1, (px - sx) / xRange));
+                const u = 1 - tApprox;
+                _avgLineY[px] = u * u * sy + 2 * u * tApprox * cy + tApprox * tApprox * ey;
+              }
             }
             ctx.lineTo(seg[seg.length-1].x, seg[seg.length-1].y);
+            _avgLineY[Math.round(seg[seg.length-1].x)] = seg[seg.length-1].y;
             ctx.stroke();
           }
           segStart = i;
@@ -1229,7 +1611,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
           }
           pts = [];
           if (firstBi >= 0) {
-            for (let i = firstBi; i <= lastBi; i++) {
+            for (let i = 0; i <= lastBi; i++) {
               const ts = _ws + (i + 0.5) * bucketSec;
               const v = accR[i].n > 0 ? accR[i].sum / accR[i].n : 0;
               pts.push({ x: xOf(ts), y: yOf(v), ts });
@@ -1276,9 +1658,9 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
           }
           pts = [];
           if (firstBi >= 0) {
-            for (let i = firstBi; i <= lastBi; i++) {
+            for (let i = 0; i <= lastBi; i++) {
               const ts = _ws + (i + 0.5) * bucketSec;
-              // Empty bucket = downtime → connect at 0ms baseline
+              // Empty bucket = downtime → show 0ms baseline (covers gaps at start or middle)
               const ms = acc[i].n > 0 ? acc[i].sum / acc[i].n : 0;
               pts.push({ x: xOf(ts), y: yOf(ms), ts });
             }
@@ -1287,6 +1669,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
         _drawLine(pts, 4);
       }
     }
+    // Store pixel lookup for hover dot
+    if (_histCache[_ckey]) _histCache[_ckey].avgLineY = _avgLineY;
   }
 
   // ── 8. Threshold lines ────────────────────────────────────────
@@ -1298,7 +1682,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(240,165,0,.85)'; ctx.textAlign = 'left';
-    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
+    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : _isVmware ? 'warn '+_fmtVmVal(_sen.warn_ms,_vmU2) : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
   }
   if (_sen?.crit_ms > 0 && _sen.crit_ms <= maxY) {
     const cy = yOf(_sen.crit_ms);
@@ -1307,7 +1691,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(248,81,73,.85)'; ctx.textAlign = 'left';
-    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
+    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : _isVmware ? 'crit '+_fmtVmVal(_sen.crit_ms,_vmU2) : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
   }
 
   // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──
@@ -1329,6 +1713,13 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       const maxD = okR.length ? _rateToDisplayUnits(Math.max(...okR.map(r => r.rate)), snmpUnit) : null;
       const _f = v => v != null ? _fmtRateThrLabel(v, snmpUnit) : '—';
       statsEl.textContent = `${total} probes · ${upPct}% up · avg ${_f(avgD)} · min ${_f(minD)} · max ${_f(maxD)}`;
+    } else if (_isVmware) {
+      const total = samples.length, okCt = samples.filter(p => p.ok).length;
+      const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
+      const avgV = msVals.length ? msVals.reduce((a,b) => a+b, 0) / msVals.length : null;
+      const minV = msVals.length ? Math.min(...msVals) : null;
+      statsEl.textContent =
+        `${total} probes · ${upPct}% up · avg ${_fmtVmVal(avgV,_vmU2)} · min ${_fmtVmVal(minV,_vmU2)} · max ${_fmtVmVal(rawMax||null,_vmU2)}`;
     } else {
       const total = samples.length, okCt = samples.filter(p => p.ok).length;
       const upPct = total ? Math.round(okCt / total * 1000) / 10 : 0;
@@ -1340,7 +1731,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   }
 }
 
-function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit) {
+function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did, sid) {
   if (!sumEl) return;
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   let _bSec;
@@ -1393,6 +1784,48 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit) {
       <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
         <th>Avg ${_lbl}</th><th>Min ${_lbl}</th><th>Max ${_lbl}</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
+    return;
+  }
+
+  // VMware metric-value summary table
+  const _vmU4 = _vmUnit(did, sid);
+  if (_vmU4 !== null) {
+    if (!summary.length) { sumEl.innerHTML = ''; return; }
+    const _lbl2 = _vmUnitLabel(_vmU4);
+    const _bk2 = {};
+    for (const r of summary) {
+      const k = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+      if (!_bk2[k]) _bk2[k] = {ts:k, ok:0, fail:0, wsum:0, wcnt:0, minV:Infinity, maxV:-Infinity, cnt:0};
+      const b = _bk2[k];
+      b.ok += r.ok; b.fail += r.fail;
+      if (r.avg_ms != null) { b.wsum += r.avg_ms * r.ok; b.wcnt += r.ok; }
+      if (r.min_ms != null) b.minV = Math.min(b.minV, r.min_ms);
+      if (r.max_ms != null) b.maxV = Math.max(b.maxV, r.max_ms);
+      b.cnt++;
+    }
+    const rows2 = Object.values(_bk2).sort((a, b) => a.ts - b.ts).map(b => {
+      const d = new Date(b.ts * 1000);
+      let lbl;
+      if      (_bSec < 86400)  lbl = d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      else if (_bSec < 604800) lbl = d.toLocaleDateString([],{month:'short',day:'numeric'});
+      else                     lbl = d.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+      const upPct = b.ok + b.fail > 0 ? Math.round(b.ok / (b.ok + b.fail) * 100) : 100;
+      const avg = b.wcnt > 0 ? b.wsum / b.wcnt : null;
+      const rowCls = upPct < 80 ? 'hrow-crit' : upPct < 95 ? 'hrow-warn' : '';
+      return `<tr class="${rowCls}">
+        <td>${lbl}</td>
+        <td style="color:var(--up)">${b.ok}↑</td>
+        <td style="color:${b.fail?'var(--down)':'var(--text3)'}">${b.fail}↓</td>
+        <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
+        <td>${_fmtVmVal(avg, _vmU4)}</td>
+        <td>${b.minV!==Infinity?_fmtVmVal(b.minV, _vmU4):'—'}</td>
+        <td>${b.maxV!==-Infinity?_fmtVmVal(b.maxV, _vmU4):'—'}</td>
+      </tr>`;
+    }).join('');
+    sumEl.innerHTML = `<table class="dm-hist-tbl">
+      <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
+        <th>Avg ${_lbl2}</th><th>Min ${_lbl2}</th><th>Max ${_lbl2}</th></tr></thead>
+      <tbody>${rows2}</tbody></table>`;
     return;
   }
 
@@ -1453,7 +1886,7 @@ function dmToggleAutoRefresh(did, sid) {
     delete S._arTimers[key];
     if (btn) { btn.textContent = 'Auto-Refresh'; btn.classList.remove('active'); }
   } else {
-    S._arTimers[key] = setInterval(() => dmHistReload(did, sid), 30000);
+    S._arTimers[key] = setInterval(() => dmHistReload(did, sid), 10000);
     if (btn) { btn.textContent = 'Auto-Refresh ●'; btn.classList.add('active'); }
   }
 }
@@ -1483,8 +1916,13 @@ document.addEventListener('fullscreenchange', () => {
     fsBtn.textContent = '⊠';
     fsBtn.title = 'Exit full screen';
     setTimeout(() => {
-      if (canvas) { canvas.height = canvas.offsetHeight || 620; dmHistRedraw(did, sid); }
-    }, 80);
+      if (canvas) {
+        // Let flex layout determine size, then sync canvas drawing height
+        const parent = canvas.parentElement;
+        canvas.height = parent ? parent.clientHeight : 620;
+        dmHistRedraw(did, sid);
+      }
+    }, 100);
   } else {
     fsBtn.textContent = '⤢';
     fsBtn.title = 'Full screen';
@@ -1512,14 +1950,17 @@ async function loadDmHistory(did, sid, minutes) {
 function mVal(s,k){
   const isSnmp=s.stype==='snmp';
   const isDns =s.stype==='dns';
+  const isVm  =s.stype==='vmware';
+  const _vu   =isVm?(_VM_UNITS[s.vmware_metric]||''):null;
   if(k==='last'){
     if(isSnmp||isDns) return s.alive===false?'FAIL':(s.last_value||s.last_detail||'—');
     if(s.stype==='tls') return s.alive===false?'FAIL':(s.last_value!=null?s.last_value+'d':'—');
+    if(isVm) return s.last_ms!=null?_fmtVmVal(s.last_ms,_vu):(s.alive===false?'DOWN':'—');
     return s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   }
-  if(k==='avg') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_avg||'—'):(s.avg_ms?`${s.avg_ms}ms`:'—');
-  if(k==='min') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_min||'—'):(s.min_ms?`${s.min_ms}ms`:'—');
-  if(k==='max') return (s.stype==='snmp'||s.stype==='tls')?(s._ov_max||'—'):(s.max_ms?`${s.max_ms}ms`:'—');
+  if(k==='avg') return (isSnmp||s.stype==='tls')?(s._ov_avg||'—'):isVm?(s.avg_ms!=null?_fmtVmVal(s.avg_ms,_vu):'—'):(s.avg_ms?`${s.avg_ms}ms`:'—');
+  if(k==='min') return (isSnmp||s.stype==='tls')?(s._ov_min||'—'):isVm?(s.min_ms!=null?_fmtVmVal(s.min_ms,_vu):'—'):(s.min_ms?`${s.min_ms}ms`:'—');
+  if(k==='max') return (isSnmp||s.stype==='tls')?(s._ov_max||'—'):isVm?(s.max_ms!=null?_fmtVmVal(s.max_ms,_vu):'—'):(s.max_ms?`${s.max_ms}ms`:'—');
   if(k==='loss')return s.loss_pct!==undefined?`${s.loss_pct}%`:'—';
   if(k==='sent')return String(s.total||0);
 }

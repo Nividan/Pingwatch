@@ -172,7 +172,9 @@ async function reloadUserTable(){
   if(wrap) wrap.innerHTML=renderUserTable(ur.users||[]);
 }
 
-function openAddUser(){
+async function openAddUser(){
+  let groups=[];
+  try{const gr=await api('GET','/api/user/groups');groups=gr.groups||[];}catch(_){}
   closeM('mau');
   const o=document.createElement('div'); o.className='mo'; o.id='mau';
   _overlayClose(o,()=>closeM('mau'));
@@ -201,6 +203,12 @@ function openAddUser(){
         <div class="fr"><label class="fl">Domain</label>
           <input type="text" id="au-domain" placeholder="EXAMPLE (optional)" autocomplete="off"/></div>
         <div class="fh">Password will be verified against your LDAP / AD server at login.</div>
+      </div>
+      <div class="fr"><label class="fl">Group</label>
+        <select id="au-group">
+          <option value="">— No group —</option>
+          ${groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}
+        </select>
       </div>
       <div class="fr"><label class="fl">Role</label>
         <select id="au-r">
@@ -233,6 +241,8 @@ async function submitAddUser(){
   const role=document.getElementById('au-r')?.value||'admin';
   if(!username){toast('Username is required','err');return;}
   let body={username,role,auth_type};
+  const gv=document.getElementById('au-group')?.value;
+  if(gv) body.group_id=parseInt(gv);
   if(auth_type==='ldap'){
     body.domain=(document.getElementById('au-domain')?.value||'').trim();
   }else{

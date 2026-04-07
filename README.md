@@ -32,7 +32,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 ## Features
 
 - 📡 Real-time device monitoring via Server-Sent Events (SSE)
-- 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner
+- 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner, VMware
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
 - 🚨 Rules-based alert engine — conditions, multi-action dispatch (email, webhook, syslog, browser push), cooldown, maintenance windows
@@ -48,12 +48,19 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback with full interface context (`interface X / no … / end / wr`)
 - 🔗 Sensor host linking — sensors inherit the device IP by default; setting a host manually marks it as overridden; clearing the host re-links it to the device
 - 🔍 Per-device port scanner with configurable default ports (Settings → Sensors)
-- 🧙 Interactive first-run setup wizard (`start.bat` / `bash start.sh`)
+- 🧙 Interactive first-run setup wizard (`windows\start.bat` / `bash linux/start.sh`)
 - 🐧 Native Linux/macOS support — headless mode, systemd service, auto package-manager detection
 - 📨 Syslog forwarding — RFC 5424 UDP/TCP to any syslog server
 - 🔁 Server restart and shutdown from the web UI (Settings → General)
 - 🏢 LDAP / Active Directory authentication with encrypted bind credentials
 - 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration
+- 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (1 per 4 sensors, 64–512 range); manual override available in Settings → General
+- 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
+- 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
+- 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
+- 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
+- ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
+- 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
 
 ### Supported Sensor Types
 
@@ -66,6 +73,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 | **SNMP** | OID polling (v1/v2c); Counter32/Counter64 traffic OIDs display live rate (B/s – GB/s); interface discovery with metric auto-select; wrong-OID detection |
 | **DNS** | Record lookup and resolution-time checks |
 | **Banner** | Raw TCP banner capture with optional regex match |
+| **VMware** | vSphere VM monitoring — CPU, memory, disk, datastore latency, network, uptime, power state; auto-discovery from vCenter/ESXi |
 
 ---
 
@@ -73,12 +81,14 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 
 - **Backend:** Python 3.x stdlib — no third-party web framework
 - **Web Server:** `http.server` (threading) + `ssl.SSLContext` for HTTPS
-- **Database:** SQLite WAL — dual-DB: `pingwatch.db` (config/devices/users/IPAM) + `pingwatch_logs.db` (samples/events/traps)
+- **Database:** Dual-backend — SQLite WAL (default, zero-setup) or PostgreSQL (production/high-scale); dual-DB layout: `main` schema (config, devices, users, IPAM, alerts) + `logs` schema (sensor samples, flap log, SNMP traps)
 - **Frontend:** Vanilla HTML, CSS, JavaScript — no build step
 - **Real-time:** Server-Sent Events (SSE)
 - **TLS:** `cryptography` (RSA-2048, X.509, Fernet encryption)
 - **SSH backup:** `paramiko`
+- **PostgreSQL:** `psycopg2` *(optional — only needed when PostgreSQL backend is enabled)*
 - **System tray:** `pystray` + `Pillow` *(optional)*
+- **VMware:** `pyvmomi` *(optional — only needed when VMware sensors are enabled)*
 - **LDAP/AD:** `ldap3` *(optional — only needed when LDAP auth is enabled)*
 
 ---
@@ -92,28 +102,28 @@ cd Pingwatch
 
 **Windows:**
 ```bat
-start.bat
+windows\start.bat
 ```
 
 **Linux / macOS:**
 ```bash
-sudo bash start.sh
+sudo bash linux/start.sh
 ```
 
 The first-run wizard checks packages, configures ports, generates a TLS certificate, sets firewall rules, and initialises the database. Subsequent launches skip the wizard. To re-run it:
 
 ```bash
-start.bat --setup          # Windows
-bash start.sh --setup      # Linux / macOS
-bash start.sh --check      # Re-check required packages only
+windows\start.bat --setup        # Windows
+bash linux/start.sh --setup      # Linux / macOS
+bash linux/start.sh --check      # Re-check required packages only
 ```
 
 **Background service (Linux):**
 ```bash
-sudo bash start.sh --install-service     # install + start systemd service
+sudo bash linux/start.sh --install-service     # install + start systemd service
 sudo systemctl start|stop|restart|status pingwatch
-journalctl -u pingwatch -f               # live logs
-sudo bash start.sh --uninstall-service
+journalctl -u pingwatch -f                     # live logs
+sudo bash linux/start.sh --uninstall-service
 ```
 
 ---
@@ -122,9 +132,9 @@ sudo bash start.sh --uninstall-service
 
 | Mode | Windows | Linux / macOS |
 |------|---------|---------------|
-| Foreground | `start.bat` | `sudo bash start.sh` |
-| Background | `pythonw pingwatch.pyw` | `sudo bash start.sh --install-service` |
-| Re-run wizard | `start.bat --setup` | `bash start.sh --setup` |
+| Foreground | `windows\start.bat` | `sudo bash linux/start.sh` |
+| Background | `pythonw windows\pingwatch.pyw` | `sudo bash linux/start.sh --install-service` |
+| Re-run wizard | `windows\start.bat --setup` | `bash linux/start.sh --setup` |
 
 After startup, PingWatch is available at **https://localhost:8443** (default). The first-run password is printed to the console — change it immediately in **Settings → Users**.
 
@@ -218,7 +228,10 @@ Click any device row in the Backups tab to open the Config Viewer:
 <img width="800" alt="Device List" src="https://github.com/user-attachments/assets/06a38bfa-3dd1-431e-8dd1-60873d9624e8" />
 <img width="800" alt="Device Detail" src="https://github.com/user-attachments/assets/3a027022-4a46-4fc2-b2e3-9f017b06a2e8" />
 <img width="480" alt="Device Panel" src="https://github.com/user-attachments/assets/131ceef8-bb9c-4abb-9346-f993f409365f" />
-<img width="480" alt="Device Panel 2" src="https://github.com/user-attachments/assets/c456c19b-348b-44f8-b68c-3ae9c48438af" />
+<img width="480" height="1140" alt="image" src="https://github.com/user-attachments/assets/e8d2eab4-257d-43a7-802b-adda20a7764b" />
+<img width="480" height="278" alt="image" src="https://github.com/user-attachments/assets/235cd301-7d46-4926-839f-9c8a4f3702f0" />
+<img width="800" height="963" alt="image" src="https://github.com/user-attachments/assets/ab494a71-8d03-4c7c-8a44-5fcc2b3948c1" />
+
 
 ### 📜 Event Logs
 <img width="800" alt="Event Log" src="https://github.com/user-attachments/assets/210e31ec-6367-4e60-bcbd-5257f36f5a5d" />
@@ -252,6 +265,7 @@ Browser / Desktop GUI
         │
         ├── core/                 ← Config, state, auth, TLS, logging
         ├── monitoring/           ← Probes, alerting, syslog, topology
+        ├── vmware/               ← vSphere VM discovery + metric probing
         ├── backup/               ← SSH/Telnet backup engine + scheduler
         ├── snmp/                 ← Trap receiver, enricher, OID catalog
         └── db/                   ← SQLite persistence (dual write-queues)
@@ -259,7 +273,7 @@ Browser / Desktop GUI
 
 - **`server.py`** — HTTP(S) dispatcher, starts all background threads
 - **`setup_wizard.py`** — cross-platform first-run wizard (packages, ports, TLS, firewall)
-- **`monitoring/probes.py`** — all sensor probe types on per-sensor threads
+- **`monitoring/probes.py`** — all sensor probe types on per-sensor threads (VMware probes via `vmware/client.py`)
 - **`backup/engine.py`** — SSH/Telnet connections, TOFU host key verification, enable-mode escalation
 - **`core/auth.py`** — PBKDF2-SHA256 local auth + LDAP branch via `core/ldap_auth.py`
 - **`snmp/`** — UDP trap listener, OID enrichment, vendor fingerprinting

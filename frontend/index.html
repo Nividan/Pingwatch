@@ -3,6 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PingWatch — Network Monitor</title>
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <!-- STYLE_INJECT -->
 </head>
@@ -49,19 +50,7 @@
 <div id="topbar">
   <div class="tb-brand" onclick="switchMainTab('dashboard')" title="Go to Dashboard" style="cursor:pointer">
     <div class="tb-logo">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="10" cy="10" r="8.5" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
-        <circle cx="10" cy="10" r="5"   stroke="rgba(255,255,255,.4)"  stroke-width="1"/>
-        <circle cx="10" cy="10" r="2"   fill="white" opacity=".9"/>
-        <line x1="1.5" y1="10" x2="5"  y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
-        <line x1="15"  y1="10" x2="18.5" y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
-        <line x1="10"  y1="1.5" x2="10" y2="5"  stroke="white" stroke-width="1.2" opacity=".7"/>
-        <line x1="10"  y1="15" x2="10" y2="18.5" stroke="white" stroke-width="1.2" opacity=".7"/>
-        <line x1="3.5" y1="3.5" x2="6.4" y2="6.4" stroke="white" stroke-width=".9" opacity=".4"/>
-        <line x1="13.6" y1="13.6" x2="16.5" y2="16.5" stroke="white" stroke-width=".9" opacity=".4"/>
-        <line x1="16.5" y1="3.5" x2="13.6" y2="6.4" stroke="white" stroke-width=".9" opacity=".4"/>
-        <line x1="6.4" y1="13.6" x2="3.5" y2="16.5" stroke="white" stroke-width=".9" opacity=".4"/>
-      </svg>
+      <img src="/favicon.ico" width="28" height="28" alt="PingWatch">
     </div>
     <div>
       <div class="tb-wordmark">
@@ -112,22 +101,8 @@
   </div>
 </div>
 
-<!-- Sidebar expand tab (visible when sidebar is collapsed) -->
-<button id="sidebarExpandTab" title="Expand sidebar" onclick="toggleSidebar()">›</button>
-
 <!-- Layout -->
 <div id="layout">
-  <div id="sidebar">
-    <div class="sb-hdr">
-      <span>Device Tree</span>
-      <button id="sidebarToggleBtn" title="Collapse sidebar" onclick="toggleSidebar()">‹</button>
-    </div>
-    <div id="devTree">
-      <div style="padding:18px 14px;color:var(--text3);font-size:11px;text-align:center;line-height:1.8">
-        No devices yet.<br>Click <strong>＋ Add Device</strong>.
-      </div>
-    </div>
-  </div>
   <div id="main">
     <!-- Tab bar -->
     <div id="mainTabs">
@@ -161,6 +136,7 @@
             <div class="evt-view-sub">State changes detected across all monitored sensors <span id="evtCount" style="margin-left:8px;color:var(--text3)"></span></div>
           </div>
           <div class="evt-hdr-actions">
+            <button class="evt-resolve-all-btn" onclick="_evtResolveAll()" title="Resolve all active alerts and flaps">✓ Resolve All</button>
             <button class="evt-view-btn active" id="evtBtnCard"  onclick="_setEvtViewMode('card')">☰ Cards</button>
             <button class="evt-view-btn"        id="evtBtnTable" onclick="_setEvtViewMode('table')">⊞ Table</button>
             <div class="evt-export-group">
@@ -188,7 +164,6 @@
           <select id="evtFType" onchange="_onEvtFilterChange()">
             <option value="">All Types</option>
             <option value="down">Down</option>
-            <option value="recovered">Recovered</option>
             <option value="threshold">Threshold</option>
             <option value="trap">SNMP Trap</option>
           </select>
@@ -196,7 +171,6 @@
             <option value="">All Severity</option>
             <option value="critical">🔴 Critical</option>
             <option value="warning">🟠 Warning</option>
-            <option value="recovery">🟢 Recovery</option>
             <option value="info">🔵 Info</option>
           </select>
           <select id="evtFVendor" onchange="_onEvtFilterChange()">
@@ -219,6 +193,31 @@
     <!-- Incident Investigation Panel -->
     <div id="evtDetailModal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.55);align-items:center;justify-content:center;">
       <div class="iip-panel"></div>
+    </div>
+    <div id="devActBar" style="display:none">
+      <div class="dev-act-left">
+        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">＋ Add Device</button>
+        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">⊞ Add Group</button>
+      </div>
+      <div class="view-toggle">
+        <button class="vt-btn active" id="vtGrid" onclick="_setView('grid')" title="Grid view">&#x229E;</button>
+        <button class="vt-btn" id="vtList" onclick="_setView('list')" title="List view">&#x2630;</button>
+      </div>
+      <div class="dev-act-sep"></div>
+      <div class="dev-pills">
+        <button class="dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="down"  onclick="_setStatusFilter('down')">Down <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="warn"  onclick="_setStatusFilter('warn')">Warn <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="up"    onclick="_setStatusFilter('up')">Up <span class="pill-ct">0</span></button>
+        <button class="dev-status-pill"        data-st="pause" onclick="_setStatusFilter('pause')">Pause <span class="pill-ct">0</span></button>
+      </div>
+      <div class="dev-search-wrap">
+        <svg class="dev-search-ico" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/>
+          <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input id="devSearch" type="search" placeholder="Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
+      </div>
     </div>
     <div id="emptyMain" style="display:none">
       <!-- Hero radar SVG -->
@@ -250,23 +249,9 @@
         <div class="hcap"><div class="hcap-ico">◎</div><div class="hcap-lbl">SNMP</div></div>
       </div>
       <button class="em-btn" onclick="openAddDevice()">＋ Add Your First Device</button>
-      <div class="hero-hint">Settings are saved automatically to <code>pingwatch.db</code></div>
-    </div>
-    <div id="devActBar" style="display:none">
-      <div class="dev-act-left">
-        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">＋ Add Device</button>
-        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">⊞ Add Group</button>
-      </div>
-      <div class="dev-act-sep"></div>
-      <div class="dev-search-wrap">
-        <svg class="dev-search-ico" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/>
-          <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <input id="devSearch" type="search" placeholder="Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
-      </div>
     </div>
     <div id="dpanels" style="display:none"></div>
+    <div id="devPagination" style="display:none"></div>
     <!-- Backups view -->
     <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
       <div id="bk-toolbar">
@@ -286,6 +271,9 @@
   </div>
 </div>
 <div id="toast"></div>
+
+<!-- Devices tab context menu -->
+<div id="dev-ctx-menu" class="dev-ctx-menu"></div>
 
 <!-- SCRIPT_INJECT -->
 </body>

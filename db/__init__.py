@@ -4,6 +4,9 @@ that all existing callers (server.py, state.py, trap_receiver.py, etc.) that
 use ``import db; db.X()`` or ``from db import X`` continue to work unchanged.
 """
 
+# backend — backend selection + config
+from db.backend     import is_pg, needs_setup
+
 # core — write queues + schema
 from db.core        import db_init, db_seed_users, _db_enqueue, \
                            _logs_enqueue, logs_db_init
@@ -19,14 +22,17 @@ from db.samples     import (
     db_load_summary,
     db_load_availability,
     db_clean_samples,
+    db_rollup_backfill,
 )
 
 # events — flap log, SNMP trap log, sensor error log
 from db.events      import (
     db_log_flap,
     db_load_flaps,
+    db_auto_resolve_flap,
     db_ack_flap,
     db_resolve_flap,
+    db_resolve_all_flaps,
     db_log_trap,
     db_load_traps,
     db_clear_device_traps,
@@ -98,6 +104,8 @@ from db.backups     import (
 )
 
 __all__ = [
+    # backend
+    "is_pg", "needs_setup",
     # core
     "db_init", "db_seed_users", "_db_enqueue",
     "_logs_enqueue", "logs_db_init",
@@ -106,8 +114,9 @@ __all__ = [
     # samples
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
+    "db_rollup_backfill",
     # events
-    "db_log_flap", "db_load_flaps", "db_ack_flap", "db_resolve_flap",
+    "db_log_flap", "db_load_flaps", "db_auto_resolve_flap", "db_ack_flap", "db_resolve_flap", "db_resolve_all_flaps",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",
     "db_log_err", "db_load_err_logs", "db_clear_err_logs",
     "db_clear_sensor_err_logs",

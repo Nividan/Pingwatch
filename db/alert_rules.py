@@ -12,6 +12,7 @@ import time
 
 from core.config import DB_PATH
 from core.logger import log
+from db.backend  import is_pg
 
 
 # ── Internal helpers ──────────────────────────────────────────────
@@ -24,19 +25,60 @@ def _con():
 
 
 def _rule_row_to_dict(row) -> dict:
+    if isinstance(row, dict):
+        r = row
+    else:
+        r = dict(row) if row else {}
+    # trigger_count / recover_count may not exist in older DBs
+    try:
+        tc = r["trigger_count"]
+    except (KeyError, IndexError):
+        tc = 1
+    try:
+        rc = r["recover_count"]
+    except (KeyError, IndexError):
+        rc = 1
     return {
-        "id":              row["id"],
-        "name":            row["name"],
-        "enabled":         bool(row["enabled"]),
-        "severity":        row["severity"],
-        "condition_logic": row["condition_logic"],
-        "cooldown_s":      row["cooldown_s"],
-        "sort_order":      row["sort_order"],
-        "created_at":      row["created_at"],
-        "updated_at":      row["updated_at"],
+        "id":              r["id"],
+        "name":            r["name"],
+        "enabled":         bool(r["enabled"]),
+        "severity":        r["severity"],
+        "condition_logic": r["condition_logic"],
+        "cooldown_s":      r["cooldown_s"],
+        "trigger_count":   int(tc or 1),
+        "recover_count":   int(rc or 1),
+        "sort_order":      r["sort_order"],
+        "created_at":      r["created_at"],
+        "updated_at":      r["updated_at"],
         "conditions":      [],
         "actions":         [],
     }
+
+
+def _load_conditions_pg(cur, rule_id: int) -> list:
+    cur.execute(
+        "SELECT * FROM alert_rule_conditions WHERE rule_id=%s ORDER BY sort_order, id",
+        (rule_id,)
+    )
+    return [{"id": r["id"], "field": r["field"], "op": r["op"],
+             "value": r["value"], "sort_order": r["sort_order"]} for r in cur.fetchall()]
+
+
+def _load_actions_pg(cur, rule_id: int) -> list:
+    cur.execute(
+        "SELECT * FROM alert_rule_actions WHERE rule_id=%s ORDER BY sort_order, id",
+        (rule_id,)
+    )
+    result = []
+    for r in cur.fetchall():
+        cfg = {}
+        try:
+            cfg = json.loads(r["config"])
+        except Exception:
+            pass
+        result.append({"id": r["id"], "atype": r["atype"],
+                        "config": cfg, "sort_order": r["sort_order"]})
+    return result
 
 
 def _load_conditions(con, rule_id: int) -> list:
@@ -68,15 +110,84 @@ def _load_actions(con, rule_id: int) -> list:
 # ── Public read functions ─────────────────────────────────────────
 
 def db_list_rules() -> list:
-    """Return all alert rules with their conditions and actions."""
+    """Return all alert rules with their conditions and actions (batch-loaded)."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT * FROM alert_rules ORDER BY sort_order, id")
+                rules = [_rule_row_to_dict(r) for r in cur.fetchall()]
+                if not rules:
+                    return rules
+                rule_ids = [r["id"] for r in rules]
+                # Batch-load all conditions in one query
+                cur.execute(
+                    "SELECT * FROM alert_rule_conditions WHERE rule_id = ANY(%s) ORDER BY rule_id, sort_order, id",
+                    (rule_ids,)
+                )
+                conds_by_rule = {}
+                for r in cur.fetchall():
+                    conds_by_rule.setdefault(r["rule_id"], []).append(
+                        {"id": r["id"], "field": r["field"], "op": r["op"],
+                         "value": r["value"], "sort_order": r["sort_order"]})
+                # Batch-load all actions in one query
+                cur.execute(
+                    "SELECT * FROM alert_rule_actions WHERE rule_id = ANY(%s) ORDER BY rule_id, sort_order, id",
+                    (rule_ids,)
+                )
+                acts_by_rule = {}
+                for r in cur.fetchall():
+                    cfg = {}
+                    try:
+                        cfg = json.loads(r["config"])
+                    except Exception:
+                        pass
+                    acts_by_rule.setdefault(r["rule_id"], []).append(
+                        {"id": r["id"], "atype": r["atype"],
+                         "config": cfg, "sort_order": r["sort_order"]})
+                for rule in rules:
+                    rule["conditions"] = conds_by_rule.get(rule["id"], [])
+                    rule["actions"]    = acts_by_rule.get(rule["id"], [])
+            return rules
+        except Exception as e:
+            log.error(f"db_list_rules error: {e}")
+            return []
+    # SQLite
     con = _con()
     try:
         rules = [_rule_row_to_dict(r) for r in con.execute(
             "SELECT * FROM alert_rules ORDER BY sort_order, id"
         ).fetchall()]
+        if not rules:
+            return rules
+        rule_ids = [r["id"] for r in rules]
+        placeholders = ",".join("?" * len(rule_ids))
+        # Batch-load all conditions in one query
+        conds_by_rule = {}
+        for r in con.execute(
+            f"SELECT * FROM alert_rule_conditions WHERE rule_id IN ({placeholders}) ORDER BY rule_id, sort_order, id",
+            rule_ids
+        ).fetchall():
+            conds_by_rule.setdefault(r["rule_id"], []).append(
+                {"id": r["id"], "field": r["field"], "op": r["op"],
+                 "value": r["value"], "sort_order": r["sort_order"]})
+        # Batch-load all actions in one query
+        acts_by_rule = {}
+        for r in con.execute(
+            f"SELECT * FROM alert_rule_actions WHERE rule_id IN ({placeholders}) ORDER BY rule_id, sort_order, id",
+            rule_ids
+        ).fetchall():
+            cfg = {}
+            try:
+                cfg = json.loads(r["config"])
+            except Exception:
+                pass
+            acts_by_rule.setdefault(r["rule_id"], []).append(
+                {"id": r["id"], "atype": r["atype"],
+                 "config": cfg, "sort_order": r["sort_order"]})
         for rule in rules:
-            rule["conditions"] = _load_conditions(con, rule["id"])
-            rule["actions"]    = _load_actions(con, rule["id"])
+            rule["conditions"] = conds_by_rule.get(rule["id"], [])
+            rule["actions"]    = acts_by_rule.get(rule["id"], [])
         return rules
     except Exception as e:
         log.error(f"db_list_rules error: {e}")
@@ -87,6 +198,22 @@ def db_list_rules() -> list:
 
 def db_get_rule(rule_id: int) -> dict | None:
     """Return a single rule with conditions and actions, or None."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT * FROM alert_rules WHERE id=%s", (rule_id,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                rule = _rule_row_to_dict(row)
+                rule["conditions"] = _load_conditions_pg(cur, rule_id)
+                rule["actions"]    = _load_actions_pg(cur, rule_id)
+            return rule
+        except Exception as e:
+            log.error(f"db_get_rule error: {e}")
+            return None
+    # SQLite
     con = _con()
     try:
         row = con.execute("SELECT * FROM alert_rules WHERE id=?", (rule_id,)).fetchone()
@@ -108,17 +235,46 @@ def db_get_rule(rule_id: int) -> dict | None:
 def db_create_rule(data: dict) -> int:
     """Insert a new rule (with conditions + actions). Returns new rule id."""
     now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, trigger_count, recover_count, sort_order, created_at, updated_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (
+                        data["name"],
+                        1 if data.get("enabled", True) else 0,
+                        data.get("severity", "warning"),
+                        data.get("condition_logic", "AND"),
+                        int(data.get("cooldown_s", 300)),
+                        int(data.get("trigger_count", 1)),
+                        int(data.get("recover_count", 1)),
+                        int(data.get("sort_order", 0)),
+                        now, now,
+                    )
+                )
+                rule_id = cur.fetchone()["id"]
+                _write_conditions_pg(cur, rule_id, data.get("conditions", []))
+                _write_actions_pg(cur, rule_id, data.get("actions", []))
+            return rule_id
+        except Exception as e:
+            log.error(f"db_create_rule error: {e}")
+            return -1
+    # SQLite
     con = _con()
     try:
         cur = con.execute(
-            "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, sort_order, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO alert_rules (name, enabled, severity, condition_logic, cooldown_s, trigger_count, recover_count, sort_order, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 data["name"],
                 1 if data.get("enabled", True) else 0,
                 data.get("severity", "warning"),
                 data.get("condition_logic", "AND"),
                 int(data.get("cooldown_s", 300)),
+                int(data.get("trigger_count", 1)),
+                int(data.get("recover_count", 1)),
                 int(data.get("sort_order", 0)),
                 now, now,
             )
@@ -138,22 +294,51 @@ def db_create_rule(data: dict) -> int:
 def db_update_rule(rule_id: int, data: dict) -> bool:
     """Replace a rule's fields, conditions, and actions atomically."""
     now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_rules SET name=%s, enabled=%s, severity=%s, condition_logic=%s, "
+                    "cooldown_s=%s, trigger_count=%s, recover_count=%s, sort_order=%s, updated_at=%s WHERE id=%s",
+                    (
+                        data["name"],
+                        1 if data.get("enabled", True) else 0,
+                        data.get("severity", "warning"),
+                        data.get("condition_logic", "AND"),
+                        int(data.get("cooldown_s", 300)),
+                        int(data.get("trigger_count", 1)),
+                        int(data.get("recover_count", 1)),
+                        int(data.get("sort_order", 0)),
+                        now, rule_id,
+                    )
+                )
+                cur.execute("DELETE FROM alert_rule_conditions WHERE rule_id=%s", (rule_id,))
+                cur.execute("DELETE FROM alert_rule_actions WHERE rule_id=%s", (rule_id,))
+                _write_conditions_pg(cur, rule_id, data.get("conditions", []))
+                _write_actions_pg(cur, rule_id, data.get("actions", []))
+            return True
+        except Exception as e:
+            log.error(f"db_update_rule error: {e}")
+            return False
+    # SQLite
     con = _con()
     try:
         con.execute(
             "UPDATE alert_rules SET name=?, enabled=?, severity=?, condition_logic=?, "
-            "cooldown_s=?, sort_order=?, updated_at=? WHERE id=?",
+            "cooldown_s=?, trigger_count=?, recover_count=?, sort_order=?, updated_at=? WHERE id=?",
             (
                 data["name"],
                 1 if data.get("enabled", True) else 0,
                 data.get("severity", "warning"),
                 data.get("condition_logic", "AND"),
                 int(data.get("cooldown_s", 300)),
+                int(data.get("trigger_count", 1)),
+                int(data.get("recover_count", 1)),
                 int(data.get("sort_order", 0)),
                 now, rule_id,
             )
         )
-        # Replace conditions and actions
         con.execute("DELETE FROM alert_rule_conditions WHERE rule_id=?", (rule_id,))
         con.execute("DELETE FROM alert_rule_actions WHERE rule_id=?", (rule_id,))
         _write_conditions(con, rule_id, data.get("conditions", []))
@@ -168,6 +353,18 @@ def db_update_rule(rule_id: int, data: dict) -> bool:
 
 
 def db_delete_rule(rule_id: int) -> bool:
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("DELETE FROM alert_rule_conditions WHERE rule_id=%s", (rule_id,))
+                cur.execute("DELETE FROM alert_rule_actions WHERE rule_id=%s", (rule_id,))
+                cur.execute("DELETE FROM alert_rules WHERE id=%s", (rule_id,))
+            return True
+        except Exception as e:
+            log.error(f"db_delete_rule error: {e}")
+            return False
+    # SQLite
     con = _con()
     try:
         con.execute("DELETE FROM alert_rule_conditions WHERE rule_id=?", (rule_id,))
@@ -183,6 +380,17 @@ def db_delete_rule(rule_id: int) -> bool:
 
 
 def db_set_rule_enabled(rule_id: int, enabled: bool) -> bool:
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("UPDATE alert_rules SET enabled=%s, updated_at=%s WHERE id=%s",
+                            (1 if enabled else 0, time.time(), rule_id))
+            return True
+        except Exception as e:
+            log.error(f"db_set_rule_enabled error: {e}")
+            return False
+    # SQLite
     con = _con()
     try:
         con.execute("UPDATE alert_rules SET enabled=?, updated_at=? WHERE id=?",
@@ -198,6 +406,16 @@ def db_set_rule_enabled(rule_id: int, enabled: bool) -> bool:
 
 def db_reorder_rules(id_list: list) -> None:
     """Set sort_order for each rule id in id_list (position = index)."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                for i, rule_id in enumerate(id_list):
+                    cur.execute("UPDATE alert_rules SET sort_order=%s WHERE id=%s", (i, rule_id))
+        except Exception as e:
+            log.error(f"db_reorder_rules error: {e}")
+        return
+    # SQLite
     con = _con()
     try:
         for i, rule_id in enumerate(id_list):
@@ -210,6 +428,25 @@ def db_reorder_rules(id_list: list) -> None:
 
 
 # ── Private write helpers ─────────────────────────────────────────
+
+def _write_conditions_pg(cur, rule_id: int, conditions: list):
+    for i, c in enumerate(conditions):
+        cur.execute(
+            "INSERT INTO alert_rule_conditions (rule_id, field, op, value, sort_order) VALUES (%s,%s,%s,%s,%s)",
+            (rule_id, c["field"], c["op"], str(c.get("value", "")), i)
+        )
+
+
+def _write_actions_pg(cur, rule_id: int, actions: list):
+    for i, a in enumerate(actions):
+        cfg = a.get("config", {})
+        if not isinstance(cfg, str):
+            cfg = json.dumps(cfg)
+        cur.execute(
+            "INSERT INTO alert_rule_actions (rule_id, atype, config, sort_order) VALUES (%s,%s,%s,%s)",
+            (rule_id, a["atype"], cfg, i)
+        )
+
 
 def _write_conditions(con, rule_id: int, conditions: list):
     for i, c in enumerate(conditions):

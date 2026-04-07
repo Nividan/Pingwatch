@@ -1,7 +1,7 @@
 """
 setup_wizard.py — PingWatch first-run interactive setup wizard.
 
-Called by start.bat when no database exists (first launch) or when
+Called by windows/start.bat when no database exists (first launch) or when
 the --setup flag is passed.  Guides the user through:
   1. Required package checks & installs
   2. HTTP port selection
@@ -10,10 +10,10 @@ the --setup flag is passed.  Guides the user through:
   5. Windows Firewall rules
   6. Desktop shortcut
   7. Database initialisation & settings persistence
-  8. systemd service install (Linux only)
+  8. Startup service install (systemd on Linux, Task Scheduler on Windows)
 
 Exit codes:
-  0 — setup completed successfully (start.bat will launch server.py)
+  0 — setup completed successfully (windows/start.bat will launch server.py)
   1 — setup failed or was aborted
 """
 
@@ -98,6 +98,66 @@ def _ask(prompt: str, default: str = "") -> str:
         raise
 
 
+def _ask_password(prompt: str, default: str = "") -> str:
+    """Prompt for a password, echoing '*' per character. Returns default on empty Enter."""
+    if not sys.stdin.isatty():
+        return default
+    hint = " [press Enter to use generated password]" if default else ""
+    sys.stdout.write(f"       {prompt}{hint}: ")
+    sys.stdout.flush()
+    chars = []
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            while True:
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    break
+                if ch == "\x03":
+                    raise KeyboardInterrupt
+                if ch in ("\x08", "\x7f"):   # backspace
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                elif ch >= " ":
+                    chars.append(ch)
+                    sys.stdout.write("*")
+                    sys.stdout.flush()
+        else:
+            import tty, termios
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                while True:
+                    ch = sys.stdin.read(1)
+                    if ch in ("\r", "\n"):
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        break
+                    if ch == "\x03":
+                        raise KeyboardInterrupt
+                    if ch in ("\x08", "\x7f"):   # backspace
+                        if chars:
+                            chars.pop()
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                    elif ch >= " ":
+                        chars.append(ch)
+                        sys.stdout.write("*")
+                        sys.stdout.flush()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except EOFError:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    val = "".join(chars)
+    return val if val else default
+
+
 def _ask_yn(prompt: str, default: bool = True) -> bool:
     """Prompt for yes/no; return default on Enter."""
     if not sys.stdin.isatty():
@@ -117,8 +177,8 @@ def _launcher_hint(setup: bool = False) -> str:
     import platform as _plat
     suffix = " --setup" if setup else ""
     if _plat.system() == "Windows":
-        return f"start.bat{suffix}"
-    return f"bash {os.path.join(_BASE, 'start.sh')}{suffix}"
+        return f"windows{os.sep}start.bat{suffix}"
+    return f"bash {os.path.join(_BASE, 'linux', 'start.sh')}{suffix}"
 
 
 def _separator(char: str = "─", width: int = 56):
@@ -127,6 +187,7 @@ def _separator(char: str = "─", width: int = 56):
 
 # ── Wizard state (collected across steps) ────────────────────────────────────
 _state = {
+    "http_enabled":    True,
     "http_port":       PORT,
     "snmp_port":       SNMP_TRAP_PORT,
     "tls_enabled":     True,
@@ -138,6 +199,13 @@ _state = {
     "org_name":        "PingWatch",
     "http_redirect":   True,
     "headless":        False,   # True when user opts out of desktop GUI
+    # Database backend (populated by step2_database)
+    "db_backend":   "sqlite",
+    "pg_host":      "localhost",
+    "pg_port":      5432,
+    "pg_database":  "pingwatch",
+    "pg_user":      "pingwatch",
+    "pg_password":  "",
 }
 
 # Track whether the DB was partially created (for Ctrl+C cleanup)
@@ -223,6 +291,14 @@ _PACKAGES = [
         "desc":     "server CPU / RAM / disk monitoring widget",
         "required": False,
     },
+    {
+        "import":   "pyVmomi",
+        "name":     "pyvmomi",
+        "install":  "pyvmomi>=8.0.0",
+        "pip":      True,
+        "desc":     "VMware vCenter / ESXi VM metrics",
+        "required": False,
+    },
 ]
 
 _SNMP_TOOL = "snmpget"
@@ -269,6 +345,19 @@ def _pip_install(package_spec: str) -> "tuple[bool, str]":
         except Exception:
             pass
 
+    # Try 3: --break-system-packages (PEP 668 — Debian/Ubuntu 23.04+ with Python 3.12+)
+    if sys.platform != "win32" and "externally-managed-environment" in last_err:
+        try:
+            r3 = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--break-system-packages", package_spec],
+                capture_output=True, text=True,
+            )
+            if r3.returncode == 0:
+                return True, ""
+            last_err = (r3.stderr or r3.stdout or last_err).strip()
+        except Exception:
+            pass
+
     return False, last_err
 
 
@@ -281,6 +370,70 @@ def step1_packages():
     _separator()
     _tag("setup", f"{_C['bold']}Step 1 — Check Required Packages{_C['reset']}")
     _separator()
+    print()
+
+    # ── Verify pip is available before any pip install attempts ──────────────
+    import shutil as _sh_pre, platform as _plat_pre
+    _pip_ok = False
+    try:
+        r = subprocess.run([sys.executable, "-m", "pip", "--version"],
+                           capture_output=True, text=True)
+        _pip_ok = r.returncode == 0
+    except Exception:
+        pass
+
+    if _pip_ok:
+        _tag("ok", "pip — Python package installer")
+    else:
+        _tag("warn", "pip is not installed or not functional.")
+        _sys_pre = _plat_pre.system()
+        if _sys_pre == "Linux":
+            _mgr_pre = ("apt-get" if _sh_pre.which("apt-get") else
+                        "dnf"     if _sh_pre.which("dnf")     else
+                        "yum"     if _sh_pre.which("yum")     else None)
+            if _mgr_pre:
+                _tag("info", f"pip can be installed via {_mgr_pre}.")
+                if _ask_yn("Install python3-pip now?", default=True):
+                    _tag("info", f"Installing python3-pip via {_mgr_pre} ...")
+                    r = subprocess.run(["sudo", _mgr_pre, "install", "-y", "python3-pip"],
+                                       capture_output=False)
+                    _pip_ok = r.returncode == 0
+                    if _pip_ok:
+                        _tag("ok", "pip installed successfully")
+                    else:
+                        _tag("error", "Could not install pip automatically.")
+                        _tag("info",  f"Install manually: sudo {_mgr_pre} install python3-pip")
+                        _tag("info",  "Then re-run setup.")
+                        sys.exit(1)
+                else:
+                    _tag("error", "pip is required to install packages. Cannot continue without it.")
+                    _tag("info",  f"Install manually: sudo {_mgr_pre} install python3-pip")
+                    sys.exit(1)
+            else:
+                _tag("error", "No package manager found (apt-get/dnf/yum). Install pip manually.")
+                sys.exit(1)
+        elif _sys_pre == "Windows":
+            _tag("info", "pip can be bootstrapped using Python's built-in ensurepip.")
+            if _ask_yn("Run 'python -m ensurepip --upgrade' to install pip?", default=True):
+                try:
+                    r = subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"],
+                                       capture_output=True, text=True)
+                    _pip_ok = r.returncode == 0
+                except Exception:
+                    pass
+                if _pip_ok:
+                    _tag("ok", "pip bootstrapped successfully")
+                else:
+                    _tag("error", "pip is not available.")
+                    _tag("info",  "Re-install Python from python.org (tick 'pip' during install),")
+                    _tag("info",  "or run: python -m ensurepip --upgrade")
+                    sys.exit(1)
+            else:
+                _tag("error", "pip is required to install packages. Cannot continue without it.")
+                _tag("info",  "Re-install Python from python.org and ensure pip is included.")
+                sys.exit(1)
+        else:
+            _tag("warn", "pip not found — package installs will likely fail. Continuing.")
     print()
 
     all_ok = True
@@ -336,11 +489,14 @@ def step1_packages():
                 elif _sys == "Darwin":
                     _tag("info", "Install with: brew install python-tk")
                     if _ask_yn("Try to install python-tk via brew now?", default=True):
-                        r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
-                        if r.returncode == 0:
-                            _tag("ok", "python-tk installed — restart the wizard to confirm")
-                        else:
-                            _tag("warn", "Install failed — try manually, then re-run setup")
+                        try:
+                            r = subprocess.run(["brew", "install", "python-tk"], capture_output=False)
+                            if r.returncode == 0:
+                                _tag("ok", "python-tk installed — restart the wizard to confirm")
+                            else:
+                                _tag("warn", "Install failed — try manually, then re-run setup")
+                        except FileNotFoundError:
+                            _tag("warn", "brew not found — install Homebrew first, then re-run setup")
                 _tag("warn", "The GUI status window will be unavailable until tkinter is installed.")
                 _tag("info", "PingWatch will still run and the web dashboard will be accessible.")
             continue
@@ -368,42 +524,37 @@ def step1_packages():
 
                 _sys_ok = False
                 if _sys == "Linux" and _apt_entry:
-                    # pip missing entirely or pip failed — try system package manager
-                    _no_pip = "No module named pip" in err
-                    if _no_pip:
-                        _tag("warn", "pip is not installed — trying system package manager ...")
-                    else:
-                        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
-                        if err_lines:
-                            _tag("info", f"  pip: {err_lines[-1]}")
-                        _tag("info", "pip failed — trying system package manager ...")
+                    err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+                    if err_lines:
+                        _tag("info", f"  pip: {err_lines[-1]}")
+                    _tag("info", "pip failed — system package manager may have a compatible version.")
 
                     _apt_pkg = _apt_entry[0]
                     _mgr = ("apt-get" if _sh.which("apt-get") else
                             "dnf"     if _sh.which("dnf")     else
                             "yum"     if _sh.which("yum")     else None)
-                    if _mgr == "apt-get":
-                        r = subprocess.run(
-                            ["sudo", "apt-get", "install", "-y", _apt_pkg],
-                            capture_output=False,
-                        )
-                        _sys_ok = r.returncode == 0
-                    elif _mgr in ("dnf", "yum"):
-                        # dnf/yum package names differ — map if known
-                        _dnf_map = {
-                            "python3-pystray":      "python3-pystray",
-                            "python3-pil":          "python3-pillow",
-                            "python3-paramiko":     "python3-paramiko",
-                            "python3-cryptography": "python3-cryptography",
-                            "python3-ldap3":        "python3-ldap3",
-                            "python3-psutil":       "python3-psutil",
-                        }
-                        _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
-                        r = subprocess.run(
-                            ["sudo", _mgr, "install", "-y", _dnf_pkg],
-                            capture_output=False,
-                        )
-                        _sys_ok = r.returncode == 0
+                    if _mgr and _ask_yn(f"Try installing '{_apt_pkg}' via {_mgr}?", default=True):
+                        if _mgr == "apt-get":
+                            r = subprocess.run(
+                                ["sudo", "apt-get", "install", "-y", _apt_pkg],
+                                capture_output=False,
+                            )
+                            _sys_ok = r.returncode == 0
+                        elif _mgr in ("dnf", "yum"):
+                            _dnf_map = {
+                                "python3-pystray":      "python3-pystray",
+                                "python3-pil":          "python3-pillow",
+                                "python3-paramiko":     "python3-paramiko",
+                                "python3-cryptography": "python3-cryptography",
+                                "python3-ldap3":        "python3-ldap3",
+                                "python3-psutil":       "python3-psutil",
+                            }
+                            _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
+                            r = subprocess.run(
+                                ["sudo", _mgr, "install", "-y", _dnf_pkg],
+                                capture_output=False,
+                            )
+                            _sys_ok = r.returncode == 0
 
                     if _sys_ok:
                         _tag("ok", f"{pkg['name']} installed via system package manager")
@@ -436,23 +587,29 @@ def step1_packages():
     else:
         _tag("warn", "net-snmp (snmpget) is not installed.")
         _tag("info",  "This enables SNMP OID polling sensors.")
-        install_snmp = _ask_yn("Install net-snmp now?", default=False)
+        install_snmp = _ask_yn("Install net-snmp now?", default=True)
         if install_snmp:
             import platform as _plat, shutil as _sh
             _sys = _plat.system()
             _ok_snmp = False
             if _sys == "Windows":
-                _tag("info", "Trying Chocolatey ...")
-                r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
-                if r.returncode == 0:
-                    _tag("ok", "net-snmp installed via Chocolatey")
-                    _ok_snmp = True
-                else:
-                    _tag("info", "Trying winget ...")
-                    r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
-                    if r2.returncode == 0:
-                        _tag("ok", "net-snmp installed via winget")
+                try:
+                    _tag("info", "Trying Chocolatey ...")
+                    r = subprocess.run(["choco", "install", "net-snmp", "-y"], capture_output=True)
+                    if r.returncode == 0:
+                        _tag("ok", "net-snmp installed via Chocolatey")
                         _ok_snmp = True
+                except FileNotFoundError:
+                    pass  # choco not installed
+                if not _ok_snmp:
+                    try:
+                        _tag("info", "Trying winget ...")
+                        r2 = subprocess.run(["winget", "install", "net-snmp.net-snmp"], capture_output=True)
+                        if r2.returncode == 0:
+                            _tag("ok", "net-snmp installed via winget")
+                            _ok_snmp = True
+                    except FileNotFoundError:
+                        pass  # winget not installed
             elif _sys == "Linux":
                 if _sh.which("apt-get"):
                     r = subprocess.run(["sudo", "apt-get", "install", "-y", "snmp"], capture_output=True)
@@ -472,12 +629,69 @@ def step1_packages():
                     if _ok_snmp:
                         _tag("ok", "net-snmp installed via Homebrew")
             if not _ok_snmp:
-                _tag("warn", "Automatic install failed.")
+                _tag("warn", "Automatic install failed. Install manually:")
+                _tag("info",  "Download: https://sourceforge.net/projects/net-snmp/files/net-snmp/")
                 _tag("info",  "Windows: choco install net-snmp  OR  winget install net-snmp.net-snmp")
                 _tag("info",  "Linux:   sudo apt install snmp  OR  sudo dnf install net-snmp-utils")
                 _tag("info",  "macOS:   brew install net-snmp")
+                print()
+                _tag("info", "After installing, press Enter to check again.")
+                _tag("info", "Or type 's' to skip (SNMP sensors will not be available).")
+                while True:
+                    raw = _ask("Press Enter to check, or type 's' to skip", "")
+                    if raw.lower() == "s":
+                        _tag("warn", "Skipping — SNMP polling sensors will not be available")
+                        break
+                    if _check_snmpget():
+                        _tag("ok", "net-snmp (snmpget) detected — SNMP sensor support")
+                        break
+                    _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
         else:
             _tag("warn", "Skipping — SNMP polling sensors will not be available")
+
+    # ── ping binary (ICMP sensors) ────────────────────────────────────────────
+    print()
+    import shutil as _sh_ic, platform as _plat_ic
+    if _sh_ic.which("ping"):
+        _tag("ok", "ping — ICMP ping sensor support")
+    else:
+        _tag("warn", "ping binary not found.")
+        _tag("info",  "Required for ICMP ping sensors (most common sensor type).")
+        _sys_ic = _plat_ic.system()
+        _ok_ping = False
+        if _sys_ic == "Linux":
+            _mgr_ic = ("apt-get" if _sh_ic.which("apt-get") else
+                       "dnf"     if _sh_ic.which("dnf")     else
+                       "yum"     if _sh_ic.which("yum")     else None)
+            if _mgr_ic and _ask_yn("Install ping (iputils-ping) now?", default=True):
+                _pkg_ic = "iputils-ping" if _mgr_ic == "apt-get" else "iputils"
+                r = subprocess.run(["sudo", _mgr_ic, "install", "-y", _pkg_ic],
+                                   capture_output=False)
+                if r.returncode == 0:
+                    _tag("ok", "ping installed")
+                    _ok_ping = True
+        if not _ok_ping:
+            if _sys_ic == "Windows":
+                _tag("info", "ping.exe should be present on all Windows installations.")
+                _tag("info", "If missing, check your Windows installation or repair Windows.")
+            elif _sys_ic == "Linux":
+                _tag("warn", "Install manually:")
+                _tag("info",  "Debian/Ubuntu: sudo apt install iputils-ping")
+                _tag("info",  "RHEL/Fedora:   sudo dnf install iputils")
+            elif _sys_ic == "Darwin":
+                _tag("info", "Install with: brew install inetutils")
+            print()
+            _tag("info", "After installing, press Enter to check again.")
+            _tag("info", "Or type 's' to skip (ICMP ping sensors will not work).")
+            while True:
+                raw = _ask("Press Enter to check, or type 's' to skip", "")
+                if raw.lower() == "s":
+                    _tag("warn", "Skipping — ICMP ping sensors will not work")
+                    break
+                if _sh_ic.which("ping"):
+                    _tag("ok", "ping detected — ICMP ping sensor support")
+                    break
+                _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
 
     print()
     if not all_ok:
@@ -513,6 +727,7 @@ def _fix_file_ownership():
         str(LOGS_DB_PATH) + "-shm",
         str(LOGS_DB_PATH) + ".pending_logs_import",
         str(CERTS_DIR),
+        os.path.join(_BASE, "pingwatch.conf"),
     ]
     # Also chown any cert files inside CERTS_DIR
     try:
@@ -520,6 +735,15 @@ def _fix_file_ownership():
             targets.append(os.path.join(str(CERTS_DIR), _f))
     except Exception:
         pass
+    # Chown the logs directory and all files inside it
+    _logs_dir = os.path.join(_BASE, "logs")
+    if os.path.isdir(_logs_dir):
+        targets.append(_logs_dir)
+        try:
+            for _f in os.listdir(_logs_dir):
+                targets.append(os.path.join(_logs_dir, _f))
+        except Exception:
+            pass
     changed = 0
     for path in targets:
         if os.path.exists(path):
@@ -533,6 +757,12 @@ def _fix_file_ownership():
 
 
 # ── Service management (Linux/systemd) ───────────────────────────────────────
+
+def _systemctl(*args) -> list:
+    """Return a systemctl command list, omitting sudo when already root."""
+    prefix = [] if (sys.platform != "win32" and os.getuid() == 0) else ["sudo"]
+    return prefix + ["systemctl"] + list(args)
+
 
 def _is_service_active() -> bool:
     """Return True if the pingwatch systemd service is currently running."""
@@ -554,10 +784,8 @@ def _is_service_active() -> bool:
 def _stop_service() -> bool:
     """Stop the pingwatch systemd service. Returns True on success."""
     try:
-        r = subprocess.run(
-            ["sudo", "systemctl", "stop", "pingwatch"],
-            capture_output=True, text=True,
-        )
+        r = subprocess.run(_systemctl("stop", "pingwatch"),
+                           capture_output=True, text=True)
         return r.returncode == 0
     except Exception:
         return False
@@ -566,10 +794,8 @@ def _stop_service() -> bool:
 def _restart_service() -> bool:
     """Start the pingwatch systemd service. Returns True on success."""
     try:
-        r = subprocess.run(
-            ["sudo", "systemctl", "start", "pingwatch"],
-            capture_output=True, text=True,
-        )
+        r = subprocess.run(_systemctl("start", "pingwatch"),
+                           capture_output=True, text=True)
         return r.returncode == 0
     except Exception:
         return False
@@ -745,60 +971,749 @@ def _ask_port(label: str, default: int, protocol: str = "TCP") -> int:
         _tag("info", "Enter a different port:")
 
 
+def _generate_pg_password(length: int = 20) -> str:
+    """Generate a random alphanumeric password."""
+    import random, string
+    chars = string.ascii_letters + string.digits
+    return "".join(random.SystemRandom().choices(chars, k=length))
+
+
+def _detect_pg_server() -> "tuple[bool, str]":
+    """Return (installed, version_string)."""
+    import shutil as _sh
+    for cmd in (["psql", "--version"], ["pg_isready", "--version"]):
+        if _sh.which(cmd[0]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                ver = (r.stdout or r.stderr or "").strip().splitlines()[0]
+                return True, ver
+            except Exception:
+                return True, cmd[0]
+    # Windows: psql is rarely in PATH — scan default install directories
+    if sys.platform == "win32":
+        import glob as _glob
+        _candidates = _glob.glob(
+            r"C:\Program Files\PostgreSQL\*\bin\psql.exe"
+        )
+        if _candidates:
+            _psql_exe = sorted(_candidates)[-1]  # highest version
+            try:
+                r = subprocess.run([_psql_exe, "--version"],
+                                   capture_output=True, text=True, timeout=5)
+                ver = (r.stdout or r.stderr or "").strip().splitlines()[0]
+                return True, ver
+            except Exception:
+                return True, _psql_exe
+    return False, ""
+
+
+def _pg_install_instructions() -> str:
+    """Return distro-specific install instructions for PostgreSQL."""
+    import platform as _plat, shutil as _sh
+    _sys = _plat.system()
+    if _sys == "Linux":
+        distro = ""
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("ID="):
+                        distro = line.strip().split("=")[1].strip('"').lower()
+                        break
+        except Exception:
+            pass
+        if distro in ("ubuntu", "debian", "pop", "mint", "elementary", "raspbian"):
+            return "sudo apt install postgresql postgresql-contrib"
+        if distro in ("rhel", "centos", "rocky", "almalinux"):
+            return ("sudo dnf install postgresql-server postgresql && "
+                    "sudo postgresql-setup --initdb && "
+                    "sudo systemctl enable --now postgresql")
+        if distro == "fedora":
+            return ("sudo dnf install postgresql-server && "
+                    "sudo postgresql-setup --initdb && "
+                    "sudo systemctl enable --now postgresql")
+        # Generic: try to detect package manager
+        if _sh.which("apt-get"):
+            return "sudo apt install postgresql postgresql-contrib"
+        if _sh.which("dnf"):
+            return "sudo dnf install postgresql-server postgresql"
+        if _sh.which("yum"):
+            return "sudo yum install postgresql-server postgresql"
+        return "Install PostgreSQL using your distribution's package manager"
+    if _sys == "Darwin":
+        return "brew install postgresql@16 && brew services start postgresql@16"
+    return "Download from https://www.postgresql.org/download/"
+
+
+def step2_database():
+    """Step 2 — Choose and configure the database backend."""
+    _separator()
+    _tag("setup", f"{_C['bold']}Step 2 — Database Backend{_C['reset']}")
+    _separator()
+    print()
+    _tag("info", "Choose where PingWatch stores its data:")
+    print()
+    print("         [1] SQLite  — Zero configuration. Data stored locally.")
+    print("                       Best for most single-server deployments.")
+    print()
+    print("         [2] PostgreSQL — External database server.")
+    print("                       Best for production environments.")
+    print()
+
+    # Pre-select based on existing config (re-run mode)
+    _default_choice = "2" if _state["db_backend"] == "postgresql" else "1"
+    choice = _ask("Choose", _default_choice)
+
+    if choice != "2":
+        # ── SQLite ─────────────────────────────────────────────────────────────
+        from db.backend import save_config, load_config
+        save_config({"db_backend": "sqlite"})
+        load_config()
+        _state["db_backend"] = "sqlite"
+        _tag("ok", "SQLite selected — no additional configuration needed.")
+        print()
+        return
+
+    # ── PostgreSQL ─────────────────────────────────────────────────────────────
+    _tag("info", "PostgreSQL selected.")
+    print()
+    import shutil as _sh
+    _is_root = sys.platform != "win32" and os.getuid() == 0
+    _sctl = ["systemctl"] if _is_root else ["sudo", "systemctl"]
+
+    # 2a. Install psycopg2-binary ───────────────────────────────────────────────
+    try:
+        import psycopg2  # noqa: F401
+        _tag("ok", "psycopg2 — Python PostgreSQL driver")
+    except ImportError:
+        _tag("warn", "psycopg2 is not installed (required for PostgreSQL).")
+        if _ask_yn("Install psycopg2-binary now?", default=True):
+            _tag("info", "Installing psycopg2-binary ...")
+            ok, err = _pip_install("psycopg2-binary>=2.9.9")
+            if ok:
+                _tag("ok", "psycopg2-binary installed successfully")
+            else:
+                # Try system package as fallback
+                import shutil as _sh
+                _sys_ok = False
+                if sys.platform != "win32" and _sh.which("apt-get"):
+                    _tag("info", "pip failed — system package python3-psycopg2 may work.")
+                    if _ask_yn("Try installing python3-psycopg2 via apt-get?", default=True):
+                        r = subprocess.run(
+                            ["sudo", "apt-get", "install", "-y", "python3-psycopg2"],
+                            capture_output=False,
+                        )
+                        _sys_ok = r.returncode == 0
+                if _sys_ok:
+                    _tag("ok", "psycopg2 installed via system package manager")
+                else:
+                    _tag("error", "Could not install psycopg2-binary automatically.")
+                    _tag("info", "Install manually:")
+                    _tag("info", "  pip install psycopg2-binary")
+                    _tag("info", "  or: sudo apt install python3-psycopg2")
+                    if not _ask_yn("Continue anyway?", default=False):
+                        _tag("info", "Switching to SQLite.")
+                        from db.backend import save_config, load_config
+                        save_config({"db_backend": "sqlite"})
+                        load_config()
+                        _state["db_backend"] = "sqlite"
+                        return
+        else:
+            _tag("warn", "Skipping — PostgreSQL backend requires psycopg2.")
+            _tag("info", "Switching to SQLite.")
+            from db.backend import save_config, load_config
+            save_config({"db_backend": "sqlite"})
+            load_config()
+            _state["db_backend"] = "sqlite"
+            return
+    print()
+
+    # 2b. Check PostgreSQL server installed ─────────────────────────────────────
+    _separator("·")
+    _tag("info", "Checking for PostgreSQL server on this host...")
+    print()
+    _pg_installed, _pg_ver = _detect_pg_server()
+
+    if _pg_installed:
+        _tag("ok", f"PostgreSQL detected: {_pg_ver}")
+    else:
+        _tag("warn", "PostgreSQL server not found on this host.")
+        print()
+        _instructions = _pg_install_instructions()
+        _tag("info", "Install PostgreSQL with:")
+        _tag("info", f"  {_C['cyan']}{_instructions}{_C['reset']}")
+        print()
+
+        # Offer automatic install on Linux where we know the exact command
+        _auto_installed = False
+        if sys.platform != "win32" and _instructions.startswith("sudo apt"):
+            if _ask_yn("Install PostgreSQL automatically now?", default=True):
+                _tag("info", "Installing PostgreSQL (this may take a minute) ...")
+                _mgr = "apt-get" if _sh.which("apt-get") else "apt"
+                _apt_cmd = [_mgr] if _is_root else ["sudo", _mgr]
+                r = subprocess.run(
+                    _apt_cmd + ["install", "-y", "postgresql", "postgresql-contrib"],
+                    capture_output=False,
+                )
+                if r.returncode == 0:
+                    # Ensure service is running
+                    subprocess.run(_sctl + ["start", "postgresql"],
+                                   capture_output=True)
+                    _pg_installed, _pg_ver = _detect_pg_server()
+                    if _pg_installed:
+                        _tag("ok", f"PostgreSQL installed and detected: {_pg_ver}")
+                        _auto_installed = True
+                    else:
+                        _tag("warn", "Installed but still not detected — continuing anyway.")
+                        _auto_installed = True
+                else:
+                    _tag("warn", "Automatic install failed — install manually and press Enter.")
+
+        if not _auto_installed and not _pg_installed:
+            _tag("info", "After installing, press Enter to check again.")
+            _tag("info", "Or choose [s] to skip (useful if PostgreSQL runs on another host).")
+            print()
+            while True:
+                raw = _ask("Press Enter to check, or type 's' to skip", "")
+                if raw.lower() == "s":
+                    _tag("info", "Skipping server check — continuing with connection details.")
+                    break
+                _pg_installed, _pg_ver = _detect_pg_server()
+                if _pg_installed:
+                    _tag("ok", f"PostgreSQL detected: {_pg_ver}")
+                    break
+                else:
+                    _tag("warn", "Still not found. Install it and press Enter again, or type 's' to skip.")
+    print()
+
+    # 2c. Create database and user ───────────────────────────────────────────────
+    _separator("·")
+    _tag("info", "Create a PostgreSQL database and user for PingWatch.")
+    print()
+    _gen_pw = _generate_pg_password()
+
+    # ── Check / start PostgreSQL service before attempting auto-create ─────────
+    if sys.platform != "win32" and _pg_installed:
+        _svc_running = False
+        try:
+            r = subprocess.run(_sctl + ["is-active", "postgresql"],
+                               capture_output=True, text=True)
+            _svc_running = r.stdout.strip() == "active"
+        except Exception:
+            pass
+        if not _svc_running:
+            # Try pg_isready as a lighter check (works without systemd)
+            _pgready = _sh.which("pg_isready")
+            if _pgready:
+                try:
+                    r = subprocess.run([_pgready], capture_output=True, text=True)
+                    _svc_running = r.returncode == 0
+                except Exception:
+                    pass
+        if not _svc_running:
+            _tag("warn", "PostgreSQL service does not appear to be running.")
+            if _ask_yn("Try to start the PostgreSQL service now?", default=True):
+                _tag("info", "Starting PostgreSQL ...")
+                r = subprocess.run(_sctl + ["start", "postgresql"],
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    _tag("ok", "PostgreSQL service started.")
+                else:
+                    _err_svc = (r.stderr or r.stdout or "").strip()
+                    if _err_svc:
+                        _tag("warn", f"Start failed: {_err_svc}")
+                    else:
+                        _tag("warn", "Could not start PostgreSQL service.")
+                    _pfx = "" if _is_root else "sudo "
+                    _tag("info", f"Try manually: {_pfx}systemctl start postgresql")
+                    _tag("info", f"Then check:   {_pfx}systemctl status postgresql")
+
+    # ── Verify postgres OS user exists (server installed, not just client tools) ─
+    if sys.platform != "win32" and _pg_installed:
+        try:
+            _id_r = subprocess.run(["id", "postgres"], capture_output=True, text=True)
+            _pg_user_exists = _id_r.returncode == 0
+        except Exception:
+            _pg_user_exists = True  # assume OK if 'id' not available
+        if not _pg_user_exists:
+            _tag("warn", "The 'postgres' system user does not exist.")
+            _tag("warn", "The PostgreSQL server package is not installed (only client tools were found).")
+            _inst = _pg_install_instructions()
+            _tag("info", f"Install the server with: {_inst}")
+            print()
+            _pg_installed = False  # skip auto-create — server not ready
+            # Offer automatic install on apt-based systems (same as "not found" path)
+            _mgr2 = "apt-get" if _sh.which("apt-get") else ("apt" if _sh.which("apt") else None)
+            if _mgr2:
+                if _ask_yn("Install PostgreSQL server automatically now?", default=True):
+                    _tag("info", "Installing PostgreSQL (this may take a minute) ...")
+                    _apt_cmd2 = [_mgr2] if _is_root else ["sudo", _mgr2]
+                    r = subprocess.run(
+                        _apt_cmd2 + ["install", "-y", "postgresql", "postgresql-contrib"],
+                        capture_output=False,
+                    )
+                    if r.returncode == 0:
+                        subprocess.run(_sctl + ["start", "postgresql"], capture_output=True)
+                        try:
+                            _id_r2 = subprocess.run(["id", "postgres"],
+                                                     capture_output=True, text=True)
+                            if _id_r2.returncode == 0:
+                                _tag("ok", "PostgreSQL server installed successfully.")
+                                _pg_installed = True
+                            else:
+                                _tag("warn", "Installed but postgres user still missing — check service.")
+                        except Exception:
+                            _pg_installed = True  # best-effort
+                    else:
+                        _tag("warn", "Automatic install failed — install manually then re-run the wizard.")
+
+    # Offer to create the DB/user automatically
+    _db_auto_ok = False
+    _pw = _gen_pw
+
+    # Find psql executable (may not be in PATH on Windows)
+    def _find_psql():
+        import shutil as _sh2, glob as _glob2
+        _p = _sh2.which("psql")
+        if _p:
+            return _p
+        if sys.platform == "win32":
+            _cands = sorted(_glob2.glob(r"C:\Program Files\PostgreSQL\*\bin\psql.exe"))
+            if _cands:
+                return _cands[-1]
+        return None
+
+    if _pg_installed:
+        print(_C["bold"] + "       The wizard can create the database and user automatically." + _C["reset"])
+        if sys.platform == "win32":
+            print(_C["bold"] + "       It will connect as the 'postgres' superuser." + _C["reset"])
+        else:
+            _access = "as root" if _is_root else "requires sudo / postgres access"
+            print(_C["bold"] + f"       It will run ({_access}):" + _C["reset"])
+        print()
+        print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '****';" + _C["reset"])
+        print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
+        print()
+        if _ask_yn("Create database and user automatically?", default=True):
+            _psql = _find_psql()
+            if not _psql:
+                _tag("warn", "psql not found — cannot run automatically.")
+            elif sys.platform == "win32":
+                # Windows: connect as postgres superuser (needs its password)
+                _pg_sa_pw = _ask_password("Password for the PostgreSQL 'postgres' superuser", "")
+                if not _pg_sa_pw:
+                    _tag("warn", "No password entered — skipping auto-create.")
+                else:
+                    _tag("info", "Creating PostgreSQL user and database ...")
+                    _cmds = [
+                        f"CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';",
+                        "CREATE DATABASE pingwatch OWNER pingwatch;",
+                    ]
+                    _all_ok = True
+                    _env = {**os.environ, "PGPASSWORD": _pg_sa_pw}
+                    for _sql in _cmds:
+                        r = subprocess.run(
+                            [_psql, "-U", "postgres", "-h", "localhost", "-c", _sql],
+                            capture_output=True, text=True, env=_env,
+                        )
+                        if r.returncode != 0:
+                            _err_out = (r.stderr or r.stdout or "").strip()
+                            if "already exists" in _err_out.lower():
+                                _tag("ok", f"Already exists (skipping): {_sql.split()[2]}")
+                            else:
+                                _tag("warn", f"Command failed: {_err_out}")
+                                _all_ok = False
+                        else:
+                            _tag("ok", _sql.split(";")[0])
+                    if _all_ok:
+                        _tag("ok", "Database and user created successfully.")
+                        _pw = _gen_pw
+                        _db_auto_ok = True
+                    else:
+                        _tag("warn", "Some commands failed. You can create them manually.")
+            else:
+                _tag("info", "Creating PostgreSQL user and database ...")
+                _cmds = [
+                    f"CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';",
+                    "CREATE DATABASE pingwatch OWNER pingwatch;",
+                ]
+                _all_ok = True
+                for _sql in _cmds:
+                    if _is_root:
+                        _pg_cmd = ["su", "-", "postgres", "-c", f'{_psql} -c "{_sql}"']
+                    else:
+                        _pg_cmd = ["sudo", "-u", "postgres", _psql, "-c", _sql]
+                    r = subprocess.run(_pg_cmd, capture_output=True, text=True)
+                    if r.returncode != 0:
+                        _err_out = (r.stderr or r.stdout or "").strip()
+                        if "already exists" in _err_out.lower():
+                            _tag("ok", f"Already exists (skipping): {_sql.split()[2]}")
+                        else:
+                            _tag("warn", f"Command failed: {_err_out}")
+                            _all_ok = False
+                    else:
+                        _tag("ok", _sql.split(";")[0])
+                if _all_ok:
+                    _tag("ok", "Database and user created successfully.")
+                    _pw = _gen_pw
+                    _db_auto_ok = True
+                else:
+                    _tag("warn", "Some commands failed. You can create them manually:")
+            print()
+
+    if not _db_auto_ok:
+        # Fall back to showing manual instructions
+        print(_C["bold"] + "       Run these commands in a terminal:" + _C["reset"])
+        print()
+        if sys.platform == "win32":
+            _psql_path = _find_psql() or r'"C:\Program Files\PostgreSQL\<version>\bin\psql.exe"'
+            print(_C["cyan"] + f'         {_psql_path} -U postgres' + _C["reset"])
+        elif _is_root:
+            print(_C["cyan"] + "         su - postgres" + _C["reset"])
+        else:
+            print(_C["cyan"] + "         sudo -u postgres psql" + _C["reset"])
+        print(_C["cyan"] + f"         CREATE USER pingwatch WITH PASSWORD '{_gen_pw}';" + _C["reset"])
+        print(_C["cyan"] +  "         CREATE DATABASE pingwatch OWNER pingwatch;" + _C["reset"])
+        print(_C["cyan"] +  "         \\q" + _C["reset"])
+        print()
+        _tag("info", "Copy the password above or enter a custom one below.")
+        _pw = _ask_password("Password for the 'pingwatch' user", _gen_pw)
+        print()
+
+    # 2d. Connection details ─────────────────────────────────────────────────────
+    _separator("·")
+    _tag("info", "Connection details (press Enter to accept defaults):")
+    print()
+    _host = _ask("PostgreSQL host", _state["pg_host"])
+    _port_raw = _ask("PostgreSQL port", str(_state["pg_port"]))
+    try:
+        _port = int(_port_raw)
+    except ValueError:
+        _port = 5432
+    _dbname = _ask("Database name", _state["pg_database"])
+    _user   = _ask("Username",      _state["pg_user"])
+    _password = _pw
+    print()
+
+    # 2e. Test connection loop ───────────────────────────────────────────────────
+    _separator("·")
+    _tag("info", "Testing connection...")
+    print()
+    _conn_ok = False
+    while True:
+        from db.pg_pool import pg_test_connection
+        _ok, _err = pg_test_connection(_host, _port, _dbname, _user, _password)
+        if _ok:
+            _tag("ok", f"Connected to PostgreSQL at {_host}:{_port}/{_dbname}")
+            _conn_ok = True
+            break
+        _tag("error", f"Connection failed: {_err}")
+        print()
+        print("         Options:")
+        print("           [1] Edit connection details and try again")
+        print("           [2] Continue anyway (skip validation)")
+        print("           [3] Switch to SQLite instead")
+        if sys.platform != "win32":
+            print("           [4] Start PostgreSQL service and retry")
+        print()
+        _opt = _ask("Choose", "1")
+        if _opt == "2":
+            _tag("warn", "Proceeding without a confirmed connection.")
+            _conn_ok = False
+            break
+        if _opt == "3":
+            _tag("info", "Switching to SQLite.")
+            from db.backend import save_config, load_config
+            save_config({"db_backend": "sqlite"})
+            load_config()
+            _state["db_backend"] = "sqlite"
+            return
+        if _opt == "4" and sys.platform != "win32":
+            _tag("info", "Starting PostgreSQL service ...")
+            r = subprocess.run(_sctl + ["start", "postgresql"],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                _tag("ok", "Service started — retrying connection ...")
+            else:
+                _err_svc = (r.stderr or r.stdout or "").strip()
+                _tag("warn", f"Could not start service: {_err_svc}" if _err_svc else "Could not start service.")
+                _pfx = "" if _is_root else "sudo "
+                _tag("info", f"Check: {_pfx}systemctl status postgresql")
+            continue
+        # re-ask details
+        _host     = _ask("PostgreSQL host", _host)
+        _port_raw = _ask("PostgreSQL port", str(_port))
+        try:
+            _port = int(_port_raw)
+        except ValueError:
+            _port = 5432
+        _dbname   = _ask("Database name", _dbname)
+        _user     = _ask("Username",      _user)
+        _password = _ask_password("Password", _password)
+        print()
+        _tag("info", "Retrying connection...")
+        print()
+    print()
+
+    # ── Persist backend settings ────────────────────────────────────────────────
+    _state["db_backend"]  = "postgresql"
+    _state["pg_host"]     = _host
+    _state["pg_port"]     = _port
+    _state["pg_database"] = _dbname
+    _state["pg_user"]     = _user
+    _state["pg_password"] = _password
+
+    from db.backend import save_config, load_config
+    save_config({
+        "db_backend":  "postgresql",
+        "pg_host":     _host,
+        "pg_port":     _port,
+        "pg_database": _dbname,
+        "pg_user":     _user,
+        "pg_password": _password,
+    })
+    load_config()
+
+    # ── Init PG pool + schemas ──────────────────────────────────────────────────
+    if _conn_ok:
+        try:
+            from db.pg_pool import pg_init_pool
+            pg_init_pool()
+            from db.core import db_init
+            db_init()
+            _tag("ok", "PostgreSQL schemas created.")
+        except Exception as _e:
+            _tag("error", f"PostgreSQL init failed: {_e}")
+            _tag("info", "You can retry later or use Settings → Database to migrate.")
+
+    # 2f. PostgreSQL client tools (psql / pg_dump) ─────────────────────────────
+    import shutil as _sh2, platform as _plat2
+    _has_psql    = _sh2.which("psql")    is not None
+    _has_pg_dump = _sh2.which("pg_dump") is not None
+    _separator("·")
+    if _has_psql and _has_pg_dump:
+        _tag("ok", "PostgreSQL client tools (psql, pg_dump) — DB export/import support")
+    else:
+        _missing = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
+        _tag("warn", f"PostgreSQL client tools ({_missing}) are not installed.")
+        _tag("info",  "Required for database export and import.")
+        _sys2 = _plat2.system()
+        _ok_pg = False
+
+        # On Windows, check if PG is already installed but just not in PATH
+        _pg_bin_dir = None
+        if _sys2 == "Windows":
+            import glob as _gl2
+            _bins = _gl2.glob(r"C:\Program Files\PostgreSQL\*\bin")
+            if _bins:
+                _pg_bin_dir = sorted(_bins)[-1]  # highest version
+                _psql_found = os.path.isfile(os.path.join(_pg_bin_dir, "psql.exe"))
+                _pgdump_found = os.path.isfile(os.path.join(_pg_bin_dir, "pg_dump.exe"))
+                if _psql_found and _pgdump_found:
+                    _tag("ok", f"Found client tools in: {_pg_bin_dir}")
+                    _tag("warn", "They are not in your system PATH.")
+                    if _ask_yn(f"Add '{_pg_bin_dir}' to system PATH permanently?", default=True):
+                        try:
+                            subprocess.run([
+                                "powershell", "-Command",
+                                f'[Environment]::SetEnvironmentVariable("Path",'
+                                f' [Environment]::GetEnvironmentVariable("Path","Machine") + ";{_pg_bin_dir}", "Machine")'
+                            ], capture_output=True, check=True)
+                            _tag("ok", "Added to system PATH permanently.")
+                        except Exception:
+                            _tag("warn", "Could not modify system PATH (requires Administrator).")
+                            _tag("info", "Run this in an elevated PowerShell to add manually:")
+                            _tag("info", f'  [Environment]::SetEnvironmentVariable("Path", $env:Path + ";{_pg_bin_dir}", "Machine")')
+                    # Always add to current process PATH so the rest of setup works
+                    os.environ["PATH"] = _pg_bin_dir + os.pathsep + os.environ.get("PATH", "")
+                    _ok_pg = True
+                    _tag("ok", "DB export/import is available.")
+
+        if _ok_pg:
+            pass  # Already resolved — skip install prompt
+        elif _ask_yn("Install PostgreSQL client tools now?", default=True):
+            if _sys2 == "Windows":
+                try:
+                    _tag("info", "Trying Chocolatey ...")
+                    r = subprocess.run(["choco", "install", "postgresql", "-y"], capture_output=True)
+                    if r.returncode == 0:
+                        _tag("ok", "PostgreSQL client tools installed via Chocolatey")
+                        _ok_pg = True
+                except FileNotFoundError:
+                    pass  # choco not installed
+                if not _ok_pg:
+                    try:
+                        _tag("info", "Trying winget ...")
+                        r2 = subprocess.run(["winget", "install", "PostgreSQL.PostgreSQL"], capture_output=True)
+                        if r2.returncode == 0:
+                            _tag("ok", "PostgreSQL client tools installed via winget")
+                            _ok_pg = True
+                    except FileNotFoundError:
+                        pass  # winget not installed
+            elif _sys2 == "Linux":
+                if _sh2.which("apt-get"):
+                    r = subprocess.run(["sudo", "apt-get", "install", "-y", "postgresql-client"], capture_output=False)
+                    _ok_pg = r.returncode == 0
+                elif _sh2.which("dnf"):
+                    r = subprocess.run(["sudo", "dnf", "install", "-y", "postgresql"], capture_output=False)
+                    _ok_pg = r.returncode == 0
+                elif _sh2.which("yum"):
+                    r = subprocess.run(["sudo", "yum", "install", "-y", "postgresql"], capture_output=False)
+                    _ok_pg = r.returncode == 0
+                if _ok_pg:
+                    _tag("ok", "PostgreSQL client tools installed")
+            elif _sys2 == "Darwin":
+                if _sh2.which("brew"):
+                    r = subprocess.run(["brew", "install", "libpq"], capture_output=True)
+                    _ok_pg = r.returncode == 0
+                    if _ok_pg:
+                        _tag("ok", "PostgreSQL client tools installed via Homebrew")
+                        _tag("info", "Run: brew link --force libpq  (to add psql/pg_dump to PATH)")
+            if not _ok_pg:
+                _tag("warn", "Automatic install failed. Install manually:")
+                if _sys2 == "Windows":
+                    _tag("info", "psql and pg_dump come with the PostgreSQL server installer.")
+                    _tag("info", "If PG is on another machine, install it locally and select")
+                    _tag("info", "'Command Line Tools' only during setup:")
+                    _tag("info", "  https://www.enterprisedb.com/downloads/postgres-postgresql-downloads")
+                    _tag("info", "After install, add the bin folder to PATH:")
+                    _tag("info", r"  C:\Program Files\PostgreSQL\<version>\bin")
+                else:
+                    _tag("info", "Linux: sudo apt install postgresql-client  OR  sudo dnf install postgresql")
+                    _tag("info", "macOS: brew install libpq && brew link --force libpq")
+                print()
+                _tag("info", "After installing, press Enter to check again.")
+                _tag("info", "Or type 's' to skip (DB export/import will not be available).")
+                while True:
+                    raw = _ask("Press Enter to check, or type 's' to skip", "")
+                    if raw.lower() == "s":
+                        _tag("warn", "Skipping — DB export/import will not be available")
+                        break
+                    # Also re-check the PG bin directory on Windows
+                    if _sys2 == "Windows":
+                        _bins2 = _gl2.glob(r"C:\Program Files\PostgreSQL\*\bin")
+                        if _bins2:
+                            _d = sorted(_bins2)[-1]
+                            os.environ["PATH"] = _d + os.pathsep + os.environ.get("PATH", "")
+                    _has_psql    = _sh2.which("psql")    is not None
+                    _has_pg_dump = _sh2.which("pg_dump") is not None
+                    if _has_psql and _has_pg_dump:
+                        _tag("ok", "PostgreSQL client tools (psql, pg_dump) detected")
+                        break
+                    _still = ", ".join(x for x, ok in [("psql", _has_psql), ("pg_dump", _has_pg_dump)] if not ok)
+                    _tag("warn", f"Still missing: {_still}. Install and press Enter again, or type 's' to skip.")
+        else:
+            _tag("warn", "Skipping — DB export/import will not be available")
+    print()
+
+    # 2g. Migration offer (existing SQLite data) ────────────────────────────────
+    if os.path.isfile(DB_PATH) and _conn_ok:
+        _sz = os.path.getsize(DB_PATH)
+        _sz_str = f"{_sz / 1048576:.1f} MB" if _sz >= 1048576 else f"{_sz // 1024} KB"
+        print()
+        _separator("·")
+        _tag("info", f"Existing SQLite database detected ({_sz_str}).")
+        _tag("info", "Migrate all data (devices, sensors, settings, history) to PostgreSQL?")
+        print()
+        if _ask_yn("Migrate existing data to PostgreSQL?", default=True):
+            _tag("info", "Migrating data — this may take a minute for large databases...")
+            print()
+            try:
+                from db.pg_migrate import migrate_sqlite_to_pg
+                def _progress(table, done, total):
+                    pct = int(done / total * 100) if total else 100
+                    print(f"\r         {table:<35} {pct:3d}%", end="", flush=True)
+                _ok_mig, _msg_mig = migrate_sqlite_to_pg(
+                    str(DB_PATH), str(LOGS_DB_PATH),
+                    {"pg_host": _host, "pg_port": _port, "pg_database": _dbname,
+                     "pg_user": _user, "pg_password": _password},
+                    progress_cb=_progress,
+                )
+                print()  # newline after progress
+                if _ok_mig:
+                    _tag("ok", f"Migration complete: {_msg_mig}")
+                    _tag("info", "SQLite files kept as backup. You can delete them once you've")
+                    _tag("info", "verified all data is present in PostgreSQL.")
+                else:
+                    _tag("warn", f"Migration finished with issues: {_msg_mig}")
+                    _tag("info", "You can retry from Settings → Database after startup.")
+            except Exception as _me:
+                print()
+                _tag("error", f"Migration error: {_me}")
+                _tag("info", "You can retry from Settings → Database after startup.")
+        else:
+            _tag("info", "Skipping migration. Your SQLite data remains untouched.")
+            _tag("info", "Migrate later from Settings → Database if needed.")
+    print()
+
+
 def step2_http_port():
     _separator()
-    _tag("setup", f"{_C['bold']}Step 2 — HTTP Port{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 3 — HTTP & HTTPS{_C['reset']}")
     _separator()
-    _tag("info", "The HTTP dashboard port (used for HTTP access or redirect to HTTPS).")
     print()
-    _state["http_port"] = _ask_port("HTTP port", PORT)
-    _tag("ok", f"HTTP port set to {_state['http_port']}")
+
+    # ── Enable HTTP? ──────────────────────────────────────────────────────────
+    _state["http_enabled"] = _ask_yn("Enable HTTP?", default=_state["http_enabled"])
+    if _state["http_enabled"]:
+        _state["http_port"] = _ask_port("HTTP port", _state["http_port"])
+        _tag("ok", f"HTTP enabled on port {_state['http_port']}")
+    else:
+        _tag("info", "HTTP disabled — HTTPS will be the only access method.")
+    print()
+
+    # ── Enable HTTPS? ─────────────────────────────────────────────────────────
+    _enable_https = _ask_yn("Enable HTTPS?", default=_state["tls_enabled"])
+    if _enable_https:
+        print()
+        print("       Certificate options:")
+        print("         [1] Generate a new self-signed certificate  (recommended)")
+        print("         [2] Import existing certificate from the certs/ folder")
+        print()
+        _cert_choice = _ask("Choose", "1")
+        if _cert_choice == "2":
+            _step3_import()
+        else:
+            _step3_generate()
+    else:
+        if not _state["http_enabled"]:
+            # Neither HTTP nor HTTPS — force HTTP as fallback
+            _tag("warn", "Both HTTP and HTTPS cannot be disabled. Enabling HTTP.")
+            _state["http_enabled"] = True
+            _state["http_port"] = _ask_port("HTTP port", _state["http_port"])
+        _step3_http_only()
+
+    # ── Redirect? (only when both HTTP and HTTPS are enabled) ─────────────────
+    if _state["http_enabled"] and _state["tls_enabled"]:
+        print()
+        _tag("info", "HTTP → HTTPS redirect: when enabled, visiting the HTTP port")
+        _tag("info", "automatically redirects browsers to the HTTPS port.")
+        _state["http_redirect"] = _ask_yn("Enable HTTP → HTTPS redirect?", default=_state["http_redirect"])
+        if _state["http_redirect"]:
+            _tag("info", "Enabled — HTTP port will redirect to HTTPS.")
+        else:
+            _tag("info", "Disabled — both ports will serve the dashboard independently.")
+
     print()
 
 
 def step3_tls():
-    _separator()
-    _tag("setup", f"{_C['bold']}Step 3 — HTTPS / TLS{_C['reset']}")
-    _separator()
-    print()
-    print("       Options:")
-    print("         [1] Generate a new self-signed certificate  (recommended)")
-    print("         [2] Import existing certificate from the certs/ folder")
-    print("         [3] Disable HTTPS — HTTP only  (not recommended)")
-    print()
-    choice = _ask("Choose", "1")
-
-    if choice == "2":
-        _step3_import()
-    elif choice == "3":
-        _step3_http_only()
-    else:
-        _step3_generate()
-
-    if _state["tls_enabled"]:
-        print()
-        _tag("info", "HTTP → HTTPS redirect: when enabled, visiting the HTTP port")
-        _tag("info", "automatically redirects browsers to the HTTPS port.")
-        _state["http_redirect"] = _ask_yn("Enable HTTP → HTTPS redirect?", default=True)
-        if not _state["http_redirect"]:
-            _tag("info", "Disabled — both ports will serve the dashboard independently.")
-
-    print()
+    """Merged into step2_http_port — retained for call-site compatibility."""
+    pass
 
 
 def _step3_generate():
     _tag("setup", "Certificate details — press Enter to accept the default")
     print()
 
-    default_cn = socket.gethostname() or "localhost"
+    default_cn = _state.get("tls_cn") or socket.gethostname() or "localhost"
     cn       = _ask("Common Name / hostname (CN)", default_cn)
-    org      = _ask("Organization (O)",            "PingWatch")
+    org      = _ask("Organization (O)",            _state.get("org_name", "PingWatch"))
     org_unit = _ask("Organizational Unit (OU)",    "")
     country  = _ask("Country (2-letter code, C)",  "")
     state    = _ask("State / Province (ST)",       "")
     locality = _ask("Locality / City (L)",         "")
     days_raw = _ask("Validity period (days)",      "825")
-    tls_port = _ask_port("HTTPS port", TLS_PORT_DEFAULT)
+    tls_port = _ask_port("HTTPS port", _state["tls_port"])
     _tag("info", "Additional SANs — extra DNS names or IP addresses to include in the")
     _tag("info", "certificate (comma-separated). Press Enter to skip.")
     sans_raw = _ask("Extra SANs (DNS/IP, comma-separated)", "")
@@ -918,7 +1833,7 @@ def _step3_http_only():
 
 def step4_snmp_port():
     _separator()
-    _tag("setup", f"{_C['bold']}Step 4 — SNMP Trap Port{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 5 — SNMP Trap Port{_C['reset']}")
     _separator()
     import platform as _plat
     _sys = _plat.system()
@@ -928,7 +1843,7 @@ def step4_snmp_port():
         _tag("info", "  Requires admin privileges (already elevated on Windows).")
     elif _sys in ("Linux", "Darwin"):
         _tag("info", "  Requires root on Linux/macOS. Options:")
-        _tag("info", "    sudo bash start.sh          (run the server as root)")
+        _tag("info", "    sudo bash linux/start.sh     (run the server as root)")
         _tag("info", "    Use port 1162 (no root) + redirect:")
         _tag("info", "      sudo iptables -t nat -A PREROUTING -p udp --dport 162 -j REDIRECT --to-ports 1162")
     _tag("info", "PingWatch auto-falls back to 1162 then 2162 if 162 cannot be bound.")
@@ -951,7 +1866,7 @@ def step5_firewall():
     import platform as _plat, shutil as _sh
     _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 5 — Firewall Rules{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 6 — Firewall Rules{_C['reset']}")
     _separator()
     print()
 
@@ -964,18 +1879,23 @@ def step5_firewall():
     # ── Check which rules already exist ──────────────────────
     def _win_has(name):
         r = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule", f'name="{name}"'],
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
             capture_output=True,
         )
         return r.returncode == 0
 
-    def _ufw_status():
-        """Return ufw status text, or '' if unavailable."""
-        try:
-            r = subprocess.run(["sudo", "ufw", "status"], capture_output=True, text=True)
-            return r.stdout if r.returncode == 0 else ""
-        except Exception:
-            return ""
+    def _ufw_has(port, proto):
+        """Return True if a ufw rule for port/proto exists (active or inactive)."""
+        _needle = f"{port}/{proto.lower()}"
+        for _cmd in (["ufw", "status"], ["ufw", "show", "added"]):
+            for _pfx in ([], ["sudo"]):
+                try:
+                    _r = subprocess.run([*_pfx, *_cmd], capture_output=True, text=True)
+                    if _r.returncode == 0 and _needle in _r.stdout:
+                        return True
+                except Exception:
+                    pass
+        return False
 
     def _fcmd_ports():
         """Return firewall-cmd --list-ports text, or '' if unavailable."""
@@ -992,10 +1912,23 @@ def step5_firewall():
         for rule in rules:
             (existing if _win_has(rule[2]) else missing).append(rule)
     elif _sys == "Linux" and _sh.which("ufw"):
-        _ufw = _ufw_status()
+        # Warn if ufw is installed but inactive (rules exist but have no effect)
+        try:
+            _ufw_active = False
+            for _pfx in ([], ["sudo"]):
+                _sr = subprocess.run([*_pfx, "ufw", "status"], capture_output=True, text=True)
+                if _sr.returncode == 0:
+                    _ufw_active = "Status: active" in _sr.stdout
+                    break
+            if not _ufw_active:
+                _tag("warn", "ufw is installed but currently INACTIVE — firewall rules have no effect.")
+                _tag("info", "Enable it with:  sudo ufw enable")
+                print()
+        except Exception:
+            pass
         for rule in rules:
             proto, port, name = rule
-            (existing if f"{port}/{proto.lower()}" in _ufw else missing).append(rule)
+            (existing if _ufw_has(port, proto) else missing).append(rule)
     elif _sys == "Linux" and _sh.which("firewall-cmd"):
         _fcmd = _fcmd_ports()
         for rule in rules:
@@ -1092,7 +2025,7 @@ def step6_shortcut():
     import platform as _plat
     _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 6 — Desktop Shortcut{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 7 — Desktop Shortcut{_C['reset']}")
     _separator()
     print()
 
@@ -1100,7 +2033,7 @@ def step6_shortcut():
         _tag("info", "Desktop shortcut creation is only supported on Windows.")
         _tag("info", f"To start PingWatch on {_sys}, run:")
         if _sys == "Linux" or _sys == "Darwin":
-            _tag("info", f"  bash {os.path.join(_BASE, 'start.sh')}")
+            _tag("info", f"  bash {os.path.join(_BASE, 'linux', 'start.sh')}")
         else:
             _tag("info", f"  python3 {os.path.join(_BASE, 'server.py')}")
         print()
@@ -1119,11 +2052,13 @@ def step6_shortcut():
         print()
         return
 
-    target = os.path.join(_BASE, "start.bat")
+    target = os.path.join(_BASE, "windows", "start.bat")
+    icon   = os.path.join(_BASE, "frontend", "favicon.ico")
     ps_cmd = (
         f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
         f'$s.TargetPath="{target}";'
         f'$s.WorkingDirectory="{_BASE}";'
+        f'$s.IconLocation="{icon},0";'
         f'$s.Description="PingWatch Network Monitor";'
         f'$s.Save()'
     )
@@ -1141,24 +2076,29 @@ def step6_shortcut():
 def step7_init_db():
     global _db_created
     _separator()
-    _tag("setup", f"{_C['bold']}Step 7 — Initialise Database & Save Settings{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 8 — Initialise Database & Save Settings{_C['reset']}")
     _separator()
     print()
 
+    from db.backend import is_pg
     from db.core import db_init
     from db.users import db_save_settings
 
-    _tag("info", "Creating database schema ...")
+    _tag("info", "Verifying database schema ...")
     _db_created = True   # mark so atexit cleanup can remove it on abort
     try:
         db_init()
     except Exception as e:
         _tag("error", f"Database initialisation failed: {e}")
         sys.exit(1)
-    _tag("ok", f"Database created: {DB_PATH}")
+    if is_pg():
+        _tag("ok", f"PostgreSQL database ready: {_state['pg_host']}:{_state['pg_port']}/{_state['pg_database']}")
+    else:
+        _tag("ok", f"Database created: {DB_PATH}")
 
     # Build settings dict from wizard state
     settings = {
+        "http_enabled": "1" if _state.get("http_enabled", True) else "0",
         "http_port":   str(_state["http_port"]),
         "snmp_port":   str(_state["snmp_port"]),
         "tls_enabled": "1" if _state["tls_enabled"] else "0",
@@ -1180,14 +2120,59 @@ def step7_init_db():
         sys.exit(1)
     _tag("ok", "Settings saved to database")
 
+    # ── Create initial admin account ──────────────────────────────────────────
+    print()
+    _separator("·")
+    _tag("info", "Create your admin account for the web dashboard.")
+    print()
+    from db.users import db_add_user, db_list_users
+    try:
+        _existing_users = db_list_users()
+    except Exception:
+        _existing_users = []
+
+    if not _existing_users:
+        _admin_user = _ask("Admin username", "admin")
+        while True:
+            _admin_pw = _ask_password("Admin password (min 8 characters)", "")
+            if not sys.stdin.isatty():
+                # Non-interactive: generate a password
+                import secrets as _sec_adm
+                _admin_pw = _sec_adm.token_urlsafe(9)
+                break
+            if len(_admin_pw) >= 8:
+                _admin_pw2 = _ask_password("Confirm password", "")
+                if _admin_pw == _admin_pw2:
+                    break
+                _tag("error", "Passwords do not match — try again.")
+            else:
+                _tag("error", "Password must be at least 8 characters — try again.")
+        try:
+            ok = db_add_user(_admin_user, _admin_pw, "admin")
+            if ok:
+                _tag("ok", f"Admin account '{_admin_user}' created.")
+                _tag("info", "Use these credentials to log in to the web dashboard.")
+            else:
+                _tag("warn", f"Account '{_admin_user}' may already exist — skipping.")
+        except Exception as _ae:
+            _tag("warn", f"Could not create admin account: {_ae}")
+            _tag("info", "A randomly-generated password will appear at first server start.")
+    else:
+        _tag("info", f"Existing accounts found ({len(_existing_users)}) — skipping admin creation.")
+    print()
+
     # Print summary
     print()
     _tag("info", "Configuration summary:")
-    _tag("info", f"  HTTP port    : {_state['http_port']}")
+    if _state.get("http_enabled", True):
+        _tag("info", f"  HTTP port    : {_state['http_port']}")
+    else:
+        _tag("info",  "  HTTP         : disabled")
     if _state["tls_enabled"]:
         _tag("info", f"  HTTPS port   : {_state['tls_port']}")
         _tag("info", f"  Certificate  : {_state['tls_cert_source']} (CN={_state['tls_cn']})")
-        _tag("info", f"  HTTP redirect: {'yes' if _state['http_redirect'] else 'no'}")
+        if _state.get("http_enabled", True):
+            _tag("info", f"  HTTP redirect: {'yes' if _state['http_redirect'] else 'no'}")
     else:
         _tag("info",  "  HTTPS        : disabled")
     _tag("info", f"  SNMP port    : {_state['snmp_port']}")
@@ -1198,18 +2183,125 @@ def step7_init_db():
 
 
 def step8_service():
-    """Offer to install PingWatch as a systemd service (Linux only)."""
+    """Offer to install PingWatch as a startup service/task (Windows or Linux)."""
     import platform as _plat, shutil as _sh
+
+    # ── Windows: Task Scheduler ───────────────────────────────────────────────
+    if _plat.system() == "Windows":
+        _separator()
+        _tag("setup", f"{_C['bold']}Step 9 — Windows Auto-Start (Task Scheduler){_C['reset']}")
+        _separator()
+        _tag("info", "Install PingWatch as a startup task so it starts automatically at boot.")
+        print()
+
+        _task_name = "PingWatch"
+
+        # Check if the task already exists
+        _already = False
+        try:
+            r = subprocess.run(["schtasks", "/query", "/tn", _task_name],
+                               capture_output=True, text=True)
+            _already = (r.returncode == 0)
+        except Exception:
+            pass
+
+        if _already:
+            _tag("ok", f"Startup task '{_task_name}' is already installed.")
+            if not _ask_yn("Reinstall / update the task?", default=False):
+                print()
+                return
+        else:
+            if not _ask_yn("Install PingWatch as a Windows startup task?", default=True):
+                _tag("info", "Skipping. To install later, re-run: windows\\start.bat --setup")
+                print()
+                return
+
+        # Decide how to run: as SYSTEM (boot, headless) or current user (logon, tray)
+        print()
+        _tag("info", "Choose how to run the startup task:")
+        _tag("info", "  [1] As SYSTEM — starts at boot, no login required, no tray icon")
+        _tag("info", "  [2] As current user — starts when you log in, tray icon works")
+        print()
+        _run_as = _ask("Run as [1/2]", "1").strip()
+        _use_system = (_run_as != "2")
+
+        # Find pythonw.exe (no console window)
+        _python_exe = sys.executable  # e.g. C:\Python312\python.exe
+        _pythonw = _python_exe.replace("python.exe", "pythonw.exe")
+        if not os.path.isfile(_pythonw):
+            _pythonw = _python_exe  # fallback to python.exe
+        _server_py = os.path.join(_BASE, "server.py")
+
+        # Escape single quotes in paths for PowerShell single-quoted strings
+        def _pse(s): return s.replace("'", "''")
+
+        _args = f'"{_pse(_server_py)}"'
+        if _use_system:
+            _args += " --headless"
+            _principal = "$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest"
+        else:
+            import getpass as _gp
+            _cur_user = os.environ.get("USERNAME") or _gp.getuser()
+            _principal = (
+                f"$p = New-ScheduledTaskPrincipal "
+                f"-UserId '{_pse(_cur_user)}' -RunLevel Highest -LogonType Interactive"
+            )
+
+        _ps_lines = [
+            f"$a = New-ScheduledTaskAction -Execute '{_pse(_pythonw)}' "
+            f"-Argument '{_args}' -WorkingDirectory '{_pse(_BASE)}'",
+            "$t = New-ScheduledTaskTrigger -AtStartup" if _use_system
+                else "$t = New-ScheduledTaskTrigger -AtLogOn",
+            _principal,
+            "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries",
+            f"Register-ScheduledTask -TaskName '{_task_name}' "
+            f"-Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null",
+        ]
+        _ps_script = "; ".join(_ps_lines)
+
+        _tag("info", f"Registering task '{_task_name}' ...")
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", _ps_script],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0:
+                _tag("ok", f"Startup task '{_task_name}' installed.")
+                if _use_system:
+                    _tag("info", "PingWatch will start automatically at next boot (SYSTEM, headless).")
+                else:
+                    _tag("info", "PingWatch will start automatically when you log in.")
+                _tag("info", f"To start now:   schtasks /run /tn {_task_name}")
+                _tag("info", f"To stop:        schtasks /end /tn {_task_name}")
+                _tag("info", f"To remove:      schtasks /delete /tn {_task_name} /f")
+                _tag("info", "Manage via:     Task Scheduler → Task Scheduler Library")
+            else:
+                _err = (r.stderr or r.stdout or "").strip().splitlines()
+                _tag("warn", "Task registration failed.")
+                for _line in _err[:5]:
+                    _tag("warn", f"  {_line}")
+                _tag("info", "To install manually, open PowerShell as Administrator and run:")
+                _tag("info", f"  {_ps_lines[0]}")
+                _tag("info", f"  {_ps_lines[1]}")
+                _tag("info", f"  {_ps_lines[2]}")
+                _tag("info", f"  {_ps_lines[3]}")
+                _tag("info", f"  {_ps_lines[4]}")
+        except Exception as _e:
+            _tag("warn", f"Could not register task: {_e}")
+        print()
+        return
+
+    # ── Linux: systemd ────────────────────────────────────────────────────────
     if _plat.system() != "Linux" or not _sh.which("systemctl"):
         return
 
     _separator()
-    _tag("setup", f"{_C['bold']}Step 8 — System Service (systemd){_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 9 — System Service (systemd){_C['reset']}")
     _separator()
     _tag("info", "Install PingWatch as a systemd service so it starts automatically on boot.")
     print()
 
-    service_src = os.path.join(_BASE, "pingwatch.service")
+    service_src = os.path.join(_BASE, "linux", "pingwatch.service")
     service_dst = "/etc/systemd/system/pingwatch.service"
 
     if not os.path.isfile(service_src):
@@ -1227,7 +2319,7 @@ def step8_service():
     else:
         if not _ask_yn("Install PingWatch as a systemd service?", default=True):
             _tag("info", "Skipping. To install later:")
-            _tag("info", f"  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+            _tag("info", f"  sudo bash {os.path.join(_BASE, 'linux', 'start.sh')} --install-service")
             print()
             return
 
@@ -1286,7 +2378,7 @@ def step8_service():
                 wrote_ok = True
             else:
                 _tag("error", f"sudo cp failed: {r.stderr.strip()}")
-                _tag("info",  f"Retry with root:  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+                _tag("info",  f"Retry with root:  sudo bash {os.path.join(_BASE, 'linux', 'start.sh')} --install-service")
         except Exception as e:
             _tag("error", f"Could not install service file: {e}")
 
@@ -1297,9 +2389,9 @@ def step8_service():
     # Reload, enable, start
     all_ok = True
     for cmd in [
-        ["sudo", "systemctl", "daemon-reload"],
-        ["sudo", "systemctl", "enable", "pingwatch"],
-        ["sudo", "systemctl", "start",  "pingwatch"],
+        _systemctl("daemon-reload"),
+        _systemctl("enable", "pingwatch"),
+        _systemctl("start",  "pingwatch"),
     ]:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
@@ -1310,12 +2402,13 @@ def step8_service():
     if all_ok:
         _tag("ok", "Service installed, enabled, and started.")
         _tag("info", "Auto-starts on boot. Useful commands:")
-        _tag("info", "  sudo systemctl status pingwatch")
-        _tag("info", "  sudo systemctl restart pingwatch")
+        _pfx = "" if (sys.platform != "win32" and os.getuid() == 0) else "sudo "
+        _tag("info", f"  {_pfx}systemctl status pingwatch")
+        _tag("info", f"  {_pfx}systemctl restart pingwatch")
         _tag("info", "  journalctl -u pingwatch -f")
     else:
         _tag("warn", "Service install may be incomplete — check errors above.")
-        _tag("info", f"Retry:  sudo bash {os.path.join(_BASE, 'start.sh')} --install-service")
+        _tag("info", f"Retry:  sudo bash {os.path.join(_BASE, 'linux', 'start.sh')} --install-service")
     print()
 
 
@@ -1324,13 +2417,29 @@ def step8_service():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # ── Check for re-run mode (--setup with existing DB) ─────────────────────
+    # ── Check for re-run mode (--setup with existing config/DB) ──────────────
     rerun = "--setup" in sys.argv
-    if rerun and os.path.isfile(DB_PATH):
-        # Load existing settings as defaults
+
+    # Load existing pingwatch.conf backend settings as defaults (re-run mode)
+    try:
+        from db.backend import load_config as _load_backend_config, get_config as _get_cfg
+        _load_backend_config()
+        _cfg = _get_cfg()
+        _state["db_backend"]  = _cfg.get("db_backend",  "sqlite")
+        _state["pg_host"]     = _cfg.get("pg_host",     "localhost")
+        _state["pg_port"]     = int(_cfg.get("pg_port", 5432))
+        _state["pg_database"] = _cfg.get("pg_database", "pingwatch")
+        _state["pg_user"]     = _cfg.get("pg_user",     "pingwatch")
+        _state["pg_password"] = _cfg.get("pg_password", "")
+    except Exception:
+        pass
+
+    if rerun:
+        # Load existing app settings (port, TLS, etc.) as defaults
         try:
             from db.users import db_load_settings
             existing = db_load_settings()
+            _state["http_enabled"] = bool(int(existing.get("http_enabled", 1)))
             _state["http_port"]    = int(existing.get("http_port",    PORT))
             _state["snmp_port"]    = int(existing.get("snmp_port",    SNMP_TRAP_PORT))
             _state["tls_enabled"]  = bool(int(existing.get("tls_enabled", 1)))
@@ -1373,17 +2482,24 @@ def main():
             _tag("warn", "Proceeding with service running — database conflicts may occur.")
         print()
 
-    # Initialise DB schema before any step so encrypt_pw / db helpers work
-    try:
-        from db.core import db_init
-        db_init()
-    except Exception as _e:
-        _tag("error", f"Failed to initialise database schema: {_e}")
-        sys.exit(1)
-    _fix_file_ownership()   # chown DB back to SUDO_USER if running as root
-
     try:
         step1_packages()
+        # Step 2: database backend (must run before db_init so the right backend is used)
+        step2_database()
+
+        # Initialise DB schema now that the backend is known; this also makes
+        # encrypt_pw / db helpers available for the TLS step that follows.
+        # For PostgreSQL the pool was already opened inside step2_database();
+        # db_init() here is idempotent (creates schemas if missing, no-ops otherwise).
+        try:
+            from db.core import db_init, logs_db_init
+            db_init()
+            logs_db_init()
+        except Exception as _e:
+            _tag("error", f"Failed to initialise database schema: {_e}")
+            sys.exit(1)
+        _fix_file_ownership()   # chown DB back to SUDO_USER if running as root
+
         step2_http_port()
         step3_tls()
         step4_snmp_port()
@@ -1411,7 +2527,8 @@ def main():
             _tag("info", "Follow logs: journalctl -u pingwatch -f")
         else:
             _tag("warn", "Could not restart service automatically.")
-            _tag("info", "Start it manually: sudo systemctl start pingwatch")
+            _pfx = "" if (sys.platform != "win32" and os.getuid() == 0) else "sudo "
+            _tag("info", f"Start it manually: {_pfx}systemctl start pingwatch")
         print()
 
     sys.exit(0)
