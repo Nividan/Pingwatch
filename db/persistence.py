@@ -311,43 +311,53 @@ def _pg_load(state):
     snr_total = sum(len(d.sensors) for d in state.devices.values())
     log.info(f"DB load: restored {len(state.devices)} device(s), {snr_total} sensor(s) into state")
 
-    # ── Restore runtime state from sensor_samples ─────────────────
+    # ── Restore runtime state from sensor_samples (BATCHED) ───────
+    # Old approach: 3 queries per sensor → 3000+ queries for 1000 sensors
+    # New approach: 2 queries total via window function aggregation
     _count_window = min(int(_settings.get("retention_days", 30)), 30)
     _cutoff = time.time() - _count_window * 86400
     try:
         with pg_conn("logs") as con:
             cur = con.cursor()
-            for _dev in state.devices.values():
-                for _s in _dev.sensors.values():
-                    cur.execute(
-                        "SELECT ok, ms FROM sensor_samples "
-                        "WHERE did=%s AND sid=%s ORDER BY ts DESC LIMIT 80",
-                        (_s.device_id, _s.sensor_id)
-                    )
-                    _rows = cur.fetchall()
-                    if _rows:
-                        for _r in reversed(_rows):
-                            _s.history.append(_r[1])
-                        _last = _rows[0]
-                        _s.alive   = bool(_last[0])
-                        _s.last_ms = _last[1]
-                        cur.execute(
-                            "SELECT value FROM sensor_samples "
-                            "WHERE did=%s AND sid=%s ORDER BY ts DESC LIMIT 1",
-                            (_s.device_id, _s.sensor_id)
-                        )
-                        _vrow = cur.fetchone()
-                        _s.last_value = _vrow[0] if _vrow else None
-                    cur.execute(
-                        "SELECT COUNT(*), SUM(ok) FROM sensor_samples "
-                        "WHERE did=%s AND sid=%s AND ts>=%s",
-                        (_s.device_id, _s.sensor_id, _cutoff)
-                    )
-                    _cnt = cur.fetchone()
-                    _s.total   = int(_cnt[0] or 0)
-                    _s.success = int(_cnt[1] or 0)
+            # Query 1: last 80 samples per (did, sid) using ROW_NUMBER window function
+            cur.execute("""
+                SELECT did, sid, ok, ms, value FROM (
+                    SELECT did, sid, ok, ms, value,
+                           ROW_NUMBER() OVER (PARTITION BY did, sid ORDER BY ts DESC) AS rn
+                    FROM sensor_samples
+                ) sub
+                WHERE rn <= 80
+                ORDER BY did, sid, rn ASC
+            """)
+            _hist_by_key = {}  # (did, sid) → list of (ok, ms, value), oldest-first
+            for _row in cur.fetchall():
+                _hist_by_key.setdefault((_row[0], _row[1]), []).append((_row[2], _row[3], _row[4]))
+            # Query 2: count + sum(ok) per (did, sid) within retention window
+            cur.execute(
+                "SELECT did, sid, COUNT(*), COALESCE(SUM(ok),0) "
+                "FROM sensor_samples WHERE ts>=%s GROUP BY did, sid",
+                (_cutoff,)
+            )
+            _stats_by_key = {(r[0], r[1]): (int(r[2] or 0), int(r[3] or 0)) for r in cur.fetchall()}
             cur.close()
-        log.info("Runtime state restored from sensor_samples.")
+        # Apply to in-memory state
+        for _dev in state.devices.values():
+            for _s in _dev.sensors.values():
+                _key = (_s.device_id, _s.sensor_id)
+                _rows = _hist_by_key.get(_key)
+                if _rows:
+                    # ROW_NUMBER ASC means newest is first; reverse so we append oldest→newest
+                    _rows_chrono = list(reversed(_rows))
+                    for _ok, _ms, _val in _rows_chrono:
+                        _s.history.append(_ms)
+                    _last = _rows_chrono[-1]  # most recent
+                    _s.alive      = bool(_last[0])
+                    _s.last_ms    = _last[1]
+                    _s.last_value = _last[2]
+                _cnt, _suc = _stats_by_key.get(_key, (0, 0))
+                _s.total   = _cnt
+                _s.success = _suc
+        log.info("Runtime state restored from sensor_samples (batched).")
     except Exception as _e:
         log.error(f"DB restore runtime error: {_e}")
 
@@ -365,7 +375,7 @@ def db_load(state):
     # ── SQLite path ──────────────────────────────────────────────────
     con = None
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(DB_PATH, timeout=15)
         devs = con.execute(
             "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted FROM devices"
         ).fetchall()
@@ -448,40 +458,54 @@ def db_load(state):
     snr_total = sum(len(d.sensors) for d in state.devices.values())
     log.info(f"DB load: restored {len(state.devices)} device(s), {snr_total} sensor(s) into state")
 
-    # ── Restore runtime state from sensor_samples ─────────────────
+    # ── Restore runtime state from sensor_samples (BATCHED) ───────
+    # Old approach: 3 queries per sensor → 3000+ queries for 1000 sensors
+    # New approach: 2 queries total via window function (SQLite >=3.25)
     _rcon = None
     try:
         _count_window = min(int(_settings.get("retention_days", 30)), 30)
         _cutoff = time.time() - _count_window * 86400
-        _rcon = sqlite3.connect(f"file:{LOGS_DB_PATH}?mode=ro", uri=True)
+        _rcon = sqlite3.connect(f"file:{LOGS_DB_PATH}?mode=ro", uri=True, timeout=15)
 
+        # Query 1: last 80 samples per (did, sid) via window function
+        _rows_iter = _rcon.execute("""
+            SELECT did, sid, ok, ms, value FROM (
+                SELECT did, sid, ok, ms, value,
+                       ROW_NUMBER() OVER (PARTITION BY did, sid ORDER BY ts DESC) AS rn
+                FROM sensor_samples
+            )
+            WHERE rn <= 80
+            ORDER BY did, sid, rn ASC
+        """).fetchall()
+        _hist_by_key = {}
+        for _row in _rows_iter:
+            _hist_by_key.setdefault((_row[0], _row[1]), []).append((_row[2], _row[3], _row[4]))
+
+        # Query 2: count + sum(ok) per (did, sid) within retention window
+        _stats_rows = _rcon.execute(
+            "SELECT did, sid, COUNT(*), COALESCE(SUM(ok),0) "
+            "FROM sensor_samples WHERE ts>=? GROUP BY did, sid",
+            (_cutoff,)
+        ).fetchall()
+        _stats_by_key = {(r[0], r[1]): (int(r[2] or 0), int(r[3] or 0)) for r in _stats_rows}
+
+        # Apply to in-memory state
         for _dev in state.devices.values():
             for _s in _dev.sensors.values():
-                _rows = _rcon.execute(
-                    "SELECT ok, ms FROM sensor_samples "
-                    "WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80",
-                    (_s.device_id, _s.sensor_id)
-                ).fetchall()
+                _key = (_s.device_id, _s.sensor_id)
+                _rows = _hist_by_key.get(_key)
                 if _rows:
-                    for _ok, _ms in reversed(_rows):
+                    _rows_chrono = list(reversed(_rows))
+                    for _ok, _ms, _val in _rows_chrono:
                         _s.history.append(_ms)
-                    _last = _rows[0]
-                    _s.alive   = bool(_last[0])
-                    _s.last_ms = _last[1]
-                    _vrow = _rcon.execute(
-                        "SELECT value FROM sensor_samples "
-                        "WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 1",
-                        (_s.device_id, _s.sensor_id)
-                    ).fetchone()
-                    _s.last_value = _vrow[0] if _vrow else None
-                _cnt = _rcon.execute(
-                    "SELECT COUNT(*), SUM(ok) FROM sensor_samples "
-                    "WHERE did=? AND sid=? AND ts>=?",
-                    (_s.device_id, _s.sensor_id, _cutoff)
-                ).fetchone()
-                _s.total   = int(_cnt[0] or 0)
-                _s.success = int(_cnt[1] or 0)
-        log.info("Runtime state restored from sensor_samples.")
+                    _last = _rows_chrono[-1]
+                    _s.alive      = bool(_last[0])
+                    _s.last_ms    = _last[1]
+                    _s.last_value = _last[2]
+                _cnt, _suc = _stats_by_key.get(_key, (0, 0))
+                _s.total   = _cnt
+                _s.success = _suc
+        log.info("Runtime state restored from sensor_samples (batched).")
     except Exception as _e:
         log.error(f"DB restore runtime error: {_e}")
     finally:

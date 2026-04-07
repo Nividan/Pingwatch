@@ -49,7 +49,7 @@ def db_lookup_trap(trap_oid: str) -> dict | None:
             log.error(f"db_lookup_trap error: {e}")
             return None
     # SQLite
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
         row = con.execute(
             "SELECT trap_name,vendor,product_family,severity,category,"
@@ -153,7 +153,7 @@ def db_get_trap_vendors() -> list:
             log.error(f"db_get_trap_vendors error: {e}")
             return []
     # SQLite
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
         rows = con.execute(
             "SELECT DISTINCT vendor FROM trap_definitions WHERE vendor!='' ORDER BY vendor"
@@ -192,7 +192,7 @@ def db_lookup_enterprise(enterprise_oid: str) -> dict | None:
             log.error(f"db_lookup_enterprise error: {e}")
             return None
     # SQLite
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
         parts = enterprise_oid.split(".")
         for length in range(len(parts), 5, -1):
@@ -271,7 +271,7 @@ def db_get_trap_categories() -> list:
             log.error(f"db_get_trap_categories error: {e}")
             return []
     # SQLite
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
         rows = con.execute(
             "SELECT name,label,color FROM trap_categories ORDER BY name"

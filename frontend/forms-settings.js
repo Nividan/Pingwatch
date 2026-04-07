@@ -50,75 +50,31 @@ async function _refreshCertSection(){
   sec.innerHTML=_renderCertSection(tr);
 }
 
-async function openSettings(){
-  _stopLogLive();
-  closeM('mset');
-  const [sr, ur, tr] = await Promise.all([
-    api('GET','/api/settings'),
-    api('GET','/api/users'),
-    api('GET','/api/tls'),
-  ]);
-  window._tlsSettings = {...tr, org_name: sr.org_name||''};
-  const o=document.createElement('div'); o.className='mo'; o.id='mset';
-  _overlayClose(o, ()=>{_stopLogLive();closeM('mset');});
-  // Pre-compute backup tab values so the template stays single-level
-  const _bkFreq = sr.backup_sched_freq || 'daily';
-  const _bkDaysActive = (_bkFreq === 'weekly') ? '' : 'none';
-  const _bkDaysSaved = String(sr.backup_sched_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
-  const _bkDayLabels = [['1','Mon'],['2','Tue'],['3','Wed'],['4','Thu'],['5','Fri'],['6','Sat'],['7','Sun']];
-  const _bkDaysHtml = _bkDayLabels.map(([v,l]) =>
+// Helpers shared by the schedule tabs
+const _BK_DAY_LABELS = [['1','Mon'],['2','Tue'],['3','Wed'],['4','Thu'],['5','Fri'],['6','Sat'],['7','Sun']];
+
+function _buildDayCheckboxes(idPrefix, savedDays) {
+  return _BK_DAY_LABELS.map(([v,l]) =>
     '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
-    '<input type="checkbox" id="st-bk-d' + v + '" value="' + v + '"' + (_bkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
+    `<input type="checkbox" id="${idPrefix}${v}" value="${v}"` + (savedDays.includes(v) ? ' checked' : '') + `> ${l}</label>`
   ).join('');
-  // Port Scanner section pre-compute
-  const _SCAN_PORT_DEFS = [
-    {key:'ping',  label:'Ping'},        {key:'21',    label:'FTP 21'},
-    {key:'22',    label:'SSH 22'},      {key:'25',    label:'SMTP 25'},
-    {key:'53',    label:'DNS 53'},      {key:'80',    label:'HTTP 80'},
-    {key:'443',   label:'HTTPS 443'},   {key:'3389',  label:'RDP 3389'},
-    {key:'3306',  label:'MySQL 3306'},  {key:'5432',  label:'PgSQL 5432'},
-    {key:'6379',  label:'Redis 6379'},  {key:'27017', label:'MongoDB 27017'},
-    {key:'389',   label:'LDAP 389'},    {key:'8080',  label:'HTTP-Alt 8080'},
-    {key:'8443',  label:'HTTPS-Alt 8443'},
-  ];
-  const _scanActive = new Set(
-    String(sr.scan_ports || 'ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443')
-      .split(',').map(s => s.trim()).filter(Boolean)
-  );
-  const _scanDefKeys  = new Set(_SCAN_PORT_DEFS.map(d => d.key));
-  const _scanCustom   = [..._scanActive].filter(k => !_scanDefKeys.has(k)).join(', ');
-  const _scanPortsHtml = _SCAN_PORT_DEFS.map(({key, label}) =>
-    `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">` +
-    `<input type="checkbox" class="st-scan-port" value="${key}"${_scanActive.has(key) ? ' checked' : ''}> ${label}</label>`
-  ).join('');
-  const _dbkFreq = sr.db_backup_freq || 'daily';
-  const _dbkDaysActive = (_dbkFreq === 'weekly') ? '' : 'none';
-  const _dbkDaysSaved = String(sr.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
-  const _dbkDaysHtml = _bkDayLabels.map(([v,l]) =>
-    '<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">' +
-    '<input type="checkbox" id="st-dbk-d' + v + '" value="' + v + '"' + (_dbkDaysSaved.includes(v) ? ' checked' : '') + '> ' + l + '</label>'
-  ).join('');
-  o.innerHTML=`
-  <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
-    <div class="mhd">
-      <div class="mttl">⚙ Settings</div>
-      <button class="mclose" onclick="_stopLogLive();closeM('mset')">✕</button>
-    </div>
-    <div class="stab-layout">
-    <nav class="stab-sidebar">
-      <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
-      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
-      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
-      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
-      <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
-      <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
-      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
-      <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
-      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
-      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
-    </nav>
-    <div class="stab-content">
-    <div class="mbdy stab-fade" id="stab-general" style="overflow-y:auto;flex:1">
+}
+
+const _SCAN_PORT_DEFS = [
+  {key:'ping',  label:'Ping'},        {key:'21',    label:'FTP 21'},
+  {key:'22',    label:'SSH 22'},      {key:'25',    label:'SMTP 25'},
+  {key:'53',    label:'DNS 53'},      {key:'80',    label:'HTTP 80'},
+  {key:'443',   label:'HTTPS 443'},   {key:'3389',  label:'RDP 3389'},
+  {key:'3306',  label:'MySQL 3306'},  {key:'5432',  label:'PgSQL 5432'},
+  {key:'6379',  label:'Redis 6379'},  {key:'27017', label:'MongoDB 27017'},
+  {key:'389',   label:'LDAP 389'},    {key:'8080',  label:'HTTP-Alt 8080'},
+  {key:'8443',  label:'HTTPS-Alt 8443'},
+];
+
+// ── Per-tab HTML builders ─────────────────────────────────────────
+
+function _buildSettingsTab_general(sr) {
+  return `<div class="mbdy stab-fade" id="stab-general" style="overflow-y:auto;flex:1">
       <div class="fr">
         <label class="fl">Session Timeout (seconds)</label>
         <input type="number" id="st-ttl" value="${sr.session_ttl||86400}" min="60" style="max-width:180px"/>
@@ -189,8 +145,11 @@ async function openSettings(){
         </div>
         <div class="fh" style="margin-top:8px">Restart applies pending settings changes. Shutdown stops the server process entirely.</div>
       </div>
-    </div>
-    <div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_users(sr, ur) {
+  return `<div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px;overflow-y:auto;flex:1">
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
@@ -220,15 +179,21 @@ async function openSettings(){
             <div class="fh">Window to count failed attempts</div></div>
         </div>
       </div>
-    </div>
-    <div class="mbdy stab-fade" id="stab-groups" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_groups() {
+  return `<div class="mbdy stab-fade" id="stab-groups" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr" style="margin-bottom:10px">
         <span style="color:var(--text3);font-size:12px">Manage alert recipient groups. Assign users to groups and use groups in alert rule email actions.</span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="_groupsOpenEditor(null)">＋ New Group</button>
       </div>
       <div id="group-list"><div class="alrt-loading">Loading…</div></div>
-    </div>
-    <div class="mbdy stab-fade" id="stab-integrations" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_integrations(sr) {
+  return `<div class="mbdy stab-fade" id="stab-integrations" style="display:none;overflow-y:auto;flex:1">
       <!-- Sub-tab bar -->
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
@@ -346,25 +311,15 @@ async function openSettings(){
           </div>
         </div>
       </div>
-    </div>
-    <div class="mft" id="stab-footer-general">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveSettings()">Save Settings</button>
-    </div>
-    <div class="mft" id="stab-footer-users" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
-    </div>
-    <div class="mft" id="stab-footer-groups" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-    </div>
-    <div class="mft" id="stab-footer-integrations" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button id="integ-btn-test" class="btn-s" onclick="testSmtp()" style="display:none">Send Test Email</button>
-      <button id="integ-btn-test-syslog" class="btn-s" onclick="testSyslog()" style="display:none">Send Test Message</button>
-      <button id="integ-btn-save" class="btn-p" onclick="_saveIntegrations()">Save</button>
-    </div>
-    <div class="mbdy stab-fade" id="stab-database" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_database(sr) {
+  const _dbkFreq = sr.db_backup_freq || 'daily';
+  const _dbkDaysActive = (_dbkFreq === 'weekly') ? '' : 'none';
+  const _dbkDaysSaved = String(sr.db_backup_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  const _dbkDaysHtml = _buildDayCheckboxes('st-dbk-d', _dbkDaysSaved);
+  return `<div class="mbdy stab-fade" id="stab-database" style="display:none;overflow-y:auto;flex:1">
 
       <!-- Database Backend -->
       <div id="db-backend-section" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
@@ -444,12 +399,11 @@ async function openSettings(){
         <div id="dbk-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_last_ts?`Last backup: ${esc(sr.db_backup_last_ts)} \u2014 ${esc(sr.db_backup_last_result)}`:''}</div>
         </div><!-- /dbk-collapse -->
       </div>
-    </div>
-    <div class="mft" id="stab-footer-database" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
-    </div>
-    <div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_logs(sr) {
+  return `<div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
       <div style="padding:10px 14px 6px;border-bottom:1px solid var(--border)">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''}/>
@@ -491,11 +445,21 @@ async function openSettings(){
         </div>
       </div>
       <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading\u2026</span></div>
-    </div>
-    <div class="mft" id="stab-footer-logs" style="display:none">
-      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
-    </div>
-    <div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_sensors(sr) {
+  const _scanActive = new Set(
+    String(sr.scan_ports || 'ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443')
+      .split(',').map(s => s.trim()).filter(Boolean)
+  );
+  const _scanDefKeys  = new Set(_SCAN_PORT_DEFS.map(d => d.key));
+  const _scanCustom   = [..._scanActive].filter(k => !_scanDefKeys.has(k)).join(', ');
+  const _scanPortsHtml = _SCAN_PORT_DEFS.map(({key, label}) =>
+    `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">` +
+    `<input type="checkbox" class="st-scan-port" value="${key}"${_scanActive.has(key) ? ' checked' : ''}> ${label}</label>`
+  ).join('');
+  return `<div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
         <div class="fl" style="margin-bottom:6px">Global Defaults</div>
         <div class="fh" style="margin-bottom:10px">Fallback values applied to all new sensors — override per type below.</div>
@@ -521,12 +485,11 @@ async function openSettings(){
           <button class="btn-s" onclick="_scanPortsReset()">Reset to Defaults</button>
         </div>
       </div>
-    </div>
-    <div class="mft" id="stab-footer-sensors" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
-    </div>
-    <div class="mbdy stab-fade" id="stab-networking" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_networking(sr, tr) {
+  return `<div class="mbdy stab-fade" id="stab-networking" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Ports</div>
       <div class="fr">
         <label class="fl">HTTP Port</label>
@@ -569,12 +532,15 @@ async function openSettings(){
       <div style="margin-top:16px;padding:10px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--warn)">
         Port changes and HTTPS toggle require a server restart to take effect.
       </div>
-    </div>
-    <div class="mft" id="stab-footer-networking" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
-    </div>
-    <div class="mbdy stab-fade" id="stab-backup" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_backup(sr) {
+  const _bkFreq = sr.backup_sched_freq || 'daily';
+  const _bkDaysActive = (_bkFreq === 'weekly') ? '' : 'none';
+  const _bkDaysSaved = String(sr.backup_sched_days || '1,2,3,4,5,6,7').split(',').map(d => d.trim());
+  const _bkDaysHtml = _buildDayCheckboxes('st-bk-d', _bkDaysSaved);
+  return `<div class="mbdy stab-fade" id="stab-backup" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:16px">Global Backup Schedule</div>
       <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="flex:1">
@@ -612,12 +578,11 @@ async function openSettings(){
       <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
         Enable individual devices via <strong style="color:var(--text2)">Device Config Backup → Configure</strong> using the "Add to Scheduled Backup" toggle.
       </div>
-    </div>
-    <div class="mft" id="stab-footer-backup" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
-    </div>
-    <div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
+    </div>`;
+}
+
+function _buildSettingsTab_alertRules() {
+  return `<div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr">
         <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
         <button class="btn-p rbac-admin" onclick="_alertingOpenEditor(null)">＋ New Rule</button>
@@ -633,6 +598,85 @@ async function openSettings(){
         </div>
         <div id="alrt-maint-list"><div class="alrt-loading">Loading…</div></div>
       </div>
+    </div>`;
+}
+
+async function openSettings(){
+  _stopLogLive();
+  closeM('mset');
+  const [sr, ur, tr] = await Promise.all([
+    api('GET','/api/settings'),
+    api('GET','/api/users'),
+    api('GET','/api/tls'),
+  ]);
+  window._tlsSettings = {...tr, org_name: sr.org_name||''};
+  const o=document.createElement('div'); o.className='mo'; o.id='mset';
+  _overlayClose(o, ()=>{_stopLogLive();closeM('mset');});
+  o.innerHTML=`
+  <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
+    <div class="mhd">
+      <div class="mttl">⚙ Settings</div>
+      <button class="mclose" onclick="_stopLogLive();closeM('mset')">✕</button>
+    </div>
+    <div class="stab-layout">
+    <nav class="stab-sidebar">
+      <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
+      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
+      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
+      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
+      <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
+      <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
+      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
+      <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
+      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
+      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
+    </nav>
+    <div class="stab-content">
+    ${_buildSettingsTab_general(sr)}
+    ${_buildSettingsTab_users(sr, ur)}
+    ${_buildSettingsTab_groups()}
+    ${_buildSettingsTab_integrations(sr)}
+    ${_buildSettingsTab_database(sr)}
+    ${_buildSettingsTab_logs(sr)}
+    ${_buildSettingsTab_sensors(sr)}
+    ${_buildSettingsTab_networking(sr, tr)}
+    ${_buildSettingsTab_backup(sr)}
+    ${_buildSettingsTab_alertRules()}
+    <div class="mft" id="stab-footer-general">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSettings()">Save Settings</button>
+    </div>
+    <div class="mft" id="stab-footer-users" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
+    </div>
+    <div class="mft" id="stab-footer-groups" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
+    <div class="mft" id="stab-footer-integrations" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button id="integ-btn-test" class="btn-s" onclick="testSmtp()" style="display:none">Send Test Email</button>
+      <button id="integ-btn-test-syslog" class="btn-s" onclick="testSyslog()" style="display:none">Send Test Message</button>
+      <button id="integ-btn-save" class="btn-p" onclick="_saveIntegrations()">Save</button>
+    </div>
+    <div class="mft" id="stab-footer-database" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
+    </div>
+    <div class="mft" id="stab-footer-logs" style="display:none">
+      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
+    </div>
+    <div class="mft" id="stab-footer-sensors" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
+    </div>
+    <div class="mft" id="stab-footer-networking" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
+    </div>
+    <div class="mft" id="stab-footer-backup" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
     </div>
     <div class="mft" id="stab-footer-alert-rules" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -642,6 +686,7 @@ async function openSettings(){
   </div>`;
   document.body.appendChild(o);
 }
+
 
 let _stabSwitching = false;
 function switchSettingsTab(tab){

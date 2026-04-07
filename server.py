@@ -195,6 +195,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _error(self, code, public_msg, exc=None, context=""):
+        """Send a JSON error response while logging the full exception server-side.
+        Use this instead of `_json(code, {"error": str(e)})` to avoid leaking
+        internal details (file paths, SQL, stack info) to clients.
+
+        Example:
+            try:
+                ...
+            except Exception as e:
+                h._error(500, "Internal server error", e, context="device_save")
+        """
+        if exc is not None:
+            ctx = context or "route"
+            log.error(f"{ctx} failed: {type(exc).__name__}: {exc}")
+        self._json(code, {"error": public_msg})
+
     def _cors(self):
         origin = self._origin()
         self.send_response(204)

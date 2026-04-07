@@ -803,11 +803,18 @@ function _pwLiveUpdate(did) {
 }
 
 // ═══════════════════════════ API ═══════════════════════════
+// NOTE: This is an iframe-local copy. The canonical version lives in app.js.
+// Keep the two implementations in sync if you change error handling.
 async function api(method, path, body) {
   const r = await fetch(path, {
     method, credentials: 'include', headers: {'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401) {
+    // Iframe can't show login; reload top-level window so the parent's auth flow runs
+    if (window.top && window.top !== window) window.top.location.reload();
+    return {};
+  }
   if (!r.ok) {
     const err = await r.json().catch(() => ({ error: r.statusText }));
     throw new Error(err.error || r.statusText);

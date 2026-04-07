@@ -1,12 +1,23 @@
+// ── Timing constants (single source of truth) ───────────────────
+const TIMINGS = Object.freeze({
+  SSE_BATCH_INTERVAL:   250,    // ms — coalesce SSE events
+  CLOCK_UPDATE:         1000,   // ms — header clock tick
+  RECONNECT_INITIAL:    3000,   // ms — initial SSE reconnect delay
+  RECONNECT_MAX:        60000,  // ms — exponential backoff cap
+  SPARK_REFRESH:        300000, // ms — sparkline refresh (5 min)
+  ALERT_BADGE_POLL:     60000,  // ms — alert badge poll
+  IDLE_CHECK:           30000,  // ms — idle session check
+});
+
 // ── App state ────────────────────────────────────────────────────
 const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{}};
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
-let _reconnectDelay  = 3000; // exponential backoff: 3s → 6s → 12s → … → 60s cap
+let _reconnectDelay  = TIMINGS.RECONNECT_INITIAL; // exponential backoff: 3s → 6s → 12s → … → 60s cap
 
 // ── SSE batching: coalesce events into 250ms windows to reduce DOM mutations ──
-const _sseBatch={sensors:{},devStatuses:{},timer:null,INTERVAL:250};
+const _sseBatch={sensors:{},devStatuses:{},timer:null,INTERVAL:TIMINGS.SSE_BATCH_INTERVAL};
 let _sseHidden=false;
 
 function _sseFlush(){
@@ -143,7 +154,7 @@ function connectSSE(){
     // Only schedule one reconnect attempt at a time to avoid a reconnect storm.
     if(!_reconnectTimer){
       _reconnectTimer=setTimeout(()=>{ _reconnectTimer=null; connectSSE(); },_reconnectDelay);
-      _reconnectDelay=Math.min(_reconnectDelay*2,60000);
+      _reconnectDelay=Math.min(_reconnectDelay*2,TIMINGS.RECONNECT_MAX);
     }
   };
 }
@@ -305,11 +316,11 @@ function onAuthenticated(username){
   connectSSE();
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
-  _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, 300000);
-  // Poll active alert count for combined Events badge (every 60s); clear on re-login to prevent stacking
+  _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, TIMINGS.SPARK_REFRESH);
+  // Poll active alert count for combined Events badge; clear on re-login to prevent stacking
   _alertEvtBadgePoll();
   if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
-  window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, 60000);
+  window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, TIMINGS.ALERT_BADGE_POLL);
   _lastActivity = Date.now();
   _startIdleCheck();
 }
@@ -327,7 +338,7 @@ function _startIdleCheck(){
       clearInterval(_idleTimer); _idleTimer=null;
       doLogout().then(()=>showLogin('Session timed out due to inactivity.'));
     }
-  },30000);
+  },TIMINGS.IDLE_CHECK);
 }
 function _stopIdleCheck(){ if(_idleTimer){clearInterval(_idleTimer);_idleTimer=null;} }
 
@@ -405,11 +416,17 @@ async function checkAuth(){
 });
 
 // ── API ──────────────────────────────────────────────────────────
+// NOTE: map.js has its own copy of api() because it runs in an isolated iframe
+// (map.html doesn't load app.js). Keep the two implementations in sync.
 async function api(method,path,body=null){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
   const r=await fetch(path,o);
   if(r.status===401){showLogin('Session expired. Please sign in again.');return {};}
+  if(!r.ok){
+    const err=await r.json().catch(()=>({error:r.statusText}));
+    throw new Error(err.error||r.statusText);
+  }
   return r.json();
 }
 

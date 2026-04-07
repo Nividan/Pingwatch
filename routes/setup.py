@@ -4,7 +4,6 @@ routes/setup.py — First-run setup wizard API endpoints.
 Handles: /api/setup/check-pg, /api/setup/test-connection, /api/setup/complete
 """
 
-import os
 import platform
 import shutil
 import subprocess
