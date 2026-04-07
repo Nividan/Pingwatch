@@ -686,6 +686,9 @@ body{
 .vm-row canvas.spk{flex:0 0 60px;width:60px;height:28px;display:block;opacity:.7}
 .vm-row-del{background:none;border:none;color:var(--text3);font-size:12px;padding:2px 5px;cursor:pointer;border-radius:4px;opacity:0;transition:opacity .15s,color .15s;flex-shrink:0}
 .vm-row:hover .vm-row-del{opacity:.6}.vm-row-del:hover{color:var(--down)!important;opacity:1!important}
+.vm-row[draggable]{cursor:grab}.vm-row[draggable]:active{cursor:grabbing}
+.vm-row.vm-row-dragging{opacity:.35}
+.vm-row.vm-row-drop-ind{background:transparent;border:2px dashed var(--accent);opacity:.5;pointer-events:none;min-height:36px}
 /* VM metric multi-picker */
 .vm-met-wrap{position:relative;display:inline-block}
 .vm-met-btn{font-size:11px;padding:3px 7px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text2);cursor:pointer;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;text-align:left}
