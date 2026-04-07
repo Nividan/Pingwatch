@@ -806,6 +806,7 @@ function openDevWin(did){
       (S.devices[did]?.sensors||[]).forEach(s=>renderTile(did,s));
     }
     _applySensorOrder(did);
+    _vmApplySavedOrders(did);
     setupChartsByDid(did);
   });
 

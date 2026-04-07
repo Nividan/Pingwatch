@@ -68,6 +68,8 @@ function tileHTML(s){
 
 // ── Sensor tile drag-to-reorder ───────────────────────────────────
 let _snrDragEl=null, _snrDragDid=null, _snrDropInd=null;
+// ── VM row drag-to-reorder ────────────────────────────────────────
+let _vmRowDragEl=null, _vmRowDragDid=null, _vmRowDragVmid=null, _vmRowDropInd=null;
 
 function _snrSaveOrder(did){
   const grid=document.getElementById(`sg-${did}`);
@@ -86,6 +88,59 @@ function _applySensorOrder(did){
     const el=grid.querySelector(`.stl[data-sid="${sid}"]`);
     if(el) grid.appendChild(el);
   });
+}
+
+function _vmSaveOrder(did,vmid){
+  const sfx=_vmGrpSfx(vmid);
+  const body=document.getElementById(`vgbody-${did}-${sfx}`);
+  if(!body) return;
+  const order=[...body.querySelectorAll('.vm-row')].map(r=>r.dataset.sid);
+  _lsSet(`pw_vm_order_${did}_${sfx}`,order);
+}
+
+function _vmApplySavedOrders(did){
+  const grid=document.getElementById(`sg-${did}`);
+  if(!grid) return;
+  grid.querySelectorAll(`[id^="vgbody-${did}-"]`).forEach(body=>{
+    const sfx=body.id.slice((`vgbody-${did}-`).length);
+    const order=_lsGet(`pw_vm_order_${did}_${sfx}`,[]);
+    if(!order.length) return;
+    order.forEach(sid=>{
+      const el=body.querySelector(`.vm-row[data-sid="${sid}"]`);
+      if(el) body.appendChild(el);
+    });
+  });
+}
+
+function _vmRowDragOver(e){
+  if(!_vmRowDragEl) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  if(!_vmRowDropInd){
+    _vmRowDropInd=document.createElement('div');
+    _vmRowDropInd.className='vm-row vm-row-drop-ind';
+  }
+  const body=e.currentTarget;
+  const rows=[...body.querySelectorAll('.vm-row:not(.vm-row-drop-ind):not(.vm-row-dragging)')];
+  let after=null;
+  for(const r of rows){ const rb=r.getBoundingClientRect(); if(e.clientY<rb.top+rb.height/2){after=r;break;} }
+  if(after) body.insertBefore(_vmRowDropInd,after);
+  else body.appendChild(_vmRowDropInd);
+}
+
+function _vmRowDrop(e){
+  if(!_vmRowDragEl) return;
+  e.preventDefault();
+  const body=e.currentTarget;
+  if(_vmRowDropInd){ body.insertBefore(_vmRowDragEl,_vmRowDropInd); _vmRowDropInd.remove(); _vmRowDropInd=null; }
+  _vmRowDragEl.classList.remove('vm-row-dragging');
+  if(_vmRowDragDid&&_vmRowDragVmid) _vmSaveOrder(_vmRowDragDid,_vmRowDragVmid);
+  _vmRowDragEl=null; _vmRowDragDid=null; _vmRowDragVmid=null;
+}
+
+function _vmRowDragLeave(e){
+  const body=e.currentTarget;
+  if(!body.contains(e.relatedTarget)&&_vmRowDropInd&&_vmRowDropInd.parentNode===body){ _vmRowDropInd.remove(); _vmRowDropInd=null; }
 }
 
 function _initSensorGrid(did){
@@ -149,14 +204,25 @@ function renderTile(did,s){
     if(!body) return;
     const key=`${did}/${s.sensor_id}`;
     const old=document.getElementById(`t-${key.replace('/','_')}`);
-    if(old) old.remove();
     const t=document.createElement('div');
     t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
     t.id=`t-${key.replace('/','_')}`;
     t.dataset.sid=s.sensor_id;
     t.onclick=()=>openDetail(did,s.sensor_id);
     t.innerHTML=vmRowHTML(s);
-    body.appendChild(t);
+    t.setAttribute('draggable','true');
+    t.addEventListener('dragstart',e=>{
+      if(e.target.tagName==='BUTTON'||e.target.closest('button')){e.preventDefault();return;}
+      _vmRowDragEl=t; _vmRowDragDid=did; _vmRowDragVmid=s.vmware_vm_id;
+      e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain',s.sensor_id);
+      setTimeout(()=>t.classList.add('vm-row-dragging'),0);
+    });
+    t.addEventListener('dragend',()=>{
+      t.classList.remove('vm-row-dragging');
+      if(_vmRowDropInd){_vmRowDropInd.remove();_vmRowDropInd=null;}
+      _vmRowDragEl=null; _vmRowDragDid=null; _vmRowDragVmid=null;
+    });
+    if(old) old.replaceWith(t); else body.appendChild(t);
     _updateVmGrpStatus(did,s.vmware_vm_id);
     const cvs=t.querySelector('canvas.spk');
     if(cvs){ cvs.width=60; S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')}; if(s.history&&s.history.length>1)drawSpk(key,s.history); }
@@ -335,6 +401,10 @@ function _ensureVmGrp(did,s){
   });
   grid.appendChild(grp);
   grp.addEventListener('animationend',()=>grp.classList.remove('stl-enter'),{once:true});
+  const _body=grp.querySelector(`#vgbody-${did}-${sfx}`);
+  _body.addEventListener('dragover',_vmRowDragOver);
+  _body.addEventListener('drop',_vmRowDrop);
+  _body.addEventListener('dragleave',_vmRowDragLeave);
 }
 
 function _updateVmGrpStatus(did,vmid){
