@@ -8,8 +8,6 @@ PATCH  /api/alert/window/{id}  admin   — update window
 DELETE /api/alert/window/{id}  admin   — delete window
 """
 
-import time
-
 from core.config import _RE_ALERT_WINDOWS, _RE_ALERT_WINDOW
 from db.maintenance_windows import (
     db_list_windows, db_get_window,

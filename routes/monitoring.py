@@ -115,8 +115,7 @@ def handle(h, method, path, body):
                         }
                 h._json(200, {"summary": result})
             except Exception as e:
-                log.error(f"Events summary error: {e}")
-                h._json(500, {"error": str(e)})
+                h._error(500, "Failed to load events summary", e, context="events_summary_pg")
             return True
         # SQLite
         con = None
@@ -141,8 +140,7 @@ def handle(h, method, path, body):
                 }
             h._json(200, {"summary": result})
         except Exception as e:
-            log.error(f"Events summary error: {e}")
-            h._json(500, {"error": str(e)})
+            h._error(500, "Failed to load events summary", e, context="events_summary_sqlite")
         finally:
             if con: con.close()
         return True

@@ -529,7 +529,7 @@ def handle(h, method, path, body):
                 os.unlink(tmp)
             except OSError:
                 pass
-            h._json(500, {"error": str(e)}); return True
+            h._error(500, "Import failed", e, context="db_import"); return True
 
         # Validate
         ok_msg = _validate_sqlite(tmp)

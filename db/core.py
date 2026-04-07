@@ -7,7 +7,6 @@ import queue
 import shutil
 import sqlite3
 import threading
-import time
 
 from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
 from core.config import DB_PATH, LOGS_DB_PATH
@@ -103,7 +102,7 @@ def db_init():
         except Exception as _be:
             log.warning(f"DB pre-migration backup failed (non-fatal): {_be}")
 
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
         con.execute("PRAGMA journal_mode=WAL")   # safe concurrent reads while probes write
 
@@ -697,7 +696,7 @@ def db_seed_users():
             log.info("DB seed: all sessions cleared (server restarted)")
         return
 
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=15)
     try:
         if not con.execute("SELECT 1 FROM users WHERE username='admin'").fetchone():
             pw = _sec.token_urlsafe(9)
@@ -725,7 +724,7 @@ def logs_db_init():
     if is_pg():
         return   # handled by db_init_pg()
 
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("""
