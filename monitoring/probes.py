@@ -227,8 +227,12 @@ def _dns_decode_name(data: bytes, offset: int) -> str:
     return ".".join(labels)
 
 
+_OID_RE = re.compile(r'^\.?[0-9]+(\.[0-9]+)*$')
+
 def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
     """Run snmpget via subprocess. Requires net-snmp tools installed."""
+    if not _OID_RE.match(oid):
+        return {"ok": False, "ms": 0, "detail": "Invalid OID format", "value": None}
     ver_flag = f"-v{version}"
     # -On: numeric OIDs in output — avoids MIB translation surprises
     cmd = ["snmpget", ver_flag, "-On", "-c", community,

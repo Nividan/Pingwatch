@@ -4,6 +4,33 @@ function grpId(g){ return 'grp-'+btoa(unescape(encodeURIComponent(g))).replace(/
 function gridId(g){ return 'gg-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 function cntId(g){  return 'gc-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 
+// ── View mode (grid / list) ─────────────────────────────────────
+let _devView = localStorage.getItem('pw-dev-view') || 'grid';
+
+function _setView(mode){
+  _devView = mode;
+  localStorage.setItem('pw-dev-view', mode);
+  document.getElementById('vtGrid')?.classList.toggle('active', mode==='grid');
+  document.getElementById('vtList')?.classList.toggle('active', mode==='list');
+  _applyViewMode();
+}
+
+function _applyViewMode(){
+  const isList = _devView==='list';
+  document.querySelectorAll('.grp-grid').forEach(g => g.classList.toggle('list-view', isList));
+  // Re-apply filter so visibility is correct
+  _applyDevFilter(document.getElementById('devSearch')?.value||'');
+}
+
+function _restoreViewToggle(){
+  if(_devView==='list'){
+    document.getElementById('vtGrid')?.classList.remove('active');
+    document.getElementById('vtList')?.classList.add('active');
+    document.querySelectorAll('.grp-grid').forEach(g => g.classList.add('list-view'));
+  }
+  _initDevCtxMenu();
+}
+
 /** Safe localStorage JSON reader — returns fallback on parse error or missing key. */
 function _lsGet(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; }
@@ -53,12 +80,15 @@ function ensureGroupSection(group){
   const line2=document.createElement('div');
   line2.className='grp-line';
 
+  const summary=document.createElement('span');
+  summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
+
   hdr.appendChild(dragH); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
-  hdr.appendChild(cnt);   hdr.appendChild(line2);
+  hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
 
   // Grid
   const grid=document.createElement('div');
-  grid.className='grp-grid'+(isCol?' collapsed':''); grid.id=gid; grid.dataset.group=group;
+  grid.className='grp-grid'+(isCol?' collapsed':'')+((_devView==='list')?' list-view':''); grid.id=gid; grid.dataset.group=group;
   grid.addEventListener('dragover',onDragOver);
   grid.addEventListener('drop',onDrop);
   grid.addEventListener('dragleave',onDragLeave);
@@ -94,6 +124,113 @@ function toggleGroup(group){
   const set=new Set(_lsGet('pw-grp-collapsed', []));
   if(nowCol) set.add(group); else set.delete(group);
   _lsSet('pw-grp-collapsed', [...set]);
+  _updateGrpSummary(group);
+}
+
+function _updateGrpSummary(group){
+  const gid=gridId(group).replace('gg-','');
+  const el=document.getElementById('gsum-'+gid);
+  if(!el) return;
+  const grid=document.getElementById(gridId(group));
+  if(!grid||!grid.classList.contains('collapsed')){el.style.display='none';return;}
+  // Count devices by status in this group
+  const counts={up:0,down:0,warn:0};
+  grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+    const did=card.id.replace('dp-','');
+    const dev=S.devices[did];
+    if(dev){const st=dev.status||'unknown';if(counts[st]!==undefined)counts[st]++;}
+  });
+  let html='';
+  if(counts.up)   html+=`<span class="grp-sum-dot up"></span> ${counts.up}`;
+  if(counts.down)  html+=`${html?' ':''}  <span class="grp-sum-dot down"></span> ${counts.down}`;
+  if(counts.warn)  html+=`${html?' ':''}  <span class="grp-sum-dot warn"></span> ${counts.warn}`;
+  el.innerHTML=html;
+  el.style.display=html?'inline-flex':'none';
+}
+
+function _devSnrSummaryHtml(did){
+  const dev=S.devices[did];
+  const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
+  if(!snrs.length) return '';
+  let ok=0,warn=0,down=0;
+  snrs.forEach(s=>{
+    if(s.alerts_muted||dev?.alerts_muted){if(s.alive===true)ok++;return;}
+    if(s.alive===false) down++;
+    else if(s.threshold_state&&s.threshold_state!=='ok') warn++;
+    else if(s.alive===true) ok++;
+  });
+  let h='';
+  if(ok)   h+=`<span class="dls-chip up"><span class="dls-dot"></span>${ok}</span>`;
+  if(warn) h+=`<span class="dls-chip warn"><span class="dls-dot"></span>${warn}</span>`;
+  if(down) h+=`<span class="dls-chip down"><span class="dls-dot"></span>${down}</span>`;
+  return h?`<div class="dlr-summary" id="dlr-sum-${did}">${h}</div>`:'';
+}
+
+// ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
+let _dcm=null;
+
+function _showDcm(x,y){
+  if(!_dcm) return;
+  _dcm.style.display='block';
+  const mw=_dcm.offsetWidth||185,mh=_dcm.offsetHeight||160;
+  _dcm.style.left=(x+mw>innerWidth?x-mw:x)+'px';
+  _dcm.style.top =(y+mh>innerHeight?y-mh:y)+'px';
+}
+
+function _hideDcm(){ if(_dcm) _dcm.style.display='none'; }
+
+function _initDevCtxMenu(){
+  if(_dcm) return; // already initialized
+  _dcm=document.getElementById('dev-ctx-menu');
+  if(!_dcm) return;
+  document.addEventListener('click',_hideDcm);
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') _hideDcm(); });
+  const panels=document.getElementById('dpanels');
+  if(!panels) return;
+  panels.addEventListener('contextmenu',e=>{
+    e.preventDefault();
+    const card=e.target.closest('.dc:not(.dc-add)');
+    const row =e.target.closest('.dc-list-row');
+    const raw =(card?.id||row?.id||'');
+    const did =raw.replace(/^dp-|^dpl-/,'') || null;
+    if(did&&S.devices[did]){
+      const dev=S.devices[did];
+      const muted=dev.alerts_muted;
+      _dcm.innerHTML=`
+        <div class="dci dci-accent" onclick="_hideDcm();openDevWin('${did}')">📊 Open Details</div>
+        <div class="dci" onclick="_hideDcm();openEditDevice('${did}')">⚙️ Edit Device</div>
+        <div class="dci-sep"></div>
+        <div class="dci ${muted?'dci-green':'dci-warn'}" onclick="_hideDcm();_toggleMuteDevice('${did}')">
+          ${muted?'🔔 Unmute Alerts':'🔕 Mute Alerts'}
+        </div>`;
+    } else {
+      _dcm.innerHTML=`
+        <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
+        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup()">👥 Add Group</div>`;
+    }
+    _showDcm(e.clientX+2,e.clientY+2);
+  });
+}
+
+async function _toggleMuteDevice(did){
+  const dev=S.devices[did];
+  if(!dev) return;
+  const newMuted=!dev.alerts_muted;
+  try{
+    await api('PATCH',`/api/device/${did}`,{
+      name:dev.name,host:dev.host,
+      group:dev.group||'Default Group',
+      webhook_url:dev.webhook_url||'',
+      alerts_muted:newMuted,
+      snmp_community_default:dev.snmp_community_default||'',
+      snmp_version_default:dev.snmp_version_default||'',
+      vmware_user_default:dev.vmware_user_default||''
+    });
+    dev.alerts_muted=newMuted;
+    toast(newMuted?`🔕 Alerts muted: ${dev.name}`:`🔔 Alerts unmuted: ${dev.name}`,'ok');
+  }catch(e){
+    toast('Failed to update alert setting','err');
+  }
 }
 
 function pruneEmptyGroups(){
@@ -109,15 +246,23 @@ function renderDp(dev){
   if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
   const old=document.getElementById('dp-'+dev.device_id);
   if(old) old.remove();
+  const oldLr=document.getElementById('dpl-'+dev.device_id);
+  if(oldLr) oldLr.remove();
   const group=dev.group||'Default Group';
   ensureGroupSection(group);
   const grid=document.getElementById(gridId(group));
   const addBtn=grid.querySelector('.dc-add');
+  // Card (grid view)
   const el=document.createElement('div');
   el.innerHTML=cardHTML(dev);
   const card=el.firstElementChild;
   grid.insertBefore(card,addBtn);
   applyDrag(card);
+  // List row (list view)
+  const lr=document.createElement('div');
+  lr.innerHTML=listRowHTML(dev);
+  const row=lr.firstElementChild;
+  grid.insertBefore(row,addBtn);
   dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
   refreshGroupCounts();
   applyRbac();
@@ -127,28 +272,73 @@ function renderDp(dev){
 }
 
 function sSnrPreview(did){
-  // return up to 3 sensor preview rows for the card
+  // return up to 3 sensor preview rows for the card, respecting saved drag order
   const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
   if(!snrs.length) return '<div class="dc-more" style="padding:6px 0">No sensors yet</div>';
-  const shown=snrs.slice(0,3);
+  const _ord=_lsGet(`pw_snr_order_${did}`,[]);
+  if(_ord.length){
+    snrs.sort((a,b)=>{
+      const ai=_ord.indexOf(a.sensor_id),bi=_ord.indexOf(b.sensor_id);
+      return (ai<0?9999:ai)-(bi<0?9999:bi);
+    });
+  }
   const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
   const snrVal=s=>{
+    if(s.stype==='vmware'){
+      if(s.last_value==null) return '—';
+      const v=parseFloat(s.last_value);
+      if(isNaN(v)) return (s.last_value+'').slice(0,10);
+      const u=_VM_UNITS[s.vmware_metric]||'';
+      return _fmtVmVal(v,u);
+    }
     if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'—').slice(0,10);
     return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   };
   const vc=s=>{
     if(s.alive===false)return'b';
+    if(s.stype==='vmware')return s.alive===true?'g':'m';
     if(isSnmp(s))return s.alive===true?'g':'m';
     return s.last_ms!=null?msC(s.last_ms,s):'m';
   };
-  let html=shown.map(s=>`
-    <div class="dc-snr">
+  // Group VMware sensors by vmware_vm_id into synthetic preview rows
+  const vmGroups={};
+  const nonVm=[];
+  snrs.forEach(s=>{
+    if(s.stype==='vmware'&&s.vmware_vm_id){ (vmGroups[s.vmware_vm_id]=vmGroups[s.vmware_vm_id]||[]).push(s); }
+    else nonVm.push(s);
+  });
+  // Build preview items: non-VM sensors first, then one row per VM group
+  const previewItems=[];
+  nonVm.forEach(s=>previewItems.push({type:'snr',s}));
+  Object.entries(vmGroups).forEach(([vmid,vms])=>{
+    const _unmuted=vms.filter(s=>!s.alerts_muted);
+    const worst=_unmuted.find(s=>s.alive===false)||_unmuted.find(s=>s.threshold_state&&s.threshold_state!=='ok')||_unmuted[0]||vms[0];
+    previewItems.push({type:'vmgrp',vmid,vms,worst});
+  });
+  const shown=previewItems.slice(0,3);
+  let html=shown.map(item=>{
+    if(item.type==='vmgrp'){
+      const {vmid,vms,worst}=item;
+      const st=worst.alive===false?'down':worst.alive===true?'up':'';
+      const nm=vms[0]?.name?.replace(/ \S+$/,'')??vmid; // strip last word (metric label)
+      const _isH=!!(vms[0]?.vmware_metric&&vms[0].vmware_metric.startsWith('host_'));
+      return `<div class="dc-snr">
+        <div class="dc-snr-ico vmware">${_isH?'H':'V'}</div>
+        <div class="dc-snr-nm">${esc(nm)} <span style="color:var(--text3);font-size:10px">${vms.length}m</span></div>
+        <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${snrVal(worst)}</div>
+        <div class="dc-snr-dot ${st}" id="csd-${worst.device_id}_${worst.sensor_id}"></div>
+      </div>`;
+    }
+    const s=item.s;
+    return `<div class="dc-snr snr-t-${s.stype}">
       <div class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</div>
       <div class="dc-snr-nm">${esc(s.name)}</div>
       <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</div>
       <div class="dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}" id="csd-${s.device_id}_${s.sensor_id}"></div>
-    </div>`).join('');
-  if(snrs.length>3) html+=`<div class="dc-more">+${snrs.length-3} more sensor${snrs.length-3>1?'s':''}</div>`;
+    </div>`;
+  }).join('');
+  const total=nonVm.length+Object.keys(vmGroups).length;
+  if(total>3) html+=`<div class="dc-more">+${total-3} more</div>`;
   return html;
 }
 
@@ -174,6 +364,51 @@ function cardHTML(dev){
   </div>`;
 }
 
+function listRowHTML(dev){
+  const st=dev.device_id ? (dev.status||'unknown') : 'unknown';
+  const snrs=Object.values(S.sensors).filter(s=>s.device_id===dev.device_id);
+  // Apply saved sensor drag order (same as sSnrPreview)
+  const _ord=_lsGet(`pw_snr_order_${dev.device_id}`,[]);
+  if(_ord.length){
+    snrs.sort((a,b)=>{
+      const ai=_ord.indexOf(a.sensor_id),bi=_ord.indexOf(b.sensor_id);
+      return (ai<0?9999:ai)-(bi<0?9999:bi);
+    });
+  }
+  const isSnmp=s=>s.stype==='snmp'||s.stype==='dns';
+  const snrVal=s=>{
+    if(s.stype==='vmware'){
+      if(s.last_value==null) return '\u2014';
+      const v=parseFloat(s.last_value);
+      if(isNaN(v)) return (s.last_value+'').slice(0,10);
+      return _fmtVmVal(v,_VM_UNITS[s.vmware_metric]||'');
+    }
+    if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'\u2014').slice(0,10);
+    return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'\u2014');
+  };
+  const vc=s=>{
+    if(s.alive===false)return'b';
+    if(s.stype==='vmware'||isSnmp(s))return s.alive===true?'g':'m';
+    return s.last_ms!=null?msC(s.last_ms,s):'m';
+  };
+  let snrHtml='';
+  snrs.slice(0,5).forEach(s=>{
+    snrHtml+=`<span class="dlr-snr snr-t-${s.stype}">
+      <span class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</span>
+      <span class="dc-snr-nm">${esc(s.name)}</span>
+      <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</span>
+    </span>`;
+  });
+  if(snrs.length>5) snrHtml+=`<span class="dlr-more">+${snrs.length-5}</span>`;
+  return `<div class="dc-list-row ${st}" id="dpl-${dev.device_id}" onclick="openDevWin('${dev.device_id}')">
+    <div class="dlr-dot"></div>
+    <div class="dlr-name">${esc(dev.name)}</div>
+    <div class="dlr-host">${esc(dev.host)}</div>
+    <div class="dlr-sensors">${snrHtml}</div>
+    ${_devSnrSummaryHtml(dev.device_id)}
+  </div>`;
+}
+
 function updateCardStatus(did,st){
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
   const card=document.getElementById(`dp-${did}`);
@@ -184,6 +419,12 @@ function updateCardStatus(did,st){
     const badge=document.getElementById(`dcst-${did}`);
     if(badge){badge.className=`dc-status ${st}`;badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}`;}
   }
+  // Also update list row
+  const lr=document.getElementById(`dpl-${did}`);
+  if(lr) lr.className=`dc-list-row ${st}`;
+  // Refresh summary badge
+  const sumEl=document.getElementById(`dlr-sum-${did}`);
+  if(sumEl){ const h=_devSnrSummaryHtml(did); if(h) sumEl.outerHTML=h; }
 }
 
 function updateCardSensor(s){
@@ -192,15 +433,38 @@ function updateCardSensor(s){
   const dEl = document.getElementById(`csd-${s.device_id}_${s.sensor_id}`);
   if(vEl){
     const isSnmp = full.stype==='snmp'||full.stype==='dns';
-    const v = isSnmp ? (full.alive===false?'FAIL':(full.last_value||'—').slice(0,10))
-                     : (full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'—'));
-    const c = full.alive===false?'b':(isSnmp?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
+    const isVmware = full.stype==='vmware';
+    let v;
+    if(isVmware){
+      if(full.last_value==null) v='—';
+      else { const nv=parseFloat(full.last_value); v=isNaN(nv)?(full.last_value+'').slice(0,10):_fmtVmVal(nv,_VM_UNITS[full.vmware_metric]||''); }
+    } else if(isSnmp){
+      v=full.alive===false?'FAIL':(full.last_value||'—').slice(0,10);
+    } else {
+      v=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'—');
+    }
+    const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
     vEl.textContent=v; vEl.className=`dc-snr-val ${c}`;
   }
   if(dEl) dEl.className=`dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
+  // Also update list row sensor value
+  const lsv=document.getElementById(`lsv-${s.device_id}_${s.sensor_id}`);
+  if(lsv){
+    const isSnmp2=full.stype==='snmp'||full.stype==='dns';
+    const isVm2=full.stype==='vmware';
+    let v2;
+    if(isVm2){ if(full.last_value==null) v2='\u2014'; else { const nv=parseFloat(full.last_value); v2=isNaN(nv)?(full.last_value+'').slice(0,10):_fmtVmVal(nv,_VM_UNITS[full.vmware_metric]||''); } }
+    else if(isSnmp2){ v2=full.alive===false?'FAIL':(full.last_value||'\u2014').slice(0,10); }
+    else { v2=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'\u2014'); }
+    const c2=full.alive===false?'b':((isSnmp2||isVm2)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
+    lsv.textContent=v2; lsv.className=`dc-snr-val ${c2}`;
+  }
+  // Refresh summary badge for this device
+  const sumEl2=document.getElementById(`dlr-sum-${s.device_id}`);
+  if(sumEl2){ const h=_devSnrSummaryHtml(s.device_id); if(h) sumEl2.outerHTML=h; }
 }
 
-// �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DRAG AND DROP �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
+//�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DRAG AND DROP �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
 let dragDid=null, dragEl=null, dropIndicator=null;
 let _dragGrp=null, _dragGrpEl=null, _grpDragOK=false, _grpDragging=false;
 // Reset drag-from-handle flag on any mouseup (handles aborted drags)
@@ -290,7 +554,6 @@ function onDrop(e){
   if((dev.group||'Default Group')!==group){
     dev.group=group;
     api('PATCH','/api/device/'+did,{group});
-    renderSidebar();
   }
   refreshGroupCounts();
   pruneEmptyGroups();
@@ -531,6 +794,7 @@ function openDevWin(did){
   _devFetch.then(freshDev=>{
     if(!document.getElementById('dwo')) return; // panel closed while loading
     if(_sg) _sg.innerHTML=''; // clear skeletons
+    _initSensorGrid(did);
     if(freshDev){
       S.devices[did]=freshDev;
       (freshDev.sensors||[]).forEach(s=>{
@@ -541,6 +805,8 @@ function openDevWin(did){
       // fetch failed — render from cache silently
       (S.devices[did]?.sensors||[]).forEach(s=>renderTile(did,s));
     }
+    _applySensorOrder(did);
+    _vmApplySavedOrders(did);
     setupChartsByDid(did);
   });
 
@@ -644,37 +910,82 @@ function setupChartsByDid(did){
   },50);
 }
 
+// ── Status filter + pagination state ─────────────────────────────
+let _activeStatusFilter='all';
+let _devPage=0;
+let _devPageSize=parseInt(localStorage.getItem('pw_page_size')||'50');
+let _filteredDids=[];
+
+// ── Status filter pills ───────────────────────────────────────────
+function _setStatusFilter(st){
+  _activeStatusFilter=st;
+  document.querySelectorAll('.dev-status-pill').forEach(p=>
+    p.classList.toggle('active', p.dataset.st===st));
+  _applyDevFilter(document.getElementById('devSearch')?.value||'');
+}
+
+function _updateStatusPills(){
+  const counts={all:0,up:0,down:0,warn:0,pause:0};
+  for(const did in S.devices){
+    counts.all++;
+    const st=(S.devices[did].status||'unknown').toLowerCase();
+    if(counts[st]!==undefined) counts[st]++;
+  }
+  document.querySelectorAll('.dev-status-pill').forEach(p=>{
+    const ct=p.querySelector('.pill-ct');
+    if(ct) ct.textContent=counts[p.dataset.st]??0;
+  });
+}
+
 // ── Device search / filter ────────────────────────────────────────
 function _applyDevFilter(query){
   const q=(query||'').trim().toLowerCase();
-  let anyVisible=false;
+  const sf=_activeStatusFilter;
+  // Build ordered list of matching device IDs (preserving DOM order)
+  _filteredDids=[];
+  document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+    const did=card.id.replace('dp-','');
+    if(!S.devices[did]) return;
+    const dev=S.devices[did];
+    const stMatch=sf==='all'||(dev.status||'unknown').toLowerCase()===sf;
+    if(!stMatch) return;
+    if(q){
+      const nameMatch=dev.name.toLowerCase().includes(q);
+      const sensorMatch=S._devSensors[did]&&[...S._devSensors[did]]
+        .some(k=>S.sensors[k]&&S.sensors[k].name.toLowerCase().includes(q));
+      if(!nameMatch&&!sensorMatch) return;
+    }
+    _filteredDids.push(did);
+  });
+  _devPage=0;
+  _renderPage();
+}
+
+function _renderPage(){
+  const start=_devPage*_devPageSize;
+  const visible=new Set(_filteredDids.slice(start,start+_devPageSize));
+  const allDids=new Set(_filteredDids);
+  // Show/hide individual cards and list rows
+  document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
+    const did=card.id.replace('dp-','');
+    card.style.display=visible.has(did)?'':'none';
+  });
+  document.querySelectorAll('.dc-list-row').forEach(row=>{
+    const did=row.id.replace('dpl-','');
+    row.style.display=visible.has(did)?'':'none';
+  });
+  // Hide groups with no visible devices on this page
   document.querySelectorAll('.grp-wrap').forEach(wrap=>{
     const grid=wrap.querySelector('.grp-grid');
     if(!grid){wrap.style.display='';return;}
-    if(!q){
-      wrap.style.display='';
-      grid.querySelectorAll('.dc:not(.dc-add)').forEach(c=>c.style.display='');
-      anyVisible=true;
-      return;
-    }
-    let groupHasMatch=false;
-    grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
-      const did=card.id.replace('dp-','');
-      const dev=S.devices[did];
-      const nameMatch=dev&&dev.name.toLowerCase().includes(q);
-      const sensorMatch=Object.values(S.sensors)
-        .filter(s=>s.device_id===did)
-        .some(s=>s.name.toLowerCase().includes(q));
-      const show=nameMatch||sensorMatch;
-      card.style.display=show?'':'none';
-      if(show) groupHasMatch=true;
-    });
-    wrap.style.display=groupHasMatch?'':'none';
-    if(groupHasMatch) anyVisible=true;
+    const hasVisible=[...grid.querySelectorAll('.dc:not(.dc-add)')]
+      .some(c=>visible.has(c.id.replace('dp-','')));
+    wrap.style.display=hasVisible?'':'none';
   });
-  // Show / hide empty state message
+  // No-results message
   let noRes=document.getElementById('devNoResults');
-  if(q && !anyVisible){
+  const anyVisible=visible.size>0;
+  if(!anyVisible){
     if(!noRes){
       noRes=document.createElement('div');
       noRes.id='devNoResults';
@@ -682,11 +993,46 @@ function _applyDevFilter(query){
       const dp=document.getElementById('dpanels');
       if(dp) dp.parentNode.insertBefore(noRes,dp.nextSibling);
     }
-    noRes.textContent='No devices or sensors match "'+query+'"';
+    const q=document.getElementById('devSearch')?.value||'';
+    noRes.textContent=q||_activeStatusFilter!=='all'
+      ?'No devices match the current filter.'
+      :'No devices yet.';
     noRes.style.display='';
   } else if(noRes){
     noRes.style.display='none';
   }
+  _renderPagination();
+}
+
+function _renderPagination(){
+  const pg=document.getElementById('devPagination');
+  if(!pg) return;
+  const total=_filteredDids.length;
+  const pages=Math.ceil(total/_devPageSize)||1;
+  if(total<=_devPageSize){pg.style.display='none';return;}
+  pg.style.display='flex';
+  const start=_devPage*_devPageSize+1;
+  const end=Math.min(start+_devPageSize-1,total);
+  pg.innerHTML=`
+    <button class="dev-pg-btn" onclick="_devGoPage(${_devPage-1})" ${_devPage===0?'disabled':''}>‹ Prev</button>
+    <span class="dev-pg-info">${start}–${end} of ${total} devices</span>
+    <button class="dev-pg-btn" onclick="_devGoPage(${_devPage+1})" ${_devPage>=pages-1?'disabled':''}>Next ›</button>
+    <select class="dev-pg-size" onchange="_devSetPageSize(+this.value)" title="Devices per page">
+      ${[25,50,100].map(n=>`<option value="${n}"${n===_devPageSize?' selected':''}>${n}/page</option>`).join('')}
+    </select>`;
+}
+
+function _devGoPage(p){
+  const pages=Math.ceil(_filteredDids.length/_devPageSize)||1;
+  _devPage=Math.max(0,Math.min(p,pages-1));
+  _renderPage();
+}
+
+function _devSetPageSize(n){
+  _devPageSize=n;
+  localStorage.setItem('pw_page_size',n);
+  _devPage=0;
+  _renderPage();
 }
 
 // Ctrl+F / Cmd+F focuses the device search when the devices tab is active

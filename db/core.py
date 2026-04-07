@@ -12,6 +12,7 @@ import time
 from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
 from core.config import DB_PATH, LOGS_DB_PATH
 from core.logger import log
+from db.backend  import is_pg
 
 # ── Single-writer queues (Main DB + Logs DB) ─────────────────────────────────
 _DB_QUEUE:   queue.Queue = queue.Queue()
@@ -47,18 +48,52 @@ threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer").s
 
 
 def _db_enqueue(fn):
-    """Queue a zero-argument callable for the Main DB writer thread."""
-    _DB_QUEUE.put(fn)
+    """Queue a zero-argument callable for the Main DB writer thread.
+    In PostgreSQL mode the callable is executed directly (PG MVCC
+    handles concurrency)."""
+    if is_pg():
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"DB writer error: {e}")
+    else:
+        _DB_QUEUE.put(fn)
 
 
 def _logs_enqueue(fn):
-    """Queue a zero-argument callable for the Logs DB writer thread."""
-    _LOGS_QUEUE.put(fn)
+    """Queue a zero-argument callable for the Logs DB writer thread.
+    In PostgreSQL mode the callable is executed directly."""
+    if is_pg():
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"Logs DB writer error: {e}")
+    else:
+        _LOGS_QUEUE.put(fn)
 
 
 # ── Schema init ──────────────────────────────────────────────────
 
+def db_init_pg():
+    """Create PostgreSQL schemas, seed defaults.  Called instead of
+    ``db_init()`` + ``logs_db_init()`` when the backend is PostgreSQL."""
+    from db.pg_pool   import pg_conn
+    from db.pg_schema import pg_create_main_schema, pg_create_logs_schema, pg_seed_defaults
+
+    with pg_conn("public") as con:
+        cur = con.cursor()
+        pg_create_main_schema(cur)
+        pg_create_logs_schema(cur)
+        pg_seed_defaults(cur)
+        cur.close()
+    log.info("PG schema init complete")
+
+
 def db_init():
+    if is_pg():
+        db_init_pg()
+        return
+
     # ── Pre-migration safety backup (runs once per DB file) ──────────────
     _bak = str(DB_PATH) + ".pre_migrate.bak"
     if not os.path.exists(_bak) and os.path.exists(DB_PATH):
@@ -297,6 +332,11 @@ def db_init():
             # Dual-DB split: '1' means logs tables live in pingwatch_logs.db
             # Seeded here so fresh installs never trigger an unnecessary migration
             ("db_split_complete",   "1"),
+            # Data rollup (v0.8.0)
+            ("retention_raw_days",     "7"),
+            ("retention_5m_days",      "90"),
+            ("retention_1h_days",      "1095"),
+            ("max_workers_executor",   "64"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -372,6 +412,20 @@ def db_init():
         ]:
             try:
                 con.execute(stmt)
+                con.commit()
+            except Exception:
+                pass
+        # VMware sensor fields
+        for col in ("vmware_user", "vmware_password", "vmware_vm_id", "vmware_vm_name", "vmware_metric"):
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col} TEXT DEFAULT ''")
+                con.commit()
+            except Exception:
+                pass
+        # Device-level default credentials
+        for col in ("snmp_community_default", "snmp_version_default", "vmware_user_default", "vmware_password_default"):
+            try:
+                con.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
                 con.commit()
             except Exception:
                 pass
@@ -536,6 +590,8 @@ def db_init():
                 severity        TEXT    DEFAULT 'warning',
                 condition_logic TEXT    DEFAULT 'AND',
                 cooldown_s      INTEGER DEFAULT 300,
+                trigger_count   INTEGER DEFAULT 1,
+                recover_count   INTEGER DEFAULT 1,
                 sort_order      INTEGER DEFAULT 0,
                 created_at      REAL    DEFAULT 0,
                 updated_at      REAL    DEFAULT 0
@@ -603,6 +659,15 @@ def db_init():
                 name        TEXT    NOT NULL UNIQUE,
                 description TEXT    DEFAULT ''
             )""")
+        # alert_rules — debounce columns (moved from per-sensor to per-rule)
+        for _col_def in [
+            "trigger_count INTEGER DEFAULT 1",
+            "recover_count INTEGER DEFAULT 1",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE alert_rules ADD COLUMN {_col_def}")
+            except Exception:
+                pass
         con.commit()
     finally:
         con.close()
@@ -612,6 +677,26 @@ def db_init():
 def db_seed_users():
     """Seed default admin user if not present; preload live sessions into memory."""
     import secrets as _sec
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        with pg_cursor("main") as cur:
+            cur.execute("SELECT 1 FROM users WHERE username='admin'")
+            if not cur.fetchone():
+                pw = _sec.token_urlsafe(9)
+                cur.execute(
+                    "INSERT INTO users (username, pw_hash, role) VALUES (%s,%s,%s)",
+                    ("admin", _hash_pw(pw), "admin")
+                )
+                print("=" * 51, flush=True)
+                print(f"  Default admin password: {pw}", flush=True)
+                print("  Change it in Settings -> Users -> Reset Password", flush=True)
+                print("=" * 51, flush=True)
+                log.warning("Default admin user created — password printed to terminal")
+            cur.execute("DELETE FROM sessions")
+            log.info("DB seed: all sessions cleared (server restarted)")
+        return
+
     con = sqlite3.connect(DB_PATH)
     try:
         if not con.execute("SELECT 1 FROM users WHERE username='admin'").fetchone():
@@ -637,6 +722,9 @@ def db_seed_users():
 
 def logs_db_init():
     """Create the Logs DB schema (sensor_samples, flap_log, sensor_err_log, snmp_traps)."""
+    if is_pg():
+        return   # handled by db_init_pg()
+
     con = sqlite3.connect(LOGS_DB_PATH)
     try:
         con.execute("PRAGMA journal_mode=WAL")
@@ -672,13 +760,17 @@ def logs_db_init():
                 direction TEXT DEFAULT 'down',
                 ack_state TEXT DEFAULT 'active',
                 ack_by    TEXT DEFAULT '',
-                ack_at    REAL DEFAULT 0
+                ack_at    REAL DEFAULT 0,
+                resolved_at REAL DEFAULT 0,
+                duration    REAL DEFAULT 0
             )""")
-        # Migration: add ack columns to existing flap_log tables
+        # Migration: add columns to existing flap_log tables
         for _col, _def in [
             ("ack_state", "TEXT DEFAULT 'active'"),
             ("ack_by",    "TEXT DEFAULT ''"),
             ("ack_at",    "REAL DEFAULT 0"),
+            ("resolved_at", "REAL DEFAULT 0"),
+            ("duration",    "REAL DEFAULT 0"),
         ]:
             try:
                 con.execute(f"ALTER TABLE flap_log ADD COLUMN {_col} {_def}")
@@ -735,6 +827,60 @@ def logs_db_init():
         if not con.execute("SELECT 1 FROM logs_schema_version").fetchone():
             con.execute(
                 "INSERT INTO logs_schema_version VALUES (1, datetime('now'), 'initial split')"
+            )
+
+        # ── Rollup tables (v0.8.0) ─────────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_samples_5m (
+                ts           REAL    NOT NULL,
+                did          TEXT    NOT NULL,
+                sid          TEXT    NOT NULL,
+                ok_count     INTEGER NOT NULL DEFAULT 0,
+                fail_count   INTEGER NOT NULL DEFAULT 0,
+                avg_ms       REAL,
+                min_ms       REAL,
+                max_ms       REAL,
+                avg_ms_sq    REAL    DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (did, sid, ts)
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_s5m_ts ON sensor_samples_5m(ts)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_samples_1h (
+                ts           REAL    NOT NULL,
+                did          TEXT    NOT NULL,
+                sid          TEXT    NOT NULL,
+                ok_count     INTEGER NOT NULL DEFAULT 0,
+                fail_count   INTEGER NOT NULL DEFAULT 0,
+                avg_ms       REAL,
+                min_ms       REAL,
+                max_ms       REAL,
+                avg_ms_sq    REAL    DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (did, sid, ts)
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_s1h_ts ON sensor_samples_1h(ts)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS rollup_state (
+                tier    TEXT PRIMARY KEY,
+                last_ts REAL NOT NULL DEFAULT 0
+            )""")
+        con.execute(
+            "INSERT OR IGNORE INTO rollup_state (tier, last_ts) VALUES ('5m', 0)"
+        )
+        con.execute(
+            "INSERT OR IGNORE INTO rollup_state (tier, last_ts) VALUES ('1h', 0)"
+        )
+        if not con.execute(
+            "SELECT 1 FROM logs_schema_version WHERE version = 2"
+        ).fetchone():
+            con.execute(
+                "INSERT INTO logs_schema_version VALUES "
+                "(2, datetime('now'), 'v0.8.0 — rollup tables')"
             )
         con.commit()
     finally:

@@ -33,6 +33,11 @@ _rules_cache: list = []
 _rules_cache_ts: float = 0.0
 _CACHE_TTL = 30.0
 
+# Debounce state: key = "rule_id:did:sid", value = {"fired": bool}
+# Tracks whether a rule has already dispatched for a given sensor incident.
+# Only accessed from the single _worker_loop thread — no lock needed.
+_debounce: dict = {}
+
 
 # ── Public API ────────────────────────────────────────────────────
 
@@ -105,6 +110,36 @@ def invalidate_rules_cache():
     _rules_cache_ts = 0.0
 
 
+def _debounce_check(rule: dict, dkey: str, event_type: str, consec: int) -> bool:
+    """Return True if this event should trigger dispatch for this rule.
+
+    Uses per-(rule, device, sensor) state to track whether the rule has already
+    dispatched for the current incident.  The sensor provides ``consec`` (the
+    consecutive probe count) and the rule defines trigger_count / recover_count.
+    """
+    tc = int(rule.get("trigger_count", 1))
+    rc = int(rule.get("recover_count", 1))
+    state = _debounce.get(dkey)
+
+    if event_type in ("flap_down", "threshold_warning", "threshold_critical"):
+        if state and state.get("fired"):
+            return False        # already dispatched, waiting for recovery
+        if consec >= tc:
+            _debounce[dkey] = {"fired": True}
+            return True         # dispatch
+        return False            # not enough consecutive events yet
+
+    if event_type in ("flap_recovered", "threshold_ok"):
+        if not state or not state.get("fired"):
+            return False        # was never dispatched, nothing to recover
+        if consec >= rc:
+            _debounce.pop(dkey, None)
+            return True         # dispatch recovery
+        return False            # not enough consecutive recoveries yet
+
+    return True                 # unknown events pass through
+
+
 def _process(event_type: str, data: dict):
     """Evaluate all enabled rules against this event and dispatch matches."""
     if event_type not in ("flap_down", "flap_recovered",
@@ -112,15 +147,36 @@ def _process(event_type: str, data: dict):
                            "threshold_ok"):
         return
 
+    # Skip if the sensor/device was deleted between enqueue and processing
+    did = data.get("did")
+    sid = data.get("sid")
+    if did and sid:
+        from core.app_state import STATE
+        with STATE._lock:
+            dev = STATE.devices.get(did)
+            if not dev or sid not in dev.sensors:
+                return
+
     rules = _get_rules()
     if not rules:
         return
 
     ctx = _build_ctx(event_type, data)
+    consec = int(data.get("consec_count", 1))
+    is_recovery = event_type in ("flap_recovered", "threshold_ok")
 
     for rule in rules:
         try:
-            if not _match_conditions(rule, ctx):
+            dkey = f"{rule['id']}:{ctx.get('did', '')}:{ctx.get('sid', '')}"
+            if is_recovery:
+                # Skip condition re-match for recoveries — only process rules that previously fired
+                _state = _debounce.get(dkey)
+                if not _state or not _state.get("fired"):
+                    continue
+            else:
+                if not _match_conditions(rule, ctx):
+                    continue
+            if not _debounce_check(rule, dkey, event_type, consec):
                 continue
             in_maintenance, mw_name = _check_maintenance(ctx)
             if in_maintenance:
@@ -128,11 +184,17 @@ def _process(event_type: str, data: dict):
                 db_log_event(rule["id"], rule["name"], ctx, state='suppressed')
                 log.debug(f"alert_engine: rule {rule['id']} suppressed by window '{mw_name}'")
                 continue
-            if not _check_cooldown(rule, ctx):
+            if not is_recovery and _is_acked(rule, ctx):
+                continue
+            if not is_recovery and not _check_cooldown(rule, ctx):
                 continue
             _dispatch(rule, ctx)
-            from db.alert_events import db_log_event
-            db_log_event(rule["id"], rule["name"], ctx, state='active')
+            if event_type in ("flap_recovered", "threshold_ok"):
+                from db.alert_events import db_auto_resolve_event
+                db_auto_resolve_event(rule["id"], ctx.get("did", ""), ctx.get("sid", ""))
+            else:
+                from db.alert_events import db_log_event
+                db_log_event(rule["id"], rule["name"], ctx, state='active')
         except Exception as e:
             log.error(f"alert_engine: rule {rule.get('id')} error: {e}")
 
@@ -141,10 +203,10 @@ def _build_ctx(event_type: str, data: dict) -> dict:
     """Build the unified context dict used for condition matching + templates."""
     _sev_map = {
         "flap_down":          "critical",
-        "flap_recovered":     "info",
+        "flap_recovered":     "recovery",
         "threshold_warning":  "warning",
         "threshold_critical": "critical",
-        "threshold_ok":       "info",
+        "threshold_ok":       "recovery",
     }
     # Normalize internal SSE event names to user-friendly values for condition matching
     _etype_norm = {
@@ -176,6 +238,7 @@ def _build_ctx(event_type: str, data: dict) -> dict:
     ctx.setdefault("loss_pct", 0)
     ctx.setdefault("ts", "")
     ctx.setdefault("detail", "")
+    ctx.setdefault("consec_count", 1)
     return ctx
 
 
@@ -283,6 +346,18 @@ def _check_maintenance(ctx: dict) -> tuple:
     return False, ""
 
 
+# ── ACK suppression ──────────────────────────────────────────────
+
+def _is_acked(rule: dict, ctx: dict) -> bool:
+    """Return True if this rule+device+sensor has an acknowledged event (suppress until resolved)."""
+    try:
+        from db.alert_events import db_has_acked_event
+        return db_has_acked_event(rule["id"], ctx.get("did", ""), ctx.get("sid", ""))
+    except Exception as e:
+        log.warning(f"alert_engine: ACK check error: {e}")
+        return False
+
+
 # ── Cooldown / dedup ──────────────────────────────────────────────
 
 def _check_cooldown(rule: dict, ctx: dict) -> bool:
@@ -359,8 +434,13 @@ def _dispatch_email(cfg: dict, ctx: dict):
 
 
 def _is_safe_url(url: str) -> bool:
-    """Return True if url is safe to request (not localhost/link-local/private)."""
+    """Return True if url is safe to request (not localhost/link-local/private).
+
+    Resolves hostnames to IP addresses before checking — prevents DNS-based
+    SSRF where an external hostname points to an internal IP.
+    """
     import ipaddress
+    import socket
     from urllib.parse import urlparse
     try:
         p = urlparse(url)
@@ -369,15 +449,15 @@ def _is_safe_url(url: str) -> bool:
         host = (p.hostname or "").lower()
         if not host:
             return False
-        if host in ("localhost",) or host.startswith("127.") or host == "::1":
-            return False
-        if host.endswith(".local"):
-            return False
+        # Resolve hostname to IP, then check the resolved address
         try:
-            ip = ipaddress.ip_address(host)
-            return ip.is_global
-        except ValueError:
-            return True  # hostname — allow (DNS resolves at request time)
+            addr = socket.gethostbyname(host)
+            ip = ipaddress.ip_address(addr)
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                return False
+            return True
+        except (socket.gaierror, ValueError):
+            return False  # DNS resolution failed — fail closed
     except Exception:
         return False
 

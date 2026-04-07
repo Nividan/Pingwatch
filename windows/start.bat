@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 :: ── 0. Elevate to admin (required to bind SNMP trap port 162) ─────────────────
 net session >nul 2>&1
@@ -30,8 +30,8 @@ if %errorlevel% neq 0 (
 :: ── 2. First-run detection ────────────────────────────────────────────────────
 set RUN_WIZARD=0
 
-if not exist "pingwatch.db"  set RUN_WIZARD=1
-if "%1"=="--setup"           set RUN_WIZARD=1
+if not exist "pingwatch.conf" set RUN_WIZARD=1
+if "%1"=="--setup"            set RUN_WIZARD=1
 
 if %RUN_WIZARD% equ 1 (
     echo.

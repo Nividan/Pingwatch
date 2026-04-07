@@ -54,6 +54,18 @@ def _validate_rule(body: dict) -> str | None:
             return "cooldown_s must be >= 0"
     except (TypeError, ValueError):
         return "cooldown_s must be an integer"
+    try:
+        tc = int(body.get("trigger_count", 1))
+        if tc < 1:
+            return "trigger_count must be >= 1"
+    except (TypeError, ValueError):
+        return "trigger_count must be an integer"
+    try:
+        rc = int(body.get("recover_count", 1))
+        if rc < 1:
+            return "recover_count must be >= 1"
+    except (TypeError, ValueError):
+        return "recover_count must be an integer"
 
     for cond in body.get("conditions", []):
         if cond.get("field") not in _VALID_FIELDS:
@@ -84,6 +96,8 @@ def _clean_body(body: dict) -> dict:
         "severity":        str(body.get("severity", "warning")),
         "condition_logic": str(body.get("condition_logic", "AND")).upper(),
         "cooldown_s":      int(body.get("cooldown_s", 300)),
+        "trigger_count":   max(1, int(body.get("trigger_count", 1))),
+        "recover_count":   max(1, int(body.get("recover_count", 1))),
         "sort_order":      int(body.get("sort_order", 0)),
         "conditions":      body.get("conditions", []),
         "actions":         body.get("actions", []),

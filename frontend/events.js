@@ -176,6 +176,22 @@ async function _evtFlapResolve(flapId) {
   _renderEvtView();
 }
 
+async function _evtResolveAll() {
+  const count = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
+  if (!count) { toast('No active alerts to resolve', 'info'); return; }
+  _pwConfirm(`Resolve all active alerts and flaps?`, async () => {
+    try {
+      const d = await api('POST', '/api/alert/events/resolve-all');
+      if (!d.ok) { toast('Failed to resolve', 'err'); return; }
+      const total = (d.alerts || 0) + (d.flaps || 0);
+      toast(`Resolved ${total} event${total === 1 ? '' : 's'}`, 'ok');
+      await _refreshAlertCache();
+      await _refreshFlapList();
+      _renderEvtView();
+    } catch(e) { toast('Failed to resolve all', 'err'); }
+  }, 'Resolve All');
+}
+
 // ── Events sub-tab state ──────────────────────────────────────────
 let _evtActiveSubTab = (() => {
   try { return localStorage.getItem('pw_evt_subtab') || 'sensor-events'; } catch { return 'sensor-events'; }
@@ -422,7 +438,7 @@ function _buildEvtCard(d) {
     ? (icon + ' ' + esc(_trapLabel(d)))
     : (icon + ' ' + esc(d.sname||''));
   const dispHost = isTrap ? esc(d.src_ip||'') : esc(d.host||'');
-  const durStr   = d._duration != null ? _fmtDuration(d._duration) : null;
+  const durStr   = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : null);
   const unknownCls = (isTrap && !d.enriched) ? ' evt-trap-unknown' : '';
 
   const row = document.createElement('div');
@@ -468,7 +484,7 @@ function _buildEvtTable(events) {
     const vendorCell = isTrap
       ? (d.vendor && d.vendor !== 'Unknown' ? _vendorBadge(d) + (d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') : '—')
       : '—';
-    const durStr = d._duration != null ? _fmtDuration(d._duration) : '—';
+    const durStr = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : '—');
     // Build alert tag cell
     const alertEvt = _matchAlertEvt(d);
     let alertCell = '<td></td>';
@@ -487,6 +503,7 @@ function _buildEvtTable(events) {
             `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">◉ Resolve</button>` +
           `</div>`
         : '';
+      const resTag = alertEvt.state === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
       alertCell =
         `<td class="aev-cell">` +
           `<div class="${tagCls}">` +
@@ -495,6 +512,7 @@ function _buildEvtTable(events) {
             `<span class="aev-st ${stCls}">${stLabel}</span>` +
             repeatBadge +
           `</div>` +
+          resTag +
           btns +
         `</td>`;
     } else if (d.id) {
@@ -509,12 +527,14 @@ function _buildEvtTable(events) {
             `<button class="aev-btn-res" onclick="event.stopPropagation();_evtFlapResolve(${d.id})">◉ Resolve</button>` +
           `</div>`
         : '';
+      const resTag = flapState === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
       alertCell =
         `<td class="aev-cell">` +
           `<div class="aev-tag aev-tag-info${isActive?' aev-tag-active':''}">` +
             `<span class="aev-dot"></span>` +
             `<span class="aev-st ${stCls}">${stLabel}</span>` +
           `</div>` +
+          resTag +
           btns +
         `</td>`;
     }
@@ -699,8 +719,8 @@ function _buildIIP(d, alertEvt) {
       ${_iipDebug(d)}
     </div>
     <div class="iip-actions">
-      <button class="iip-act-btn" onclick="_iipOpenDevice(${JSON.stringify(d.did||'')})">🖥 Open Device</button>
-      ${!isTrap ? `<button class="iip-act-btn" onclick="_iipOpenHistory(${JSON.stringify(d.did||'')},${JSON.stringify(d.sid||'')})">📊 Sensor History</button>` : ''}
+      <button class="iip-act-btn" onclick="_iipOpenDevice('${esc(d.did||'')}')">🖥 Open Device</button>
+      ${!isTrap ? `<button class="iip-act-btn" onclick="_iipOpenHistory('${esc(d.did||'')}','${esc(d.sid||'')}')">📊 Sensor History</button>` : ''}
     </div>`;
 }
 
@@ -727,20 +747,12 @@ function _iipStatus(d, alertEvt) {
     ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
   }
 
-  let btns = '';
-  if (d.id && !isRes) {
-    btns = `<div class="iip-btns">` +
-      (isActive ? `<button class="aev-btn-ack" onclick="_iipFlapAck(${d.id})">✓ ACK</button>` : '') +
-      `<button class="aev-btn-res" onclick="_iipFlapResolve(${d.id})">◉ Resolve</button>` +
-    `</div>`;
-  }
-
   return `<div class="iip-section">
     <div class="iip-section-title">STATUS</div>
     <div class="iip-st-row"><span class="iip-st-badge ${badgeCls}">${badgeTxt}</span></div>
     <div class="iip-time-row"><span class="iip-mono">${esc(utcStr)}</span></div>
     <div class="iip-dur-row">Duration: <span id="iip-dur-live" class="iip-dur-live">${initDur}</span></div>
-    ${ackmeta}${btns}
+    ${ackmeta}
   </div>`;
 }
 
@@ -920,11 +932,13 @@ async function _iipAlertResolve(id) {
 
 function _iipOpenDevice(did) {
   _closeEvtDetail();
-  document.getElementById('tabDevices')?.click();
+  switchMainTab('devices');
+  if (did && typeof openDevWin === 'function') openDevWin(did);
 }
 function _iipOpenHistory(did, sid) {
   _closeEvtDetail();
-  document.getElementById('tabSensors')?.click();
+  switchMainTab('devices');
+  if (did && sid && typeof openDetail === 'function') openDetail(did, sid, 'history');
 }
 
 // ── Export ────────────────────────────────────────────────────────

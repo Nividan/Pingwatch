@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PingWatch — Setup</title>
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2333;--bg4:#243044;
+  --panel:#13181f;--border:#21293a;--border2:#2d3a4e;
+  --up:#23d18b;--down:#f85149;--warn:#f0a500;
+  --text:#e6edf3;--text2:#8b949e;--text3:#6e7681;
+  --accent:#2f81f7;--accent-hover:#388bfd;
+}
+html,body{height:100%;overflow:auto}
+body{
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 20%, rgba(17,30,60,.6) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 50% at 80% 80%, rgba(10,25,50,.5) 0%, transparent 55%),
+    var(--bg);
+  color:var(--text);font-family:'Exo 2',sans-serif;font-size:14px;line-height:1.5;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;
+}
+.setup-wrap{max-width:640px;width:100%;padding:24px}
+
+/* Header */
+.setup-head{text-align:center;margin-bottom:32px}
+.setup-logo{
+  width:56px;height:56px;border-radius:14px;margin:0 auto 16px;
+  background:linear-gradient(135deg,#1d4ed8 0%,#2f81f7 50%,#0ea5e9 100%);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 24px rgba(47,129,247,.55);
+}
+.setup-title{font-size:22px;font-weight:700}
+.setup-title .ping{color:var(--text)}
+.setup-title .watch{color:var(--accent)}
+.setup-sub{color:var(--text2);font-size:13px;margin-top:4px}
+
+/* Steps indicator */
+.steps{display:flex;gap:8px;justify-content:center;margin-bottom:28px}
+.step-dot{
+  width:10px;height:10px;border-radius:50%;background:var(--border2);
+  transition:background .3s,box-shadow .3s;
+}
+.step-dot.active{background:var(--accent);box-shadow:0 0 8px rgba(47,129,247,.5)}
+.step-dot.done{background:var(--up)}
+
+/* Card */
+.setup-card{
+  background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+  padding:28px;margin-bottom:20px;
+}
+.card-title{font-size:16px;font-weight:600;margin-bottom:16px}
+.card-desc{color:var(--text2);font-size:13px;margin-bottom:20px}
+
+/* Backend choice cards */
+.backend-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.backend-opt{
+  background:var(--bg3);border:2px solid var(--border2);border-radius:10px;
+  padding:20px;cursor:pointer;transition:border-color .2s,box-shadow .2s;text-align:center;
+}
+.backend-opt:hover{border-color:var(--accent)}
+.backend-opt.selected{border-color:var(--accent);box-shadow:0 0 12px rgba(47,129,247,.3)}
+.backend-opt h3{font-size:15px;font-weight:600;margin-bottom:6px}
+.backend-opt p{font-size:12px;color:var(--text2);line-height:1.4}
+.backend-icon{font-size:28px;margin-bottom:10px;display:block}
+
+/* Form fields */
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+.field input{
+  width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--border2);
+  border-radius:6px;color:var(--text);font-family:inherit;font-size:13px;
+  transition:border-color .2s;outline:none;
+}
+.field input:focus{border-color:var(--accent)}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* Buttons */
+.btn{
+  padding:10px 20px;border:none;border-radius:8px;font-family:inherit;font-size:13px;
+  font-weight:600;cursor:pointer;transition:background .2s,opacity .2s;
+}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-secondary{background:var(--bg4);color:var(--text)}
+.btn-secondary:hover{background:var(--border2)}
+.btn-row{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+.btn-row-spread{justify-content:space-between}
+
+/* Status indicators */
+.status-msg{
+  padding:10px 14px;border-radius:8px;font-size:13px;margin-top:12px;
+  display:none;
+}
+.status-msg.ok{display:block;background:rgba(35,209,139,.1);border:1px solid rgba(35,209,139,.3);color:var(--up)}
+.status-msg.err{display:block;background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:var(--down)}
+.status-msg.info{display:block;background:rgba(47,129,247,.1);border:1px solid rgba(47,129,247,.3);color:var(--accent)}
+
+/* Code block */
+.code-block{
+  background:var(--bg);border:1px solid var(--border);border-radius:8px;
+  padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;
+  color:var(--text2);line-height:1.7;position:relative;white-space:pre-wrap;
+  margin:12px 0;
+}
+.copy-btn{
+  position:absolute;top:8px;right:8px;background:var(--bg4);border:1px solid var(--border2);
+  color:var(--text2);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;
+  font-family:inherit;
+}
+.copy-btn:hover{background:var(--border2);color:var(--text)}
+
+/* Spinner */
+.spinner{
+  display:inline-block;width:16px;height:16px;border:2px solid var(--border2);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;
+  vertical-align:middle;margin-right:6px;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Check icon */
+.check-ok{color:var(--up);font-weight:700;margin-right:6px}
+.check-fail{color:var(--down);font-weight:700;margin-right:6px}
+
+/* Hidden */
+.hidden{display:none !important}
+</style>
+</head>
+<body>
+
+<div class="setup-wrap">
+  <div class="setup-head">
+    <div class="setup-logo">
+      <svg width="30" height="30" viewBox="0 0 20 20" fill="none">
+        <circle cx="10" cy="10" r="8.5" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
+        <circle cx="10" cy="10" r="5"   stroke="rgba(255,255,255,.4)"  stroke-width="1"/>
+        <circle cx="10" cy="10" r="2"   fill="white" opacity=".9"/>
+        <line x1="1.5" y1="10" x2="5"  y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="15"  y1="10" x2="18.5" y2="10" stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="10"  y1="1.5" x2="10" y2="5"  stroke="white" stroke-width="1.2" opacity=".7"/>
+        <line x1="10"  y1="15" x2="10" y2="18.5" stroke="white" stroke-width="1.2" opacity=".7"/>
+      </svg>
+    </div>
+    <div class="setup-title"><span class="ping">Ping</span><span class="watch">Watch</span></div>
+    <div class="setup-sub">First-Run Setup</div>
+  </div>
+
+  <div class="steps" id="steps">
+    <div class="step-dot active" data-step="1"></div>
+    <div class="step-dot" data-step="2"></div>
+    <div class="step-dot" data-step="3"></div>
+    <div class="step-dot" data-step="4"></div>
+  </div>
+
+  <!-- Step 1: Choose Backend -->
+  <div class="setup-card" id="step1">
+    <div class="card-title">Choose Database Backend</div>
+    <div class="card-desc">PingWatch supports SQLite for simple deployments and PostgreSQL for production use.</div>
+    <div class="backend-grid">
+      <div class="backend-opt selected" onclick="selectBackend('sqlite')" id="opt-sqlite">
+        <span class="backend-icon">&#128230;</span>
+        <h3>SQLite (Simple)</h3>
+        <p>Zero configuration. Best for small deployments (&lt;100 devices). Data stored locally.</p>
+      </div>
+      <div class="backend-opt" onclick="selectBackend('postgresql')" id="opt-pg">
+        <span class="backend-icon">&#128024;</span>
+        <h3>PostgreSQL (Production)</h3>
+        <p>External database server. Best for production. Supports concurrent writes and large datasets.</p>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-step1" onclick="step1Next()">Continue</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Check PostgreSQL Installed -->
+  <div class="setup-card hidden" id="step2">
+    <div class="card-title">PostgreSQL Server Check</div>
+    <div class="card-desc">Checking if PostgreSQL is installed on this system...</div>
+    <div id="pg-check-result"></div>
+    <div class="btn-row btn-row-spread">
+      <button class="btn btn-secondary" onclick="goStep(1)">Back</button>
+      <div>
+        <button class="btn btn-secondary" onclick="checkPg()" id="btn-recheck">Check Again</button>
+        <button class="btn btn-primary hidden" id="btn-step2" onclick="goStep(3)">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Create Database & User -->
+  <div class="setup-card hidden" id="step3">
+    <div class="card-title">Create Database &amp; User</div>
+    <div class="card-desc">Run these commands in a terminal to create the PingWatch database and user:</div>
+    <div class="code-block" id="pg-cmds">sudo -u postgres psql
+CREATE USER pingwatch WITH PASSWORD '<span id="gen-pw">changeme</span>';
+CREATE DATABASE pingwatch OWNER pingwatch;
+\q</div>
+    <button class="copy-btn" onclick="copyCode()">Copy</button>
+    <div class="field" style="margin-top:16px">
+      <label>Password</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="setup-pg-pw" value="changeme" oninput="updatePwPreview()">
+        <button class="btn btn-secondary" onclick="generatePw()" style="white-space:nowrap;padding:8px 14px">Generate</button>
+      </div>
+    </div>
+    <div class="btn-row btn-row-spread">
+      <button class="btn btn-secondary" onclick="goStep(2)">Back</button>
+      <button class="btn btn-primary" onclick="goStep(4)">Continue</button>
+    </div>
+  </div>
+
+  <!-- Step 4: Connection Details -->
+  <div class="setup-card hidden" id="step4">
+    <div class="card-title">Connection Details</div>
+    <div class="card-desc">Enter the PostgreSQL connection details. These are pre-filled from the previous step.</div>
+    <div class="field-row">
+      <div class="field">
+        <label>Host</label>
+        <input type="text" id="pg-host" value="localhost">
+      </div>
+      <div class="field">
+        <label>Port</label>
+        <input type="number" id="pg-port" value="5432">
+      </div>
+    </div>
+    <div class="field">
+      <label>Database</label>
+      <input type="text" id="pg-database" value="pingwatch">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="pg-user" value="pingwatch">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="pg-password" value="changeme">
+      </div>
+    </div>
+    <div class="btn-row" style="justify-content:flex-start;margin-top:8px">
+      <button class="btn btn-secondary" onclick="testConnection()" id="btn-test">Test Connection</button>
+    </div>
+    <div class="status-msg" id="conn-status"></div>
+    <div class="btn-row btn-row-spread" style="margin-top:20px">
+      <button class="btn btn-secondary" onclick="goStep(3)">Back</button>
+      <button class="btn btn-primary" id="btn-complete" onclick="completeSetup()" disabled>Complete Setup</button>
+    </div>
+  </div>
+
+  <!-- Completion -->
+  <div class="setup-card hidden" id="step-done">
+    <div style="text-align:center;padding:20px 0">
+      <div style="font-size:48px;margin-bottom:16px">&#9989;</div>
+      <div class="card-title" style="margin-bottom:8px">Setup Complete</div>
+      <div class="card-desc">PingWatch is configured and ready. The server needs to restart to apply changes.</div>
+      <div class="btn-row" style="justify-content:center;margin-top:24px">
+        <button class="btn btn-primary" onclick="location.href='/'">Open PingWatch</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let _backend = 'sqlite';
+let _pgInstalled = false;
+
+function selectBackend(b) {
+  _backend = b;
+  document.getElementById('opt-sqlite').classList.toggle('selected', b === 'sqlite');
+  document.getElementById('opt-pg').classList.toggle('selected', b === 'postgresql');
+}
+
+function goStep(n) {
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('step' + i);
+    if (el) el.classList.toggle('hidden', i !== n);
+  }
+  document.getElementById('step-done').classList.add('hidden');
+  // Update dots
+  document.querySelectorAll('.step-dot').forEach(d => {
+    const s = parseInt(d.dataset.step);
+    d.classList.toggle('active', s === n);
+    d.classList.toggle('done', s < n);
+  });
+  // Auto-check PG on step 2
+  if (n === 2) checkPg();
+  // Sync password to step 4
+  if (n === 4) {
+    document.getElementById('pg-password').value = document.getElementById('setup-pg-pw').value;
+  }
+}
+
+function step1Next() {
+  if (_backend === 'sqlite') {
+    completeSqlite();
+  } else {
+    goStep(2);
+  }
+}
+
+async function completeSqlite() {
+  document.getElementById('btn-step1').disabled = true;
+  document.getElementById('btn-step1').textContent = 'Setting up...';
+  try {
+    const r = await fetch('/api/setup/complete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({backend: 'sqlite'})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showDone();
+    } else {
+      alert('Setup failed: ' + (d.error || 'unknown error'));
+    }
+  } catch (e) {
+    alert('Setup failed: ' + e.message);
+  }
+  document.getElementById('btn-step1').disabled = false;
+  document.getElementById('btn-step1').textContent = 'Continue';
+}
+
+async function checkPg() {
+  const el = document.getElementById('pg-check-result');
+  el.innerHTML = '<span class="spinner"></span> Checking for PostgreSQL...';
+  try {
+    const r = await fetch('/api/setup/check-pg');
+    const d = await r.json();
+    if (d.installed) {
+      _pgInstalled = true;
+      el.innerHTML = '<div class="status-msg ok"><span class="check-ok">&#10003;</span> PostgreSQL detected: ' + escHtml(d.version) + '</div>';
+      document.getElementById('btn-step2').classList.remove('hidden');
+    } else {
+      _pgInstalled = false;
+      let html = '<div class="status-msg err"><span class="check-fail">&#10007;</span> PostgreSQL not found on this system.</div>';
+      if (d.install_instructions) {
+        html += '<div style="margin-top:12px"><strong style="font-size:12px;color:var(--text2)">Install instructions (' + escHtml(d.os_name) + '):</strong>';
+        html += '<div class="code-block">' + escHtml(d.install_instructions) + '</div></div>';
+      }
+      el.innerHTML = html;
+      // Still allow continuing (user may have PG on a remote host)
+      document.getElementById('btn-step2').classList.remove('hidden');
+    }
+  } catch (e) {
+    el.innerHTML = '<div class="status-msg err">Check failed: ' + escHtml(e.message) + '</div>';
+    document.getElementById('btn-step2').classList.remove('hidden');
+  }
+}
+
+function generatePw() {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+  let pw = '';
+  const arr = new Uint8Array(20);
+  crypto.getRandomValues(arr);
+  for (let i = 0; i < 20; i++) pw += chars[arr[i] % chars.length];
+  document.getElementById('setup-pg-pw').value = pw;
+  updatePwPreview();
+}
+
+function updatePwPreview() {
+  document.getElementById('gen-pw').textContent = document.getElementById('setup-pg-pw').value;
+}
+
+function copyCode() {
+  const text = document.getElementById('pg-cmds').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+
+async function testConnection() {
+  const btn = document.getElementById('btn-test');
+  const st = document.getElementById('conn-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Testing...';
+  st.className = 'status-msg';
+  st.style.display = 'none';
+  try {
+    const r = await fetch('/api/setup/test-connection', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        host: document.getElementById('pg-host').value,
+        port: parseInt(document.getElementById('pg-port').value) || 5432,
+        database: document.getElementById('pg-database').value,
+        user: document.getElementById('pg-user').value,
+        password: document.getElementById('pg-password').value,
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.className = 'status-msg ok';
+      st.innerHTML = '<span class="check-ok">&#10003;</span> Connection successful!';
+      document.getElementById('btn-complete').disabled = false;
+    } else {
+      st.className = 'status-msg err';
+      st.innerHTML = '<span class="check-fail">&#10007;</span> ' + escHtml(d.error);
+      document.getElementById('btn-complete').disabled = true;
+    }
+  } catch (e) {
+    st.className = 'status-msg err';
+    st.innerHTML = '<span class="check-fail">&#10007;</span> ' + escHtml(e.message);
+  }
+  btn.disabled = false;
+  btn.innerHTML = 'Test Connection';
+}
+
+async function completeSetup() {
+  const btn = document.getElementById('btn-complete');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Setting up...';
+  try {
+    const r = await fetch('/api/setup/complete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        backend: 'postgresql',
+        host: document.getElementById('pg-host').value,
+        port: parseInt(document.getElementById('pg-port').value) || 5432,
+        database: document.getElementById('pg-database').value,
+        user: document.getElementById('pg-user').value,
+        password: document.getElementById('pg-password').value,
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showDone();
+    } else {
+      const st = document.getElementById('conn-status');
+      st.className = 'status-msg err';
+      st.innerHTML = '<span class="check-fail">&#10007;</span> ' + escHtml(d.error || 'Setup failed');
+      btn.disabled = false;
+      btn.innerHTML = 'Complete Setup';
+    }
+  } catch (e) {
+    alert('Setup failed: ' + e.message);
+    btn.disabled = false;
+    btn.innerHTML = 'Complete Setup';
+  }
+}
+
+function showDone() {
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('step' + i);
+    if (el) el.classList.add('hidden');
+  }
+  document.getElementById('step-done').classList.remove('hidden');
+  document.querySelectorAll('.step-dot').forEach(d => {
+    d.classList.remove('active');
+    d.classList.add('done');
+  });
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Generate a password on load
+generatePw();
+</script>
+</body>
+</html>

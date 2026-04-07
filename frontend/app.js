@@ -3,6 +3,7 @@ const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devS
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
+let _reconnectDelay  = 3000; // exponential backoff: 3s → 6s → 12s → … → 60s cap
 
 // ── SSE batching: coalesce events into 250ms windows to reduce DOM mutations ──
 const _sseBatch={sensors:{},devStatuses:{},timer:null,INTERVAL:250};
@@ -14,13 +15,13 @@ function _sseFlush(){
   // Per-sensor DOM updates
   for(const key in _sseBatch.sensors){
     const d=_sseBatch.sensors[key];
-    updateTile(d); updateCardSensor(d); updateSbSensorDot(d);
+    updateTile(d); updateCardSensor(d);
     devIds.add(d.device_id);
   }
   // Per-device-status DOM updates
   for(const did in _sseBatch.devStatuses){
     const st=_sseBatch.devStatuses[did];
-    updateCardStatus(did,st); updateSbDevDot(did,st);
+    updateCardStatus(did,st);
     devIds.add(did);
   }
   // Once per batch (not per event)
@@ -45,6 +46,17 @@ function _sseSchedule(){
 // ── Clock ────────────────────────────────────────────────────────
 setInterval(()=>document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-GB'),1000);
 
+// ── SSE refresh coalescing (prevents flood during flap storms) ───
+let _refreshTimer=null;
+function _scheduleRefresh(){
+  if(_refreshTimer) return;
+  _refreshTimer=setTimeout(()=>{
+    _refreshTimer=null;
+    if(typeof _refreshAlertCache==='function') _refreshAlertCache();
+    _refreshFlapList();
+  },3000);
+}
+
 // ── SSE helpers ──────────────────────────────────────────────────
 function _parseSSE(e){
   try{ return JSON.parse(e.data); }
@@ -57,6 +69,7 @@ function connectSSE(){
   sse=new EventSource('/events');
   sse.onopen=()=>{
     document.getElementById('cbn').style.display='none';
+    _reconnectDelay=3000;  // reset backoff on successful connect
     if(_sseFirstConnect){ _sseFirstConnect=false; return; }
     // Reconnect after drop — re-sync state and refresh widgets
     _sseResync();
@@ -91,32 +104,26 @@ function connectSSE(){
   sse.addEventListener('flap_down',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
-    // Refresh alert cache after alert engine has had time to process (3s delay)
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('flap_recovered',e=>{
-    const d=_parseSSE(e); if(!d) return; d._direction='recovered'; pushFlap(d);
+    const d=_parseSSE(e); if(!d) return;
+    resolveFlap(d,'down');
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    _scheduleRefresh();
   });
   sse.addEventListener('threshold_ok',e=>{
     const d=_parseSSE(e); if(!d) return;
-    d._direction='threshold_ok';
-    pushFlap(d);
-    if(typeof _refreshAlertCache==='function') setTimeout(_refreshAlertCache, 3000);
-    setTimeout(_refreshFlapList, 2000);
+    resolveFlap(d,'threshold');
+    _scheduleRefresh();
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
@@ -134,8 +141,10 @@ function connectSSE(){
     document.getElementById('cbn').style.display='block';
     // Guard: onerror can fire multiple times (browser retries) before the timer fires.
     // Only schedule one reconnect attempt at a time to avoid a reconnect storm.
-    if(!_reconnectTimer)
-      _reconnectTimer=setTimeout(()=>{ _reconnectTimer=null; connectSSE(); },3000);
+    if(!_reconnectTimer){
+      _reconnectTimer=setTimeout(()=>{ _reconnectTimer=null; connectSSE(); },_reconnectDelay);
+      _reconnectDelay=Math.min(_reconnectDelay*2,60000);
+    }
   };
 }
 // ── Re-sync after SSE reconnect ──────────────────────────────────
@@ -239,7 +248,9 @@ async function submitLogin(){
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
     S.role=d.role||'viewer';
+    if(d.session_ttl)_sessionTtl=d.session_ttl;
     hideLogin();
+    try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
     onAuthenticated(d.username);
   }catch(e){
     const msg=e.name==='AbortError'?'Server is taking too long — it may still be loading. Try again.':'Server error. Try again.';
@@ -247,6 +258,7 @@ async function submitLogin(){
   }finally{clearTimeout(slowHint);}
 }
 async function doLogout(){
+  _stopIdleCheck();
   await fetch('/api/logout',{method:'POST'});
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
@@ -298,12 +310,29 @@ function onAuthenticated(username){
   _alertEvtBadgePoll();
   if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
   window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, 60000);
+  _lastActivity = Date.now();
+  _startIdleCheck();
 }
 
 let _alertEvtBadgeCount = 0;
 
+let _sessionTtl   = 86400;
+let _lastActivity = Date.now();
+let _idleTimer    = null;
+function _onUserActivity(){ _lastActivity = Date.now(); }
+function _startIdleCheck(){
+  if(_idleTimer) clearInterval(_idleTimer);
+  _idleTimer = setInterval(()=>{
+    if((Date.now()-_lastActivity)/1000 >= _sessionTtl){
+      clearInterval(_idleTimer); _idleTimer=null;
+      doLogout().then(()=>showLogin('Session timed out due to inactivity.'));
+    }
+  },30000);
+}
+function _stopIdleCheck(){ if(_idleTimer){clearInterval(_idleTimer);_idleTimer=null;} }
+
 function _updateEvtBadge() {
-  const n = unseenFlaps + _alertEvtBadgeCount;
+  const n = unseenFlaps;
   const b = document.getElementById('evtBadge');
   if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
 }
@@ -314,7 +343,6 @@ async function _alertEvtBadgePoll() {
     if (!r.ok) return;
     const d = await r.json();
     _alertEvtBadgeCount = d.count || 0;
-    _updateEvtBadge();
   } catch (_) {}
 }
 
@@ -347,7 +375,7 @@ function _showBrowserNotif(d) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const n = new Notification(d.title || 'PingWatch Alert', {
     body: d.body || '',
-    icon: '/static/favicon.ico',
+    icon: '/favicon.ico',
     tag:  'pingwatch-alert',
   });
   n.onclick = () => { window.focus(); n.close(); };
@@ -364,13 +392,16 @@ async function checkAuth(){
   document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
-    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; onAuthenticated(d.username);}
+    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; onAuthenticated(d.username);}
     else{showLogin();}
   }catch(e){showLogin();}
 }
 // Enter key on login inputs
 ['login-user','login-pass'].forEach(id=>{
   document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')submitLogin();});
+});
+['click','keydown','mousemove','touchstart'].forEach(ev=>{
+  document.addEventListener(ev,_onUserActivity,{passive:true});
 });
 
 // ── API ──────────────────────────────────────────────────────────
@@ -385,6 +416,7 @@ async function api(method,path,body=null){
 // ── Pills ────────────────────────────────────────────────────────
 function updatePills(){
   _hbUpdate();
+  if(typeof _updateStatusPills==='function') _updateStatusPills();
 }
 
 // ── Global Network Health Bar ─────────────────────────────────────
@@ -553,13 +585,14 @@ function _hbSetupSparkInteractions() {
     const up  = Math.round(best.pct / 100 * tot);
     const dt  = new Date(best.ts * 1000);
     const t   = `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-    _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t);
+    const nearby = _hbSparkEvents.filter(ev => Math.abs(ev.ts - best.ts) <= 900);
+    _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t, nearby);
   });
   canvas.addEventListener('mouseleave', _hbSpkTipHide);
   canvas.addEventListener('click', () => { _hbSpkTipHide(); _hbOpenExpanded(); });
 }
 
-function _hbSpkTip(cx, cy, pct, up, down, time) {
+function _hbSpkTip(cx, cy, pct, up, down, time, events) {
   let tip = document.getElementById('hb-spk-tip');
   if (!tip) {
     tip = document.createElement('div');
@@ -568,14 +601,26 @@ function _hbSpkTip(cx, cy, pct, up, down, time) {
     document.body.appendChild(tip);
   }
   const col = pct >= 95 ? 'var(--up)' : pct >= 80 ? 'var(--warn)' : 'var(--down)';
-  tip.innerHTML =
+  let html =
     `<div class="hb-tip-time">${time}</div>` +
     `<div class="hb-tip-pct" style="color:${col}">${Math.round(pct)}%</div>` +
     `<div class="hb-tip-row"><span style="color:var(--up)">▲</span> ${up} up</div>` +
     (down ? `<div class="hb-tip-row"><span style="color:var(--down)">▼</span> ${down} down</div>` : '');
+  if (events && events.length) {
+    html += '<div class="hb-tip-sep"></div>';
+    const shown = events.slice(0, 3);
+    shown.forEach(ev => {
+      const ic = ev.type === 'outage' ? '▼' : '⚠';
+      const c  = ev.type === 'outage' ? 'var(--down)' : 'var(--warn)';
+      html += `<div class="hb-tip-ev"><span style="color:${c}">${ic}</span> ${esc(ev.label)}</div>`;
+    });
+    if (events.length > 3) html += `<div class="hb-tip-ev" style="color:var(--text3)">+${events.length - 3} more</div>`;
+  }
+  tip.innerHTML = html;
   tip.style.display = '';
-  const tw = 94;
-  let left = cx - tw / 2, top = cy - 82;
+  const tw = tip.offsetWidth || 120;
+  const th = tip.offsetHeight || 80;
+  let left = cx - tw / 2, top = cy - th - 10;
   if (left < 4) left = 4;
   if (left + tw > innerWidth - 4) left = innerWidth - tw - 4;
   if (top < 4) top = cy + 12;
@@ -687,6 +732,23 @@ function pushFlap(d){
   flashDownPill();
 }
 
+function resolveFlap(d, matchDir){
+  for(let i=0;i<FLAPS.length;i++){
+    const f=FLAPS[i];
+    if(f.did===d.did && f.sid===d.sid
+       && (f._direction===matchDir || f.direction===matchDir)
+       && !f.resolved_at){
+      const downMs=new Date(f.ts).getTime();
+      const recMs=new Date(d.ts).getTime();
+      f.resolved_at=recMs/1000;
+      f.duration=Math.max(0,(recMs-downMs)/1000);
+      f.ack_state='resolved';
+      break;
+    }
+  }
+  renderFlaps();
+}
+
 function pushThresholdEvent(d, level){
   const entry=Object.assign({},d,{_direction:'threshold',_thr_level:level});
   const k=_flapKey(entry); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
@@ -751,15 +813,18 @@ async function _refreshFlapList(){
     const fd=await fetch('/api/flaps').then(r=>r.json());
     const byKey={};
     (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
-      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       byKey[_flapKey(f)]=f;
     });
     for(let i=0;i<FLAPS.length;i++){
       const k=_flapKey(FLAPS[i]);
-      if(byKey[k]) Object.assign(FLAPS[i],{id:byKey[k].id,ack_state:byKey[k].ack_state});
+      if(byKey[k]) Object.assign(FLAPS[i],{
+        id:byKey[k].id, ack_state:byKey[k].ack_state,
+        resolved_at:byKey[k].resolved_at, duration:byKey[k].duration
+      });
     }
     renderFlaps();
   }catch(_){}
@@ -853,7 +918,6 @@ async function _refreshDevices(){
       renderDp(dev);
     });
     updatePills();
-    renderSidebar();
   }catch(e){}
 }
 
@@ -863,11 +927,12 @@ async function _refreshEvents(){
     const [fd,td]=await Promise.all([
       fetch('/api/flaps').then(r=>r.json()),
       fetch('/api/traps').then(r=>r.json()),
+      typeof _refreshAlertCache==='function' ? _refreshAlertCache() : Promise.resolve(),
     ]);
     (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
-      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
@@ -898,15 +963,6 @@ async function _loadTrapFilters(){
       });
     }
   }catch(e){}
-}
-
-function toggleSidebar(){
-  const collapsed=document.body.classList.toggle('sidebar-collapsed');
-  localStorage.setItem('sidebarCollapsed', collapsed);
-}
-// Restore sidebar state across sessions
-if(localStorage.getItem('sidebarCollapsed')==='true'){
-  document.body.classList.add('sidebar-collapsed');
 }
 
 function flashDownPill(){
@@ -943,8 +999,6 @@ async function loadAll(){
     window._snrDef = {
       interval:     _sr.snr_interval     || 5,
       timeout:      _sr.snr_timeout      || 4,
-      fail_after:   _sr.snr_fail_after   || 1,
-      recover_after:_sr.snr_recover_after|| 1,
     };
     window._snrTypeDefaults = _sr.snr_type_defaults || {};
     const orgName = (_sr.org_name || '').trim();
@@ -966,9 +1020,9 @@ async function loadAll(){
     const fr=await fetch('/api/flaps');
     const fd=await fr.json();
     (fd.flaps||[]).forEach(f=>{
+      if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
-      else if(f.direction==='threshold_ok'){f._direction='threshold_ok';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
@@ -1009,7 +1063,13 @@ async function loadAll(){
   renderFlaps(); // re-render events now that S.devices (groups) is populated
   updatePills();
   restoreGroupOrder();
-  renderSidebar();
+  _restoreViewToggle();
+  // Clear dashboard loading shimmer now that device/sensor data is ready
+  if (typeof _dwClearLoading === 'function') _dwClearLoading();
+  // Update group summaries for collapsed groups
+  document.querySelectorAll('.grp-grid.collapsed').forEach(g=>{
+    if(g.dataset.group) _updateGrpSummary(g.dataset.group);
+  });
   // Backfill per-device trap log from historical FLAPS (devices now loaded)
   FLAPS.filter(f=>f._direction==='trap').forEach(t=>{
     const dev=Object.values(S.devices).find(v=>v.host===t.src_ip);

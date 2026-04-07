@@ -236,6 +236,7 @@ function _alertEvtRow(e) {
     <button class="btn-sm rbac-op" onclick="_alertAck(${e.id})">ACK</button>
     <button class="btn-sm rbac-op" onclick="_alertResolve(${e.id})">Resolve</button>` : '';
   const sevCls = e.severity === 'critical' ? 'alrt-sev-crit'
+               : e.severity === 'recovery' ? 'alrt-sev-recovery'
                : e.severity === 'info'     ? 'alrt-sev-info' : 'alrt-sev-warn';
   return `
     <div class="alrt-evt-row">
@@ -520,6 +521,8 @@ async function _alertingOpenEditor(id) {
   const sev     = rule?.severity        || 'warning';
   const logic   = rule?.condition_logic || 'AND';
   const cool    = rule?.cooldown_s      ?? 300;
+  const trigCnt = rule?.trigger_count   ?? 1;
+  const recCnt  = rule?.recover_count   ?? 1;
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'alrt-editor-modal';
@@ -537,7 +540,7 @@ async function _alertingOpenEditor(id) {
           <input type="text" id="ae-name" value="${esc(name)}"
             placeholder="e.g. Ping DOWN → ops email" autocomplete="off" maxlength="200"/>
         </div>
-        <div class="alrt-row3">
+        <div class="alrt-row3" style="flex-wrap:wrap">
           <div class="fr">
             <label class="fl">Severity</label>
             <select id="ae-sev">
@@ -549,6 +552,16 @@ async function _alertingOpenEditor(id) {
           <div class="fr">
             <label class="fl">Cooldown (seconds)</label>
             <input type="number" id="ae-cool" value="${cool}" min="0" step="60"/>
+          </div>
+          <div class="fr">
+            <label class="fl">Trigger After (events)</label>
+            <input type="number" id="ae-trigger" value="${trigCnt}" min="1" max="100"/>
+            <div class="fh">Consecutive events before alerting</div>
+          </div>
+          <div class="fr">
+            <label class="fl">Recover After (events)</label>
+            <input type="number" id="ae-recover" value="${recCnt}" min="1" max="100"/>
+            <div class="fh">Consecutive recoveries before recovery alert</div>
           </div>
           <div class="fr" style="align-self:flex-end;padding-bottom:14px">
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -628,7 +641,7 @@ const _AE_OPS = [
 // Known enum values for fields that have a fixed set of options
 const _AE_FIELD_VALUES = {
   event_type:      ['down','recovered','threshold_warning','threshold_critical','threshold_ok'],
-  severity:        ['critical','warning','info'],
+  severity:        ['critical','warning','recovery','info'],
   direction:       ['down','recovered','threshold'],
   threshold_state: ['warn','crit'],
 };
@@ -886,9 +899,14 @@ async function _alertingSave() {
     actions.push({ atype, config: cfg });
   });
 
+  const trigger = parseInt(document.getElementById('ae-trigger')?.value || '1', 10);
+  const recover = parseInt(document.getElementById('ae-recover')?.value || '1', 10);
+
   const payload = {
     name, enabled, severity: sev,
     condition_logic: logic, cooldown_s: isNaN(cool) ? 300 : cool,
+    trigger_count: isNaN(trigger) ? 1 : Math.max(1, trigger),
+    recover_count: isNaN(recover) ? 1 : Math.max(1, recover),
     conditions, actions,
   };
 

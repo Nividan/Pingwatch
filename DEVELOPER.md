@@ -47,6 +47,9 @@ Browser / Desktop GUI
         │   ├── engine.py         ← SSH / Telnet backup engine
         │   └── scheduler.py      ← Backup schedule runner
         │
+        ├── vmware/               ← VMware vSphere integration
+        │   └── client.py         ← VM discovery, metric querying, session/metric caching
+        │
         ├── snmp/                 ← SNMP trap pipeline
         │   ├── receiver.py       ← UDP trap listener
         │   ├── enricher.py       ← Trap enrichment & OID lookup
@@ -54,12 +57,14 @@ Browser / Desktop GUI
         │   ├── catalog.py        ← OID catalog queries
         │   └── seeds/            ← Built-in trap definitions
         │
-        └── db/                   ← SQLite persistence package (dual-DB)
-                                       Main DB: config, devices, users, groups, IPAM, settings
-                                       Logs DB: sensor samples, flap log, SNMP traps, error log
+        └── db/                   ← Dual-backend persistence (SQLite default / PostgreSQL production)
+                                       Main: config, devices, users, groups, IPAM, settings, alerts
+                                       Logs: sensor samples, flap log, SNMP traps, error log
 ```
 
-**Dual write-queue design:** two independent queue threads — one for the Main DB (`pingwatch.db`) and one for the Logs DB (`pingwatch_logs.db`). Probe threads never block on DB writes; they enqueue a lambda and continue.
+**Dual-backend:** SQLite (default, zero-setup) or PostgreSQL (production/high-scale), selected via `pingwatch.conf`. All `db/` modules implement both paths gated by `is_pg()`.
+
+**Dual write-queue design (SQLite):** two independent queue threads — one for the Main DB (`pingwatch.db`) and one for the Logs DB (`pingwatch_logs.db`). Probe threads never block on DB writes; they enqueue a lambda and continue. PostgreSQL bypasses the queues (MVCC handles concurrency).
 
 ---
 
@@ -70,10 +75,12 @@ pingwatch/
 ├── server.py               ← HTTP/HTTPS dispatcher + entry point
 ├── setup_wizard.py         ← First-run interactive setup wizard
 ├── gui.py                  ← Desktop status window (tkinter)
-├── pingwatch.pyw           ← Windows windowless launcher
-├── start.bat               ← Windows console launcher
-├── start.sh                ← Linux/macOS launcher + service installer
-├── pingwatch.service       ← systemd unit file
+├── linux/
+│   ├── start.sh            ← Linux/macOS launcher + service installer
+│   └── pingwatch.service   ← systemd unit file
+├── windows/
+│   ├── start.bat           ← Windows console launcher
+│   └── pingwatch.pyw       ← Windows windowless launcher
 ├── requirements.txt        ← Python dependencies
 ├── ssh_known_hosts.txt     ← SSH TOFU host key store (auto-created)
 │
@@ -100,6 +107,9 @@ pingwatch/
 │   ├── db_backup.py        ← WAL-safe SQLite DB snapshots via sqlite3.backup(); retention policy
 │   └── database/           ← Timestamped DB snapshot files (auto-created)
 │
+├── vmware/
+│   └── client.py           ← vSphere VM discovery, metric querying, session + metric caching (pyvmomi)
+│
 ├── snmp/
 │   ├── receiver.py         ← UDP socket on SNMP port, injects traps into pipeline
 │   ├── enricher.py         ← OID resolution, vendor ID, category + severity annotation
@@ -110,7 +120,11 @@ pingwatch/
 ├── db/
 │   ├── __init__.py         ← Re-exports all public symbols
 │   ├── core.py             ← Dual write-queues, schema init, user seeding
-│   ├── migration.py        ← One-time split: legacy single-DB → Main + Logs DB
+│   ├── backend.py          ← Backend selection: is_pg(), load_config() from pingwatch.conf
+│   ├── pg_pool.py          ← PostgreSQL connection pool; pg_conn() / pg_cursor() context managers
+│   ├── pg_schema.py        ← PostgreSQL DDL — main + logs schemas, indexes, partitioned tables
+│   ├── pg_migrate.py       ← One-time SQLite-to-PostgreSQL migration tool
+│   ├── migration.py        ← One-time split: legacy single-DB → Main + Logs DB (SQLite)
 │   ├── persistence.py      ← Device/sensor save & load
 │   ├── samples.py          ← Buffered probe writes, history & summary queries
 │   ├── events.py           ← Flap log, SNMP trap log, sensor error log
@@ -145,7 +159,7 @@ pingwatch/
     ├── app.js              ← Bootstrap, tab routing, shared helpers
     ├── dashboard.js        ← Customizable widget dashboard
     ├── devices.js          ← Device list and detail panel
-    ├── sensors.js          ← Sensor list and detail panel
+    ├── sensors.js          ← Sensor list, detail panel, history chart; KPI tiles reflect selected time range
     ├── events.js           ← Flap/trap/error event log viewer
     ├── backups.js          ← Backup table, config viewer, diff, rollback
     ├── forms-device.js     ← Add/edit device form
@@ -167,7 +181,7 @@ pingwatch/
 ## Backend Modules
 
 ### `server.py`
-HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect.
+HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
 ### `setup_wizard.py`
 Cross-platform first-run wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only).
@@ -185,7 +199,7 @@ LDAP/AD helpers: `ldap_authenticate`, `ldap_test_connection`, `ldap_test_auth_us
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
 
 ### `monitoring/probes.py`
-All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match). `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
+All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match). VMware probing is handled by `vmware/client.py`, called from `core/state.py`. `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
 
 ### `backup/engine.py`
 SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH host key verification, password and keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable command, per-command idle timeouts, configurable command list.
@@ -194,13 +208,16 @@ SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH hos
 Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to run while the DB is being written) to snapshot both Main DB and Logs DB into timestamped files under `backup/database/`. Applies a configurable retention policy (default: keep 7 copies). Triggered by the scheduler and also callable on demand via `POST /api/db/backup/run`.
 
 ### `monitoring/alert_engine.py`
-Rules-based alert engine. A bounded daemon queue receives events from `core/state.py` on every sensor state change. The worker thread evaluates all enabled rules against each event: condition matching (AND/OR), maintenance window suppression, cooldown/deduplication (DB-persisted), and multi-action dispatch. Actions: email (group-resolved + raw addresses), HTTP webhook (SSRF-guarded), syslog, and browser push notification via SSE. Rules are cached in memory with a 30-second TTL; `invalidate_rules_cache()` forces an immediate reload after saves.
+Rules-based alert engine. A bounded daemon queue receives events from `core/state.py` on every sensor state change. The worker thread evaluates all enabled rules against each event: condition matching (AND/OR), maintenance window suppression, cooldown/deduplication (DB-persisted), and multi-action dispatch. Actions: email (group-resolved + raw addresses), HTTP webhook (SSRF-guarded), syslog, and browser push notification via SSE. Rules are cached in memory with a 30-second TTL; `invalidate_rules_cache()` forces an immediate reload after saves. Verifies sensor/device still exists before dispatch to prevent ghost alerts after deletion.
 
 ### `monitoring/smtp_alert.py`
-Down/up email alerts via SMTP when sensor states change. Rate-limits repeated SMTP failure logs (5-minute suppression per host).
+Down/up email alerts via SMTP when sensor states change. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Delayed DOWN emails (`_smtp_down_delayed`) verify the sensor is still running before sending — prevents alerts for deleted sensors.
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.
+
+### `vmware/client.py`
+VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM discovery from vCenter/ESXi and real-time metric querying for 16 VM metrics across 6 categories (CPU, Memory, Disk, Datastore, Network, System). Session caching with 25-minute TTL avoids repeated logins; metric caching with 20-second TTL (matching vSphere's realtime sampling interval) avoids redundant QueryPerf calls when multiple sensors target the same VM. `vmware_probe()` returns the standard `{ok, ms, detail, value}` probe contract. `mem_consumed_pct` uses `quickStats.guestMemoryUsage` (actual guest OS memory from VMware Tools) with fallback to `mem.active.average`.
 
 ### `snmp/`
 - `receiver.py` — UDP socket on the SNMP port, injects raw traps into the pipeline
@@ -217,14 +234,14 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 | `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/users/{u}/profile` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
-| `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*` |
+| `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard`, `/api/db/stats` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
 | `alert_rules.py` | `/api/alert/rules`, `/api/alert/rule`, `/api/alert/rule/{id}`, `/api/alert/rule/{id}/toggle`, `/api/alert/rule/{id}/test` |
-| `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
+| `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/events/resolve-all`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
@@ -233,12 +250,25 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 
 ## Database Package
 
+PingWatch supports two database backends selected via `pingwatch.conf`. All DB modules implement both paths; the `is_pg()` helper gates which branch runs.
+
+| SQLite | PostgreSQL |
+|--------|------------|
+| `pingwatch.db` (main) + `pingwatch_logs.db` (logs) | Single PG server, `main` schema + `logs` schema |
+| `?` placeholders, tuple rows | `%s` placeholders, `RealDictCursor` dict rows |
+| Write-queue serialization (`_db_enqueue` / `_logs_enqueue`) | MVCC — queues bypassed, direct connection via `pg_conn()` / `pg_cursor()` |
+| No partitioning | `sensor_samples` range-partitioned by month (auto-created) |
+
 | Module | Responsibility |
 |--------|----------------|
+| `backend.py` | `is_pg()`, `load_config()` / `save_config()` — reads `pingwatch.conf` to select backend |
+| `pg_pool.py` | PostgreSQL connection pool; `pg_conn()` (auto-commit/rollback) and `pg_cursor()` (auto-close) context managers |
+| `pg_schema.py` | PostgreSQL DDL — main + logs schemas, indexes, monthly-partitioned `sensor_samples`, rollup tables (`sensor_samples_5m`, `sensor_samples_1h`) |
+| `pg_migrate.py` | One-time SQLite → PostgreSQL migration: copies all tables, verifies row counts |
 | `core.py` | Dual write-queues (main + logs), schema init for both DBs, user seeding |
-| `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB |
+| `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB (SQLite only) |
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag |
-| `samples.py` | Buffered probe writes, history & summary queries |
+| `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
 | `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch |
@@ -264,6 +294,7 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `db_backup_time` | `"HH:MM"` | Time of day for scheduled DB backup |
 | `db_backup_days` | `"1,2,3,4,5,6,7"` | Days of week for weekly DB backup |
 | `db_backup_keep` | integer string | Number of DB backup snapshots to retain (default 7) |
+| `max_workers_executor` | integer string | Probe worker override (4–512). `"0"` or absent = auto (`max(64, min(512, sensor_count // 4))`). Live resize on device add/delete — no restart needed. |
 
 ---
 
@@ -277,12 +308,12 @@ The frontend is served as static files — no build step.
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`) |
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
-| `devices.js` | Device list, detail panel, port scan modal |
-| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads |
-| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event` |
+| `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
+| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
+| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; bulk "Resolve All" button |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |
-| `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths |
+| `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
 | `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Syslog, Alert Rules) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal |
@@ -415,8 +446,16 @@ The frontend is served as static files — no build step.
 |--------|------|------|-------------|
 | `GET` | `/api/alert/events` | viewer | Paginated event history |
 | `GET` | `/api/alert/events/active` | viewer | Active / unresolved events |
+| `POST` | `/api/alert/events/resolve-all` | operator | Resolve all active alert events and flaps |
 | `POST` | `/api/alert/event/{id}/ack` | operator | Acknowledge event |
 | `POST` | `/api/alert/event/{id}/resolve` | operator | Resolve event |
+
+### VMware
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/vmware/metrics` | viewer | Available VM metrics with labels, units, groups |
+| `POST` | `/api/vmware/vms` | operator | Discover VMs on a vCenter/ESXi host |
 
 ### Maintenance Windows
 

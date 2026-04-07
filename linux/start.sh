@@ -19,6 +19,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 
 # ── Service install / uninstall ─────────────────────────────
@@ -37,7 +38,7 @@ if [ "${1:-}" = "--install-service" ]; then
     ACTUAL_USER="${SUDO_USER:-$(whoami)}"
     ACTUAL_GROUP="$(id -gn "$ACTUAL_USER" 2>/dev/null || echo "$ACTUAL_USER")"
     # Patch WorkingDirectory and ExecStart to the actual install path
-    sed "s|/opt/pingwatch|$SCRIPT_DIR|g" "$SERVICE_SRC" > "$SERVICE_DST"
+    sed "s|/opt/pingwatch|$PROJECT_ROOT|g" "$SERVICE_SRC" > "$SERVICE_DST"
     # Replace python path with the actual python3 on this system
     PYPATH="$(command -v python3)"
     sed -i "s|/usr/bin/python3|$PYPATH|g" "$SERVICE_DST"
@@ -112,10 +113,10 @@ PYEOF
 fi
 
 # ── First-run / forced setup ────────────────────────────────
-DB="$SCRIPT_DIR/pingwatch.db"
-if [ ! -f "$DB" ] || [ "${1:-}" = "--setup" ]; then
+CONF="$PROJECT_ROOT/pingwatch.conf"
+if [ ! -f "$CONF" ] || [ "${1:-}" = "--setup" ]; then
     echo "[SETUP] Running first-run setup wizard..."
-    "$PYTHON" "$SCRIPT_DIR/setup_wizard.py"
+    "$PYTHON" "$PROJECT_ROOT/setup_wizard.py" "$@"
     # If the wizard restarted the systemd service, don't launch a second instance
     if command -v systemctl &>/dev/null && systemctl is-active --quiet pingwatch 2>/dev/null; then
         exit 0
@@ -126,7 +127,7 @@ fi
 if [ "$EUID" -ne 0 ] && [ "${PINGWATCH_NO_ROOT_WARN:-}" != "1" ]; then
     "$PYTHON" -c "
 import sys, os
-sys.path.insert(0, '$SCRIPT_DIR')
+sys.path.insert(0, '$PROJECT_ROOT')
 try:
     from db.users import db_load_settings
     s = db_load_settings()
@@ -153,5 +154,5 @@ except Exception:
 fi
 
 # ── Launch server ───────────────────────────────────────────
-cd "$SCRIPT_DIR"
-exec "$PYTHON" "$SCRIPT_DIR/server.py"
+cd "$PROJECT_ROOT"
+exec "$PYTHON" "$PROJECT_ROOT/server.py"

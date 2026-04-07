@@ -30,13 +30,15 @@ def handle(h, method, path, body):
 
     # ── /api/pages GET ────────────────────────────────────────────
     if path == '/api/pages' and method == 'GET':
-        if not h._auth(): return True
+        user, _ = h._require("viewer")
+        if not user: return True
         h._json(200, topo_get_pages())
         return True
 
     # ── /api/nodes GET ────────────────────────────────────────────
     if path == '/api/nodes' and method == 'GET':
-        if not h._auth(): return True
+        user, _ = h._require("viewer")
+        if not user: return True
         from urllib.parse import urlparse, parse_qs
         _qs     = urlparse(h.path).query
         _page_id = None
@@ -50,7 +52,8 @@ def handle(h, method, path, body):
 
     # ── /api/links GET ────────────────────────────────────────────
     if path == '/api/links' and method == 'GET':
-        if not h._auth(): return True
+        user, _ = h._require("viewer")
+        if not user: return True
         from urllib.parse import urlparse, parse_qs
         _qs     = urlparse(h.path).query
         _page_id = None
@@ -64,7 +67,8 @@ def handle(h, method, path, body):
 
     # ── /api/groups GET ───────────────────────────────────────────
     if path == '/api/groups' and method == 'GET':
-        if not h._auth(): return True
+        user, _ = h._require("viewer")
+        if not user: return True
         from urllib.parse import urlparse, parse_qs
         _qs     = urlparse(h.path).query
         _page_id = None
@@ -79,7 +83,8 @@ def handle(h, method, path, body):
     # ── /api/settings/{key} GET ───────────────────────────────────
     m = _RE_TOPO_SETTING.match(path)
     if m and method == 'GET':
-        if not h._auth(): return True
+        user, _ = h._require("viewer")
+        if not user: return True
         row = topo_get_setting(m.group(1))
         h._json(200, row) if row else h._json(404, {'error': 'not found'})
         return True
