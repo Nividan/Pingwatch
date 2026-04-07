@@ -399,7 +399,7 @@ function showPwDashboardPanel() {
 }
 
 function _buildIncidentList() {
-  const downDevs = pwDevices.filter(d => d.status === 'down');
+  const downDevs = pwDevices.filter(d => d.status === 'down' && !d.alerts_muted);
   const threshInc = [];
   for (const key of Object.keys(_pwSensorState)) {
     const state = _pwSensorState[key];
@@ -410,7 +410,7 @@ function _buildIncidentList() {
     const dev = _pwDevMap[did];
     if (!dev) continue;
     const sensor = (dev.sensors || []).find(s => s.sensor_id === sid);
-    if (!sensor) continue;
+    if (!sensor || sensor.alerts_muted || dev.alerts_muted) continue;
     threshInc.push({ dev, sensor, state });
   }
   const critInc = threshInc.filter(x => x.state === 'crit');
