@@ -592,15 +592,6 @@ body{
   cursor:grab;pointer-events:none;
 }
 .dc:hover .dc-drag-handle{opacity:.5}
-.dc-alrt-btn{
-  position:absolute;top:8px;right:26px;z-index:3;
-  background:none;border:none;cursor:pointer;
-  color:var(--text3);font-size:13px;line-height:1;
-  padding:2px 4px;border-radius:4px;
-  opacity:0;transition:opacity .15s,color .15s,background .15s;
-}
-.dc:hover .dc-alrt-btn{opacity:.7}
-.dc-alrt-btn:hover{opacity:1;color:var(--accent);background:var(--bg3);}
 
 /* ── Sensor tile grid (inside device window) ── */
 .sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:16px}

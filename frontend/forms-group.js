@@ -30,11 +30,7 @@ async function openEditGroup(groupName) {
           </div>
         </div>
 
-        <div class="alrt-section" style="opacity:.5">
-          <div class="alrt-section-hdr">More Group Settings</div>
-          <div class="fh">Future per-group configuration (notification routing,
-            quiet hours, default sensor templates) will appear here.</div>
-        </div>
+
       </div>
       <div class="mft">
         <button class="btn-s" onclick="closeM('meg')">Cancel</button>
