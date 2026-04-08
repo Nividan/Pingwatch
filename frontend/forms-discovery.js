@@ -1,0 +1,710 @@
+// ── SUBNET DISCOVERY MODAL ──────────────────────────────────────────────
+// Step 1: CIDR input + scan options
+// Step 2: live progress
+// Step 3: results table (multi-select)
+// Step 4: per-device sensor review
+// Step 5: bulk add via /api/discovery/bulk-add
+
+const _disc = {
+  scanId: null,
+  pollT:  null,
+  state:  null,            // last server response
+  step:   1,               // 1=input, 2=scanning, 3=results, 4=sensor review
+  rows:   [],              // results table data (mutable)
+  selected: new Set(),     // ips selected for adding
+  customNames: {},         // ip -> overridden name
+  sensorChecks: {},        // ip -> { key: bool }   key = `${stype}|${port||''}`
+  sensorArgs: {},          // ip -> { key: { url, snmp_community, ... } }
+  filter: '',
+  sortKey: 'ip',
+  showDups: 'all',         // 'all' | 'only' | 'hide'
+};
+
+function openDiscoverSubnet(){
+  closeM('mdisc');
+  _disc.scanId = null;
+  _disc.state  = null;
+  _disc.step   = 1;
+  _disc.rows   = [];
+  _disc.selected.clear();
+  _disc.customNames = {};
+  _disc.sensorChecks = {};
+  _disc.sensorArgs = {};
+  _disc.filter = '';
+  _disc.showDups = 'all';
+
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'mdisc';
+  _overlayClose(o, ()=>_discClose());
+  o.innerHTML = `
+    <div class="mbox mbox-discover">
+      <div class="mhd">
+        <div class="mttl">⊕ Discover Subnet</div>
+        <button class="mclose" onclick="_discClose()">✕</button>
+      </div>
+      <div class="mbdy" id="disc-bdy"></div>
+      <div class="mft" id="disc-ft"></div>
+    </div>`;
+  document.body.appendChild(o);
+  _discRenderInput();
+}
+
+function _discClose(){
+  if(_disc.pollT){ clearTimeout(_disc.pollT); _disc.pollT = null; }
+  // If a scan is running, ask the server to stop it
+  if(_disc.scanId && _disc.state && _disc.state.state === 'running'){
+    try{ api('DELETE', `/api/discovery/scan/${_disc.scanId}`); }catch(e){}
+  }
+  closeM('mdisc');
+}
+
+// ── Step 1: input ──────────────────────────────────────────────
+function _discRenderInput(){
+  _disc.step = 1;
+  const bdy = document.getElementById('disc-bdy');
+  const ft  = document.getElementById('disc-ft');
+  if(!bdy||!ft) return;
+  bdy.innerHTML = `
+    <div class="fr">
+      <label class="fl">Subnet / CIDR</label>
+      <input type="text" id="disc-cidr" placeholder="192.168.1.0/24" autocomplete="off" oninput="_discCidrChanged()"/>
+      <div id="disc-cidr-info" class="disc-info-line">Enter a subnet in CIDR notation (e.g. 192.168.1.0/24)</div>
+    </div>
+    <div class="fr">
+      <label class="cb-row"><input type="checkbox" id="disc-skip" checked/> Skip already-monitored IPs</label>
+    </div>
+    <div class="fr">
+      <label class="fl">Scan mode</label>
+      <div class="disc-mode-row">
+        <label class="cb-row"><input type="radio" name="disc-mode" id="disc-mode-full" value="full" checked onchange="_discCidrChanged()"/> Full <span class="disc-mode-hint">(ping + DNS + ports + guess)</span></label>
+        <label class="cb-row"><input type="radio" name="disc-mode" id="disc-mode-ping" value="ping" onchange="_discCidrChanged()"/> Ping only <span class="disc-mode-hint">(faster, large networks)</span></label>
+      </div>
+      <div class="disc-info-line" style="margin-top:4px">Full mode uses your <a href="#" onclick="_discOpenSettings();return false;">Port Scanner settings</a>.</div>
+    </div>
+    <div id="disc-warn-banner"></div>
+  `;
+  ft.innerHTML = `
+    <button class="btn-s" onclick="_discClose()">Cancel</button>
+    <button class="btn-p" id="disc-scan-btn" onclick="_discStartScan()" disabled>Scan ▶</button>
+  `;
+  setTimeout(()=>document.getElementById('disc-cidr')?.focus(), 50);
+  document.getElementById('disc-cidr')?.addEventListener('keydown', e=>{
+    if(e.key==='Enter') _discStartScan();
+  });
+}
+
+function _discOpenSettings(){
+  _discClose();
+  if(typeof openSettings === 'function'){
+    openSettings();
+    setTimeout(()=>{
+      const tab = document.querySelector('[data-stab="portscan"]') || document.querySelector('[onclick*="portscan"]');
+      if(tab) tab.click();
+    }, 100);
+  }
+}
+
+// Pure-JS CIDR validator (mirrors backend _validate_cidr)
+function _discParseCidr(cidr){
+  if(!cidr) return {err:'Enter a CIDR'};
+  const m = cidr.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
+  if(!m) return {err:'Invalid CIDR format'};
+  const oct = [+m[1],+m[2],+m[3],+m[4]];
+  if(oct.some(v=>v<0||v>255)) return {err:'Invalid CIDR format'};
+  const prefix = +m[5];
+  if(prefix<0||prefix>32) return {err:'Invalid prefix'};
+  const numAddrs = Math.pow(2, 32-prefix);
+  if(numAddrs > 65536) return {err:'Subnet too large (max /16 = 65534 hosts)'};
+  const hosts = prefix>=31 ? numAddrs : (numAddrs - 2);
+  return {prefix, numAddrs, hosts};
+}
+
+function _discCidrChanged(){
+  const cidr = document.getElementById('disc-cidr')?.value || '';
+  const info = document.getElementById('disc-cidr-info');
+  const banner = document.getElementById('disc-warn-banner');
+  const btn = document.getElementById('disc-scan-btn');
+  const r = _discParseCidr(cidr);
+  if(r.err){
+    if(info) info.textContent = cidr ? r.err : 'Enter a subnet in CIDR notation (e.g. 192.168.1.0/24)';
+    if(info) info.className = 'disc-info-line' + (cidr ? ' disc-info-err' : '');
+    if(banner) banner.innerHTML = '';
+    if(btn) btn.disabled = true;
+    return;
+  }
+  // Auto-switch to ping-only above 4096 hosts (user can override)
+  if(r.hosts > 4096){
+    const pingRadio = document.getElementById('disc-mode-ping');
+    if(pingRadio && !pingRadio.checked && !pingRadio.dataset.userTouched){
+      pingRadio.checked = true;
+    }
+  }
+  const mode = document.querySelector('input[name="disc-mode"]:checked')?.value || 'full';
+  const perHostEnrich = mode === 'full' ? 4 : 0.5;
+  const pingPhase = Math.ceil(r.hosts / 64) * 2; // ~2s per batch of 64
+  const enrichPhase = Math.ceil(r.hosts * 0.10 * perHostEnrich); // ~10% alive
+  const est = pingPhase + enrichPhase;
+  const estStr = est < 60 ? `${est}s` : `${Math.floor(est/60)}m ${est%60}s`;
+  if(info){
+    info.textContent = `${r.hosts} host${r.hosts===1?'':'s'} · ~${estStr} estimated`;
+    info.className = 'disc-info-line';
+  }
+  if(banner){
+    let b = '';
+    if(r.hosts >= 16384){
+      b = `<div class="disc-warn disc-warn-orange">⚠ Very large scan — expected runtime ~${estStr}. Consider scanning smaller ranges.</div>`;
+    } else if(r.hosts >= 1024){
+      b = `<div class="disc-warn">Large scan — may take several minutes (~${estStr}).</div>`;
+    }
+    if(r.hosts >= 65534){
+      b = `<div class="disc-warn disc-warn-red">⛔ Maximum size scan — expected runtime ~${estStr}. Cancel any time.</div>`;
+    }
+    banner.innerHTML = b;
+  }
+  if(btn) btn.disabled = false;
+}
+
+// ── Step 2: scanning / progress ──────────────────────────────────
+async function _discStartScan(){
+  const cidr = document.getElementById('disc-cidr')?.value.trim() || '';
+  const skip = document.getElementById('disc-skip')?.checked !== false;
+  const mode = document.querySelector('input[name="disc-mode"]:checked')?.value || 'full';
+  if(_discParseCidr(cidr).err){ toast('Invalid CIDR','err'); return; }
+  const btn = document.getElementById('disc-scan-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Starting…'; }
+  let r;
+  try{
+    r = await api('POST', '/api/discovery/scan', {cidr, skip_monitored:skip, mode});
+  }catch(e){
+    toast('Failed to start scan','err');
+    if(btn){ btn.disabled = false; btn.textContent = 'Scan ▶'; }
+    return;
+  }
+  if(!r || !r.scan_id){
+    toast(r && r.error ? r.error : 'Failed to start scan','err');
+    if(btn){ btn.disabled = false; btn.textContent = 'Scan ▶'; }
+    return;
+  }
+  _disc.scanId = r.scan_id;
+  _disc.step = 2;
+  _discRenderProgress();
+  _discPoll();
+}
+
+function _discRenderProgress(){
+  const bdy = document.getElementById('disc-bdy');
+  const ft  = document.getElementById('disc-ft');
+  if(!bdy||!ft) return;
+  const st  = _disc.state;
+  const cidr = (st && st.cidr) || '...';
+  const phase = (st && st.phase) || 'starting';
+  const pg = (st && st.progress) || {total:0,checked:0,alive:0,enrich_total:0,enriched:0,monitored_skipped:0};
+  let pct = 0;
+  let pctLabel = '';
+  if(phase === 'pinging' && pg.total > 0){
+    pct = Math.min(100, Math.round((pg.checked/pg.total)*100));
+    pctLabel = `${pg.checked} / ${pg.total}`;
+  } else if(phase === 'enriching' && pg.enrich_total > 0){
+    pct = Math.min(100, Math.round((pg.enriched/pg.enrich_total)*100));
+    pctLabel = `${pg.enriched} / ${pg.enrich_total} hosts`;
+  } else if(phase === 'analyzing'){
+    pct = 99; pctLabel = 'Analyzing duplicates…';
+  }
+  const phaseLabel = {
+    starting:'Starting…', pinging:'Pinging hosts',
+    enriching:'Enriching alive hosts', analyzing:'Analyzing duplicates'
+  }[phase] || phase;
+  bdy.innerHTML = `
+    <div class="disc-prog-wrap">
+      <div class="disc-prog-title">Scanning ${esc(cidr)}…</div>
+      <div class="disc-progress"><div class="disc-progress-bar" style="width:${pct}%"></div></div>
+      <div class="disc-prog-stats">
+        <span>Phase: <b>${esc(phaseLabel)}</b></span>
+        <span>${esc(pctLabel)}</span>
+      </div>
+      <div class="disc-prog-stats" style="margin-top:6px">
+        <span>Alive: <b style="color:var(--up)">${pg.alive}</b></span>
+        <span>Skipped (monitored): <b>${pg.monitored_skipped}</b></span>
+      </div>
+    </div>
+  `;
+  ft.innerHTML = `
+    <button class="btn-s" onclick="_discCancelScan()">Cancel ✕</button>
+  `;
+}
+
+async function _discPoll(){
+  if(!_disc.scanId) return;
+  let r;
+  try{
+    r = await api('GET', `/api/discovery/scan/${_disc.scanId}`);
+  }catch(e){
+    _disc.pollT = setTimeout(_discPoll, 2000);
+    return;
+  }
+  if(!r){ return; }
+  _disc.state = r;
+  if(_disc.step === 2) _discRenderProgress();
+  if(r.state === 'done'){
+    _disc.rows = (r.results || []).slice();
+    _discInitSelectionDefaults();
+    _discRenderResults();
+    return;
+  }
+  if(r.state === 'cancelled'){
+    if((r.results||[]).length){
+      _disc.rows = r.results.slice();
+      _discInitSelectionDefaults();
+      _discRenderResults();
+    } else {
+      toast('Scan cancelled','info');
+      _discRenderInput();
+    }
+    return;
+  }
+  if(r.state === 'error'){
+    toast(r.error || 'Scan failed','err');
+    _discRenderInput();
+    return;
+  }
+  _disc.pollT = setTimeout(_discPoll, 1000);
+}
+
+async function _discCancelScan(){
+  if(!_disc.scanId) return;
+  try{
+    await api('DELETE', `/api/discovery/scan/${_disc.scanId}`);
+  }catch(e){}
+}
+
+// ── Step 3: results table ───────────────────────────────────────
+function _discInitSelectionDefaults(){
+  // Default selection: every row that is NOT a possible duplicate.
+  _disc.selected.clear();
+  for(const row of _disc.rows){
+    if(!row.possible_duplicate_of){
+      _disc.selected.add(row.ip);
+    }
+  }
+}
+
+function _discRowName(row, useHostname){
+  if(_disc.customNames[row.ip] !== undefined){
+    return _disc.customNames[row.ip];
+  }
+  if(useHostname && row.hostname){
+    return row.hostname.split('.')[0];
+  }
+  return `Host ${row.ip}`;
+}
+
+function _discFilteredRows(){
+  let rows = _disc.rows.slice();
+  const f = (_disc.filter || '').toLowerCase();
+  if(f){
+    rows = rows.filter(r=>{
+      const portStr = (r.ports||[]).map(p=>p.port).join(',');
+      return (r.ip||'').toLowerCase().includes(f)
+          || (r.hostname||'').toLowerCase().includes(f)
+          || (r.mac||'').toLowerCase().includes(f)
+          || (r.vendor||'').toLowerCase().includes(f)
+          || portStr.includes(f);
+    });
+  }
+  if(_disc.showDups === 'only'){
+    rows = rows.filter(r=>!!r.possible_duplicate_of);
+  } else if(_disc.showDups === 'hide'){
+    rows = rows.filter(r=>!r.possible_duplicate_of);
+  }
+  const k = _disc.sortKey;
+  rows.sort((a,b)=>{
+    if(k==='ip'){
+      const ai = (a.ip||'').split('.').map(n=>+n);
+      const bi = (b.ip||'').split('.').map(n=>+n);
+      for(let i=0;i<4;i++){ if(ai[i]!==bi[i]) return ai[i]-bi[i]; }
+      return 0;
+    }
+    if(k==='hostname') return (a.hostname||'').localeCompare(b.hostname||'');
+    if(k==='ports')    return ((b.ports||[]).length) - ((a.ports||[]).length);
+    if(k==='guess')    return (a.guess||'').localeCompare(b.guess||'');
+    return 0;
+  });
+  return rows;
+}
+
+function _discRenderResults(){
+  _disc.step = 3;
+  const bdy = document.getElementById('disc-bdy');
+  const ft  = document.getElementById('disc-ft');
+  if(!bdy||!ft) return;
+  const rows = _discFilteredRows();
+  const dupCount = _disc.rows.filter(r=>!!r.possible_duplicate_of).length;
+  const isPing = (_disc.state && _disc.state.mode) === 'ping';
+  bdy.innerHTML = `
+    <div class="disc-result-toolbar">
+      <div>
+        <b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found
+        ${dupCount ? `<span class="disc-dup-chip">⚠ ${dupCount} possible duplicate${dupCount===1?'':'s'}</span>` : ''}
+      </div>
+      <div class="disc-toolbar-right">
+        <input type="text" class="disc-filter-inp" placeholder="Filter…" oninput="_discSetFilter(this.value)" value="${esc(_disc.filter)}"/>
+        <select onchange="_disc.showDups=this.value; _discRenderResults()">
+          <option value="all" ${_disc.showDups==='all'?'selected':''}>All rows</option>
+          <option value="only" ${_disc.showDups==='only'?'selected':''}>Only duplicates</option>
+          <option value="hide" ${_disc.showDups==='hide'?'selected':''}>Hide duplicates</option>
+        </select>
+      </div>
+    </div>
+    <div class="disc-quick-row">
+      <button class="btn-s" onclick="_discSelectAll(true)">Select all visible</button>
+      <button class="btn-s" onclick="_discSelectAll(false)">Clear all</button>
+      ${isPing ? '' : `
+        <button class="btn-s" onclick="_discSelectByPort(161)">+ SNMP open</button>
+        <button class="btn-s" onclick="_discSelectByPort(80,443,8080,8443)">+ Web open</button>
+      `}
+    </div>
+    <div class="disc-table-wrap">
+      <table class="disc-table">
+        <thead><tr>
+          <th style="width:32px"></th>
+          <th class="disc-th-sortable" onclick="_discSetSort('ip')">IP</th>
+          <th class="disc-th-sortable" onclick="_discSetSort('hostname')">Hostname</th>
+          <th>MAC / Vendor</th>
+          <th class="disc-th-sortable" onclick="_discSetSort('ports')">${isPing?'':'Ports'}</th>
+          <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Guess'}</th>
+          <th>Latency</th>
+        </tr></thead>
+        <tbody id="disc-tbody">
+          ${rows.map(r=>_discRowHtml(r,isPing)).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="disc-foot-opts">
+      <div class="fr" style="margin:0">
+        <label class="fl">Group</label>
+        <input type="text" id="disc-group" value="Discovered" placeholder="Discovered" autocomplete="off"/>
+      </div>
+      <div class="fr" style="margin:0">
+        <label class="fl">Naming</label>
+        <select id="disc-naming" onchange="_discRefreshTbody()">
+          <option value="hostname">Use hostname (fallback to IP)</option>
+          <option value="ip">Use IP only</option>
+        </select>
+      </div>
+    </div>
+  `;
+  ft.innerHTML = `
+    <button class="btn-s" onclick="_discRenderInput()">◀ New scan</button>
+    <button class="btn-s" onclick="_discClose()">Cancel</button>
+    <button class="btn-p" id="disc-next-btn" onclick="_discRenderSensorReview()">Next: Review sensors ▶</button>
+  `;
+  _discUpdateNextBtn();
+}
+
+function _discRowHtml(r, isPing){
+  const checked = _disc.selected.has(r.ip) ? 'checked' : '';
+  const useHostname = (document.getElementById('disc-naming')?.value || 'hostname') === 'hostname';
+  const nm = _discRowName(r, useHostname);
+  const portChips = (r.ports||[]).map(p=>`<span class="disc-chip" title="${esc(p.name||'')}">${p.port}</span>`).join('');
+  const macStr = r.mac ? `<span class="disc-mono">${esc(r.mac)}</span>` : '<span class="disc-muted">—</span>';
+  const vendStr = r.vendor ? `<span class="disc-vendor">${esc(r.vendor)}</span>` : '';
+  const dup = r.possible_duplicate_of;
+  let dupChip = '';
+  let dupNote = '';
+  if(dup){
+    dupChip = ` <span class="disc-warn-chip" title="${esc(dup.kind==='existing_device'?'Same hostname as existing device':'Same hostname as another scan result')}">⚠</span>`;
+    if(dup.kind === 'existing_device'){
+      dupNote = `<div class="disc-dup-note">↳ Same hostname as existing device <b>${esc(dup.name)}</b> (${esc(dup.host)}) — likely a second NIC. Add anyway as a separate device to monitor each NIC independently.</div>`;
+    } else {
+      dupNote = `<div class="disc-dup-note">↳ Same hostname as another scan result: <b>${esc(dup.host)}</b></div>`;
+    }
+  }
+  const hostCell = r.hostname
+    ? `<span class="disc-hn">${esc(r.hostname)}</span>${dupChip}`
+    : `<span class="disc-muted">—</span>${dupChip}`;
+  const ms = (r.ms != null) ? `${r.ms}ms` : '<span class="disc-muted">—</span>';
+  return `
+    <tr class="${dup?'disc-row-dup':''}" data-ip="${esc(r.ip)}">
+      <td><input type="checkbox" class="disc-cb" ${checked} onchange="_discToggle('${esc(r.ip)}', this.checked)"/></td>
+      <td><span class="disc-mono">${esc(r.ip)}</span></td>
+      <td>${hostCell}${dupNote}
+        <div class="disc-row-name">
+          <input type="text" value="${esc(nm)}" placeholder="Device name" oninput="_discSetCustomName('${esc(r.ip)}', this.value)"/>
+        </div>
+      </td>
+      <td>${macStr} ${vendStr}</td>
+      <td>${isPing?'<span class="disc-muted">—</span>':portChips || '<span class="disc-muted">—</span>'}</td>
+      <td>${isPing?'':`<span class="disc-guess">${esc(r.guess||'')}</span>`}</td>
+      <td>${ms}</td>
+    </tr>`;
+}
+
+function _discRefreshTbody(){
+  const tb = document.getElementById('disc-tbody');
+  if(!tb) return;
+  const isPing = (_disc.state && _disc.state.mode) === 'ping';
+  tb.innerHTML = _discFilteredRows().map(r=>_discRowHtml(r, isPing)).join('');
+}
+
+function _discSetFilter(v){
+  _disc.filter = v || '';
+  _discRefreshTbody();
+}
+
+function _discSetSort(k){
+  _disc.sortKey = k;
+  _discRefreshTbody();
+}
+
+function _discToggle(ip, on){
+  if(on) _disc.selected.add(ip);
+  else _disc.selected.delete(ip);
+  _discUpdateNextBtn();
+}
+
+function _discSelectAll(on){
+  const visible = _discFilteredRows();
+  for(const r of visible){
+    if(on) _disc.selected.add(r.ip);
+    else _disc.selected.delete(r.ip);
+  }
+  _discRefreshTbody();
+  _discUpdateNextBtn();
+}
+
+function _discSelectByPort(...ports){
+  const set = new Set(ports);
+  for(const r of _disc.rows){
+    if((r.ports||[]).some(p=>set.has(p.port))){
+      _disc.selected.add(r.ip);
+    }
+  }
+  _discRefreshTbody();
+  _discUpdateNextBtn();
+}
+
+function _discSetCustomName(ip, value){
+  _disc.customNames[ip] = value;
+}
+
+function _discUpdateNextBtn(){
+  const btn = document.getElementById('disc-next-btn');
+  if(!btn) return;
+  const n = _disc.selected.size;
+  btn.disabled = (n === 0);
+  btn.textContent = `Next: Review sensors (${n}) ▶`;
+}
+
+// ── Step 4: per-device sensor review ────────────────────────────
+function _discRenderSensorReview(){
+  if(_disc.selected.size === 0){ toast('Select at least one device','err'); return; }
+  _disc.step = 4;
+  const bdy = document.getElementById('disc-bdy');
+  const ft  = document.getElementById('disc-ft');
+  if(!bdy||!ft) return;
+  // Initialize sensor checks for any new selections
+  const selectedRows = _disc.rows.filter(r=>_disc.selected.has(r.ip));
+  for(const row of selectedRows){
+    if(!_disc.sensorChecks[row.ip]){
+      _disc.sensorChecks[row.ip] = {};
+      _disc.sensorArgs[row.ip] = {};
+      for(const sg of (row.suggested||[])){
+        const key = `${sg.stype}|${sg.port||''}`;
+        _disc.sensorChecks[row.ip][key] = !!sg.enabled;
+        if(sg.url) _disc.sensorArgs[row.ip][key] = {url: sg.url};
+      }
+    }
+  }
+  bdy.innerHTML = `
+    <div class="disc-rev-title">Review sensors — ${selectedRows.length} device${selectedRows.length===1?'':'s'} selected</div>
+    <div class="disc-bulk-toggles">
+      <button class="btn-s" onclick="_discBulkToggle('http', true)">Enable all HTTP</button>
+      <button class="btn-s" onclick="_discBulkToggle('http', false)">Disable all HTTP</button>
+      <button class="btn-s" onclick="_discBulkToggle('snmp', true)">Enable all SNMP</button>
+      <button class="btn-s" onclick="_discBulkToggle('snmp', false)">Disable all SNMP</button>
+      <button class="btn-s" onclick="_discBulkToggle('tls', true)">Enable all TLS</button>
+      <button class="btn-s" onclick="_discBulkToggle('tcp', true)">Enable all TCP</button>
+    </div>
+    <div class="disc-rev-list">
+      ${selectedRows.map((r,i)=>_discRevRowHtml(r, i===0)).join('')}
+    </div>
+  `;
+  ft.innerHTML = `
+    <button class="btn-s" onclick="_discRenderResults()">◀ Back</button>
+    <button class="btn-s" onclick="_discClose()">Cancel</button>
+    <button class="btn-p" id="disc-add-btn" onclick="_discBulkAdd()">Add devices</button>
+  `;
+  _discUpdateAddBtn();
+}
+
+function _discRevRowHtml(row, expanded){
+  const useHostname = (document.getElementById('disc-naming')?.value || 'hostname') === 'hostname';
+  const nm = _discRowName(row, useHostname);
+  const sensors = (row.suggested||[]);
+  const checks  = _disc.sensorChecks[row.ip] || {};
+  const args    = _disc.sensorArgs[row.ip]   || {};
+  const checkedCount = sensors.filter(s=>checks[`${s.stype}|${s.port||''}`]).length;
+  const summary = `${checkedCount} sensor${checkedCount===1?'':'s'} selected`;
+  const sensorRows = sensors.map(sg=>{
+    const key = `${sg.stype}|${sg.port||''}`;
+    const isChecked = !!checks[key];
+    const isPing = sg.stype === 'ping';
+    let extra = '';
+    if(sg.stype === 'http'){
+      const url = (args[key] && args[key].url) || sg.url || `http://${row.ip}:${sg.port}`;
+      extra = `<input type="text" class="disc-sg-extra" placeholder="URL" value="${esc(url)}" oninput="_discSetArg('${esc(row.ip)}','${esc(key)}','url',this.value)"/>`;
+    } else if(sg.stype === 'snmp'){
+      const comm = (args[key] && args[key].snmp_community) || '';
+      extra = `<input type="text" class="disc-sg-extra" placeholder="community (leave blank → fill later)" value="${esc(comm)}" oninput="_discSetArg('${esc(row.ip)}','${esc(key)}','snmp_community',this.value)"/>`;
+    }
+    return `
+      <div class="disc-sg-row">
+        <label class="cb-row">
+          <input type="checkbox" ${isChecked?'checked':''} ${isPing?'disabled':''} onchange="_discSetCheck('${esc(row.ip)}','${esc(key)}',this.checked)"/>
+          <span class="disc-sg-name">${esc(sg.name)}</span>
+        </label>
+        ${extra}
+      </div>`;
+  }).join('');
+  return `
+    <details class="disc-rev-card" ${expanded?'open':''} data-ip="${esc(row.ip)}">
+      <summary>
+        <div class="disc-rev-head">
+          <div>
+            <b>${esc(nm)}</b>
+            <span class="disc-muted"> (${esc(row.ip)})</span>
+            ${row.guess?`<span class="disc-guess">— ${esc(row.guess)}</span>`:''}
+          </div>
+          <div class="disc-rev-summary" id="disc-rev-sum-${esc(row.ip).replace(/\./g,'_')}">${summary}</div>
+        </div>
+      </summary>
+      <div class="disc-sg-list">${sensorRows}</div>
+    </details>`;
+}
+
+function _discSetCheck(ip, key, on){
+  if(!_disc.sensorChecks[ip]) _disc.sensorChecks[ip] = {};
+  _disc.sensorChecks[ip][key] = !!on;
+  // Update summary in place
+  const row = _disc.rows.find(r=>r.ip===ip);
+  if(row){
+    const checks = _disc.sensorChecks[ip];
+    const c = (row.suggested||[]).filter(s=>checks[`${s.stype}|${s.port||''}`]).length;
+    const sum = document.getElementById(`disc-rev-sum-${ip.replace(/\./g,'_')}`);
+    if(sum) sum.textContent = `${c} sensor${c===1?'':'s'} selected`;
+  }
+  _discUpdateAddBtn();
+}
+
+function _discSetArg(ip, key, field, value){
+  if(!_disc.sensorArgs[ip]) _disc.sensorArgs[ip] = {};
+  if(!_disc.sensorArgs[ip][key]) _disc.sensorArgs[ip][key] = {};
+  _disc.sensorArgs[ip][key][field] = value;
+}
+
+function _discBulkToggle(stype, on){
+  for(const ip of _disc.selected){
+    const row = _disc.rows.find(r=>r.ip===ip);
+    if(!row) continue;
+    for(const sg of (row.suggested||[])){
+      if(sg.stype === stype){
+        const key = `${sg.stype}|${sg.port||''}`;
+        if(!_disc.sensorChecks[ip]) _disc.sensorChecks[ip] = {};
+        _disc.sensorChecks[ip][key] = on;
+      }
+    }
+  }
+  _discRenderSensorReview();
+}
+
+function _discUpdateAddBtn(){
+  const btn = document.getElementById('disc-add-btn');
+  if(!btn) return;
+  let nDev = 0, nSens = 0;
+  for(const ip of _disc.selected){
+    const row = _disc.rows.find(r=>r.ip===ip);
+    if(!row) continue;
+    nDev++;
+    const checks = _disc.sensorChecks[ip] || {};
+    for(const sg of (row.suggested||[])){
+      if(checks[`${sg.stype}|${sg.port||''}`]) nSens++;
+    }
+  }
+  btn.disabled = (nDev === 0);
+  btn.textContent = `Add ${nDev} device${nDev===1?'':'s'} + ${nSens} sensor${nSens===1?'':'s'}`;
+}
+
+// ── Step 5: bulk add ───────────────────────────────────────────
+async function _discBulkAdd(){
+  const btn = document.getElementById('disc-add-btn');
+  const group = (document.getElementById('disc-group')?.value || 'Discovered').trim() || 'Discovered';
+  const useHostname = (document.getElementById('disc-naming')?.value || 'hostname') === 'hostname';
+  const devices = [];
+  for(const ip of _disc.selected){
+    const row = _disc.rows.find(r=>r.ip===ip);
+    if(!row) continue;
+    const checks = _disc.sensorChecks[ip] || {};
+    const args   = _disc.sensorArgs[ip]   || {};
+    const sensors = [];
+    for(const sg of (row.suggested||[])){
+      const key = `${sg.stype}|${sg.port||''}`;
+      if(!checks[key]) continue;
+      const spec = {stype: sg.stype, name: sg.name};
+      if(sg.port) spec.port = sg.port;
+      const a = args[key] || {};
+      if(sg.stype === 'http' && (a.url || sg.url)) spec.url = a.url || sg.url;
+      if(sg.stype === 'snmp' && a.snmp_community) spec.snmp_community = a.snmp_community;
+      sensors.push(spec);
+    }
+    devices.push({
+      name:  _discRowName(row, useHostname),
+      host:  ip,
+      group,
+      sensors,
+    });
+  }
+  if(!devices.length){ toast('No devices to add','err'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = 'Adding…'; }
+  let r;
+  try{
+    r = await api('POST', '/api/discovery/bulk-add', {devices});
+  }catch(e){
+    toast('Bulk add failed','err');
+    if(btn){ btn.disabled = false; _discUpdateAddBtn(); }
+    return;
+  }
+  if(!r){
+    toast('Bulk add failed','err');
+    if(btn){ btn.disabled = false; _discUpdateAddBtn(); }
+    return;
+  }
+  const ok = (r.created||[]).length;
+  const ng = (r.errors||[]).length;
+  toast(`Added ${ok} device${ok===1?'':'s'}${ng?` (${ng} failed)`:''}`, ok ? 'ok' : 'err');
+
+  // Refresh local state for the freshly created devices
+  for(const c of (r.created||[])){
+    try{
+      const dev = await (await fetch(`/api/device/${c.did}`)).json();
+      if(dev && dev.device_id){
+        S.devices[c.did] = dev;
+        if(dev.sensors){
+          for(const s of dev.sensors){
+            S.sensors[`${c.did}/${s.sensor_id}`] = s;
+            S.logs[`${c.did}/${s.sensor_id}`] = [];
+          }
+        }
+        if(typeof renderDp === 'function') renderDp(dev);
+      }
+    }catch(e){}
+  }
+  if(typeof updatePills === 'function') updatePills();
+  if(typeof refreshGroupCounts === 'function') refreshGroupCounts();
+  const empty = document.getElementById('emptyMain');
+  if(empty && ok) empty.style.display = 'none';
+  const dpanels = document.getElementById('dpanels');
+  if(dpanels && ok) dpanels.style.display = '';
+  const devActBar = document.getElementById('devActBar');
+  if(devActBar && ok) devActBar.style.display = '';
+  _discClose();
+}

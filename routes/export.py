@@ -630,7 +630,7 @@ def handle(h, method, path, body):
                 _pass = False; continue
             if f_before and ts >= f_before:
                 _pass = False; continue
-            if f_search and f_search not in msg.lower():
+            if f_search and f_search not in line.lower():
                 _pass = False; continue
             filtered.append(line)
 
