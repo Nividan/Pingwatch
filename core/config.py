@@ -94,3 +94,7 @@ _RE_GROUP_MEMBERS   = re.compile(r'^/api/user/group/(\d+)/members$')
 # User profiles
 _RE_ME_PROFILE      = re.compile(r'^/api/me/profile$')
 _RE_USER_PROFILE    = re.compile(r'^/api/users/([^/]+)/profile$')
+# Subnet discovery
+_RE_DISCOVERY_SCAN     = re.compile(r'^/api/discovery/scan$')
+_RE_DISCOVERY_STATUS   = re.compile(r'^/api/discovery/scan/([a-f0-9]{16})$')
+_RE_DISCOVERY_BULK_ADD = re.compile(r'^/api/discovery/bulk-add$')

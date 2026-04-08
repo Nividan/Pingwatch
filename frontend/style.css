@@ -2157,4 +2157,77 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-day-btn{background:var(--bg3);border:1px solid var(--border);color:var(--text2);
   width:34px;height:28px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;}
 .alrt-day-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+/* ── Subnet Discovery modal ─────────────────────────────────────── */
+.mbox-discover{width:880px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;}
+.mbox-discover .mbdy{overflow-y:auto;flex:1;}
+.disc-info-line{margin-top:4px;font-size:11px;color:var(--text3);}
+.disc-info-err{color:var(--down);}
+.disc-mode-row{display:flex;gap:18px;flex-wrap:wrap;}
+.disc-mode-hint{color:var(--text3);font-weight:400;font-size:11px;}
+.disc-warn{padding:8px 12px;background:rgba(240,165,0,.10);border:1px solid rgba(240,165,0,.35);
+  border-radius:4px;color:var(--warn);font-size:12px;margin:8px 0;}
+.disc-warn-orange{background:rgba(255,140,0,.12);border-color:rgba(255,140,0,.45);color:#ff8c00;}
+.disc-warn-red{background:rgba(248,81,73,.12);border-color:rgba(248,81,73,.45);color:var(--down);}
+.disc-prog-wrap{padding:8px 0;}
+.disc-prog-title{font-size:13px;color:var(--text2);margin-bottom:10px;}
+.disc-progress{height:8px;background:var(--bg3);border-radius:4px;overflow:hidden;}
+.disc-progress-bar{height:100%;background:var(--accent);transition:width .3s ease;}
+.disc-prog-stats{display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-top:6px;}
+.disc-result-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:4px 0 8px 0;border-bottom:1px solid var(--border);margin-bottom:8px;font-size:12px;color:var(--text2);}
+.disc-toolbar-right{display:flex;gap:6px;align-items:center;}
+.disc-filter-inp{background:var(--bg3);border:1px solid var(--border);color:var(--text);
+  padding:4px 8px;border-radius:4px;font-size:12px;width:160px;}
+.disc-toolbar-right select{background:var(--bg3);border:1px solid var(--border);color:var(--text);
+  padding:4px 6px;border-radius:4px;font-size:11px;}
+.disc-dup-chip{display:inline-block;margin-left:8px;padding:2px 8px;background:rgba(240,165,0,.15);
+  color:var(--warn);border:1px solid rgba(240,165,0,.35);border-radius:10px;font-size:10px;font-weight:600;}
+.disc-quick-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;}
+.disc-table-wrap{max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:4px;}
+.disc-table{width:100%;border-collapse:collapse;font-size:12px;}
+.disc-table th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:6px 8px;
+  color:var(--text3);font-weight:600;font-size:11px;text-transform:uppercase;
+  border-bottom:1px solid var(--border);z-index:1;}
+.disc-th-sortable{cursor:pointer;user-select:none;}
+.disc-th-sortable:hover{color:var(--accent);}
+.disc-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+.disc-table tr:hover td{background:var(--bg3);}
+.disc-table tr.disc-row-dup td{background:rgba(240,165,0,.06);}
+.disc-mono{font-family:ui-monospace,Consolas,monospace;font-size:11px;}
+.disc-muted{color:var(--text3);}
+.disc-hn{font-weight:500;}
+.disc-vendor{display:inline-block;margin-left:6px;padding:1px 6px;background:var(--bg4);
+  border-radius:3px;color:var(--text2);font-size:10px;}
+.disc-chip{display:inline-block;padding:1px 6px;margin:1px 2px;font-size:10px;
+  background:var(--bg4);border-radius:3px;color:var(--text2);}
+.disc-guess{font-size:11px;color:var(--text3);}
+.disc-warn-chip{display:inline-block;color:var(--warn);font-size:13px;cursor:help;}
+.disc-dup-note{font-size:10px;color:var(--text3);margin-top:3px;font-style:italic;line-height:1.4;}
+.disc-row-name{margin-top:4px;}
+.disc-row-name input{width:100%;background:var(--bg3);border:1px solid var(--border);
+  color:var(--text);padding:3px 6px;border-radius:3px;font-size:11px;}
+.disc-foot-opts{display:flex;gap:14px;margin-top:10px;align-items:flex-end;}
+.disc-foot-opts .fr{flex:1;}
+/* Sensor review */
+.disc-rev-title{font-size:13px;color:var(--text2);margin-bottom:10px;}
+.disc-bulk-toggles{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;
+  padding-bottom:8px;border-bottom:1px solid var(--border);}
+.disc-rev-list{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow:auto;}
+.disc-rev-card{background:var(--bg2);border:1px solid var(--border);border-radius:4px;}
+.disc-rev-card summary{padding:8px 12px;cursor:pointer;list-style:none;}
+.disc-rev-card summary::-webkit-details-marker{display:none;}
+.disc-rev-card summary::before{content:'▸';display:inline-block;margin-right:6px;
+  color:var(--text3);transition:transform .15s;}
+.disc-rev-card[open] summary::before{transform:rotate(90deg);}
+.disc-rev-head{display:inline-flex;justify-content:space-between;align-items:center;
+  width:calc(100% - 18px);font-size:12px;}
+.disc-rev-summary{font-size:11px;color:var(--text3);}
+.disc-sg-list{padding:8px 12px 12px 32px;display:flex;flex-direction:column;gap:6px;
+  border-top:1px solid var(--border);}
+.disc-sg-row{display:flex;gap:8px;align-items:center;font-size:12px;}
+.disc-sg-name{margin-left:4px;}
+.disc-sg-extra{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);
+  padding:3px 8px;border-radius:3px;font-size:11px;font-family:ui-monospace,Consolas,monospace;}
+
 .evt-dtl-label{font-size:11px;color:var(--text3);width:76px;flex-shrink:0;font-weight:600;}

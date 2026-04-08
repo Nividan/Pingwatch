@@ -348,10 +348,10 @@ function _buildSettingsTab_database(sr) {
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Export / Import</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportBundle()">&#8681; Export Full Bundle (ZIP)</button>
-          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="importDb()">&#8679; Import DB / Bundle</button>
+          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="importDb()">&#8679; Import (Main DB / Logs DB / Bundle)</button>
           <span id="db-import-status" style="font-size:12px;color:var(--text3)"></span>
         </div>
-        <div class="fh" style="margin-top:8px">Bundle ZIP contains both DBs. Import accepts Main DB, Logs DB, or a bundle ZIP.<br><span style="color:var(--down)">Warning: import replaces the uploaded DB and restarts the server.</span></div>
+        <div class="fh" style="margin-top:8px">A single import handles all file types — auto-detected on upload: Main DB, Logs DB, or full bundle ZIP.<br><span style="color:var(--down)">Warning: import replaces the uploaded DB and restarts the server.</span></div>
       </div>
 
       <div style="margin-top:4px;padding-top:16px;border-top:1px solid var(--border)">
@@ -1258,7 +1258,7 @@ function _colorLog(text, searchTerm) {
     const m = line.match(RE);
     if (m) {
       const [,ts,lvl,msg] = m;
-      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${e(ts)}</span><span class="ll-${lvl.toLowerCase()}">${e(lvl)}</span></span><span class="ll-msg">${hl(msg)}</span></div>`;
+      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${hl(ts)}</span><span class="ll-${lvl.toLowerCase()}">${hl(lvl)}</span></span><span class="ll-msg">${hl(msg)}</span></div>`;
     }
     return `<div class="ll-row ll-cont"><span class="ll-msg">${hl(line)}</span></div>`;
   }).join('');
