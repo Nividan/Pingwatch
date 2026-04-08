@@ -413,24 +413,65 @@ async function openTemplateEditor(id) {
     </div>`;
   document.body.appendChild(o);
   setTimeout(() => document.getElementById('at-name')?.focus(), 60);
+  if (atype === 'email') _atPopulateEmailSelects(cfg);
 }
 
 function _atTypeChange() {
   const t = document.getElementById('at-type')?.value || 'email';
   const pane = document.getElementById('at-cfg-pane');
-  if (pane) pane.innerHTML = _atCfgHtml(t, {});
+  if (pane) { pane.innerHTML = _atCfgHtml(t, {}); if (t === 'email') _atPopulateEmailSelects({}); }
+}
+
+async function _atPopulateEmailSelects(cfg) {
+  const divUsers  = document.getElementById('at-users-chk');
+  const divGroups = document.getElementById('at-groups-chk');
+  if (!divUsers && !divGroups) return;
+
+  const savedUsers  = Array.isArray(cfg.to_users)  ? cfg.to_users
+                    : (cfg.to_users  ? [cfg.to_users]  : []);
+  const savedGroups = Array.isArray(cfg.to_groups) ? cfg.to_groups.map(String)
+                    : (cfg.to_groups ? [String(cfg.to_groups)] : []);
+
+  let users = [], groups = [];
+  try {
+    const [uRes, gRes] = await Promise.all([
+      api('GET', '/api/users'),
+      api('GET', '/api/user/groups'),
+    ]);
+    users  = uRes.users  || [];
+    groups = gRes.groups || [];
+  } catch (_) {}
+
+  if (divUsers) {
+    if (!users.length) {
+      divUsers.innerHTML = '<span style="color:var(--text3);font-size:.85em">No users found</span>';
+    } else {
+      divUsers.innerHTML = users.map(u => {
+        const chk = savedUsers.includes(u.username) ? ' checked' : '';
+        return `<label class="chk-item"><input type="checkbox" value="${esc(u.username)}"${chk}> ${esc(u.username)}</label>`;
+      }).join('');
+    }
+  }
+  if (divGroups) {
+    if (!groups.length) {
+      divGroups.innerHTML = '<span style="color:var(--text3);font-size:.85em">No groups found</span>';
+    } else {
+      divGroups.innerHTML = groups.map(g => {
+        const chk = savedGroups.includes(String(g.id)) ? ' checked' : '';
+        return `<label class="chk-item"><input type="checkbox" value="${esc(String(g.id))}"${chk}> ${esc(g.name)}</label>`;
+      }).join('');
+    }
+  }
 }
 
 function _atCfgHtml(atype, cfg) {
   if (atype === 'email') {
-    const users  = Array.isArray(cfg.to_users)  ? cfg.to_users.join(',')  : (cfg.to_users  || '');
-    const groups = Array.isArray(cfg.to_groups) ? cfg.to_groups.join(',') : (cfg.to_groups || '');
     const emails = cfg.to_emails || cfg.to || '';
     return `
-      <div class="fr"><label class="fl">Usernames (comma-separated)</label>
-        <input type="text" id="at-users" value="${esc(users)}" placeholder="admin, oncall"/></div>
-      <div class="fr"><label class="fl">Group ids (comma-separated)</label>
-        <input type="text" id="at-groups" value="${esc(groups)}" placeholder="1,2"/></div>
+      <div class="fr"><label class="fl">Users</label>
+        <div id="at-users-chk" class="chk-list"><span style="color:var(--text3);font-size:.85em">Loading…</span></div></div>
+      <div class="fr"><label class="fl">Groups</label>
+        <div id="at-groups-chk" class="chk-list"><span style="color:var(--text3);font-size:.85em">Loading…</span></div></div>
       <div class="fr"><label class="fl">Extra emails (comma-separated)</label>
         <input type="text" id="at-emails" value="${esc(emails)}" placeholder="ops@example.com"/></div>
       <div class="fr"><label class="fl">Subject template (optional)</label>
@@ -486,11 +527,11 @@ async function _alertingSaveTemplate() {
 
   const cfg = {};
   if (atype === 'email') {
-    const users  = (document.getElementById('at-users')?.value  || '').trim();
-    const groups = (document.getElementById('at-groups')?.value || '').trim();
+    const users  = Array.from(document.querySelectorAll('#at-users-chk input:checked')).map(i => i.value);
+    const groups = Array.from(document.querySelectorAll('#at-groups-chk input:checked')).map(i => parseInt(i.value)).filter(n => n > 0);
     const emails = (document.getElementById('at-emails')?.value || '').trim();
-    if (users)  cfg.to_users  = users.split(',').map(s => s.trim()).filter(Boolean);
-    if (groups) cfg.to_groups = groups.split(',').map(s => parseInt(s.trim())).filter(n => n > 0);
+    if (users.length)  cfg.to_users  = users;
+    if (groups.length) cfg.to_groups = groups;
     if (emails) cfg.to_emails = emails;
     const subj  = (document.getElementById('at-subject')?.value || '').trim();
     const body  = (document.getElementById('at-body')?.value || '').trim();
