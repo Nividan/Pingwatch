@@ -2034,7 +2034,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-del-btn:hover{background:var(--down-bg) !important;}
 
 /* Editor modal */
-.alrt-editor-box{width:min(95vw,820px);max-height:90vh;overflow-y:auto;}
+.alrt-editor-box{width:min(95vw,960px);max-height:90vh;overflow-y:auto;}
 .alrt-editor-body{display:flex;flex-direction:column;gap:0;overflow-y:visible;}
 .alrt-row3{display:flex;gap:16px;flex-wrap:wrap;}
 .alrt-row3 .fr{flex:1;min-width:140px;}
@@ -2080,7 +2080,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .ap-dash{color:var(--text3);font-size:12px;padding:0 6px;}
 
 /* Multi-template checkbox list inside stage table */
-.ap-actions-chk{max-height:100px;min-width:180px;background:var(--bg2);
+.ap-actions-chk{max-height:100px;min-width:220px;background:var(--bg2);
   border:1px solid var(--border2);border-radius:5px;padding:4px 6px;gap:2px;}
 .ap-actions-chk:focus-within{border-color:var(--accent);}
 .ap-tpl-item{gap:7px;padding:3px 5px;border-radius:3px;}
