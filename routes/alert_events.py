@@ -83,13 +83,13 @@ def handle(h, method, path, body):
             ok = db_ack_event(event_id, user)
             if ok:
                 db_log_audit(user, h.client_address[0], 'alert_event_ack',
-                             f"event {event_id} rule '{evt.get('rule_name','')}'")
+                             f"event {event_id} profile '{evt.get('profile_name','')}'")
             h._json(200 if ok else 500, {"ok": ok})
         else:  # resolve
             ok = db_resolve_event(event_id)
             if ok:
                 db_log_audit(user, h.client_address[0], 'alert_event_resolve',
-                             f"event {event_id} rule '{evt.get('rule_name','')}'")
+                             f"event {event_id} profile '{evt.get('profile_name','')}'")
             h._json(200 if ok else 500, {"ok": ok})
         return True
 

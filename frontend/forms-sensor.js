@@ -286,6 +286,14 @@ function sensorFormHTML(dev, s=null) {
         </label>
         <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Probing continues — no DOWN / recovery / threshold events are fired.</div>
       </div>
+      ${isEdit ? `
+      <div class="fr" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <label class="fl" style="margin:0">📋 Alert Profile</label>
+        <div id="as-profile-body" data-did="${s.device_id}" data-sid="${s.sensor_id}"
+             style="font-size:12px;color:var(--text3);margin-top:6px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px">
+          Loading…
+        </div>
+      </div>` : ''}
   </div>
   <!-- Probe Timing -->
   <div class="snr-section">
@@ -370,7 +378,81 @@ function openEditSensor(did, sid){
     const _et=document.getElementById('as-t')?.value;
     if(_et==='snmp') _snmpLoadVendors();
     if(_et==='vmware') _vmwareLoadMetrics();
+    _loadSensorProfileSection(did, sid);
   },50);
+}
+
+// ── Alert profile section inside the sensor edit modal ────────────
+async function _loadSensorProfileSection(did, sid){
+  const body = document.getElementById('as-profile-body');
+  if(!body) return;
+  const dev = S.devices[did];
+  const groupName = dev?.group || 'Default Group';
+  const scopeKey = `${did}/${sid}`;
+  try{
+    const r = await api('GET','/api/alert/profiles');
+    const all = r.profiles || [];
+    const sensorProf = all.find(p => p.scope_type==='sensor' && p.scope_value===scopeKey);
+    const deviceProf = all.find(p => p.scope_type==='device' && p.scope_value===did);
+    const groupProf  = all.find(p => p.scope_type==='group'  && p.scope_value===groupName);
+    const globalProf = all.find(p => p.scope_type==='global');
+
+    let resolved, fromLabel;
+    if(sensorProf){ resolved=sensorProf; fromLabel='this sensor (override)'; }
+    else if(deviceProf){ resolved=deviceProf; fromLabel='device override'; }
+    else if(groupProf){ resolved=groupProf; fromLabel=`group "${esc(groupName)}"`; }
+    else if(globalProf){ resolved=globalProf; fromLabel='global default'; }
+    else { resolved=null; fromLabel='— no profile resolved'; }
+
+    let html = '';
+    if(sensorProf){
+      html += `<div style="margin-bottom:8px">
+        <span class="alrt-override-badge">Override</span>
+        <span style="margin-left:8px;color:var(--text)">${esc(sensorProf.name)}</span>
+        <span style="margin-left:6px;color:var(--text3);font-size:11px">(${sensorProf.stages.length} stage${sensorProf.stages.length===1?'':'s'})</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn-s" onclick="_sensorProfileEdit(${sensorProf.id})">Edit profile…</button>
+        <button type="button" class="btn-s" onclick="_sensorProfileReset('${did}','${sid}',${sensorProf.id})">Reset to inherited</button>
+      </div>`;
+    } else {
+      html += `<div style="margin-bottom:8px">
+        <span class="alrt-inherit-badge">Inherited</span>
+        <span style="margin-left:8px">from ${fromLabel}${resolved?` — <strong style="color:var(--text)">${esc(resolved.name)}</strong>`:''}</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn-s" onclick="_sensorProfileOverride('${did}','${sid}')">Override at sensor level</button>
+        ${resolved?`<button type="button" class="btn-s" onclick="_sensorProfileEdit(${resolved.id})">View ${esc(fromLabel)}</button>`:''}
+      </div>`;
+    }
+    body.innerHTML = html;
+  }catch(e){
+    body.innerHTML = `<span style="color:var(--down)">Failed to load profile</span>`;
+  }
+}
+
+function _sensorProfileEdit(profileId){
+  closeM('mes');
+  if(typeof openProfileEditor==='function') openProfileEditor(profileId);
+  else toast('Open the Alerting page to edit profiles','err');
+}
+
+function _sensorProfileOverride(did, sid){
+  closeM('mes');
+  if(typeof openProfileEditor==='function')
+    openProfileEditor(null,{scope_type:'sensor',scope_value:`${did}/${sid}`});
+  else toast('Open the Alerting page to create profiles','err');
+}
+
+async function _sensorProfileReset(did, sid, profileId){
+  if(!confirm('Delete the sensor-scoped alert profile?\nThis sensor will fall back to the device/group/global profile.')) return;
+  try{
+    await api('DELETE','/api/alert/profile/'+profileId);
+    toast('Sensor profile reset','ok');
+    _loadSensorProfileSection(did, sid);
+  }catch(e){
+    toast('Reset failed','err');
+  }
 }
 
 async function submitEditSensor(did, sid){

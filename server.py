@@ -57,7 +57,7 @@ _STATIC_TYPES = {
 # ── JS files inlined into index.html ─────────────────────────────
 _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
-    "forms-utils.js", "forms-device.js", "forms-sensor.js",
+    "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
     "forms-discovery.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "alerting.js", "app.js",
@@ -320,8 +320,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -350,8 +350,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
+        from routes import ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -359,12 +359,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_rules_mod, _maint_mod, _groups_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -395,8 +395,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_rules_mod, _maint_mod, _groups_mod, _disc_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -554,6 +554,11 @@ def main():
         log.error(f"migrate_topo_from_file failed: {_e}", exc_info=True)
     db_seed_users()
     try:
+        from db.core import db_seed_alert_profiles
+        db_seed_alert_profiles()
+    except Exception as _e:
+        log.error(f"db_seed_alert_profiles failed: {_e}")
+    try:
         from snmp.seeds.loader import load_all_seeds
         load_all_seeds()
     except Exception as _se:
@@ -690,8 +695,6 @@ def main():
     log.info(f"SNMP trap receiver started on port {app_state.effective_snmp_port}")
     from backup.scheduler import start_scheduler
     start_scheduler()
-    from monitoring.alert_engine import alert_engine_start
-    alert_engine_start()
     from monitoring.syslog_client import _attach_app_log_handlers
     _attach_app_log_handlers()
     threading.Thread(target=server.serve_forever, daemon=True).start()
