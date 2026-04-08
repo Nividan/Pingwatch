@@ -275,14 +275,25 @@ async function openProfileEditor(id, scopeDefaults = null) {
               ${_AP_TRIG_ORDER.map((trig, i) => {
                 const s = stagesByPos[i];
                 const isRecovery = trig.endsWith('_recovered');
-                return `
+                const trigClass = isRecovery ? 'alrt-trig-recovery'
+                                : trig === 'down' ? 'alrt-trig-down' : 'alrt-trig-warning';
+                const stageNum = i < 2 ? i + 1 : (i >= 3 && i < 5) ? i - 2 : null;
+                const numBadge = stageNum != null
+                  ? `<span class="alrt-stage-num">${stageNum}</span>` : '';
+                const hdrRow = (i === 0 || i === 3) ? `
+                  <tr class="alrt-group-hdr-row">
+                    <td colspan="4"><div class="alrt-group-hdr-label alrt-group-hdr-${i === 0 ? 'down' : 'warn'}">
+                      ${i === 0 ? 'Down conditions' : 'Warning conditions'}
+                    </div></td>
+                  </tr>` : '';
+                return hdrRow + `
                   <tr class="alrt-stage-row alrt-stage-${trig}" data-trig="${trig}" data-pos="${i}">
-                    <td class="alrt-trig-cell">${_AP_TRIG_LABELS[trig]}</td>
+                    <td class="alrt-trig-cell">${numBadge}<span class="${trigClass}">${_AP_TRIG_LABELS[trig]}</span></td>
                     <td>${isRecovery
-                        ? '<span style="color:var(--text3);font-size:11px">—</span>'
+                        ? '<span class="ap-dash">—</span>'
                         : `<input type="number" class="ap-delay" value="${s?.delay_s ?? _AP_DEFAULT_DELAYS[i]}" min="0" step="10"/>`}</td>
                     <td>${isRecovery
-                        ? '<span style="color:var(--text3);font-size:11px">—</span>'
+                        ? '<span class="ap-dash">—</span>'
                         : `<input type="number" class="ap-repeat" value="${s?.repeat_min ?? 0}" min="0" step="5"/>`}</td>
                     <td><div class="chk-list ap-actions-chk">${tplCheckboxes(s?.action_ids || [])}</div></td>
                   </tr>`;

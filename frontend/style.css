@@ -2048,18 +2048,36 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-profile-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
   color:var(--text3);text-align:left;padding:8px 10px;background:var(--bg2);
   border-bottom:1px solid var(--border);}
-.alrt-profile-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.alrt-profile-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
 .alrt-profile-table tr:last-child td{border-bottom:none;}
 .alrt-stage-row{transition:background .15s;}
-.alrt-stage-row:hover{background:var(--bg2);}
-.alrt-stage-row.alrt-stage-down{border-left:3px solid var(--down);}
-.alrt-stage-row.alrt-stage-warning{border-left:3px solid var(--warn);}
+.alrt-stage-row:hover{background:rgba(255,255,255,.025);}
+.alrt-stage-row.alrt-stage-down{border-left:4px solid var(--down);}
+.alrt-stage-row.alrt-stage-warning{border-left:4px solid var(--warn);}
 .alrt-stage-row.alrt-stage-down_recovered,
-.alrt-stage-row.alrt-stage-warning_recovered{border-left:3px solid var(--up);}
-.alrt-stage-row .alrt-trig-cell{font-size:11px;font-weight:600;color:var(--text2);min-width:120px;}
+.alrt-stage-row.alrt-stage-warning_recovered{border-left:4px solid var(--up);background:rgba(35,209,139,.03);}
+.alrt-stage-row .alrt-trig-cell{font-size:11px;font-weight:600;min-width:130px;white-space:nowrap;}
 .alrt-stage-row input[type="number"]{width:80px;font-size:12px;padding:4px 6px;
   background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);}
+.alrt-stage-row input[type="number"]:focus{border-color:var(--accent);outline:none;}
 .alrt-stage-row .alrt-stage-disabled{opacity:.4;pointer-events:none;}
+/* Section header rows */
+.alrt-group-hdr-row td{padding:5px 10px;background:var(--bg2);border-bottom:1px solid var(--border);}
+.alrt-group-hdr-row:not(:first-child) td{border-top:1px solid var(--border2);}
+.alrt-group-hdr-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;}
+.alrt-group-hdr-down{color:rgba(248,81,73,.75);}
+.alrt-group-hdr-warn{color:rgba(240,165,0,.75);}
+/* Trigger text colors */
+.alrt-trig-down{color:var(--down);}
+.alrt-trig-warning{color:var(--warn);}
+.alrt-trig-recovery{color:var(--up);opacity:.85;}
+/* Stage escalation number badge */
+.alrt-stage-num{display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;border-radius:50%;font-size:9px;font-weight:700;
+  background:var(--bg4);color:var(--text3);border:1px solid var(--border2);
+  flex-shrink:0;margin-right:6px;vertical-align:middle;}
+/* Recovery dash placeholder */
+.ap-dash{color:var(--text3);font-size:12px;padding:0 6px;}
 
 /* Multi-template checkbox list inside stage table */
 .ap-actions-chk{max-height:100px;min-width:180px;background:var(--bg2);
