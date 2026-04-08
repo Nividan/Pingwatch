@@ -36,8 +36,9 @@ Browser / Desktop GUI
         │   ├── logger.py         ← Central logging
         │   └── settings.py       ← Runtime settings cache
         │
-        ├── monitoring/           ← Probes, alerting, topology
+        ├── monitoring/           ← Probes, alerting, topology, subnet discovery
         │   ├── probes.py         ← Sensor engine
+        │   ├── subnet_discovery.py ← Subnet scan engine (liveness, enrichment, dup detection)
         │   ├── alert_engine.py   ← Rules-based alert engine (conditions, dispatch, cooldown)
         │   ├── smtp_alert.py     ← Email notifications
         │   ├── syslog_client.py  ← RFC 5424 syslog forwarding
@@ -86,6 +87,8 @@ pingwatch/
 │
 ├── core/
 │   ├── config.py           ← File paths, compiled route regexes, startup constants
+│   ├── constants.py        ← Probe & server constants (PORT_MIN/MAX, PROBE_DEFAULT_INTERVAL, SENSOR_HISTORY_SIZE, …)
+│   ├── validation.py       ← Server-side input validators (validate_port, validate_host, validate_interval, …)
 │   ├── settings.py         ← Thread-safe runtime settings cache (DB-backed)
 │   ├── logger.py           ← App logger, audit logger, in-memory log buffer
 │   ├── auth.py             ← Login, PBKDF2-SHA256, RBAC, session management
@@ -96,6 +99,7 @@ pingwatch/
 │
 ├── monitoring/
 │   ├── probes.py           ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
+│   ├── subnet_discovery.py ← Subnet scan engine (liveness + enrichment + duplicate detection)
 │   ├── smtp_alert.py       ← Down/up email alerts with 5-min failure-log suppression
 │   ├── syslog_client.py    ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
 │   └── network_map.py      ← Topology pages, nodes, links, groups (DB-backed)
@@ -119,6 +123,7 @@ pingwatch/
 │
 ├── db/
 │   ├── __init__.py         ← Re-exports all public symbols
+│   ├── helpers.py          ← Unified dual-backend query helpers (db_query, db_execute, db_upsert, db_cursor, _ph)
 │   ├── core.py             ← Dual write-queues, schema init, user seeding
 │   ├── backend.py          ← Backend selection: is_pg(), load_config() from pingwatch.conf
 │   ├── pg_pool.py          ← PostgreSQL connection pool; pg_conn() / pg_cursor() context managers
@@ -149,7 +154,8 @@ pingwatch/
 │   ├── alert_events.py     ← Alert history, ACK/resolve
 │   ├── maintenance_windows.py ← Maintenance window CRUD
 │   ├── ldap.py             ← LDAP/AD settings & test endpoints
-│   └── ipam.py             ← IPAM subnet & IP allocation API
+│   ├── ipam.py             ← IPAM subnet & IP allocation API
+│   └── discovery.py        ← Subnet discovery scan + bulk device add
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -169,6 +175,7 @@ pingwatch/
     ├── forms-ldap.js       ← LDAP/AD settings modal
     ├── forms-io.js         ← DB export/import form
     ├── forms-utils.js      ← Shared form helpers
+    ├── forms-discovery.js  ← Subnet discovery wizard modal
     ├── ipam.js             ← IPAM tab
     ├── bg.js               ← Animated background canvas
     ├── map.html            ← Network Topology Manager shell
@@ -183,11 +190,21 @@ pingwatch/
 ### `server.py`
 HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
+`Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
+
 ### `setup_wizard.py`
 Cross-platform first-run wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only).
 
 ### `core/state.py`
 In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to all connected clients. The probe loop calculates live traffic rates for Counter32/Counter64 SNMP OIDs (`_fmt_bps`, wraparound-safe delta / elapsed) and stores the formatted rate in `last_value`. `Sensor.host_override` tracks whether the host was set manually (not inherited from the device); device IP changes propagate to all non-overridden sensors.
+
+`Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. This ensures VMware and other threshold-bearing sensors correctly colour the device tile without requiring a probe failure.
+
+### `core/constants.py`
+Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
+
+### `core/validation.py`
+Server-side input validation helpers used by route handlers before persisting user-supplied values. Functions: `validate_port(v)`, `validate_host(v)`, `validate_interval(v)`, `validate_timeout(v)`, `validate_name(v, max_len)`. Each returns `(value, None)` on success or `(None, "error message")` on failure.
 
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
@@ -197,6 +214,15 @@ LDAP/AD helpers: `ldap_authenticate`, `ldap_test_connection`, `ldap_test_auth_us
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
+
+### `monitoring/subnet_discovery.py`
+Subnet discovery scan engine. Exposes `start_scan(cidr, skip_monitored, mode)`, `get_scan(scan_id)`, and `cancel_scan(scan_id)` as the public API. Scans run in a dedicated `ThreadPoolExecutor(64)` (`_SCAN_EXECUTOR`) isolated from `STATE._executor` so large scans cannot starve existing sensor probes.
+
+**Two scan modes** — `full` (ping + reverse DNS + ARP MAC lookup + port scan using the existing `scan_ports` setting via `_get_scan_targets()` + device-type guess) and `ping` (ping + DNS + MAC only; designed for /18–/16 ranges where port enrichment would take hours).
+
+**Three phases per scan:** (1) parallel ICMP liveness via `probe_ping()` across all candidate IPs; (2) per-alive-host enrichment — reverse DNS (`socket.gethostbyaddr`), ARP MAC (`arp -a` Windows / `arp -n` Linux), OUI vendor lookup from a built-in ~80-entry map, and an 8-worker inner thread pool for port probing with a 6 s per-host deadline; (3) multi-NIC duplicate detection — `_hostname_fingerprint()` strips NIC suffixes (`-mgmt`, `-data`, `-iscsi`, etc.) and domain labels to normalise hostnames; results are cross-referenced against existing devices and other scan rows; matches set `possible_duplicate_of` on the row.
+
+Scan state (`_SCANS` dict, keyed by 16-char hex UUID) is in-memory and auto-purged after 1 hour. Maximum CIDR size is /16 (65 534 hosts); larger inputs are rejected at validation. The `run_subnet_scan()` helper wraps the full flow for future scheduled-scan use.
 
 ### `monitoring/probes.py`
 All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match). VMware probing is handled by `vmware/client.py`, called from `core/state.py`. `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
@@ -218,6 +244,8 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 
 ### `vmware/client.py`
 VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM discovery from vCenter/ESXi and real-time metric querying for 16 VM metrics across 6 categories (CPU, Memory, Disk, Datastore, Network, System). Session caching with 25-minute TTL avoids repeated logins; metric caching with 20-second TTL (matching vSphere's realtime sampling interval) avoids redundant QueryPerf calls when multiple sensors target the same VM. `vmware_probe()` returns the standard `{ok, ms, detail, value}` probe contract. `mem_consumed_pct` uses `quickStats.guestMemoryUsage` (actual guest OS memory from VMware Tools) with fallback to `mem.active.average`.
+
+`SmartConnect()` is wrapped with `socket.setdefaulttimeout(60)` — caps the vSphere SOAP authentication handshake at 60 seconds and restores the previous timeout in a `finally` block. Without this, a slow or unresponsive vCenter could block the probe thread indefinitely.
 
 ### `snmp/`
 - `receiver.py` — UDP socket on the SNMP port, injects raw traps into the pipeline
@@ -245,6 +273,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
+| `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
 
 ---
 
@@ -261,13 +290,14 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 
 | Module | Responsibility |
 |--------|----------------|
+| `helpers.py` | Unified dual-backend query helpers — `db_query`, `db_query_one`, `db_execute`, `db_executemany`, `db_upsert`, `db_cursor`; `_ph()` converts `?` → `%s` for PG. Use these instead of inline `if is_pg()` branches in new code. |
 | `backend.py` | `is_pg()`, `load_config()` / `save_config()` — reads `pingwatch.conf` to select backend |
 | `pg_pool.py` | PostgreSQL connection pool; `pg_conn()` (auto-commit/rollback) and `pg_cursor()` (auto-close) context managers |
 | `pg_schema.py` | PostgreSQL DDL — main + logs schemas, indexes, monthly-partitioned `sensor_samples`, rollup tables (`sensor_samples_5m`, `sensor_samples_1h`) |
 | `pg_migrate.py` | One-time SQLite → PostgreSQL migration: copies all tables, verifies row counts |
 | `core.py` | Dual write-queues (main + logs), schema init for both DBs, user seeding |
 | `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB (SQLite only) |
-| `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag |
+| `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
@@ -306,7 +336,7 @@ The frontend is served as static files — no build step.
 |------|---------|
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
-| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`) |
+| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
@@ -314,11 +344,12 @@ The frontend is served as static files — no build step.
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Syslog, Alert Rules) |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Alert Rules); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal |
 | `forms-io.js` | DB export/import modal |
-| `forms-utils.js` | Shared form utilities (field validation, common UI helpers) |
+| `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
+| `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, device-type guess, multi-NIC ⚠ flags), per-device sensor review with inline URL/community inputs, bulk add with live device count |
 | `alerting.js` | Alert rules editor (conditions, collapsible action blocks with group chip selector), alert history viewer, maintenance windows |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
 | `bg.js` | Animated background canvas (aurora + radar) |
@@ -465,6 +496,15 @@ The frontend is served as static files — no build step.
 | `POST` | `/api/alert/window` | admin | Create window |
 | `PATCH` | `/api/alert/window/{id}` | admin | Update window |
 | `DELETE` | `/api/alert/window/{id}` | admin | Delete window |
+
+### Subnet Discovery
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/discovery/scan` | operator | Start a subnet scan `{cidr, skip_monitored, mode}` → `202 {scan_id}` |
+| `GET` | `/api/discovery/scan/{id}` | viewer | Poll scan progress and results |
+| `DELETE` | `/api/discovery/scan/{id}` | operator | Cancel a running scan |
+| `POST` | `/api/discovery/bulk-add` | operator | Bulk-create up to 500 devices with sensors `{devices: [{name, host, group, sensors: [...]}]}` |
 
 ---
 

@@ -196,8 +196,9 @@
     </div>
     <div id="devActBar" style="display:none">
       <div class="dev-act-left">
-        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">＋ Add Device</button>
-        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">⊞ Add Group</button>
+        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">➕ Add Device</button>
+        <button id="btnDiscover" class="btn-sm rbac-op"            onclick="openDiscoverSubnet()" title="Scan a subnet for unmonitored devices">📡 Discover Subnet</button>
+        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">🗂️ Add Group</button>
       </div>
       <div class="view-toggle">
         <button class="vt-btn active" id="vtGrid" onclick="_setView('grid')" title="Grid view">&#x229E;</button>

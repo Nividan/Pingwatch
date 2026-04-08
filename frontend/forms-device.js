@@ -99,6 +99,10 @@ function openEditDevice(did){
   if(!dev) return;
   closeM('dwo');
   closeM('med');
+  const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
+  const _edGroupItems = _edGroups.map(g =>
+    `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_edgPick('${esc(g)}')">${esc(g)}</div>`
+  ).join('');
   const o = document.createElement('div'); o.className='mo'; o.id='med';
   _overlayClose(o, ()=>closeM('med'));
   o.innerHTML = `
@@ -119,7 +123,13 @@ function openEditDevice(did){
         </div>
         <div class="fr">
           <label class="fl">Group</label>
-          <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" autocomplete="off"/>
+          <div style="position:relative">
+            <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" autocomplete="off"
+                   style="padding-right:28px"
+                   onfocus="_edgShow()" oninput="_edgFilter(this.value)"/>
+            <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_edgToggle()">▾</button>
+            <div id="ed-g-dd" class="grp-dd" style="display:none">${_edGroupItems}</div>
+          </div>
         </div>
       </div>
       <div class="fr">
@@ -168,6 +178,40 @@ function openEditDevice(did){
       if(e.key === 'Enter') submitEditDevice(did);
     })
   );
+  document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
+}
+
+function _edgShow(){
+  const dd=document.getElementById('ed-g-dd');
+  if(!dd) return;
+  dd.style.display='';
+  _edgFilter('');
+}
+function _edgToggle(){
+  const dd=document.getElementById('ed-g-dd');
+  if(dd && dd.style.display!=='none') _edgHide();
+  else _edgShow();
+}
+function _edgHide(){
+  const dd=document.getElementById('ed-g-dd');
+  if(dd) dd.style.display='none';
+}
+function _edgFilter(v){
+  const dd=document.getElementById('ed-g-dd');
+  if(!dd) return;
+  const q=v.trim().toLowerCase();
+  let any=false;
+  dd.querySelectorAll('.grp-dd-item').forEach(el=>{
+    const show=!q||el.dataset.g.includes(q);
+    el.style.display=show?'':'none';
+    if(show) any=true;
+  });
+  dd.style.display=any?'':'none';
+}
+function _edgPick(g){
+  const inp=document.getElementById('ed-g');
+  if(inp) inp.value=g;
+  _edgHide();
 }
 
 async function submitEditDevice(did){
@@ -199,6 +243,7 @@ async function submitEditDevice(did){
   closeM('med');
   const dev = S.devices[did];
   if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  pruneEmptyGroups();
   updatePills();
   refreshGroupCounts();
   toast(`Saved: ${name}`, 'ok');

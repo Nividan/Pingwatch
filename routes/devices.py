@@ -428,12 +428,17 @@ def handle(h, method, path, body):
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
         try:
+            from core.validation import validate_interval, validate_port
             if "interval" in kwargs:
-                kwargs["interval"] = max(1, min(3600, int(kwargs["interval"])))
+                kwargs["interval"] = validate_interval(kwargs["interval"], 1, 3600)
             if "timeout" in kwargs:
                 iv = int(kwargs.get("interval", body.get("interval", 5)))
                 kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
-        except (TypeError, ValueError):
+            if "port" in kwargs and kwargs["port"] not in (None, ""):
+                kwargs["port"] = validate_port(kwargs["port"])
+        except ValueError as _ve:
+            h._json(400, {"error": str(_ve)}); return True
+        except (TypeError,):
             h._json(400, {"error": "interval and timeout must be integers"}); return True
         if kwargs.get("banner_regex"):
             if len(kwargs["banner_regex"]) > 200:

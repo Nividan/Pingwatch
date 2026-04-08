@@ -31,14 +31,7 @@ function _restoreViewToggle(){
   _initDevCtxMenu();
 }
 
-/** Safe localStorage JSON reader — returns fallback on parse error or missing key. */
-function _lsGet(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; }
-  catch { return fallback; }
-}
-function _lsSet(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota/private mode */ }
-}
+// _lsGet / _lsSet moved to forms-utils.js (canonical location)
 
 function ensureGroupSection(group){
   const id=grpId(group);

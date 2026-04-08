@@ -61,6 +61,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
 - ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
 - 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
+- 🔭 Subnet Discovery — scan a CIDR range for unmonitored hosts; two modes (Full: ping + DNS + port scan + device-type guess; Ping only: fast scan for large networks); multi-select results table with MAC/vendor, open ports, multi-NIC duplicate detection, per-device sensor review, and one-click bulk add to a "Discovered" group; maximum scan size /16 (65 534 hosts) with tiered runtime warnings and cancellation support
 
 ### Supported Sensor Types
 
@@ -114,8 +115,8 @@ The first-run wizard checks packages, configures ports, generates a TLS certific
 
 ```bash
 windows\start.bat --setup        # Windows
-bash linux/start.sh --setup      # Linux / macOS
-bash linux/start.sh --check      # Re-check required packages only
+sudo bash linux/start.sh --setup      # Linux / macOS
+sudo bash linux/start.sh --check      # Re-check required packages only
 ```
 
 **Background service (Linux):**
