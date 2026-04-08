@@ -78,14 +78,16 @@ def _validate_profile(body: dict) -> str | None:
                 return f"stage {i}: repeat_min must be >= 0"
         except (TypeError, ValueError):
             return f"stage {i}: repeat_min must be an integer"
-        try:
-            aid = int(s.get("action_id") or 0)
-        except (TypeError, ValueError):
-            return f"stage {i}: action_id must be an integer"
-        if aid <= 0:
-            return f"stage {i}: action_id is required"
-        if not db_get_action_template(aid):
-            return f"stage {i}: action template {aid} not found"
+        action_ids = s.get("action_ids") or []
+        if not isinstance(action_ids, list):
+            return f"stage {i}: action_ids must be a list"
+        for j, aid in enumerate(action_ids):
+            try:
+                aid = int(aid)
+            except (TypeError, ValueError):
+                return f"stage {i}: action_ids[{j}] must be an integer"
+            if not db_get_action_template(aid):
+                return f"stage {i}: action template {aid} not found"
     return None
 
 
@@ -156,9 +158,6 @@ def _fire_test_profile(profile: dict, actor: str):
 
     def _run():
         for stage in profile.get("stages") or []:
-            tpl = db_get_action_template(stage.get("action_id"))
-            if not tpl:
-                continue
             ctx = {
                 "did":        "test",
                 "sid":        "test",
@@ -177,10 +176,14 @@ def _fire_test_profile(profile: dict, actor: str):
                 "severity":   "info",
                 "event_type": "test",
             }
-            try:
-                dispatch(tpl["atype"], tpl["config"], ctx)
-            except Exception as e:
-                log.error(f"alert_profile test dispatch error: {e}")
+            for aid in (stage.get("action_ids") or []):
+                tpl = db_get_action_template(aid)
+                if not tpl:
+                    continue
+                try:
+                    dispatch(tpl["atype"], tpl["config"], ctx)
+                except Exception as e:
+                    log.error(f"alert_profile test dispatch error: {e}")
 
     threading.Thread(target=_run, daemon=True).start()
 

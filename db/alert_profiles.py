@@ -41,13 +41,26 @@ def _profile_row(row) -> dict:
 
 def _stage_row(row) -> dict:
     r = dict(row) if not isinstance(row, dict) else row
+    # Parse action_ids JSON; fall back to legacy action_id column if needed
+    action_ids = []
+    raw = r.get("action_ids")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            action_ids = [int(x) for x in parsed if x]
+        except Exception:
+            pass
+    if not action_ids:
+        old = r.get("action_id")
+        if old:
+            action_ids = [int(old)]
     return {
         "id":            r["id"],
         "profile_id":    r["profile_id"],
         "trigger_state": r["trigger_state"],
         "delay_s":       int(r["delay_s"] or 0),
         "repeat_min":    int(r["repeat_min"] or 0),
-        "action_id":     r["action_id"],
+        "action_ids":    action_ids,
         "sort_order":    int(r["sort_order"] or 0),
     }
 
@@ -217,15 +230,15 @@ def _write_stages(cur, profile_id: int, stages: list, pg: bool):
         trig = s.get("trigger_state") or "down"
         if trig not in ("down", "warning", "down_recovered", "warning_recovered"):
             continue
-        action_id = s.get("action_id")
-        if not action_id:
-            # Stage with no action is meaningless — skip
+        action_ids = s.get("action_ids") or []
+        if not action_ids:
+            # Stage with no actions is meaningless — skip
             continue
         cur.execute(
             f"INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
-            f"repeat_min, action_id, sort_order) VALUES ({ph},{ph},{ph},{ph},{ph},{ph})",
+            f"repeat_min, action_ids, sort_order) VALUES ({ph},{ph},{ph},{ph},{ph},{ph})",
             (profile_id, trig, int(s.get("delay_s") or 0),
-             int(s.get("repeat_min") or 0), int(action_id), i)
+             int(s.get("repeat_min") or 0), json.dumps(action_ids), i)
         )
 
 
@@ -282,15 +295,15 @@ def db_save_action_template(data: dict, tpl_id: int | None = None) -> int:
 
 def db_delete_action_template(tpl_id: int) -> bool:
     """Delete a template. Fails if any stage still references it."""
-    used = db_query_one(
-        "main",
-        "SELECT COUNT(*) AS n FROM alert_profile_stages WHERE action_id=?",
-        (tpl_id,)
-    )
-    n = (used.get("n") if isinstance(used, dict) else used[0]) if used else 0
-    if n:
-        log.warning(f"db_delete_action_template: template {tpl_id} still used by {n} stage(s)")
-        return False
+    rows = db_query("main", "SELECT action_ids FROM alert_profile_stages")
+    for row in rows:
+        try:
+            ids = json.loads((row.get("action_ids") if isinstance(row, dict) else row[0]) or "[]")
+            if tpl_id in [int(x) for x in ids]:
+                log.warning(f"db_delete_action_template: template {tpl_id} still referenced")
+                return False
+        except Exception:
+            continue
     return db_execute("main", "DELETE FROM alert_action_templates WHERE id=?", (tpl_id,))
 
 
