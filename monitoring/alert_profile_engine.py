@@ -114,10 +114,17 @@ def _classify(sensor) -> tuple:
 
     current_state ∈ {"down", "warning", "ok"}
     session_started_ts is float epoch — None if state is ok.
+
+    Mapping:
+        sensor unreachable (ICMP/TCP fail)  → "down"
+        threshold_state == "crit"           → "down"   (critical = same urgency as down)
+        threshold_state == "warn"           → "warning"
     """
     if sensor._down_since_ts:
         return "down", sensor._down_since_ts
-    if sensor._threshold_state in ("crit", "warn") and sensor._threshold_triggered_ts:
+    if sensor._threshold_state == "crit" and sensor._threshold_triggered_ts:
+        return "down", sensor._threshold_triggered_ts
+    if sensor._threshold_state == "warn" and sensor._threshold_triggered_ts:
         return "warning", sensor._threshold_triggered_ts
     return "ok", None
 
