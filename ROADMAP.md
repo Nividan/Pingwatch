@@ -141,6 +141,18 @@
   - `frontend/forms-settings.js` — `openSettings()` refactored from ~600-line monolith into 10 focused tab-builder functions (`_buildSettingsTab_*`)
 - `db/persistence.py` startup restore — reverted window-function approach (caused 50 s startup on PostgreSQL due to full-table scan bypassing the composite index) back to per-sensor indexed seeks + single batched `GROUP BY` stats query; startup time restored to ~4 s
 
+- Subnet Discovery — scan a CIDR for unmonitored hosts
+  - Full mode (ping + DNS + MAC/OUI lookup + port scan + device-type guess) and Ping-only mode (fast, for /18–/16 ranges)
+  - Reuses existing `scan_ports` setting as the single source of truth for port list
+  - Max scan size /16 (65 534 hosts) with tiered runtime warning banners; estimated runtime shown live
+  - Auto-switches to Ping-only when host count > 4 096, user can override
+  - Multi-NIC duplicate detection via hostname fingerprinting — flagged rows pre-unchecked, inline ⚠ note
+  - Per-device sensor review step — Ping always on, HTTP/TLS/SNMP/TCP toggles per detected port
+  - Bulk add endpoint (`POST /api/discovery/bulk-add`) — creates normal standalone devices + sensors, single `db_save()` persist
+  - Background scan with 1 s SSE-style polling and `DELETE` cancel support; in-memory state, auto-purged after 1 h
+  - Dedicated `ThreadPoolExecutor(64)` isolated from sensor probe pool to avoid starving existing probes during large scans
+  - Audit log entries for scan start and bulk add
+
 ## 🔴 High Priority
 
 ## ⚙️ Medium Priority

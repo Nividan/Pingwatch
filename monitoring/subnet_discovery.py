@@ -20,7 +20,7 @@ import uuid
 from core.config import SYS
 from core.app_state import STATE
 from core.logger import log
-from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
+from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_banner
 
 # ── Dedicated executor — isolated from STATE._executor ──────────────
 # 64 workers so /16 (65534 hosts) finishes ping phase in ~30 min worst case.
@@ -310,7 +310,10 @@ def _enrich_host(ip: str, targets, deadline_s: float, mode: str = "full") -> dic
                 elif stype == "http":
                     r = probe_http(f"http://{ip}:{port}", timeout=tout, verify_ssl=False)
                 elif stype == "tls":
-                    r = probe_tls(ip, port, timeout=tout)
+                    # Use TCP reachability for discovery — cert validation is
+                    # irrelevant here and would cause false-negatives on
+                    # self-signed certs (e.g. PRTG, ESXi, internal appliances)
+                    r = probe_tcp(ip, port, timeout=tout)
                 elif stype == "banner":
                     r = probe_banner(ip, port, timeout=tout)
                 else:

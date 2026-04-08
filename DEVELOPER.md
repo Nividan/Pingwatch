@@ -36,8 +36,9 @@ Browser / Desktop GUI
         │   ├── logger.py         ← Central logging
         │   └── settings.py       ← Runtime settings cache
         │
-        ├── monitoring/           ← Probes, alerting, topology
+        ├── monitoring/           ← Probes, alerting, topology, subnet discovery
         │   ├── probes.py         ← Sensor engine
+        │   ├── subnet_discovery.py ← Subnet scan engine (liveness, enrichment, dup detection)
         │   ├── alert_engine.py   ← Rules-based alert engine (conditions, dispatch, cooldown)
         │   ├── smtp_alert.py     ← Email notifications
         │   ├── syslog_client.py  ← RFC 5424 syslog forwarding
@@ -98,6 +99,7 @@ pingwatch/
 │
 ├── monitoring/
 │   ├── probes.py           ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
+│   ├── subnet_discovery.py ← Subnet scan engine (liveness + enrichment + duplicate detection)
 │   ├── smtp_alert.py       ← Down/up email alerts with 5-min failure-log suppression
 │   ├── syslog_client.py    ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
 │   └── network_map.py      ← Topology pages, nodes, links, groups (DB-backed)
@@ -152,7 +154,8 @@ pingwatch/
 │   ├── alert_events.py     ← Alert history, ACK/resolve
 │   ├── maintenance_windows.py ← Maintenance window CRUD
 │   ├── ldap.py             ← LDAP/AD settings & test endpoints
-│   └── ipam.py             ← IPAM subnet & IP allocation API
+│   ├── ipam.py             ← IPAM subnet & IP allocation API
+│   └── discovery.py        ← Subnet discovery scan + bulk device add
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -172,6 +175,7 @@ pingwatch/
     ├── forms-ldap.js       ← LDAP/AD settings modal
     ├── forms-io.js         ← DB export/import form
     ├── forms-utils.js      ← Shared form helpers
+    ├── forms-discovery.js  ← Subnet discovery wizard modal
     ├── ipam.js             ← IPAM tab
     ├── bg.js               ← Animated background canvas
     ├── map.html            ← Network Topology Manager shell
@@ -210,6 +214,15 @@ LDAP/AD helpers: `ldap_authenticate`, `ldap_test_connection`, `ldap_test_auth_us
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
+
+### `monitoring/subnet_discovery.py`
+Subnet discovery scan engine. Exposes `start_scan(cidr, skip_monitored, mode)`, `get_scan(scan_id)`, and `cancel_scan(scan_id)` as the public API. Scans run in a dedicated `ThreadPoolExecutor(64)` (`_SCAN_EXECUTOR`) isolated from `STATE._executor` so large scans cannot starve existing sensor probes.
+
+**Two scan modes** — `full` (ping + reverse DNS + ARP MAC lookup + port scan using the existing `scan_ports` setting via `_get_scan_targets()` + device-type guess) and `ping` (ping + DNS + MAC only; designed for /18–/16 ranges where port enrichment would take hours).
+
+**Three phases per scan:** (1) parallel ICMP liveness via `probe_ping()` across all candidate IPs; (2) per-alive-host enrichment — reverse DNS (`socket.gethostbyaddr`), ARP MAC (`arp -a` Windows / `arp -n` Linux), OUI vendor lookup from a built-in ~80-entry map, and an 8-worker inner thread pool for port probing with a 6 s per-host deadline; (3) multi-NIC duplicate detection — `_hostname_fingerprint()` strips NIC suffixes (`-mgmt`, `-data`, `-iscsi`, etc.) and domain labels to normalise hostnames; results are cross-referenced against existing devices and other scan rows; matches set `possible_duplicate_of` on the row.
+
+Scan state (`_SCANS` dict, keyed by 16-char hex UUID) is in-memory and auto-purged after 1 hour. Maximum CIDR size is /16 (65 534 hosts); larger inputs are rejected at validation. The `run_subnet_scan()` helper wraps the full flow for future scheduled-scan use.
 
 ### `monitoring/probes.py`
 All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match). VMware probing is handled by `vmware/client.py`, called from `core/state.py`. `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
@@ -260,6 +273,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
+| `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
 
 ---
 
@@ -335,6 +349,7 @@ The frontend is served as static files — no build step.
 | `forms-ldap.js` | LDAP/AD settings modal |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
+| `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, device-type guess, multi-NIC ⚠ flags), per-device sensor review with inline URL/community inputs, bulk add with live device count |
 | `alerting.js` | Alert rules editor (conditions, collapsible action blocks with group chip selector), alert history viewer, maintenance windows |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
 | `bg.js` | Animated background canvas (aurora + radar) |
@@ -481,6 +496,15 @@ The frontend is served as static files — no build step.
 | `POST` | `/api/alert/window` | admin | Create window |
 | `PATCH` | `/api/alert/window/{id}` | admin | Update window |
 | `DELETE` | `/api/alert/window/{id}` | admin | Delete window |
+
+### Subnet Discovery
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/discovery/scan` | operator | Start a subnet scan `{cidr, skip_monitored, mode}` → `202 {scan_id}` |
+| `GET` | `/api/discovery/scan/{id}` | viewer | Poll scan progress and results |
+| `DELETE` | `/api/discovery/scan/{id}` | operator | Cancel a running scan |
+| `POST` | `/api/discovery/bulk-add` | operator | Bulk-create up to 500 devices with sensors `{devices: [{name, host, group, sensors: [...]}]}` |
 
 ---
 
