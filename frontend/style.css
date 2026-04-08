@@ -2034,7 +2034,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-del-btn:hover{background:var(--down-bg) !important;}
 
 /* Editor modal */
-.alrt-editor-box{width:min(95vw,960px);max-height:90vh;overflow-y:auto;}
+.alrt-editor-box{width:min(95vw,960px);max-width:min(95vw,960px);max-height:90vh;overflow-y:auto;}
 .alrt-editor-body{display:flex;flex-direction:column;gap:0;overflow-y:visible;}
 .alrt-row3{display:flex;gap:16px;flex-wrap:wrap;}
 .alrt-row3 .fr{flex:1;min-width:140px;}
