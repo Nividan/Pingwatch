@@ -84,11 +84,12 @@ _EVENT_TYPE_BY_STATE = {
 }
 
 
-def _build_ctx(dev, sensor, current_state: str, trigger_state: str) -> dict:
+def _build_ctx(dev, sensor, current_state: str, trigger_state: str,
+               duration_s=None) -> dict:
     """Build the dispatcher ctx dict from live sensor state."""
     import datetime
     did = getattr(dev, "did", None) or getattr(dev, "device_id", "")
-    return {
+    ctx = {
         "did":       did,
         "sid":       sensor.sensor_id,
         "dname":     getattr(dev, "name", ""),
@@ -105,6 +106,9 @@ def _build_ctx(dev, sensor, current_state: str, trigger_state: str) -> dict:
         "severity":  _SEV_BY_STATE.get(trigger_state, "info"),
         "event_type": _EVENT_TYPE_BY_STATE.get(trigger_state, trigger_state),
     }
+    if duration_s is not None:
+        ctx["duration_s"] = int(duration_s)
+    return ctx
 
 
 # ── Current-state classifier ─────────────────────────────────────
@@ -131,6 +135,26 @@ def _classify(sensor) -> tuple:
 
 def _session_key(ts: float | None) -> str:
     return str(int(ts)) if ts else ""
+
+
+def _get_session_start_ts(stages, target_state, did, sid, db_get_stage_state):
+    """Return the epoch timestamp when the failing session started, or None.
+
+    Reads `active_session` from the first state-stage that fired; that field
+    stores str(int(down_since_ts)) so we can recover the start time.
+    """
+    for s in stages:
+        if s["trigger_state"] != target_state:
+            continue
+        st = db_get_stage_state(s["id"], did, sid)
+        if st and st.get("fire_count", 0) > 0:
+            session = st.get("active_session", "")
+            if session:
+                try:
+                    return float(session)
+                except (ValueError, TypeError):
+                    pass
+    return None
 
 
 # ── Stage evaluator ──────────────────────────────────────────────
@@ -207,9 +231,12 @@ def evaluate_and_fire(dev, sensor) -> None:
             recovery_state = db_get_stage_state(sid_key, did, sid)
             if recovery_state and recovery_state.get("fire_count", 0) > 0:
                 continue   # already fired this recovery
+            start_ts = _get_session_start_ts(stages, target_state, did, sid,
+                                             db_get_stage_state)
+            duration_s = (now - start_ts) if start_ts else None
             _fire(stage, dev, sensor, trig, did, sid, session, profile,
                   dispatch, check_maintenance, db_log_event,
-                  db_record_stage_fire, recovery=True)
+                  db_record_stage_fire, recovery=True, duration_s=duration_s)
             fired_recovery = True
 
     # After firing recovery stages, wipe the per-stage history for this
@@ -237,11 +264,12 @@ def _had_prior_fire(stages, target_state, recovery_stage_id,
 
 def _fire(stage, dev, sensor, trig, did, sid, session, profile,
           dispatch, check_maintenance, db_log_event, db_record_stage_fire,
-          recovery: bool = False) -> None:
+          recovery: bool = False, duration_s=None) -> None:
     """Build context, check maintenance, dispatch the action, log the event."""
     from db.alert_profiles import db_get_action_template
 
-    ctx = _build_ctx(dev, sensor, sensor._threshold_state, trig)
+    ctx = _build_ctx(dev, sensor, sensor._threshold_state, trig,
+                     duration_s=duration_s)
 
     suppressed, mw_name = check_maintenance(ctx)
     if suppressed:

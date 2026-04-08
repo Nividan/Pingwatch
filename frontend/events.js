@@ -619,7 +619,7 @@ function _openEvtDetail(d) {
   if (!panel) return;
   panel.innerHTML = _buildIIP(d, alertEvt);
   document.getElementById('evtDetailModal').style.display = 'flex';
-  _startEvtDurTimer(d);
+  _startEvtDurTimer(d, alertEvt);
 }
 
 function _closeEvtDetail() {
@@ -631,7 +631,7 @@ function _closeEvtDetail() {
 }
 
 // Returns {secs, live}: secs = current duration value, live = whether it should tick
-function _iipGetDuration(d) {
+function _iipGetDuration(d, alertEvt) {
   const dir        = d._direction || d.direction || '';
   const isRecovery = dir === 'recovered' || dir === 'threshold_ok';
   const tsSec      = d.ts ? new Date(d.ts).getTime() / 1000 : 0;
@@ -668,7 +668,12 @@ function _iipGetDuration(d) {
     }
   }
 
-  // Resolved/acked with no matching event in FLAPS — use ack_at as end time
+  // Alert event resolved: use resolved_at as the fixed end time
+  if (alertEvt && alertEvt.state === 'resolved' && alertEvt.resolved_at && tsSec) {
+    return { secs: Math.max(0, Math.floor(alertEvt.resolved_at - tsSec)), live: false };
+  }
+
+  // Resolved/acked flap with no matching event in FLAPS — use ack_at as end time
   const state = d.ack_state || 'active';
   if ((state === 'resolved' || state === 'acknowledged') && d.ack_at && tsSec) {
     return { secs: Math.max(0, Math.floor(d.ack_at - tsSec)), live: false };
@@ -679,9 +684,9 @@ function _iipGetDuration(d) {
   return { secs, live: true };
 }
 
-function _startEvtDurTimer(d) {
+function _startEvtDurTimer(d, alertEvt) {
   clearInterval(_evtDetailTimer);
-  const { live } = _iipGetDuration(d);
+  const { live } = _iipGetDuration(d, alertEvt);
   if (!live) return;  // static duration — no ticker needed
   _evtDetailTimer = setInterval(() => {
     const el = document.getElementById('iip-dur-live');
@@ -739,7 +744,7 @@ function _iipStatus(d, alertEvt) {
 
   const utcStr = d.ts ? _iipFmtDt(d.ts) : '—';
 
-  const { secs: durSecs } = _iipGetDuration(d);
+  const { secs: durSecs } = _iipGetDuration(d, alertEvt);
   const initDur = _fmtDuration(durSecs);
 
   let ackmeta = '';
