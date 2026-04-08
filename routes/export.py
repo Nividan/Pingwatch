@@ -529,7 +529,7 @@ def handle(h, method, path, body):
                 os.unlink(tmp)
             except OSError:
                 pass
-            h._json(500, {"error": str(e)}); return True
+            h._error(500, "Import failed", e, context="db_import"); return True
 
         # Validate
         ok_msg = _validate_sqlite(tmp)
@@ -630,7 +630,7 @@ def handle(h, method, path, body):
                 _pass = False; continue
             if f_before and ts >= f_before:
                 _pass = False; continue
-            if f_search and f_search not in msg.lower():
+            if f_search and f_search not in line.lower():
                 _pass = False; continue
             filtered.append(line)
 

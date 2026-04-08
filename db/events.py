@@ -71,7 +71,7 @@ def db_load_err_logs(did):
             log.error(f"DB load err logs error: {e}")
             return []
     # SQLite
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         rows = con.execute(
             "SELECT ts,did,sid,sname,stype,msg FROM sensor_err_log "
@@ -98,7 +98,7 @@ def db_clear_err_logs(did):
             log.error(f"DB clear err logs error: {e}")
         return
     # SQLite
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         con.execute("DELETE FROM sensor_err_log WHERE did=?", (did,))
         con.commit()
@@ -119,7 +119,7 @@ def db_clear_sensor_err_logs(did, sid):
             log.error(f"DB clear sensor err logs error: {e}")
         return
     # SQLite
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         con.execute("DELETE FROM sensor_err_log WHERE did=? AND sid=?", (did, sid))
         con.commit()
@@ -283,7 +283,7 @@ def db_load_flaps():
             log.error(f"DB load flaps error: {e}")
             return []
     # SQLite
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         rows = con.execute(
             "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
@@ -515,7 +515,7 @@ def db_load_traps(limit=500, vendor=None, category=None, severity=None):
             log.error(f"DB load traps error: {e}")
             return []
     # SQLite
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         where, params = [], []
         if vendor:
@@ -560,7 +560,7 @@ def db_clear_device_traps(src_ip):
             log.error(f"DB clear device traps error: {e}")
         return
     # SQLite
-    con = sqlite3.connect(LOGS_DB_PATH)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
         con.execute("DELETE FROM snmp_traps WHERE src_ip=?", (src_ip,))
         con.commit()

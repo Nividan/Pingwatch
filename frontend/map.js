@@ -285,6 +285,8 @@ function calcPwLayout(devices) {
   }
   const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60;
   const syntheticNodes = [], syntheticGroups = [];
+  // Smart-placement dirty flags — batched save at end of pass
+  let _pwNodeDirty = false, _pwGroupDirty = false;
 
   // Pre-compute each group's slot dimensions based on actual device types
   const entries = Object.entries(byGroup).map(([gname, devs]) => {
@@ -311,17 +313,85 @@ function calcPwLayout(devices) {
                              x: gax, y: gay,
                              w: govr.w ?? w,  h: govr.h ?? h,
                              color: govr.color || '#00d4ff' });
-      devs.forEach((dev, i) => {
-        const dc = i % 3, dr = Math.floor(i / 3);
-        syntheticNodes.push(deviceToNode(dev,
-          gax + PAD + dc * NW,
-          gay + PAD + 28 + dr * NH));
-      });
+
+      // Build the "occupied" list from devices that already have (x,y) overrides
+      const occupied = [];
+      let hasAnyOverride = false;
+      for (const dev of devs) {
+        const ovr = pwOverrides[dev.device_id];
+        if (ovr?.x != null && ovr?.y != null) {
+          const nt = ovr.node_type || pwDeviceType(dev);
+          const s  = nsize(nt, null) || { w: 170, h: 95 };
+          occupied.push({ x: ovr.x, y: ovr.y, w: s.w, h: s.h });
+          hasAnyOverride = true;
+        }
+      }
+
+      if (!hasAnyOverride) {
+        // Pristine group — deterministic grid (unchanged legacy behavior)
+        devs.forEach((dev, i) => {
+          const dc = i % 3, dr = Math.floor(i / 3);
+          syntheticNodes.push(deviceToNode(dev,
+            gax + PAD + dc * NW,
+            gay + PAD + 28 + dr * NH));
+        });
+      } else {
+        // Customized group — smart placement for un-overridden devices
+        const groupRect = { x: gax, y: gay, w: govr.w ?? w, h: govr.h ?? h };
+        const INNER_PAD = 24, TITLE_H = 28;
+
+        // 1) Push all overridden nodes first (deviceToNode pulls from ovr)
+        for (const dev of devs) {
+          const ovr = pwOverrides[dev.device_id];
+          if (ovr?.x != null && ovr?.y != null) {
+            syntheticNodes.push(deviceToNode(dev, 0, 0));  // ovr wins inside deviceToNode
+          }
+        }
+
+        // 2) Place each unplaced device into a free slot (grow group if needed)
+        for (const dev of devs) {
+          const ovr = pwOverrides[dev.device_id];
+          if (ovr?.x != null && ovr?.y != null) continue;
+          const nt = ovr?.node_type || pwDeviceType(dev);
+          const sz = nsize(nt, null) || { w: 170, h: 95 };
+
+          let pos = _findFreeSlotInGroup(groupRect, occupied, sz.w, sz.h);
+          if (!pos) {
+            // Group is full → grow vertically (and widen if the node is too wide)
+            const maxY = occupied.reduce((m, o) => Math.max(m, o.y + o.h),
+                                         groupRect.y + TITLE_H);
+            pos = { x: groupRect.x + INNER_PAD, y: maxY + 20 };
+            const neededH = (pos.y + sz.h + INNER_PAD) - groupRect.y;
+            const neededW = Math.max(groupRect.w, sz.w + 2 * INNER_PAD);
+            groupRect.h = Math.max(groupRect.h, neededH);
+            groupRect.w = neededW;
+            pwGroupOverrides[gname] = { ...(pwGroupOverrides[gname] || govr),
+                                        x: gax, y: gay,
+                                        w: groupRect.w, h: groupRect.h };
+            _pwGroupDirty = true;
+            // Patch the syntheticGroups entry so this render reflects the new size
+            const sg = syntheticGroups[syntheticGroups.length - 1];
+            if (sg && sg.name === gname) { sg.w = groupRect.w; sg.h = groupRect.h; }
+          }
+
+          pwOverrides[dev.device_id] = { ...(pwOverrides[dev.device_id] || {}),
+                                         x: pos.x, y: pos.y };
+          _pwNodeDirty = true;
+          occupied.push({ x: pos.x, y: pos.y, w: sz.w, h: sz.h });
+          syntheticNodes.push(deviceToNode(dev, pos.x, pos.y));
+        }
+      }
+
       gx += w + GGAP;
       gi++;
     }
     rowY += rowH + ROWGAP;
   }
+
+  // Batched persistence — one PATCH per settings key per layout pass
+  if (_pwNodeDirty)  _pwSave('pw_node_overrides',  pwOverrides);
+  if (_pwGroupDirty) _pwSave('pw_group_overrides', pwGroupOverrides);
+
   return { syntheticNodes, syntheticGroups };
 }
 
@@ -803,11 +873,18 @@ function _pwLiveUpdate(did) {
 }
 
 // ═══════════════════════════ API ═══════════════════════════
+// NOTE: This is an iframe-local copy. The canonical version lives in app.js.
+// Keep the two implementations in sync if you change error handling.
 async function api(method, path, body) {
   const r = await fetch(path, {
     method, credentials: 'include', headers: {'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401) {
+    // Iframe can't show login; reload top-level window so the parent's auth flow runs
+    if (window.top && window.top !== window) window.top.location.reload();
+    return {};
+  }
   if (!r.ok) {
     const err = await r.json().catch(() => ({ error: r.statusText }));
     throw new Error(err.error || r.statusText);
@@ -923,6 +1000,41 @@ function nsize(type, node) {
 function nodeCenter(node) {
   const s = nsize(node.type, node);
   return { x: node.x + s.w/2, y: node.y + s.h/2 };
+}
+
+// ═══════════════════════════ SMART NODE PLACEMENT (PW LIVE) ═══════════════════════════
+// Axis-aligned rectangle overlap test with optional padding
+function _rectsOverlap(a, b, pad = 0) {
+  return !(a.x + a.w + pad <= b.x ||
+           b.x + b.w + pad <= a.x ||
+           a.y + a.h + pad <= b.y ||
+           b.y + b.h + pad <= a.y);
+}
+
+// Row-major scan of a group's interior for a non-colliding slot.
+// groupRect: {x, y, w, h}   occupied: array of {x, y, w, h}
+// Returns {x, y} or null if nothing fits.
+function _findFreeSlotInGroup(groupRect, occupied, newW, newH) {
+  const INNER_PAD = 24;    // distance from group border
+  const TITLE_H   = 28;    // group title bar
+  const STEP      = 20;    // candidate grid step (px)
+  const COLLIDE_PAD = 12;  // breathing room between nodes
+  const x0 = groupRect.x + INNER_PAD;
+  const y0 = groupRect.y + INNER_PAD + TITLE_H;
+  const x1 = groupRect.x + groupRect.w - INNER_PAD - newW;
+  const y1 = groupRect.y + groupRect.h - INNER_PAD - newH;
+  if (x1 < x0 || y1 < y0) return null; // group smaller than the node
+  for (let y = y0; y <= y1; y += STEP) {
+    for (let x = x0; x <= x1; x += STEP) {
+      const r = { x, y, w: newW, h: newH };
+      let hit = false;
+      for (const o of occupied) {
+        if (_rectsOverlap(r, o, COLLIDE_PAD)) { hit = true; break; }
+      }
+      if (!hit) return { x, y };
+    }
+  }
+  return null;
 }
 
 // ═══════════════════════════ RENDER ═══════════════════════════

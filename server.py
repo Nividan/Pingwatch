@@ -59,6 +59,7 @@ _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
+    "forms-discovery.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "alerting.js", "app.js",
 ]
 
@@ -195,6 +196,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _error(self, code, public_msg, exc=None, context=""):
+        """Send a JSON error response while logging the full exception server-side.
+        Use this instead of `_json(code, {"error": str(e)})` to avoid leaking
+        internal details (file paths, SQL, stack info) to clients.
+
+        Example:
+            try:
+                ...
+            except Exception as e:
+                h._error(500, "Internal server error", e, context="device_save")
+        """
+        if exc is not None:
+            ctx = context or "route"
+            log.error(f"{ctx} failed: {type(exc).__name__}: {exc}")
+        self._json(code, {"error": public_msg})
+
     def _cors(self):
         origin = self._origin()
         self.send_response(204)
@@ -303,8 +320,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -333,8 +350,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod):
+        from routes import ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -378,8 +395,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_rules_mod, _maint_mod, _groups_mod):
+        from routes import ipam, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_rules_mod, _maint_mod, _groups_mod, _disc_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 

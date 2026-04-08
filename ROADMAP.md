@@ -123,6 +123,35 @@
 - Bug fixes
   - Event detail panel "Open Device" and "Sensor History" buttons restored — navigate to device panel and open sensor history modal respectively
   - Backup schedule dark mode styling fixed — frequency dropdown, days-of-week checkboxes, and time input render correctly in dark theme
+- Project structure reorganisation
+  - `start.sh` + `pingwatch.service` moved to `linux/`; `start.bat` + `pingwatch.pyw` moved to `windows/`
+  - All launchers use dynamic relative paths — work correctly from any working directory regardless of `cwd`
+- VMware sensor improvements
+  - Device-level status now correctly reflects VMware sensor threshold states — `crit` threshold → device Down (red), `warn` threshold → device Warn (orange); previously the device tile always showed Up/green even with active threshold violations
+  - `SmartConnect()` capped at 60 s via `socket.setdefaulttimeout()` — prevents vSphere authentication hanging indefinitely on first connect (was causing ~2-minute startup delay for new VMware sensors)
+- Dashboard widget loading shimmer — widgets show animated shimmer with "Loading…" overlay during initial data fetch; clears automatically on first SSE update
+- Sensor history time-range fade — smooth opacity transition with guaranteed minimum 250 ms display when switching between time ranges (1 h → 3 y)
+- Code quality & maintainability refactor
+  - `db/helpers.py` — unified dual-backend query layer (`db_query`, `db_query_one`, `db_execute`, `db_executemany`, `db_upsert`, `db_cursor`); eliminates per-module `if is_pg()` boilerplate across all DB modules
+  - `core/constants.py` — centralised probe and server constants (`PORT_MIN/MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE`, etc.)
+  - `core/validation.py` — server-side input validation helpers (`validate_port`, `validate_host`, `validate_interval`, `validate_timeout`, `validate_name`)
+  - `server.py` `Handler._error()` — safe error handler: full exception logged server-side, generic message returned to client (no internal detail leakage)
+  - `frontend/forms-utils.js` — `msColor()`, `statusClass()`, `_lsGet()`, `_lsSet()` promoted to canonical shared implementations; all other JS modules reference these instead of maintaining local copies
+  - `frontend/app.js` `TIMINGS` — frozen object of all SSE/UI timing constants; replaces scattered magic numbers
+  - `frontend/forms-settings.js` — `openSettings()` refactored from ~600-line monolith into 10 focused tab-builder functions (`_buildSettingsTab_*`)
+- `db/persistence.py` startup restore — reverted window-function approach (caused 50 s startup on PostgreSQL due to full-table scan bypassing the composite index) back to per-sensor indexed seeks + single batched `GROUP BY` stats query; startup time restored to ~4 s
+
+- Subnet Discovery — scan a CIDR for unmonitored hosts
+  - Full mode (ping + DNS + MAC/OUI lookup + port scan + device-type guess) and Ping-only mode (fast, for /18–/16 ranges)
+  - Reuses existing `scan_ports` setting as the single source of truth for port list
+  - Max scan size /16 (65 534 hosts) with tiered runtime warning banners; estimated runtime shown live
+  - Auto-switches to Ping-only when host count > 4 096, user can override
+  - Multi-NIC duplicate detection via hostname fingerprinting — flagged rows pre-unchecked, inline ⚠ note
+  - Per-device sensor review step — Ping always on, HTTP/TLS/SNMP/TCP toggles per detected port
+  - Bulk add endpoint (`POST /api/discovery/bulk-add`) — creates normal standalone devices + sensors, single `db_save()` persist
+  - Background scan with 1 s SSE-style polling and `DELETE` cancel support; in-memory state, auto-purged after 1 h
+  - Dedicated `ThreadPoolExecutor(64)` isolated from sensor probe pool to avoid starving existing probes during large scans
+  - Audit log entries for scan start and bulk add
 
 ## 🔴 High Priority
 

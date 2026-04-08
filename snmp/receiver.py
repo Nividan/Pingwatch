@@ -7,7 +7,6 @@ them to all SSE clients via STATE._broadcast('snmp_trap', ...).
 """
 
 import datetime
-import json
 import os
 import socket
 
