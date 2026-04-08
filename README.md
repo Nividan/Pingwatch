@@ -115,8 +115,8 @@ The first-run wizard checks packages, configures ports, generates a TLS certific
 
 ```bash
 windows\start.bat --setup        # Windows
-bash linux/start.sh --setup      # Linux / macOS
-bash linux/start.sh --check      # Re-check required packages only
+sudo bash linux/start.sh --setup      # Linux / macOS
+sudo bash linux/start.sh --check      # Re-check required packages only
 ```
 
 **Background service (Linux):**
