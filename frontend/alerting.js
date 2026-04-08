@@ -216,7 +216,8 @@ async function openProfileEditor(id, scopeDefaults = null) {
         `<button class="ap-chip-rm" onclick="_apChipRemove(this)">&#x2715;</button>` +
         `</span>`
       ).join('');
-    return chips + `<button class="ap-add-btn" onclick="_apPickerOpen(this)">＋ Add</button>`;
+    const allAdded = selected.length >= _alertTemplates.length;
+    return chips + (allAdded ? '' : `<button class="ap-add-btn" onclick="_apPickerOpen(this)">＋ Add</button>`);
   };
 
   const o = document.createElement('div');
@@ -318,7 +319,16 @@ async function openProfileEditor(id, scopeDefaults = null) {
 
 // ── Chip action-template picker ──────────────────────────────────────────────
 function _apChipRemove(btn) {
+  const picker = btn.closest('.ap-act-picker');
   btn.closest('.ap-chip').remove();
+  // Restore add button if it was hidden
+  if (!picker.querySelector('.ap-add-btn')) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'ap-add-btn';
+    addBtn.setAttribute('onclick', '_apPickerOpen(this)');
+    addBtn.textContent = '＋ Add';
+    picker.appendChild(addBtn);
+  }
 }
 
 function _apPickerOpen(btn) {
@@ -358,7 +368,11 @@ function _apPickerSelect(id) {
   chip.dataset.id = id;
   chip.innerHTML = `${esc(t.name)}<span class="ap-tpl-badge ap-tpl-badge-${t.atype}">${t.atype.toUpperCase()}</span>` +
     `<button class="ap-chip-rm" onclick="_apChipRemove(this)">&#x2715;</button>`;
-  _apCurrentPicker.insertBefore(chip, _apCurrentPicker.querySelector('.ap-add-btn'));
+  const addBtn = _apCurrentPicker.querySelector('.ap-add-btn');
+  _apCurrentPicker.insertBefore(chip, addBtn);
+  // Hide add button if all templates are now selected
+  const selectedCount = _apCurrentPicker.querySelectorAll('.ap-chip[data-id]').length;
+  if (selectedCount >= _alertTemplates.length && addBtn) addBtn.remove();
   document.getElementById('_ap_picker_dd')?.remove();
   document.removeEventListener('click', _apPickerOutside, true);
   _apCurrentPicker = null;
