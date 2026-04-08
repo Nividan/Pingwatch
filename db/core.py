@@ -701,6 +701,46 @@ def db_init():
                 log.info("DB migrate: alert_profile_stages action_id → action_ids")
         except Exception as _e:
             log.warning(f"DB migrate alert_profile_stages: {_e}")
+        # ── Make action_id nullable (SQLite can't ALTER COLUMN — recreate table) ──
+        try:
+            cols_info = con.execute(
+                "PRAGMA table_info(alert_profile_stages)").fetchall()
+            aid_col = next((r for r in cols_info if r[1] == 'action_id'), None)
+            if aid_col and aid_col[3] == 1:   # notnull == 1
+                con.execute(
+                    "ALTER TABLE alert_profile_stages "
+                    "RENAME TO _aps_migrate_tmp"
+                )
+                con.execute("""
+                    CREATE TABLE alert_profile_stages (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        profile_id    INTEGER NOT NULL
+                                      REFERENCES alert_profiles(id) ON DELETE CASCADE,
+                        trigger_state TEXT NOT NULL CHECK(trigger_state IN
+                                      ('down','warning','down_recovered','warning_recovered')),
+                        delay_s       INTEGER NOT NULL DEFAULT 0,
+                        repeat_min    INTEGER NOT NULL DEFAULT 0,
+                        action_ids    TEXT    NOT NULL DEFAULT '[]',
+                        action_id     INTEGER,
+                        sort_order    INTEGER NOT NULL DEFAULT 0
+                    )""")
+                con.execute(
+                    "INSERT INTO alert_profile_stages "
+                    "(id, profile_id, trigger_state, delay_s, repeat_min, "
+                    " action_ids, action_id, sort_order) "
+                    "SELECT id, profile_id, trigger_state, delay_s, repeat_min, "
+                    "       action_ids, action_id, sort_order "
+                    "FROM _aps_migrate_tmp"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_profile_stages_profile "
+                    "ON alert_profile_stages(profile_id)"
+                )
+                con.execute("DROP TABLE _aps_migrate_tmp")
+                con.commit()
+                log.info("DB migrate: alert_profile_stages action_id made nullable")
+        except Exception as _e:
+            log.warning(f"DB migrate alert_profile_stages nullable: {_e}")
     finally:
         con.close()
     log.info("DB init: schema ready")

@@ -348,6 +348,19 @@ def pg_create_main_schema(cur):
             END IF;
         END $$
     """)
+    # Drop NOT NULL from action_id so new inserts (which omit it) succeed
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='main' AND table_name='alert_profile_stages'
+                  AND column_name='action_id' AND is_nullable = 'NO'
+            ) THEN
+                ALTER TABLE alert_profile_stages ALTER COLUMN action_id DROP NOT NULL;
+            END IF;
+        END $$
+    """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_profile_state (
             sig            TEXT PRIMARY KEY,
