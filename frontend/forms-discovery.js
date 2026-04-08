@@ -548,10 +548,9 @@ function _discRevRowHtml(row, expanded){
   const sensorRows = sensors.map(sg=>{
     const key = `${sg.stype}|${sg.port||''}`;
     const isChecked = !!checks[key];
-    const isPing = sg.stype === 'ping';
     let extra = '';
     if(sg.stype === 'http'){
-      const url = (args[key] && args[key].url) || sg.url || `http://${row.ip}:${sg.port}`;
+      const url = (args[key] && args[key].url) || sg.url || '';
       extra = `<input type="text" class="disc-sg-extra" placeholder="URL" value="${esc(url)}" oninput="_discSetArg('${esc(row.ip)}','${esc(key)}','url',this.value)"/>`;
     } else if(sg.stype === 'snmp'){
       const comm = (args[key] && args[key].snmp_community) || '';
@@ -560,7 +559,7 @@ function _discRevRowHtml(row, expanded){
     return `
       <div class="disc-sg-row">
         <label class="cb-row">
-          <input type="checkbox" ${isChecked?'checked':''} ${isPing?'disabled':''} onchange="_discSetCheck('${esc(row.ip)}','${esc(key)}',this.checked)"/>
+          <input type="checkbox" ${isChecked?'checked':''} onchange="_discSetCheck('${esc(row.ip)}','${esc(key)}',this.checked)"/>
           <span class="disc-sg-name">${esc(sg.name)}</span>
         </label>
         ${extra}
@@ -601,6 +600,7 @@ function _discSetArg(ip, key, field, value){
   if(!_disc.sensorArgs[ip][key]) _disc.sensorArgs[ip][key] = {};
   _disc.sensorArgs[ip][key][field] = value;
 }
+
 
 function _discBulkToggle(stype, on){
   for(const ip of _disc.selected){

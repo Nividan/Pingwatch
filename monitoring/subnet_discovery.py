@@ -262,19 +262,23 @@ def _guess_device_type(ports: list) -> str:
 def _suggest_sensors(ip: str, hostname: str, ports: list) -> list:
     """Build list of suggested sensor specs for a discovered host."""
     out = [{"stype": "ping", "name": "Ping", "port": None, "enabled": True}]
-    seen_ports = set()
+    seen_keys = set()  # (stype, port) — allows TLS + HTTP on the same port
     for svc in ports:
         st = svc.get("stype", "")
         port = svc.get("port")
-        if not port or port in seen_ports:
+        if not port:
             continue
-        seen_ports.add(port)
+        if (st, port) in seen_keys:
+            continue
+        seen_keys.add((st, port))
         if st == "http":
             out.append({"stype": "http", "name": f"HTTP {port}", "port": port,
                         "url": f"http://{ip}:{port}", "enabled": False})
         elif st == "tls":
             out.append({"stype": "tls", "name": f"TLS {port}", "port": port,
                         "enabled": False})
+            out.append({"stype": "http", "name": f"HTTPS {port}", "port": port,
+                        "url": f"https://{ip}:{port}", "enabled": False})
         elif port == 161:
             out.append({"stype": "snmp", "name": "SNMP sysUpTime", "port": 161,
                         "enabled": False})
