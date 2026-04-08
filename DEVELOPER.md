@@ -37,12 +37,13 @@ Browser / Desktop GUI
         │   └── settings.py       ← Runtime settings cache
         │
         ├── monitoring/           ← Probes, alerting, topology, subnet discovery
-        │   ├── probes.py         ← Sensor engine
-        │   ├── subnet_discovery.py ← Subnet scan engine (liveness, enrichment, dup detection)
-        │   ├── alert_engine.py   ← Rules-based alert engine (conditions, dispatch, cooldown)
-        │   ├── smtp_alert.py     ← Email notifications
-        │   ├── syslog_client.py  ← RFC 5424 syslog forwarding
-        │   └── network_map.py    ← NTM topology data layer
+        │   ├── probes.py              ← Sensor engine
+        │   ├── subnet_discovery.py    ← Subnet scan engine (liveness, enrichment, dup detection)
+        │   ├── alert_profile_engine.py ← PRTG-style profile evaluator (cascade, stage timing, dispatch)
+        │   ├── alert_dispatchers.py   ← Reusable action dispatchers (email, webhook, syslog, browser)
+        │   ├── smtp_alert.py          ← SMTP helper and email rendering
+        │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
+        │   └── network_map.py         ← NTM topology data layer
         │
         ├── backup/               ← Config backup engine
         │   ├── engine.py         ← SSH / Telnet backup engine
@@ -98,11 +99,13 @@ pingwatch/
 │   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
 │
 ├── monitoring/
-│   ├── probes.py           ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
-│   ├── subnet_discovery.py ← Subnet scan engine (liveness + enrichment + duplicate detection)
-│   ├── smtp_alert.py       ← Down/up email alerts with 5-min failure-log suppression
-│   ├── syslog_client.py    ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
-│   └── network_map.py      ← Topology pages, nodes, links, groups (DB-backed)
+│   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
+│   ├── subnet_discovery.py      ← Subnet scan engine (liveness + enrichment + duplicate detection)
+│   ├── alert_profile_engine.py  ← PRTG-style profile evaluator (cascade resolution, stage timing, dispatch hook)
+│   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
+│   ├── smtp_alert.py            ← SMTP connection helper and email rendering (used by alert_dispatchers)
+│   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
+│   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
 │
 ├── backup/
 │   ├── engine.py           ← SSH (paramiko) + Telnet connections, TOFU key verify,
@@ -138,7 +141,9 @@ pingwatch/
 │   ├── audit.py            ← Audit log write & query
 │   ├── backups.py          ← Backup settings (encrypted), run history, 3-run retention
 │   ├── trap_defs.py        ← SNMP trap definition queries
-│   └── ipam.py             ← Subnet and IP allocation management
+│   ├── ipam.py             ← Subnet and IP allocation management
+│   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
+│   └── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
@@ -150,7 +155,7 @@ pingwatch/
 │   ├── topology.py         ← NTM pages/nodes/links/groups
 │   ├── export.py           ← DB export/import, audit log
 │   ├── backups.py          ← Device config backup API
-│   ├── alert_rules.py      ← Alert rules CRUD, toggle, test-fire
+│   ├── alert_profiles.py   ← Alert profile + action template CRUD, profile test-fire
 │   ├── alert_events.py     ← Alert history, ACK/resolve
 │   ├── maintenance_windows.py ← Maintenance window CRUD
 │   ├── ldap.py             ← LDAP/AD settings & test endpoints
@@ -233,11 +238,14 @@ SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH hos
 ### `backup/db_backup.py`
 Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to run while the DB is being written) to snapshot both Main DB and Logs DB into timestamped files under `backup/database/`. Applies a configurable retention policy (default: keep 7 copies). Triggered by the scheduler and also callable on demand via `POST /api/db/backup/run`.
 
-### `monitoring/alert_engine.py`
-Rules-based alert engine. A bounded daemon queue receives events from `core/state.py` on every sensor state change. The worker thread evaluates all enabled rules against each event: condition matching (AND/OR), maintenance window suppression, cooldown/deduplication (DB-persisted), and multi-action dispatch. Actions: email (group-resolved + raw addresses), HTTP webhook (SSRF-guarded), syslog, and browser push notification via SSE. Rules are cached in memory with a 30-second TTL; `invalidate_rules_cache()` forces an immediate reload after saves. Verifies sensor/device still exists before dispatch to prevent ghost alerts after deletion.
+### `monitoring/alert_profile_engine.py`
+Pure-functional profile evaluator driven by the probe loop. Called from `Sensor._run_once()` after each probe cycle. `resolve_profile_for_sensor()` walks the cascade (sensor → device → group → global), returns the first matching profile, and caches the result on the sensor object (`_resolved_profile_id` / `_resolved_profile_ver`); invalidated by bumping `STATE._profile_cache_ver` whenever any profile changes. `evaluate_and_fire()` checks each stage's trigger state, delay, and repeat interval against the sensor's `_down_since_ts` / `_threshold_triggered_ts` fields. Recovery stages fire once when the sensor returns to OK (provided a state-stage previously fired in the same session) and compute total downtime duration from the `active_session` stored in `alert_profile_state`. Post-recovery, all stage rows for that sensor are cleared and the active alert event is auto-resolved.
+
+### `monitoring/alert_dispatchers.py`
+Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
 ### `monitoring/smtp_alert.py`
-Down/up email alerts via SMTP when sensor states change. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Delayed DOWN emails (`_smtp_down_delayed`) verify the sensor is still running before sending — prevents alerts for deleted sensors.
+SMTP connection helper and HTML email rendering. `_smtp_connect()` manages the server connection and TLS/auth handshake; `_build_email_html()` / `_build_email_text()` render the notification body. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Used by `alert_dispatchers._dispatch_email`.
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.
@@ -268,7 +276,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
-| `alert_rules.py` | `/api/alert/rules`, `/api/alert/rule`, `/api/alert/rule/{id}`, `/api/alert/rule/{id}/toggle`, `/api/alert/rule/{id}/test` |
+| `alert_profiles.py` | `/api/alert/profiles`, `/api/alert/profile`, `/api/alert/profile/{id}`, `/api/alert/action-templates`, `/api/alert/action-template`, `/api/alert/action-template/{id}`, `/api/alert/profile/{id}/test` |
 | `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/events/resolve-all`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
@@ -306,6 +314,8 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
 | `trap_defs.py` | SNMP trap definition queries |
 | `ipam.py` | Subnet and IP allocation management |
+| `alert_profiles.py` | Alert profile CRUD, action template CRUD, stage state tracking (`alert_profile_state`) |
+| `alert_events.py` | Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count |
 
 ### `app_settings` table
 
@@ -340,17 +350,18 @@ The frontend is served as static files — no build step.
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
-| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; bulk "Resolve All" button |
+| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; bulk "Resolve All" button; resolved event duration uses `resolved_at` as fixed end time (stops counting) |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Alert Rules); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator |
+| `forms-settings.js` | Settings modal (9 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
 | `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, device-type guess, multi-NIC ⚠ flags), per-device sensor review with inline URL/community inputs, bulk add with live device count |
-| `alerting.js` | Alert rules editor (conditions, collapsible action blocks with group chip selector), alert history viewer, maintenance windows |
+| `alerting.js` | Alert profiles editor (PRTG-style escalation table with delay / repeat / action columns), reusable action template editor (email with user+group checkbox pickers, webhook, syslog, browser push), alert event history viewer, maintenance windows |
+| `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.js` | NTM canvas engine — drag-and-drop topology editor |
@@ -366,7 +377,7 @@ The frontend is served as static files — no build step.
 5. Probe threads in `monitoring/probes.py` run on per-sensor intervals, push results to the Logs DB write-queue, and broadcast state-change events over SSE.
 6. `backup/scheduler.py` fires backup jobs on cron schedule; `backup/engine.py` connects to the device and returns config text to `db/backups.py`.
 7. `snmp/receiver.py` listens on a UDP socket; traps are enriched by `snmp/enricher.py` and injected into the flap pipeline.
-8. `monitoring/smtp_alert.py` and `monitoring/syslog_client.py` react to state-change events from their own listener threads.
+8. After each probe, `monitoring/alert_profile_engine.evaluate_and_fire()` resolves the alert profile for the sensor (cached; cascade: sensor → device → group → global), evaluates each stage's delay and repeat interval, and calls `monitoring/alert_dispatchers` to send email, webhook, syslog, or browser notifications. `monitoring/syslog_client.py` forwards events asynchronously on its own daemon queue.
 
 ---
 
@@ -458,18 +469,20 @@ The frontend is served as static files — no build step.
 | `DELETE` | `/api/group/{id}` | admin | Delete group; members are unassigned |
 | `PUT` | `/api/group/{id}/members` | admin | Replace member list `{usernames: [...]}` |
 
-### Alert Rules
+### Alert Profiles
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/alert/rules` | viewer | List all rules |
-| `POST` | `/api/alert/rule` | admin | Create rule |
-| `GET` | `/api/alert/rule/{id}` | viewer | Get single rule |
-| `PATCH` | `/api/alert/rule/{id}` | admin | Update rule |
-| `DELETE` | `/api/alert/rule/{id}` | admin | Delete rule |
-| `POST` | `/api/alert/rule/{id}/toggle` | operator | Enable / disable rule |
-| `POST` | `/api/alert/rule/{id}/test` | admin | Test-fire all actions with synthetic event |
-| `POST` | `/api/alert/rules` | admin | Reorder rules `{order: [id, ...]}` |
+| `GET` | `/api/alert/profiles` | viewer | List all profiles with scope and stage count |
+| `POST` | `/api/alert/profile` | admin | Create profile |
+| `GET` | `/api/alert/profile/{id}` | viewer | Get profile with all stages |
+| `PATCH` | `/api/alert/profile/{id}` | admin | Update profile and stages |
+| `DELETE` | `/api/alert/profile/{id}` | admin | Delete profile |
+| `POST` | `/api/alert/profile/{id}/test` | admin | Test-fire all stages with synthetic event |
+| `GET` | `/api/alert/action-templates` | viewer | List all action templates |
+| `POST` | `/api/alert/action-template` | admin | Create action template |
+| `PATCH` | `/api/alert/action-template/{id}` | admin | Update action template |
+| `DELETE` | `/api/alert/action-template/{id}` | admin | Delete action template |
 
 ### Alert Events
 

@@ -2059,9 +2059,22 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-stage-row .alrt-trig-cell{font-size:11px;font-weight:600;color:var(--text2);min-width:120px;}
 .alrt-stage-row input[type="number"]{width:80px;font-size:12px;padding:4px 6px;
   background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);}
-.alrt-stage-row select{font-size:12px;padding:4px 6px;background:var(--bg);
-  border:1px solid var(--border);border-radius:4px;color:var(--text);min-width:140px;}
 .alrt-stage-row .alrt-stage-disabled{opacity:.4;pointer-events:none;}
+
+/* Multi-template checkbox list inside stage table */
+.ap-actions-chk{max-height:100px;min-width:180px;background:var(--bg2);
+  border:1px solid var(--border2);border-radius:5px;padding:4px 6px;gap:2px;}
+.ap-actions-chk:focus-within{border-color:var(--accent);}
+.ap-tpl-item{gap:7px;padding:3px 5px;border-radius:3px;}
+.ap-tpl-item:hover{background:var(--bg3);}
+.ap-tpl-name{flex:1;font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ap-tpl-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  padding:1px 5px;border-radius:8px;flex-shrink:0;}
+.ap-tpl-badge-email  {background:rgba(47,129,247,.15);color:#58a6ff;}
+.ap-tpl-badge-webhook{background:rgba(139,92,246,.15);color:#a78bfa;}
+.ap-tpl-badge-syslog {background:rgba(240,165,0,.15);color:#f0a500;}
+.ap-tpl-badge-browser{background:rgba(35,209,139,.15);color:#23d18b;}
+.ap-no-tpl{font-size:11px;color:var(--text3);font-style:italic;padding:4px 2px;}
 
 /* Inherit / override badges */
 .alrt-inherit-badge,.alrt-override-badge{display:inline-flex;align-items:center;gap:4px;

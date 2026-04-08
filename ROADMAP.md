@@ -66,6 +66,17 @@
   - Maintenance windows — suppresses alert dispatch for all/group/device scopes; recurring daily schedule supported
   - Alert history tab with severity filter, acknowledge/resolve workflow
   - Test-fire button per rule (dispatches all actions with synthetic context)
+- Hierarchical alert profiles (replaced condition-based rules engine)
+  - PRTG-style escalation stages: trigger state (Down / Warning / Recovered), per-stage delay (seconds), repeat interval (minutes), and reusable action template
+  - Cascade resolution: sensor → device → group → global; first match wins; result cached on the sensor object and invalidated on any profile change
+  - Reusable action templates ("Email admin", "Slack #ops") defined once and shared across many stages and profiles
+  - Action template editor with checkbox pickers for user and group recipients (no raw IDs)
+  - Recovery stage computes total downtime duration from session start and includes it in the notification
+  - Edit Group modal (`forms-group.js`) — group rename and per-group alert profile in one panel; ⚙️ button on group header + right-click "Edit Group"
+  - Per-device and per-sensor profile override with one-click "Reset to inherited"
+  - Maintenance window suppression and mute-flag gate preserved from previous engine
+  - `alert_profile_state` table persists stage fire history across restarts; `alert_events` updated with profile_id / stage_id / profile_name
+  - Resolved event duration fixed — stops counting once alert_events.resolved_at is set
 - Settings → Sensors tab redesigned as compact table with expandable rows
 - Settings → Logs tab: improved fonts, structured rows, log-level colour coding
 - Home button — PingWatch logo navigates to Dashboard tab

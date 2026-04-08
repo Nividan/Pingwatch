@@ -205,11 +205,18 @@ async function openProfileEditor(id, scopeDefaults = null) {
     return matches[0] || null;
   });
 
-  const tplOpts = id => {
-    const opts = _alertTemplates.map(t =>
-      `<option value="${t.id}" ${id === t.id ? 'selected' : ''}>${esc(t.name)} (${t.atype})</option>`
-    ).join('');
-    return `<option value="">— pick template —</option>${opts}`;
+  const tplCheckboxes = (ids) => {
+    const selected = Array.isArray(ids) ? ids.map(Number) : [];
+    if (!_alertTemplates.length)
+      return `<span class="ap-no-tpl">No templates — add one below</span>`;
+    return _alertTemplates.map(t => {
+      const chk = selected.includes(t.id) ? ' checked' : '';
+      return `<label class="chk-item ap-tpl-item">` +
+        `<input type="checkbox" class="ap-tpl-chk" value="${t.id}"${chk}>` +
+        `<span class="ap-tpl-name">${esc(t.name)}</span>` +
+        `<span class="ap-tpl-badge ap-tpl-badge-${esc(t.atype)}">${esc(t.atype)}</span>` +
+        `</label>`;
+    }).join('');
   };
 
   const o = document.createElement('div');
@@ -261,7 +268,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
                 <th>Trigger</th>
                 <th>Delay (s)</th>
                 <th>Repeat (min)</th>
-                <th>Action template</th>
+                <th>Action templates</th>
               </tr>
             </thead>
             <tbody>
@@ -277,7 +284,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
                     <td>${isRecovery
                         ? '<span style="color:var(--text3);font-size:11px">—</span>'
                         : `<input type="number" class="ap-repeat" value="${s?.repeat_min ?? 0}" min="0" step="5"/>`}</td>
-                    <td><select class="ap-action">${tplOpts(s?.action_id || 0)}</select></td>
+                    <td><div class="chk-list ap-actions-chk">${tplCheckboxes(s?.action_ids || [])}</div></td>
                   </tr>`;
               }).join('')}
             </tbody>
@@ -323,16 +330,16 @@ async function _alertingSaveProfile() {
   // Collect stages from the table rows
   const stages = [];
   document.querySelectorAll('#alrt-prof-modal .alrt-stage-row').forEach(row => {
-    const trig    = row.dataset.trig;
-    const actSel  = row.querySelector('.ap-action');
-    const action_id = parseInt(actSel?.value || '0');
-    if (!action_id) return;   // empty stage row
+    const trig = row.dataset.trig;
+    const action_ids = Array.from(row.querySelectorAll('.ap-tpl-chk:checked'))
+      .map(i => parseInt(i.value)).filter(n => n > 0);
+    if (!action_ids.length) return;   // empty stage row — skip
     const isRecovery = trig.endsWith('_recovered');
     stages.push({
       trigger_state: trig,
       delay_s:    isRecovery ? 0 : parseInt(row.querySelector('.ap-delay')?.value  || '0'),
       repeat_min: isRecovery ? 0 : parseInt(row.querySelector('.ap-repeat')?.value || '0'),
-      action_id,
+      action_ids,
     });
   });
 

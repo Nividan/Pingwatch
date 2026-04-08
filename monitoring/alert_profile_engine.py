@@ -196,8 +196,9 @@ def evaluate_and_fire(dev, sensor) -> None:
         repeat  = int(stage.get("repeat_min") or 0)
         sid_key = stage["id"]
 
-        is_state_stage    = trig in ("down", "warning")
-        is_recovery_stage = trig in ("down_recovered", "warning_recovered")
+        action_ids        = stage.get("action_ids") or []
+        is_state_stage    = trig in ("down", "warning") and bool(action_ids)
+        is_recovery_stage = trig in ("down_recovered", "warning_recovered") and bool(action_ids)
 
         # ── State stages: fire while sensor is in matching state ──
         if is_state_stage:
@@ -284,18 +285,18 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
         db_record_stage_fire(stage["id"], did, sid, session)
         return
 
-    tpl = db_get_action_template(stage["action_id"])
-    if not tpl:
-        log.warning(
-            f"alert_profile_engine: stage {stage['id']} references missing "
-            f"template {stage.get('action_id')} — skipped"
-        )
-        return
-
-    try:
-        dispatch(tpl["atype"], tpl["config"], ctx)
-    except Exception as e:
-        log.error(f"alert_profile_engine: dispatch error: {e}")
+    for aid in (stage.get("action_ids") or []):
+        tpl = db_get_action_template(aid)
+        if not tpl:
+            log.warning(
+                f"alert_profile_engine: stage {stage['id']} references missing "
+                f"template {aid} — skipped"
+            )
+            continue
+        try:
+            dispatch(tpl["atype"], tpl["config"], ctx)
+        except Exception as e:
+            log.error(f"alert_profile_engine: dispatch error for template {aid}: {e}")
 
     try:
         if recovery:

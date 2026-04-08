@@ -646,7 +646,7 @@ def db_init():
                 trigger_state TEXT    NOT NULL,
                 delay_s       INTEGER NOT NULL DEFAULT 0,
                 repeat_min    INTEGER NOT NULL DEFAULT 0,
-                action_id     INTEGER NOT NULL REFERENCES alert_action_templates(id),
+                action_ids    TEXT    NOT NULL DEFAULT '[]',
                 sort_order    INTEGER NOT NULL DEFAULT 0
             )""")
         con.execute(
@@ -683,6 +683,24 @@ def db_init():
                 description TEXT    DEFAULT ''
             )""")
         con.commit()
+        # ── Migrate alert_profile_stages: action_id (int) → action_ids (json) ──
+        try:
+            cols = {r[1] for r in con.execute(
+                "PRAGMA table_info(alert_profile_stages)").fetchall()}
+            if 'action_ids' not in cols and 'action_id' in cols:
+                con.execute(
+                    "ALTER TABLE alert_profile_stages "
+                    "ADD COLUMN action_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+                con.execute(
+                    "UPDATE alert_profile_stages "
+                    "SET action_ids = '[' || CAST(action_id AS TEXT) || ']' "
+                    "WHERE action_id IS NOT NULL"
+                )
+                con.commit()
+                log.info("DB migrate: alert_profile_stages action_id → action_ids")
+        except Exception as _e:
+            log.warning(f"DB migrate alert_profile_stages: {_e}")
     finally:
         con.close()
     log.info("DB init: schema ready")
@@ -771,13 +789,13 @@ def db_seed_alert_profiles():
             prof_id = cur.fetchone()["id"]
             cur.execute(
                 "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
-                "repeat_min, action_id, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
-                (prof_id, "down", 60, 0, tpl_id, 0)
+                "repeat_min, action_ids, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
+                (prof_id, "down", 60, 0, f"[{tpl_id}]", 0)
             )
             cur.execute(
                 "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
-                "repeat_min, action_id, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
-                (prof_id, "down_recovered", 0, 0, tpl_id, 1)
+                "repeat_min, action_ids, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
+                (prof_id, "down_recovered", 0, 0, f"[{tpl_id}]", 1)
             )
         log.info("DB seed: default alert profile + Email admin template created")
         return
@@ -801,13 +819,13 @@ def db_seed_alert_profiles():
         prof_id = cur.lastrowid
         con.execute(
             "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
-            "repeat_min, action_id, sort_order) VALUES (?,?,?,?,?,?)",
-            (prof_id, "down", 60, 0, tpl_id, 0)
+            "repeat_min, action_ids, sort_order) VALUES (?,?,?,?,?,?)",
+            (prof_id, "down", 60, 0, f"[{tpl_id}]", 0)
         )
         con.execute(
             "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
-            "repeat_min, action_id, sort_order) VALUES (?,?,?,?,?,?)",
-            (prof_id, "down_recovered", 0, 0, tpl_id, 1)
+            "repeat_min, action_ids, sort_order) VALUES (?,?,?,?,?,?)",
+            (prof_id, "down_recovered", 0, 0, f"[{tpl_id}]", 1)
         )
         con.commit()
         log.info("DB seed: default alert profile + Email admin template created")

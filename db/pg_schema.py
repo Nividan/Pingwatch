@@ -325,13 +325,29 @@ def pg_create_main_schema(cur):
             trigger_state TEXT NOT NULL,
             delay_s       INTEGER NOT NULL DEFAULT 0,
             repeat_min    INTEGER NOT NULL DEFAULT 0,
-            action_id     INTEGER NOT NULL REFERENCES alert_action_templates(id),
+            action_ids    TEXT NOT NULL DEFAULT '[]',
             sort_order    INTEGER NOT NULL DEFAULT 0
         )""")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_profile_stages_profile "
         "ON alert_profile_stages(profile_id)"
     )
+    # Migrate action_id (int) → action_ids (json) for existing installs
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='main' AND table_name='alert_profile_stages'
+                  AND column_name='action_ids'
+            ) THEN
+                ALTER TABLE alert_profile_stages ADD COLUMN action_ids TEXT NOT NULL DEFAULT '[]';
+                UPDATE alert_profile_stages
+                   SET action_ids = '['||action_id::text||']'
+                 WHERE action_id IS NOT NULL;
+            END IF;
+        END $$
+    """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_profile_state (
             sig            TEXT PRIMARY KEY,
