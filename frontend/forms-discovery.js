@@ -382,7 +382,16 @@ function _discRenderResults(){
     <div class="disc-foot-opts">
       <div class="fr" style="margin:0">
         <label class="fl">Group</label>
-        <input type="text" id="disc-group" value="Discovered" placeholder="Discovered" autocomplete="off"/>
+        <div style="position:relative">
+          <input type="text" id="disc-group" value="Discovered" placeholder="Discovered" autocomplete="off"
+                 style="padding-right:28px"
+                 onfocus="_dgShow()" oninput="_dgFilter(this.value)"/>
+          <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_dgToggle()">▾</button>
+          <div id="disc-group-dd" class="grp-dd" style="display:none">${
+            [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
+            .map(g=>`<div class="grp-dd-item" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_dgPick('${esc(g)}')">${esc(g)}</div>`).join('')
+          }</div>
+        </div>
       </div>
       <div class="fr" style="margin:0">
         <label class="fl">Naming</label>
@@ -399,6 +408,40 @@ function _discRenderResults(){
     <button class="btn-p" id="disc-next-btn" onclick="_discRenderSensorReview()">Next: Review sensors ▶</button>
   `;
   _discUpdateNextBtn();
+  document.getElementById('disc-group')?.addEventListener('blur', () => setTimeout(_dgHide, 150));
+}
+
+function _dgShow(){
+  const dd = document.getElementById('disc-group-dd');
+  if(!dd) return;
+  dd.style.display = '';
+  _dgFilter('');
+}
+function _dgToggle(){
+  const dd = document.getElementById('disc-group-dd');
+  if(dd && dd.style.display !== 'none') _dgHide();
+  else _dgShow();
+}
+function _dgHide(){
+  const dd = document.getElementById('disc-group-dd');
+  if(dd) dd.style.display = 'none';
+}
+function _dgFilter(v){
+  const dd = document.getElementById('disc-group-dd');
+  if(!dd) return;
+  const q = v.trim().toLowerCase();
+  let any = false;
+  dd.querySelectorAll('.grp-dd-item').forEach(el => {
+    const show = !q || el.dataset.g.includes(q);
+    el.style.display = show ? '' : 'none';
+    if(show) any = true;
+  });
+  dd.style.display = any ? '' : 'none';
+}
+function _dgPick(g){
+  const inp = document.getElementById('disc-group');
+  if(inp) inp.value = g;
+  _dgHide();
 }
 
 function _discRowHtml(r, isPing){
