@@ -86,6 +86,8 @@ pingwatch/
 │
 ├── core/
 │   ├── config.py           ← File paths, compiled route regexes, startup constants
+│   ├── constants.py        ← Probe & server constants (PORT_MIN/MAX, PROBE_DEFAULT_INTERVAL, SENSOR_HISTORY_SIZE, …)
+│   ├── validation.py       ← Server-side input validators (validate_port, validate_host, validate_interval, …)
 │   ├── settings.py         ← Thread-safe runtime settings cache (DB-backed)
 │   ├── logger.py           ← App logger, audit logger, in-memory log buffer
 │   ├── auth.py             ← Login, PBKDF2-SHA256, RBAC, session management
@@ -119,6 +121,7 @@ pingwatch/
 │
 ├── db/
 │   ├── __init__.py         ← Re-exports all public symbols
+│   ├── helpers.py          ← Unified dual-backend query helpers (db_query, db_execute, db_upsert, db_cursor, _ph)
 │   ├── core.py             ← Dual write-queues, schema init, user seeding
 │   ├── backend.py          ← Backend selection: is_pg(), load_config() from pingwatch.conf
 │   ├── pg_pool.py          ← PostgreSQL connection pool; pg_conn() / pg_cursor() context managers
@@ -183,11 +186,21 @@ pingwatch/
 ### `server.py`
 HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
+`Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
+
 ### `setup_wizard.py`
 Cross-platform first-run wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only).
 
 ### `core/state.py`
 In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to all connected clients. The probe loop calculates live traffic rates for Counter32/Counter64 SNMP OIDs (`_fmt_bps`, wraparound-safe delta / elapsed) and stores the formatted rate in `last_value`. `Sensor.host_override` tracks whether the host was set manually (not inherited from the device); device IP changes propagate to all non-overridden sensors.
+
+`Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. This ensures VMware and other threshold-bearing sensors correctly colour the device tile without requiring a probe failure.
+
+### `core/constants.py`
+Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
+
+### `core/validation.py`
+Server-side input validation helpers used by route handlers before persisting user-supplied values. Functions: `validate_port(v)`, `validate_host(v)`, `validate_interval(v)`, `validate_timeout(v)`, `validate_name(v, max_len)`. Each returns `(value, None)` on success or `(None, "error message")` on failure.
 
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
@@ -218,6 +231,8 @@ Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queu
 
 ### `vmware/client.py`
 VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM discovery from vCenter/ESXi and real-time metric querying for 16 VM metrics across 6 categories (CPU, Memory, Disk, Datastore, Network, System). Session caching with 25-minute TTL avoids repeated logins; metric caching with 20-second TTL (matching vSphere's realtime sampling interval) avoids redundant QueryPerf calls when multiple sensors target the same VM. `vmware_probe()` returns the standard `{ok, ms, detail, value}` probe contract. `mem_consumed_pct` uses `quickStats.guestMemoryUsage` (actual guest OS memory from VMware Tools) with fallback to `mem.active.average`.
+
+`SmartConnect()` is wrapped with `socket.setdefaulttimeout(60)` — caps the vSphere SOAP authentication handshake at 60 seconds and restores the previous timeout in a `finally` block. Without this, a slow or unresponsive vCenter could block the probe thread indefinitely.
 
 ### `snmp/`
 - `receiver.py` — UDP socket on the SNMP port, injects raw traps into the pipeline
@@ -261,13 +276,14 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 
 | Module | Responsibility |
 |--------|----------------|
+| `helpers.py` | Unified dual-backend query helpers — `db_query`, `db_query_one`, `db_execute`, `db_executemany`, `db_upsert`, `db_cursor`; `_ph()` converts `?` → `%s` for PG. Use these instead of inline `if is_pg()` branches in new code. |
 | `backend.py` | `is_pg()`, `load_config()` / `save_config()` — reads `pingwatch.conf` to select backend |
 | `pg_pool.py` | PostgreSQL connection pool; `pg_conn()` (auto-commit/rollback) and `pg_cursor()` (auto-close) context managers |
 | `pg_schema.py` | PostgreSQL DDL — main + logs schemas, indexes, monthly-partitioned `sensor_samples`, rollup tables (`sensor_samples_5m`, `sensor_samples_1h`) |
 | `pg_migrate.py` | One-time SQLite → PostgreSQL migration: copies all tables, verifies row counts |
 | `core.py` | Dual write-queues (main + logs), schema init for both DBs, user seeding |
 | `migration.py` | One-time safe split of legacy single-DB into Main + Logs DB (SQLite only) |
-| `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag |
+| `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
@@ -306,7 +322,7 @@ The frontend is served as static files — no build step.
 |------|---------|
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
-| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`) |
+| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
@@ -314,11 +330,11 @@ The frontend is served as static files — no build step.
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Syslog, Alert Rules) |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Alert Rules); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal |
 | `forms-io.js` | DB export/import modal |
-| `forms-utils.js` | Shared form utilities (field validation, common UI helpers) |
+| `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
 | `alerting.js` | Alert rules editor (conditions, collapsible action blocks with group chip selector), alert history viewer, maintenance windows |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
 | `bg.js` | Animated background canvas (aurora + radar) |

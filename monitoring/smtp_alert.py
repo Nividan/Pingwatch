@@ -47,6 +47,17 @@ def _status_style(event_type: str, severity: str):
     return '#2c6fad',   '\U0001f535', 'INFO'           # blue
 
 
+def _fmt_duration(seconds) -> str:
+    """Format a duration in seconds as a human-readable string."""
+    if seconds is None:
+        return ''
+    s = int(seconds)
+    if s < 60:   return f"{s}s"
+    if s < 3600: return f"{s // 60}m {s % 60}s"
+    h = s // 3600; m = (s % 3600) // 60
+    return f"{h}h {m}m"
+
+
 def _fmt_ts(ts_str: str) -> str:
     """Convert ISO timestamp (e.g. '2026-04-05T16:42:31Z') to 'DD-MM-YYYY HH:MM:SS'."""
     if not ts_str:
@@ -150,8 +161,11 @@ def send_alert_email(direction, evt):
         ('Host',     _safe(evt.get('host'))),
         ('Severity', sev),
         ('Time',     _fmt_ts(evt.get('ts'))),
-        ('Detail',   _safe(evt.get('detail'))),
     ]
+    _dur = _fmt_duration(evt.get('duration_s'))
+    if _dur:
+        rows.append(('Duration', _dur))
+    rows.append(('Detail', _safe(evt.get('detail'))))
     body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
     html = _build_alert_html(rows, direction, sev, dname, sname)
     srv = None
@@ -226,8 +240,11 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
             ('Host',     _safe(ctx.get('host',   ''))),
             ('Severity', severity),
             ('Time',     _fmt_ts(ctx.get('ts', ''))),
-            ('Detail',   _safe(ctx.get('detail', ''))),
         ]
+        _dur = _fmt_duration(ctx.get('duration_s'))
+        if _dur:
+            rows.append(('Duration', _dur))
+        rows.append(('Detail', _safe(ctx.get('detail', ''))))
         body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
         html = _build_alert_html(rows, event_type, severity, dname, sname)
 
