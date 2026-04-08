@@ -219,11 +219,15 @@ def evaluate_and_fire(dev, sensor) -> None:
                   dispatch, check_maintenance, db_log_event,
                   db_record_stage_fire)
 
-        # ── Recovery stages: fire once when sensor leaves matching state ──
+        # ── Recovery stages: fire once when sensor is fully OK ──
         elif is_recovery_stage:
             target_state = "down" if trig == "down_recovered" else "warning"
-            if current_state == target_state:
-                continue   # still in failing state
+            # Only fire on full recovery to ok — warn↔crit transitions are
+            # escalations within the same session, not recoveries. Firing
+            # warning_recovered on warning→crit would resolve the active event
+            # mid-incident and cause the next stage to insert a fresh row.
+            if current_state != "ok":
+                continue
             # Did any state-stage of the matching trigger fire previously?
             if not _had_prior_fire(stages, target_state, sid_key, did, sid,
                                    db_get_stage_state):
@@ -268,6 +272,7 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
           recovery: bool = False, duration_s=None) -> None:
     """Build context, check maintenance, dispatch the action, log the event."""
     from db.alert_profiles import db_get_action_template
+    from db.alert_events  import db_has_acked_event
 
     ctx = _build_ctx(dev, sensor, sensor._threshold_state, trig,
                      duration_s=duration_s)
@@ -285,18 +290,31 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
         db_record_stage_fire(stage["id"], did, sid, session)
         return
 
-    for aid in (stage.get("action_ids") or []):
-        tpl = db_get_action_template(aid)
-        if not tpl:
-            log.warning(
-                f"alert_profile_engine: stage {stage['id']} references missing "
-                f"template {aid} — skipped"
-            )
-            continue
+    # If the user has already ACK'd an event for this sensor, keep silent:
+    # no dispatches (no emails / webhooks / syslog / browser pings). The event
+    # row is still updated below so repeat_count reflects reality. Recovery
+    # stages always dispatch — they're the signal that the incident is over.
+    gated_by_ack = False
+    if not recovery:
         try:
-            dispatch(tpl["atype"], tpl["config"], ctx)
+            if db_has_acked_event(profile["id"], did, sid):
+                gated_by_ack = True
         except Exception as e:
-            log.error(f"alert_profile_engine: dispatch error for template {aid}: {e}")
+            log.warning(f"alert_profile_engine: ack-gate check error: {e}")
+
+    if not gated_by_ack:
+        for aid in (stage.get("action_ids") or []):
+            tpl = db_get_action_template(aid)
+            if not tpl:
+                log.warning(
+                    f"alert_profile_engine: stage {stage['id']} references missing "
+                    f"template {aid} — skipped"
+                )
+                continue
+            try:
+                dispatch(tpl["atype"], tpl["config"], ctx)
+            except Exception as e:
+                log.error(f"alert_profile_engine: dispatch error for template {aid}: {e}")
 
     try:
         if recovery:
