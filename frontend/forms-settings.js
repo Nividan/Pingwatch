@@ -228,16 +228,12 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr"><label class="fl">To</label>
             <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
         </div>
-        <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
-          <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>
-          <div class="fh">Wait this many seconds before sending a DOWN email — if sensor recovers in time, no email is sent. Set to 0 to alert immediately.</div>
-        </div>
         <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
           <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
           <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text3)">
-          Emails are sent on sensor DOWN and RECOVERED events.
+          SMTP credentials power email actions in <b>Alert Profiles</b>. Per-stage delay and repeat are configured per profile.
         </div>
       </div>
 
@@ -584,15 +580,30 @@ function _buildSettingsTab_backup(sr) {
 function _buildSettingsTab_alertRules() {
   return `<div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr">
-        <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
-        <button class="btn-p rbac-admin" onclick="_alertingOpenEditor(null)">＋ New Rule</button>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text2)">📋 Alert Profiles</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">Escalation policies cascade global → group → device → sensor. First match wins.</div>
+        </div>
+        <button class="btn-p rbac-admin" onclick="openProfileEditor(null)">＋ New Profile</button>
       </div>
       <div id="alrt-list"><div class="alrt-loading">Loading…</div></div>
+
+      <div style="margin:16px 0 8px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="alrt-panel-hdr">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text2)">📨 Action Templates</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">Reusable notification targets. Define once, reference from any profile stage.</div>
+          </div>
+          <button class="btn-p rbac-admin" onclick="openTemplateEditor(null)">＋ New Template</button>
+        </div>
+        <div id="alrt-tpl-list"><div class="alrt-loading">Loading…</div></div>
+      </div>
+
       <div style="margin:16px 0 8px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="alrt-panel-hdr">
           <div>
             <div style="font-size:13px;font-weight:600;color:var(--text2)">🛠 Maintenance Windows</div>
-            <div style="font-size:12px;color:var(--text3);margin-top:2px">Suppress notifications during scheduled maintenance. Rules still evaluate.</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">Suppress notifications during scheduled maintenance. Profiles still evaluate.</div>
           </div>
           <button class="btn-p rbac-admin" onclick="_alertMaintOpen(null)">＋ New Window</button>
         </div>
@@ -629,7 +640,7 @@ async function openSettings(){
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
-      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
+      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}
@@ -1623,7 +1634,6 @@ async function saveSettings(){
     smtp_user:       document.getElementById('st-smtp-user')?.value.trim()||'',
     smtp_from:       document.getElementById('st-smtp-from')?.value.trim()||'',
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
-    smtp_down_delay: parseInt(document.getElementById('st-smtp-delay')?.value)??10,
   };
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;

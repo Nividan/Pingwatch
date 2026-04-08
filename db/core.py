@@ -580,43 +580,28 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
-        # ── Alert Rules Engine tables (v0.7.3+) ───────────────────────
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS alert_rules (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                name            TEXT    NOT NULL,
-                enabled         INTEGER DEFAULT 1,
-                severity        TEXT    DEFAULT 'warning',
-                condition_logic TEXT    DEFAULT 'AND',
-                cooldown_s      INTEGER DEFAULT 300,
-                trigger_count   INTEGER DEFAULT 1,
-                recover_count   INTEGER DEFAULT 1,
-                sort_order      INTEGER DEFAULT 0,
-                created_at      REAL    DEFAULT 0,
-                updated_at      REAL    DEFAULT 0
-            )""")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS alert_rule_conditions (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-                field      TEXT    NOT NULL,
-                op         TEXT    NOT NULL,
-                value      TEXT    NOT NULL DEFAULT '',
-                sort_order INTEGER DEFAULT 0
-            )""")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS alert_rule_actions (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-                atype      TEXT    NOT NULL,
-                config     TEXT    NOT NULL DEFAULT '{}',
-                sort_order INTEGER DEFAULT 0
-            )""")
+        # ── Alert Profiles (PRTG-style state-trigger system) ──────────
+        # One-time cleanup of legacy condition-rule tables (idempotent)
+        for _t in ("alert_rules", "alert_rule_conditions",
+                   "alert_rule_actions", "alert_dedup"):
+            try:
+                con.execute(f"DROP TABLE IF EXISTS {_t}")
+            except Exception:
+                pass
+        # Hard-replace alert_events: rule_id/rule_name → profile_id/stage_id/profile_name.
+        # alert_events is rotational and the user has minimal history — full recreate is fine.
+        try:
+            _cols = {r[1] for r in con.execute("PRAGMA table_info(alert_events)").fetchall()}
+            if _cols and ("rule_id" in _cols or "profile_id" not in _cols):
+                con.execute("DROP TABLE alert_events")
+        except Exception:
+            pass
         con.execute("""
             CREATE TABLE IF NOT EXISTS alert_events (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                rule_id      INTEGER DEFAULT 0,
-                rule_name    TEXT    DEFAULT '',
+                profile_id   INTEGER DEFAULT 0,
+                stage_id     INTEGER DEFAULT 0,
+                profile_name TEXT    DEFAULT '',
                 did          TEXT    DEFAULT '',
                 sid          TEXT    DEFAULT '',
                 dname        TEXT    DEFAULT '',
@@ -632,10 +617,49 @@ def db_init():
                 repeat_count INTEGER DEFAULT 1
             )""")
         con.execute("""
-            CREATE TABLE IF NOT EXISTS alert_dedup (
-                sig        TEXT    PRIMARY KEY,
-                last_fired REAL    DEFAULT 0,
-                fire_count INTEGER DEFAULT 1
+            CREATE TABLE IF NOT EXISTS alert_profiles (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL,
+                scope_type  TEXT    NOT NULL DEFAULT 'global',
+                scope_value TEXT    DEFAULT '',
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                created_at  REAL    DEFAULT 0,
+                updated_at  REAL    DEFAULT 0,
+                UNIQUE(scope_type, scope_value)
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alert_profiles_scope "
+            "ON alert_profiles(scope_type, scope_value)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_action_templates (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT    NOT NULL UNIQUE,
+                atype      TEXT    NOT NULL,
+                config     TEXT    NOT NULL DEFAULT '{}',
+                created_at REAL    DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_profile_stages (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id    INTEGER NOT NULL REFERENCES alert_profiles(id) ON DELETE CASCADE,
+                trigger_state TEXT    NOT NULL,
+                delay_s       INTEGER NOT NULL DEFAULT 0,
+                repeat_min    INTEGER NOT NULL DEFAULT 0,
+                action_id     INTEGER NOT NULL REFERENCES alert_action_templates(id),
+                sort_order    INTEGER NOT NULL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_profile_stages_profile "
+            "ON alert_profile_stages(profile_id)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alert_profile_state (
+                sig            TEXT    PRIMARY KEY,
+                first_fire_ts  REAL    DEFAULT 0,
+                last_fire_ts   REAL    DEFAULT 0,
+                fire_count     INTEGER DEFAULT 0,
+                active_session TEXT    DEFAULT ''
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS maintenance_windows (
@@ -658,15 +682,6 @@ def db_init():
                 name        TEXT    NOT NULL UNIQUE,
                 description TEXT    DEFAULT ''
             )""")
-        # alert_rules — debounce columns (moved from per-sensor to per-rule)
-        for _col_def in [
-            "trigger_count INTEGER DEFAULT 1",
-            "recover_count INTEGER DEFAULT 1",
-        ]:
-            try:
-                con.execute(f"ALTER TABLE alert_rules ADD COLUMN {_col_def}")
-            except Exception:
-                pass
         con.commit()
     finally:
         con.close()
@@ -715,6 +730,87 @@ def db_seed_users():
         con.execute("DELETE FROM sessions")
         con.commit()
         log.info("DB seed: all sessions cleared (server restarted)")
+    finally:
+        con.close()
+
+
+def db_seed_alert_profiles():
+    """Seed default action template + global Default profile if missing.
+
+    Fresh installs ship with sane "alert me when something dies" behavior:
+      - Action template "Email admin" → email to the 'admin' user group
+      - Global profile "Default" with stages:
+          • down @ 60s     → Email admin
+          • down_recovered → Email admin
+    """
+    import time as _t
+    import json as _json
+    now = _t.time()
+    # Default action targets the 'admin' user — its email is resolved at fire time
+    cfg_email = _json.dumps({"to_users": ["admin"]})
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        with pg_cursor("main") as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM alert_profiles")
+            row = cur.fetchone()
+            if row and (row.get("n") if isinstance(row, dict) else row[0]):
+                return
+            cur.execute(
+                "INSERT INTO alert_action_templates (name, atype, config, created_at) "
+                "VALUES (%s,%s,%s,%s) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name "
+                "RETURNING id",
+                ("Email admin", "email", cfg_email, now)
+            )
+            tpl_id = cur.fetchone()["id"]
+            cur.execute(
+                "INSERT INTO alert_profiles (name, scope_type, scope_value, enabled, "
+                "created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                ("Default", "global", "", 1, now, now)
+            )
+            prof_id = cur.fetchone()["id"]
+            cur.execute(
+                "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
+                "repeat_min, action_id, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
+                (prof_id, "down", 60, 0, tpl_id, 0)
+            )
+            cur.execute(
+                "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
+                "repeat_min, action_id, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
+                (prof_id, "down_recovered", 0, 0, tpl_id, 1)
+            )
+        log.info("DB seed: default alert profile + Email admin template created")
+        return
+
+    con = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        n = con.execute("SELECT COUNT(*) FROM alert_profiles").fetchone()[0]
+        if n:
+            return
+        cur = con.execute(
+            "INSERT INTO alert_action_templates (name, atype, config, created_at) "
+            "VALUES (?,?,?,?)",
+            ("Email admin", "email", cfg_email, now)
+        )
+        tpl_id = cur.lastrowid
+        cur = con.execute(
+            "INSERT INTO alert_profiles (name, scope_type, scope_value, enabled, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?)",
+            ("Default", "global", "", 1, now, now)
+        )
+        prof_id = cur.lastrowid
+        con.execute(
+            "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
+            "repeat_min, action_id, sort_order) VALUES (?,?,?,?,?,?)",
+            (prof_id, "down", 60, 0, tpl_id, 0)
+        )
+        con.execute(
+            "INSERT INTO alert_profile_stages (profile_id, trigger_state, delay_s, "
+            "repeat_min, action_id, sort_order) VALUES (?,?,?,?,?,?)",
+            (prof_id, "down_recovered", 0, 0, tpl_id, 1)
+        )
+        con.commit()
+        log.info("DB seed: default alert profile + Email admin template created")
     finally:
         con.close()
 

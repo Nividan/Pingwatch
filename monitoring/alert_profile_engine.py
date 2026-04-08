@@ -1,0 +1,275 @@
+"""
+monitoring/alert_profile_engine.py — PRTG-style alert profile engine.
+
+Pure-functional helpers driven by the probe loop. There is no thread of its
+own — every probe cycle calls evaluate_and_fire() once for the active sensor.
+
+Concepts:
+
+    Profile         A complete escalation policy bound to one scope.
+    Stage           One row inside a profile: trigger_state + delay + repeat
+                    + action_template_id.
+    Session         The contiguous period a sensor has been in a failing state.
+                    Identified by str(sensor._down_since_ts). Resets when the
+                    sensor recovers and goes down again.
+    Cascade         sensor → device → group → global. First match wins. If no
+                    profile resolves, no alerts fire (intentional "off" state).
+
+Cache invalidation:
+
+    Sensor caches its resolved profile id on _resolved_profile_id /
+    _resolved_profile_ver. Any profile write bumps STATE._profile_cache_ver,
+    forcing every sensor to re-resolve on its next probe.
+"""
+
+import time
+
+from core.logger import log
+
+
+# ── Profile resolution (cascade) ─────────────────────────────────
+
+def resolve_profile_for_sensor(dev, sensor) -> dict | None:
+    """Return the profile that applies to this sensor, or None.
+
+    Cached on sensor._resolved_profile_id, invalidated when
+    STATE._profile_cache_ver changes.
+    """
+    from core.app_state import STATE
+    from db.alert_profiles import db_get_profile, db_get_profile_for_scope
+
+    cur_ver = getattr(STATE, "_profile_cache_ver", 0)
+    if (getattr(sensor, "_resolved_profile_ver", -1) == cur_ver
+            and getattr(sensor, "_resolved_profile_id", None) is not None):
+        pid = sensor._resolved_profile_id
+        if pid == 0:
+            return None
+        return db_get_profile(pid)
+
+    profile = None
+    did = dev.did if hasattr(dev, "did") else getattr(dev, "device_id", "")
+    sid = sensor.sensor_id
+
+    # 1. sensor scope
+    profile = db_get_profile_for_scope("sensor", f"{did}/{sid}")
+    # 2. device scope
+    if not profile:
+        profile = db_get_profile_for_scope("device", did)
+    # 3. group scope
+    if not profile and getattr(dev, "group", ""):
+        profile = db_get_profile_for_scope("group", dev.group)
+    # 4. global
+    if not profile:
+        profile = db_get_profile_for_scope("global", "")
+
+    sensor._resolved_profile_id  = profile["id"] if profile else 0
+    sensor._resolved_profile_ver = cur_ver
+    return profile
+
+
+# ── Context builder (mirrors the legacy alert_engine ctx shape) ──
+
+_SEV_BY_STATE = {
+    "down":              "critical",
+    "warning":           "warning",
+    "down_recovered":    "recovery",
+    "warning_recovered": "recovery",
+}
+
+_EVENT_TYPE_BY_STATE = {
+    "down":              "down",
+    "warning":           "threshold_warning",
+    "down_recovered":    "recovered",
+    "warning_recovered": "threshold_ok",
+}
+
+
+def _build_ctx(dev, sensor, current_state: str, trigger_state: str) -> dict:
+    """Build the dispatcher ctx dict from live sensor state."""
+    import datetime
+    did = getattr(dev, "did", None) or getattr(dev, "device_id", "")
+    return {
+        "did":       did,
+        "sid":       sensor.sensor_id,
+        "dname":     getattr(dev, "name", ""),
+        "sname":     sensor.name,
+        "host":      sensor.host,
+        "stype":     sensor.stype,
+        "grp":       getattr(dev, "group", ""),
+        "state":     sensor._threshold_state,
+        "ms":        sensor.last_ms,
+        "loss_pct":  getattr(sensor, "loss_pct", 0),
+        "detail":    sensor.last_detail,
+        "ts":        datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "severity":  _SEV_BY_STATE.get(trigger_state, "info"),
+        "event_type": _EVENT_TYPE_BY_STATE.get(trigger_state, trigger_state),
+    }
+
+
+# ── Current-state classifier ─────────────────────────────────────
+
+def _classify(sensor) -> tuple:
+    """Return (current_state, session_started_ts).
+
+    current_state ∈ {"down", "warning", "ok"}
+    session_started_ts is float epoch — None if state is ok.
+    """
+    if sensor._down_since_ts:
+        return "down", sensor._down_since_ts
+    if sensor._threshold_state in ("crit", "warn") and sensor._threshold_triggered_ts:
+        return "warning", sensor._threshold_triggered_ts
+    return "ok", None
+
+
+def _session_key(ts: float | None) -> str:
+    return str(int(ts)) if ts else ""
+
+
+# ── Stage evaluator ──────────────────────────────────────────────
+
+def evaluate_and_fire(dev, sensor) -> None:
+    """Run the profile evaluator for this sensor on this probe cycle.
+
+    Called from Sensor._run_once after the existing flap/threshold blocks
+    have already updated _down_since_ts / _threshold_triggered_ts.
+    """
+    if sensor.alerts_muted or getattr(dev, "alerts_muted", False):
+        return
+
+    profile = resolve_profile_for_sensor(dev, sensor)
+    if not profile or not profile.get("enabled", True):
+        return
+    stages = profile.get("stages") or []
+    if not stages:
+        return
+
+    current_state, started_ts = _classify(sensor)
+    now = time.time()
+
+    from db.alert_profiles import (
+        db_get_stage_state, db_record_stage_fire,
+        db_clear_stage_state_for_sensor,
+    )
+    from db.alert_events  import db_log_event, db_auto_resolve_event
+    from monitoring.alert_dispatchers import dispatch, check_maintenance
+
+    did = getattr(dev, "did", None) or getattr(dev, "device_id", "")
+    sid = sensor.sensor_id
+
+    fired_recovery = False
+
+    for stage in stages:
+        trig    = stage["trigger_state"]
+        delay   = int(stage.get("delay_s") or 0)
+        repeat  = int(stage.get("repeat_min") or 0)
+        sid_key = stage["id"]
+
+        is_state_stage    = trig in ("down", "warning")
+        is_recovery_stage = trig in ("down_recovered", "warning_recovered")
+
+        # ── State stages: fire while sensor is in matching state ──
+        if is_state_stage:
+            if current_state != trig:
+                continue
+            if (now - started_ts) < delay:
+                continue
+            session = _session_key(started_ts)
+            state = db_get_stage_state(sid_key, did, sid)
+            should_fire = False
+            if not state or state.get("active_session") != session:
+                should_fire = True   # never fired in this session
+            elif repeat > 0 and (now - state.get("last_fire_ts", 0)) >= (repeat * 60):
+                should_fire = True   # repeat interval elapsed
+            if not should_fire:
+                continue
+            _fire(stage, dev, sensor, trig, did, sid, session, profile,
+                  dispatch, check_maintenance, db_log_event,
+                  db_record_stage_fire)
+
+        # ── Recovery stages: fire once when sensor leaves matching state ──
+        elif is_recovery_stage:
+            target_state = "down" if trig == "down_recovered" else "warning"
+            if current_state == target_state:
+                continue   # still in failing state
+            # Did any state-stage of the matching trigger fire previously?
+            if not _had_prior_fire(stages, target_state, sid_key, did, sid,
+                                   db_get_stage_state):
+                continue
+            session = ""  # recovery stages aren't session-bound
+            recovery_state = db_get_stage_state(sid_key, did, sid)
+            if recovery_state and recovery_state.get("fire_count", 0) > 0:
+                continue   # already fired this recovery
+            _fire(stage, dev, sensor, trig, did, sid, session, profile,
+                  dispatch, check_maintenance, db_log_event,
+                  db_record_stage_fire, recovery=True)
+            fired_recovery = True
+
+    # After firing recovery stages, wipe the per-stage history for this
+    # sensor so a future failure starts a fresh session cleanly.
+    if fired_recovery and current_state == "ok":
+        try:
+            db_clear_stage_state_for_sensor(did, sid)
+            db_auto_resolve_event(profile["id"], did, sid)
+        except Exception as e:
+            log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
+
+
+def _had_prior_fire(stages, target_state, recovery_stage_id,
+                    did, sid, db_get_stage_state) -> bool:
+    """Return True if any state-stage matching target_state previously fired
+    for this sensor (any session)."""
+    for s in stages:
+        if s["trigger_state"] != target_state:
+            continue
+        st = db_get_stage_state(s["id"], did, sid)
+        if st and st.get("fire_count", 0) > 0:
+            return True
+    return False
+
+
+def _fire(stage, dev, sensor, trig, did, sid, session, profile,
+          dispatch, check_maintenance, db_log_event, db_record_stage_fire,
+          recovery: bool = False) -> None:
+    """Build context, check maintenance, dispatch the action, log the event."""
+    from db.alert_profiles import db_get_action_template
+
+    ctx = _build_ctx(dev, sensor, sensor._threshold_state, trig)
+
+    suppressed, mw_name = check_maintenance(ctx)
+    if suppressed:
+        try:
+            db_log_event(profile["id"], stage["id"], profile["name"],
+                         ctx, state="suppressed")
+        except Exception:
+            pass
+        log.debug(f"alert_profile_engine: stage {stage['id']} "
+                  f"suppressed by maintenance window {mw_name!r}")
+        # Still mark as fired so we don't keep retrying every probe
+        db_record_stage_fire(stage["id"], did, sid, session)
+        return
+
+    tpl = db_get_action_template(stage["action_id"])
+    if not tpl:
+        log.warning(
+            f"alert_profile_engine: stage {stage['id']} references missing "
+            f"template {stage.get('action_id')} — skipped"
+        )
+        return
+
+    try:
+        dispatch(tpl["atype"], tpl["config"], ctx)
+    except Exception as e:
+        log.error(f"alert_profile_engine: dispatch error: {e}")
+
+    try:
+        if recovery:
+            # Recovery stages auto-resolve any active event for this profile
+            from db.alert_events import db_auto_resolve_event
+            db_auto_resolve_event(profile["id"], did, sid)
+        db_log_event(profile["id"], stage["id"], profile["name"], ctx,
+                     state="active")
+    except Exception as e:
+        log.warning(f"alert_profile_engine: db_log_event error: {e}")
+
+    db_record_stage_fire(stage["id"], did, sid, session)

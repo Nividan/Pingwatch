@@ -137,60 +137,6 @@ def _safe(v):
     return str(v or '').replace('\r', '').replace('\n', ' ')
 
 
-def send_alert_email(direction, evt):
-    """Send a flap alert email. Called in a daemon thread from state.py."""
-    from db.backups import decrypt_pw as _dec_pw
-    host      = _cfg('smtp_host', '')
-    port      = _cfg('smtp_port', 587)
-    tls       = _cfg('smtp_tls',  'starttls')  # 'ssl' | 'starttls' | 'none'
-    user      = _cfg('smtp_user', '')
-    password  = _dec_pw(_cfg('smtp_pass', ''))
-    from_addr = _cfg('smtp_from', '')
-    to_addr   = _cfg('smtp_to',   '')
-    if not (host and from_addr and to_addr):
-        return
-    sev        = 'critical' if direction == 'down' else 'recovery'
-    _c, emoji, label = _status_style(direction, sev)
-    dname  = _safe(evt.get('dname'))
-    sname  = _safe(evt.get('sname'))
-    subject = f"[PingWatch] {emoji} {label}: {dname} / {sname}"
-    rows = [
-        ('Status',   label),
-        ('Device',   dname),
-        ('Sensor',   f"{sname} ({_safe(evt.get('stype'))})"),
-        ('Host',     _safe(evt.get('host'))),
-        ('Severity', sev),
-        ('Time',     _fmt_ts(evt.get('ts'))),
-    ]
-    _dur = _fmt_duration(evt.get('duration_s'))
-    if _dur:
-        rows.append(('Duration', _dur))
-    rows.append(('Detail', _safe(evt.get('detail'))))
-    body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
-    html = _build_alert_html(rows, direction, sev, dname, sname)
-    srv = None
-    try:
-        srv = _connect(host, port, tls, user, password)
-        srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr, html).as_string())
-        srv.quit(); srv = None
-        _last_error.pop(host, None)   # clear suppression on success
-        global _last_ok_ts; _last_ok_ts = time.time()
-        log.info(f"Alert email sent ({label}): {evt.get('dname')}/{evt.get('sname')}")
-    except Exception as e:
-        err_str = str(e)
-        now = time.monotonic()
-        last_err, last_ts = _last_error.get(host, (None, 0))
-        if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
-            log.error(f"SMTP alert failed (host={host}:{port}): {e}")
-            _last_error[host] = (err_str, now)
-        global _last_err; _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
-        # else: suppress repeated identical error
-    finally:
-        if srv:
-            try: srv.quit()
-            except Exception: pass
-
-
 def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
     """Send an alert rule email. Called from alert_engine.py.
 

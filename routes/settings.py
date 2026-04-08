@@ -82,7 +82,6 @@ def handle(h, method, path, body):
             "smtp_from":       _settings.get("smtp_from", ""),
             "smtp_to":         _settings.get("smtp_to",   ""),
             "smtp_pass_set":   bool(_settings.get("smtp_pass", "")),
-            "smtp_down_delay": int(_settings.get("smtp_down_delay", 10)),
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
             "snr_timeout":       int(_settings.get("snr_timeout",       4)),
@@ -251,7 +250,7 @@ def handle(h, method, path, body):
                 _settings.load({_k: _val})
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
         for _k in (
-            "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to", "smtp_down_delay",
+            "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
             "snr_interval", "snr_timeout",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window",

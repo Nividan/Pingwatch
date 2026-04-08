@@ -1,156 +1,537 @@
-// ── Alerting (Rules in Settings, History in Events tab) ──────────────
+// ── Alerting (PRTG-style profiles + action templates + events + maint) ──
 
-let _alertRules        = [];
-let _alertEditingId    = null;   // null = new rule
-let _alertEvtFilter    = 'all';
-let _alertEvtOffset    = 0;
-const _ALERT_EVT_LIMIT = 100;
-let _alertMaintWindows = [];
-let _aeGroups          = null;   // [{id, name}] cached per editor session
-let _aeBlkCounter      = 0;      // unique per-block ID for chip scoping
+let _alertProfiles      = [];
+let _alertTemplates     = [];
+let _alertEditingProfId = null;   // null = new profile
+let _alertEditingTplId  = null;   // null = new template
+let _alertEvtFilter     = 'all';
+let _alertEvtOffset     = 0;
+const _ALERT_EVT_LIMIT  = 100;
+let _alertMaintWindows  = [];
 
-function _aeInvalidateGroups() { _aeGroups = null; }
-
-async function _aeLoadGroups() {
-  if (_aeGroups) return _aeGroups;
-  try {
-    const r = await fetch('/api/user/groups');
-    const d = await r.json();
-    _aeGroups = (d.groups || []).map(g => ({id: g.id, name: g.name}));
-  } catch (_) { _aeGroups = []; }
-  return _aeGroups;
-}
-
-function _aeGrpAdd(sel, blkId) {
-  const gid  = parseInt(sel.value);
-  if (!gid) return;
-  const name = sel.options[sel.selectedIndex].text;
-  sel.value  = '';
-
-  // Remove from dropdown
-  const opt = sel.querySelector(`option[value="${gid}"]`);
-  if (opt) opt.remove();
-
-  // Add chip
-  const chips = document.getElementById(`ae-chips-${blkId}`);
-  if (!chips) return;
-  const chip = document.createElement('span');
-  chip.className  = 'ae-grp-chip';
-  chip.dataset.gid = gid;
-  chip.innerHTML  = `${esc(name)}<button type="button" onclick="_aeGrpRemove(${gid},'${blkId}','${esc(name)}')" title="Remove">✕</button>`;
-  chips.appendChild(chip);
-}
-
-function _aeGrpRemove(gid, blkId, name) {
-  // Remove chip
-  const chips = document.getElementById(`ae-chips-${blkId}`);
-  if (chips) chips.querySelector(`[data-gid="${gid}"]`)?.remove();
-
-  // Restore to dropdown
-  const sel = chips?.closest('.alrt-act-body')?.querySelector('.ae-grp-add');
-  if (sel) {
-    const opt = document.createElement('option');
-    opt.value = gid;
-    opt.textContent = name;
-    sel.appendChild(opt);
-  }
-}
-
+// Constants the editor uses
+const _AP_TRIG_LABELS = {
+  down:              'Down',
+  warning:           'Warning',
+  down_recovered:    'Down → recovered',
+  warning_recovered: 'Warning → recovered',
+};
+const _AP_TRIG_ORDER = ['down', 'down', 'down_recovered',
+                        'warning', 'warning', 'warning_recovered'];
+const _AP_DEFAULT_DELAYS = [60, 600, 0, 60, 600, 0];
 
 // ═══════════════════════════════════════════════════════════════
-// RULES sub-tab
+// PROFILES + TEMPLATES — top-level loaders called from settings tab
 // ═══════════════════════════════════════════════════════════════
 
-async function _alertingLoadRules() {
+async function _alertingLoadProfiles() {
   const list = document.getElementById('alrt-list');
   if (!list) return;
-  list.innerHTML = '<div class="alrt-loading">Loading…</div>';
+  list.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
   applyRbac();
   try {
-    const r = await fetch('/api/alert/rules');
-    if (r.status === 401) { showLogin('Session expired'); return; }
-    const d = await r.json();
-    _alertRules = d.rules || [];
-    if (_alertRules.some(r => (r.actions||[]).some(a => a.atype === 'browser')))
-      if (typeof _requestNotifPermission === 'function') _requestNotifPermission();
-    _alertingRenderRules(_alertRules);
+    const [pr, tr] = await Promise.all([
+      api('GET', '/api/alert/profiles'),
+      api('GET', '/api/alert/action-templates'),
+    ]);
+    _alertProfiles  = pr.profiles  || [];
+    _alertTemplates = tr.templates || [];
+    _alertingRenderProfiles();
+    _alertingRenderTemplates();
   } catch (e) {
-    list.innerHTML = `<div class="alrt-err">Failed to load rules: ${esc(String(e))}</div>`;
+    list.innerHTML = `<div class="alrt-err">Failed to load profiles: ${esc(String(e))}</div>`;
   }
 }
 
-function _alertingRenderRules(rules) {
+function _alertingRenderProfiles() {
   const wrap = document.getElementById('alrt-list');
   if (!wrap) return;
-  if (!rules.length) {
-    wrap.innerHTML = `<div class="alrt-empty">No rules yet. Click <strong>＋ New Rule</strong> to get started.</div>`;
+  if (!_alertProfiles.length) {
+    wrap.innerHTML = `<div class="alrt-empty">
+      No alert profiles yet. Click <strong>＋ New Profile</strong> to create one.
+    </div>`;
     return;
   }
-  wrap.innerHTML = rules.map(r => _alertRuleCard(r)).join('');
+  // Order: global → group → device → sensor
+  const rank = {global: 0, group: 1, device: 2, sensor: 3};
+  const sorted = [..._alertProfiles].sort(
+    (a, b) => (rank[a.scope_type] - rank[b.scope_type])
+              || a.name.localeCompare(b.name)
+  );
+  wrap.innerHTML = `<div class="alrt-tree">${sorted.map(p => _alertProfileRow(p)).join('')}</div>`;
   applyRbac();
 }
 
-function _alertRuleCard(r) {
-  const sevCls = r.severity === 'critical' ? 'alrt-sev-crit'
-               : r.severity === 'info'     ? 'alrt-sev-info' : 'alrt-sev-warn';
-  const dot = r.enabled
+function _alertProfileRow(p) {
+  const stageCount = (p.stages || []).length;
+  const scopeLbl = p.scope_type === 'global'
+    ? 'Global'
+    : `${p.scope_type[0].toUpperCase()}${p.scope_type.slice(1)}: ${esc(p.scope_value || '')}`;
+  const dot = p.enabled
     ? '<span class="alrt-dot-on" title="Enabled">●</span>'
     : '<span class="alrt-dot-off" title="Disabled">○</span>';
-  const condCount = (r.conditions || []).length;
-  const actCount  = (r.actions    || []).length;
-  const condSummary = condCount === 0
-    ? '<span style="color:var(--text3)">Matches all events</span>'
-    : `${condCount} condition${condCount > 1 ? 's' : ''} (${esc(r.condition_logic)})`;
-  const actSummary = actCount === 0
-    ? '<span style="color:var(--down)">No actions</span>'
-    : `${actCount} action${actCount > 1 ? 's' : ''}`;
-  const safeName = esc(r.name).replace(/'/g, '&#39;');
+  const safeName = esc(p.name).replace(/'/g, '&#39;');
   return `
-    <div class="alrt-card">
-      <div class="alrt-card-left">
-        <div class="alrt-card-top">
-          ${dot}
-          <span class="alrt-name">${esc(r.name)}</span>
-          <span class="alrt-sev-badge ${sevCls}">${esc(r.severity)}</span>
-        </div>
-        <div class="alrt-card-info">
-          <span class="alrt-info-pill">⚙ ${condSummary}</span>
-          <span class="alrt-info-pill">↪ ${actSummary}</span>
-          <span class="alrt-info-pill" style="color:var(--text3)">cooldown ${r.cooldown_s}s</span>
-        </div>
-      </div>
-      <div class="alrt-card-btns">
-        <button class="btn-sm rbac-op"    onclick="_alertingToggle(${r.id})">${r.enabled ? 'Disable' : 'Enable'}</button>
-        <button class="btn-sm rbac-admin" onclick="_alertingOpenEditor(${r.id})">Edit</button>
-        <button class="btn-sm rbac-admin" onclick="_alertingTest(${r.id},'${safeName}')">Test</button>
-        <button class="btn-sm rbac-admin alrt-del-btn" onclick="_alertingDelete(${r.id},'${safeName}')">Delete</button>
+    <div class="alrt-tree-row">
+      ${dot}
+      <span class="alrt-tree-scope">${scopeLbl}</span>
+      <span class="alrt-tree-name">${esc(p.name)}</span>
+      <span style="font-size:11px;color:var(--text3)">${stageCount} stage${stageCount === 1 ? '' : 's'}</span>
+      <div class="alrt-tree-btns">
+        <button class="btn-sm rbac-op"    onclick="_alertingProfToggle(${p.id})">${p.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="btn-sm rbac-admin" onclick="openProfileEditor(${p.id})">Edit</button>
+        <button class="btn-sm rbac-admin" onclick="_alertingProfTest(${p.id},'${safeName}')">Test</button>
+        <button class="btn-sm rbac-admin alrt-del-btn" onclick="_alertingProfDelete(${p.id},'${safeName}')">Delete</button>
       </div>
     </div>`;
 }
 
-async function _alertingToggle(id) {
-  const d = await api('POST', `/api/alert/rule/${id}/toggle`);
-  if (d.error) { toast(d.error, 'err'); return; }
-  _alertingLoadRules();
+function _alertingRenderTemplates() {
+  const wrap = document.getElementById('alrt-tpl-list');
+  if (!wrap) return;
+  if (!_alertTemplates.length) {
+    wrap.innerHTML = `<div class="alrt-empty">
+      No action templates yet. Click <strong>＋ New Action Template</strong> to create one.
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = `<div class="alrt-tree">${_alertTemplates.map(t => _alertTemplateRow(t)).join('')}</div>`;
+  applyRbac();
 }
 
-async function _alertingTest(id, name) {
-  const d = await api('POST', `/api/alert/rule/${id}/test`);
-  if (d.error) { toast(d.error, 'err'); return; }
-  toast(d.msg || `Test dispatched for "${name}"`, 'info');
+function _alertTemplateRow(t) {
+  const cfgSummary = _tplSummary(t);
+  const safeName = esc(t.name).replace(/'/g, '&#39;');
+  return `
+    <div class="alrt-tree-row">
+      <span class="alrt-tree-scope">${t.atype}</span>
+      <span class="alrt-tree-name">${esc(t.name)}</span>
+      <span style="font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${cfgSummary}</span>
+      <div class="alrt-tree-btns">
+        <button class="btn-sm rbac-admin" onclick="openTemplateEditor(${t.id})">Edit</button>
+        <button class="btn-sm rbac-admin alrt-del-btn" onclick="_alertingTplDelete(${t.id},'${safeName}')">Delete</button>
+      </div>
+    </div>`;
 }
 
-async function _alertingDelete(id, name) {
-  if (!confirm(`Delete rule "${name}"?\nThis cannot be undone.`)) return;
-  const d = await api('DELETE', `/api/alert/rule/${id}`);
-  if (d.error) { toast(d.error, 'err'); return; }
-  toast(`Rule "${name}" deleted`, 'info');
-  _alertingLoadRules();
+function _tplSummary(t) {
+  const c = t.config || {};
+  if (t.atype === 'email') {
+    const parts = [];
+    if (c.to_users)  parts.push((Array.isArray(c.to_users)  ? c.to_users  : [c.to_users]).join(', '));
+    if (c.to_groups) parts.push((Array.isArray(c.to_groups) ? c.to_groups : [c.to_groups]).map(g => `group:${g}`).join(', '));
+    if (c.to_emails || c.to) parts.push(c.to_emails || c.to);
+    return esc(parts.join(' · ')) || '<i>no recipients</i>';
+  }
+  if (t.atype === 'webhook') return esc(c.url || '');
+  if (t.atype === 'syslog')  return esc((c.host || 'default') + ':' + (c.port || 514));
+  if (t.atype === 'browser') return esc(c.title || '(default title)');
+  return '';
 }
 
+// ── Profile actions ────────────────────────────────────────────────
+
+async function _alertingProfToggle(id) {
+  try { await api('POST', `/api/alert/profile/${id}/toggle`); } catch (e) { toast(e.message, 'err'); return; }
+  _alertingLoadProfiles();
+}
+
+async function _alertingProfTest(id, name) {
+  try {
+    const d = await api('POST', `/api/alert/profile/${id}/test`);
+    toast(d.msg || `Test fired for "${name}"`, 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function _alertingProfDelete(id, name) {
+  if (!confirm(`Delete alert profile "${name}"?`)) return;
+  try {
+    await api('DELETE', `/api/alert/profile/${id}`);
+    toast(`Profile "${name}" deleted`, 'info');
+    _alertingLoadProfiles();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function _alertingTplDelete(id, name) {
+  if (!confirm(`Delete action template "${name}"?\n` +
+               `This will fail if any profile stage still uses it.`)) return;
+  try {
+    await api('DELETE', `/api/alert/action-template/${id}`);
+    toast(`Template "${name}" deleted`, 'info');
+    _alertingLoadProfiles();
+  } catch (e) { toast(e.message, 'err'); }
+}
 
 // ═══════════════════════════════════════════════════════════════
-// ALERT EVENTS sub-tabs (Active + History)
+// PROFILE EDITOR modal — PRTG-style 6-stage table
+// ═══════════════════════════════════════════════════════════════
+
+async function openProfileEditor(id, scopeDefaults = null) {
+  closeM('alrt-prof-modal');
+  // Make sure templates are loaded for the picker
+  if (!_alertTemplates.length) {
+    try {
+      const tr = await api('GET', '/api/alert/action-templates');
+      _alertTemplates = tr.templates || [];
+    } catch (_) { /* will show empty picker */ }
+  }
+  // Make sure the profile is in our cache (may have been opened from elsewhere)
+  let prof = id !== null ? _alertProfiles.find(p => p.id === id) : null;
+  if (!prof && id !== null) {
+    try {
+      const r = await api('GET', `/api/alert/profile/${id}`);
+      prof = r.profile;
+    } catch (e) { toast(e.message, 'err'); return; }
+  }
+  _alertEditingProfId = prof ? prof.id : null;
+
+  const name        = prof?.name        || '';
+  const enabled     = prof ? prof.enabled : true;
+  const scopeType   = prof?.scope_type  || scopeDefaults?.scope_type  || 'global';
+  const scopeValue  = prof?.scope_value || scopeDefaults?.scope_value || '';
+
+  // Pre-fill stages by trigger position; if profile has fewer than 6, blanks
+  const stagesByPos = _AP_TRIG_ORDER.map((trig, i) => {
+    const matches = (prof?.stages || []).filter(s => s.trigger_state === trig);
+    // For 'down' and 'warning' (positions 0,1 / 3,4) take by index within trigger
+    if (trig === 'down') {
+      const downStages = (prof?.stages || []).filter(s => s.trigger_state === 'down');
+      return downStages[i] || null;
+    }
+    if (trig === 'warning') {
+      const warnStages = (prof?.stages || []).filter(s => s.trigger_state === 'warning');
+      return warnStages[i - 3] || null;
+    }
+    return matches[0] || null;
+  });
+
+  const tplOpts = id => {
+    const opts = _alertTemplates.map(t =>
+      `<option value="${t.id}" ${id === t.id ? 'selected' : ''}>${esc(t.name)} (${t.atype})</option>`
+    ).join('');
+    return `<option value="">— pick template —</option>${opts}`;
+  };
+
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'alrt-prof-modal';
+  _overlayClose(o, () => closeM('alrt-prof-modal'));
+
+  o.innerHTML = `
+    <div class="mbox alrt-editor-box">
+      <div class="mhd">
+        <div class="mttl">${prof ? '✏ Edit Alert Profile' : '＋ New Alert Profile'}</div>
+        <button class="mclose" onclick="closeM('alrt-prof-modal')">&#x2715;</button>
+      </div>
+      <div class="mbdy alrt-editor-body">
+        <div class="alrt-row3">
+          <div class="fr" style="flex:2">
+            <label class="fl">Name</label>
+            <input type="text" id="ap-name" value="${esc(name)}"
+              placeholder="e.g. Production firewalls" autocomplete="off" maxlength="200"/>
+          </div>
+          <div class="fr">
+            <label class="fl">Scope</label>
+            <select id="ap-scope-type" onchange="_apScopeChange()">
+              <option value="global" ${scopeType === 'global' ? 'selected' : ''}>Global</option>
+              <option value="group"  ${scopeType === 'group'  ? 'selected' : ''}>Group</option>
+              <option value="device" ${scopeType === 'device' ? 'selected' : ''}>Device</option>
+              <option value="sensor" ${scopeType === 'sensor' ? 'selected' : ''}>Sensor</option>
+            </select>
+          </div>
+          <div class="fr" id="ap-scope-val-row" style="${scopeType === 'global' ? 'display:none' : ''}">
+            <label class="fl" id="ap-scope-val-lbl">${
+              scopeType === 'group' ? 'Group name' :
+              scopeType === 'device' ? 'Device ID' : 'did/sid'
+            }</label>
+            <input type="text" id="ap-scope-val" value="${esc(scopeValue)}" autocomplete="off"/>
+          </div>
+          <div class="fr" style="align-self:flex-end;padding-bottom:14px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="ap-enabled" ${enabled ? 'checked' : ''}/>
+              <span style="font-size:12px;color:var(--text2)">Enabled</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="alrt-section">
+          <div class="alrt-section-hdr">Escalation Stages</div>
+          <table class="alrt-profile-table">
+            <thead>
+              <tr>
+                <th>Trigger</th>
+                <th>Delay (s)</th>
+                <th>Repeat (min)</th>
+                <th>Action template</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${_AP_TRIG_ORDER.map((trig, i) => {
+                const s = stagesByPos[i];
+                const isRecovery = trig.endsWith('_recovered');
+                return `
+                  <tr class="alrt-stage-row alrt-stage-${trig}" data-trig="${trig}" data-pos="${i}">
+                    <td class="alrt-trig-cell">${_AP_TRIG_LABELS[trig]}</td>
+                    <td>${isRecovery
+                        ? '<span style="color:var(--text3);font-size:11px">—</span>'
+                        : `<input type="number" class="ap-delay" value="${s?.delay_s ?? _AP_DEFAULT_DELAYS[i]}" min="0" step="10"/>`}</td>
+                    <td>${isRecovery
+                        ? '<span style="color:var(--text3);font-size:11px">—</span>'
+                        : `<input type="number" class="ap-repeat" value="${s?.repeat_min ?? 0}" min="0" step="5"/>`}</td>
+                    <td><select class="ap-action">${tplOpts(s?.action_id || 0)}</select></td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+          <div class="alrt-hint">
+            Stages with no template are skipped. Add templates from the
+            <strong>Action Templates</strong> section below.
+          </div>
+        </div>
+      </div>
+      <div class="mft">
+        ${prof ? `<button class="btn-s alrt-del-btn" onclick="_alertingProfDelete(${prof.id},'${esc(prof.name).replace(/'/g, "&#39;")}')">Delete</button>` : ''}
+        <button class="btn-s" onclick="closeM('alrt-prof-modal')">Cancel</button>
+        <button class="btn-p" id="ap-save-btn" onclick="_alertingSaveProfile()">Save Profile</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => document.getElementById('ap-name')?.focus(), 60);
+}
+
+function _apScopeChange() {
+  const sel  = document.getElementById('ap-scope-type')?.value;
+  const row  = document.getElementById('ap-scope-val-row');
+  const lbl  = document.getElementById('ap-scope-val-lbl');
+  if (!row) return;
+  row.style.display = sel === 'global' ? 'none' : '';
+  if (lbl) lbl.textContent =
+    sel === 'group'  ? 'Group name' :
+    sel === 'device' ? 'Device ID'  : 'did/sid';
+}
+
+async function _alertingSaveProfile() {
+  const name       = (document.getElementById('ap-name')?.value || '').trim();
+  const enabled    = !!document.getElementById('ap-enabled')?.checked;
+  const scopeType  = document.getElementById('ap-scope-type')?.value || 'global';
+  const scopeValue = (document.getElementById('ap-scope-val')?.value || '').trim();
+
+  if (!name) { toast('Name is required', 'err'); return; }
+  if (scopeType !== 'global' && !scopeValue) {
+    toast('Scope value is required for non-global scopes', 'err'); return;
+  }
+
+  // Collect stages from the table rows
+  const stages = [];
+  document.querySelectorAll('#alrt-prof-modal .alrt-stage-row').forEach(row => {
+    const trig    = row.dataset.trig;
+    const actSel  = row.querySelector('.ap-action');
+    const action_id = parseInt(actSel?.value || '0');
+    if (!action_id) return;   // empty stage row
+    const isRecovery = trig.endsWith('_recovered');
+    stages.push({
+      trigger_state: trig,
+      delay_s:    isRecovery ? 0 : parseInt(row.querySelector('.ap-delay')?.value  || '0'),
+      repeat_min: isRecovery ? 0 : parseInt(row.querySelector('.ap-repeat')?.value || '0'),
+      action_id,
+    });
+  });
+
+  const payload = {
+    name, enabled,
+    scope_type: scopeType,
+    scope_value: scopeType === 'global' ? '' : scopeValue,
+    stages,
+  };
+
+  const btn = document.getElementById('ap-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+  const isNew  = _alertEditingProfId === null;
+  const method = isNew ? 'POST' : 'PATCH';
+  const path   = isNew ? '/api/alert/profile' : `/api/alert/profile/${_alertEditingProfId}`;
+
+  try {
+    await api(method, path, payload);
+    toast(isNew ? `Profile "${name}" created` : `Profile "${name}" updated`, 'ok');
+    closeM('alrt-prof-modal');
+    _alertingLoadProfiles();
+  } catch (e) {
+    toast(e.message || 'Save failed', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Profile'; }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACTION TEMPLATE editor
+// ═══════════════════════════════════════════════════════════════
+
+async function openTemplateEditor(id) {
+  closeM('alrt-tpl-modal');
+  let tpl = id !== null ? _alertTemplates.find(t => t.id === id) : null;
+  if (!tpl && id !== null) {
+    try {
+      const r = await api('GET', `/api/alert/action-template/${id}`);
+      tpl = r.template;
+    } catch (e) { toast(e.message, 'err'); return; }
+  }
+  _alertEditingTplId = tpl ? tpl.id : null;
+
+  const name  = tpl?.name  || '';
+  const atype = tpl?.atype || 'email';
+  const cfg   = tpl?.config || {};
+
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'alrt-tpl-modal';
+  _overlayClose(o, () => closeM('alrt-tpl-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,600px)">
+      <div class="mhd">
+        <div class="mttl">${tpl ? '✏ Edit Action Template' : '＋ New Action Template'}</div>
+        <button class="mclose" onclick="closeM('alrt-tpl-modal')">&#x2715;</button>
+      </div>
+      <div class="mbdy">
+        <div class="fr">
+          <label class="fl">Name</label>
+          <input type="text" id="at-name" value="${esc(name)}"
+            placeholder="e.g. Email admin" autocomplete="off" maxlength="200"/>
+        </div>
+        <div class="fr">
+          <label class="fl">Action type</label>
+          <select id="at-type" onchange="_atTypeChange()">
+            <option value="email"   ${atype === 'email'   ? 'selected' : ''}>Email</option>
+            <option value="webhook" ${atype === 'webhook' ? 'selected' : ''}>Webhook</option>
+            <option value="syslog"  ${atype === 'syslog'  ? 'selected' : ''}>Syslog</option>
+            <option value="browser" ${atype === 'browser' ? 'selected' : ''}>Browser notification</option>
+          </select>
+        </div>
+        <div id="at-cfg-pane">${_atCfgHtml(atype, cfg)}</div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('alrt-tpl-modal')">Cancel</button>
+        <button class="btn-p" id="at-save-btn" onclick="_alertingSaveTemplate()">Save Template</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => document.getElementById('at-name')?.focus(), 60);
+}
+
+function _atTypeChange() {
+  const t = document.getElementById('at-type')?.value || 'email';
+  const pane = document.getElementById('at-cfg-pane');
+  if (pane) pane.innerHTML = _atCfgHtml(t, {});
+}
+
+function _atCfgHtml(atype, cfg) {
+  if (atype === 'email') {
+    const users  = Array.isArray(cfg.to_users)  ? cfg.to_users.join(',')  : (cfg.to_users  || '');
+    const groups = Array.isArray(cfg.to_groups) ? cfg.to_groups.join(',') : (cfg.to_groups || '');
+    const emails = cfg.to_emails || cfg.to || '';
+    return `
+      <div class="fr"><label class="fl">Usernames (comma-separated)</label>
+        <input type="text" id="at-users" value="${esc(users)}" placeholder="admin, oncall"/></div>
+      <div class="fr"><label class="fl">Group ids (comma-separated)</label>
+        <input type="text" id="at-groups" value="${esc(groups)}" placeholder="1,2"/></div>
+      <div class="fr"><label class="fl">Extra emails (comma-separated)</label>
+        <input type="text" id="at-emails" value="${esc(emails)}" placeholder="ops@example.com"/></div>
+      <div class="fr"><label class="fl">Subject template (optional)</label>
+        <input type="text" id="at-subject" value="${esc(cfg.subject || '')}"
+          placeholder="[PingWatch] {dname}/{sname} — {event_type}"/></div>
+      <div class="fr"><label class="fl">Body template (optional)</label>
+        <textarea id="at-body" rows="3" placeholder="Leave blank for the default HTML alert">${esc(cfg.body || '')}</textarea></div>`;
+  }
+  if (atype === 'webhook') {
+    return `
+      <div class="fr"><label class="fl">URL</label>
+        <input type="text" id="at-url" value="${esc(cfg.url || '')}" placeholder="https://hooks.example.com/\u2026"/></div>
+      <div class="fr"><label class="fl">Method</label>
+        <select id="at-method">
+          <option value="POST" ${cfg.method !== 'PUT' ? 'selected' : ''}>POST</option>
+          <option value="PUT"  ${cfg.method === 'PUT'  ? 'selected' : ''}>PUT</option>
+        </select></div>
+      <div class="fr"><label class="fl">Body template (optional, JSON or text)</label>
+        <textarea id="at-body" rows="4" placeholder='{"text":"{dname}/{sname} {event_type}"}'>${esc(cfg.body || '')}</textarea></div>`;
+  }
+  if (atype === 'syslog') {
+    return `
+      <div class="fr"><label class="fl">Host (blank = use global syslog server)</label>
+        <input type="text" id="at-host" value="${esc(cfg.host || '')}" placeholder="syslog.example.com"/></div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="at-port" value="${cfg.port || 514}" min="1" max="65535"/></div>
+      <div class="fr"><label class="fl">Protocol</label>
+        <select id="at-proto">
+          <option value="udp" ${cfg.proto !== 'tcp' ? 'selected' : ''}>UDP</option>
+          <option value="tcp" ${cfg.proto === 'tcp' ? 'selected' : ''}>TCP</option>
+        </select></div>`;
+  }
+  // browser
+  return `
+    <div class="fr"><label class="fl">Title template</label>
+      <input type="text" id="at-title" value="${esc(cfg.title || '')}"
+        placeholder="[{severity}] {dname}/{sname}"/></div>
+    <div class="fr"><label class="fl">Body template</label>
+      <input type="text" id="at-body" value="${esc(cfg.body || '')}"
+        placeholder="{event_type}: {detail}"/></div>
+    <div class="fr"><label class="fl">Sound</label>
+      <select id="at-sound">
+        <option value="alert"  ${cfg.sound !== 'double' && cfg.sound !== 'none' ? 'selected' : ''}>alert</option>
+        <option value="double" ${cfg.sound === 'double' ? 'selected' : ''}>double</option>
+        <option value="none"   ${cfg.sound === 'none'   ? 'selected' : ''}>none</option>
+      </select></div>`;
+}
+
+async function _alertingSaveTemplate() {
+  const name  = (document.getElementById('at-name')?.value || '').trim();
+  const atype = document.getElementById('at-type')?.value || 'email';
+  if (!name) { toast('Name is required', 'err'); return; }
+
+  const cfg = {};
+  if (atype === 'email') {
+    const users  = (document.getElementById('at-users')?.value  || '').trim();
+    const groups = (document.getElementById('at-groups')?.value || '').trim();
+    const emails = (document.getElementById('at-emails')?.value || '').trim();
+    if (users)  cfg.to_users  = users.split(',').map(s => s.trim()).filter(Boolean);
+    if (groups) cfg.to_groups = groups.split(',').map(s => parseInt(s.trim())).filter(n => n > 0);
+    if (emails) cfg.to_emails = emails;
+    const subj  = (document.getElementById('at-subject')?.value || '').trim();
+    const body  = (document.getElementById('at-body')?.value || '').trim();
+    if (subj) cfg.subject = subj;
+    if (body) cfg.body    = body;
+  } else if (atype === 'webhook') {
+    cfg.url    = (document.getElementById('at-url')?.value || '').trim();
+    cfg.method = document.getElementById('at-method')?.value || 'POST';
+    const body = (document.getElementById('at-body')?.value || '').trim();
+    if (body) cfg.body = body;
+  } else if (atype === 'syslog') {
+    const host = (document.getElementById('at-host')?.value || '').trim();
+    if (host) cfg.host = host;
+    cfg.port  = parseInt(document.getElementById('at-port')?.value  || '514');
+    cfg.proto = document.getElementById('at-proto')?.value || 'udp';
+  } else {  // browser
+    cfg.title = (document.getElementById('at-title')?.value || '').trim();
+    cfg.body  = (document.getElementById('at-body')?.value  || '').trim();
+    cfg.sound = document.getElementById('at-sound')?.value  || 'alert';
+  }
+
+  const payload = { name, atype, config: cfg };
+  const btn = document.getElementById('at-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+  const isNew  = _alertEditingTplId === null;
+  const method = isNew ? 'POST' : 'PATCH';
+  const path   = isNew ? '/api/alert/action-template' : `/api/alert/action-template/${_alertEditingTplId}`;
+  try {
+    await api(method, path, payload);
+    toast(isNew ? `Template "${name}" created` : `Template "${name}" updated`, 'ok');
+    closeM('alrt-tpl-modal');
+    _alertingLoadProfiles();
+  } catch (e) {
+    toast(e.message || 'Save failed', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Template'; }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ALERT EVENTS sub-tab (history)
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadEvents(state, reset) {
@@ -170,21 +551,19 @@ async function _alertingLoadEvents(state, reset) {
 
   wrap.innerHTML = `
     <div class="alrt-panel-hdr" style="justify-content:flex-start;gap:12px">${filterBar}</div>
-    <div id="alrt-evt-list-${panelId}"><div class="alrt-loading">Loading…</div></div>
+    <div id="alrt-evt-list-${panelId}"><div class="alrt-loading">Loading\u2026</div></div>
     <div id="alrt-evt-pager-${panelId}" class="alrt-pager"></div>`;
 
-  await _alertingFetchEvents(state, panelId);
+  await _alertingFetchEvents(state || _alertEvtFilter, panelId);
 }
 
 async function _alertingFetchEvents(state, panelId) {
   const listId = `alrt-evt-list-${panelId}`;
   const list   = document.getElementById(listId);
   if (!list) return;
-  const qs  = `state=${state}&limit=${_ALERT_EVT_LIMIT}&offset=${_alertEvtOffset}`;
+  const qs = `state=${state}&limit=${_ALERT_EVT_LIMIT}&offset=${_alertEvtOffset}`;
   try {
-    const r = await fetch(`/api/alert/events?${qs}`);
-    if (r.status === 401) { showLogin('Session expired'); return; }
-    const d = await r.json();
+    const d = await api('GET', `/api/alert/events?${qs}`);
     const events = d.events || [];
     if (typeof _alertEvtBadgeCount !== 'undefined') {
       _alertEvtBadgeCount = d.active_count || 0;
@@ -197,7 +576,6 @@ async function _alertingFetchEvents(state, panelId) {
     }
     list.innerHTML = events.map(e => _alertEvtRow(e)).join('');
     applyRbac();
-    // Pager
     const pager = document.getElementById(`alrt-evt-pager-${panelId}`);
     if (pager) {
       const hasPrev = _alertEvtOffset > 0;
@@ -244,7 +622,7 @@ function _alertEvtRow(e) {
         <div class="alrt-evt-top">
           <span class="alrt-state-badge ${stateCls}">${e.state}</span>
           <span class="alrt-sev-badge ${sevCls}">${esc(e.severity)}</span>
-          <span class="alrt-evt-rule">${esc(e.rule_name)}</span>
+          <span class="alrt-evt-rule">${esc(e.profile_name || '')}</span>
           ${repeat}
         </div>
         <div class="alrt-evt-detail">
@@ -260,41 +638,30 @@ function _alertEvtRow(e) {
 }
 
 async function _alertAck(id) {
-  const d = await api('POST', `/api/alert/event/${id}/ack`);
-  if (!d.ok && d.error) { toast(d.error, 'err'); return; }
+  try { await api('POST', `/api/alert/event/${id}/ack`); }
+  catch (e) { toast(e.message, 'err'); return; }
   toast('Alert acknowledged', 'ok');
   _alertingLoadEvents(_alertEvtFilter, true);
-  fetch('/api/alert/events/active').then(r=>r.json()).then(d=>{
-    _alertEvtBadgeCount = d.count || 0;
-    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
-  }).catch(()=>{});
 }
 
 async function _alertResolve(id) {
-  const d = await api('POST', `/api/alert/event/${id}/resolve`);
-  if (!d.ok && d.error) { toast(d.error, 'err'); return; }
+  try { await api('POST', `/api/alert/event/${id}/resolve`); }
+  catch (e) { toast(e.message, 'err'); return; }
   toast('Alert resolved', 'ok');
   _alertingLoadEvents(_alertEvtFilter, true);
-  fetch('/api/alert/events/active').then(r=>r.json()).then(d=>{
-    _alertEvtBadgeCount = d.count || 0;
-    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
-  }).catch(()=>{});
 }
 
-
 // ═══════════════════════════════════════════════════════════════
-// MAINTENANCE WINDOWS sub-tab
+// MAINTENANCE WINDOWS sub-tab (preserved from old engine)
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadMaint() {
   const list = document.getElementById('alrt-maint-list');
   if (!list) return;
-  list.innerHTML = '<div class="alrt-loading">Loading…</div>';
+  list.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
   applyRbac();
   try {
-    const r = await fetch('/api/alert/windows');
-    if (r.status === 401) { showLogin('Session expired'); return; }
-    const d = await r.json();
+    const d = await api('GET', '/api/alert/windows');
     _alertMaintWindows = d.windows || [];
     _alertMaintRenderList(_alertMaintWindows);
   } catch (e) {
@@ -346,8 +713,8 @@ function _alertMaintRenderList(windows) {
 
 async function _alertMaintDelete(id, name) {
   if (!confirm(`Delete maintenance window "${name}"?`)) return;
-  const d = await api('DELETE', `/api/alert/window/${id}`);
-  if (d.error) { toast(d.error, 'err'); return; }
+  try { await api('DELETE', `/api/alert/window/${id}`); }
+  catch (e) { toast(e.message, 'err'); return; }
   toast(`Window "${name}" deleted`, 'info');
   _alertingLoadMaint();
 }
@@ -377,7 +744,7 @@ function _alertMaintOpen(id) {
     <div class="mbox" style="width:min(95vw,540px)">
       <div class="mhd">
         <div class="mttl">${w ? '✏ Edit Window' : '＋ New Maintenance Window'}</div>
-        <button class="mclose" onclick="closeM('alrt-maint-modal')">✕</button>
+        <button class="mclose" onclick="closeM('alrt-maint-modal')">&#x2715;</button>
       </div>
       <div class="mbdy">
         <div class="fr">
@@ -489,439 +856,23 @@ async function _alertMaintSave(id) {
   };
 
   const btn = document.getElementById('mw-save-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
 
   const isNew  = id === null;
   const method = isNew ? 'POST'  : 'PATCH';
   const path   = isNew ? '/api/alert/window' : `/api/alert/window/${id}`;
-  const d = await api(method, path, payload);
-
-  if (btn) { btn.disabled = false; btn.textContent = 'Save Window'; }
-
-  if (d.error) { toast(d.error, 'err'); return; }
-  toast(isNew ? `Window "${name}" created` : `Window "${name}" updated`, 'ok');
-  closeM('alrt-maint-modal');
-  _alertingLoadMaint();
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-// RULE EDITOR modal
-// ═══════════════════════════════════════════════════════════════
-
-async function _alertingOpenEditor(id) {
-  closeM('alrt-editor-modal');
-  _aeGroups = null;  // invalidate cache so fresh groups load
-  await _aeLoadGroups();
-  const rule = (id !== null) ? (_alertRules.find(r => r.id === id) || null) : null;
-  _alertEditingId = rule ? rule.id : null;
-
-  const name    = rule?.name            || '';
-  const enabled = rule ? rule.enabled   : true;
-  const sev     = rule?.severity        || 'warning';
-  const logic   = rule?.condition_logic || 'AND';
-  const cool    = rule?.cooldown_s      ?? 300;
-  const trigCnt = rule?.trigger_count   ?? 1;
-  const recCnt  = rule?.recover_count   ?? 1;
-
-  const o = document.createElement('div');
-  o.className = 'mo'; o.id = 'alrt-editor-modal';
-  _overlayClose(o, () => closeM('alrt-editor-modal'));
-
-  o.innerHTML = `
-    <div class="mbox alrt-editor-box">
-      <div class="mhd">
-        <div class="mttl">${rule ? '✏ Edit Rule' : '＋ New Rule'}</div>
-        <button class="mclose" onclick="closeM('alrt-editor-modal')">✕</button>
-      </div>
-      <div class="mbdy alrt-editor-body">
-        <div class="fr">
-          <label class="fl">Name</label>
-          <input type="text" id="ae-name" value="${esc(name)}"
-            placeholder="e.g. Ping DOWN → ops email" autocomplete="off" maxlength="200"/>
-        </div>
-        <div class="alrt-row3" style="flex-wrap:wrap">
-          <div class="fr">
-            <label class="fl">Severity</label>
-            <select id="ae-sev">
-              <option value="info"     ${sev==='info'    ?'selected':''}>info</option>
-              <option value="warning"  ${sev==='warning' ?'selected':''}>warning</option>
-              <option value="critical" ${sev==='critical'?'selected':''}>critical</option>
-            </select>
-          </div>
-          <div class="fr">
-            <label class="fl">Cooldown (seconds)</label>
-            <input type="number" id="ae-cool" value="${cool}" min="0" step="60"/>
-          </div>
-          <div class="fr">
-            <label class="fl">Trigger After (events)</label>
-            <input type="number" id="ae-trigger" value="${trigCnt}" min="1" max="100"/>
-            <div class="fh">Consecutive events before alerting</div>
-          </div>
-          <div class="fr">
-            <label class="fl">Recover After (events)</label>
-            <input type="number" id="ae-recover" value="${recCnt}" min="1" max="100"/>
-            <div class="fh">Consecutive recoveries before recovery alert</div>
-          </div>
-          <div class="fr" style="align-self:flex-end;padding-bottom:14px">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="ae-enabled" ${enabled?'checked':''}/>
-              <span style="font-size:12px;color:var(--text2)">Enabled</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">
-            <span>Conditions</span>
-            <span style="color:var(--text3);font-size:11px;margin-left:8px">Match</span>
-            <select id="ae-logic" class="ae-logic-sel">
-              <option value="AND" ${logic==='AND'?'selected':''}>ALL</option>
-              <option value="OR"  ${logic==='OR' ?'selected':''}>ANY</option>
-            </select>
-            <span style="color:var(--text3);font-size:11px;margin-left:4px">of the conditions</span>
-            <button class="btn-sm" style="margin-left:auto" onclick="_alertingAddCondition(null)">＋ Add</button>
-          </div>
-          <div id="ae-cond-list" class="alrt-cond-list"></div>
-          <div id="ae-cond-empty" class="alrt-hint"
-               style="${(rule?.conditions||[]).length ? 'display:none' : ''}">
-            No conditions — matches every sensor event.
-          </div>
-        </div>
-
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">
-            <span>Actions</span>
-            <div style="margin-left:auto;display:flex;gap:6px">
-              <button class="btn-sm" onclick="_alertingAddAction('email')">＋ Email</button>
-              <button class="btn-sm" onclick="_alertingAddAction('webhook')">＋ Webhook</button>
-              <button class="btn-sm" onclick="_alertingAddAction('syslog')">＋ Syslog</button>
-              <button class="btn-sm" onclick="_alertingAddAction('browser')">＋ Browser</button>
-            </div>
-          </div>
-          <div id="ae-act-list" class="alrt-act-list"></div>
-          <div id="ae-act-empty" class="alrt-hint"
-               style="${(rule?.actions||[]).length ? 'display:none' : ''}">
-            No actions — rule will match but send no notifications.
-          </div>
-        </div>
-      </div>
-      <div class="mft">
-        <button class="btn-s" onclick="closeM('alrt-editor-modal')">Cancel</button>
-        <button class="btn-p" id="ae-save-btn" onclick="_alertingSave()">Save Rule</button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(o);
-  (rule?.conditions || []).forEach(c => _alertingAddCondition(c));
-  (rule?.actions    || []).forEach(a => _alertingAddAction(a.atype, a));
-  setTimeout(() => document.getElementById('ae-name')?.focus(), 60);
-}
-
-// ── Condition rows ────────────────────────────────────────────────────
-const _AE_FIELDS = [
-  {v:'event_type',      l:'Event Type'},
-  {v:'sensor_type',     l:'Sensor Type'},
-  {v:'device_group',    l:'Device Group'},
-  {v:'threshold_state', l:'Threshold State'},
-  {v:'direction',       l:'Direction'},
-  {v:'loss_pct',        l:'Packet Loss %'},
-  {v:'severity',        l:'Severity'},
-];
-const _AE_OPS = [
-  {v:'eq',       l:'= equals'},
-  {v:'ne',       l:'≠ not equals'},
-  {v:'contains', l:'contains'},
-  {v:'in',       l:'in list'},
-  {v:'gt',       l:'> greater than'},
-  {v:'gte',      l:'≥ at least'},
-  {v:'lt',       l:'< less than'},
-  {v:'lte',      l:'≤ at most'},
-];
-// Known enum values for fields that have a fixed set of options
-const _AE_FIELD_VALUES = {
-  event_type:      ['down','recovered','threshold_warning','threshold_critical','threshold_ok'],
-  severity:        ['critical','warning','recovery','info'],
-  direction:       ['down','recovered','threshold'],
-  threshold_state: ['warn','crit'],
-};
-
-function _aeValueHtml(field, val) {
-  const opts = _AE_FIELD_VALUES[field];
-  if (opts) {
-    const safeVal = opts.includes(val) ? val : opts[0];
-    return `<select class="ae-cond-val">${opts.map(o =>
-      `<option value="${o}"${safeVal===o?' selected':''}>${o}</option>`).join('')}</select>`;
+  try {
+    await api(method, path, payload);
+    toast(isNew ? `Window "${name}" created` : `Window "${name}" updated`, 'ok');
+    closeM('alrt-maint-modal');
+    _alertingLoadMaint();
+  } catch (e) {
+    toast(e.message || 'Save failed', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Window'; }
   }
-  return `<input type="text" class="ae-cond-val" value="${esc(val)}"
-    placeholder="value" autocomplete="off" spellcheck="false"/>`;
 }
 
-function _aeFieldChanged(selectEl) {
-  const row   = selectEl.closest('.alrt-cond-row');
-  const valEl = row?.querySelector('.ae-cond-val');
-  if (!valEl) return;
-  const newHtml = _aeValueHtml(selectEl.value, '');
-  valEl.outerHTML = newHtml;
-}
-
-function _alertingAddCondition(cond) {
-  const list  = document.getElementById('ae-cond-list');
-  const empty = document.getElementById('ae-cond-empty');
-  if (!list) return;
-  if (empty) empty.style.display = 'none';
-  const field = cond?.field || 'event_type';
-  const op    = cond?.op    || 'eq';
-  const val   = cond?.value ?? '';
-  const fieldOpts = _AE_FIELDS.map(f =>
-    `<option value="${f.v}" ${field===f.v?'selected':''}>${esc(f.l)}</option>`).join('');
-  const opOpts = _AE_OPS.map(o =>
-    `<option value="${o.v}" ${op===o.v?'selected':''}>${esc(o.l)}</option>`).join('');
-  const row = document.createElement('div');
-  row.className = 'alrt-cond-row';
-  row.innerHTML = `
-    <select class="ae-cond-field" onchange="_aeFieldChanged(this)">${fieldOpts}</select>
-    <select class="ae-cond-op">${opOpts}</select>
-    ${_aeValueHtml(field, val)}
-    <button class="alrt-rm-btn"
-      onclick="this.closest('.alrt-cond-row').remove();
-               _alertingCheckEmpty('ae-cond-list','ae-cond-empty')"
-      title="Remove">✕</button>`;
-  list.appendChild(row);
-}
-
-// ── Action blocks ─────────────────────────────────────────────────────
-function _alertingAddAction(atype, action) {
-  const list  = document.getElementById('ae-act-list');
-  const empty = document.getElementById('ae-act-empty');
-  if (!list) return;
-  if (empty) empty.style.display = 'none';
-  const cfg = action?.config || {};
-  const blk = document.createElement('div');
-  blk.dataset.atype = atype;
-
-  // Pre-configured actions (loaded from saved rule) start collapsed
-  const isConfigured = !!action;
-  blk.className = 'alrt-act-block' + (isConfigured ? ' collapsed' : '');
-
-  // Summary shown in header when collapsed
-  let summary = '';
-  if (isConfigured) {
-    if (atype === 'email') {
-      if ((cfg.groups||[]).length) {
-        const grpNames = (cfg.groups||[]).map(gid => {
-          const g = (_aeGroups||[]).find(g=>g.id===gid);
-          return g ? g.name : `#${gid}`;
-        }).join(', ');
-        summary = grpNames + (cfg.extra_to ? ` + ${cfg.extra_to}` : '');
-      } else {
-        summary = cfg.extra_to || cfg.to || '';
-      }
-    }
-    if (atype === 'webhook') summary = cfg.url || '';
-    if (atype === 'syslog')  summary = cfg.host ? `${cfg.host}:${cfg.port||514}` : 'global settings';
-    if (atype === 'browser') summary = cfg.title || `sound: ${cfg.sound || 'alert'}`;
-  }
-
-  const rmBtn = `<button class="alrt-rm-btn"
-    onclick="event.stopPropagation();this.closest('.alrt-act-block').remove();
-             _alertingCheckEmpty('ae-act-list','ae-act-empty')"
-    title="Remove">✕</button>`;
-
-  const labels = {email:'📧 Email', webhook:'🔗 Webhook', syslog:'📡 Syslog', browser:'🔔 Browser Notification'};
-  const hdr = `
-    <div class="alrt-act-hdr" onclick="this.closest('.alrt-act-block').classList.toggle('collapsed')">
-      <span class="alrt-act-label">${labels[atype]||atype}</span>
-      <span class="alrt-act-summary">${esc(summary)}</span>
-      <div style="display:flex;align-items:center;gap:2px">
-        <span class="alrt-act-chevron">▾</span>
-        ${rmBtn}
-      </div>
-    </div>`;
-
-  const blkId = ++_aeBlkCounter;
-  let body = '';
-  if (atype === 'email') {
-    const selectedGids = new Set((cfg.groups||[]).map(Number));
-    const availGroups  = (_aeGroups||[]).filter(g => !selectedGids.has(g.id));
-    const selectedChips = [...selectedGids].map(gid => {
-      const g = (_aeGroups||[]).find(g=>g.id===gid);
-      const n = g ? g.name : `#${gid}`;
-      return `<span class="ae-grp-chip" data-gid="${gid}">${esc(n)}<button type="button" onclick="_aeGrpRemove(${gid},'${blkId}','${esc(n)}')" title="Remove">✕</button></span>`;
-    }).join('');
-    const groupOpts = availGroups.length
-      ? availGroups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')
-      : '<option value="" disabled>No groups — create one in Settings › Groups</option>';
-    const noGroupsHint = (_aeGroups||[]).length === 0
-      ? '<div style="font-size:11px;color:var(--text3);margin-top:2px">No groups yet. Go to Settings → Groups to create one.</div>'
-      : '';
-    body = `
-      <div class="fr">
-        <label class="fl">Groups <span style="color:var(--text3);font-size:10px">(recipients)</span></label>
-        <div class="ae-grp-wrap">
-          <div class="ae-grp-chips" id="ae-chips-${blkId}">${selectedChips}</div>
-          <select class="ae-grp-add" onchange="_aeGrpAdd(this,'${blkId}')">
-            <option value="">＋ Add group…</option>
-            ${groupOpts}
-          </select>
-        </div>
-        ${noGroupsHint}
-      </div>
-      <div class="fr">
-        <label class="fl">Extra emails <span style="color:var(--text3);font-size:10px">(comma-separated, optional)</span></label>
-        <input type="text" class="ae-act-extrato" value="${esc(cfg.extra_to||cfg.to||'')}"
-          placeholder="cto@corp.com" autocomplete="off"/>
-      </div>
-      <div class="fr">
-        <label class="fl">Subject <span style="color:var(--text3);font-size:10px">({dname} {sname} {severity} {event_type})</span></label>
-        <input type="text" class="ae-act-subj" value="${esc(cfg.subject||'')}"
-          placeholder="[{severity}] {dname}/{sname} — {event_type}" autocomplete="off"/>
-      </div>
-      <div class="fr">
-        <label class="fl">Body <span style="color:var(--text3);font-size:10px">(empty = auto-generated HTML email)</span></label>
-        <textarea class="ae-act-body" rows="1" placeholder="Leave empty for default…">${esc(cfg.body||'')}</textarea>
-      </div>`;
-  } else if (atype === 'webhook') {
-    body = `
-      <div class="fr">
-        <label class="fl">URL</label>
-        <input type="text" class="ae-act-url" value="${esc(cfg.url||'')}"
-          placeholder="https://hooks.example.com/..." autocomplete="off" spellcheck="false"/>
-      </div>
-      <div class="fr">
-        <label class="fl">Body template <span style="color:var(--text3);font-size:10px">(JSON with {placeholders} — empty = full ctx dict)</span></label>
-        <textarea class="ae-act-wbody" rows="1"
-          placeholder='{"text":"[{severity}] {dname}/{sname} is {event_type}"}'>${esc(cfg.body||'')}</textarea>
-      </div>`;
-  } else if (atype === 'syslog') {
-    body = `
-      <div style="display:flex;gap:12px;flex-wrap:wrap">
-        <div class="fr" style="flex:2;min-width:180px">
-          <label class="fl">Host <span style="color:var(--text3);font-size:10px">(empty = use global syslog settings)</span></label>
-          <input type="text" class="ae-act-shost" value="${esc(cfg.host||'')}"
-            placeholder="syslog.corp.com" autocomplete="off" spellcheck="false"/>
-        </div>
-        <div class="fr" style="flex:1;min-width:80px">
-          <label class="fl">Port</label>
-          <input type="number" class="ae-act-sport" value="${cfg.port||514}" min="1" max="65535"/>
-        </div>
-        <div class="fr" style="flex:1;min-width:80px">
-          <label class="fl">Protocol</label>
-          <select class="ae-act-sproto">
-            <option value="udp" ${(cfg.proto||'udp')==='udp'?'selected':''}>UDP</option>
-            <option value="tcp" ${(cfg.proto||'')==='tcp'?'selected':''}>TCP</option>
-          </select>
-        </div>
-      </div>`;
-  } else if (atype === 'browser') {
-    body = `
-      <div class="fr">
-        <label class="fl">Title <span style="color:var(--text3);font-size:10px">(supports {dname}, {sname}, {severity}, {event_type})</span></label>
-        <input type="text" class="ae-act-btitle" value="${esc(cfg.title||'')}"
-          placeholder="[{severity}] {dname}/{sname}" autocomplete="off"/>
-      </div>
-      <div class="fr">
-        <label class="fl">Body <span style="color:var(--text3);font-size:10px">(empty = auto)</span></label>
-        <input type="text" class="ae-act-bbody" value="${esc(cfg.body||'')}"
-          placeholder="{event_type}: {detail}" autocomplete="off"/>
-      </div>
-      <div class="fr">
-        <label class="fl">Sound</label>
-        <select class="ae-act-bsound">
-          <option value="alert"  ${(cfg.sound||'alert')==='alert' ?'selected':''}>Alert beep</option>
-          <option value="double" ${(cfg.sound||'')==='double'?'selected':''}>Double beep</option>
-          <option value="none"   ${(cfg.sound||'')==='none'  ?'selected':''}>No sound</option>
-        </select>
-      </div>
-      <div style="font-size:11px;color:var(--text3);margin-top:2px">
-        All logged-in users receive this alert.
-      </div>`;
-    _requestNotifPermission();
-  }
-
-  blk.innerHTML = hdr + `<div class="alrt-act-body">${body}</div>`;
-  list.appendChild(blk);
-}
-
-function _alertingCheckEmpty(listId, emptyId) {
-  const list  = document.getElementById(listId);
-  const empty = document.getElementById(emptyId);
-  if (empty) empty.style.display = (list && list.children.length === 0) ? '' : 'none';
-}
-
-// ── Save rule ─────────────────────────────────────────────────────────
-async function _alertingSave() {
-  const name    = (document.getElementById('ae-name')?.value || '').trim();
-  const enabled = document.getElementById('ae-enabled')?.checked ?? true;
-  const sev     = document.getElementById('ae-sev')?.value   || 'warning';
-  const logic   = document.getElementById('ae-logic')?.value || 'AND';
-  const cool    = parseInt(document.getElementById('ae-cool')?.value || '300', 10);
-
-  const conditions = [];
-  document.querySelectorAll('#ae-cond-list .alrt-cond-row').forEach(row => {
-    conditions.push({
-      field: row.querySelector('.ae-cond-field')?.value || 'event_type',
-      op:    row.querySelector('.ae-cond-op')?.value    || 'eq',
-      value: row.querySelector('.ae-cond-val')?.value   || '',
-    });
-  });
-
-  const actions = [];
-  document.querySelectorAll('#ae-act-list .alrt-act-block').forEach(blk => {
-    const atype = blk.dataset.atype;
-    let cfg = {};
-    if (atype === 'email') {
-      const chips = blk.querySelectorAll('.ae-grp-chip');
-      cfg = {
-        groups:   Array.from(chips).map(c => parseInt(c.dataset.gid)).filter(n => !isNaN(n)),
-        extra_to: (blk.querySelector('.ae-act-extrato')?.value || '').trim(),
-        subject:  (blk.querySelector('.ae-act-subj')?.value    || '').trim(),
-        body:     (blk.querySelector('.ae-act-body')?.value     || '').trim(),
-      };
-    } else if (atype === 'webhook') {
-      cfg = {
-        url:  (blk.querySelector('.ae-act-url')?.value   || '').trim(),
-        body: (blk.querySelector('.ae-act-wbody')?.value || '').trim(),
-      };
-    } else if (atype === 'syslog') {
-      cfg = {
-        host:  (blk.querySelector('.ae-act-shost')?.value  || '').trim(),
-        port:  parseInt(blk.querySelector('.ae-act-sport')?.value || '514', 10),
-        proto: blk.querySelector('.ae-act-sproto')?.value || 'udp',
-      };
-    } else if (atype === 'browser') {
-      cfg = {
-        title: (blk.querySelector('.ae-act-btitle')?.value || '').trim(),
-        body:  (blk.querySelector('.ae-act-bbody')?.value  || '').trim(),
-        sound: blk.querySelector('.ae-act-bsound')?.value || 'alert',
-      };
-    }
-    actions.push({ atype, config: cfg });
-  });
-
-  const trigger = parseInt(document.getElementById('ae-trigger')?.value || '1', 10);
-  const recover = parseInt(document.getElementById('ae-recover')?.value || '1', 10);
-
-  const payload = {
-    name, enabled, severity: sev,
-    condition_logic: logic, cooldown_s: isNaN(cool) ? 300 : cool,
-    trigger_count: isNaN(trigger) ? 1 : Math.max(1, trigger),
-    recover_count: isNaN(recover) ? 1 : Math.max(1, recover),
-    conditions, actions,
-  };
-
-  const btn = document.getElementById('ae-save-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-
-  const isNew  = _alertEditingId === null;
-  const method = isNew ? 'POST'  : 'PATCH';
-  const path   = isNew ? '/api/alert/rule' : `/api/alert/rule/${_alertEditingId}`;
-  const d = await api(method, path, payload);
-
-  if (btn) { btn.disabled = false; btn.textContent = 'Save Rule'; }
-
-  if (d.error) { toast(d.error, 'err'); return; }
-  toast(isNew ? `Rule "${name}" created` : `Rule "${name}" updated`, 'ok');
-  closeM('alrt-editor-modal');
-  _alertingLoadRules();
-}
+// Backwards-compat shim — old call sites may still invoke _alertingLoadRules.
+// Map it to the new profiles loader so nothing breaks.
+function _alertingLoadRules() { _alertingLoadProfiles(); }

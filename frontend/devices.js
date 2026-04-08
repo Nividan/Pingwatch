@@ -67,6 +67,15 @@ function ensureGroupSection(group){
   label.textContent=group;
   label.addEventListener('dblclick',function(){ renameGroup(label, group); });
 
+  const editBtn=document.createElement('button');
+  editBtn.className='grp-edit-btn rbac-operator';
+  editBtn.title='Edit group settings';
+  editBtn.innerHTML='&#9881;'; // gear
+  editBtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    if (typeof openEditGroup === 'function') openEditGroup(group);
+  });
+
   const cnt=document.createElement('div');
   cnt.className='grp-count'; cnt.id=gcid; cnt.textContent='0';
 
@@ -77,7 +86,7 @@ function ensureGroupSection(group){
   summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
 
   hdr.appendChild(dragH); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
-  hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
+  hdr.appendChild(editBtn); hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
 
   // Grid
   const grid=document.createElement('div');
@@ -342,6 +351,7 @@ function cardHTML(dev){
   <div class="dc ${st}" id="dp-${dev.device_id}" onclick="openDevWin('${dev.device_id}')">
     <div class="dc-bar ${st}" id="dcbar-${dev.device_id}"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
+    <button class="dc-alrt-btn" title="Alert profile" onclick="event.stopPropagation();openDeviceProfile('${dev.device_id}')">&#128276;</button>
     <div class="dc-body">
       <div>
         <div class="dc-name">${esc(dev.name)}</div>
@@ -355,6 +365,29 @@ function cardHTML(dev){
       </div>
     </div>
   </div>`;
+}
+
+// ── Alert profile entry-point from device card ───────────────────
+async function openDeviceProfile(did){
+  const dev=S.devices[did];
+  if(!dev){ toast('Device not found','err'); return; }
+  try{
+    const r=await api('GET','/api/alert/profiles');
+    const all=r.profiles||[];
+    const devProf=all.find(p=>p.scope_type==='device' && p.scope_value===did);
+    if(devProf){
+      if(typeof openProfileEditor==='function') openProfileEditor(devProf.id);
+      else toast('Open the Alerting page to edit profiles','err');
+      return;
+    }
+    // No device-level override: offer to create one
+    if(!confirm(`This device inherits its alert profile from the group/global level.\n\nCreate a device-level override for "${dev.name}"?`)) return;
+    if(typeof openProfileEditor==='function')
+      openProfileEditor(null,{scope_type:'device',scope_value:did});
+    else toast('Open the Alerting page to create profiles','err');
+  }catch(e){
+    toast('Failed to load profiles','err');
+  }
 }
 
 function listRowHTML(dev){
@@ -656,6 +689,16 @@ function renameGroup(labelEl, oldName){
     labelEl.replaceWith(labelEl.cloneNode(true));
     const newLabel=wrap.querySelector('.grp-label');
     newLabel.addEventListener('dblclick',function(){ renameGroup(newLabel, newName); });
+    // Rebind gear button so it carries the new group name
+    const gear=wrap.querySelector('.grp-edit-btn');
+    if(gear){
+      gear.replaceWith(gear.cloneNode(true));
+      const freshGear=wrap.querySelector('.grp-edit-btn');
+      freshGear.addEventListener('click',function(e){
+        e.stopPropagation();
+        if (typeof openEditGroup === 'function') openEditGroup(newName);
+      });
+    }
     cntId_refresh(wrap, newName);
   }
   toast('Group renamed to "'+newName+'"','ok');

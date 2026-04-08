@@ -8,8 +8,8 @@ use ``import db; db.X()`` or ``from db import X`` continue to work unchanged.
 from db.backend     import is_pg, needs_setup
 
 # core — write queues + schema
-from db.core        import db_init, db_seed_users, _db_enqueue, \
-                           _logs_enqueue, logs_db_init
+from db.core        import db_init, db_seed_users, db_seed_alert_profiles, \
+                           _db_enqueue, _logs_enqueue, logs_db_init
 
 # persistence — device/sensor save/load + autosave
 from db.persistence import db_load, db_save, autosave_loop
@@ -87,6 +87,37 @@ from db.ipam        import (
     ipam_sync_subnet_add,
 )
 
+# alert profiles (PRTG-style state-trigger system)
+from db.alert_profiles import (
+    db_list_profiles,
+    db_get_profile,
+    db_get_profile_for_scope,
+    db_save_profile,
+    db_delete_profile,
+    db_set_profile_enabled,
+    db_list_action_templates,
+    db_get_action_template,
+    db_save_action_template,
+    db_delete_action_template,
+    db_get_stage_state,
+    db_record_stage_fire,
+    db_clear_stage_state_for_sensor,
+    db_list_active_stage_sessions_for_sensor,
+)
+
+# alert events (history + ack/resolve)
+from db.alert_events import (
+    db_log_event,
+    db_list_events,
+    db_count_active,
+    db_get_event,
+    db_ack_event,
+    db_resolve_event,
+    db_auto_resolve_event,
+    db_resolve_all_active,
+    db_has_acked_event,
+)
+
 # backups
 from db.backups     import (
     db_get_backup_list,
@@ -107,7 +138,7 @@ __all__ = [
     # backend
     "is_pg", "needs_setup",
     # core
-    "db_init", "db_seed_users", "_db_enqueue",
+    "db_init", "db_seed_users", "db_seed_alert_profiles", "_db_enqueue",
     "_logs_enqueue", "logs_db_init",
     # persistence
     "db_load", "db_save", "autosave_loop",
@@ -136,6 +167,18 @@ __all__ = [
     "db_get_allocations", "db_upsert_allocation", "db_clear_allocation", "db_update_dns",
     "ipam_sync_device_add", "ipam_sync_device_update",
     "ipam_sync_device_delete", "ipam_sync_subnet_add",
+    # alert profiles
+    "db_list_profiles", "db_get_profile", "db_get_profile_for_scope",
+    "db_save_profile", "db_delete_profile", "db_set_profile_enabled",
+    "db_list_action_templates", "db_get_action_template",
+    "db_save_action_template", "db_delete_action_template",
+    "db_get_stage_state", "db_record_stage_fire",
+    "db_clear_stage_state_for_sensor",
+    "db_list_active_stage_sessions_for_sensor",
+    # alert events
+    "db_log_event", "db_list_events", "db_count_active", "db_get_event",
+    "db_ack_event", "db_resolve_event", "db_auto_resolve_event",
+    "db_resolve_all_active", "db_has_acked_event",
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",
