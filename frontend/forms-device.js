@@ -125,7 +125,9 @@ function openEditDevice(did){
           <label class="fl">Group</label>
           <div style="position:relative">
             <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" autocomplete="off"
+                   style="padding-right:28px"
                    onfocus="_edgShow()" oninput="_edgFilter(this.value)"/>
+            <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_edgToggle()">▾</button>
             <div id="ed-g-dd" class="grp-dd" style="display:none">${_edGroupItems}</div>
           </div>
         </div>
@@ -183,7 +185,12 @@ function _edgShow(){
   const dd=document.getElementById('ed-g-dd');
   if(!dd) return;
   dd.style.display='';
-  _edgFilter(document.getElementById('ed-g')?.value||'');
+  _edgFilter('');
+}
+function _edgToggle(){
+  const dd=document.getElementById('ed-g-dd');
+  if(dd && dd.style.display!=='none') _edgHide();
+  else _edgShow();
 }
 function _edgHide(){
   const dd=document.getElementById('ed-g-dd');
