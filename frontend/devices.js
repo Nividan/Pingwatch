@@ -63,14 +63,12 @@ function ensureGroupSection(group){
 
   const label=document.createElement('div');
   label.className='grp-label';
-  label.title='Double-click to rename';
   label.textContent=group;
-  label.addEventListener('dblclick',function(){ renameGroup(label, group); });
 
   const editBtn=document.createElement('button');
   editBtn.className='grp-edit-btn rbac-operator';
   editBtn.title='Edit group settings';
-  editBtn.innerHTML='&#9881;'; // gear
+  editBtn.innerHTML='⚙️';
   editBtn.addEventListener('click',function(e){
     e.stopPropagation();
     if (typeof openEditGroup === 'function') openEditGroup(group);
@@ -169,7 +167,7 @@ function _devSnrSummaryHtml(did){
 }
 
 // ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
-let _dcm=null;
+let _dcm=null, _ctxGrp=null;
 
 function _showDcm(x,y){
   if(!_dcm) return;
@@ -193,6 +191,7 @@ function _initDevCtxMenu(){
     e.preventDefault();
     const card=e.target.closest('.dc:not(.dc-add)');
     const row =e.target.closest('.dc-list-row');
+    const grpHdr=e.target.closest('.grp-hdr');
     const raw =(card?.id||row?.id||'');
     const did =raw.replace(/^dp-|^dpl-/,'') || null;
     if(did&&S.devices[did]){
@@ -205,6 +204,12 @@ function _initDevCtxMenu(){
         <div class="dci ${muted?'dci-green':'dci-warn'}" onclick="_hideDcm();_toggleMuteDevice('${did}')">
           ${muted?'🔔 Unmute Alerts':'🔕 Mute Alerts'}
         </div>`;
+    } else if(grpHdr){
+      _ctxGrp=grpHdr.closest('.grp-wrap')?.dataset.grpName||'';
+      _dcm.innerHTML=`
+        <div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openEditGroup==='function')openEditGroup(_ctxGrp)">⚙️ Edit Group</div>
+        <div class="dci-sep"></div>
+        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp)">🖥️ Add Device</div>`;
     } else {
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
@@ -685,10 +690,10 @@ function renameGroup(labelEl, oldName){
       const fresh=wrap.querySelector('.dc-add');
       fresh.addEventListener('click',function(){ openAddDeviceGroup(newName); });
     }
-    // Update the label's own listener
+    // Update the label text
     labelEl.replaceWith(labelEl.cloneNode(true));
     const newLabel=wrap.querySelector('.grp-label');
-    newLabel.addEventListener('dblclick',function(){ renameGroup(newLabel, newName); });
+    newLabel.textContent=newName;
     // Rebind gear button so it carries the new group name
     const gear=wrap.querySelector('.grp-edit-btn');
     if(gear){
