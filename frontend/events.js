@@ -177,8 +177,9 @@ async function _evtFlapResolve(flapId) {
 }
 
 async function _evtResolveAll() {
-  const count = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
-  if (!count) { toast('No active alerts to resolve', 'info'); return; }
+  const alertCount = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
+  const flapCount  = (typeof FLAPS !== 'undefined' ? FLAPS : []).filter(f => f.id && (f.ack_state || 'active') !== 'resolved').length;
+  if (!alertCount && !flapCount) { toast('No active events to resolve', 'info'); return; }
   _pwConfirm(`Resolve all active alerts and flaps?`, async () => {
     try {
       const d = await api('POST', '/api/alert/events/resolve-all');
@@ -508,7 +509,7 @@ function _buildEvtTable(events) {
         `<td class="aev-cell">` +
           `<div class="${tagCls}">` +
             `<span class="aev-dot"></span>` +
-            `<span class="aev-rule" title="${esc(alertEvt.rule_name)}">${esc(alertEvt.rule_name)}</span>` +
+            `<span class="aev-rule" title="${esc(alertEvt.profile_name)}">${esc(alertEvt.profile_name)}</span>` +
             `<span class="aev-st ${stCls}">${stLabel}</span>` +
             repeatBadge +
           `</div>` +
