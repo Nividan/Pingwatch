@@ -156,6 +156,8 @@ class Sensor:
         self._threshold_state             = "ok"
         self._consec_threshold            = 0       # consecutive probes in current threshold state
         self._threshold_recovery_pending  = False   # keep sending threshold_ok events to engine
+        self._threshold_triggered_ts      = None    # wall-clock time threshold first fired (for duration)
+        self._down_since_ts               = None    # wall-clock time sensor first went down (for duration)
         self.history               = collections.deque(maxlen=self.MAX)
         self.thr_history           = collections.deque(maxlen=self.MAX)
         self.total          = 0
@@ -596,12 +598,17 @@ class MonitorState:
             s._consec_fail = 0
             s._consec_ok  += 1
             if s._alerted_down and s._consec_ok >= s.recover_after:
+                _flap_dur = None
+                if s._down_since_ts:
+                    _flap_dur = int(time.time() - s._down_since_ts)
+                    s._down_since_ts = None
                 rec_data = {
                     "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
                     "host": s.host, "stype": s.stype, "ts": _ts,
                     "detail": "Recovered", "direction": "recovered",
                     "grp": dev.group,
                     "consec_count": s._consec_ok,
+                    "duration_s": _flap_dur,
                 }
                 if not _muted:
                     self._broadcast("flap_recovered", rec_data)
@@ -673,7 +680,8 @@ class MonitorState:
                     _smtp_cap = dict(flap_data)
                     s._email_sent_down = False
                     threading.Thread(target=_smtp_down_delayed, args=(s, _smtp_cap), daemon=True).start()
-                s._alerted_down = True
+                s._alerted_down    = True
+                s._down_since_ts   = time.time()
             elif s._alerted_down and not _muted:
                 # Subsequent failures — alert engine only (skip SSE/syslog)
                 _eng_data = {
@@ -723,6 +731,7 @@ class MonitorState:
             s._consec_threshold = 1
             if _new_thr != "ok" and not _muted:
                 s._threshold_recovery_pending = False
+                s._threshold_triggered_ts = time.time()
                 _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
                 _thr_evt_data = {
                     "did": did, "sid": sid, "dname": dev.name,
@@ -761,6 +770,21 @@ class MonitorState:
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
                 # Threshold recovered — broadcast and resolve existing event
                 s._threshold_recovery_pending = True
+                _thr_dur = None
+                if s._threshold_triggered_ts:
+                    _thr_dur = int(time.time() - s._threshold_triggered_ts)
+                    s._threshold_triggered_ts = None
+                # Build a human-readable current value for the detail field
+                if s._last_rate is not None:
+                    _rec_val = s.last_value or f"{s._last_rate:.2f}"
+                elif s.stype == 'vmware':
+                    _rec_val = s.last_detail or s.last_value or ''
+                elif s.stype in ('snmp', 'tls'):
+                    _rec_val = s.last_value or ''
+                else:
+                    _rec_val = f"{s.last_ms}ms" if s.last_ms is not None else ''
+                _rec_detail = (f"Recovered from {_prev_thr}: {_rec_val}" if _rec_val
+                               else f"Recovered from {_prev_thr}")
                 _thr_rec_data = {
                     "did": did, "sid": sid, "dname": dev.name,
                     "sname": s.name, "host": s.host, "stype": s.stype,
@@ -768,6 +792,8 @@ class MonitorState:
                     "ms": s.last_ms, "loss_pct": s.loss_pct,
                     "grp": dev.group,
                     "consec_count": 1,
+                    "duration_s": _thr_dur,
+                    "detail": _rec_detail,
                 }
                 self._broadcast("threshold_ok", _thr_rec_data)
                 log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
