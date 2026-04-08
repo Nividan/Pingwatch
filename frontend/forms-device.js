@@ -143,6 +143,10 @@ function openEditDevice(did){
         </label>
         <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Silences DOWN / recovery / threshold alerts for every sensor in this device.</div>
       </div>
+      <div class="alrt-section" style="margin-top:10px">
+        <div class="alrt-section-hdr">Alert Profile</div>
+        <div id="ed-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
+      </div>
       <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default)?' open':''}>
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
@@ -179,6 +183,73 @@ function openEditDevice(did){
     })
   );
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
+  _loadDeviceProfileSection(did);
+}
+
+async function _loadDeviceProfileSection(did) {
+  const body = document.getElementById('ed-profile-body');
+  if (!body) return;
+  try {
+    const dev = S.devices[did];
+    const r   = await api('GET', '/api/alert/profiles');
+    const all = r.profiles || [];
+    const devProf   = all.find(p => p.scope_type === 'device' && p.scope_value === did);
+    const groupProf = dev && all.find(p => p.scope_type === 'group' && p.scope_value === (dev.group || 'Default Group'));
+    const globalProf = all.find(p => p.scope_type === 'global');
+    const inherited  = groupProf || globalProf;
+
+    if (devProf) {
+      body.innerHTML = `
+        <div style="margin-bottom:10px">
+          <span class="alrt-override-badge">Override</span>
+          <span style="margin-left:8px;color:var(--text)">${esc(devProf.name)}</span>
+          <span style="margin-left:6px;color:var(--text3);font-size:11px">(${devProf.stages.length} stage${devProf.stages.length === 1 ? '' : 's'})</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-s" onclick="_editProfileFromDevice(${devProf.id})">Edit profile\u2026</button>
+          <button class="btn-s" onclick="_resetDeviceProfile('${esc(did)}', ${devProf.id})">Reset to inherited</button>
+        </div>`;
+    } else {
+      const inheritedFrom = inherited
+        ? `${inherited.scope_type === 'group' ? 'Group' : 'Global'} profile <strong style="color:var(--text)">${esc(inherited.name)}</strong>`
+        : `(none \u2014 no profile resolved)`;
+      body.innerHTML = `
+        <div style="margin-bottom:10px">
+          <span class="alrt-inherit-badge">Inherited</span>
+          <span style="margin-left:8px">${inheritedFrom}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-s" onclick="_overrideDeviceProfile('${esc(did)}')">Override at device level</button>
+          ${inherited ? `<button class="btn-s" onclick="_editProfileFromDevice(${inherited.id})">View inherited profile</button>` : ''}
+        </div>`;
+    }
+  } catch (e) {
+    if (body) body.innerHTML = `<span style="color:var(--down)">Failed to load profile</span>`;
+  }
+}
+
+function _editProfileFromDevice(profileId) {
+  closeM('med');
+  if (typeof openProfileEditor === 'function') openProfileEditor(profileId);
+  else toast('Open the Alerting page to edit profiles', 'err');
+}
+
+function _overrideDeviceProfile(did) {
+  closeM('med');
+  if (typeof openProfileEditor === 'function')
+    openProfileEditor(null, { scope_type: 'device', scope_value: did });
+  else toast('Open the Alerting page to create profiles', 'err');
+}
+
+async function _resetDeviceProfile(did, profileId) {
+  if (!confirm('Delete the device-scoped alert profile?\nThis device will fall back to the group or global profile.')) return;
+  try {
+    await api('DELETE', '/api/alert/profile/' + profileId);
+    toast('Device profile reset', 'ok');
+    _loadDeviceProfileSection(did);
+  } catch (e) {
+    toast('Reset failed: ' + (e.message || e), 'err');
+  }
 }
 
 function _edgShow(){
