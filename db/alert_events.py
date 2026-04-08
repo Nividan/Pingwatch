@@ -30,11 +30,24 @@ def _row(r) -> dict:
 def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                  ctx: dict, state: str = 'active') -> int:
     """
-    Log a fired stage event. If an active event already exists for the same
-    profile + device + sensor, increments repeat_count instead of inserting a
-    new row. Returns the event id.
+    Log a fired stage event. If an active OR acknowledged event already exists
+    for the same device + sensor, updates that row in place (bump repeat_count,
+    refresh detail/stage/profile, escalate severity but never downgrade).
+    Otherwise inserts a new row. Returns the event id.
+
+    Dedup matches on (did, sid) alone — profile_id is NOT part of the key, so
+    swapping a sensor's profile mid-incident updates the same row instead of
+    creating a new one. This gives "one row per failure session per sensor".
     """
-    now = time.time()
+    now        = time.time()
+    did        = ctx.get('did', '')
+    sid        = ctx.get('sid', '')
+    dname      = ctx.get('dname', '')
+    sname      = ctx.get('sname', '')
+    severity   = ctx.get('severity', '')
+    event_type = ctx.get('event_type', '')
+    detail     = ctx.get('detail', '')
+
     if is_pg():
         from db.pg_pool import pg_conn
         import psycopg2.extras
@@ -42,16 +55,28 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
             with pg_conn("main") as con:
                 cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 cur.execute(
-                    "SELECT id, repeat_count FROM alert_events "
-                    "WHERE profile_id=%s AND did=%s AND sid=%s AND state='active'",
-                    (profile_id, ctx.get('did', ''), ctx.get('sid', ''))
+                    "SELECT id, severity FROM alert_events "
+                    "WHERE did=%s AND sid=%s AND state IN ('active','acknowledged') "
+                    "ORDER BY id DESC LIMIT 1",
+                    (did, sid)
                 )
                 existing = cur.fetchone()
                 if existing and state == 'active':
+                    # Escalate severity (never downgrade). If current row is already
+                    # 'critical', keep it; otherwise adopt the incoming severity.
                     cur.execute(
-                        "UPDATE alert_events SET repeat_count=repeat_count+1, "
-                        "triggered_at=%s, stage_id=%s WHERE id=%s",
-                        (now, stage_id, existing['id'])
+                        """UPDATE alert_events SET
+                               repeat_count = repeat_count + 1,
+                               triggered_at = %s,
+                               stage_id     = %s,
+                               profile_id   = %s,
+                               profile_name = %s,
+                               severity     = CASE WHEN severity = 'critical' THEN severity ELSE %s END,
+                               event_type   = CASE WHEN severity = 'critical' THEN event_type ELSE %s END,
+                               detail       = %s
+                           WHERE id = %s""",
+                        (now, stage_id, profile_id, profile_name,
+                         severity, event_type, detail, existing['id'])
                     )
                     eid = existing['id']
                 else:
@@ -62,10 +87,8 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (
                             profile_id, stage_id, profile_name,
-                            ctx.get('did', ''), ctx.get('sid', ''),
-                            ctx.get('dname', ''), ctx.get('sname', ''),
-                            ctx.get('severity', ''), ctx.get('event_type', ''),
-                            state, now, ctx.get('detail', ''),
+                            did, sid, dname, sname,
+                            severity, event_type, state, now, detail,
                         )
                     )
                     eid = cur.fetchone()['id']
@@ -79,15 +102,33 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
     try:
         con.execute("BEGIN IMMEDIATE")
         existing = con.execute(
-            "SELECT id, repeat_count FROM alert_events "
-            "WHERE profile_id=? AND did=? AND sid=? AND state='active'",
-            (profile_id, ctx.get('did', ''), ctx.get('sid', ''))
+            "SELECT id, severity, event_type FROM alert_events "
+            "WHERE did=? AND sid=? AND state IN ('active','acknowledged') "
+            "ORDER BY id DESC LIMIT 1",
+            (did, sid)
         ).fetchone()
         if existing and state == 'active':
+            # Escalate severity but never downgrade (critical stays critical
+            # until the whole session recovers).
+            if existing['severity'] == 'critical':
+                new_sev  = 'critical'
+                new_etyp = existing['event_type']
+            else:
+                new_sev  = severity
+                new_etyp = event_type
             con.execute(
-                "UPDATE alert_events SET repeat_count=repeat_count+1, "
-                "triggered_at=?, stage_id=? WHERE id=?",
-                (now, stage_id, existing['id'])
+                """UPDATE alert_events SET
+                       repeat_count = repeat_count + 1,
+                       triggered_at = ?,
+                       stage_id     = ?,
+                       profile_id   = ?,
+                       profile_name = ?,
+                       severity     = ?,
+                       event_type   = ?,
+                       detail       = ?
+                   WHERE id = ?""",
+                (now, stage_id, profile_id, profile_name,
+                 new_sev, new_etyp, detail, existing['id'])
             )
             eid = existing['id']
         else:
@@ -98,10 +139,8 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     profile_id, stage_id, profile_name,
-                    ctx.get('did', ''), ctx.get('sid', ''),
-                    ctx.get('dname', ''), ctx.get('sname', ''),
-                    ctx.get('severity', ''), ctx.get('event_type', ''),
-                    state, now, ctx.get('detail', ''),
+                    did, sid, dname, sname,
+                    severity, event_type, state, now, detail,
                 )
             )
             eid = cur.lastrowid

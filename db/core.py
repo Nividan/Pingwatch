@@ -616,6 +616,12 @@ def db_init():
                 detail       TEXT    DEFAULT '',
                 repeat_count INTEGER DEFAULT 1
             )""")
+        # Partial index for dedup lookups — only covers unresolved rows.
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alert_events_active_sensor "
+            "ON alert_events(did, sid) "
+            "WHERE state IN ('active','acknowledged')"
+        )
         con.execute("""
             CREATE TABLE IF NOT EXISTS alert_profiles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
