@@ -2079,20 +2079,34 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 /* Recovery dash placeholder */
 .ap-dash{color:var(--text3);font-size:12px;padding:0 6px;}
 
-/* Multi-template checkbox list inside stage table */
-.ap-actions-chk{max-height:100px;min-width:220px;background:var(--bg2);
-  border:1px solid var(--border2);border-radius:5px;padding:4px 6px;gap:2px;}
-.ap-actions-chk:focus-within{border-color:var(--accent);}
-.ap-tpl-item{gap:7px;padding:3px 5px;border-radius:3px;}
-.ap-tpl-item:hover{background:var(--bg3);}
-.ap-tpl-name{flex:1;font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* Action template badge colors (used in stage table + action template list) */
 .ap-tpl-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
   padding:1px 5px;border-radius:8px;flex-shrink:0;}
 .ap-tpl-badge-email  {background:rgba(47,129,247,.15);color:#58a6ff;}
 .ap-tpl-badge-webhook{background:rgba(139,92,246,.15);color:#a78bfa;}
 .ap-tpl-badge-syslog {background:rgba(240,165,0,.15);color:#f0a500;}
 .ap-tpl-badge-browser{background:rgba(35,209,139,.15);color:#23d18b;}
-.ap-no-tpl{font-size:11px;color:var(--text3);font-style:italic;padding:4px 2px;}
+
+/* Chip action-template picker */
+.ap-act-picker{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-height:28px;padding:2px 0;}
+.ap-chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg3);
+  border:1px solid var(--border2);border-radius:4px;padding:2px 4px 2px 8px;
+  font-size:11px;color:var(--text2);white-space:nowrap;}
+.ap-chip .ap-tpl-badge{margin-left:2px;}
+.ap-chip-rm{background:none;border:none;cursor:pointer;color:var(--text3);
+  font-size:11px;padding:0 2px;line-height:1;border-radius:2px;flex-shrink:0;}
+.ap-chip-rm:hover{color:var(--down);}
+.ap-add-btn{background:none;border:1px dashed var(--border2);border-radius:4px;
+  color:var(--text3);font-size:11px;padding:2px 8px;cursor:pointer;white-space:nowrap;}
+.ap-add-btn:hover{border-color:var(--accent);color:var(--accent);}
+.ap-picker-dd{position:fixed;z-index:9999;background:var(--bg2);
+  border:1px solid var(--border2);border-radius:6px;
+  box-shadow:0 8px 24px rgba(0,0,0,.55);min-width:200px;max-height:260px;
+  overflow-y:auto;padding:4px 0;}
+.ap-picker-item{display:flex;align-items:center;justify-content:space-between;
+  padding:7px 12px;cursor:pointer;font-size:12px;color:var(--text2);gap:10px;}
+.ap-picker-item:hover{background:var(--bg3);}
+.ap-picker-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 /* Inherit / override badges */
 .alrt-inherit-badge,.alrt-override-badge{display:inline-flex;align-items:center;gap:4px;

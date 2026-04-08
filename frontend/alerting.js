@@ -4,6 +4,7 @@ let _alertProfiles      = [];
 let _alertTemplates     = [];
 let _alertEditingProfId = null;   // null = new profile
 let _alertEditingTplId  = null;   // null = new template
+let _apCurrentPicker    = null;   // picker dropdown state
 let _alertEvtFilter     = 'all';
 let _alertEvtOffset     = 0;
 const _ALERT_EVT_LIMIT  = 100;
@@ -205,18 +206,17 @@ async function openProfileEditor(id, scopeDefaults = null) {
     return matches[0] || null;
   });
 
-  const tplCheckboxes = (ids) => {
+  const tplChipPicker = (ids) => {
     const selected = Array.isArray(ids) ? ids.map(Number) : [];
-    if (!_alertTemplates.length)
-      return `<span class="ap-no-tpl">No templates — add one below</span>`;
-    return _alertTemplates.map(t => {
-      const chk = selected.includes(t.id) ? ' checked' : '';
-      return `<label class="chk-item ap-tpl-item">` +
-        `<input type="checkbox" class="ap-tpl-chk" value="${t.id}"${chk}>` +
-        `<span class="ap-tpl-name">${esc(t.name)}</span>` +
-        `<span class="ap-tpl-badge ap-tpl-badge-${esc(t.atype)}">${esc(t.atype)}</span>` +
-        `</label>`;
-    }).join('');
+    const chips = _alertTemplates
+      .filter(t => selected.includes(t.id))
+      .map(t =>
+        `<span class="ap-chip" data-id="${t.id}">` +
+        `${esc(t.name)}<span class="ap-tpl-badge ap-tpl-badge-${t.atype}">${t.atype.toUpperCase()}</span>` +
+        `<button class="ap-chip-rm" onclick="_apChipRemove(this)">&#x2715;</button>` +
+        `</span>`
+      ).join('');
+    return chips + `<button class="ap-add-btn" onclick="_apPickerOpen(this)">＋ Add</button>`;
   };
 
   const o = document.createElement('div');
@@ -295,7 +295,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
                     <td>${isRecovery
                         ? '<span class="ap-dash">—</span>'
                         : `<input type="number" class="ap-repeat" value="${s?.repeat_min ?? 0}" min="0" step="5"/>`}</td>
-                    <td><div class="chk-list ap-actions-chk">${tplCheckboxes(s?.action_ids || [])}</div></td>
+                    <td><div class="ap-act-picker">${tplChipPicker(s?.action_ids || [])}</div></td>
                   </tr>`;
               }).join('')}
             </tbody>
@@ -314,6 +314,63 @@ async function openProfileEditor(id, scopeDefaults = null) {
     </div>`;
   document.body.appendChild(o);
   setTimeout(() => document.getElementById('ap-name')?.focus(), 60);
+}
+
+// ── Chip action-template picker ──────────────────────────────────────────────
+function _apChipRemove(btn) {
+  btn.closest('.ap-chip').remove();
+}
+
+function _apPickerOpen(btn) {
+  document.getElementById('_ap_picker_dd')?.remove();
+  document.removeEventListener('click', _apPickerOutside, true);
+  _apCurrentPicker = btn.closest('.ap-act-picker');
+  const selectedIds = new Set(
+    Array.from(_apCurrentPicker.querySelectorAll('.ap-chip[data-id]')).map(c => +c.dataset.id)
+  );
+  const available = _alertTemplates.filter(t => !selectedIds.has(t.id));
+  if (!available.length) return;
+  const dd = document.createElement('div');
+  dd.id = '_ap_picker_dd';
+  dd.className = 'ap-picker-dd';
+  dd.innerHTML = available.map(t =>
+    `<div class="ap-picker-item" onclick="_apPickerSelect(${t.id})">` +
+    `<span class="ap-picker-name">${esc(t.name)}</span>` +
+    `<span class="ap-tpl-badge ap-tpl-badge-${t.atype}">${t.atype.toUpperCase()}</span>` +
+    `</div>`
+  ).join('');
+  document.body.appendChild(dd);
+  const r = btn.getBoundingClientRect();
+  dd.style.left = r.left + window.scrollX + 'px';
+  dd.style.top  = (r.bottom + window.scrollY + 4) + 'px';
+  setTimeout(() => document.addEventListener('click', _apPickerOutside, {capture: true}), 0);
+}
+
+function _apPickerSelect(id) {
+  if (!_apCurrentPicker) return;
+  const t = _alertTemplates.find(x => x.id === id);
+  if (!t || _apCurrentPicker.querySelector(`.ap-chip[data-id="${id}"]`)) {
+    document.getElementById('_ap_picker_dd')?.remove();
+    return;
+  }
+  const chip = document.createElement('span');
+  chip.className = 'ap-chip';
+  chip.dataset.id = id;
+  chip.innerHTML = `${esc(t.name)}<span class="ap-tpl-badge ap-tpl-badge-${t.atype}">${t.atype.toUpperCase()}</span>` +
+    `<button class="ap-chip-rm" onclick="_apChipRemove(this)">&#x2715;</button>`;
+  _apCurrentPicker.insertBefore(chip, _apCurrentPicker.querySelector('.ap-add-btn'));
+  document.getElementById('_ap_picker_dd')?.remove();
+  document.removeEventListener('click', _apPickerOutside, true);
+  _apCurrentPicker = null;
+}
+
+function _apPickerOutside(e) {
+  const dd = document.getElementById('_ap_picker_dd');
+  if (dd && !dd.contains(e.target)) {
+    dd.remove();
+    document.removeEventListener('click', _apPickerOutside, true);
+    _apCurrentPicker = null;
+  }
 }
 
 function _apScopeChange() {
@@ -342,8 +399,8 @@ async function _alertingSaveProfile() {
   const stages = [];
   document.querySelectorAll('#alrt-prof-modal .alrt-stage-row').forEach(row => {
     const trig = row.dataset.trig;
-    const action_ids = Array.from(row.querySelectorAll('.ap-tpl-chk:checked'))
-      .map(i => parseInt(i.value)).filter(n => n > 0);
+    const action_ids = Array.from(row.querySelectorAll('.ap-chip[data-id]'))
+      .map(c => parseInt(c.dataset.id)).filter(n => n > 0);
     if (!action_ids.length) return;   // empty stage row — skip
     const isRecovery = trig.endsWith('_recovered');
     stages.push({
