@@ -119,7 +119,11 @@ function openEditDevice(did){
         </div>
         <div class="fr">
           <label class="fl">Group</label>
-          <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" autocomplete="off"/>
+          <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" list="ed-g-list" autocomplete="off"/>
+          <datalist id="ed-g-list">${
+            [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
+            .map(g=>`<option value="${esc(g)}"></option>`).join('')
+          }</datalist>
         </div>
       </div>
       <div class="fr">
