@@ -1,6 +1,7 @@
 [Unit]
 Description=PingWatch Network Monitor
-After=network.target
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
@@ -8,6 +9,7 @@ WorkingDirectory=/opt/pingwatch
 ExecStart=/usr/bin/python3 /opt/pingwatch/server.py
 Restart=on-failure
 RestartSec=5
+StartLimitIntervalSec=0
 
 # Run as the installing user — patched automatically by start.sh --install-service
 # User=pingwatch
