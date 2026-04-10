@@ -116,6 +116,7 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
+    _scheduleActiveEvtPoll();
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return;
@@ -127,10 +128,12 @@ function connectSSE(){
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
     _scheduleRefresh();
+    _scheduleActiveEvtPoll();
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
     _scheduleRefresh();
+    _scheduleActiveEvtPoll();
   });
   sse.addEventListener('threshold_ok',e=>{
     const d=_parseSSE(e); if(!d) return;
@@ -149,6 +152,7 @@ function connectSSE(){
   sse.addEventListener('browser_notification',e=>{
     const d=_parseSSE(e); if(!d) return;
     _showBrowserNotif(d);
+    _scheduleActiveEvtPoll();
   });
   sse.addEventListener('log_badge',e=>{
     const d=_parseSSE(e); if(!d) return;
@@ -804,7 +808,6 @@ function pushFlap(d){
   FLAPS.unshift(d);
   if(FLAPS.length>MAX_FLAPS) FLAPS.pop();
   renderFlaps();
-  _scheduleActiveEvtPoll();
   flashDownPill();
 }
 
@@ -831,7 +834,6 @@ function pushThresholdEvent(d, level){
   FLAPS.unshift(entry);
   if(FLAPS.length>MAX_FLAPS)FLAPS.pop();
   renderFlaps();
-  _scheduleActiveEvtPoll();
 }
 
 function renderFlaps(){
