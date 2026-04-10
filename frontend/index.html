@@ -134,6 +134,10 @@
       </div>
       <!-- Panel: Sensor Events -->
       <div id="evtstab-panel-sensor-events" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0">
+        <div class="evt-inner-tabs">
+          <button class="evt-inner-tab active" id="evtInnerActive" onclick="_evtSetInnerTab('active')">Active <span class="evt-inner-count" id="evtActiveCount"></span></button>
+          <button class="evt-inner-tab" id="evtInnerHistory" onclick="_evtSetInnerTab('history')">History</button>
+        </div>
         <div class="evt-view-hdr">
           <div>
             <div class="evt-view-title">⚡ Events</div>

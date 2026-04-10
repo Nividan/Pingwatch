@@ -1058,10 +1058,15 @@ const _histCache = {};
 // Shared chart renderer — callable from both the sensor detail modal and dashboard widgets
 async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   if (!canvas) return;
-  if (statsEl) statsEl.textContent = 'Loading…';
-  // Fade out chart, KPIs, and table while fetching
-  const _fadeEls = [document.getElementById(`kpi-${did}-${sid}`), canvas.parentElement, sumEl].filter(Boolean);
-  _fadeEls.forEach(el => el.classList.add('dm-hist-loading'));
+  // Only show loading fade on first load — silent refresh on ticks to avoid flash
+  const _cacheKey = `${did}/${sid}`;
+  const _isRefresh = !!_histCache[_cacheKey];
+  const _fadeEls = [];
+  if (!_isRefresh) {
+    if (statsEl) statsEl.textContent = 'Loading…';
+    [document.getElementById(`kpi-${did}-${sid}`), canvas.parentElement, sumEl]
+      .filter(Boolean).forEach(el => { _fadeEls.push(el); el.classList.add('dm-hist-loading'); });
+  }
   const _loadT0 = performance.now();
   const dynamicLimit = Math.min(10000, Math.max(500, Math.round(minutes * 60 / 10)));
   const [hr, sr] = await Promise.all([
@@ -1092,11 +1097,13 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
   _drawHistCanvas(c, _statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, _snmpUnit);
   if (_sumEl) _buildSummaryTable(_sumEl, summary, minutes, rateSamples, _snmpUnit, did, sid);
   // Ensure loading fade is visible for at least 250ms, then fade back in
-  const _elapsed = performance.now() - _loadT0;
-  if (_elapsed < 250) await new Promise(r => setTimeout(r, 250 - _elapsed));
-  [document.getElementById(`kpi-${did}-${sid}`), c.parentElement,
-   document.getElementById(`dm-hist-summary-${did}-${sid}`) || _sumEl
-  ].forEach(el => { if (el) el.classList.remove('dm-hist-loading'); });
+  if (_fadeEls.length) {
+    const _elapsed = performance.now() - _loadT0;
+    if (_elapsed < 250) await new Promise(r => setTimeout(r, 250 - _elapsed));
+    [document.getElementById(`kpi-${did}-${sid}`), c.parentElement,
+     document.getElementById(`dm-hist-summary-${did}-${sid}`) || _sumEl
+    ].forEach(el => { if (el) el.classList.remove('dm-hist-loading'); });
+  }
   // If canvas.offsetWidth was 0 when _drawHistCanvas ran (layout race on first render),
   // the next animation frame will have correct dimensions — redraw from cache.
   requestAnimationFrame(() => dmHistRedraw(did, sid));
