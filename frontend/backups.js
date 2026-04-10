@@ -16,7 +16,7 @@ async function _bkInit() {
   wrap.innerHTML = '<div class="bk-loading">Loading…</div>';
   try {
     const [r, sr] = await Promise.all([fetch('/api/backups'), fetch('/api/settings')]);
-    if (r.status === 401) { showLogin('Session expired'); return; }
+    if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
     const d = await r.json();
     if (sr.ok) {
       const s = await sr.json();
