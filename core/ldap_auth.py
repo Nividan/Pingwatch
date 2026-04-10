@@ -619,7 +619,12 @@ def ldap_sync_groups() -> dict:
             log.error(f"LDAP sync: unexpected error for {username!r}: {e}")
             stats["errors"] += 1
 
-    log.info(f"LDAP sync complete: {stats}")
+    if stats.get('errors'):
+        log.error(f"LDAP sync complete with errors: {stats}")
+    elif stats.get('updated') or stats.get('disabled'):
+        log.info(f"LDAP sync complete: {stats}")
+    else:
+        log.debug(f"LDAP sync complete (no changes): {stats}")
     try:
         from db import db_log_audit
         db_log_audit("system", "ldap_sync", "ldap_sync_complete",
