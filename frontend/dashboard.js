@@ -9,6 +9,24 @@ function _fetchAvailability() {
   return _availFetchPromise;
 }
 
+// ── Smooth widget content swap (avoids flash on innerHTML refresh) ─
+function _dwSwap(body, html) {
+  if (!body) return;
+  // First render — no transition needed
+  if (!body.children.length) { body.innerHTML = html; return; }
+  // Build new content off-screen, then crossfade
+  const next = document.createElement('div');
+  next.style.cssText = 'opacity:0;transition:opacity .25s ease';
+  next.innerHTML = html;
+  // Fade out old content
+  Array.from(body.children).forEach(c => { c.style.transition = 'opacity .15s ease'; c.style.opacity = '0'; });
+  setTimeout(() => {
+    body.innerHTML = '';
+    body.appendChild(next);
+    requestAnimationFrame(() => { next.style.opacity = '1'; });
+  }, 150);
+}
+
 // ── Dashboard widget system ───────────────────────────────────────
 // Widget registry — add entries here to support new widget types
 const _DW_REG = {
@@ -675,14 +693,14 @@ function _dwRefreshDeviceStatus(wid) {
       <span class="dw-ds-st ${st}">${st}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `
+  _dwSwap(body, `
     <div class="dw-ds-pills">
       <span class="dw-ds-pill up">${cnt.up} Up</span>
       <span class="dw-ds-pill down">${cnt.down} Down</span>
       <span class="dw-ds-pill warn">${cnt.warn} Warning</span>
       ${cnt.idle ? `<span class="dw-ds-pill idle">${cnt.idle} Idle</span>` : ''}
     </div>
-    <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`;
+    <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`);
 }
 
 // ── Loading shimmer clear (called when first real data arrives) ───
@@ -848,14 +866,14 @@ function _dwRefreshGauge(wid, cfg) {
   const unit = s.stype === 'tls' ? 'd' : 'ms';
   const color = st === 'up' ? 'var(--up)' : st === 'down' ? 'var(--down)' : st === 'warning' ? 'var(--warn)' : 'var(--text3)';
   const typeIco = {ping:'◉',tcp:'⇌',http:'◈',snmp:'◎',dns:'⬡',tls:'🔒',http_keyword:'K',banner:'B'}[s.stype] || '·';
-  body.innerHTML = `
+  _dwSwap(body, `
     <div class="dw-gauge-wrap">
       <div class="dw-gauge-ring" style="--gc:${color}">
         <div class="dw-gauge-val" style="color:${color}">${val}<span class="dw-gauge-unit">${unit}</span></div>
       </div>
       <div class="dw-gauge-name">${esc(s.name)}</div>
       <div class="dw-gauge-st" style="color:${color}">${typeIco} ${st.toUpperCase()}</div>
-    </div>`;
+    </div>`);
 }
 
 // ── Widget: Recent Flap Events ────────────────────────────────────
@@ -889,7 +907,7 @@ function _dwRefreshFlapEvents(wid, cfg) {
       <span class="dw-fe-name">${esc(name)}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-fe-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-fe-list">${rows}</div>`);
 }
 
 // ── Widget: System Status ─────────────────────────────────────────
@@ -996,7 +1014,7 @@ function _dwRefreshDownDevices(wid) {
       <span class="dw-ds-st ${st}">${st}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-dd-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-dd-list">${rows}</div>`);
 }
 
 // ── Widget: Slowest Ping Devices ──────────────────────────────────
@@ -1033,7 +1051,7 @@ function _dwRefreshTopLatency(wid, cfg) {
       <span class="dw-tl-val" style="color:${color}">${ms}ms</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-tl-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-tl-list">${rows}</div>`);
 }
 
 // ── Widget: Event Summary ─────────────────────────────────────────
@@ -1089,7 +1107,7 @@ async function _dwRefreshEventCount(wid) {
       return `<span class="dw-ec-cell">${n}</span>`;
     }).join('')}
   </div>`;
-  body.innerHTML = `<div class="dw-ec-table">${headerRow}${dataRows}${totalRow}</div>`;
+  _dwSwap(body, `<div class="dw-ec-table">${headerRow}${dataRows}${totalRow}</div>`);
 }
 
 // ── Widget: Packet Loss ───────────────────────────────────────────
@@ -1117,7 +1135,7 @@ function _dwRefreshPacketLoss(wid, cfg) {
       <span class="dw-tl-val" style="color:${color}">${s.loss_pct}%</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-tl-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-tl-list">${rows}</div>`);
 }
 
 // ── Widget: SLA Report ────────────────────────────────────────────
@@ -1162,14 +1180,14 @@ async function _dwFetchSLA(wid, cfg) {
   const dtSec = Math.round(totalFail / totalAll * mins * 60);
   const dtH   = Math.floor(dtSec / 3600);
   const dtM   = String(Math.floor((dtSec % 3600) / 60)).padStart(2, '0');
-  wrap.innerHTML = `
+  _dwSwap(wrap, `
     <div class="dw-sla-pct" style="color:${slaColor}">${slaFixed}<span class="dw-sla-sym">%</span></div>
     <div class="dw-sla-tier" style="color:${slaColor}">${slaLabel}</div>
     <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" style="width:${Math.min(100,slaPct).toFixed(2)}%;background:${slaColor}"></div></div>
     <div class="dw-sla-stats">
       <span><span class="dw-sla-key">Downtime</span>${dtH}h ${dtM}m</span>
       <span><span class="dw-sla-key">Samples</span>${totalAll}</span>
-    </div>`;
+    </div>`);
 }
 
 // ── Widget: Flapping Devices ──────────────────────────────────────
@@ -1216,7 +1234,7 @@ function _dwRefreshFlapDetect(wid, cfg) {
       </div>
       <span class="dw-fd-cnt">${d.count}</span>
     </div>`).join('');
-  body.innerHTML = `<div class="dw-fd-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-fd-list">${rows}</div>`);
 }
 
 // ── Widget: Internet Health ───────────────────────────────────────
@@ -1266,7 +1284,7 @@ function _dwRefreshInternetHealth(wid) {
       <span class="dw-ih-fail-host">${esc(target || '')}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-ih-wrap">
+  _dwSwap(body, `<div class="dw-ih-wrap">
     <div class="dw-ih-badge ${badgeCls}">${badgeTxt}</div>
     <div class="dw-ih-counts">
       <span style="color:var(--up)">${up} up</span> ·
@@ -1275,7 +1293,7 @@ function _dwRefreshInternetHealth(wid) {
       <span style="color:var(--text3);font-size:10px"> / ${total} external</span>
     </div>
     ${failed.length ? `<div class="dw-ih-fail-list">${failRows}</div>` : ''}
-  </div>`;
+  </div>`);
 }
 
 // ── Widget: Server Performance ───────────────────────────────────
@@ -1318,18 +1336,19 @@ async function _dwFetchServerPerf(wid) {
   };
   const ramDetail  = `${_fmtBytes(d.ram_used)} / ${_fmtBytes(d.ram_total)}`;
   const diskDetail = `${_fmtBytes(d.disk_used)} / ${_fmtBytes(d.disk_total)}`;
-  body.innerHTML = `<div class="dw-sp-list">
+  _dwSwap(body, `<div class="dw-sp-list">
     ${_gauge(d.cpu_pct,  'CPU',  `${d.cpu_pct}%`)}
     ${_gauge(d.ram_pct,  'RAM',  ramDetail)}
     ${_gauge(d.disk_pct, 'Disk', diskDetail)}
-  </div>`;
+  </div>`);
 }
 
 // ── NCM Backup Status Widget ─────────────────────────────────────
 async function _dwNcmStatusRefresh(wid) {
   const el = document.getElementById(`dw-body-${wid}`);
   if (!el) return;
-  el.innerHTML = '<div class="dw-loading">Loading…</div>';
+  // Don't show "Loading…" on refresh — only on first render
+  if (!el.children.length) el.innerHTML = '<div class="dw-loading">Loading…</div>';
   try {
     const r = await api('GET', '/api/backups');
     const devs = (r.devices || []).filter(d => !d.orphaned);
@@ -1338,7 +1357,7 @@ async function _dwNcmStatusRefresh(wid) {
     const ok      = devs.filter(d => d.last_success === true).length;
     const failed  = devs.filter(d => d.run_count > 0 && d.last_success === false).length;
     const never   = devs.filter(d => d.run_count === 0 && d.enabled).length;
-    el.innerHTML = `
+    _dwSwap(el, `
       <div class="dw-ncm-grid">
         <div class="dw-ncm-kpi dw-ncm-ok">
           <span class="dw-ncm-n">${ok}</span>
@@ -1356,7 +1375,7 @@ async function _dwNcmStatusRefresh(wid) {
           <span class="dw-ncm-n">${enabled}/${total}</span>
           <span class="dw-ncm-l">Enabled</span>
         </div>
-      </div>`;
+      </div>`);
   } catch {
     el.innerHTML = '<div class="dw-err">Failed to load backup status</div>';
   }

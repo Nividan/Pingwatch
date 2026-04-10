@@ -198,6 +198,21 @@ let _evtActiveSubTab = (() => {
   try { return localStorage.getItem('pw_evt_subtab') || 'sensor-events'; } catch { return 'sensor-events'; }
 })();
 
+// ── Inner tab state (Active / History) ───────────────────────────
+let _evtInnerTab = (() => {
+  try { return localStorage.getItem('pw_evt_inner_tab') || 'active'; } catch { return 'active'; }
+})();
+
+function _evtSetInnerTab(tab) {
+  _evtInnerTab = tab;
+  try { localStorage.setItem('pw_evt_inner_tab', tab); } catch(_) {}
+  document.getElementById('evtInnerActive')?.classList.toggle('active', tab === 'active');
+  document.getElementById('evtInnerHistory')?.classList.toggle('active', tab === 'history');
+  const resolveBtn = document.querySelector('.evt-resolve-all-btn');
+  if (resolveBtn) resolveBtn.style.display = (tab === 'active') ? '' : 'none';
+  _renderEvtView();
+}
+
 function _evtSubTab(name) {
   _evtActiveSubTab = name;
   try { localStorage.setItem('pw_evt_subtab', name); } catch(_) {}
@@ -211,8 +226,11 @@ function _evtSubTab(name) {
     if (typeof _alertingLoadEvents === 'function')
       _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
   }
-  if (name === 'sensor-events' && _alertMap === null) {
-    _loadAlertCache();
+  if (name === 'sensor-events') {
+    if (_alertMap === null) _loadAlertCache();
+    document.getElementById('evtInnerActive')?.classList.toggle('active', _evtInnerTab === 'active');
+    document.getElementById('evtInnerHistory')?.classList.toggle('active', _evtInnerTab === 'history');
+    _renderEvtView();
   }
 }
 
@@ -230,9 +248,25 @@ const EVT_FILTER = {
   category: ''
 };
 
+function _isEvtActive(d) {
+  const dir = d._direction || d.direction || '';
+  if (dir === 'trap') {
+    const ae = _matchAlertEvt(d);
+    return !ae || ae.state !== 'resolved';
+  }
+  return (d.ack_state || 'active') !== 'resolved';
+}
+
 function _applyEvtFilters() {
   // Make shallow copy so we can add _duration without mutating FLAPS
   let result = FLAPS.map(d => Object.assign({}, d));
+
+  // Partition by inner tab (Active vs History)
+  if (_evtInnerTab === 'active') {
+    result = result.filter(d => _isEvtActive(d));
+  } else if (_evtInnerTab === 'history') {
+    result = result.filter(d => !_isEvtActive(d));
+  }
 
   // Time range
   if (EVT_FILTER.timeRange !== 'all') {
@@ -587,6 +621,22 @@ function _renderEvtView() {
     const el = document.getElementById(id);
     if (el) el.style.display = _showCustom ? '' : 'none';
   });
+
+  // Update active count badge (computed from raw FLAPS before other filters)
+  const activeCount = FLAPS.filter(d => _isEvtActive(d)).length;
+  const acEl = document.getElementById('evtActiveCount');
+  if (acEl) {
+    acEl.textContent = activeCount > 0 ? activeCount : '';
+    acEl.style.display = activeCount > 0 ? '' : 'none';
+  }
+
+  // Sync inner tab buttons
+  document.getElementById('evtInnerActive')?.classList.toggle('active', _evtInnerTab === 'active');
+  document.getElementById('evtInnerHistory')?.classList.toggle('active', _evtInnerTab === 'history');
+
+  // Resolve All only on Active tab
+  const resolveBtn = document.querySelector('.evt-resolve-all-btn');
+  if (resolveBtn) resolveBtn.style.display = (_evtInnerTab === 'active') ? '' : 'none';
 
   const events = _applyEvtFilters();
 
