@@ -21,6 +21,16 @@
   - Domain user creation with role assignment
   - Test Connection & Test User Auth from Settings UI
   - Accepts `user`, `DOMAIN\user`, and `user@domain` login formats
+- LDAP Group Integration
+  - Import AD/LDAP groups into PingWatch (Settings → Groups → Import from LDAP) with per-group role assignment
+  - Auto-provision: unknown LDAP users in imported groups are created automatically on first login with the correct role, display name, and email
+  - Login-time sync: refreshes group, role, and display name from LDAP on every login
+  - Auto-disable: login rejected and account suspended when user is removed from all imported groups in AD
+  - Background sync thread — reconciles LDAP users against AD group membership on a configurable interval (default 60 min, 0 = disabled)
+  - Nested AD groups via `LDAP_MATCHING_RULE_IN_CHAIN` (optional toggle)
+  - Multi-group priority: user in multiple imported groups receives the highest role
+  - Test User Groups diagnostic — admin can look up a user's LDAP group memberships from the UI
+  - LDAP badge on imported groups; LDAP-managed group editor hides member checkboxes
 - IP Address Management (IPAM)
   - Subnet management (CIDR) with host IP expansion
   - Per-IP name/allocation tracking with inline editing
@@ -152,6 +162,12 @@
   - `frontend/forms-settings.js` — `openSettings()` refactored from ~600-line monolith into 10 focused tab-builder functions (`_buildSettingsTab_*`)
 - `db/persistence.py` startup restore — reverted window-function approach (caused 50 s startup on PostgreSQL due to full-table scan bypassing the composite index) back to per-sensor indexed seeks + single batched `GROUP BY` stats query; startup time restored to ~4 s
 
+- Events tab Active / History split
+  - Inner tabs ("Active" / "History") inside Sensor Events panel — Active shows unresolved flaps + alert-linked traps; History shows resolved events
+  - Active tab badge shows live unresolved count; "Resolve All" hidden on History tab
+  - SNMP traps without a linked alert rule default to History (informational, not actionable)
+  - Tab selection persisted in `localStorage` (`pw_evt_inner_tab`)
+- Debug Mode checkbox auto-saves on toggle — no Save button required; reverts on API failure
 - Subnet Discovery — scan a CIDR for unmonitored hosts
   - Full mode (ping + DNS + MAC/OUI lookup + port scan + device-type guess) and Ping-only mode (fast, for /18–/16 ranges)
   - Reuses existing `scan_ports` setting as the single source of truth for port list

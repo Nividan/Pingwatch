@@ -67,6 +67,7 @@ from db.groups      import (
     db_delete_group,
     db_update_group_members,
     db_resolve_group_emails,
+    db_get_ldap_mapped_groups,
 )
 
 # audit
@@ -161,7 +162,7 @@ __all__ = [
     "db_update_profile", "db_update_own_profile",
     # groups
     "db_list_groups", "db_create_group", "db_update_group", "db_delete_group",
-    "db_update_group_members", "db_resolve_group_emails",
+    "db_update_group_members", "db_resolve_group_emails", "db_get_ldap_mapped_groups",
     # audit
     "db_log_audit", "db_get_audit",
     # ipam

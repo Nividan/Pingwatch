@@ -93,7 +93,7 @@ pingwatch/
 │   ├── settings.py         ← Thread-safe runtime settings cache (DB-backed)
 │   ├── logger.py           ← App logger, audit logger, in-memory log buffer
 │   ├── auth.py             ← Login, PBKDF2-SHA256, RBAC, session management
-│   ├── ldap_auth.py        ← ldap_authenticate / ldap_test_connection / ldap_test_auth_user
+│   ├── ldap_auth.py        ← LDAP/AD auth, group search, nested membership, background sync
 │   ├── app_state.py        ← Shared globals: STATE, effective ports, TLS flag, tray ref
 │   ├── state.py            ← In-memory Device/Sensor objects, probe threads, SSE broadcast
 │   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
@@ -137,7 +137,7 @@ pingwatch/
 │   ├── samples.py          ← Buffered probe writes, history & summary queries
 │   ├── events.py           ← Flap log, SNMP trap log, sensor error log
 │   ├── users.py            ← User management (local + LDAP), profile (full_name, email), app_settings
-│   ├── groups.py           ← User group CRUD and email resolution for alert dispatch
+│   ├── groups.py           ← User group CRUD, email resolution, LDAP group mapping
 │   ├── audit.py            ← Audit log write & query
 │   ├── backups.py          ← Backup settings (encrypted), run history, 3-run retention
 │   ├── trap_defs.py        ← SNMP trap definition queries
@@ -147,7 +147,7 @@ pingwatch/
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
-│   ├── groups.py           ← User group CRUD and member assignment
+│   ├── groups.py           ← User group CRUD, member assignment, LDAP group import
 │   ├── devices.py          ← Device & sensor CRUD, port scan
 │   ├── monitoring.py       ← SSE, flaps, traps, SNMP
 │   ├── settings.py         ← App settings, server info, restart/shutdown
@@ -158,7 +158,7 @@ pingwatch/
 │   ├── alert_profiles.py   ← Alert profile + action template CRUD, profile test-fire
 │   ├── alert_events.py     ← Alert history, ACK/resolve
 │   ├── maintenance_windows.py ← Maintenance window CRUD
-│   ├── ldap.py             ← LDAP/AD settings & test endpoints
+│   ├── ldap.py             ← LDAP/AD settings, test, group search, user group lookup
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
 │   └── discovery.py        ← Subnet discovery scan + bulk device add
 │
@@ -171,11 +171,11 @@ pingwatch/
     ├── dashboard.js        ← Customizable widget dashboard
     ├── devices.js          ← Device list and detail panel
     ├── sensors.js          ← Sensor list, detail panel, history chart; KPI tiles reflect selected time range
-    ├── events.js           ← Flap/trap/error event log viewer
+    ├── events.js           ← Flap/trap/error event log viewer (Active / History inner tabs)
     ├── backups.js          ← Backup table, config viewer, diff, rollback
     ├── forms-device.js     ← Add/edit device form
     ├── forms-sensor.js     ← Add/edit sensor form
-    ├── forms-settings.js   ← Settings modal (9 tabs)
+    ├── forms-settings.js   ← Settings modal (10 tabs)
     ├── forms-users.js      ← User management
     ├── forms-ldap.js       ← LDAP/AD settings modal
     ├── forms-io.js         ← DB export/import form
@@ -193,7 +193,7 @@ pingwatch/
 ## Backend Modules
 
 ### `server.py`
-HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
+HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog, LDAP sync). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
 `Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
 
@@ -214,8 +214,20 @@ Server-side input validation helpers used by route handlers before persisting us
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
 
+`auth_login()` handles two LDAP paths: (1) **existing LDAP users** — after successful bind, `_ldap_login_sync()` refreshes group/role/display_name from LDAP and rejects login if the user is no longer in any imported group; (2) **unknown users** — if `ldap_enabled` and `ldap_auto_provision` are set, the user is authenticated against LDAP, matched to an imported group, and created automatically via `db_add_ldap_user()`. A race-condition guard retries the normal login path if a concurrent INSERT wins the race.
+
 ### `core/ldap_auth.py`
-LDAP/AD helpers: `ldap_authenticate`, `ldap_test_connection`, `ldap_test_auth_user`. Supports plain LDAP, LDAPS, and StartTLS. Bind password decrypted in-memory only; never logged. `ldap3` import deferred inside functions — the library is optional and local users are unaffected if absent.
+LDAP/AD helpers. Supports plain LDAP, LDAPS, and StartTLS. Bind password decrypted in-memory only; never logged. `ldap3` import deferred inside functions — the library is optional and local users are unaffected if absent.
+
+Key functions:
+- `ldap_authenticate(username, password)` — returns `{"ok": True, "display_name", "email", "member_of", "dn"}` on success or `None` on failure (dict is truthy, None is falsy — backward-compatible).
+- `ldap_test_connection(cfg)` / `ldap_test_auth_user(username, password, cfg)` — diagnostic helpers called from the settings UI.
+- `ldap_search_groups(query, cfg)` — service-account bind, searches `ldap_group_base_dn` with `ldap_group_filter`; returns `(True, [{dn, cn, description, member_count}])` or `(False, error_msg)`.
+- `ldap_get_user_info(username, cfg)` — fetches DN, displayName, mail, memberOf for a user; used by the Test User Groups diagnostic.
+- `ldap_check_nested_membership(user_dn, group_dn, cfg)` — uses AD's `LDAP_MATCHING_RULE_IN_CHAIN` OID (`1.2.840.113556.1.4.1941`) to resolve recursive group membership.
+- `_match_user_to_groups(member_of, user_dn, mapped_groups, cfg)` — finds the best-matching imported group for a user (direct DN match first, then nested fallback); picks the group with the highest role rank (admin > operator > viewer).
+- `ldap_sync_groups()` — iterates all LDAP users in the DB, checks current AD group membership, updates or disables accounts as needed; returns `{"updated": N, "disabled": N, "errors": N}`.
+- `ldap_sync_loop()` — daemon thread that runs `ldap_sync_groups()` on the `ldap_sync_interval` schedule; started by `server.py` on startup.
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
@@ -268,7 +280,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | Module | Endpoints |
 |--------|-----------|
 | `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/users/{u}/profile` |
-| `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members` |
+| `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard`, `/api/db/stats` |
@@ -279,7 +291,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `alert_profiles.py` | `/api/alert/profiles`, `/api/alert/profile`, `/api/alert/profile/{id}`, `/api/alert/action-templates`, `/api/alert/action-template`, `/api/alert/action-template/{id}`, `/api/alert/profile/{id}/test` |
 | `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/events/resolve-all`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
-| `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
+| `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth`, `/api/ldap/search_groups`, `/api/ldap/test_user_groups` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
 
@@ -309,7 +321,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
-| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch |
+| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
 | `trap_defs.py` | SNMP trap definition queries |
@@ -327,6 +339,11 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `snr_type_defaults` | JSON string | Per-sensor-type default intervals/timeouts |
 | `backup_enc_key` | Fernet key (base64) | Encryption key for device backup credentials |
 | `ldap_bind_pass` | Fernet-encrypted | LDAP service-account bind password |
+| `ldap_auto_provision` | `"1"` / `"0"` | Auto-create unknown LDAP users who belong to an imported group on first login |
+| `ldap_group_base_dn` | DN string | Search base for LDAP group browsing (falls back to `ldap_base_dn` when empty) |
+| `ldap_group_filter` | LDAP filter | Group object filter (AD default: `(objectClass=group)`, OpenLDAP: `(objectClass=groupOfNames)`) |
+| `ldap_sync_interval` | integer string (minutes) | Background LDAP group sync interval in minutes; `"0"` = disabled |
+| `ldap_nested_groups` | `"1"` / `"0"` | Enable recursive AD group membership via `LDAP_MATCHING_RULE_IN_CHAIN` (AD-specific) |
 | `tls_enabled` | `"1"` / `"0"` | HTTPS toggle |
 | `http_port` / `https_port` | integer string | Configured listen ports |
 | `db_backup_enabled` | `"1"` / `"0"` | Scheduled SQLite DB backup toggle |
@@ -350,13 +367,13 @@ The frontend is served as static files — no build step.
 | `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
-| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; bulk "Resolve All" button; resolved event duration uses `resolved_at` as fixed end time (stops counting) |
+| `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting) |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (9 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Logs tab: Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()` (immediate `PATCH /api/settings`; reverts on failure). Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
-| `forms-ldap.js` | LDAP/AD settings modal |
+| `forms-ldap.js` | LDAP/AD settings modal including Group Integration section (auto-provision, nested groups, group base DN, group filter, sync interval) and Test User Groups sub-dialog |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
 | `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, device-type guess, multi-NIC ⚠ flags), per-device sensor review with inline URL/community inputs, bulk add with live device count |
@@ -434,12 +451,14 @@ The frontend is served as static files — no build step.
 
 ### LDAP
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/ldap/settings` | LDAP config (bind password never returned) |
-| `PATCH` | `/api/ldap/settings` | Save LDAP config |
-| `POST` | `/api/ldap/test_connection` | Test service-account bind |
-| `POST` | `/api/ldap/test_auth` | Test full user authentication flow |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/ldap/settings` | admin | LDAP config (bind password never returned) including group integration fields |
+| `PATCH` | `/api/ldap/settings` | admin | Save LDAP config |
+| `POST` | `/api/ldap/test_connection` | admin | Test service-account bind |
+| `POST` | `/api/ldap/test_auth` | admin | Test full user authentication flow |
+| `POST` | `/api/ldap/search_groups` | admin | Browse/search LDAP directory for groups `{query}` → `{ok, groups: [{dn, cn, description, member_count}]}` |
+| `POST` | `/api/ldap/test_user_groups` | admin | Look up a user's LDAP group memberships `{username}` → `{ok, display_name, email, groups: [dn, ...]}` |
 
 ### IPAM
 
@@ -468,6 +487,7 @@ The frontend is served as static files — no build step.
 | `PATCH` | `/api/group/{id}` | admin | Update group name / description |
 | `DELETE` | `/api/group/{id}` | admin | Delete group; members are unassigned |
 | `PUT` | `/api/group/{id}/members` | admin | Replace member list `{usernames: [...]}` |
+| `POST` | `/api/user/group/import_ldap` | admin | Bulk-import LDAP groups `{groups: [{dn, cn, description, default_role}]}` — idempotent (skips existing DNs) → `{ok, imported, skipped, groups}` |
 
 ### Alert Profiles
 
@@ -539,6 +559,6 @@ The frontend is served as static files — no build step.
 
 ### Adding a new route module
 
-1. Create `routes/<name>.py` with a `handle(method, path, body, req)` function.
+1. Create `routes/<name>.py` with a `handle(h, method, path, body)` function.
 2. Register it in `server.py` by adding a route regex in `core/config.py` and a dispatch call in `server.py`'s request handler.
 3. Add it to the `routes/` table in this document.

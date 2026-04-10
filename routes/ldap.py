@@ -22,17 +22,22 @@ def handle(h, method, path, body):
         user, _ = h._require('admin')
         if not user: return True
         h._json(200, {
-            'ldap_enabled':       int(_settings.get('ldap_enabled', 0) or 0),
-            'ldap_server':        _settings.get('ldap_server', ''),
-            'ldap_port':          int(_settings.get('ldap_port', 389) or 389),
-            'ldap_ssl':           int(_settings.get('ldap_ssl', 0) or 0),
-            'ldap_base_dn':       _settings.get('ldap_base_dn', ''),
-            'ldap_bind_dn':       _settings.get('ldap_bind_dn', ''),
-            'ldap_bind_pass_set': bool(_settings.get('ldap_bind_pass', '')),
-            'ldap_user_filter':   _settings.get('ldap_user_filter', '(sAMAccountName={username})'),
-            'ldap_domain':        _settings.get('ldap_domain', ''),
-            'ldap_timeout':       int(_settings.get('ldap_timeout', 10) or 10),
-            'ldap_debug':         int(_settings.get('ldap_debug', 0) or 0),
+            'ldap_enabled':          int(_settings.get('ldap_enabled', 0) or 0),
+            'ldap_server':           _settings.get('ldap_server', ''),
+            'ldap_port':             int(_settings.get('ldap_port', 389) or 389),
+            'ldap_ssl':              int(_settings.get('ldap_ssl', 0) or 0),
+            'ldap_base_dn':          _settings.get('ldap_base_dn', ''),
+            'ldap_bind_dn':          _settings.get('ldap_bind_dn', ''),
+            'ldap_bind_pass_set':    bool(_settings.get('ldap_bind_pass', '')),
+            'ldap_user_filter':      _settings.get('ldap_user_filter', '(sAMAccountName={username})'),
+            'ldap_domain':           _settings.get('ldap_domain', ''),
+            'ldap_timeout':          int(_settings.get('ldap_timeout', 10) or 10),
+            'ldap_debug':            int(_settings.get('ldap_debug', 0) or 0),
+            'ldap_group_base_dn':    _settings.get('ldap_group_base_dn', ''),
+            'ldap_group_filter':     _settings.get('ldap_group_filter', '(objectClass=group)'),
+            'ldap_auto_provision':   int(_settings.get('ldap_auto_provision', 0) or 0),
+            'ldap_sync_interval':    int(_settings.get('ldap_sync_interval', 60) or 60),
+            'ldap_nested_groups':    int(_settings.get('ldap_nested_groups', 0) or 0),
         })
         return True
 
@@ -49,9 +54,21 @@ def handle(h, method, path, body):
             save['ldap_debug'] = '1' if body['ldap_debug'] else '0'
 
         for k in ('ldap_server', 'ldap_base_dn', 'ldap_bind_dn',
-                  'ldap_user_filter', 'ldap_domain'):
+                  'ldap_user_filter', 'ldap_domain',
+                  'ldap_group_base_dn', 'ldap_group_filter'):
             if k in body:
                 save[k] = str(body[k]).strip()
+
+        if 'ldap_auto_provision' in body:
+            save['ldap_auto_provision'] = '1' if body['ldap_auto_provision'] else '0'
+        if 'ldap_nested_groups' in body:
+            save['ldap_nested_groups'] = '1' if body['ldap_nested_groups'] else '0'
+
+        if 'ldap_sync_interval' in body:
+            try:
+                save['ldap_sync_interval'] = str(max(0, int(body['ldap_sync_interval'])))
+            except (ValueError, TypeError):
+                h._json(400, {'error': 'ldap_sync_interval must be an integer'}); return True
 
         if 'ldap_port' in body:
             try:
@@ -144,7 +161,8 @@ def handle(h, method, path, body):
         log.info(f"LDAP test_auth initiated by {user!r}: testing {test_user!r}")
         try:
             from core.ldap_auth import ldap_test_auth_user
-            ok, msg = ldap_test_auth_user(test_user, test_pass)
+            result = ldap_test_auth_user(test_user, test_pass)
+            ok, msg = result[0], result[1]
             if ok:
                 log.info(f"LDAP test_auth result: OK for {test_user!r} "
                          f"(initiated by {user!r})")
@@ -156,6 +174,49 @@ def handle(h, method, path, body):
                       f"(initiated by {user!r}): {e}")
             ok, msg = False, str(e)
         h._json(200, {'ok': ok, 'message': msg})
+        return True
+
+    # ── POST /api/ldap/search_groups ─────────────────────────────
+    if path == '/api/ldap/search_groups' and method == 'POST':
+        user, _ = h._require('admin')
+        if not user: return True
+        query = (body.get('query') or '').strip()
+        log.info(f"LDAP search_groups initiated by {user!r}: query={query!r}")
+        try:
+            from core.ldap_auth import ldap_search_groups
+            ok, result = ldap_search_groups(query)
+            if ok:
+                h._json(200, {'ok': True, 'groups': result})
+            else:
+                h._json(200, {'ok': False, 'message': result})
+        except Exception as e:
+            log.error(f"LDAP search_groups route error: {e}")
+            h._json(200, {'ok': False, 'message': 'Search failed'})
+        return True
+
+    # ── POST /api/ldap/test_user_groups ──────────────────────────
+    if path == '/api/ldap/test_user_groups' and method == 'POST':
+        user, _ = h._require('admin')
+        if not user: return True
+        test_user = (body.get('username') or '').strip()
+        if not test_user:
+            h._json(400, {'error': 'username is required'}); return True
+        log.info(f"LDAP test_user_groups initiated by {user!r}: testing {test_user!r}")
+        try:
+            from core.ldap_auth import ldap_get_user_info
+            ok, result = ldap_get_user_info(test_user)
+            if ok:
+                h._json(200, {
+                    'ok': True,
+                    'display_name': result.get('display_name', ''),
+                    'email':        result.get('email', ''),
+                    'groups':       result.get('member_of', []),
+                })
+            else:
+                h._json(200, {'ok': False, 'message': result})
+        except Exception as e:
+            log.error(f"LDAP test_user_groups route error: {e}")
+            h._json(200, {'ok': False, 'message': 'Lookup failed'})
         return True
 
     return False

@@ -90,10 +90,14 @@ _RE_ALERT_EVENT_ACT     = re.compile(r'^/api/alert/event/(\d+)/(ack|resolve)$')
 _RE_ALERT_WINDOWS   = re.compile(r'^/api/alert/windows$')
 _RE_ALERT_WINDOW    = re.compile(r'^/api/alert/window/(\d+)$')
 # User groups
-_RE_GROUPS          = re.compile(r'^/api/user/groups$')
-_RE_GROUP           = re.compile(r'^/api/user/group$')
-_RE_GROUP_ITEM      = re.compile(r'^/api/user/group/(\d+)$')
-_RE_GROUP_MEMBERS   = re.compile(r'^/api/user/group/(\d+)/members$')
+_RE_GROUPS             = re.compile(r'^/api/user/groups$')
+_RE_GROUP              = re.compile(r'^/api/user/group$')
+_RE_GROUP_ITEM         = re.compile(r'^/api/user/group/(\d+)$')
+_RE_GROUP_MEMBERS      = re.compile(r'^/api/user/group/(\d+)/members$')
+_RE_GROUP_IMPORT_LDAP  = re.compile(r'^/api/user/group/import_ldap$')
+# LDAP group operations
+_RE_LDAP_SEARCH_GROUPS    = re.compile(r'^/api/ldap/search_groups$')
+_RE_LDAP_TEST_USER_GROUPS = re.compile(r'^/api/ldap/test_user_groups$')
 # User profiles
 _RE_ME_PROFILE      = re.compile(r'^/api/me/profile$')
 _RE_USER_PROFILE    = re.compile(r'^/api/users/([^/]+)/profile$')

@@ -187,6 +187,7 @@ function _buildSettingsTab_groups() {
       <div class="alrt-panel-hdr" style="margin-bottom:10px">
         <span style="color:var(--text3);font-size:12px">Manage alert recipient groups. Assign users to groups and use groups in alert rule email actions.</span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="_groupsOpenEditor(null)">＋ New Group</button>
+        <button class="btn-s rbac-admin" id="btn-import-ldap-group" style="font-size:12px;padding:5px 12px;display:none" onclick="_groupsImportLdap()">Import from LDAP</button>
       </div>
       <div id="group-list"><div class="alrt-loading">Loading…</div></div>
     </div>`;
@@ -2146,20 +2147,30 @@ async function _groupsLoad(){
   }catch(e){
     wrap.innerHTML='<div style="color:var(--err);font-size:12px">Failed to load groups.</div>';
   }
+  // Show "Import from LDAP" button if LDAP is enabled
+  try{
+    const ldap = await api('GET','/api/ldap/settings');
+    const btn = document.getElementById('btn-import-ldap-group');
+    if(btn) btn.style.display = ldap.ldap_enabled ? '' : 'none';
+  }catch(_){}
 }
 
 function _groupsRender(groups){
   if(!groups.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No groups yet. Create one to use as alert email recipients.</div>';
-  const rows=groups.map(g=>`
+  const rows=groups.map(g=>{
+    const ldapBadge = g.ldap_dn ? '<span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:3px;margin-left:6px">LDAP</span>' : '';
+    const roleBadge = g.ldap_dn ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">(${esc(g.default_role||'viewer')})</span>` : '';
+    return `
     <tr>
-      <td><strong>${esc(g.name)}</strong></td>
+      <td><strong>${esc(g.name)}</strong>${ldapBadge}${roleBadge}</td>
       <td style="color:var(--text3)">${esc(g.description||'')}</td>
       <td style="text-align:center">${g.member_count}</td>
       <td><div class="usr-act">
         <button onclick="_groupsOpenEditor(${g.id})">✏ Edit</button>
         <button class="del" onclick="_groupsDelete(${g.id},'${esc(g.name)}')">🗑 Delete</button>
       </div></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `<table class="usr-table">
     <thead><tr><th>Name</th><th>Description</th><th style="text-align:center">Members</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
@@ -2176,13 +2187,38 @@ async function _groupsOpenEditor(id){
   if(id){
     group=(_groupsCache||[]).find(g=>g.id===id)||null;
   }
-  const memberUsernames=new Set(users.filter(u=>u.group_id===id).map(u=>u.username));
-  const memberList=users.map(u=>`
-    <label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
-      <input type="checkbox" data-uname="${esc(u.username)}" ${memberUsernames.has(u.username)?'checked':''}/>
-      <span>${esc(u.username)}</span>
-      <span style="color:var(--text3);font-size:11px">${esc(u.role)}</span>
-    </label>`).join('');
+
+  const isLdap = !!(group && group.ldap_dn);
+
+  // For local groups: member checkboxes. For LDAP groups: role selector + info.
+  let membersHtml = '';
+  if (isLdap) {
+    const roleOpts = ['viewer','operator','admin'].map(r =>
+      `<option value="${r}" ${(group.default_role||'viewer')===r?'selected':''}>${r}</option>`
+    ).join('');
+    membersHtml = `
+      <div class="fr"><label class="fl">Default Role</label>
+        <select id="grp-default-role" style="max-width:160px">${roleOpts}</select>
+      </div>
+      <div class="fr"><label class="fl">LDAP DN</label>
+        <input type="text" value="${esc(group.ldap_dn)}" readonly style="color:var(--text3);background:var(--bg2)"/></div>
+      <div class="fh" style="margin-top:4px">Members of this group are managed through LDAP. Users are assigned when they log in or during background sync.</div>`;
+  } else {
+    const memberUsernames=new Set(users.filter(u=>u.group_id===id).map(u=>u.username));
+    const memberList=users.map(u=>`
+      <label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+        <input type="checkbox" data-uname="${esc(u.username)}" ${memberUsernames.has(u.username)?'checked':''}/>
+        <span>${esc(u.username)}</span>
+        <span style="color:var(--text3);font-size:11px">${esc(u.role)}</span>
+      </label>`).join('');
+    membersHtml = `
+      <div class="fr"><label class="fl" style="margin-bottom:6px">Members</label>
+        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+          ${memberList||'<span style="color:var(--text3);font-size:12px">No users found.</span>'}
+        </div>
+        <div class="fh">A user can belong to only one group. Changing group here removes them from their previous group.</div>
+      </div>`;
+  }
 
   closeM('m-grp-ed');
   const o=document.createElement('div'); o.className='mo'; o.id='m-grp-ed';
@@ -2190,7 +2226,7 @@ async function _groupsOpenEditor(id){
   o.innerHTML=`
   <div class="mbox" style="max-width:420px">
     <div class="mhd">
-      <div class="mttl">${id?'Edit Group':'New Group'}</div>
+      <div class="mttl">${id?'Edit Group':'New Group'}${isLdap?' <span style="font-size:11px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:3px;margin-left:6px">LDAP</span>':''}</div>
       <button class="mclose" onclick="closeM('m-grp-ed')">✕</button>
     </div>
     <div class="mbdy">
@@ -2198,12 +2234,7 @@ async function _groupsOpenEditor(id){
         <input type="text" id="grp-name" value="${esc(group?.name||'')}" placeholder="NOC Team" maxlength="100" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Description</label>
         <input type="text" id="grp-desc" value="${esc(group?.description||'')}" placeholder="Optional description" maxlength="500" autocomplete="off"/></div>
-      <div class="fr"><label class="fl" style="margin-bottom:6px">Members</label>
-        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-          ${memberList||'<span style="color:var(--text3);font-size:12px">No users found.</span>'}
-        </div>
-        <div class="fh">A user can belong to only one group. Changing group here removes them from their previous group.</div>
-      </div>
+      ${membersHtml}
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('m-grp-ed')">Cancel</button>
@@ -2220,17 +2251,25 @@ async function _groupsSave(id){
   if(!name){toast('Group name is required','err');return;}
   const btn=document.querySelector('#m-grp-ed .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
+
+  // Check if this is an LDAP-mapped group (has default_role selector)
+  const roleEl = document.getElementById('grp-default-role');
+  const isLdap = !!roleEl;
+
   try{
     let r;
+    const patchBody = {name, description: desc};
+    if (isLdap && roleEl) patchBody.default_role = roleEl.value;
+
     if(id){
-      r=await api('PATCH',`/api/user/group/${id}`,{name,description:desc});
+      r=await api('PATCH',`/api/user/group/${id}`, patchBody);
     }else{
       r=await api('POST','/api/user/group',{name,description:desc});
       id=r.id;
     }
     if(r.error){toast(r.error,'err');return;}
-    // Save members
-    if(id){
+    // Save members (only for local groups — LDAP groups manage membership via LDAP)
+    if(id && !isLdap){
       const checks=document.querySelectorAll('#m-grp-ed [data-uname]');
       const usernames=Array.from(checks).filter(c=>c.checked).map(c=>c.dataset.uname);
       await api('PUT',`/api/user/group/${id}/members`,{usernames});
@@ -2269,6 +2308,119 @@ async function _groupsDelete(id, name){
   }
   if(typeof _aeInvalidateGroups==='function') _aeInvalidateGroups();
   toast(`Group "${name}" deleted`,'ok');
+}
+
+// ── LDAP GROUP IMPORT MODAL ──────────────────────────────────────
+
+async function _groupsImportLdap() {
+  closeM('m-grp-imp');
+  const o = document.createElement('div'); o.className = 'mo'; o.id = 'm-grp-imp';
+  _overlayClose(o, () => closeM('m-grp-imp'));
+  o.innerHTML = `
+  <div class="mbox" style="max-width:640px;width:96vw">
+    <div class="mhd">
+      <div class="mttl">Import LDAP Groups</div>
+      <button class="mclose" onclick="closeM('m-grp-imp')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div class="fh" style="margin-bottom:8px">Search your LDAP directory for groups and import them into PingWatch. Set a default role for users who auto-provision through each group.</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="ldap-grp-search" placeholder="Search by group name (leave empty for all)" autocomplete="off" style="flex:1"/>
+        <button class="btn-p" style="font-size:12px;white-space:nowrap" onclick="_ldapGroupSearch()">Search</button>
+      </div>
+      <div id="ldap-grp-results" style="margin-top:10px;min-height:40px"></div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('m-grp-imp')">Cancel</button>
+      <button class="btn-p" id="btn-ldap-grp-import" style="display:none" onclick="_ldapGroupImport()">Import Selected</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => document.getElementById('ldap-grp-search')?.focus(), 50);
+}
+
+let _ldapGroupSearchResults = [];
+
+async function _ldapGroupSearch() {
+  const query = (document.getElementById('ldap-grp-search')?.value || '').trim();
+  const resEl = document.getElementById('ldap-grp-results');
+  const impBtn = document.getElementById('btn-ldap-grp-import');
+  if (resEl) resEl.innerHTML = '<div style="color:var(--text3);font-size:12px">Searching LDAP…</div>';
+  if (impBtn) impBtn.style.display = 'none';
+  let r;
+  try {
+    r = await api('POST', '/api/ldap/search_groups', {query});
+  } catch (e) {
+    if (resEl) resEl.innerHTML = '<div style="color:var(--down);font-size:12px">Search request failed.</div>';
+    return;
+  }
+  if (!r.ok) {
+    if (resEl) resEl.innerHTML = `<div style="color:var(--down);font-size:12px">${esc(r.message || 'Search failed')}</div>`;
+    return;
+  }
+  _ldapGroupSearchResults = r.groups || [];
+  if (!_ldapGroupSearchResults.length) {
+    if (resEl) resEl.innerHTML = '<div style="color:var(--text3);font-size:12px">No groups found.</div>';
+    return;
+  }
+  // Build results table
+  const rows = _ldapGroupSearchResults.map((g, i) => {
+    const roleOpts = ['viewer', 'operator', 'admin'].map(rv =>
+      `<option value="${rv}">${rv}</option>`
+    ).join('');
+    return `<tr>
+      <td><label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" data-ldap-idx="${i}"/>
+        <span style="font-weight:500">${esc(g.cn)}</span>
+      </label></td>
+      <td style="color:var(--text3);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${esc(g.dn)}">${esc(g.description || '')}</td>
+      <td style="text-align:center">${g.member_count}</td>
+      <td><select data-ldap-role="${i}" style="font-size:11px;padding:2px 4px">${roleOpts}</select></td>
+    </tr>`;
+  }).join('');
+  if (resEl) resEl.innerHTML = `
+    <div style="font-size:11px;color:var(--text3);margin-bottom:4px">${_ldapGroupSearchResults.length} group(s) found</div>
+    <div style="max-height:300px;overflow-y:auto">
+    <table class="usr-table" style="font-size:12px">
+      <thead><tr><th>Group</th><th>Description</th><th style="text-align:center">Members</th><th>Role</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  if (impBtn) impBtn.style.display = '';
+}
+
+async function _ldapGroupImport() {
+  const checks = document.querySelectorAll('#m-grp-imp [data-ldap-idx]');
+  const items = [];
+  checks.forEach(cb => {
+    if (!cb.checked) return;
+    const idx = parseInt(cb.dataset.ldapIdx);
+    const g = _ldapGroupSearchResults[idx];
+    if (!g) return;
+    const roleEl = document.querySelector(`#m-grp-imp [data-ldap-role="${idx}"]`);
+    items.push({
+      dn: g.dn,
+      cn: g.cn,
+      description: g.description || '',
+      default_role: roleEl ? roleEl.value : 'viewer',
+    });
+  });
+  if (!items.length) { toast('No groups selected', 'err'); return; }
+  const btn = document.getElementById('btn-ldap-grp-import');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  let r;
+  try {
+    r = await api('POST', '/api/user/group/import_ldap', {groups: items});
+  } catch (e) {
+    toast('Import request failed', 'err'); return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Import Selected'; }
+  }
+  if (r.error) { toast(r.error, 'err'); return; }
+  _groupsCache = r.groups || _groupsCache;
+  const wrap = document.getElementById('group-list');
+  if (wrap) wrap.innerHTML = _groupsRender(_groupsCache || []);
+  closeM('m-grp-imp');
+  toast(`Imported ${r.imported} group(s)${r.skipped ? `, ${r.skipped} skipped` : ''}`, 'ok');
 }
 
 // ── USER PROFILE MODAL (admin path, opens from Users tab) ─────────

@@ -8,9 +8,9 @@ from db.helpers  import db_query, db_execute, db_cursor
 
 
 def db_list_groups() -> list:
-    """Return [{id, name, description, member_count}] ordered by name."""
+    """Return [{id, name, description, member_count, ldap_dn, default_role}] ordered by name."""
     rows = db_query("main", """
-        SELECT g.id, g.name, g.description,
+        SELECT g.id, g.name, g.description, g.ldap_dn, g.default_role,
                COUNT(u.username) AS member_count
         FROM user_groups g
         LEFT JOIN users u ON u.group_id = g.id
@@ -20,24 +20,29 @@ def db_list_groups() -> list:
     return [{"id":           r["id"],
              "name":         r["name"],
              "description":  r["description"] or "",
+             "ldap_dn":      r["ldap_dn"] or "",
+             "default_role": r["default_role"] or "viewer",
              "member_count": r["member_count"]} for r in rows]
 
 
-def db_create_group(name: str, description: str = "") -> int:
+def db_create_group(name: str, description: str = "",
+                    ldap_dn: str = "", default_role: str = "viewer") -> int:
     """Insert group. Returns new id, -2 on duplicate name, -1 on error."""
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
             if is_pg():
                 cur.execute(
-                    f"INSERT INTO user_groups (name, description) VALUES ({ph},{ph}) RETURNING id",
-                    (name.strip(), description.strip())
+                    f"INSERT INTO user_groups (name, description, ldap_dn, default_role) "
+                    f"VALUES ({ph},{ph},{ph},{ph}) RETURNING id",
+                    (name.strip(), description.strip(), ldap_dn.strip(), default_role)
                 )
                 return cur.fetchone()["id"]
             else:
                 cur.execute(
-                    f"INSERT INTO user_groups (name, description) VALUES ({ph},{ph})",
-                    (name.strip(), description.strip())
+                    f"INSERT INTO user_groups (name, description, ldap_dn, default_role) "
+                    f"VALUES ({ph},{ph},{ph},{ph})",
+                    (name.strip(), description.strip(), ldap_dn.strip(), default_role)
                 )
                 return cur.lastrowid
     except Exception as e:
@@ -48,14 +53,24 @@ def db_create_group(name: str, description: str = "") -> int:
         return -1
 
 
-def db_update_group(group_id: int, name: str, description: str = "") -> bool:
-    """Update group name/description. Returns False if not found or on duplicate name."""
+_UG_UNSET = object()
+
+def db_update_group(group_id: int, name: str, description: str = "",
+                    default_role=_UG_UNSET) -> bool:
+    """Update group name/description (and optionally default_role).
+    Returns False if not found or on duplicate name."""
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
+            sets = [f"name={ph}", f"description={ph}"]
+            params = [name.strip(), description.strip()]
+            if default_role is not _UG_UNSET:
+                sets.append(f"default_role={ph}")
+                params.append(default_role)
+            params.append(group_id)
             cur.execute(
-                f"UPDATE user_groups SET name={ph}, description={ph} WHERE id={ph}",
-                (name.strip(), description.strip(), group_id)
+                f"UPDATE user_groups SET {', '.join(sets)} WHERE id={ph}",
+                params
             )
             return cur.rowcount > 0
     except Exception as e:
@@ -113,3 +128,14 @@ def db_resolve_group_emails(group_id: int) -> list:
                     "SELECT email FROM users WHERE group_id=? AND email IS NOT NULL AND email != ''",
                     (group_id,))
     return [r["email"] for r in rows]
+
+
+def db_get_ldap_mapped_groups() -> list:
+    """Return [{id, name, ldap_dn, default_role}] for groups with a non-empty ldap_dn."""
+    rows = db_query("main",
+                    "SELECT id, name, ldap_dn, default_role FROM user_groups "
+                    "WHERE ldap_dn IS NOT NULL AND ldap_dn != ''")
+    return [{"id":           r["id"],
+             "name":         r["name"],
+             "ldap_dn":      r["ldap_dn"],
+             "default_role": r["default_role"] or "viewer"} for r in rows]

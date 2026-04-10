@@ -396,10 +396,23 @@ def pg_create_main_schema(cur):
     # ── User Groups ──────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_groups (
-            id          SERIAL PRIMARY KEY,
-            name        TEXT NOT NULL UNIQUE,
-            description TEXT DEFAULT ''
+            id           SERIAL PRIMARY KEY,
+            name         TEXT NOT NULL UNIQUE,
+            description  TEXT DEFAULT '',
+            ldap_dn      TEXT DEFAULT '',
+            default_role TEXT DEFAULT 'viewer'
         )""")
+    # Migration: LDAP group mapping columns
+    for _tbl, _col, _typedef in [
+        ("user_groups", "ldap_dn",      "TEXT DEFAULT ''"),
+        ("user_groups", "default_role",  "TEXT DEFAULT 'viewer'"),
+    ]:
+        try:
+            cur.execute("SAVEPOINT _alter_ug")
+            cur.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_typedef}")
+            cur.execute("RELEASE SAVEPOINT _alter_ug")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT _alter_ug")
 
     # ── Topology map tables ──────────────────────────────────────────
     cur.execute("""

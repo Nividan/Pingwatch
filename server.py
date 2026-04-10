@@ -694,6 +694,8 @@ def main():
     start_scheduler()
     from monitoring.syslog_client import _attach_app_log_handlers
     _attach_app_log_handlers()
+    from core.ldap_auth import ldap_sync_loop
+    threading.Thread(target=ldap_sync_loop, daemon=True, name="ldap-sync").start()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
