@@ -215,9 +215,10 @@ def evaluate_and_fire(dev, sensor) -> None:
                 should_fire = True   # repeat interval elapsed
             if not should_fire:
                 continue
+            first_fire = (not state or state.get("active_session") != session)
             _fire(stage, dev, sensor, trig, did, sid, session, profile,
                   dispatch, check_maintenance, db_log_event,
-                  db_record_stage_fire)
+                  db_record_stage_fire, first_fire_in_session=first_fire)
 
         # ── Recovery stages: fire once when sensor is fully OK ──
         elif is_recovery_stage:
@@ -269,7 +270,8 @@ def _had_prior_fire(stages, target_state, recovery_stage_id,
 
 def _fire(stage, dev, sensor, trig, did, sid, session, profile,
           dispatch, check_maintenance, db_log_event, db_record_stage_fire,
-          recovery: bool = False, duration_s=None) -> None:
+          recovery: bool = False, duration_s=None,
+          first_fire_in_session: bool = False) -> None:
     """Build context, check maintenance, dispatch the action, log the event."""
     from db.alert_profiles import db_get_action_template
     from db.alert_events  import db_has_acked_event
@@ -301,6 +303,20 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
                 gated_by_ack = True
         except Exception as e:
             log.warning(f"alert_profile_engine: ack-gate check error: {e}")
+
+    # Mid-incident escalation gate: if the session key changed (e.g. warn→crit
+    # resets _threshold_triggered_ts) but an active/acked event already exists,
+    # this is NOT a new failure — suppress dispatch to prevent duplicate emails.
+    # Repeat-interval fires (first_fire_in_session=False) always dispatch.
+    if not recovery and not gated_by_ack and first_fire_in_session:
+        try:
+            from db.alert_events import db_has_active_event
+            if db_has_active_event(did, sid):
+                gated_by_ack = True
+                log.debug(f"alert_profile_engine: stage {stage['id']} suppressed "
+                          f"(mid-incident escalation, active event already exists)")
+        except Exception as e:
+            log.warning(f"alert_profile_engine: active-event gate check error: {e}")
 
     if not gated_by_ack:
         for aid in (stage.get("action_ids") or []):
