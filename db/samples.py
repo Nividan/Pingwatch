@@ -66,6 +66,7 @@ def db_flush_samples():
             return
         rows = _SAMPLE_BUF[:]
         _SAMPLE_BUF.clear()
+    log.debug(f"Sample flush: {len(rows)} rows")
     try:
         _do_insert_samples(rows)
     except Exception:
@@ -84,6 +85,7 @@ def _sample_flush_loop():
                 continue
             rows = _SAMPLE_BUF[:]
             _SAMPLE_BUF.clear()
+        log.debug(f"Sample flush: {len(rows)} rows")
         _logs_enqueue(lambda r=rows: _do_insert_samples(r))
 
 

@@ -3,6 +3,23 @@ logger.py — Central logging configuration for PingWatch.
 
 Writes to both the console and a rotating log file (pingwatch.log).
 All modules import `log` from here instead of using print().
+
+Logging level policy
+--------------------
+ERROR     Operation failed, needs attention (DB write failure, TLS cert
+          load error, port bind failure).
+WARNING   Unexpected but non-fatal; investigate when convenient (LDAP user
+          matched no group, webhook delivery failed, rate-limit triggered).
+INFO      Significant operational events visible in normal production
+          (login success/failure, alert fired, service start/stop, DB
+          loaded N devices, debug mode toggled).
+DEBUG     Diagnostic detail, only visible when debug mode is enabled (LDAP
+          connection steps, memberOf list, alert engine decision path,
+          sample flush counts).
+
+Never log passwords, tokens, session IDs, or secrets at any level.
+Never use log.debug() in per-probe tight loops — use log_sensors for
+sensor-specific events.
 """
 
 import logging
@@ -30,6 +47,7 @@ _fh.setLevel(logging.INFO)
 log.addHandler(_fh)
 
 # ── Console handler — INFO and above only (skipped without a console) ──────
+_ch = None
 if sys.stderr is not None:
     _ch = logging.StreamHandler(sys.stderr)
     _ch.setFormatter(_fmt)
@@ -110,7 +128,7 @@ def get_badge_total() -> int:
 
 # ── Debug mode toggle ─────────────────────────────────────────────────────
 def set_debug_mode(enabled: bool):
-    """Switch file handlers between DEBUG and INFO level.
+    """Switch file + console handlers between DEBUG and INFO level.
 
     Called at startup from server.py and at runtime from settings PATCH.
     Sensor and audit loggers are unaffected (always INFO).
@@ -119,6 +137,9 @@ def set_debug_mode(enabled: bool):
     _fh.setLevel(lvl)
     _bkh.setLevel(lvl)
     log_buffer.setLevel(lvl)
+    if _ch is not None:
+        _ch.setLevel(lvl)
+    log.info(f"Debug mode {'enabled' if enabled else 'disabled'}")
 
 
 # ── Public map consumed by the log-viewer API (/api/logs/{key}) ───────────
