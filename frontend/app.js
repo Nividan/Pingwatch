@@ -360,7 +360,6 @@ function _updateEvtBadge() {
   const n = _alertEvtBadgeCount;
   const el = document.getElementById('activeEvtBadge');
   const cnt = document.getElementById('activeEvtBadgeCnt');
-  console.debug('[badge] _updateEvtBadge n:', n, 'el:', !!el, 'cnt:', !!cnt, 'sev:', _alertEvtBadgeSeverity);
   if (!el) return;
   if (cnt) cnt.textContent = n;
   el.style.display = n > 0 ? 'flex' : 'none';
@@ -376,14 +375,20 @@ let _activeEvtPollTimer = null;
 async function _alertEvtBadgePoll() {
   try {
     const r = await fetch('/api/alert/events/active');
-    if (!r.ok) { console.debug('[badge] poll not ok:', r.status); return; }
+    if (!r.ok) return;
     const d = await r.json();
     _alertEvtBadgeCount = d.count || 0;
-    const evts = d.events || [];
-    _alertEvtBadgeSeverity = evts.some(e => e.severity === 'critical') ? 'critical' : 'warning';
-    console.debug('[badge] poll result:', _alertEvtBadgeCount, _alertEvtBadgeSeverity);
+    // Severity from in-memory FLAPS: critical if any active down event, else warning
+    const activeFlaps = typeof FLAPS !== 'undefined'
+      ? FLAPS.filter(f => (f.ack_state || 'active') !== 'resolved')
+      : [];
+    const hasCrit = activeFlaps.some(f => {
+      const dir = f._direction || f.direction || '';
+      return dir === 'down' || (dir === 'threshold' && f._thr_level === 'crit');
+    });
+    _alertEvtBadgeSeverity = hasCrit ? 'critical' : 'warning';
     _updateEvtBadge();
-  } catch (ex) { console.debug('[badge] poll error:', ex); }
+  } catch (_) {}
 }
 
 function _scheduleActiveEvtPoll() {
