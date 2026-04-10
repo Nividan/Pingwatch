@@ -392,14 +392,6 @@ function _buildSettingsTab_integrations(sr) {
           </div>
         </div>
 
-        <!-- Debug logging -->
-        <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-            <input type="checkbox" id="ldap-debug" style="width:14px;height:14px;cursor:pointer"/>
-            Enable debug logging — logs TCP, BIND, and search steps for each authentication attempt
-          </label>
-        </div>
-
       </div>
     </div>`;
 }
@@ -2155,7 +2147,6 @@ async function _loadLdapPanel() {
   set('ldap-group-base-dn',     s.ldap_group_base_dn  || '');
   set('ldap-sync-interval',     s.ldap_sync_interval  ?? 60);
   set('ldap-group-filter',      s.ldap_group_filter   || '(objectClass=group)');
-  setChk('ldap-debug',          s.ldap_debug);
   // Clear any stale test result
   const res = document.getElementById('ldap-test-result');
   if (res) res.innerHTML = '';
