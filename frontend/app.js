@@ -148,6 +148,11 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     _showBrowserNotif(d);
   });
+  sse.addEventListener('log_badge',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    _logBadgeTotal=d.total||0;
+    _updateLogBadge();
+  });
   sse.onerror=()=>{
     document.getElementById('cbn').style.display='block';
     // Guard: onerror can fire multiple times (browser retries) before the timer fires.
@@ -321,6 +326,7 @@ function onAuthenticated(username){
   _alertEvtBadgePoll();
   if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
   window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, TIMINGS.ALERT_BADGE_POLL);
+  _logBadgeInit();
   _lastActivity = Date.now();
   _startIdleCheck();
 }
@@ -355,6 +361,38 @@ async function _alertEvtBadgePoll() {
     const d = await r.json();
     _alertEvtBadgeCount = d.count || 0;
   } catch (_) {}
+}
+
+// ── Log badge (WARNING+ entries) ────────────────────────────────
+let _logBadgeTotal = 0;
+
+function _updateLogBadge() {
+  const seen = parseInt(_lsGet('logBadgeSeen') || '0', 10);
+  const unseen = Math.max(0, _logBadgeTotal - seen);
+  const el = document.getElementById('logBadge');
+  const cnt = document.getElementById('logBadgeCnt');
+  if (!el) return;
+  if (S.role === 'viewer') { el.style.display = 'none'; return; }
+  cnt.textContent = unseen;
+  el.style.display = unseen > 0 ? '' : 'none';
+}
+
+async function _logBadgeInit() {
+  try {
+    const r = await fetch('/api/log-badge');
+    if (!r.ok) return;
+    const d = await r.json();
+    _logBadgeTotal = d.total || 0;
+    _updateLogBadge();
+  } catch (_) {}
+}
+
+function _openLogBadge() {
+  _lsSet('logBadgeSeen', String(_logBadgeTotal));
+  _updateLogBadge();
+  // Pre-filter to WARNING+ when opening from badge
+  if (typeof _logFilter !== 'undefined') _logFilter.level = 'WARNING';
+  openSettings('logs');
 }
 
 function _requestNotifPermission() {

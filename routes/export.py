@@ -584,6 +584,15 @@ def handle(h, method, path, body):
         h._json(200, {"entries": db_get_audit(200)})
         return True
 
+    # ── /api/log-badge GET ─────────────────────────────────────────
+    if path == "/api/log-badge" and method == "GET":
+        user, _ = h._require("operator")
+        if not user:
+            return True
+        from core.logger import get_badge_total
+        h._json(200, {"total": get_badge_total()})
+        return True
+
     # ── /api/logs/{logname} GET ───────────────────────────────────
     m = _RE_LOGS.match(path)
     if m and method == "GET":

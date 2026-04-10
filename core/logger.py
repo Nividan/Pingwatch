@@ -86,6 +86,28 @@ class _MemoryHandler(logging.Handler):
 log_buffer = _MemoryHandler()
 log.addHandler(log_buffer)
 
+# ── Badge counter (drives the "New Log Entries" status-bar badge) ────────
+_badge_total = 0
+
+class _BadgeHandler(logging.Handler):
+    """Counts WARNING+ records and pushes SSE updates to the frontend."""
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+    def emit(self, record):
+        global _badge_total
+        _badge_total += 1
+        try:
+            from core.app_state import STATE
+            if hasattr(STATE, '_broadcast'):
+                STATE._broadcast("log_badge", {"total": _badge_total})
+        except Exception:
+            pass
+
+log.addHandler(_BadgeHandler())
+
+def get_badge_total() -> int:
+    return _badge_total
+
 # ── Debug mode toggle ─────────────────────────────────────────────────────
 def set_debug_mode(enabled: bool):
     """Switch file handlers between DEBUG and INFO level.

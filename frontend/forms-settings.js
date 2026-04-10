@@ -612,7 +612,7 @@ function _buildSettingsTab_alertRules() {
     </div>`;
 }
 
-async function openSettings(){
+async function openSettings(initialTab){
   _stopLogLive();
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
@@ -696,6 +696,9 @@ async function openSettings(){
     </div><!-- /stab-layout -->
   </div>`;
   document.body.appendChild(o);
+  if (initialTab && initialTab !== 'general') {
+    switchSettingsTab(initialTab);
+  }
 }
 
 
@@ -1279,6 +1282,10 @@ async function _loadLogTab() {
   const el  = document.getElementById('log-body');
   const lbl = document.getElementById('log-footer-label');
   if (!el) return;
+
+  // Sync dropdown values with _logFilter (may have been set externally, e.g. badge click)
+  const _lfEl = document.getElementById('logFLevel');
+  if (_lfEl && _lfEl.value !== _logFilter.level) _lfEl.value = _logFilter.level;
 
   const parsed = _parseLogSearch(_logFilter.search);
   const params = new URLSearchParams();

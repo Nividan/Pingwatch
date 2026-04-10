@@ -73,6 +73,14 @@ body{
   background:var(--bg3);
 }
 .tb-db-dot{width:5px;height:5px;border-radius:50%;background:#23d18b;box-shadow:0 0 6px #23d18b}
+.tb-log-badge{
+  display:flex;align-items:center;gap:6px;
+  font-size:10px;font-weight:600;color:#fff;
+  padding:3px 10px;border-radius:20px;
+  background:var(--down);cursor:pointer;
+  white-space:nowrap;transition:background .15s;
+}
+.tb-log-badge:hover{background:#d63843}
 
 /* ── Layout ── */
 #layout{display:flex;position:fixed;top:var(--header-h);left:0;right:0;bottom:0}
