@@ -48,7 +48,7 @@ function _ipamRenderShell() {
 // ── Subnet loading ─────────────────────────────────────────────────────────
 async function _ipamLoadSubnets() {
   const r = await fetch('/api/ipam/subnets');
-  if (r.status === 401) { showLogin('Session expired'); return; }
+  if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
   if (!r.ok) { toast('Failed to load subnets', 'err'); return; }
   const d = await r.json();
   _ipamSubnets = d.subnets || [];

@@ -11,6 +11,7 @@ const TIMINGS = Object.freeze({
 
 // ── App state ────────────────────────────────────────────────────
 const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{}};
+let _loggedOut=false;  // set during intentional logout to suppress "session expired"
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
@@ -269,6 +270,7 @@ async function submitLogin(){
     clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
+    _loggedOut=false;
     S.role=d.role||'viewer';
     if(d.session_ttl)_sessionTtl=d.session_ttl;
     hideLogin();
@@ -280,8 +282,13 @@ async function submitLogin(){
   }finally{clearTimeout(slowHint);}
 }
 async function doLogout(){
+  _loggedOut=true;
   _stopIdleCheck();
-  await fetch('/api/logout',{method:'POST'});
+  if(sse){sse.close();sse=null;}
+  if(_reconnectTimer){clearTimeout(_reconnectTimer);_reconnectTimer=null;}
+  if(_hbSparkInterval){clearInterval(_hbSparkInterval);_hbSparkInterval=null;}
+  if(window._alertEvtBadgeInterval){clearInterval(window._alertEvtBadgeInterval);window._alertEvtBadgeInterval=null;}
+  await fetch('/api/logout',{method:'POST'}).catch(()=>{});
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
   showLogin();
@@ -496,7 +503,7 @@ async function api(method,path,body=null){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
   const r=await fetch(path,o);
-  if(r.status===401){showLogin('Session expired. Please sign in again.');return {};}
+  if(r.status===401){if(!_loggedOut)showLogin('Session expired. Please sign in again.');return {};}
   if(!r.ok){
     const err=await r.json().catch(()=>({error:r.statusText}));
     throw new Error(err.error||r.statusText);
