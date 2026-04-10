@@ -78,6 +78,10 @@
   <div class="tb-right">
     <div class="tb-time" id="clk"></div>
     <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
+    <div class="tb-log-badge" id="logBadge" style="display:none"
+         onclick="_openLogBadge()" title="New log entries (WARNING+)">
+      New Log Entries <span id="logBadgeCnt">0</span>
+    </div>
     <div class="usr-dd" id="usrDd" style="display:none">
       <button class="usr-dd-trigger" id="usrDdBtn" onclick="_usrDdToggle(event)" aria-haspopup="true" aria-expanded="false">
         <span class="usr-dd-dot"></span>
