@@ -505,8 +505,8 @@ def _match_user_to_groups(member_of: list, user_dn: str,
                     best = g
 
     if best:
-        log.info(f"LDAP match: winning group={best['name']!r} dn={best['ldap_dn']!r} "
-                 f"role={best['default_role']!r}")
+        _ldap_dbg(f"LDAP match: winning group={best['name']!r} dn={best['ldap_dn']!r} "
+                  f"role={best['default_role']!r}")
     else:
         log.warning("LDAP match: no matching imported group found for user")
     return best

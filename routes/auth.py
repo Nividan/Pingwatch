@@ -276,14 +276,12 @@ def handle(h, method, path, body):
             with _FAIL_LOCK:
                 _FAIL_LOG.setdefault(ip, []).append(time.time())
             db_log_audit(username, ip, 'login_fail', username)
-            log.info(f"Login FAILED: {username!r} from {ip}")
             h._json(401, {"error": "Invalid username or password"})
             return True
         with _FAIL_LOCK:
             _FAIL_LOG.pop(ip, None)
         db_log_audit(username, ip, 'login_ok', username)
         role = auth_check_role(token) or "viewer"
-        log.info(f"Login OK: {username!r} from {ip} role={role!r}")
         _sec = "; Secure" if tls_active else ""
         h._send_with_cookie(
             200, {"ok": True, "username": username, "role": role,
