@@ -710,14 +710,20 @@ function _iipGetDuration(d, alertEvt) {
     }
   }
 
-  // Alert event resolved: use resolved_at as the fixed end time
-  if (alertEvt && alertEvt.state === 'resolved' && alertEvt.resolved_at && tsSec) {
-    return { secs: Math.max(0, Math.floor(alertEvt.resolved_at - tsSec)), live: false };
+  // Combined resolved check (mirrors _iipStatus logic): either source wins
+  const isResolved = (alertEvt && alertEvt.state === 'resolved') ||
+                     d.ack_state === 'resolved';
+  if (isResolved) {
+    const endTs = (alertEvt && alertEvt.resolved_at) || d.ack_at || 0;
+    if (endTs && tsSec) {
+      return { secs: Math.max(0, Math.floor(endTs - tsSec)), live: false };
+    }
+    // Resolved but no end timestamp — freeze at current age
+    return { secs: d.ts ? Math.max(0, Math.floor((Date.now() - dTs) / 1000)) : 0, live: false };
   }
 
-  // Resolved/acked flap with no matching event in FLAPS — use ack_at as end time
-  const state = d.ack_state || 'active';
-  if ((state === 'resolved' || state === 'acknowledged') && d.ack_at && tsSec) {
+  // Acknowledged flap with ack_at — freeze duration
+  if (d.ack_state === 'acknowledged' && d.ack_at && tsSec) {
     return { secs: Math.max(0, Math.floor(d.ack_at - tsSec)), live: false };
   }
 

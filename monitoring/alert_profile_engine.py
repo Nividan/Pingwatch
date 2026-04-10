@@ -249,14 +249,26 @@ def evaluate_and_fire(dev, sensor) -> None:
                   db_record_stage_fire, recovery=True, duration_s=duration_s)
             fired_recovery = True
 
-    # After firing recovery stages, wipe the per-stage history for this
-    # sensor so a future failure starts a fresh session cleanly.
-    if fired_recovery and current_state == "ok":
-        try:
-            db_clear_stage_state_for_sensor(did, sid)
-            db_auto_resolve_event(profile["id"], did, sid)
-        except Exception as e:
-            log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
+    # When sensor is fully OK, auto-resolve any active alert event and
+    # clear per-stage history so a future failure starts a fresh session.
+    # This must run even if no recovery stage dispatched (e.g. profile has
+    # no recovery stage, or its recovery stage has no action templates).
+    if current_state == "ok":
+        should_cleanup = fired_recovery
+        if not should_cleanup:
+            for s in stages:
+                if s["trigger_state"] not in ("down", "warning"):
+                    continue
+                st = db_get_stage_state(s["id"], did, sid)
+                if st and st.get("fire_count", 0) > 0:
+                    should_cleanup = True
+                    break
+        if should_cleanup:
+            try:
+                db_clear_stage_state_for_sensor(did, sid)
+                db_auto_resolve_event(profile["id"], did, sid)
+            except Exception as e:
+                log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
 
 
 def _had_prior_fire(stages, target_state, recovery_stage_id,
