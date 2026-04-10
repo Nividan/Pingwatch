@@ -17,8 +17,8 @@ _SSL_LABELS = {0: 'none', 1: 'LDAPS', 2: 'StartTLS'}
 
 
 def _ldap_dbg(msg: str) -> None:
-    """Emit a debug log only when ldap_debug is enabled in settings."""
-    if int(_settings.get('ldap_debug', 0) or 0):
+    """Emit a debug log when ldap_debug or the general debug_mode is enabled in settings."""
+    if int(_settings.get('ldap_debug', 0) or 0) or int(_settings.get('debug_mode', 0) or 0):
         log.debug(msg)
 
 
@@ -295,12 +295,17 @@ def ldap_authenticate(username: str, password: str):
         msg = result[1]
         attrs = result[2] if len(result) > 2 else {}
         if ok:
-            log.info(f"LDAP authenticate: SUCCESS for {username!r}")
+            member_of = attrs.get("member_of", [])
+            log.info(f"LDAP authenticate: SUCCESS for {username!r} — "
+                     f"display_name={attrs.get('display_name', '')!r} "
+                     f"email={attrs.get('email', '')!r} memberOf={len(member_of)} groups")
+            for dn in member_of:
+                _ldap_dbg(f"LDAP authenticate:   memberOf: {dn}")
             return {
                 "ok":           True,
                 "display_name": attrs.get("display_name", ""),
                 "email":        attrs.get("email", ""),
-                "member_of":    attrs.get("member_of", []),
+                "member_of":    member_of,
                 "dn":           attrs.get("dn", ""),
             }
         else:
@@ -477,6 +482,8 @@ def _match_user_to_groups(member_of: list, user_dn: str,
     member_of_lower = {m.lower() for m in member_of}
     _ldap_dbg(f"LDAP match_user_to_groups: user has {len(member_of)} memberOf entries, "
               f"checking against {len(mapped_groups)} imported groups")
+    for g in mapped_groups:
+        _ldap_dbg(f"LDAP match:   imported group: {g['name']!r} → {g['ldap_dn']}")
 
     best = None
     for g in mapped_groups:
@@ -484,6 +491,8 @@ def _match_user_to_groups(member_of: list, user_dn: str,
             _ldap_dbg(f"LDAP match: direct match → group={g['name']!r} role={g['default_role']}")
             if best is None or _ROLE_RANK.get(g['default_role'], 0) > _ROLE_RANK.get(best['default_role'], 0):
                 best = g
+        else:
+            _ldap_dbg(f"LDAP match: no match for group {g['name']!r}")
 
     # If no direct match and nested groups enabled, try recursive
     if best is None and cfg and cfg.get('nested_groups') and user_dn:
@@ -495,9 +504,10 @@ def _match_user_to_groups(member_of: list, user_dn: str,
                     best = g
 
     if best:
-        _ldap_dbg(f"LDAP match: best group={best['name']!r} role={best['default_role']}")
+        log.info(f"LDAP match: winning group={best['name']!r} dn={best['ldap_dn']!r} "
+                 f"role={best['default_role']!r}")
     else:
-        _ldap_dbg("LDAP match: no matching group found")
+        log.info("LDAP match: no matching imported group found for user")
     return best
 
 

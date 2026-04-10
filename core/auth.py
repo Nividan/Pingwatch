@@ -97,6 +97,9 @@ def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
 
     log.debug(f"LDAP login sync: {clean!r} — {len(mapped_groups)} mapped groups, "
               f"memberOf={len(ldap_result.get('member_of', []))} entries")
+    if log.isEnabledFor(10):  # DEBUG
+        for dn in ldap_result.get('member_of', []):
+            log.debug(f"LDAP login sync:   memberOf: {dn}")
 
     # If no LDAP groups are imported, skip sync — allow login with existing role
     if not mapped_groups:
@@ -137,6 +140,8 @@ def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
     # User is in a group — update if changed
     new_role = best['default_role']
     display_name = ldap_result.get('display_name', '')
+    log.info(f"LDAP login sync: {clean!r} matched group={best['name']!r} "
+             f"role={new_role!r} display_name={display_name!r}")
     try:
         # Always update to keep in sync; db_update_profile is a no-op if nothing changed
         db_update_profile(clean, display_name or '', '',
