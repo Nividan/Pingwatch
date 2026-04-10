@@ -374,7 +374,42 @@ def db_resolve_all_active() -> int:
         con.close()
 
 
-# ── ACK suppression check ────────────────────────────────────────
+# ── Active / ACK suppression checks ─────────────────────────────
+
+def db_has_active_event(did: str, sid: str) -> bool:
+    """Return True if any active or acknowledged event exists for this device+sensor.
+
+    Used by the alert engine to detect mid-incident state transitions (e.g.
+    warn→crit session-key change) and suppress duplicate dispatches.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT 1 FROM alert_events "
+                    "WHERE did=%s AND sid=%s AND state IN ('active','acknowledged') LIMIT 1",
+                    (did, sid)
+                )
+                return cur.fetchone() is not None
+        except Exception as e:
+            log.error(f"db_has_active_event error: {e}")
+            return False
+    # SQLite
+    con = _con()
+    try:
+        row = con.execute(
+            "SELECT 1 FROM alert_events "
+            "WHERE did=? AND sid=? AND state IN ('active','acknowledged') LIMIT 1",
+            (did, sid)
+        ).fetchone()
+        return row is not None
+    except Exception as e:
+        log.error(f"db_has_active_event error: {e}")
+        return False
+    finally:
+        con.close()
+
 
 def db_has_acked_event(profile_id: int, did: str, sid: str) -> bool:
     """Return True if an acknowledged (not resolved) event exists for this profile+device+sensor."""

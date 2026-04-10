@@ -116,6 +116,7 @@ from db.alert_events import (
     db_auto_resolve_event,
     db_resolve_all_active,
     db_has_acked_event,
+    db_has_active_event,
 )
 
 # backups
@@ -178,7 +179,7 @@ __all__ = [
     # alert events
     "db_log_event", "db_list_events", "db_count_active", "db_get_event",
     "db_ack_event", "db_resolve_event", "db_auto_resolve_event",
-    "db_resolve_all_active", "db_has_acked_event",
+    "db_resolve_all_active", "db_has_acked_event", "db_has_active_event",
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",
