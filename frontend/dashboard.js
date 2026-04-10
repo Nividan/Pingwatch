@@ -9,27 +9,11 @@ function _fetchAvailability() {
   return _availFetchPromise;
 }
 
-// ── Smooth widget content swap (avoids flash on innerHTML refresh) ─
+// ── Widget content swap (skip if unchanged, instant write otherwise) ─
 function _dwSwap(body, html) {
   if (!body) return;
-  // First render — no transition needed
-  if (!body.children.length) { body.innerHTML = html; return; }
-  // If a swap is already pending (rapid refresh), cancel it and write directly
-  if (body._dwSwapTimer) {
-    clearTimeout(body._dwSwapTimer);
-    body._dwSwapTimer = null;
-    body.innerHTML = html;
-    return;
-  }
-  // Fade out old content, then swap in new
-  Array.from(body.children).forEach(c => { c.style.transition = 'opacity .15s ease'; c.style.opacity = '0'; });
-  body._dwSwapTimer = setTimeout(() => {
-    body._dwSwapTimer = null;
-    body.innerHTML = html;
-    // Fade in — target the new child if present
-    const first = body.firstElementChild;
-    if (first) { first.style.opacity = '0'; requestAnimationFrame(() => { first.style.transition = 'opacity .2s ease'; first.style.opacity = '1'; }); }
-  }, 150);
+  if (body.innerHTML === html) return;
+  body.innerHTML = html;
 }
 
 // ── Dashboard widget system ───────────────────────────────────────
