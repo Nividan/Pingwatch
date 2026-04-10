@@ -360,9 +360,10 @@ function _updateEvtBadge() {
   const n = _alertEvtBadgeCount;
   const el = document.getElementById('activeEvtBadge');
   const cnt = document.getElementById('activeEvtBadgeCnt');
+  console.debug('[badge] _updateEvtBadge n:', n, 'el:', !!el, 'cnt:', !!cnt, 'sev:', _alertEvtBadgeSeverity);
   if (!el) return;
-  cnt.textContent = n;
-  el.style.display = n > 0 ? '' : 'none';
+  if (cnt) cnt.textContent = n;
+  el.style.display = n > 0 ? 'flex' : 'none';
   el.className = 'tb-active-evt-badge ' + (_alertEvtBadgeSeverity === 'critical' ? 'crit' : 'warn');
 }
 
@@ -375,13 +376,14 @@ let _activeEvtPollTimer = null;
 async function _alertEvtBadgePoll() {
   try {
     const r = await fetch('/api/alert/events/active');
-    if (!r.ok) return;
+    if (!r.ok) { console.debug('[badge] poll not ok:', r.status); return; }
     const d = await r.json();
     _alertEvtBadgeCount = d.count || 0;
     const evts = d.events || [];
     _alertEvtBadgeSeverity = evts.some(e => e.severity === 'critical') ? 'critical' : 'warning';
+    console.debug('[badge] poll result:', _alertEvtBadgeCount, _alertEvtBadgeSeverity);
     _updateEvtBadge();
-  } catch (_) {}
+  } catch (ex) { console.debug('[badge] poll error:', ex); }
 }
 
 function _scheduleActiveEvtPoll() {

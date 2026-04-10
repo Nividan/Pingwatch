@@ -402,7 +402,7 @@ function _buildSettingsTab_logs(sr) {
   return `<div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
       <div style="padding:10px 14px 6px;border-bottom:1px solid var(--border)">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''}/>
+          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
           <span style="font-size:12px;font-weight:600;color:var(--text2)">Debug Mode</span>
         </label>
         <div class="fh" style="margin-top:4px">Enable verbose debug logging. When off, only INFO and above is written to log files.</div>
@@ -1671,6 +1671,12 @@ async function saveSettings(){
     document.title='PingWatch \u2014 '+(body.org_name||'Network Monitor');
   }
   toast('Settings saved','ok');
+}
+
+async function _saveDebugMode(cb) {
+  const r = await api('PATCH', '/api/settings', { debug_mode: cb.checked ? 1 : 0 });
+  if (!r.ok) { toast('Failed to save debug mode', 'err'); cb.checked = !cb.checked; return; }
+  toast(cb.checked ? 'Debug mode enabled' : 'Debug mode disabled', 'ok');
 }
 
 async function saveSecuritySettings(){
