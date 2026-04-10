@@ -122,6 +122,7 @@ function connectSSE(){
     resolveFlap(d,'down');
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
+    _scheduleActiveEvtPoll();
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
@@ -135,6 +136,7 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     resolveFlap(d,'threshold');
     _scheduleRefresh();
+    _scheduleActiveEvtPoll();
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
@@ -348,19 +350,42 @@ function _startIdleCheck(){
 }
 function _stopIdleCheck(){ if(_idleTimer){clearInterval(_idleTimer);_idleTimer=null;} }
 
+let _alertEvtBadgeSeverity = 'warning'; // 'critical' or 'warning'
+
 function _updateEvtBadge() {
-  const n = unseenFlaps;
-  const b = document.getElementById('evtBadge');
-  if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+  const n = _alertEvtBadgeCount;
+  const el = document.getElementById('activeEvtBadge');
+  const cnt = document.getElementById('activeEvtBadgeCnt');
+  if (!el) return;
+  cnt.textContent = n;
+  el.style.display = n > 0 ? '' : 'none';
+  el.className = 'tb-active-evt-badge ' + (_alertEvtBadgeSeverity === 'critical' ? 'crit' : 'warn');
 }
 
+function _openActiveEvtBadge() {
+  switchMainTab('events');
+  if (typeof _evtSetInnerTab === 'function') _evtSetInnerTab('active');
+}
+
+let _activeEvtPollTimer = null;
 async function _alertEvtBadgePoll() {
   try {
     const r = await fetch('/api/alert/events/active');
     if (!r.ok) return;
     const d = await r.json();
     _alertEvtBadgeCount = d.count || 0;
+    const evts = d.events || [];
+    _alertEvtBadgeSeverity = evts.some(e => e.severity === 'critical') ? 'critical' : 'warning';
+    _updateEvtBadge();
   } catch (_) {}
+}
+
+function _scheduleActiveEvtPoll() {
+  if (_activeEvtPollTimer) return;
+  _activeEvtPollTimer = setTimeout(() => {
+    _activeEvtPollTimer = null;
+    _alertEvtBadgePoll();
+  }, 2000);
 }
 
 // ── Log badge (WARNING+ entries) ────────────────────────────────
@@ -765,7 +790,6 @@ function _hbRenderExpanded() {
 const FLAPS=[];   // newest first; size controlled by MAX_FLAPS
 const _FLAP_SEEN=new Set(); // dedup keys to prevent API+SSE duplicates
 let MAX_FLAPS=20;
-let unseenFlaps=0;
 
 function _flapKey(d){
   // Unique key: device+sensor+timestamp+direction (covers both flaps and traps)
@@ -780,10 +804,7 @@ function pushFlap(d){
   FLAPS.unshift(d);
   if(FLAPS.length>MAX_FLAPS) FLAPS.pop();
   renderFlaps();
-  if(activeMainTab!=='events'){
-    unseenFlaps++;
-    _updateEvtBadge();
-  }
+  _scheduleActiveEvtPoll();
   flashDownPill();
 }
 
@@ -810,10 +831,7 @@ function pushThresholdEvent(d, level){
   FLAPS.unshift(entry);
   if(FLAPS.length>MAX_FLAPS)FLAPS.pop();
   renderFlaps();
-  if(activeMainTab!=='events'){
-    unseenFlaps++;
-    _updateEvtBadge();
-  }
+  _scheduleActiveEvtPoll();
 }
 
 function renderFlaps(){
@@ -924,8 +942,6 @@ function switchMainTab(tab){
     eventsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
-    unseenFlaps=0;
-    _updateEvtBadge();
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshEvents();
     if(typeof _evtSubTab==='function') _evtSubTab(_evtActiveSubTab);
