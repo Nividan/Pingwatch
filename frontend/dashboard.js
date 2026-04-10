@@ -14,16 +14,21 @@ function _dwSwap(body, html) {
   if (!body) return;
   // First render — no transition needed
   if (!body.children.length) { body.innerHTML = html; return; }
-  // Build new content off-screen, then crossfade
-  const next = document.createElement('div');
-  next.style.cssText = 'opacity:0;transition:opacity .25s ease';
-  next.innerHTML = html;
-  // Fade out old content
+  // If a swap is already pending (rapid refresh), cancel it and write directly
+  if (body._dwSwapTimer) {
+    clearTimeout(body._dwSwapTimer);
+    body._dwSwapTimer = null;
+    body.innerHTML = html;
+    return;
+  }
+  // Fade out old content, then swap in new
   Array.from(body.children).forEach(c => { c.style.transition = 'opacity .15s ease'; c.style.opacity = '0'; });
-  setTimeout(() => {
-    body.innerHTML = '';
-    body.appendChild(next);
-    requestAnimationFrame(() => { next.style.opacity = '1'; });
+  body._dwSwapTimer = setTimeout(() => {
+    body._dwSwapTimer = null;
+    body.innerHTML = html;
+    // Fade in — target the new child if present
+    const first = body.firstElementChild;
+    if (first) { first.style.opacity = '0'; requestAnimationFrame(() => { first.style.transition = 'opacity .2s ease'; first.style.opacity = '1'; }); }
   }, 150);
 }
 
@@ -1254,6 +1259,10 @@ function _dwIsPrivate(host) {
 function _dwRefreshInternetHealth(wid) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
+  // Throttle: SSE fires this on every sensor update; health status changes rarely.
+  const _now = Date.now();
+  if (_now - (body._ihLastRefresh || 0) < 5000) return;
+  body._ihLastRefresh = _now;
   const external = Object.values(S.sensors).filter(s => {
     let target = s.host;
     if (s.stype === 'http' && s.url) { try { target = new URL(s.url).hostname; } catch {} }
