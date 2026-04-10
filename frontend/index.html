@@ -78,6 +78,10 @@
   <div class="tb-right">
     <div class="tb-time" id="clk"></div>
     <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
+    <div class="tb-active-evt-badge" id="activeEvtBadge" style="display:none"
+         onclick="_openActiveEvtBadge()" title="Active unresolved events">
+      Active Events <span id="activeEvtBadgeCnt">0</span>
+    </div>
     <div class="tb-log-badge" id="logBadge" style="display:none"
          onclick="_openLogBadge()" title="New log entries (WARNING+)">
       New Log Entries <span id="logBadgeCnt">0</span>
@@ -112,7 +116,7 @@
     <div id="mainTabs">
       <button class="mtab" id="tabDashboard" onclick="switchMainTab('dashboard')">📊 Dashboard</button>
       <button class="mtab" id="tabDevices" onclick="switchMainTab('devices')">🖧 Devices</button>
-      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events <span class="mtab-badge" id="evtBadge" style="display:none">0</span></button>
+      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events</button>
       <button class="mtab" id="tabMap" onclick="switchMainTab('map')">🌐 Map</button>
       <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
       <button class="mtab" id="tabIpam" onclick="switchMainTab('ipam')">📋 IP Addresses</button>
@@ -135,7 +139,7 @@
       <!-- Panel: Sensor Events -->
       <div id="evtstab-panel-sensor-events" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0">
         <div class="evt-inner-tabs">
-          <button class="evt-inner-tab active" id="evtInnerActive" onclick="_evtSetInnerTab('active')">Active <span class="evt-inner-count" id="evtActiveCount"></span></button>
+          <button class="evt-inner-tab active" id="evtInnerActive" onclick="_evtSetInnerTab('active')">Active</button>
           <button class="evt-inner-tab" id="evtInnerHistory" onclick="_evtSetInnerTab('history')">History</button>
         </div>
         <div class="evt-view-hdr">

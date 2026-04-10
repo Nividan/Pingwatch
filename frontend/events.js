@@ -622,14 +622,6 @@ function _renderEvtView() {
     if (el) el.style.display = _showCustom ? '' : 'none';
   });
 
-  // Update active count badge (computed from raw FLAPS before other filters)
-  const activeCount = FLAPS.filter(d => _isEvtActive(d)).length;
-  const acEl = document.getElementById('evtActiveCount');
-  if (acEl) {
-    acEl.textContent = activeCount > 0 ? activeCount : '';
-    acEl.style.display = activeCount > 0 ? '' : 'none';
-  }
-
   // Sync inner tab buttons
   document.getElementById('evtInnerActive')?.classList.toggle('active', _evtInnerTab === 'active');
   document.getElementById('evtInnerHistory')?.classList.toggle('active', _evtInnerTab === 'history');
