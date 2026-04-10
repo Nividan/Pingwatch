@@ -13,7 +13,6 @@ function _ldapSslChange() {
 function _ldapCollectForm() {
   return {
     ldap_enabled:         document.getElementById('ldap-enabled')?.checked ? 1 : 0,
-    ldap_debug:           document.getElementById('ldap-debug')?.checked   ? 1 : 0,
     ldap_server:          (document.getElementById('ldap-server')?.value || '').trim(),
     ldap_port:            parseInt(document.getElementById('ldap-port')?.value || '389'),
     ldap_ssl:             parseInt(document.getElementById('ldap-ssl')?.value || '0'),
