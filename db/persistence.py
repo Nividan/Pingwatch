@@ -133,6 +133,11 @@ def _pg_save(state):
 
 def db_save(state):
     """Upsert all devices and sensors; remove deleted rows."""
+    with state._lock:
+        _nd = len(state.devices)
+        _ns = sum(len(d.sensors) for d in state.devices.values())
+    log.debug(f"DB save: {_nd} devices, {_ns} sensors")
+
     if is_pg():
         _pg_save(state)
         return

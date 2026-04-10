@@ -173,6 +173,8 @@ def evaluate_and_fire(dev, sensor) -> None:
         return
     stages = profile.get("stages") or []
     if not stages:
+        log.debug(f"alert: {getattr(dev, 'did', '?')}/{sensor.sensor_id} "
+                  f"profile {profile['name']!r} has no stages")
         return
 
     current_state, started_ts = _classify(sensor)
@@ -203,8 +205,12 @@ def evaluate_and_fire(dev, sensor) -> None:
         # ── State stages: fire while sensor is in matching state ──
         if is_state_stage:
             if current_state != trig:
+                log.debug(f"alert: {did}/{sid} stage {sid_key} "
+                          f"state={trig} vs current={current_state} — skip")
                 continue
             if (now - started_ts) < delay:
+                log.debug(f"alert: {did}/{sid} stage {sid_key} "
+                          f"delay {delay}s not elapsed ({now - started_ts:.0f}s so far)")
                 continue
             session = _session_key(started_ts)
             state = db_get_stage_state(sid_key, did, sid)
@@ -214,6 +220,8 @@ def evaluate_and_fire(dev, sensor) -> None:
             elif repeat > 0 and (now - state.get("last_fire_ts", 0)) >= (repeat * 60):
                 should_fire = True   # repeat interval elapsed
             if not should_fire:
+                log.debug(f"alert: {did}/{sid} stage {sid_key} "
+                          f"not due (repeat interval {repeat}min)")
                 continue
             first_fire = (not state or state.get("active_session") != session)
             _fire(stage, dev, sensor, trig, did, sid, session, profile,
@@ -319,6 +327,9 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
             log.warning(f"alert_profile_engine: active-event gate check error: {e}")
 
     if not gated_by_ack:
+        log.info(f"Alert dispatch: profile={profile['name']!r} stage={stage['id']} "
+                 f"trigger={trig} device={did} sensor={sid}"
+                 f"{' [recovery]' if recovery else ''}")
         for aid in (stage.get("action_ids") or []):
             tpl = db_get_action_template(aid)
             if not tpl:
