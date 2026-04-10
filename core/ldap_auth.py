@@ -296,9 +296,9 @@ def ldap_authenticate(username: str, password: str):
         attrs = result[2] if len(result) > 2 else {}
         if ok:
             member_of = attrs.get("member_of", [])
-            log.info(f"LDAP authenticate: SUCCESS for {username!r} — "
-                     f"display_name={attrs.get('display_name', '')!r} "
-                     f"email={attrs.get('email', '')!r} memberOf={len(member_of)} groups")
+            log.debug(f"LDAP authenticate: SUCCESS for {username!r} — "
+                      f"display_name={attrs.get('display_name', '')!r} "
+                      f"email={attrs.get('email', '')!r} memberOf={len(member_of)} groups")
             for dn in member_of:
                 _ldap_dbg(f"LDAP authenticate:   memberOf: {dn}")
             return {
@@ -504,10 +504,10 @@ def _match_user_to_groups(member_of: list, user_dn: str,
                     best = g
 
     if best:
-        log.info(f"LDAP match: winning group={best['name']!r} dn={best['ldap_dn']!r} "
-                 f"role={best['default_role']!r}")
+        log.debug(f"LDAP match: winning group={best['name']!r} dn={best['ldap_dn']!r} "
+                  f"role={best['default_role']!r}")
     else:
-        log.info("LDAP match: no matching imported group found for user")
+        log.debug("LDAP match: no matching imported group found for user")
     return best
 
 

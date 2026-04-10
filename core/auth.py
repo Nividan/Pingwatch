@@ -140,8 +140,8 @@ def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
     # User is in a group — update if changed
     new_role = best['default_role']
     display_name = ldap_result.get('display_name', '')
-    log.info(f"LDAP login sync: {clean!r} matched group={best['name']!r} "
-             f"role={new_role!r} display_name={display_name!r}")
+    log.debug(f"LDAP login sync: {clean!r} matched group={best['name']!r} "
+              f"role={new_role!r} display_name={display_name!r}")
     try:
         # Always update to keep in sync; db_update_profile is a no-op if nothing changed
         db_update_profile(clean, display_name or '', '',
