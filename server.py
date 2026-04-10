@@ -451,10 +451,6 @@ def _start_http_redirect(http_port: int, https_port: int):
 # ── Entry point ───────────────────────────────────────────────────
 
 def main():
-    if SYS in ("Linux", "Darwin") and os.geteuid() != 0:
-        log.warning("ICMP ping may need root on this OS.")
-        log.warning("If pings fail: sudo python3 server.py")
-
     # ── Startup: validate ICMP capability ────────────────────────────
     if SYS in ("Linux", "Darwin"):
         import socket as _socket
@@ -464,7 +460,8 @@ def main():
         except PermissionError:
             log.warning(
                 "ICMP raw socket unavailable — ping sensors will fail. "
-                "Fix: sudo setcap cap_net_raw+ep $(which python3)"
+                "Fix: run as root, or grant CAP_NET_RAW, or: "
+                "sudo setcap cap_net_raw+ep $(which python3)"
             )
 
     # ── Apply pending DB imports ──────────────────────────────────────
