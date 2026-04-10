@@ -40,8 +40,8 @@ _fmt = logging.Formatter(
 log = logging.getLogger("pingwatch")
 log.setLevel(logging.DEBUG)
 
-# ── Rotating file handler (1 MB × 3 backups) — INFO by default ────────────
-_fh = RotatingFileHandler(_LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+# ── Rotating file handler (10 MB × 5 backups) — INFO by default ───────────
+_fh = RotatingFileHandler(_LOG_PATH, maxBytes=10_000_000, backupCount=5, encoding="utf-8")
 _fh.setFormatter(_fmt)
 _fh.setLevel(logging.INFO)
 log.addHandler(_fh)
@@ -60,7 +60,7 @@ log_sensors.setLevel(logging.INFO)
 log_sensors.propagate = False   # don't bubble up to the main pingwatch logger
 _sh = RotatingFileHandler(
     os.path.join(_LOG_DIR, "pingwatchsensors.log"),
-    maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    maxBytes=20_000_000, backupCount=5, encoding="utf-8"
 )
 _sh.setFormatter(_fmt)
 log_sensors.addHandler(_sh)
@@ -71,7 +71,7 @@ log_audit.setLevel(logging.INFO)
 log_audit.propagate = False     # don't bubble up to the main pingwatch logger
 _ah = RotatingFileHandler(
     os.path.join(_LOG_DIR, "pingwatchaudit.log"),
-    maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+    maxBytes=10_000_000, backupCount=10, encoding="utf-8"
 )
 _ah.setFormatter(_fmt)
 log_audit.addHandler(_ah)
@@ -82,7 +82,7 @@ log_backup.setLevel(logging.DEBUG)
 log_backup.propagate = False    # keep backup messages out of pingwatch.log
 _bkh = RotatingFileHandler(
     os.path.join(_LOG_DIR, "pingwatchbackup.log"),
-    maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    maxBytes=5_000_000, backupCount=5, encoding="utf-8"
 )
 _bkh.setFormatter(_fmt)
 _bkh.setLevel(logging.INFO)
