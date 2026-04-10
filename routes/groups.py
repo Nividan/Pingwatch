@@ -10,6 +10,7 @@ PUT    /api/user/group/{id}/members  admin   — replace member list {usernames:
 
 from core.config import (
     _RE_GROUPS, _RE_GROUP, _RE_GROUP_ITEM, _RE_GROUP_MEMBERS,
+    _RE_GROUP_IMPORT_LDAP,
 )
 from db import db_log_audit
 from db.groups import (
@@ -35,6 +36,43 @@ def handle(h, method, path, body):
         user, _ = h._require("viewer")
         if not user: return True
         h._json(200, {"groups": db_list_groups()})
+        return True
+
+    # POST /api/user/group/import_ldap  (must check before /group POST)
+    if _RE_GROUP_IMPORT_LDAP.match(path) and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        items = body.get("groups")
+        if not isinstance(items, list) or not items:
+            h._json(400, {"error": "groups list is required"}); return True
+
+        # Build set of already-imported LDAP DNs (case-insensitive)
+        from db.groups import db_get_ldap_mapped_groups
+        existing_dns = {g['ldap_dn'].lower() for g in db_get_ldap_mapped_groups()}
+
+        imported, skipped = 0, 0
+        for item in items:
+            dn   = str(item.get('dn', '')).strip()
+            cn   = str(item.get('cn', '')).strip()
+            desc = str(item.get('description', '')).strip()[:500]
+            role = item.get('default_role', 'viewer')
+            if role not in ('viewer', 'operator', 'admin'):
+                role = 'viewer'
+            if not dn or not cn:
+                skipped += 1; continue
+            if dn.lower() in existing_dns:
+                skipped += 1; continue
+            gid = db_create_group(cn, desc, ldap_dn=dn, default_role=role)
+            if gid > 0:
+                imported += 1
+                existing_dns.add(dn.lower())
+                db_log_audit(user, h.client_address[0], 'group_import_ldap',
+                             f"{cn} (role={role})")
+            else:
+                skipped += 1
+
+        h._json(200, {"ok": True, "imported": imported, "skipped": skipped,
+                       "groups": db_list_groups()})
         return True
 
     # POST /api/group  (create)
@@ -69,7 +107,13 @@ def handle(h, method, path, body):
         desc = str(body.get("description", "")).strip()
         if len(desc) > 500:
             h._json(400, {"error": "description too long (max 500)"}); return True
-        ok = db_update_group(gid, body["name"], desc)
+        # Optional: update default_role for LDAP-mapped groups
+        kwargs = {}
+        if "default_role" in body:
+            role = body["default_role"]
+            if role in ('viewer', 'operator', 'admin'):
+                kwargs["default_role"] = role
+        ok = db_update_group(gid, body["name"], desc, **kwargs)
         if not ok:
             h._json(404, {"error": "group not found"}); return True
         db_log_audit(user, h.client_address[0], 'group_update', body["name"])

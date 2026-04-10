@@ -122,15 +122,19 @@ def db_delete_user(username: str) -> bool:
         return False
 
 
-def db_add_ldap_user(username: str, domain: str, role: str = 'viewer') -> bool:
+def db_add_ldap_user(username: str, domain: str, role: str = 'viewer',
+                     full_name: str = '', email: str = '',
+                     group_id: int | None = None) -> bool:
     """Insert a domain/LDAP user (no local password). Returns False if username exists."""
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
             cur.execute(
-                f"INSERT INTO users (username, pw_hash, role, auth_type, domain) "
-                f"VALUES ({ph},{ph},{ph},{ph},{ph})",
-                (username, '__ldap__', role, 'ldap', domain)
+                f"INSERT INTO users (username, pw_hash, role, auth_type, domain, "
+                f"full_name, email, group_id) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (username, '__ldap__', role, 'ldap', domain,
+                 full_name, email, group_id)
             )
         return True
     except Exception as e:

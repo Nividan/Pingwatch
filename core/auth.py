@@ -45,60 +45,13 @@ def _strip_domain(username: str) -> str:
     return username
 
 
-def auth_login(username: str, password: str):
-    """Return a session token on success, None on failure."""
+def _create_session(clean: str, role: str):
+    """Create session token, store in memory + DB. Returns token."""
     from db.backend import is_pg
-    clean = _strip_domain(username)
-
-    if is_pg():
-        from db.pg_pool import pg_cursor
-        try:
-            with pg_cursor("main") as cur:
-                cur.execute(
-                    "SELECT pw_hash, role, auth_type FROM users WHERE username=%s",
-                    (clean,)
-                )
-                row = cur.fetchone()
-        except Exception:
-            return None
-        if not row:
-            return None
-        pw_hash   = row["pw_hash"]
-        _role     = row["role"] or "viewer"
-        auth_type = row["auth_type"] or "local"
-    else:
-        try:
-            con = sqlite3.connect(DB_PATH)
-            try:
-                row = con.execute(
-                    "SELECT pw_hash, role, auth_type FROM users WHERE username=?", (clean,)
-                ).fetchone()
-            finally:
-                con.close()
-        except Exception:
-            return None
-        if not row:
-            return None
-        pw_hash   = row[0]
-        _role     = row[1] or "viewer"
-        auth_type = row[2] if len(row) > 2 else 'local'
-
-    if auth_type == 'ldap':
-        try:
-            from core.ldap_auth import ldap_authenticate
-            if not ldap_authenticate(clean, password):
-                return None
-        except Exception as e:
-            log.error(f"LDAP auth error for {clean!r}: {e}")
-            return None
-    else:
-        if not _verify_pw(password, pw_hash):
-            return None
-
     token   = secrets.token_hex(32)
     expires = time.time() + _settings.get("session_ttl", 86400)
     with _SESSIONS_LOCK:
-        _SESSIONS[token] = {"username": clean, "expires": expires, "role": _role}
+        _SESSIONS[token] = {"username": clean, "expires": expires, "role": role}
 
     if is_pg():
         from db.pg_pool import pg_cursor
@@ -123,6 +76,215 @@ def auth_login(username: str, password: str):
         except Exception as e:
             log.error(f"Session save error: {e}")
     return token
+
+
+def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
+                     current_group_id) -> str | None:
+    """
+    Login-time sync for existing LDAP users:
+    - Check group membership against imported LDAP groups
+    - If user not in any imported group → reject login (auto-disable)
+    - If user's group/role changed → update
+    - Sync display_name from LDAP
+    Returns the (possibly updated) role, or None to reject login.
+    """
+    from core.ldap_auth import _match_user_to_groups, _get_cfg
+    from db.groups import db_get_ldap_mapped_groups
+    from db.users  import db_update_profile
+
+    cfg = _get_cfg()
+    mapped_groups = db_get_ldap_mapped_groups()
+
+    log.debug(f"LDAP login sync: {clean!r} — {len(mapped_groups)} mapped groups, "
+              f"memberOf={len(ldap_result.get('member_of', []))} entries")
+
+    # If no LDAP groups are imported, skip sync — allow login with existing role
+    if not mapped_groups:
+        # Still sync display_name if available
+        display_name = ldap_result.get('display_name', '')
+        if display_name:
+            try:
+                db_update_profile(clean, display_name, '',
+                                  group_id=current_group_id, role=current_role)
+            except Exception:
+                pass
+        return current_role
+
+    member_of = ldap_result.get('member_of', [])
+    user_dn   = ldap_result.get('dn', '')
+    best = _match_user_to_groups(member_of, user_dn, mapped_groups, cfg)
+
+    if best is None:
+        # User not in any imported group → disable
+        log.warning(f"LDAP login sync: {clean!r} not in any imported LDAP group — "
+                    "rejecting login")
+        try:
+            from db.helpers import db_cursor
+            from db.backend import is_pg as _is_pg
+            ph = "%s" if _is_pg() else "?"
+            with db_cursor("main") as cur:
+                cur.execute(f"UPDATE users SET group_id=NULL WHERE username={ph}",
+                            (clean,))
+        except Exception as e:
+            log.error(f"LDAP login sync: failed to clear group for {clean!r}: {e}")
+        try:
+            from db import db_log_audit
+            db_log_audit("system", "ldap_login", "ldap_user_disabled", clean)
+        except Exception:
+            pass
+        return None  # reject login
+
+    # User is in a group — update if changed
+    new_role = best['default_role']
+    display_name = ldap_result.get('display_name', '')
+    try:
+        # Always update to keep in sync; db_update_profile is a no-op if nothing changed
+        db_update_profile(clean, display_name or '', '',
+                          group_id=best['id'], role=new_role)
+    except Exception as e:
+        log.error(f"LDAP login sync: profile update failed for {clean!r}: {e}")
+
+    return new_role
+
+
+def auth_login(username: str, password: str):
+    """Return a session token on success, None on failure."""
+    from db.backend import is_pg
+    clean = _strip_domain(username)
+
+    # ── Look up user in DB ────────────────────────────────────────
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT pw_hash, role, auth_type, group_id FROM users WHERE username=%s",
+                    (clean,)
+                )
+                row = cur.fetchone()
+        except Exception:
+            return None
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                row = con.execute(
+                    "SELECT pw_hash, role, auth_type, group_id FROM users WHERE username=?",
+                    (clean,)
+                ).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return None
+
+    # ── User exists → authenticate ────────────────────────────────
+    if row:
+        if is_pg():
+            pw_hash   = row["pw_hash"]
+            _role     = row["role"] or "viewer"
+            auth_type = row["auth_type"] or "local"
+            group_id  = row["group_id"]
+        else:
+            pw_hash   = row[0]
+            _role     = row[1] or "viewer"
+            auth_type = row[2] if len(row) > 2 else 'local'
+            group_id  = row[3] if len(row) > 3 else None
+
+        if auth_type == 'ldap':
+            try:
+                from core.ldap_auth import ldap_authenticate
+                ldap_result = ldap_authenticate(clean, password)
+                if not ldap_result:
+                    return None
+            except Exception as e:
+                log.error(f"LDAP auth error for {clean!r}: {e}")
+                return None
+
+            # Login-time sync: refresh group/role/display_name from LDAP
+            synced_role = _ldap_login_sync(clean, ldap_result, _role, group_id)
+            if synced_role is None:
+                return None  # auto-disabled — not in any imported group
+            _role = synced_role
+        else:
+            if not _verify_pw(password, pw_hash):
+                return None
+
+        return _create_session(clean, _role)
+
+    # ── User NOT found → try LDAP auto-provision ──────────────────
+    try:
+        import core.settings as _ap_settings
+        ldap_enabled = bool(int(_ap_settings.get('ldap_enabled', 0) or 0))
+        auto_provision = bool(int(_ap_settings.get('ldap_auto_provision', 0) or 0))
+    except Exception:
+        ldap_enabled = False
+        auto_provision = False
+
+    if not ldap_enabled or not auto_provision:
+        return None
+
+    log.debug(f"LDAP auto-provision: attempting for unknown user {clean!r}")
+
+    # Attempt LDAP authentication for the unknown user
+    try:
+        from core.ldap_auth import ldap_authenticate, _match_user_to_groups, _get_cfg
+        ldap_result = ldap_authenticate(clean, password)
+        if not ldap_result:
+            log.debug(f"LDAP auto-provision: auth failed for {clean!r}")
+            return None
+    except Exception as e:
+        log.error(f"LDAP auto-provision auth error for {clean!r}: {e}")
+        return None
+
+    log.debug(f"LDAP auto-provision: auth OK for {clean!r}, checking group membership "
+              f"(memberOf={len(ldap_result.get('member_of', []))} entries)")
+
+    # Check group membership
+    from db.groups import db_get_ldap_mapped_groups
+    cfg = _get_cfg()
+    mapped_groups = db_get_ldap_mapped_groups()
+    if not mapped_groups:
+        log.info(f"LDAP auto-provision: no imported groups — cannot provision {clean!r}")
+        return None
+
+    member_of = ldap_result.get('member_of', [])
+    user_dn   = ldap_result.get('dn', '')
+    best = _match_user_to_groups(member_of, user_dn, mapped_groups, cfg)
+
+    if best is None:
+        log.info(f"LDAP auto-provision: {clean!r} not in any imported group — "
+                 "login rejected")
+        return None
+
+    # Auto-create the user
+    domain = _ap_settings.get('ldap_domain', '') or ''
+    display_name = ldap_result.get('display_name', '')
+    email = ldap_result.get('email', '')
+    role = best['default_role']
+
+    from db.users import db_add_ldap_user
+    ok = db_add_ldap_user(
+        clean, domain, role=role,
+        full_name=display_name, email=email, group_id=best['id']
+    )
+
+    if not ok:
+        # Might be a race condition (another request created the user).
+        # Re-query and try normal login.
+        log.warning(f"LDAP auto-provision: INSERT failed for {clean!r} — "
+                    "possible race condition, retrying normal login")
+        return auth_login(username, password)
+
+    log.info(f"LDAP auto-provision: created {clean!r} with role={role!r} "
+             f"group={best['name']!r}")
+    try:
+        from db import db_log_audit
+        db_log_audit("system", "ldap_auto_provision", "ldap_auto_provision",
+                     f"{clean} role={role} group={best['name']}")
+    except Exception:
+        pass
+
+    return _create_session(clean, role)
 
 
 def auth_logout(token: str):

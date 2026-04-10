@@ -684,11 +684,23 @@ def db_init():
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS user_groups (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                name        TEXT    NOT NULL UNIQUE,
-                description TEXT    DEFAULT ''
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL UNIQUE,
+                description  TEXT    DEFAULT '',
+                ldap_dn      TEXT    DEFAULT '',
+                default_role TEXT    DEFAULT 'viewer'
             )""")
         con.commit()
+        # Migration: LDAP group mapping columns (v0.9+)
+        for _col, _def in [
+            ("ldap_dn",      "TEXT DEFAULT ''"),
+            ("default_role",  "TEXT DEFAULT 'viewer'"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE user_groups ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
         # ── Migrate alert_profile_stages: action_id (int) → action_ids (json) ──
         try:
             cols = {r[1] for r in con.execute(
