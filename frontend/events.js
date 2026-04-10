@@ -252,7 +252,7 @@ function _isEvtActive(d) {
   const dir = d._direction || d.direction || '';
   if (dir === 'trap') {
     const ae = _matchAlertEvt(d);
-    return !ae || ae.state !== 'resolved';
+    return ae ? ae.state !== 'resolved' : false;
   }
   return (d.ack_state || 'active') !== 'resolved';
 }
