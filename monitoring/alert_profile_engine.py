@@ -205,8 +205,6 @@ def evaluate_and_fire(dev, sensor) -> None:
         # ── State stages: fire while sensor is in matching state ──
         if is_state_stage:
             if current_state != trig:
-                log.debug(f"alert: {did}/{sid} stage {sid_key} "
-                          f"state={trig} vs current={current_state} — skip")
                 continue
             if (now - started_ts) < delay:
                 log.debug(f"alert: {did}/{sid} stage {sid_key} "
@@ -220,8 +218,6 @@ def evaluate_and_fire(dev, sensor) -> None:
             elif repeat > 0 and (now - state.get("last_fire_ts", 0)) >= (repeat * 60):
                 should_fire = True   # repeat interval elapsed
             if not should_fire:
-                log.debug(f"alert: {did}/{sid} stage {sid_key} "
-                          f"not due (repeat interval {repeat}min)")
                 continue
             first_fire = (not state or state.get("active_session") != session)
             _fire(stage, dev, sensor, trig, did, sid, session, profile,
