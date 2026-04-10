@@ -153,7 +153,6 @@ function _buildSettingsTab_users(sr, ur) {
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
-        <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="openLdapSettings()">🔐 LDAP Settings</button>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:12px">Change Password</div>
@@ -199,6 +198,7 @@ function _buildSettingsTab_integrations(sr) {
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
+        <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD</button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -307,6 +307,99 @@ function _buildSettingsTab_integrations(sr) {
             <div class="fh">Requires syslog forwarding to be enabled and configured above</div>
           </div>
         </div>
+      </div>
+
+      <!-- ── LDAP sub-panel ── -->
+      <div id="ipanel-ldap" style="display:none">
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable LDAP / Active Directory Authentication</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Domain users are verified against this server at login. Add them under Users with auth type "Domain".</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="ldap-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- Connection -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Connection</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">LDAP Server</label>
+            <input type="text" id="ldap-server" placeholder="dc.example.com or 192.168.1.10" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="ldap-port" value="389" min="1" max="65535" style="max-width:100px"/></div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Security</label>
+            <select id="ldap-ssl" style="max-width:240px" onchange="_ldapSslChange()">
+              <option value="0">None — plain LDAP (port 389)</option>
+              <option value="1">LDAPS — TLS from start (port 636)</option>
+              <option value="2">StartTLS — upgrade connection (port 389)</option>
+            </select>
+          </div>
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="ldap-timeout" value="10" min="1" max="120" style="max-width:80px"/></div>
+        </div>
+        <div class="fr"><label class="fl">Base DN</label>
+          <input type="text" id="ldap-base-dn" placeholder="DC=example,DC=com" autocomplete="off"/></div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Bind DN</label>
+            <input type="text" id="ldap-bind-dn" placeholder="CN=svc-pingwatch,OU=Service Accounts,DC=example,DC=com" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Bind Password</label>
+            <input type="password" id="ldap-bind-pass" placeholder="bind password" autocomplete="new-password"/></div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">User Search Filter</label>
+            <input type="text" id="ldap-user-filter" placeholder="(sAMAccountName={username})" autocomplete="off"/>
+            <div class="fh">Use <code style="font-family:monospace;color:var(--accent)">{username}</code> as the placeholder</div>
+          </div>
+          <div class="fr"><label class="fl">NetBIOS Domain</label>
+            <input type="text" id="ldap-domain" placeholder="EXAMPLE (optional)" autocomplete="off"/></div>
+        </div>
+
+        <!-- Test buttons -->
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testLdapConnection()">▶ Test Connection</button>
+          <button class="btn-s" style="font-size:12px" onclick="openLdapTestAuth()">▶ Test User Auth</button>
+          <div id="ldap-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+
+        <!-- Group Integration -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Group Integration</div>
+          <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="ldap-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision unknown users at login
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="ldap-nested-groups" style="width:14px;height:14px;cursor:pointer"/>
+              Nested groups (LDAP_MATCHING_RULE_IN_CHAIN)
+            </label>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Group Search Base</label>
+              <input type="text" id="ldap-group-base-dn" placeholder="OU=Groups,DC=example,DC=com (optional)" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Sync Interval (min)</label>
+              <input type="number" id="ldap-sync-interval" value="60" min="0" max="1440" style="max-width:80px" title="0 = disabled"/></div>
+          </div>
+          <div class="fr"><label class="fl">Group Filter</label>
+            <input type="text" id="ldap-group-filter" placeholder="(objectClass=group)" autocomplete="off"/>
+            <div class="fh">AD: <code style="font-family:monospace;color:var(--accent)">(objectClass=group)</code> &nbsp; OpenLDAP: <code style="font-family:monospace;color:var(--accent)">(objectClass=groupOfNames)</code></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn-s" style="font-size:12px" onclick="openLdapTestUserGroups()">▶ Test User Groups</button>
+          </div>
+        </div>
+
+        <!-- Debug logging -->
+        <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+            <input type="checkbox" id="ldap-debug" style="width:14px;height:14px;cursor:pointer"/>
+            Enable debug logging — logs TCP, BIND, and search steps for each authentication attempt
+          </label>
+        </div>
+
       </div>
     </div>`;
 }
@@ -1988,7 +2081,7 @@ function _renderIntegStatus(id, status) {
 }
 
 function switchIntegTab(name) {
-  ['smtp', 'syslog'].forEach(t => {
+  ['smtp', 'syslog', 'ldap'].forEach(t => {
     document.getElementById(`itab-${t}`)?.classList.toggle('itab-active', t === name);
     const p = document.getElementById(`ipanel-${t}`);
     if (p) p.style.display = t === name ? '' : 'none';
@@ -1998,6 +2091,8 @@ function switchIntegTab(name) {
   const testSyslogBtn = document.getElementById('integ-btn-test-syslog');
   if (testSmtpBtn)   testSmtpBtn.style.display   = name === 'smtp'   ? '' : 'none';
   if (testSyslogBtn) testSyslogBtn.style.display  = name === 'syslog' ? '' : 'none';
+  // Load LDAP fields each time the tab is shown
+  if (name === 'ldap') _loadLdapPanel();
 }
 
 async function _loadIntegrationsStatus() {
@@ -2007,7 +2102,9 @@ async function _loadIntegrationsStatus() {
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
-  const activeSubTab = document.getElementById('ipanel-smtp')?.style.display !== 'none' ? 'smtp' : 'syslog';
+  const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+    t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
+  ) || 'smtp';
   switchIntegTab(activeSubTab);
 }
 
@@ -2015,15 +2112,53 @@ async function _saveIntegrations() {
   const btn = document.getElementById('integ-btn-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
   try {
-    const activeSubTab = document.getElementById('ipanel-smtp')?.style.display !== 'none' ? 'smtp' : 'syslog';
+    const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+      t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
+    ) || 'smtp';
     if (activeSubTab === 'smtp') {
       await saveSettings();
+    } else if (activeSubTab === 'ldap') {
+      await saveLdapSettings();
     } else {
       await saveSyslogSettings();
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   }
+}
+
+async function _loadLdapPanel() {
+  let s;
+  try {
+    s = await api('GET', '/api/ldap/settings');
+  } catch(e) {
+    toast('Failed to load LDAP settings', 'err');
+    return;
+  }
+  if (s.error) { toast(s.error, 'err'); return; }
+  const set    = (id, val) => { const el = document.getElementById(id); if (el) el.value = String(val ?? ''); };
+  const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+  setChk('ldap-enabled',        s.ldap_enabled);
+  set('ldap-server',            s.ldap_server || '');
+  set('ldap-port',              s.ldap_port   || 389);
+  const sslEl = document.getElementById('ldap-ssl');
+  if (sslEl) sslEl.value = String(s.ldap_ssl ?? 0);
+  set('ldap-timeout',           s.ldap_timeout || 10);
+  set('ldap-base-dn',           s.ldap_base_dn || '');
+  set('ldap-bind-dn',           s.ldap_bind_dn || '');
+  const passEl = document.getElementById('ldap-bind-pass');
+  if (passEl) passEl.placeholder = s.ldap_bind_pass_set ? '●●●●●●●● (set — leave blank to keep)' : 'bind password';
+  set('ldap-user-filter',       s.ldap_user_filter  || '(sAMAccountName={username})');
+  set('ldap-domain',            s.ldap_domain       || '');
+  setChk('ldap-auto-provision', s.ldap_auto_provision);
+  setChk('ldap-nested-groups',  s.ldap_nested_groups);
+  set('ldap-group-base-dn',     s.ldap_group_base_dn  || '');
+  set('ldap-sync-interval',     s.ldap_sync_interval  ?? 60);
+  set('ldap-group-filter',      s.ldap_group_filter   || '(objectClass=group)');
+  setChk('ldap-debug',          s.ldap_debug);
+  // Clear any stale test result
+  const res = document.getElementById('ldap-test-result');
+  if (res) res.innerHTML = '';
 }
 
 async function saveSyslogSettings(){

@@ -226,6 +226,8 @@ def auth_login(username: str, password: str):
         auto_provision = False
 
     if not ldap_enabled or not auto_provision:
+        log.debug(f"LDAP auto-provision: disabled (ldap_enabled={ldap_enabled}, "
+                  f"auto_provision={auto_provision}) — unknown user {clean!r} rejected without LDAP query")
         return None
 
     log.debug(f"LDAP auto-provision: attempting for unknown user {clean!r}")
