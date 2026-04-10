@@ -39,7 +39,8 @@ def handle(h, method, path, body):
     if _RE_ALERT_EVENTS_ACTIVE.match(path) and method == "GET":
         user, _ = h._require("viewer")
         if not user: return True
-        count  = db_count_active()
+        from db.events import db_count_active_flaps
+        count  = db_count_active_flaps()
         events = db_list_events(state='active', limit=50)
         h._json(200, {"count": count, "events": events})
         return True

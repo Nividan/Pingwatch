@@ -369,6 +369,34 @@ def db_resolve_flap(flap_id):
         if con: con.close()
 
 
+def db_count_active_flaps() -> int:
+    """Count flap_log entries with ack_state in ('active','acknowledged')."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM flap_log "
+                    "WHERE COALESCE(ack_state,'active') IN ('active','acknowledged')"
+                )
+                return cur.fetchone()["cnt"]
+        except Exception as e:
+            log.error(f"db_count_active_flaps error: {e}")
+            return 0
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+    try:
+        n = con.execute(
+            "SELECT COUNT(*) FROM flap_log "
+            "WHERE COALESCE(ack_state,'active') IN ('active','acknowledged')"
+        ).fetchone()[0]
+        return n
+    except Exception as e:
+        log.error(f"db_count_active_flaps error: {e}")
+        return 0
+    finally:
+        con.close()
+
+
 def db_resolve_all_flaps() -> int:
     """Resolve all active/acknowledged flaps.  Returns count resolved."""
     import time as _time
