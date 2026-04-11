@@ -692,6 +692,13 @@ function _dwRefreshDeviceStatus(wid) {
     <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`);
 }
 
+// ── Reset dashboard state (called on re-authentication) ──────────
+function _dwReset() {
+  _dwDataArrived = false;
+  _dwWidgets = null;
+  if (_dwTickTimer) { clearInterval(_dwTickTimer); _dwTickTimer = null; }
+}
+
 // ── Loading shimmer clear (called when first real data arrives) ───
 let _dwDataArrived = false;
 function _dwClearLoading() {
