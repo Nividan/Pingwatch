@@ -1933,6 +1933,7 @@ function selectLink(lk) {
 
 function deselect() {
   selectedEl = null;
+  if (multiSelect.size > 0) { showMultiPanel(); return; }
   if (isPingWatchPage) { _selectedPwDid = null; showPwDashboardPanel(); return; }
   renderNodes();
   renderLinks();
