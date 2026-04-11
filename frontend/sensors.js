@@ -84,11 +84,13 @@ function _applySensorOrder(did){
   if(!order.length)return;
   const grid=document.getElementById(`sg-${did}`);
   if(!grid)return;
-  // Move tiles matching saved order to front, preserving unknown tiles at end
+  // Append saved-order tiles first, then tiles not in order (new sensors) last
   order.forEach(sid=>{
     const el=grid.querySelector(`.stl[data-sid="${sid}"]`);
     if(el) grid.appendChild(el);
   });
+  [...grid.querySelectorAll('.stl:not(.stl-drop-ind)')].filter(el=>!order.includes(el.dataset.sid))
+    .forEach(el=>grid.appendChild(el));
 }
 
 function _vmSaveOrder(did,vmid){

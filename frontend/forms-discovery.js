@@ -797,12 +797,13 @@ async function _discLinkConfirm(ip, did, nSuggested){
   // 2. Create selected sensors
   let sensCreated = 0, sensFailed = 0;
   for(const sg of toCreate){
-    const spec = {name: sg.name, type: sg.stype, host: ip};
+    const spec = {name: `${sg.name}-${ip}`, type: sg.stype, host: ip};
     if(sg.port) spec.port = sg.port;
     if(sg.url)  spec.url  = sg.url;
     try{
       const sr = await api('POST', `/api/device/${did}/sensor`, spec);
       if(sr && sr.sid){
+        await api('POST', `/api/device/${did}/sensor/${sr.sid}/start`);
         sensCreated++;
       } else { sensFailed++; }
     } catch(e){ sensFailed++; }
