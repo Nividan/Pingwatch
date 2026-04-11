@@ -969,9 +969,11 @@ function _applyDevFilter(query){
     if(!stMatch) return;
     if(q){
       const nameMatch=dev.name.toLowerCase().includes(q);
+      const hostMatch=(dev.host||'').toLowerCase().includes(q);
+      const secIpMatch=(dev.secondary_ips||[]).some(ip=>ip.toLowerCase().includes(q));
       const sensorMatch=S._devSensors[did]&&[...S._devSensors[did]]
         .some(k=>S.sensors[k]&&S.sensors[k].name.toLowerCase().includes(q));
-      if(!nameMatch&&!sensorMatch) return;
+      if(!nameMatch&&!hostMatch&&!secIpMatch&&!sensorMatch) return;
     }
     _filteredDids.push(did);
   });
