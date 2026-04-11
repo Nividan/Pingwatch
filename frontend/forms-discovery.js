@@ -345,7 +345,7 @@ function _discRenderResults(){
   bdy.innerHTML = `
     <div class="disc-result-toolbar">
       <div>
-        <b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found
+        <span id="disc-count"><b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found</span>
         ${dupCount ? `<span class="disc-dup-chip">⚠ ${dupCount} possible duplicate${dupCount===1?'':'s'}</span>` : ''}
       </div>
       <div class="disc-toolbar-right">
@@ -375,6 +375,7 @@ function _discRenderResults(){
           <th class="disc-th-sortable" onclick="_discSetSort('ports')">${isPing?'':'Ports'}</th>
           <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Guess'}</th>
           <th>Latency</th>
+          <th></th>
         </tr></thead>
         <tbody id="disc-tbody">
           ${rows.map(r=>_discRowHtml(r,isPing)).join('')}
@@ -482,6 +483,7 @@ function _discRowHtml(r, isPing){
       <td>${isPing?'<span class="disc-muted">—</span>':portChips || '<span class="disc-muted">—</span>'}</td>
       <td>${isPing?'':`<span class="disc-guess">${esc(r.guess||'')}</span>`}</td>
       <td>${ms}</td>
+      <td><button class="btn-s" style="padding:1px 6px;font-size:10px;white-space:nowrap" onclick="event.stopPropagation();_discLinkToDevice('${esc(r.ip)}')" title="Add this IP as a secondary IP of an existing device">🔗 Link</button></td>
     </tr>`;
 }
 
@@ -681,6 +683,71 @@ function _discUpdateAddBtn(){
   }
   btn.disabled = (nDev === 0);
   btn.textContent = `Add ${nDev} device${nDev===1?'':'s'} + ${nSens} sensor${nSens===1?'':'s'}`;
+}
+
+// ── Link discovered IP to existing device ─────────────────────
+function _discLinkToDevice(ip){
+  const devs = Object.values(S.devices).sort((a,b)=>a.name.localeCompare(b.name));
+  if(!devs.length){ toast('No existing devices to link to','err'); return; }
+  closeM('disc-link-m');
+  const o = document.createElement('div'); o.className='mo'; o.id='disc-link-m';
+  _overlayClose(o, ()=>closeM('disc-link-m'));
+  const devItems = devs.map(d =>
+    `<div class="grp-dd-item" style="padding:6px 10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)" onclick="_discLinkConfirm('${esc(ip)}','${esc(d.device_id)}')">
+      <span>${esc(d.name)}</span>
+      <span style="font-size:11px;color:var(--text3);font-family:monospace">${esc(d.host)}</span>
+    </div>`
+  ).join('');
+  o.innerHTML = `
+  <div class="mbox" style="max-width:420px">
+    <div class="mhd">
+      <div class="mttl">Link ${esc(ip)} to device</div>
+      <button class="mclose" onclick="closeM('disc-link-m')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div class="fr">
+        <label class="fl">Search devices</label>
+        <input type="text" id="disc-link-filter" autocomplete="off" placeholder="Filter…"
+               oninput="_discLinkFilter(this.value)"/>
+      </div>
+      <div id="disc-link-list" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px">${devItems}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px">This IP will be added as a secondary IP of the selected device.</div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('disc-link-m')">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('disc-link-filter')?.focus(), 50);
+}
+function _discLinkFilter(q){
+  q = q.toLowerCase();
+  const list = document.getElementById('disc-link-list');
+  if(!list) return;
+  for(const item of list.children){
+    const text = item.textContent.toLowerCase();
+    item.style.display = text.includes(q) ? '' : 'none';
+  }
+}
+async function _discLinkConfirm(ip, did){
+  let r;
+  try{ r = await api('POST', `/api/device/${did}/secondary-ip`, {ip}); }
+  catch(e){ toast('Failed to link IP','err'); return; }
+  if(!r || r.error){ toast(r?.error || 'Failed to link','err'); return; }
+  closeM('disc-link-m');
+  // Update local state
+  const dev = S.devices[did];
+  if(dev) dev.secondary_ips = r.secondary_ips || [...(dev.secondary_ips||[]), ip];
+  // Remove from discovery results
+  _disc.rows = _disc.rows.filter(row => row.ip !== ip);
+  _disc.selected.delete(ip);
+  _discRefreshTbody();
+  _discUpdateCounts();
+  toast(`Linked ${ip} → ${dev?.name || did}`, 'ok');
+}
+function _discUpdateCounts(){
+  const countEl = document.getElementById('disc-count');
+  if(countEl) countEl.innerHTML = `<b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found`;
 }
 
 // ── Step 5: bulk add ───────────────────────────────────────────

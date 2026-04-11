@@ -102,11 +102,16 @@ def _validate_cidr(cidr: str):
 def _monitored_ip_set() -> set:
     """Build a set of IPs that are already monitored.
 
+    Includes primary hosts and all secondary IPs.
     Resolves any non-IP host with a single 1s lookup attempt.
     """
     ips = set()
     with STATE._lock:
         hosts = [d.host for d in STATE.devices.values() if getattr(d, "host", "")]
+        for d in STATE.devices.values():
+            for sip in getattr(d, "secondary_ips", []) or []:
+                if sip:
+                    hosts.append(sip)
     for h in hosts:
         try:
             ipaddress.ip_address(h)

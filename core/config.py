@@ -36,6 +36,7 @@ TLS_PORT_DEFAULT = 8443
 # Pre-compiled HTTP route patterns
 _RE_DEVICE_LOGS   = re.compile(r'^/api/device/([^/]+)/logs$')
 _RE_DEVICE        = re.compile(r'^/api/device/([^/]+)$')
+_RE_DEVICE_SIP    = re.compile(r'^/api/device/([^/]+)/secondary-ip$')
 _RE_DEVICE_ACTION = re.compile(r'^/api/device/([^/]+)/(start|stop)$')
 _RE_SENSOR        = re.compile(r'^/api/device/([^/]+)/sensor$')
 _RE_SENSOR_ACTION = re.compile(r'^/api/device/([^/]+)/sensor/([^/]+)/(start|stop)$')

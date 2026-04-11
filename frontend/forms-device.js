@@ -94,11 +94,14 @@ async function submitAddDevice(){
 
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────
 
+let _edSecIps = [];   // secondary IPs being edited
+
 function openEditDevice(did){
   const dev = S.devices[did];
   if(!dev) return;
   closeM('dwo');
   closeM('med');
+  _edSecIps = [...(dev.secondary_ips || [])];
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
   const _edGroupItems = _edGroups.map(g =>
     `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_edgPick('${esc(g)}')">${esc(g)}</div>`
@@ -132,6 +135,17 @@ function openEditDevice(did){
           </div>
         </div>
       </div>
+      <details class="dev-creds" style="margin-top:10px"${_edSecIps.length?' open':''}>
+        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Secondary IPs <span style="color:var(--text3);font-weight:400">(${_edSecIps.length})</span></summary>
+        <div style="margin-top:8px">
+          <div id="ed-sip-list" style="max-height:160px;overflow-y:auto;margin-bottom:6px"></div>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="ed-sip-input" placeholder="e.g. 10.0.0.5" autocomplete="off"
+                   style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_edSipAdd()}"/>
+            <button class="btn-s" type="button" onclick="_edSipAdd()" style="white-space:nowrap">+ Add</button>
+          </div>
+        </div>
+      </details>
       <div class="fr">
         <label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional)</span></label>
         <input type="text" id="ed-wh" value="${esc(dev.webhook_url||'')}" placeholder="https://hooks.slack.com/…" autocomplete="off"/>
@@ -183,6 +197,7 @@ function openEditDevice(did){
     })
   );
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
+  _edSipRender();
   _loadDeviceProfileSection(did);
 }
 
@@ -299,7 +314,8 @@ async function submitEditDevice(did){
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const payload = {name, host, group, webhook_url, alerts_muted,
-    snmp_community_default, snmp_version_default, vmware_user_default};
+    snmp_community_default, snmp_version_default, vmware_user_default,
+    secondary_ips: _edSecIps};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   let r;
   try{
@@ -313,9 +329,43 @@ async function submitEditDevice(did){
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   pruneEmptyGroups();
   updatePills();
   refreshGroupCounts();
   toast(`Saved: ${name}`, 'ok');
+}
+
+// ── Secondary IPs helpers ─────────────────────────────────────────────
+function _edSipRender(){
+  const el = document.getElementById('ed-sip-list');
+  if(!el) return;
+  if(!_edSecIps.length){ el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No secondary IPs</div>'; return; }
+  el.innerHTML = _edSecIps.map((ip,i) =>
+    `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
+      <span style="flex:1;font-size:12px;font-family:monospace">${esc(ip)}</span>
+      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edSipRemove(${i})">✕</button>
+    </div>`
+  ).join('');
+  // update count in summary
+  const summary = document.querySelector('#med details.dev-creds:first-of-type summary span');
+  if(summary) summary.textContent = `(${_edSecIps.length})`;
+}
+function _edSipAdd(){
+  const inp = document.getElementById('ed-sip-input');
+  if(!inp) return;
+  const ip = inp.value.trim().toLowerCase();
+  if(!ip){ toast('Enter an IP address','err'); return; }
+  if(!/^[\w.\-:]+$/.test(ip)){ toast('Invalid IP format','err'); return; }
+  const primary = (document.getElementById('ed-h')?.value || '').trim().toLowerCase();
+  if(ip === primary){ toast('Already the primary host','err'); return; }
+  if(_edSecIps.includes(ip)){ toast('Already in the list','err'); return; }
+  if(_edSecIps.length >= 50){ toast('Maximum 50 secondary IPs','err'); return; }
+  _edSecIps.push(ip);
+  inp.value = '';
+  _edSipRender();
+}
+function _edSipRemove(idx){
+  _edSecIps.splice(idx, 1);
+  _edSipRender();
 }

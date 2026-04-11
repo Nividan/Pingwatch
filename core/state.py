@@ -276,6 +276,7 @@ class Device:
         self.group       = group
         self.webhook_url  = ""
         self.alerts_muted = False
+        self.secondary_ips = []
         self.sensors      = {}
         self._sid_ctr     = 0
         # Device-level default credentials (pre-fill for new sensors)
@@ -303,6 +304,7 @@ class Device:
             "device_id":    self.device_id,
             "name":         self.name,
             "host":         self.host,
+            "secondary_ips": self.secondary_ips or [],
             "group":        self.group,
             "webhook_url":  self.webhook_url,
             "alerts_muted": self.alerts_muted,
