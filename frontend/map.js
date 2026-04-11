@@ -1790,6 +1790,7 @@ function getSVGPt(e) {
 }
 
 function startDrag(e, node) {
+  if (e.shiftKey) return;  // shift+drag = rubber-band, not single-node drag
   e.preventDefault();
   if (e.altKey) { startLinkDraw(e, node); return; }
   dragNode = node;
@@ -1877,11 +1878,14 @@ svg.addEventListener('mousedown', e => {
     return;
   }
   if (e.button !== 0 || e.altKey || linkDraw) return;
-  const overNode = findNodeAtEvent(e);
-  if (overNode) return;
-  if (!e.shiftKey) { // left drag on empty canvas = pan
+  if (e.shiftKey) {
+    // Shift+drag always starts rubber-band regardless of node/group under cursor
+  } else {
+    const overNode = findNodeAtEvent(e);
+    if (overNode) return;
     const overGroup = findGroupAtEvent(e);
     if (overGroup) return;
+    // left drag on empty canvas = pan
     e.preventDefault();
     mmPan = { sx: e.clientX, sy: e.clientY, tx0: vp.tx, ty0: vp.ty };
     svg.style.cursor = 'grabbing';
