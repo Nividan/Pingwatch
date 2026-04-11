@@ -1879,9 +1879,9 @@ svg.addEventListener('mousedown', e => {
   if (e.button !== 0 || e.altKey || linkDraw) return;
   const overNode = findNodeAtEvent(e);
   if (overNode) return;
-  const overGroup = findGroupAtEvent(e);
-  if (overGroup) return;
   if (!e.shiftKey) { // left drag on empty canvas = pan
+    const overGroup = findGroupAtEvent(e);
+    if (overGroup) return;
     e.preventDefault();
     mmPan = { sx: e.clientX, sy: e.clientY, tx0: vp.tx, ty0: vp.ty };
     svg.style.cursor = 'grabbing';
