@@ -13,6 +13,7 @@ const _disc = {
   rows:   [],              // results table data (mutable)
   selected: new Set(),     // ips selected for adding
   customNames: {},         // ip -> overridden name
+  customGroups: {},        // ip -> group override (undefined = follow default _disc.group)
   sensorChecks: {},        // ip -> { key: bool }   key = `${stype}|${port||''}`
   sensorArgs: {},          // ip -> { key: { url, snmp_community, ... } }
   filter: '',
@@ -29,6 +30,7 @@ function openDiscoverSubnet(){
   _disc.rows   = [];
   _disc.selected.clear();
   _disc.customNames = {};
+  _disc.customGroups = {};
   _disc.sensorChecks = {};
   _disc.sensorArgs = {};
   _disc.filter = '';
@@ -382,13 +384,17 @@ function _discRenderResults(){
         </tbody>
       </table>
     </div>
+    <datalist id="disc-groups-dl">${
+      [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
+      .map(g=>`<option value="${esc(g)}"></option>`).join('')
+    }</datalist>
     <div class="disc-foot-opts">
       <div class="fr" style="margin:0">
-        <label class="fl">Group</label>
+        <label class="fl">Group <span style="font-size:10px;color:var(--text3);font-weight:normal">(default for all)</span></label>
         <div style="position:relative">
           <input type="text" id="disc-group" value="${esc(_disc.group)}" placeholder="Discovered" autocomplete="off"
                  style="padding-right:28px"
-                 onfocus="_dgShow()" oninput="_dgFilter(this.value)"/>
+                 onfocus="_dgShow()" oninput="_dgFilter(this.value);_discSetDefaultGroup(this.value)"/>
           <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_dgToggle()">▾</button>
           <div id="disc-group-dd" class="grp-dd" style="display:none">${
             [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
@@ -444,7 +450,7 @@ function _dgFilter(v){
 function _dgPick(g){
   const inp = document.getElementById('disc-group');
   if(inp) inp.value = g;
-  _disc.group = g;
+  _discSetDefaultGroup(g);
   _dgHide();
 }
 
@@ -477,6 +483,11 @@ function _discRowHtml(r, isPing){
       <td>${hostCell}${dupNote}
         <div class="disc-row-name">
           <input type="text" value="${esc(nm)}" placeholder="Device name" oninput="_discSetCustomName('${esc(r.ip)}', this.value)"/>
+          <input type="text" class="disc-row-grp${_disc.customGroups[r.ip]!==undefined?' disc-row-grp-custom':''}"
+                 list="disc-groups-dl" data-ip="${esc(r.ip)}"
+                 value="${esc(_disc.customGroups[r.ip]!==undefined?_disc.customGroups[r.ip]:_disc.group)}"
+                 placeholder="Group"
+                 oninput="_discSetRowGroup('${esc(r.ip)}',this.value)"/>
         </div>
       </td>
       <td>${macStr} ${vendStr}</td>
@@ -533,6 +544,27 @@ function _discSelectByPort(...ports){
 
 function _discSetCustomName(ip, value){
   _disc.customNames[ip] = value;
+}
+
+function _discSetDefaultGroup(g){
+  _disc.group = g;
+  // Push new default to all per-row inputs that haven't been manually overridden
+  document.querySelectorAll('.disc-row-grp[data-ip]').forEach(inp => {
+    if(_disc.customGroups[inp.dataset.ip] === undefined){
+      inp.value = g;
+    }
+  });
+}
+
+function _discSetRowGroup(ip, g){
+  // If user types the same as the default, treat as "following default" (no override)
+  if(g === _disc.group || g === ''){
+    delete _disc.customGroups[ip];
+    document.querySelector(`.disc-row-grp[data-ip="${ip}"]`)?.classList.remove('disc-row-grp-custom');
+  } else {
+    _disc.customGroups[ip] = g;
+    document.querySelector(`.disc-row-grp[data-ip="${ip}"]`)?.classList.add('disc-row-grp-custom');
+  }
 }
 
 function _discUpdateNextBtn(){
@@ -625,7 +657,10 @@ function _discRevRowHtml(row, expanded){
             <span class="disc-muted"> (${esc(row.ip)})</span>
             ${row.guess?`<span class="disc-guess">— ${esc(row.guess)}</span>`:''}
           </div>
-          <div class="disc-rev-summary" id="disc-rev-sum-${esc(row.ip).replace(/\./g,'_')}">${summary}</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="disc-rev-summary" id="disc-rev-sum-${esc(row.ip).replace(/\./g,'_')}">${summary}</div>
+            <div style="font-size:10px;color:var(--text3)">→ ${esc((_disc.customGroups[row.ip]!==undefined?_disc.customGroups[row.ip]:_disc.group)||'Discovered')}</div>
+          </div>
         </div>
       </summary>
       <div class="disc-sg-list">${sensorRows}</div>
@@ -829,7 +864,7 @@ function _discUpdateCounts(){
 // ── Step 5: bulk add ───────────────────────────────────────────
 async function _discBulkAdd(){
   const btn = document.getElementById('disc-add-btn');
-  const group = (_disc.group || 'Discovered').trim() || 'Discovered';
+  const defaultGroup = (_disc.group || 'Discovered').trim() || 'Discovered';
   const useHostname = (document.getElementById('disc-naming')?.value || 'hostname') === 'hostname';
   const devices = [];
   for(const ip of _disc.selected){
@@ -848,10 +883,11 @@ async function _discBulkAdd(){
       if(sg.stype === 'snmp' && a.snmp_community) spec.snmp_community = a.snmp_community;
       sensors.push(spec);
     }
+    const devGroup = (_disc.customGroups[ip] !== undefined ? _disc.customGroups[ip] : defaultGroup).trim() || defaultGroup;
     devices.push({
       name:  _discRowName(row, useHostname),
       host:  ip,
-      group,
+      group: devGroup,
       sensors,
     });
   }
