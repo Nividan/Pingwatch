@@ -1324,9 +1324,9 @@ function renderNodes() {
     g.addEventListener('mousedown', e => startDrag(e, node));
     g.addEventListener('click', e => {
       e.stopPropagation();
+      if (e.shiftKey) { toggleMultiSelect(node); return; }
       if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
-      if (e.shiftKey) { toggleMultiSelect(node); }
-      else { multiSelect.clear(); selectNode(node); }
+      multiSelect.clear(); selectNode(node);
     });
     g.addEventListener('touchstart', e => startDrag(e, node), {passive:false});
     layer.appendChild(g);
@@ -2744,10 +2744,14 @@ document.getElementById('canvas-wrap').addEventListener('contextmenu', e => {
   if (isPingWatchPage) {
     const n = findNodeAtEvent(e);
     if (n && n._pwDid) {
+      const bulkHtml = multiSelect.size > 0
+        ? `<div class="ctx-sep"></div><div class="ctx-item" style="color:var(--gold)" onclick="ctxAction(()=>bulkLinkSelectedTo('${n._pwDid}'))">⟷ LINK ${multiSelect.size} SELECTED → THIS</div>`
+        : '';
       ctxMenu.innerHTML = `
         <div class="ctx-item" style="color:var(--accent2)" onclick="ctxAction(()=>showPwNodePanel('${n._pwDid}'))">✎ EDIT COLOR</div>
         <div class="ctx-item" style="color:var(--gold)" onclick="ctxAction(()=>ctxDrawLinkFrom('${n.id}'))">⟷ DRAW LINK</div>
         <div class="ctx-item" style="color:#ffd700" onclick="ctxAction(()=>_pwSetTraceSrc('${n._pwDid}'))">◉ SET AS TRACE SOURCE</div>
+        ${bulkHtml}
       `;
       showCtxMenu(e.clientX, e.clientY);
       return;
@@ -2902,6 +2906,177 @@ function _pwLinkModal(src, tgt, onSave) {
     onSave(type, label);
   };
   setTimeout(() => ov.querySelector('#_pwlm_label').focus(), 50);
+}
+
+
+// ═══════════════════════════ BULK LINK ═══════════════════════════
+
+function _createBulkPwLinks(srcDids, tgtDid, linkType, label) {
+  const existingPairs = new Set(
+    pwLinks.flatMap(l => [l.src_did + '→' + l.tgt_did, l.tgt_did + '→' + l.src_did])
+  );
+  let created = 0;
+  const base = Date.now();
+  for (const srcDid of srcDids) {
+    if (String(srcDid) === String(tgtDid)) continue;
+    const key = srcDid + '→' + tgtDid;
+    if (existingPairs.has(key)) continue;
+    pwLinks.push({
+      id: 'pwl_' + base + '_' + created,
+      src_did: srcDid, tgt_did: tgtDid,
+      link_type: linkType, label
+    });
+    existingPairs.add(key);
+    existingPairs.add(tgtDid + '→' + srcDid);
+    created++;
+  }
+  if (created > 0) {
+    _pwSave('pw_links', pwLinks);
+    renderLinks();
+  }
+  return created;
+}
+
+function _getSelectedPwDids() {
+  return [...multiSelect]
+    .map(nid => nodeMap[nid])
+    .filter(n => n && n._pwDid)
+    .map(n => n._pwDid);
+}
+
+function openBulkLinkModal() {
+  if (multiSelect.size === 0) return;
+  const selectedDids = _getSelectedPwDids();
+  if (!selectedDids.length) { toast('No PW devices selected'); return; }
+
+  const selectedSet = new Set(selectedDids.map(String));
+  const targets = pwDevices
+    .filter(d => !selectedSet.has(String(d.device_id)))
+    .map(d => ({ did: d.device_id, name: d.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
+    <div style="margin-bottom:12px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
+      <input id="_blm_search" type="text" placeholder="Search devices…"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;margin-bottom:4px;"/>
+      <select id="_blm_target" size="6"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px;font-size:11px;border-radius:4px;">
+        ${targets.map(t => `<option value="${t.did}" style="background:#0d1a2e;color:#e2e8f0;padding:2px 4px;">${escXml(t.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:12px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+    </div>
+    <div id="_blm_status" style="font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+
+  const close    = () => document.body.removeChild(ov);
+  const searchEl = ov.querySelector('#_blm_search');
+  const selectEl = ov.querySelector('#_blm_target');
+  const statusEl = ov.querySelector('#_blm_status');
+  const yesBtn   = ov.querySelector('#_blm_yes');
+
+  searchEl.addEventListener('input', () => {
+    const q = searchEl.value.trim().toLowerCase();
+    for (const opt of selectEl.options) {
+      opt.hidden = q ? !opt.text.toLowerCase().includes(q) : false;
+    }
+  });
+
+  function updateStatus() {
+    const tgtDid = selectEl.value;
+    if (!tgtDid) { statusEl.textContent = 'Select a target device'; yesBtn.disabled = true; return; }
+    const existingPairs = new Set(
+      pwLinks.flatMap(l => [l.src_did + '→' + l.tgt_did, l.tgt_did + '→' + l.src_did])
+    );
+    let newCount = 0, skipCount = 0;
+    for (const srcDid of selectedDids) {
+      if (String(srcDid) === String(tgtDid)) { skipCount++; continue; }
+      if (existingPairs.has(srcDid + '→' + tgtDid)) { skipCount++; }
+      else { newCount++; }
+    }
+    statusEl.textContent = newCount > 0
+      ? `Will create ${newCount} link(s)` + (skipCount ? ` (${skipCount} skipped)` : '')
+      : 'All links already exist';
+    yesBtn.disabled = newCount === 0;
+    yesBtn.textContent = newCount > 0 ? `ADD ${newCount} LINKS` : 'ADD LINKS';
+  }
+  selectEl.addEventListener('change', updateStatus);
+  updateStatus();
+
+  ov.querySelector('#_blm_no').onclick = close;
+  yesBtn.onclick = () => {
+    const tgtDid   = selectEl.value;
+    const linkType = ov.querySelector('#_blm_type').value;
+    const label    = ov.querySelector('#_blm_label').value.trim();
+    if (!tgtDid) return;
+    close();
+    const created = _createBulkPwLinks(selectedDids, tgtDid, linkType, label);
+    multiSelect.clear(); renderNodes(); deselect();
+    toast(created > 0 ? `${created} link(s) created` : 'All links already exist');
+  };
+
+  setTimeout(() => searchEl.focus(), 50);
+}
+
+function bulkLinkSelectedTo(tgtDid) {
+  const selectedDids = _getSelectedPwDids().filter(d => String(d) !== String(tgtDid));
+  if (!selectedDids.length) { toast('No valid devices to link'); return; }
+
+  const tgtName = _pwDevName(tgtDid);
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
+    <div style="margin-bottom:12px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm2_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm2_label" type="text" placeholder="e.g. IPMI, Mgmt…"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="_blm2_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm2_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD ${selectedDids.length} LINKS</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+
+  const close = () => document.body.removeChild(ov);
+  ov.querySelector('#_blm2_no').onclick = close;
+  ov.querySelector('#_blm2_yes').onclick = () => {
+    const linkType = ov.querySelector('#_blm2_type').value;
+    const label    = ov.querySelector('#_blm2_label').value.trim();
+    close();
+    const created = _createBulkPwLinks(selectedDids, tgtDid, linkType, label);
+    multiSelect.clear(); renderNodes(); deselect();
+    toast(created > 0 ? `${created} link(s) created` : 'All links already exist');
+  };
+
+  setTimeout(() => ov.querySelector('#_blm2_label').focus(), 50);
 }
 
 
@@ -3600,14 +3775,20 @@ async function importPwLayout(file) {
 
 // ═══════════════════════════ MULTI-SELECT ═══════════════════════════
 function showMultiPanel() {
-  const panel = document.getElementById('info-panel');
-  panel.innerHTML = `
+  document.getElementById('panel-title').textContent = 'MULTI-SELECT';
+  document.getElementById('panel-icon').textContent = '◈';
+  document.getElementById('panel-body').innerHTML = `
     <div class="panel-section">
-      <div class="panel-section-title">MULTI-SELECT</div>
-      <div class="info-row"><span class="info-label">SELECTED</span><span class="info-value">${multiSelect.size} DEVICES</span></div>
+      <div class="panel-section-title">SELECTION</div>
+      <div class="info-row"><span class="info-label">DEVICES</span><span class="info-value">${multiSelect.size}</span></div>
     </div>
-    <div style="padding:0 16px 16px;display:flex;gap:8px;flex-direction:column;">
-      <button class="btn" style="width:100%;border-color:var(--danger);color:var(--danger)" onclick="deleteSelectedNodes()">✕ DELETE SELECTED (${multiSelect.size})</button>
+  `;
+  const actionBtn = isPingWatchPage
+    ? `<button class="btn" style="width:100%;border-color:var(--gold);color:var(--gold)" onclick="openBulkLinkModal()">⟷ LINK ALL TO… (${multiSelect.size})</button>`
+    : `<button class="btn" style="width:100%;border-color:var(--danger);color:var(--danger)" onclick="deleteSelectedNodes()">✕ DELETE SELECTED (${multiSelect.size})</button>`;
+  document.getElementById('panel-actions').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:8px;width:100%;">
+      ${actionBtn}
       <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
     </div>
   `;
