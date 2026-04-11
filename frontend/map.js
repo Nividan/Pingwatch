@@ -3076,8 +3076,9 @@ function doGroupDrag(e) {
     for (const { node, x0, y0 } of groupDrag.contained) {
       node.x = x0 + dx;
       node.y = y0 + dy;
-      document.getElementById('node-' + node.id)
-        ?.setAttribute('transform', `translate(${node.x},${node.y})`);
+      const t = `translate(${node.x},${node.y})`;
+      document.getElementById('node-' + node.id)?.setAttribute('transform', t);
+      document.getElementById('node-label-' + node.id)?.setAttribute('transform', t);
     }
     if (groupDrag.contained.length) renderLinks();
   }

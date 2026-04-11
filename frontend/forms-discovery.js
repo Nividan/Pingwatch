@@ -18,6 +18,7 @@ const _disc = {
   filter: '',
   sortKey: 'ip',
   showDups: 'all',         // 'all' | 'only' | 'hide'
+  group: 'Discovered',     // persisted across step 3→4 navigation
 };
 
 function openDiscoverSubnet(){
@@ -32,6 +33,7 @@ function openDiscoverSubnet(){
   _disc.sensorArgs = {};
   _disc.filter = '';
   _disc.showDups = 'all';
+  _disc.group = 'Discovered';
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'mdisc';
@@ -383,7 +385,7 @@ function _discRenderResults(){
       <div class="fr" style="margin:0">
         <label class="fl">Group</label>
         <div style="position:relative">
-          <input type="text" id="disc-group" value="Discovered" placeholder="Discovered" autocomplete="off"
+          <input type="text" id="disc-group" value="${esc(_disc.group)}" placeholder="Discovered" autocomplete="off"
                  style="padding-right:28px"
                  onfocus="_dgShow()" oninput="_dgFilter(this.value)"/>
           <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_dgToggle()">▾</button>
@@ -441,6 +443,7 @@ function _dgFilter(v){
 function _dgPick(g){
   const inp = document.getElementById('disc-group');
   if(inp) inp.value = g;
+  _disc.group = g;
   _dgHide();
 }
 
@@ -541,6 +544,9 @@ function _discUpdateNextBtn(){
 // ── Step 4: per-device sensor review ────────────────────────────
 function _discRenderSensorReview(){
   if(_disc.selected.size === 0){ toast('Select at least one device','err'); return; }
+  // Save group value before bdy is replaced (input leaves the DOM after this)
+  const _grpEl = document.getElementById('disc-group');
+  if(_grpEl) _disc.group = _grpEl.value.trim() || 'Discovered';
   _disc.step = 4;
   const bdy = document.getElementById('disc-bdy');
   const ft  = document.getElementById('disc-ft');
@@ -680,7 +686,7 @@ function _discUpdateAddBtn(){
 // ── Step 5: bulk add ───────────────────────────────────────────
 async function _discBulkAdd(){
   const btn = document.getElementById('disc-add-btn');
-  const group = (document.getElementById('disc-group')?.value || 'Discovered').trim() || 'Discovered';
+  const group = (_disc.group || 'Discovered').trim() || 'Discovered';
   const useHostname = (document.getElementById('disc-naming')?.value || 'hostname') === 'hostname';
   const devices = [];
   for(const ip of _disc.selected){
