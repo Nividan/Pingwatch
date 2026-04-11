@@ -562,7 +562,7 @@ function showPwNodePanel(did) {
     ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
     ['storage','Storage / NAS'],['phone','IP Phone / VoIP'],['camera','IP Camera / CCTV'],
     ['printer','Printer / MFP'],['load-balancer','Load Balancer'],['hypervisor','Hypervisor / ESXi'],
-    ['ups','UPS / PDU'],['container','Container Host'],
+    ['ups','UPS / PDU'],['container','Container Host'],['ipmi','IPMI / BMC'],
   ].map(([v,l])=>`<option value="${v}"${v===currentType?' selected':''}>${l}</option>`).join('');
   const sensors = dev.sensors || [];
   const sRows = sensors.map(s => {
@@ -987,6 +987,7 @@ const NODE_SIZE = {
   hypervisor: { w:160,  h:68  },
   ups:        { w:160,  h:68  },
   container:  { w:160,  h:68  },
+  ipmi:       { w:160,  h:68  },
 };
 function nsize(type, node) {
   if (type === 'info-box' && node) {
@@ -1436,6 +1437,7 @@ function buildNode(node, sel) {
     case 'hypervisor': return renderHypervisor(node, p, selFilter);
     case 'ups':        return renderUPS(node, p, selFilter);
     case 'container':  return renderContainer(node, p, selFilter);
+    case 'ipmi':       return renderIPMI(node, p, selFilter);
     default:           return renderGeneric(node, p, selFilter);
   }
 }
@@ -1957,6 +1959,27 @@ function renderContainer(node, p, sf) {
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(56,189,248,0.2)"/>
+  </g>`;
+}
+
+// ── IPMI / BMC ───────────────────────────────────────────────
+function renderIPMI(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(30,10,10,0.92)" stroke="#ef4444" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="6" y="6" width="18" height="18" rx="2" fill="rgba(239,68,68,0.12)" stroke="#ef4444" stroke-width="1.2"/>
+      <circle cx="15" cy="15" r="3" fill="#ef4444" opacity="0.8"/>
+      ${[10,15,20].map(y=>`<line x1="0" y1="${y}" x2="6" y2="${y}" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+      ${[10,15,20].map(y=>`<line x1="24" y1="${y}" x2="30" y2="${y}" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+      ${[10,15,20].map(x=>`<line x1="${x}" y1="0" x2="${x}" y2="6" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+      ${[10,15,20].map(x=>`<line x1="${x}" y1="24" x2="${x}" y2="30" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+    </g>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(239,68,68,0.2)"/>
   </g>`;
 }
 
@@ -3998,7 +4021,7 @@ function showMultiPanel() {
       ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
     ['storage','Storage / NAS'],['phone','IP Phone / VoIP'],['camera','IP Camera / CCTV'],
     ['printer','Printer / MFP'],['load-balancer','Load Balancer'],['hypervisor','Hypervisor / ESXi'],
-    ['ups','UPS / PDU'],['container','Container Host'],
+    ['ups','UPS / PDU'],['container','Container Host'],['ipmi','IPMI / BMC'],
     ].map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
 
     document.getElementById('panel-body').innerHTML = `
