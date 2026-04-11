@@ -50,7 +50,8 @@ def pg_create_main_schema(cur):
             snmp_community_default   TEXT DEFAULT '',
             snmp_version_default     TEXT DEFAULT '',
             vmware_user_default      TEXT DEFAULT '',
-            vmware_password_default  TEXT DEFAULT ''
+            vmware_password_default  TEXT DEFAULT '',
+            secondary_ips            TEXT DEFAULT '[]'
         )""")
 
     cur.execute("""
@@ -105,6 +106,7 @@ def pg_create_main_schema(cur):
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
         ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
+        ("main.devices", "secondary_ips",           "TEXT DEFAULT '[]'"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:

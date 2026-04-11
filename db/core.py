@@ -428,6 +428,12 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # Device secondary IPs (JSON array)
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN secondary_ips TEXT DEFAULT '[]'")
+            con.commit()
+        except Exception:
+            pass
         # backup_devices — replace per-device schedule with global-schedule flag
         try:
             con.execute("ALTER TABLE backup_devices ADD COLUMN in_schedule INTEGER DEFAULT 0")

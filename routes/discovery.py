@@ -122,12 +122,16 @@ def handle(h, method, path, body):
         if len(items) > 500:
             h._json(400, {"error": "too many devices (max 500 per call)"}); return True
 
-        # Snapshot existing hosts (lowercased) for fast duplicate detection.
+        # Snapshot existing hosts + secondary IPs (lowercased) for dedup.
         with STATE._lock:
             existing_hosts = {
                 (d.host or "").lower()
                 for d in STATE.devices.values() if getattr(d, "host", "")
             }
+            for d in STATE.devices.values():
+                for sip in getattr(d, "secondary_ips", []) or []:
+                    if sip:
+                        existing_hosts.add(sip.lower())
 
         created, errors = [], []
         for idx, item in enumerate(items):
