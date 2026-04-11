@@ -425,6 +425,8 @@ function renderPingWatchCanvas() {
     showPwLinkPanel(selectedEl.data.id);
   } else if (_selectedPwDid) {
     showPwNodePanel(_selectedPwDid);
+  } else if (multiSelect.size > 0) {
+    showMultiPanel();
   } else {
     showPwDashboardPanel();
   }
@@ -867,7 +869,7 @@ function _pwLiveUpdate(did) {
   // Update right panel only if relevant and no input is focused
   if (_selectedPwDid === did && !_pwInputFocused()) {
     showPwNodePanel(did);
-  } else if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) {
+  } else if (!_selectedPwDid && !selectedEl && multiSelect.size === 0 && !_pwInputFocused()) {
     showPwDashboardPanel();
   }
 }
