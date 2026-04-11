@@ -560,6 +560,9 @@ function showPwNodePanel(did) {
     ['laptop','Laptop'],['ap','WiFi Access Point'],['connector','Cato Connector'],
     ['remote-pc','Remote PC'],['cloud','Cloud / Internet'],
     ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
+    ['storage','Storage / NAS'],['phone','IP Phone / VoIP'],['camera','IP Camera / CCTV'],
+    ['printer','Printer / MFP'],['load-balancer','Load Balancer'],['hypervisor','Hypervisor / ESXi'],
+    ['ups','UPS / PDU'],['container','Container Host'],
   ].map(([v,l])=>`<option value="${v}"${v===currentType?' selected':''}>${l}</option>`).join('');
   const sensors = dev.sensors || [];
   const sRows = sensors.map(s => {
@@ -976,6 +979,14 @@ const NODE_SIZE = {
   router:     { w:160,  h:68  },
   vm:         { w:160,  h:68  },
   appliance:  { w:160,  h:68  },
+  storage:    { w:160,  h:68  },
+  phone:      { w:160,  h:68  },
+  camera:     { w:160,  h:68  },
+  printer:    { w:160,  h:68  },
+  'load-balancer':{ w:160, h:68 },
+  hypervisor: { w:160,  h:68  },
+  ups:        { w:160,  h:68  },
+  container:  { w:160,  h:68  },
 };
 function nsize(type, node) {
   if (type === 'info-box' && node) {
@@ -1417,6 +1428,14 @@ function buildNode(node, sel) {
     case 'router':     return renderRouter(node, p, selFilter);
     case 'vm':         return renderVM(node, p, selFilter);
     case 'appliance':  return renderAppliance(node, p, selFilter);
+    case 'storage':    return renderStorage(node, p, selFilter);
+    case 'phone':      return renderPhone(node, p, selFilter);
+    case 'camera':     return renderCamera(node, p, selFilter);
+    case 'printer':    return renderPrinter(node, p, selFilter);
+    case 'load-balancer': return renderLoadBalancer(node, p, selFilter);
+    case 'hypervisor': return renderHypervisor(node, p, selFilter);
+    case 'ups':        return renderUPS(node, p, selFilter);
+    case 'container':  return renderContainer(node, p, selFilter);
     default:           return renderGeneric(node, p, selFilter);
   }
 }
@@ -1776,6 +1795,168 @@ function renderAppliance(node, p, sf) {
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(251,146,60,0.2)"/>
+  </g>`;
+}
+
+// ── Storage / NAS ────────────────────────────────────────────
+function renderStorage(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(30,20,5,0.92)" stroke="#f59e0b" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <rect x="2" y="0" width="26" height="8" rx="3" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.2"/>
+      <rect x="0" y="10" width="30" height="8" rx="3" fill="rgba(245,158,11,0.2)" stroke="#f59e0b" stroke-width="1.2"/>
+      <rect x="2" y="20" width="26" height="8" rx="3" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.2"/>
+      <circle cx="24" cy="14" r="2" fill="#f59e0b" class="led-blink"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#fcd34d" x="52" y="24" fill="${p.name_color||'#fcd34d'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(245,158,11,0.2)"/>
+  </g>`;
+}
+
+// ── IP Phone / VoIP ──────────────────────────────────────────
+function renderPhone(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(5,25,25,0.92)" stroke="#14b8a6" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <path d="M4,8 Q4,4 8,4 L12,4 Q14,4 14,6 L14,12 Q14,14 12,14 L10,14 Q6,18 6,22 Q6,26 10,26 L12,26 Q14,26 14,28 L14,34 Q14,36 12,36 L8,36 Q4,36 4,32 Z" fill="none" stroke="#14b8a6" stroke-width="1.5"/>
+      <path d="M18,10 Q24,4 30,10" fill="none" stroke="#14b8a6" stroke-width="1.2" opacity="0.4"/>
+      <path d="M20,12 Q24,8 28,12" fill="none" stroke="#14b8a6" stroke-width="1.2" opacity="0.7"/>
+      <circle cx="24" cy="14" r="1.5" fill="#14b8a6"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#5eead4" x="52" y="24" fill="${p.name_color||'#5eead4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(20,184,166,0.2)"/>
+  </g>`;
+}
+
+// ── IP Camera / CCTV ─────────────────────────────────────────
+function renderCamera(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(15,12,35,0.92)" stroke="#818cf8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <rect x="0" y="6" width="22" height="16" rx="2" fill="rgba(129,140,248,0.15)" stroke="#818cf8" stroke-width="1.2"/>
+      <circle cx="11" cy="14" r="5" fill="none" stroke="#818cf8" stroke-width="1.2"/>
+      <circle cx="11" cy="14" r="2" fill="#818cf8" opacity="0.8"/>
+      <polygon points="22,10 30,6 30,22 22,18" fill="rgba(129,140,248,0.2)" stroke="#818cf8" stroke-width="1"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#c7d2fe" x="52" y="24" fill="${p.name_color||'#c7d2fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(129,140,248,0.2)"/>
+  </g>`;
+}
+
+// ── Printer / MFP ────────────────────────────────────────────
+function renderPrinter(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(15,18,22,0.92)" stroke="#94a3b8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="2" y="0" width="24" height="10" rx="1" fill="rgba(148,163,184,0.1)" stroke="#94a3b8" stroke-width="1"/>
+      <rect x="0" y="10" width="28" height="14" rx="2" fill="rgba(148,163,184,0.15)" stroke="#94a3b8" stroke-width="1.2"/>
+      <rect x="4" y="24" width="20" height="6" rx="1" fill="rgba(148,163,184,0.1)" stroke="#94a3b8" stroke-width="0.8"/>
+      <rect x="6" y="-4" width="16" height="6" rx="1" fill="rgba(148,163,184,0.08)" stroke="#94a3b8" stroke-width="0.8"/>
+      <circle cx="23" cy="17" r="1.5" fill="#94a3b8" class="led-blink"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#cbd5e1" x="52" y="24" fill="${p.name_color||'#cbd5e1'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(148,163,184,0.2)"/>
+  </g>`;
+}
+
+// ── Load Balancer ────────────────────────────────────────────
+function renderLoadBalancer(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(30,8,20,0.92)" stroke="#ec4899" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <circle cx="4" cy="14" r="3" fill="#ec4899" opacity="0.8"/>
+      <line x1="7" y1="14" x2="16" y2="14" stroke="#ec4899" stroke-width="1.5"/>
+      <line x1="16" y1="14" x2="28" y2="6" stroke="#ec4899" stroke-width="1.2"/>
+      <line x1="16" y1="14" x2="28" y2="14" stroke="#ec4899" stroke-width="1.2"/>
+      <line x1="16" y1="14" x2="28" y2="22" stroke="#ec4899" stroke-width="1.2"/>
+      <polygon points="26,4 32,6 26,8" fill="#ec4899"/>
+      <polygon points="26,12 32,14 26,16" fill="#ec4899"/>
+      <polygon points="26,20 32,22 26,24" fill="#ec4899"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#f9a8d4" x="52" y="24" fill="${p.name_color||'#f9a8d4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(236,72,153,0.2)"/>
+  </g>`;
+}
+
+// ── Hypervisor / ESXi ────────────────────────────────────────
+function renderHypervisor(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(8,15,40,0.92)" stroke="#3b82f6" stroke-width="1.5" filter="url(#glow-blue)"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="0" y="0" width="30" height="30" rx="2" fill="rgba(59,130,246,0.1)" stroke="#3b82f6" stroke-width="1.2"/>
+      <rect x="3" y="3" width="24" height="7" rx="1" fill="rgba(59,130,246,0.15)" stroke="#3b82f6" stroke-width="0.8"/>
+      <rect x="3" y="12" width="24" height="7" rx="1" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="0.8" opacity="0.8"/>
+      <rect x="3" y="21" width="24" height="7" rx="1" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="0.8" opacity="0.6"/>
+      <circle cx="23" cy="6.5" r="1.5" fill="#3b82f6" class="led-blink"/>
+      <circle cx="23" cy="15.5" r="1.5" fill="#3b82f6" class="led-blink" opacity="0.7"/>
+      <circle cx="23" cy="24.5" r="1.5" fill="#ffd700" class="led-blink" opacity="0.5"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="52" y="24" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(59,130,246,0.2)"/>
+  </g>`;
+}
+
+// ── UPS / PDU ────────────────────────────────────────────────
+function renderUPS(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(15,22,8,0.92)" stroke="#84cc16" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="4" y="0" width="22" height="30" rx="3" fill="rgba(132,204,22,0.1)" stroke="#84cc16" stroke-width="1.2"/>
+      <rect x="10" y="-3" width="10" height="4" rx="1" fill="rgba(132,204,22,0.3)" stroke="#84cc16" stroke-width="0.8"/>
+      <path d="M18,10 L13,18 L17,18 L12,26" fill="none" stroke="#84cc16" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="22" cy="4" r="1.5" fill="#84cc16" class="led-blink"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#bef264" x="52" y="24" fill="${p.name_color||'#bef264'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(132,204,22,0.2)"/>
+  </g>`;
+}
+
+// ── Container Host ───────────────────────────────────────────
+function renderContainer(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(5,20,30,0.92)" stroke="#38bdf8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <path d="M2,20 L15,26 L28,20 L28,8 L15,2 L2,8 Z" fill="rgba(56,189,248,0.1)" stroke="#38bdf8" stroke-width="1.2"/>
+      <line x1="2" y1="8" x2="15" y2="14" stroke="#38bdf8" stroke-width="0.8" opacity="0.5"/>
+      <line x1="28" y1="8" x2="15" y2="14" stroke="#38bdf8" stroke-width="0.8" opacity="0.5"/>
+      <line x1="15" y1="14" x2="15" y2="26" stroke="#38bdf8" stroke-width="0.8" opacity="0.5"/>
+      <path d="M8,11 L15,14.5 L22,11" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.6"/>
+      <path d="M8,16 L15,19.5 L22,16" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.4"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(56,189,248,0.2)"/>
   </g>`;
 }
 
@@ -3815,6 +3996,9 @@ function showMultiPanel() {
       ['laptop','Laptop'],['ap','WiFi Access Point'],['connector','Cato Connector'],
       ['remote-pc','Remote PC'],['cloud','Cloud / Internet'],
       ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
+    ['storage','Storage / NAS'],['phone','IP Phone / VoIP'],['camera','IP Camera / CCTV'],
+    ['printer','Printer / MFP'],['load-balancer','Load Balancer'],['hypervisor','Hypervisor / ESXi'],
+    ['ups','UPS / PDU'],['container','Container Host'],
     ].map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
 
     document.getElementById('panel-body').innerHTML = `
