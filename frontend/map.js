@@ -468,6 +468,8 @@ function showPwDashboardPanel() {
     </div>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
   `;
+  // Restart dashboard canvas (paused while node/link panel was showing)
+  _resumeDashBg?.();
 }
 
 function _buildIncidentList() {
@@ -654,7 +656,7 @@ function startPwSSE() {
     // Threshold events → re-color any PW link assigned to that sensor
     ['threshold_critical', 'threshold_warning', 'threshold_ok'].forEach(evt => {
       pwSSE.addEventListener(evt, e => {
-        if (!isPingWatchPage) return;
+        if (!isPingWatchPage || !_ntmVisible) return;
         const d = JSON.parse(e.data);
         const state = evt === 'threshold_ok' ? 'ok' : evt === 'threshold_warning' ? 'warn' : 'crit';
         _pwSensorThresholdUpdate(d.did, d.sid, state);
@@ -715,10 +717,10 @@ function _pwFindPath(fromDid, toDid) {
 
 // ── Trace animation performance limits ───────────────────────────────────────
 // Max 3 concurrent dots (was 6) — each runs its own rAF loop at 30fps
-const PW_MAX_TRACES = 3;
-// Per-device cooldown: only one trace per device per 4 seconds.
-// With 38 devices probing every 5s, this was firing ~22 traces/second.
-const _pwTraceCooldown = 4000;
+const PW_MAX_TRACES = 2;
+// Per-device cooldown: only one trace per device per 6 seconds.
+// With 62 devices probing every 5s, fewer concurrent traces = less RAF pressure.
+const _pwTraceCooldown = 6000;
 const _pwTraceLastFired = new Map();
 
 function _pwFireTrace(toDid, alive) {
@@ -1357,23 +1359,9 @@ function renderNodes() {
   _startLedBlink();
 }
 
-let ledIntervals = [];
-let _ledTimer = null;
-
-function clearLedIntervals() {
-  if (_ledTimer) { clearInterval(_ledTimer); _ledTimer = null; }
-  ledIntervals.forEach(clearInterval);
-  ledIntervals = [];
-}
-
-function _startLedBlink() {
-  if (_ledTimer) return; // already running
-  _ledTimer = setInterval(() => {
-    document.querySelectorAll('.led-blink').forEach(led => {
-      led.style.opacity = Math.random() > 0.3 ? '1' : '0.2';
-    });
-  }, 700);
-}
+// LED blink is now pure CSS (@keyframes ledBlink in map.css)
+function clearLedIntervals() {}
+function _startLedBlink() {}
 
 // ═══════════════════════════ NODE RENDERERS ═══════════════════════════
 
@@ -4208,7 +4196,8 @@ function initDashBg() {
 
   function frame() {
     // Stop-and-restart: don't re-schedule when paused (saves empty RAF/s)
-    if (_bgPaused || !_ntmVisible) { _rafId = null; return; }
+    // Also skip when dashboard panel canvas is not visible (node/link panel showing)
+    if (_bgPaused || !_ntmVisible || !canvas.offsetParent) { _rafId = null; return; }
     _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
 
     const W = canvas.width, H = canvas.height;
