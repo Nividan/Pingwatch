@@ -679,6 +679,13 @@ function _iipGetDuration(d, alertEvt) {
   const tsSec      = d.ts ? new Date(d.ts).getTime() / 1000 : 0;
   const dTs        = d.ts ? new Date(d.ts).getTime() : 0;
 
+  // d.duration is the authoritative outage duration written to DB at recovery time.
+  // Use it first — avoids mismatches from alertEvt.resolved_at which may belong to
+  // a different alert period (match window is loose).
+  if (d.duration > 0) {
+    return { secs: d.duration, live: false };
+  }
+
   // Recovery row: _calcDurations pre-computed down→up (only for plain 'recovered' direction)
   if (isRecovery && d._duration != null) {
     return { secs: d._duration, live: false };
