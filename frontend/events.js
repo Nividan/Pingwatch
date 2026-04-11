@@ -473,7 +473,9 @@ function _buildEvtCard(d) {
     ? (icon + ' ' + esc(_trapLabel(d)))
     : (icon + ' ' + esc(d.sname||''));
   const dispHost = isTrap ? esc(d.src_ip||'') : esc(d.host||'');
-  const durStr   = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : null);
+  const _cardAlertEvt = _matchAlertEvt(d);
+  const { secs: _cardDurSecs, live: _cardDurLive } = _iipGetDuration(d, _cardAlertEvt);
+  const durStr   = (!_cardDurLive && _cardDurSecs > 0) ? _fmtDuration(_cardDurSecs) : null;
   const unknownCls = (isTrap && !d.enriched) ? ' evt-trap-unknown' : '';
 
   const row = document.createElement('div');
@@ -519,9 +521,10 @@ function _buildEvtTable(events) {
     const vendorCell = isTrap
       ? (d.vendor && d.vendor !== 'Unknown' ? _vendorBadge(d) + (d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') : '—')
       : '—';
-    const durStr = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : '—');
-    // Build alert tag cell
+    // Build alert tag cell — computed first so durStr can use alertEvt.resolved_at
     const alertEvt = _matchAlertEvt(d);
+    const { secs: _durSecs, live: _durLive } = _iipGetDuration(d, alertEvt);
+    const durStr = (!_durLive && _durSecs > 0) ? _fmtDuration(_durSecs) : '—';
     let alertCell = '<td></td>';
     if (alertEvt) {
       const isActive = alertEvt.state === 'active';
