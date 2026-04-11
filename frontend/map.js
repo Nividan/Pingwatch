@@ -586,6 +586,11 @@ function showPwNodePanel(did) {
       <div class="field-label">HOST / IP</div>
       <span style="color:${col};font-family:'Share Tech Mono',monospace;font-size:11px">${escXml(dev.host)}</span>
     </div>
+    ${(dev.secondary_ips||[]).length ? `
+    <div class="field-group">
+      <div class="field-label">SECONDARY IPS</div>
+      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
+    </div>` : ''}
     <div class="field-group">
       <div class="field-label">GROUP</div>
       <span style="color:rgba(255,255,255,0.5);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
