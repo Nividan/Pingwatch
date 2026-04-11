@@ -388,34 +388,6 @@ function calcPwLayout(devices) {
     rowY += rowH + ROWGAP;
   }
 
-  // De-overlap pass: if any group grew and now overlaps a later group, push it down
-  const GROUP_PAD = 30;
-  for (let i = 0; i < syntheticGroups.length; i++) {
-    const a = syntheticGroups[i];
-    for (let j = i + 1; j < syntheticGroups.length; j++) {
-      const b = syntheticGroups[j];
-      if (_rectsOverlap(a, b, GROUP_PAD)) {
-        const shift = (a.y + a.h + GROUP_PAD) - b.y;
-        if (shift > 0) {
-          b.y += shift;
-          // Move all nodes that belong to this group
-          const govr = pwGroupOverrides[b.name];
-          if (govr) { govr.y = b.y; _pwGroupDirty = true; }
-          for (const n of syntheticNodes) {
-            if (n._pwDid) {
-              const dev = pwDevices.find(d => d.device_id === n._pwDid);
-              if (dev && (dev.group || 'Default Group') === b.name) {
-                const ovr = pwOverrides[n._pwDid];
-                if (ovr) { ovr.y += shift; _pwNodeDirty = true; }
-                n.y += shift;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
   // Batched persistence — one PATCH per settings key per layout pass
   if (_pwNodeDirty)  _pwSave('pw_node_overrides',  pwOverrides);
   if (_pwGroupDirty) _pwSave('pw_group_overrides', pwGroupOverrides);
