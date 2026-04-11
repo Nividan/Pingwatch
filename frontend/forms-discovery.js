@@ -483,10 +483,12 @@ function _discRowHtml(r, isPing){
       <td>${hostCell}${dupNote}
         <div class="disc-row-name">
           <input type="text" value="${esc(nm)}" placeholder="Device name" oninput="_discSetCustomName('${esc(r.ip)}', this.value)"/>
+          <span class="disc-row-lbl">Group:</span>
           <input type="text" class="disc-row-grp${_disc.customGroups[r.ip]!==undefined?' disc-row-grp-custom':''}"
                  list="disc-groups-dl" data-ip="${esc(r.ip)}"
                  value="${esc(_disc.customGroups[r.ip]!==undefined?_disc.customGroups[r.ip]:_disc.group)}"
                  placeholder="Group"
+                 onfocus="this.select()"
                  oninput="_discSetRowGroup('${esc(r.ip)}',this.value)"/>
         </div>
       </td>
