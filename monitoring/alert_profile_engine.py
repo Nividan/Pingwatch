@@ -356,8 +356,9 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
             # Recovery stages auto-resolve any active event for this profile
             from db.alert_events import db_auto_resolve_event
             db_auto_resolve_event(profile["id"], did, sid)
-        db_log_event(profile["id"], stage["id"], profile["name"], ctx,
-                     state="active")
+        else:
+            db_log_event(profile["id"], stage["id"], profile["name"], ctx,
+                         state="active")
     except Exception as e:
         log.warning(f"alert_profile_engine: db_log_event error: {e}")
 
