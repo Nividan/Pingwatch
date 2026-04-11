@@ -686,6 +686,7 @@ function _discUpdateAddBtn(){
 }
 
 // ── Link discovered IP to existing device ─────────────────────
+// Step 1: device picker
 function _discLinkToDevice(ip){
   const devs = Object.values(S.devices).sort((a,b)=>a.name.localeCompare(b.name));
   if(!devs.length){ toast('No existing devices to link to','err'); return; }
@@ -693,7 +694,8 @@ function _discLinkToDevice(ip){
   const o = document.createElement('div'); o.className='mo'; o.id='disc-link-m';
   _overlayClose(o, ()=>closeM('disc-link-m'));
   const devItems = devs.map(d =>
-    `<div class="grp-dd-item" style="padding:6px 10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)" onclick="_discLinkConfirm('${esc(ip)}','${esc(d.device_id)}')">
+    `<div class="grp-dd-item" style="padding:6px 10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"
+          onclick="_discLinkStep2('${esc(ip)}','${esc(d.device_id)}')">
       <span>${esc(d.name)}</span>
       <span style="font-size:11px;color:var(--text3);font-family:monospace">${esc(d.host)}</span>
     </div>`
@@ -729,21 +731,94 @@ function _discLinkFilter(q){
     item.style.display = text.includes(q) ? '' : 'none';
   }
 }
-async function _discLinkConfirm(ip, did){
+
+// Step 2: confirm + sensor selection
+function _discLinkStep2(ip, did){
+  const dev = S.devices[did];
+  const devName = dev?.name || did;
+  const row = _disc.rows.find(r => r.ip === ip);
+  // Use discovered suggestions; fall back to a single PING if none
+  const suggested = (row?.suggested || []).length > 0
+    ? row.suggested
+    : [{stype:'ping', name:`Ping-${ip}`, port:null}];
+
+  const sensRows = suggested.map((sg, i) => {
+    const label = `${esc(sg.name)} <span style="font-size:10px;color:var(--text3)">(${esc(sg.stype)}${sg.port?':'+sg.port:''})</span>`;
+    return `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--border)">
+      <input type="checkbox" id="dlsnk-${i}" checked>
+      <span>${label}</span>
+    </label>`;
+  }).join('');
+
+  const mbox = document.querySelector('#disc-link-m .mbox');
+  if(!mbox) return;
+  mbox.innerHTML = `
+    <div class="mhd">
+      <div class="mttl">Link ${esc(ip)} → ${esc(devName)}</div>
+      <button class="mclose" onclick="closeM('disc-link-m')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+        <b>${esc(ip)}</b> will be registered as a secondary IP of <b>${esc(devName)}</b>.
+      </div>
+      <div class="fl" style="margin-bottom:6px">Also add sensors on ${esc(devName)}:</div>
+      <div style="border:1px solid var(--border);border-radius:6px;padding:0 10px">${sensRows}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px">Uncheck sensors you don't want to add. All sensors will use this IP as their host.</div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="_discLinkToDevice('${esc(ip)}')">← Back</button>
+      <button class="btn-s" onclick="closeM('disc-link-m')">Cancel</button>
+      <button class="btn-p" onclick="_discLinkConfirm('${esc(ip)}','${esc(did)}',${suggested.length})">Link</button>
+    </div>`;
+}
+
+async function _discLinkConfirm(ip, did, nSuggested){
+  const mbox = document.querySelector('#disc-link-m .mbox');
+  const btn = mbox?.querySelector('.btn-p');
+  if(btn){ btn.disabled=true; btn.textContent='Linking…'; }
+
+  // Collect checked sensors
+  const row = _disc.rows.find(r => r.ip === ip);
+  const suggested = (row?.suggested || []).length > 0
+    ? row.suggested
+    : [{stype:'ping', name:`Ping-${ip}`, port:null}];
+  const toCreate = suggested.filter((_,i)=>document.getElementById(`dlsnk-${i}`)?.checked);
+
+  // 1. Register secondary IP
   let r;
   try{ r = await api('POST', `/api/device/${did}/secondary-ip`, {ip}); }
-  catch(e){ toast('Failed to link IP','err'); return; }
-  if(!r || r.error){ toast(r?.error || 'Failed to link','err'); return; }
-  closeM('disc-link-m');
-  // Update local state
+  catch(e){ toast('Failed to link IP','err'); if(btn){btn.disabled=false;btn.textContent='Link';} return; }
+  if(!r || r.error){ toast(r?.error||'Failed to link','err'); if(btn){btn.disabled=false;btn.textContent='Link';} return; }
+
+  // Update local secondary_ips
   const dev = S.devices[did];
   if(dev) dev.secondary_ips = r.secondary_ips || [...(dev.secondary_ips||[]), ip];
+
+  // 2. Create selected sensors
+  let sensCreated = 0, sensFailed = 0;
+  for(const sg of toCreate){
+    const spec = {name: sg.name, type: sg.stype, host: ip};
+    if(sg.port) spec.port = sg.port;
+    if(sg.url)  spec.url  = sg.url;
+    try{
+      const sr = await api('POST', `/api/device/${did}/sensor`, spec);
+      if(sr && sr.sid){
+        sensCreated++;
+      } else { sensFailed++; }
+    } catch(e){ sensFailed++; }
+  }
+
+  closeM('disc-link-m');
   // Remove from discovery results
-  _disc.rows = _disc.rows.filter(row => row.ip !== ip);
+  _disc.rows = _disc.rows.filter(r => r.ip !== ip);
   _disc.selected.delete(ip);
   _discRefreshTbody();
   _discUpdateCounts();
-  toast(`Linked ${ip} → ${dev?.name || did}`, 'ok');
+
+  const snrMsg = toCreate.length === 0 ? ''
+    : sensFailed ? ` — ${sensCreated} sensor${sensCreated===1?'':'s'} added, ${sensFailed} failed`
+    : ` + ${sensCreated} sensor${sensCreated===1?'':'s'}`;
+  toast(`Linked ${ip} → ${dev?.name || did}${snrMsg}`, sensFailed?'err':'ok');
 }
 function _discUpdateCounts(){
   const countEl = document.getElementById('disc-count');
