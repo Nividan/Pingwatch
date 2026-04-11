@@ -373,6 +373,7 @@ function _discRenderResults(){
           <th style="width:32px"></th>
           <th class="disc-th-sortable" onclick="_discSetSort('ip')">IP</th>
           <th class="disc-th-sortable" onclick="_discSetSort('hostname')">Hostname</th>
+          <th>Group</th>
           <th>MAC / Vendor</th>
           <th class="disc-th-sortable" onclick="_discSetSort('ports')">${isPing?'':'Ports'}</th>
           <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Type'}</th>
@@ -483,14 +484,15 @@ function _discRowHtml(r, isPing){
       <td>${hostCell}${dupNote}
         <div class="disc-row-name">
           <input type="text" value="${esc(nm)}" placeholder="Device name" oninput="_discSetCustomName('${esc(r.ip)}', this.value)"/>
-          <span class="disc-row-lbl">Group:</span>
-          <input type="text" class="disc-row-grp${_disc.customGroups[r.ip]!==undefined?' disc-row-grp-custom':''}"
-                 list="disc-groups-dl" data-ip="${esc(r.ip)}"
-                 value="${esc(_disc.customGroups[r.ip]!==undefined?_disc.customGroups[r.ip]:_disc.group)}"
-                 placeholder="Group"
-                 onfocus="this.select()"
-                 oninput="_discSetRowGroup('${esc(r.ip)}',this.value)"/>
         </div>
+      </td>
+      <td>
+        <input type="text" class="disc-row-grp${_disc.customGroups[r.ip]!==undefined?' disc-row-grp-custom':''}"
+               list="disc-groups-dl" data-ip="${esc(r.ip)}"
+               value="${esc(_disc.customGroups[r.ip]!==undefined?_disc.customGroups[r.ip]:_disc.group)}"
+               placeholder="Group"
+               onfocus="_discGrpFocus(this)" onblur="_discGrpBlur(this,'${esc(r.ip)}')"
+               oninput="_discSetRowGroup('${esc(r.ip)}',this.value)"/>
       </td>
       <td>${macStr} ${vendStr}</td>
       <td>${isPing?'<span class="disc-muted">—</span>':portChips || '<span class="disc-muted">—</span>'}</td>
@@ -556,6 +558,19 @@ function _discSetDefaultGroup(g){
       inp.value = g;
     }
   });
+}
+
+function _discGrpFocus(inp){
+  inp.dataset.prev = inp.value;
+  inp.value = '';
+}
+function _discGrpBlur(inp, ip){
+  if(!inp.value){
+    // Restore previous value if user clicked away without picking
+    inp.value = inp.dataset.prev || _disc.group;
+    // Make sure state matches
+    if(inp.value === _disc.group) delete _disc.customGroups[ip];
+  }
 }
 
 function _discSetRowGroup(ip, g){
