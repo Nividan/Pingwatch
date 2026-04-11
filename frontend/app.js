@@ -180,6 +180,11 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
   if (gen !== _resyncGen) return;  // a newer call took over — abort this chain
   try {
     const r = await fetch('/api/devices');
+    if (r.status === 401) {
+      // Server restarted and cleared sessions — show login
+      if (!_loggedOut) showLogin('Server restarted. Please sign in again.');
+      return;
+    }
     if (!r.ok) {
       if (retryCount < 5) setTimeout(() => _sseResync(retryCount + 1, gen), 3000);
       return;
@@ -319,6 +324,21 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowUp'){e.preventDefault();items[(idx-1+items.length)%items.length]?.focus();}
 });
 function onAuthenticated(username){
+  // ── Clean slate: purge stale data from previous session / server restart ──
+  for(const k in S.devices)  delete S.devices[k];
+  for(const k in S.sensors)  delete S.sensors[k];
+  for(const k in S.logs)     delete S.logs[k];
+  for(const k in S.charts)   delete S.charts[k];
+  for(const k in S.devTraps) delete S.devTraps[k];
+  S._devSensors={};
+  FLAPS.length=0; _FLAP_SEEN.clear();
+  if(typeof _dwReset==='function') _dwReset();
+  // Clear stale device cards & group sections from DOM
+  document.querySelectorAll('#dpanels .grp-wrap').forEach(el=>el.remove());
+  // Reset SSE state for clean reconnect
+  _sseFirstConnect=true;
+  _reconnectDelay=TIMINGS.RECONNECT_INITIAL;
+
   document.getElementById('tb-user').textContent=username;
   document.getElementById('usrDd').style.display='';
   const dn=document.getElementById('usr-dd-name');
@@ -1173,6 +1193,9 @@ async function loadAll(){
     document.getElementById('dpanels').style.display='';
     document.getElementById('devActBar').style.display='';
   }
+  // Signal NTM map iframe to re-fetch fresh data (handles server restart)
+  const _mf=document.getElementById('map-frame');
+  if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
 }
 // App bootstrap — check session before doing anything
 checkAuth();

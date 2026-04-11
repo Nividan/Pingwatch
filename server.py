@@ -189,6 +189,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
@@ -681,6 +682,7 @@ def main():
     # ── Load state & start background threads ──────────────────────
     _t0 = time.time()
     db_load(STATE)
+    app_state.ready = True
     log.info(f"State loaded in {time.time()-_t0:.2f}s — {len(STATE.devices)} device(s)")
     threading.Thread(target=autosave_loop, args=(STATE,), daemon=True).start()
     from snmp.receiver import trap_receiver_loop

@@ -23,5 +23,8 @@ effective_snmp_port = 162
 # ── TLS state (set by main() during startup) ─────────────────────
 tls_active = False   # True when the server socket is SSL-wrapped
 
+# ── Server readiness (set True after db_load completes) ──────────
+ready = False
+
 # ── System-tray icon reference (set by main(); used by DB import) ─
 tray_icon = None
