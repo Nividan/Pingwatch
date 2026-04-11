@@ -3777,21 +3777,122 @@ async function importPwLayout(file) {
 function showMultiPanel() {
   document.getElementById('panel-title').textContent = 'MULTI-SELECT';
   document.getElementById('panel-icon').textContent = '◈';
-  document.getElementById('panel-body').innerHTML = `
-    <div class="panel-section">
-      <div class="panel-section-title">SELECTION</div>
-      <div class="info-row"><span class="info-label">DEVICES</span><span class="info-value">${multiSelect.size}</span></div>
-    </div>
-  `;
-  const actionBtn = isPingWatchPage
-    ? `<button class="btn" style="width:100%;border-color:var(--gold);color:var(--gold)" onclick="openBulkLinkModal()">⟷ LINK ALL TO… (${multiSelect.size})</button>`
-    : `<button class="btn" style="width:100%;border-color:var(--danger);color:var(--danger)" onclick="deleteSelectedNodes()">✕ DELETE SELECTED (${multiSelect.size})</button>`;
-  document.getElementById('panel-actions').innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:8px;width:100%;">
-      ${actionBtn}
-      <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
-    </div>
-  `;
+
+  if (isPingWatchPage) {
+    // Gather selected PW devices
+    const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+    const selDevs  = selNodes.map(n => pwDevices.find(d => d.device_id === n._pwDid)).filter(Boolean);
+
+    const upCount   = selDevs.filter(d => d.status === 'up').length;
+    const downCount = selDevs.filter(d => d.status === 'down').length;
+    const unkCount  = selDevs.length - upCount - downCount;
+
+    // Per-device summary rows (capped at 12 to avoid overflow)
+    const devRows = selDevs.slice(0, 12).map(d => {
+      const c = pwStatusColor(d.status);
+      const dot = `<span style="color:${c};font-size:9px">●</span>`;
+      return `<div style="display:flex;align-items:center;gap:5px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
+        ${dot}
+        <span style="font-family:'Share Tech Mono',monospace;font-size:9px;color:rgba(255,255,255,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escXml(d.name)}</span>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">${escXml(d.host)}</span>
+      </div>`;
+    }).join('');
+    const moreRow = selDevs.length > 12
+      ? `<div style="font-size:9px;color:rgba(255,255,255,0.3);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
+      : '';
+
+    const _typeOpts = [
+      ['','— keep current —'],
+      ['switch','Switch'],['bb-switch','Backbone Switch'],['firewall','Firewall'],
+      ['wan-switch','WAN Switch'],['server','Server'],['pc','PC / Workstation'],
+      ['laptop','Laptop'],['ap','WiFi Access Point'],['connector','Cato Connector'],
+      ['remote-pc','Remote PC'],['cloud','Cloud / Internet'],
+      ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
+    ].map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+
+    document.getElementById('panel-body').innerHTML = `
+      <div class="panel-section">
+        <div class="panel-section-title">SELECTION — ${selDevs.length} DEVICES</div>
+        <div style="display:flex;gap:10px;margin-bottom:8px">
+          <span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#00ff9d">▲ ${upCount} UP</span>
+          ${downCount ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#ff3333">▼ ${downCount} DOWN</span>` : ''}
+          ${unkCount  ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#888">? ${unkCount}</span>` : ''}
+        </div>
+        <div style="max-height:160px;overflow-y:auto;">${devRows}${moreRow}</div>
+      </div>
+      <div class="panel-section" style="margin-top:10px">
+        <div class="panel-section-title">BULK SETTINGS</div>
+        <div class="field-group">
+          <div class="field-label">DEVICE ICON</div>
+          <select id="multi-icon-sel"
+            style="background:#0d1a2e;color:#e2e8f0;border:1px solid rgba(0,212,255,0.3);border-radius:4px;padding:4px 6px;font-family:'Share Tech Mono',monospace;font-size:10px;width:100%;cursor:pointer"
+            onchange="setBulkPwNodeType(this.value)">${_typeOpts}</select>
+        </div>
+        <div class="field-group" style="margin-top:8px">
+          <div class="field-label">COLOR OVERRIDE</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="color" id="multi-color-pick" value="#00d4ff"
+                   onchange="setBulkPwNodeColor(this.value)"
+                   style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
+            <button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetBulkPwNodeColor()">Reset all</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById('panel-actions').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:8px;width:100%;">
+        <button class="btn" style="width:100%;border-color:var(--gold);color:var(--gold)" onclick="openBulkLinkModal()">⟷ LINK ALL TO… (${multiSelect.size})</button>
+        <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
+      </div>
+    `;
+  } else {
+    document.getElementById('panel-body').innerHTML = `
+      <div class="panel-section">
+        <div class="panel-section-title">SELECTION</div>
+        <div class="info-row"><span class="info-label">DEVICES</span><span class="info-value">${multiSelect.size}</span></div>
+      </div>
+    `;
+    document.getElementById('panel-actions').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:8px;width:100%;">
+        <button class="btn" style="width:100%;border-color:var(--danger);color:var(--danger)" onclick="deleteSelectedNodes()">✕ DELETE SELECTED (${multiSelect.size})</button>
+        <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
+      </div>
+    `;
+  }
+}
+
+function setBulkPwNodeType(newType) {
+  if (!newType) return;  // "— keep current —" selected
+  const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+  for (const node of selNodes) {
+    const sid = String(node._pwDid);
+    pwOverrides[sid] = { ...(pwOverrides[sid] || {}), node_type: newType };
+    node.type = newType;
+  }
+  _pwSave('pw_node_overrides', pwOverrides);
+  renderPingWatchCanvas();
+  showMultiPanel();
+}
+
+function setBulkPwNodeColor(color) {
+  const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+  for (const node of selNodes) {
+    const sid = String(node._pwDid);
+    pwOverrides[sid] = { ...(pwOverrides[sid] || {}), color };
+  }
+  _pwSave('pw_node_overrides', pwOverrides);
+  renderPingWatchCanvas();
+}
+
+function resetBulkPwNodeColor() {
+  const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+  for (const node of selNodes) {
+    const sid = String(node._pwDid);
+    if (pwOverrides[sid]) delete pwOverrides[sid].color;
+  }
+  _pwSave('pw_node_overrides', pwOverrides);
+  renderPingWatchCanvas();
+  showMultiPanel();
 }
 
 async function deleteSelectedNodes() {
