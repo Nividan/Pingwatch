@@ -104,7 +104,7 @@ function openEditDevice(did){
   _edSecIps = [...(dev.secondary_ips || [])];
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
   const _edGroupItems = _edGroups.map(g =>
-    `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_edgPick('${esc(g)}')">${esc(g)}</div>`
+    `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault()" onclick="_edgPick(this.textContent)">${esc(g)}</div>`
   ).join('');
   const o = document.createElement('div'); o.className='mo'; o.id='med';
   _overlayClose(o, ()=>closeM('med'));

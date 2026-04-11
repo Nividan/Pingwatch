@@ -375,7 +375,7 @@ function _discRenderResults(){
           <th class="disc-th-sortable" onclick="_discSetSort('hostname')">Hostname</th>
           <th>MAC / Vendor</th>
           <th class="disc-th-sortable" onclick="_discSetSort('ports')">${isPing?'':'Ports'}</th>
-          <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Guess'}</th>
+          <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Type'}</th>
           <th>Latency</th>
           <th></th>
         </tr></thead>
@@ -398,7 +398,7 @@ function _discRenderResults(){
           <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_dgToggle()">▾</button>
           <div id="disc-group-dd" class="grp-dd" style="display:none">${
             [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
-            .map(g=>`<div class="grp-dd-item" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_dgPick('${esc(g)}')">${esc(g)}</div>`).join('')
+            .map(g=>`<div class="grp-dd-item" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault()" onclick="_dgPick(this.textContent)">${esc(g)}</div>`).join('')
           }</div>
         </div>
       </div>
