@@ -146,6 +146,28 @@ function openEditDevice(did){
           </div>
         </div>
       </details>
+      <details class="dev-creds" style="margin-top:10px">
+        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Licenses <span id="ed-lic-count" style="color:var(--text3);font-weight:400">(0)</span></summary>
+        <div style="margin-top:8px">
+          <div id="ed-lic-list" style="max-height:220px;overflow-y:auto;margin-bottom:6px"></div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px">
+            <div class="fgrid">
+              <div class="fr" style="margin:0"><input type="text" id="ed-lic-name" placeholder="License name (e.g. FortiCare)" autocomplete="off"/></div>
+              <div class="fr" style="margin:0"><input type="date" id="ed-lic-date" autocomplete="off"/></div>
+            </div>
+            <div class="fgrid">
+              <div class="fr" style="margin:0"><input type="text" id="ed-lic-note" placeholder="Note (optional)" autocomplete="off"/></div>
+              <div class="fr" style="margin:0;display:flex;gap:6px;align-items:center">
+                <input type="number" id="ed-lic-warn" value="30" min="0" max="365" style="width:60px" title="Warn days before expiry"/>
+                <span style="font-size:10px;color:var(--text3)">warn days</span>
+                <input type="number" id="ed-lic-crit" value="0" min="0" max="365" style="width:60px" title="Crit days before expiry"/>
+                <span style="font-size:10px;color:var(--text3)">crit days</span>
+              </div>
+            </div>
+            <button class="btn-s" type="button" onclick="_edLicAdd('${did}')" style="align-self:flex-start">+ Add License</button>
+          </div>
+        </div>
+      </details>
       <div class="fr">
         <label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional)</span></label>
         <input type="text" id="ed-wh" value="${esc(dev.webhook_url||'')}" placeholder="https://hooks.slack.com/…" autocomplete="off"/>
@@ -198,6 +220,7 @@ function openEditDevice(did){
   );
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
   _edSipRender();
+  _edLicLoad(did);
   _loadDeviceProfileSection(did);
 }
 
@@ -368,4 +391,85 @@ function _edSipAdd(){
 function _edSipRemove(idx){
   _edSecIps.splice(idx, 1);
   _edSipRender();
+}
+
+// ── License helpers ─────────────────────────────────────────────────
+let _edLicenses = [];
+
+function _edLicStatusBadge(lic){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const exp = new Date(lic.expiry_date + 'T00:00:00');
+  const days = Math.ceil((exp - today) / 86400000);
+  const crit = lic.crit_days || 0;
+  const warn = lic.warn_days || 30;
+  if(days <= crit) return `<span style="color:var(--down);font-size:10px;font-weight:600">${days < 0 ? 'Expired '+(-days)+'d ago' : 'Expired'}</span>`;
+  if(days <= warn) return `<span style="color:var(--warn);font-size:10px;font-weight:600">Expiring (${days}d)</span>`;
+  return `<span style="color:var(--up);font-size:10px;font-weight:600">Valid (${days}d)</span>`;
+}
+
+async function _edLicLoad(did){
+  try{
+    const r = await api('GET', `/api/device/${did}/licenses`);
+    _edLicenses = (r && r.licenses) || [];
+  }catch(e){ _edLicenses = []; }
+  _edLicRender(did);
+  // Open section if there are licenses
+  if(_edLicenses.length){
+    const det = document.getElementById('ed-lic-list')?.closest('details');
+    if(det) det.open = true;
+  }
+}
+
+function _edLicRender(did){
+  const el = document.getElementById('ed-lic-list');
+  const cnt = document.getElementById('ed-lic-count');
+  if(cnt) cnt.textContent = `(${_edLicenses.length})`;
+  if(!el) return;
+  if(!_edLicenses.length){
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No licenses</div>';
+    return;
+  }
+  el.innerHTML = _edLicenses.map(lic =>
+    `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;color:var(--text)">${esc(lic.license_name)}</div>
+        <div style="font-size:10px;color:var(--text3);display:flex;gap:8px;align-items:center;margin-top:2px">
+          <span style="font-family:monospace">${esc(lic.expiry_date)}</span>
+          ${_edLicStatusBadge(lic)}
+          ${lic.note ? `<span title="${esc(lic.note)}">📝</span>` : ''}
+          <span style="opacity:0.5">w:${lic.warn_days}d c:${lic.crit_days}d</span>
+        </div>
+      </div>
+      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edLicDel(${lic.id},'${esc(did)}')">✕</button>
+    </div>`
+  ).join('');
+}
+
+async function _edLicAdd(did){
+  const name = document.getElementById('ed-lic-name')?.value.trim();
+  const date = document.getElementById('ed-lic-date')?.value.trim();
+  if(!name || !date){ toast('Name and date are required','err'); return; }
+  const note = document.getElementById('ed-lic-note')?.value.trim() || '';
+  const warn = parseInt(document.getElementById('ed-lic-warn')?.value) || 30;
+  const crit = parseInt(document.getElementById('ed-lic-crit')?.value) || 0;
+  try{
+    const r = await api('POST', `/api/device/${did}/licenses`, {
+      license_name: name, expiry_date: date, note, warn_days: warn, crit_days: crit
+    });
+    if(r && r.licenses) _edLicenses = r.licenses;
+    _edLicRender(did);
+    document.getElementById('ed-lic-name').value = '';
+    document.getElementById('ed-lic-date').value = '';
+    document.getElementById('ed-lic-note').value = '';
+    toast('License added','ok');
+  }catch(e){ toast('Failed to add license','err'); }
+}
+
+async function _edLicDel(licId, did){
+  try{
+    await api('DELETE', `/api/license/${licId}`);
+    _edLicenses = _edLicenses.filter(l => l.id !== licId);
+    _edLicRender(did);
+    toast('License removed','ok');
+  }catch(e){ toast('Failed to delete license','err'); }
 }

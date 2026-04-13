@@ -121,6 +121,18 @@ from db.alert_events import (
     db_has_active_event,
 )
 
+# licenses
+from db.licenses    import (
+    db_get_licenses,
+    db_get_all_licenses,
+    db_add_license,
+    db_update_license,
+    db_delete_license,
+    db_delete_device_licenses,
+    db_update_license_status,
+    db_license_summary,
+)
+
 # backups
 from db.backups     import (
     db_get_backup_list,

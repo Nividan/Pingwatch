@@ -553,6 +553,13 @@ def autosave_loop(state):
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
             _logs_enqueue(db_clean_samples)
+        if _iter % 360 == 0:   # every ~6 hours — check license expirations
+            try:
+                from monitoring.license_checker import check_license_expirations
+                check_license_expirations()
+            except Exception as _le:
+                from core.logger import log as _llog
+                _llog.warning(f"License check error: {_le}")
         if _iter % 1440 == 0:  # every ~24 hours — maintain PG partitions
             if is_pg():
                 try:
