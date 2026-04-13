@@ -229,6 +229,22 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr"><label class="fl">To</label>
             <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
         </div>
+        <!-- Email Style -->
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Email Style</div>
+          <div class="fr" style="margin-top:0">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+              <input type="checkbox" id="st-email-logo" ${sr.email_logo!==0?'checked':''}>
+              <span class="fl" style="margin:0">Show logo in alert emails</span>
+            </label>
+            <div class="fh" style="margin-left:24px">PingWatch radar icon displayed in the email header</div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Company Name</label>
+            <input type="text" id="st-email-company" value="${esc(sr.email_company_name||'')}" placeholder="PingWatch" style="max-width:260px"/>
+            <div class="fh">Shown in email header and footer — leave blank for "PingWatch"</div>
+          </div>
+        </div>
         <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
           <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
           <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
@@ -1727,6 +1743,8 @@ async function saveSettings(){
     smtp_user:       document.getElementById('st-smtp-user')?.value.trim()||'',
     smtp_from:       document.getElementById('st-smtp-from')?.value.trim()||'',
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
+    email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
+    email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
   };
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
