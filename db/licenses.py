@@ -111,7 +111,7 @@ def db_add_license(did: str, license_name: str, expiry_date: str,
                      now, now)
                 )
                 row = cur.fetchone()
-                return row["id"] if row else None
+                return row[0] if row else None  # pg_conn cursor returns tuples
         except Exception as e:
             log.error(f"db_add_license error: {e}")
             return None

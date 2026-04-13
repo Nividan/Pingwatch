@@ -153,7 +153,7 @@ function openEditDevice(did){
           <div style="border:1px solid var(--border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px">
             <div class="fgrid">
               <div class="fr" style="margin:0"><input type="text" id="ed-lic-name" placeholder="License name (e.g. FortiCare)" autocomplete="off"/></div>
-              <div class="fr" style="margin:0"><input type="date" id="ed-lic-date" autocomplete="off"/></div>
+              <div class="fr" style="margin:0"><input type="date" id="ed-lic-date" autocomplete="off" class="lic-date-inp"/></div>
             </div>
             <div class="fgrid">
               <div class="fr" style="margin:0"><input type="text" id="ed-lic-note" placeholder="Note (optional)" autocomplete="off"/></div>
