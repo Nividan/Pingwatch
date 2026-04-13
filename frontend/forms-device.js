@@ -15,8 +15,6 @@ function openAddDevice(){
         <div class="fr"><label class="fl">Group</label>
           <input type="text" id="ad-g" placeholder="Default Group" autocomplete="off"/></div>
       </div>
-      <div class="fr"><label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional — POST on status change)</span></label>
-        <input type="text" id="ad-wh" placeholder="https://hooks.slack.com/…" autocomplete="off"/></div>
       <details class="dev-creds" style="margin-top:10px">
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
@@ -54,7 +52,6 @@ async function submitAddDevice(){
   const name=(document.getElementById('ad-n')?.value||'').trim();
   const host=(document.getElementById('ad-h')?.value||'').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
   const group=(document.getElementById('ad-g')?.value||'Default Group').trim();
-  const webhook_url=(document.getElementById('ad-wh')?.value||'').trim();
   const snmp_community_default=(document.getElementById('ad-snmp-comm')?.value||'').trim();
   const snmp_version_default=document.getElementById('ad-snmp-ver')?.value||'';
   const vmware_user_default=(document.getElementById('ad-vmw-user')?.value||'').trim();
@@ -62,7 +59,7 @@ async function submitAddDevice(){
   if(!name||!host){toast('Name and host are required','err');return;}
   const btn=document.querySelector('#mad .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
-  const payload={name,host,group,webhook_url};
+  const payload={name,host,group};
   if(snmp_community_default) payload.snmp_community_default=snmp_community_default;
   if(snmp_version_default) payload.snmp_version_default=snmp_version_default;
   if(vmware_user_default) payload.vmware_user_default=vmware_user_default;
@@ -168,10 +165,6 @@ function openEditDevice(did){
           </div>
         </div>
       </details>
-      <div class="fr">
-        <label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional)</span></label>
-        <input type="text" id="ed-wh" value="${esc(dev.webhook_url||'')}" placeholder="https://hooks.slack.com/…" autocomplete="off"/>
-      </div>
       <div class="fr" style="margin-top:4px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
           <input type="checkbox" id="ed-am" ${dev.alerts_muted?'checked':''}>
@@ -327,7 +320,6 @@ async function submitEditDevice(did){
   const name  = (document.getElementById('ed-n')?.value || '').trim();
   const host  = (document.getElementById('ed-h')?.value || '').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
   const group = (document.getElementById('ed-g')?.value || 'Default Group').trim();
-  const webhook_url  = (document.getElementById('ed-wh')?.value || '').trim();
   const alerts_muted = document.getElementById('ed-am')?.checked || false;
   const snmp_community_default = (document.getElementById('ed-snmp-comm')?.value || '').trim();
   const snmp_version_default   = document.getElementById('ed-snmp-ver')?.value || '';
@@ -336,7 +328,7 @@ async function submitEditDevice(did){
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  const payload = {name, host, group, webhook_url, alerts_muted,
+  const payload = {name, host, group, alerts_muted,
     snmp_community_default, snmp_version_default, vmware_user_default,
     secondary_ips: _edSecIps};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
@@ -352,7 +344,7 @@ async function submitEditDevice(did){
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   pruneEmptyGroups();
   updatePills();
   refreshGroupCounts();
