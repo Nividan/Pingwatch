@@ -10,6 +10,7 @@ let _ipamPage         = 0;      // current page (0-based)
 let _ipamShellInited  = false;  // shell HTML built once; data always refreshed on tab switch
 const _IPAM_PAGE_SIZE = 200;
 let _ipamGlobalCache  = null;   // flat array of all IPs across all subnets, with subnetLabel; null = stale
+let _ipamLicenseMap   = {};     // did → worst license status (ok/warn/crit)
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function _ipamInit() {
@@ -18,7 +19,7 @@ async function _ipamInit() {
     _ipamShellInited = true;
     _ipamRenderShell();
   }
-  await _ipamLoadSubnets();
+  await Promise.all([_ipamLoadSubnets(), _ipamLoadLicenses()]);
 }
 
 function _ipamRenderShell() {
@@ -43,6 +44,38 @@ function _ipamRenderShell() {
       </div>
     </div>`;
   applyRbac();
+}
+
+// ── License status cache ───────────────────────────────────────────────────
+async function _ipamLoadLicenses() {
+  try {
+    const r = await fetch('/api/licenses');
+    if (!r.ok) return;
+    const { licenses } = await r.json();
+    const prio = { crit: 2, warn: 1, ok: 0 };
+    const map = {};
+    for (const lic of (licenses || [])) {
+      const cur = map[lic.did];
+      if (cur === undefined || prio[lic.last_status] > prio[cur]) {
+        map[lic.did] = lic.last_status;
+      }
+    }
+    _ipamLicenseMap = map;
+  } catch {}
+}
+
+function _ipamLicBadge(did) {
+  if (!did) return '<span style="color:var(--text3)">—</span>';
+  const st = _ipamLicenseMap[did];
+  if (st === undefined) return '<span style="color:var(--text3)">—</span>';
+  if (st === 'crit') return '<span class="ipam-lic-crit">Expired</span>';
+  if (st === 'warn') return '<span class="ipam-lic-warn">Expiring</span>';
+  return '<span class="ipam-lic-ok">Valid</span>';
+}
+
+async function _ipamOnLicenseUpdate() {
+  await _ipamLoadLicenses();
+  if (_ipamSelectedId) _ipamApplyFilter(document.getElementById('ipam-search')?.value || '');
 }
 
 // ── Subnet loading ─────────────────────────────────────────────────────────
@@ -234,6 +267,7 @@ function _ipamRenderGlobalResults(results, q) {
       <td>${nameText}</td>
       <td class="ipam-dns" title="${esc(dns)}">${dnsDisplay ? esc(dnsDisplay) : '<span class="ipam-ts">—</span>'}</td>
       <td>${badge}</td>
+      <td>${_ipamLicBadge(e.device_id)}</td>
     </tr>`;
   }).join('');
   wrap.innerHTML = `
@@ -245,6 +279,7 @@ function _ipamRenderGlobalResults(results, q) {
           <th>Name / Description</th>
           <th>DNS</th>
           <th>Status</th>
+          <th>Licenses</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -308,6 +343,7 @@ function _ipamRenderTable() {
       ${nameCell}
       ${dnsCell}
       <td>${badge}</td>
+      <td>${_ipamLicBadge(e.device_id)}</td>
       <td class="ipam-ts">${esc(e.modified_by || '—')}</td>
       <td class="ipam-ts">${dateStr}</td>
     </tr>`;
@@ -321,6 +357,7 @@ function _ipamRenderTable() {
           <th>Name / Description</th>
           <th>DNS</th>
           <th>Status</th>
+          <th>Licenses</th>
           <th>Modified By</th>
           <th>Last Modified</th>
         </tr>

@@ -150,6 +150,15 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
   });
+  sse.addEventListener('license_status',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    if(typeof _ipamOnLicenseUpdate==='function') _ipamOnLicenseUpdate();
+    if(activeMainTab==='dashboard'){
+      _dwLoad().forEach(w=>{
+        if(w.type==='license_overview') _dwLicenseOverviewRefresh(w.id);
+      });
+    }
+  });
   sse.addEventListener('browser_notification',e=>{
     const d=_parseSSE(e); if(!d) return;
     _showBrowserNotif(d);

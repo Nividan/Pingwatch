@@ -1458,6 +1458,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-used{background:rgba(0,255,150,.15);color:var(--up)!important;
   border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap;}
 .ipam-free{color:var(--text3)!important;font-size:10px;}
+.ipam-lic-ok  {background:rgba(0,255,150,.1);color:var(--up)!important;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap;}
+.ipam-lic-warn{background:rgba(240,165,0,.12);color:var(--warn)!important;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap;}
+.ipam-lic-crit{background:rgba(248,81,73,.12);color:var(--down)!important;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap;}
 .ipam-name-cell{cursor:pointer;min-width:180px;}
 .ipam-name-cell:hover{background:rgba(99,102,241,.08)!important;}
 .ipam-name-inp{background:var(--bg2);border:1px solid var(--accent);border-radius:3px;
@@ -1894,6 +1897,13 @@ tbody.bk-grp-collapsed{display:none;}
 .dw-ncm-fail .dw-ncm-n{color:#f85149;}
 .dw-ncm-never .dw-ncm-n{color:#e3b341;}
 .dw-ncm-total .dw-ncm-n{color:var(--text);font-size:1.2rem;}
+
+/* ── License Overview widget ─────────────────────────────────────── */
+.dw-lic-tbl{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px;}
+.dw-lic-tbl th{color:var(--text3);font-weight:600;padding:2px 6px;text-align:left;
+                border-bottom:1px solid var(--border);}
+.dw-lic-tbl td{padding:3px 6px;border-bottom:1px solid rgba(255,255,255,.04);}
+.dw-lic-tbl tr:hover td{background:rgba(255,255,255,.04);}
 
 /* ── Toggle switch (used in settings forms) ─────────────────────── */
 label.toggle{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0;vertical-align:middle;}
