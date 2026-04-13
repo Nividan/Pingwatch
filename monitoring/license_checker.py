@@ -204,6 +204,6 @@ def _fire_license_alert(lic: dict, new_status: str, old_status: str,
             if not tpl:
                 continue
             try:
-                dispatch(tpl.get("atype", ""), tpl, ctx)
+                dispatch(tpl["atype"], tpl["config"], ctx)
             except Exception as e:
                 log.error(f"license_checker: dispatch error (aid={aid}): {e}")

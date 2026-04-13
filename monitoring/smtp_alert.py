@@ -15,6 +15,23 @@ _ERROR_SUPPRESS_S = 300         # seconds between identical error logs
 _last_ok_ts: float = 0          # timestamp of last successful send / test
 _last_err: dict = {'ts': 0.0, 'msg': ''}  # last error
 
+# PingWatch radar logo — base64 SVG (white on transparent, renders on dark/colored bg)
+_LOGO_B64 = (
+    "PHN2ZyB3aWR0aD0iMjgiIGhlaWdodD0iMjgiIHZpZXdCb3g9IjAgMCAyMCAyMCIgeG1sbnM9"
+    "Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMCIgY3k9IjEwIiBy"
+    "PSI4LjUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwuNCkiIHN0cm9rZS13aWR0aD0iMSIg"
+    "ZmlsbD0ibm9uZSIvPjxjaXJjbGUgY3g9IjEwIiBjeT0iMTAiIHI9IjUiIHN0cm9rZT0icmdi"
+    "YSgyNTUsMjU1LDI1NSwuNikiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIvPjxjaXJj"
+    "bGUgY3g9IjEwIiBjeT0iMTAiIHI9IjIiIGZpbGw9IndoaXRlIiBvcGFjaXR5PSIuOSIvPjxs"
+    "aW5lIHgxPSIxLjUiIHkxPSIxMCIgeDI9IjUiIHkyPSIxMCIgc3Ryb2tlPSJ3aGl0ZSIgc3Ry"
+    "b2tlLXdpZHRoPSIxLjIiIG9wYWNpdHk9Ii43Ii8+PGxpbmUgeDE9IjE1IiB5MT0iMTAiIHgy"
+    "PSIxOC41IiB5Mj0iMTAiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMS4yIiBvcGFj"
+    "aXR5PSIuNyIvPjxsaW5lIHgxPSIxMCIgeTE9IjEuNSIgeDI9IjEwIiB5Mj0iNSIgc3Ryb2tl"
+    "PSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG9wYWNpdHk9Ii43Ii8+PGxpbmUgeDE9IjEw"
+    "IiB5MT0iMTUiIHgyPSIxMCIgeTI9IjE4LjUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0"
+    "aD0iMS4yIiBvcGFjaXR5PSIuNyIvPjwvc3ZnPg=="
+)
+
 
 def _build_msg(subject, body, from_addr, to_addr, html=None):
     """Build a MIME message. If html is provided, sends multipart/alternative."""
@@ -71,7 +88,8 @@ def _fmt_ts(ts_str: str) -> str:
 
 
 def _build_alert_html(rows: list, event_type: str, severity: str,
-                      title_device: str, title_sensor: str) -> str:
+                      title_device: str, title_sensor: str,
+                      logo: bool = True, company: str = 'PingWatch') -> str:
     """Render a clean HTML email body. rows = list of (label, value) tuples."""
     color, _emoji, label = _status_style(event_type, severity)
     table_rows = ''.join(
@@ -90,12 +108,26 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
         f'<td style="padding:7px 4px;font-size:13px;color:#222">{severity}</td>',
         f'<td style="padding:7px 4px">{sev_badge}</td>'
     )
+    # Branding bar (logo + company name)
+    _co = _safe(company) if company else 'PingWatch'
+    if logo:
+        branding = (
+            f'<tr><td style="background:#141b24;padding:12px 24px">'
+            f'<img src="data:image/svg+xml;base64,{_LOGO_B64}" width="24" height="24" '
+            f'alt="" style="vertical-align:middle;display:inline-block"/>'
+            f'<span style="color:#fff;font-size:15px;font-weight:600;margin-left:8px;'
+            f'vertical-align:middle;letter-spacing:.3px">{_co}</span>'
+            f'</td></tr>'
+        )
+    else:
+        branding = ''
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,Helvetica,sans-serif">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f0f0;padding:24px 0">
 <tr><td align="center">
 <table width="520" cellpadding="0" cellspacing="0"
        style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.13)">
+  {branding}
   <tr><td style="background:{color};padding:18px 24px">
     <div style="font-size:26px;display:inline-block;vertical-align:middle">{_emoji}</div>
     <span style="color:#fff;font-size:20px;font-weight:700;margin-left:10px;vertical-align:middle">{label}</span>
@@ -107,7 +139,7 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
     <table width="100%" cellpadding="0" cellspacing="0">{table_rows}</table>
   </td></tr>
   <tr><td style="background:#f8f8f8;padding:10px 24px;border-top:1px solid #e8e8e8">
-    <span style="font-size:11px;color:#aaa">PingWatch &nbsp;·&nbsp; Alert Engine</span>
+    <span style="font-size:11px;color:#aaa">{_co} &nbsp;·&nbsp; Alert Engine</span>
   </td></tr>
 </table>
 </td></tr>
@@ -192,7 +224,10 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
             rows.append(('Duration', _dur))
         rows.append(('Detail', _safe(ctx.get('detail', ''))))
         body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
-        html = _build_alert_html(rows, event_type, severity, dname, sname)
+        _logo = str(_cfg('email_logo', '1')) == '1'
+        _company = _cfg('email_company_name', '') or 'PingWatch'
+        html = _build_alert_html(rows, event_type, severity, dname, sname,
+                                 logo=_logo, company=_company)
 
     recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
     srv = None
@@ -230,9 +265,20 @@ def test_smtp(cfg):
         )
         from_addr = cfg.get('from_addr', 'pingwatch@test')
         to_addr   = cfg.get('to_addr', from_addr)
-        subject   = '[PingWatch] SMTP test \u2014 connection OK'
-        body      = 'This is a test email from PingWatch SMTP alert system.'
-        srv.sendmail(from_addr, [to_addr], _build_msg(subject, body, from_addr, to_addr).as_string())
+        _logo = str(_cfg('email_logo', '1')) == '1'
+        _company = _cfg('email_company_name', '') or 'PingWatch'
+        subject   = f'[{_company}] SMTP test \u2014 connection OK'
+        body      = f'This is a test email from {_company} alert system.'
+        rows = [
+            ('Status', 'SMTP connection successful'),
+            ('From',   from_addr),
+            ('To',     to_addr),
+            ('Time',   _fmt_ts(datetime.datetime.now(datetime.timezone.utc).isoformat())),
+        ]
+        html = _build_alert_html(rows, 'info', 'info', 'SMTP Test', 'Connection OK',
+                                 logo=_logo, company=_company)
+        srv.sendmail(from_addr, [to_addr],
+                     _build_msg(subject, body, from_addr, to_addr, html).as_string())
         srv.quit(); srv = None
         _last_ok_ts = time.time()
         return True, 'Test email sent successfully.'
