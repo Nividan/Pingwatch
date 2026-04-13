@@ -7,7 +7,10 @@ function evtSeverity(d) {
   const dir = d._direction || d.direction || '';
   if (dir === 'recovered')                             return 'recovery';
   if (dir === 'threshold_ok')                          return 'recovery';
+  if (dir === 'license_ok')                            return 'recovery';
   if (dir === 'down')                                  return 'critical';
+  if (dir === 'license_crit')                          return 'critical';
+  if (dir === 'license_warn')                          return 'warning';
   if (dir === 'threshold' && d._thr_level === 'crit') return 'critical';
   if (dir === 'threshold' && d._thr_level === 'warn') return 'warning';
   if (dir === 'trap') {
@@ -23,7 +26,8 @@ const _SEV_LABEL = { critical: 'CRITICAL', warning: 'WARNING', recovery: 'RECOVE
 // ── Icons ─────────────────────────────────────────────────────────
 const _EVT_ICONS = {
   ping: '🖥', tcp: '🔌', http: '🌐', snmp: '📡',
-  dns: '🌐', tls: '🔌', http_keyword: '🌐', banner: '🔌'
+  dns: '🌐', tls: '🔌', http_keyword: '🌐', banner: '🔌',
+  license: '📋'
 };
 const _VENDOR_ICONS = {
   'Fortinet': '🛡', 'Cisco': '🔵', 'Juniper': '🟠',
@@ -307,7 +311,11 @@ function _applyEvtFilters() {
 
   // Event type
   if (EVT_FILTER.type) {
-    result = result.filter(d => (d._direction || d.direction) === EVT_FILTER.type);
+    result = result.filter(d => {
+      const dir = d._direction || d.direction || '';
+      if (EVT_FILTER.type === 'license') return dir.startsWith('license');
+      return dir === EVT_FILTER.type;
+    });
   }
 
   // Severity

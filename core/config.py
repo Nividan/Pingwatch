@@ -102,6 +102,12 @@ _RE_LDAP_TEST_USER_GROUPS = re.compile(r'^/api/ldap/test_user_groups$')
 # User profiles
 _RE_ME_PROFILE      = re.compile(r'^/api/me/profile$')
 _RE_USER_PROFILE    = re.compile(r'^/api/users/([^/]+)/profile$')
+# Device licenses
+_RE_DEVICE_LICENSES   = re.compile(r'^/api/device/([^/]+)/licenses$')
+_RE_LICENSE_ITEM      = re.compile(r'^/api/license/(\d+)$')
+_RE_LICENSES_ALL      = re.compile(r'^/api/licenses$')
+_RE_LICENSES_SUMMARY  = re.compile(r'^/api/licenses/summary$')
+_RE_LICENSES_CHECK    = re.compile(r'^/api/licenses/check$')
 # Subnet discovery
 _RE_DISCOVERY_SCAN     = re.compile(r'^/api/discovery/scan$')
 _RE_DISCOVERY_STATUS   = re.compile(r'^/api/discovery/scan/([a-f0-9]{16})$')

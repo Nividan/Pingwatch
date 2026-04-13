@@ -696,6 +696,23 @@ def db_init():
                 ldap_dn      TEXT    DEFAULT '',
                 default_role TEXT    DEFAULT 'viewer'
             )""")
+        # ── Device license tracking ───────────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS device_licenses (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                did          TEXT NOT NULL,
+                license_name TEXT NOT NULL,
+                expiry_date  TEXT NOT NULL,
+                note         TEXT DEFAULT '',
+                warn_days    INTEGER DEFAULT 30,
+                crit_days    INTEGER DEFAULT 0,
+                last_status  TEXT DEFAULT 'ok',
+                created_at   REAL DEFAULT 0,
+                updated_at   REAL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dev_lic_did ON device_licenses(did)"
+        )
         con.commit()
         # Migration: LDAP group mapping columns (v0.9+)
         for _col, _def in [
