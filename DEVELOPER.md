@@ -36,13 +36,14 @@ Browser / Desktop GUI
         │   ├── logger.py         ← Central logging
         │   └── settings.py       ← Runtime settings cache
         │
-        ├── monitoring/           ← Probes, alerting, topology, subnet discovery
+        ├── monitoring/           ← Probes, alerting, topology, subnet discovery, license checking
         │   ├── probes.py              ← Sensor engine
         │   ├── subnet_discovery.py    ← Subnet scan engine (liveness, enrichment, dup detection)
         │   ├── alert_profile_engine.py ← PRTG-style profile evaluator (cascade, stage timing, dispatch)
         │   ├── alert_dispatchers.py   ← Reusable action dispatchers (email, webhook, syslog, browser)
         │   ├── smtp_alert.py          ← SMTP helper and email rendering
         │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
+        │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
         │   └── network_map.py         ← NTM topology data layer
         │
         ├── backup/               ← Config backup engine
@@ -105,6 +106,7 @@ pingwatch/
 │   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
 │   ├── smtp_alert.py            ← SMTP connection helper and email rendering (used by alert_dispatchers)
 │   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
+│   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
 │   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
 │
 ├── backup/
@@ -143,7 +145,8 @@ pingwatch/
 │   ├── trap_defs.py        ← SNMP trap definition queries
 │   ├── ipam.py             ← Subnet and IP allocation management
 │   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
-│   └── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
+│   ├── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
+│   └── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
@@ -160,7 +163,8 @@ pingwatch/
 │   ├── maintenance_windows.py ← Maintenance window CRUD
 │   ├── ldap.py             ← LDAP/AD settings, test, group search, user group lookup
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
-│   └── discovery.py        ← Subnet discovery scan + bulk device add
+│   ├── discovery.py        ← Subnet discovery scan + bulk device add
+│   └── licenses.py         ← Device license CRUD + expiration check trigger
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -253,6 +257,8 @@ Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to 
 ### `monitoring/alert_profile_engine.py`
 Pure-functional profile evaluator driven by the probe loop. Called from `Sensor._run_once()` after each probe cycle. `resolve_profile_for_sensor()` walks the cascade (sensor → device → group → global), returns the first matching profile, and caches the result on the sensor object (`_resolved_profile_id` / `_resolved_profile_ver`); invalidated by bumping `STATE._profile_cache_ver` whenever any profile changes. `evaluate_and_fire()` checks each stage's trigger state, delay, and repeat interval against the sensor's `_down_since_ts` / `_threshold_triggered_ts` fields. Recovery stages fire once when the sensor returns to OK (provided a state-stage previously fired in the same session) and compute total downtime duration from the `active_session` stored in `alert_profile_state`. Post-recovery, all stage rows for that sensor are cleared and the active alert event is auto-resolved.
 
+**Recovery path note:** `_fire()` uses `if recovery: ... else: db_log_event(...)` — the `else` guard is critical. Without it, `db_log_event(state="active")` would run immediately after `db_auto_resolve_event()`, re-creating the event and leaving a stale active alert visible in the Events tab.
+
 ### `monitoring/alert_dispatchers.py`
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
@@ -261,6 +267,13 @@ SMTP connection helper and HTML email rendering. `_smtp_connect()` manages the s
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.
+
+### `monitoring/license_checker.py`
+Periodic license expiration checker. `check_license_expirations()` fetches all licenses via `db_get_all_licenses()`, computes `days_left` for each, determines `new_status` (`ok` / `warn` / `crit`) using per-license `warn_days` / `crit_days` thresholds, and fires events only when status changes (deduplication via `last_status`).
+
+On state change: calls `db_update_license_status()`, then `db_log_flap()` with `stype='license'` and `direction='license_warn'` or `'license_crit'`. On recovery (crit/warn → ok): calls `db_auto_resolve_flap()` to close the active event and logs `direction='license_ok'`. Broadcasts `STATE._broadcast("license_status", {...})` after every state change for real-time frontend updates.
+
+Hooked into `db/persistence.py` `autosave_loop` at `_iter % 360 == 0` (every 6 hours). Also called immediately after `POST /api/device/{did}/licenses` and `PATCH /api/license/{id}` so a newly added or updated license is evaluated right away.
 
 ### `vmware/client.py`
 VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM discovery from vCenter/ESXi and real-time metric querying for 16 VM metrics across 6 categories (CPU, Memory, Disk, Datastore, Network, System). Session caching with 25-minute TTL avoids repeated logins; metric caching with 20-second TTL (matching vSphere's realtime sampling interval) avoids redundant QueryPerf calls when multiple sensors target the same VM. `vmware_probe()` returns the standard `{ok, ms, detail, value}` probe contract. `mem_consumed_pct` uses `quickStats.guestMemoryUsage` (actual guest OS memory from VMware Tools) with fallback to `mem.active.average`.
@@ -294,6 +307,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth`, `/api/ldap/search_groups`, `/api/ldap/test_user_groups` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
+| `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
 
 ---
 
@@ -328,6 +342,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `ipam.py` | Subnet and IP allocation management |
 | `alert_profiles.py` | Alert profile CRUD, action template CRUD, stage state tracking (`alert_profile_state`) |
 | `alert_events.py` | Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count |
+| `licenses.py` | `device_licenses` table CRUD — `db_get_licenses(did)`, `db_get_all_licenses()`, `db_add_license()`, `db_update_license()`, `db_delete_license()`, `db_delete_device_licenses(did)`, `db_update_license_status()` (internal), `db_license_summary()` |
 
 ### `app_settings` table
 
@@ -364,22 +379,22 @@ The frontend is served as static files — no build step.
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
-| `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
+| `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA); includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table with device name, license name, expiry date, days remaining, and status badge |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
-| `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting) |
+| `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
-| `forms-device.js` | Add/edit device modal |
+| `forms-device.js` | Add/edit device modal; **Licenses section** — collapsible `<details>` with status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day inputs, add/delete per license; `_edLicLoad()`, `_edLicRender()`, `_edLicAdd()`, `_edLicDel()`, `_edLicStatusBadge()` |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
 | `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Logs tab: Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()` (immediate `PATCH /api/settings`; reverts on failure). Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal including Group Integration section (auto-provision, nested groups, group base DN, group filter, sync interval) and Test User Groups sub-dialog |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
-| `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, device-type guess, multi-NIC ⚠ flags), per-device sensor review with inline URL/community inputs, bulk add with live device count |
+| `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, Type column, multi-NIC ⚠ flags), per-device sensor review, bulk add; **per-device group assignment** — default group dropdown plus per-row group input with `_discGrpFocus`/`_discGrpBlur` datalist UX; `customGroups[ip]` overrides; accent border on overridden rows |
 | `alerting.js` | Alert profiles editor (PRTG-style escalation table with delay / repeat / action columns), reusable action template editor (email with user+group checkbox pickers, webhook, syslog, browser push), alert event history viewer, maintenance windows |
 | `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
-| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
+| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLoadLicenses()` fetches `/api/licenses` in parallel with subnet load, `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` via `_ipamOnLicenseUpdate()` |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.js` | NTM canvas engine — drag-and-drop topology editor |
 
@@ -469,6 +484,18 @@ The frontend is served as static files — no build step.
 | `DELETE` | `/api/ipam/subnets/{id}` | Remove subnet and all allocations |
 | `GET` | `/api/ipam/subnets/{id}/ips` | IP allocations for a subnet |
 | `PUT` | `/api/ipam/ips/{subnet_id}/{ip}` | Set or clear the name for an IP |
+
+### Device Licenses
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/device/{did}/licenses` | viewer | List licenses for a device |
+| `POST` | `/api/device/{did}/licenses` | operator | Add license `{license_name, expiry_date, note?, warn_days?, crit_days?}` → `{id, licenses[]}` |
+| `PATCH` | `/api/license/{id}` | operator | Update license fields |
+| `DELETE` | `/api/license/{id}` | operator | Delete a license |
+| `GET` | `/api/licenses` | viewer | All licenses across all devices (for dashboard widget and IPAM map) |
+| `GET` | `/api/licenses/summary` | viewer | Counts by status `{ok, warn, crit, total}` |
+| `POST` | `/api/licenses/check` | admin | Trigger immediate expiration check |
 
 ### User Profiles
 

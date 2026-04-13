@@ -494,6 +494,14 @@ function selType(t){
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);
+  // Update threshold labels to match selected sensor type
+  const _wL=document.getElementById('as-wms-lbl'), _cL=document.getElementById('as-cms-lbl');
+  if(_wL&&_cL){
+    if(t==='tls'){_wL.textContent='Warn Days (cert expiry)';_cL.textContent='Crit Days (cert expiry)';}
+    else if(t==='snmp'){const _su=document.getElementById('as-snmp-unit')?.value||'';_wL.textContent=_snmpThrLabel(_su,true)||'Warn Value';_cL.textContent=_snmpThrLabel(_su,false)||'Crit Value';}
+    else if(t==='vmware'){const _vm=document.getElementById('as-vmmet-v')?.value||'';_wL.textContent=_vmwareThrLabel(_vm,true);_cL.textContent=_vmwareThrLabel(_vm,false);}
+    else{_wL.textContent='Warn Latency (ms)';_cL.textContent='Crit Latency (ms)';}
+  }
 }
 
 function _applyTypeDefaults(t){

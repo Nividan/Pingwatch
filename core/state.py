@@ -684,8 +684,13 @@ class MonitorState:
             elif s.last_ms is not None:
                 _thr_chk = s.last_ms
             if _thr_chk is not None:
-                if s.crit_ms and _thr_chk >= s.crit_ms:    _new_thr = "crit"
-                elif s.warn_ms and _thr_chk >= s.warn_ms:  _new_thr = "warn"
+                if s.stype == 'tls' and s._last_rate is None:
+                    # TLS cert expiry: lower days = worse → alert when below threshold
+                    if s.crit_ms and _thr_chk <= s.crit_ms:    _new_thr = "crit"
+                    elif s.warn_ms and _thr_chk <= s.warn_ms:   _new_thr = "warn"
+                else:
+                    if s.crit_ms and _thr_chk >= s.crit_ms:    _new_thr = "crit"
+                    elif s.warn_ms and _thr_chk >= s.warn_ms:  _new_thr = "warn"
         if s.loss_crit_pct and s.loss_pct >= s.loss_crit_pct:
             _new_thr = "crit"
         elif s.loss_warn_pct and s.loss_pct >= s.loss_warn_pct:
@@ -719,7 +724,7 @@ class MonitorState:
                     _unit = ''
                     _val_disp = s.last_detail or s.last_value or ''
                 elif s.stype in ('snmp', 'tls'):
-                    _u3 = s.snmp_unit if s.stype == 'snmp' else ''
+                    _u3 = s.snmp_unit if s.stype == 'snmp' else 'days'
                     _unit = f" {_u3}" if _u3 else ''
                     _rv = s.last_value or ''
                     _val_disp = f"{_rv} {_u3}" if _u3 else _rv

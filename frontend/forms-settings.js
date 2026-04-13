@@ -1494,8 +1494,8 @@ function _logDownload(filename, content, mime) {
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
 
-const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:500,  http_keyword:500,  banner:300};
-const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:2000, http_keyword:1500, banner:1000};
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000};
 
 const _SDR_META = {
   ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},

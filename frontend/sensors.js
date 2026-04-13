@@ -1692,7 +1692,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(240,165,0,.85)'; ctx.textAlign = 'left';
-    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : _isVmware ? 'warn '+_fmtVmVal(_sen.warn_ms,_vmU2) : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
+    ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : _isVmware ? 'warn '+_fmtVmVal(_sen.warn_ms,_vmU2) : _sen?.stype==='tls' ? 'warn '+_sen.warn_ms+'d' : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
   }
   if (_sen?.crit_ms > 0 && _sen.crit_ms <= maxY) {
     const cy = yOf(_sen.crit_ms);
@@ -1701,7 +1701,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(248,81,73,.85)'; ctx.textAlign = 'left';
-    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : _isVmware ? 'crit '+_fmtVmVal(_sen.crit_ms,_vmU2) : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
+    ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : _isVmware ? 'crit '+_fmtVmVal(_sen.crit_ms,_vmU2) : _sen?.stype==='tls' ? 'crit '+_sen.crit_ms+'d' : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
   }
 
   // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──

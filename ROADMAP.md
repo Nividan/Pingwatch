@@ -180,6 +180,32 @@
   - Dedicated `ThreadPoolExecutor(64)` isolated from sensor probe pool to avoid starving existing probes during large scans
   - Audit log entries for scan start and bulk add
 
+- Subnet Discovery improvements
+  - Per-device group assignment — set a global default group for the batch, override individual rows independently; custom group border accent on overridden rows
+  - "Guess" column renamed to "Type" for clarity
+- NTM live map performance
+  - LED blink animation moved from JS `setInterval` to pure CSS `@keyframes` — compositor-handled, never blocks the main thread; removed `querySelectorAll` churn on every tick
+  - Packet-trace cooldown extended (4 → 6 s), max concurrent traces reduced (3 → 2)
+  - SSE threshold events gated by `_ntmVisible` — map receives no updates while hidden
+  - Link animation step counts halved across all link types — reduces GPU fill rate
+- Alert profile engine recovery bug fix — recovery path now uses `else:` guard so `db_log_event(state="active")` cannot fire immediately after `db_auto_resolve_event()`, eliminating stale active events after sensor recovery
+- TLS sensor threshold fixes
+  - Threshold comparison direction fixed — now alerts when days remaining drops **below** threshold (was inverted: `>=` → `<=`)
+  - Default thresholds corrected from 500/2000 (ms-style) to 30/7 (days)
+  - Add Sensor tab switching now updates threshold labels dynamically (TLS shows "Warn/Crit Days (cert expiry)")
+  - Chart threshold lines show "d" suffix for TLS sensors instead of "ms"
+  - Log messages include "days" unit for TLS threshold events
+- Device License Tracking
+  - `device_licenses` table — per-device license records with `id`, `did`, `license_name`, `expiry_date`, `note`, `warn_days` (default 30), `crit_days` (default 0), `last_status`, `created_at`, `updated_at`; `idx_dev_lic_did` index; SQLite + PostgreSQL schemas
+  - `monitoring/license_checker.py` — `check_license_expirations()` compares expiry dates against today; fires `license_warn` / `license_crit` events into `flap_log` (`stype='license'`) on state change; fires `license_ok` recovery and auto-resolves the active event when renewed; broadcasts `license_status` SSE event; deduplication via `last_status` (no duplicate events unless status changes)
+  - Runs every 6 hours via `autosave_loop` hook (`_iter % 360 == 0`) and immediately after any license add/update via the API
+  - REST API — `GET/POST /api/device/{did}/licenses`, `PATCH/DELETE /api/license/{id}`, `GET /api/licenses`, `GET /api/licenses/summary`, `POST /api/licenses/check` (admin)
+  - Events tab — `license_ok`/`license_warn`/`license_crit` severity mapping; "License" type filter option; 📋 icon
+  - Edit Device modal — collapsible Licenses section (same pattern as Secondary IPs): status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day threshold inputs, add/delete per license
+  - IPAM table — "Licenses" column shows worst license status badge per linked device (`_ipamLicenseMap`); refreshed in parallel with subnet load and on SSE `license_status` events
+  - License Overview dashboard widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted table of expiring/expired licenses (device, license name, expiry date, days remaining, status badge)
+  - SSE listener in `app.js` — `license_status` event refreshes IPAM license map and dashboard widget in real-time
+
 ## 🔴 High Priority
 
 ## ⚙️ Medium Priority
