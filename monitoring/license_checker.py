@@ -106,6 +106,10 @@ def check_license_expirations() -> None:
             }
             db_log_flap(flap)
 
+        # Alert profile dispatch (email / webhook / syslog / browser)
+        _fire_license_alert(lic, new_status, old_status, detail, did, dname,
+                            host, getattr(dev, "group", "") if dev else "")
+
         # SSE broadcast for real-time UI update
         STATE._broadcast("license_status", {
             "did":          did,
@@ -115,3 +119,91 @@ def check_license_expirations() -> None:
             "days_left":    days_left,
             "detail":       detail,
         })
+
+
+def _fire_license_alert(lic: dict, new_status: str, old_status: str,
+                        detail: str, did: str, dname: str,
+                        host: str, grp: str) -> None:
+    """Resolve the device's alert profile and dispatch matching stages.
+
+    Mapping: crit → "down" stages, warn → "warning" stages,
+             ok (after crit) → "down_recovered", ok (after warn) → "warning_recovered".
+    Skips delay/repeat — the 6-hour check cadence is the natural throttle.
+    """
+    try:
+        from db.alert_profiles import db_get_profile_for_scope, db_get_action_template
+        from monitoring.alert_dispatchers import dispatch, check_maintenance
+    except Exception as e:
+        log.warning(f"license_checker: alert dispatch import error: {e}")
+        return
+
+    # Resolve profile: device → group → global cascade
+    profile = (
+        db_get_profile_for_scope("device", did)
+        or (db_get_profile_for_scope("group", grp) if grp else None)
+        or db_get_profile_for_scope("global", "")
+    )
+    if not profile or not profile.get("enabled", True):
+        return
+    stages = profile.get("stages") or []
+    if not stages:
+        return
+
+    # Map license status to stage trigger states
+    if new_status == "crit":
+        trigger_states = ("down",)
+    elif new_status == "warn":
+        trigger_states = ("warning",)
+    elif new_status == "ok" and old_status == "crit":
+        trigger_states = ("down_recovered",)
+    elif new_status == "ok" and old_status == "warn":
+        trigger_states = ("warning_recovered",)
+    else:
+        return
+
+    _SEV = {"down": "critical", "warning": "warning",
+            "down_recovered": "recovery", "warning_recovered": "recovery"}
+    _ETYPE = {"down": "license_expired", "warning": "license_expiring",
+              "down_recovered": "license_ok", "warning_recovered": "license_ok"}
+
+    sid = f"lic_{lic['id']}"
+    ctx = {
+        "did":        did,
+        "sid":        sid,
+        "dname":      dname,
+        "sname":      lic["license_name"],
+        "host":       host,
+        "stype":      "license",
+        "grp":        grp,
+        "state":      new_status,
+        "ms":         0,
+        "loss_pct":   0,
+        "detail":     detail,
+        "ts":         datetime.datetime.now(datetime.timezone.utc).strftime(
+                          "%Y-%m-%dT%H:%M:%SZ"),
+        "severity":   _SEV.get(trigger_states[0], "info"),
+        "event_type": _ETYPE.get(trigger_states[0], "license"),
+    }
+
+    suppressed, mw_name = check_maintenance(ctx)
+    if suppressed:
+        log.debug(f"license_checker: alert suppressed by maintenance window {mw_name!r}")
+        return
+
+    for stage in stages:
+        if stage.get("trigger_state") not in trigger_states:
+            continue
+        action_ids = stage.get("action_ids") or []
+        if not action_ids:
+            continue
+        log.info(f"license_checker: dispatching alert profile={profile['name']!r} "
+                 f"stage={stage['id']} trigger={stage['trigger_state']} "
+                 f"license={lic['license_name']!r} device={dname}")
+        for aid in action_ids:
+            tpl = db_get_action_template(aid)
+            if not tpl:
+                continue
+            try:
+                dispatch(tpl.get("atype", ""), tpl, ctx)
+            except Exception as e:
+                log.error(f"license_checker: dispatch error (aid={aid}): {e}")
