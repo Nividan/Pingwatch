@@ -170,6 +170,14 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwNcmStatusRefresh(wid),
     refresh: (wid, _cfg) => _dwNcmStatusRefresh(wid),
   },
+  license_overview: {
+    label: 'License Overview',
+    icon:  '📋',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
+    refresh: (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
+  },
 };
 
 // ── Persistence (server-side, per user) ───────────────────────────
@@ -1378,5 +1386,69 @@ async function _dwNcmStatusRefresh(wid) {
       </div>`);
   } catch {
     el.innerHTML = '<div class="dw-err">Failed to load backup status</div>';
+  }
+}
+
+// ── License Overview Widget ──────────────────────────────────────
+async function _dwLicenseOverviewRefresh(wid) {
+  const el = document.getElementById(`dw-body-${wid}`);
+  if (!el) return;
+  if (!el.children.length) el.innerHTML = '<div class="dw-loading">Loading…</div>';
+  try {
+    const [sumR, licR] = await Promise.all([
+      fetch('/api/licenses/summary'),
+      fetch('/api/licenses'),
+    ]);
+    if (!sumR.ok || !licR.ok) throw new Error();
+    const sum = await sumR.json();
+    const { licenses } = await licR.json();
+    const expiring = (licenses || []).filter(l => l.last_status === 'warn' || l.last_status === 'crit');
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const rows = expiring.map(l => {
+      const devName = S.devices[l.did]?.name || l.did;
+      const exp = new Date(l.expiry_date + 'T00:00:00');
+      const daysLeft = Math.round((exp - today) / 86400000);
+      const badge = l.last_status === 'crit'
+        ? '<span class="ipam-lic-crit">Expired</span>'
+        : '<span class="ipam-lic-warn">Expiring</span>';
+      const daysStr = daysLeft < 0
+        ? `${Math.abs(daysLeft)}d ago`
+        : `${daysLeft}d left`;
+      return `<tr>
+        <td style="color:var(--text)">${esc(devName)}</td>
+        <td>${esc(l.license_name)}</td>
+        <td style="font-family:'Courier New',monospace;font-size:10px">${esc(l.expiry_date)}</td>
+        <td style="text-align:right;color:var(--text2);font-size:10px;padding-right:6px">${daysStr}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('');
+    _dwSwap(el, `
+      <div class="dw-ncm-grid">
+        <div class="dw-ncm-kpi" style="border-color:rgba(248,81,73,.3)">
+          <span class="dw-ncm-n" style="color:#f85149">${sum.crit || 0}</span>
+          <span class="dw-ncm-l">Expired</span>
+        </div>
+        <div class="dw-ncm-kpi" style="border-color:rgba(240,165,0,.3)">
+          <span class="dw-ncm-n" style="color:#e3b341">${sum.warn || 0}</span>
+          <span class="dw-ncm-l">Expiring</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-ok">
+          <span class="dw-ncm-n">${sum.ok || 0}</span>
+          <span class="dw-ncm-l">Valid</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-total">
+          <span class="dw-ncm-n">${sum.total || 0}</span>
+          <span class="dw-ncm-l">Total</span>
+        </div>
+      </div>
+      ${expiring.length ? `<table class="dw-lic-tbl">
+        <thead><tr>
+          <th>Device</th><th>License</th><th>Expires</th><th>Days</th><th>Status</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : '<div class="dw-dd-ok" style="margin-top:8px">✓ No expiring licenses</div>'}
+    `);
+  } catch {
+    el.innerHTML = '<div class="dw-err">Failed to load license data</div>';
   }
 }
