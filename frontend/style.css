@@ -30,12 +30,45 @@
   --accent-glow: rgba(47,129,247,.35);
   --accent-hover:#388bfd;
   --header-h:52px;
+  /* Tokens used by rules that previously had hard-coded colors */
+  --topbar-bg:     rgba(9,13,19,.85);
+  --topbar-border: rgba(33,41,58,.7);
+  --body-grad-1:   rgba(17,30,60,.6);
+  --body-grad-2:   rgba(10,25,50,.5);
+}
+/* ── Light theme palette ─────────────────────────────────────────
+   Flipped via <html data-theme="light">. All UI rules using
+   CSS variables re-resolve automatically — no JS DOM walk needed. */
+:root[data-theme="light"]{
+  color-scheme: light;
+  --bg:    #ffffff;
+  --bg2:   #f6f8fa;
+  --bg3:   #eaeef2;
+  --bg4:   #d8dee4;
+  --panel: #ffffff;
+  --border:#d0d7de;
+  --border2:#afb8c1;
+  --up:    #1a7f37;  --up-bg:    rgba(26,127,55,.12);   --up-border:   rgba(26,127,55,.45);
+  --warn:  #9a6700;  --warn-bg:  rgba(154,103,0,.12);   --warn-border: rgba(154,103,0,.45);
+  --down:  #cf222e;  --down-bg:  rgba(207,34,46,.12);   --down-border: rgba(207,34,46,.45);
+  --pause: #6e7781;  --pause-bg: rgba(110,119,129,.12); --pause-border:rgba(110,119,129,.45);
+  --info:  #0969da;
+  --text:  #1f2328;
+  --text2: #656d76;
+  --text3: #8c959f;
+  --accent:#0969da;
+  --accent-glow: rgba(9,105,218,.22);
+  --accent-hover:#0860ca;
+  --topbar-bg:     rgba(255,255,255,.90);
+  --topbar-border: rgba(208,215,222,.90);
+  --body-grad-1:   transparent;
+  --body-grad-2:   transparent;
 }
 html,body{height:100%;overflow:hidden}
 body{
   background:
-    radial-gradient(ellipse 80% 60% at 20% 20%, rgba(17,30,60,.6) 0%, transparent 60%),
-    radial-gradient(ellipse 70% 50% at 80% 80%, rgba(10,25,50,.5) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 20% 20%, var(--body-grad-1) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 50% at 80% 80%, var(--body-grad-2) 0%, transparent 55%),
     var(--bg);
   color:var(--text);font-family:'Exo 2',sans-serif;font-size:13px;line-height:1.4;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale
@@ -47,14 +80,18 @@ body{
 
 /* ── Network grid background canvas ── */
 #netbg{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.55}
+/* In light mode the canvas uses dark-blue mesh lines that become noisy
+   against a white page. Drop opacity until Phase 2 rewires bg.js to
+   read CSS vars and redraw on theme change. */
+:root[data-theme="light"] #netbg{opacity:.18}
 #layout,#topbar{z-index:1;position:relative}
 #layout{z-index:1}
 
 /* ── Top bar ── */
 #topbar{
   height:var(--header-h);
-  background:rgba(9,13,19,.85);
-  border-bottom:1px solid rgba(33,41,58,.7);
+  background:var(--topbar-bg);
+  border-bottom:1px solid var(--topbar-border);
   display:flex;align-items:center;
   position:fixed;top:0;left:0;right:0;z-index:200;
   user-select:none;
@@ -82,7 +119,7 @@ body{
   border:1px solid var(--border);border-radius:20px;
   background:var(--bg3);
 }
-.tb-db-dot{width:5px;height:5px;border-radius:50%;background:#23d18b;box-shadow:0 0 6px #23d18b}
+.tb-db-dot{width:5px;height:5px;border-radius:50%;background:var(--up);box-shadow:0 0 6px var(--up)}
 .tb-badges{display:flex;align-items:center;gap:4px}
 .tb-badge{
   display:flex;align-items:center;justify-content:center;
@@ -330,7 +367,7 @@ body{
 .dc-snr{
   display:flex;align-items:center;gap:6px;
   padding:4px 7px;border-radius:6px;
-  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);
+  background:var(--bg3);border:1px solid var(--border);
 }
 .dc-snr-ico{
   width:16px;height:16px;border-radius:3px;
@@ -356,6 +393,16 @@ body{
 .dc-snr.snr-t-http_keyword{border-color:rgba(234,179,8,.22)}
 .dc-snr.snr-t-banner      {border-color:rgba(251,146,60,.22)}
 .dc-snr.snr-t-vmware      {border-color:rgba(99,102,241,.22)}
+/* Light-theme: sensor type icons need darker foreground to hit AA on white */
+:root[data-theme="light"] .dc-snr-ico.ping        {background:rgba(59,130,246,.12); color:#1f6feb}
+:root[data-theme="light"] .dc-snr-ico.tcp         {background:rgba(16,185,129,.14); color:#0e7c54}
+:root[data-theme="light"] .dc-snr-ico.http        {background:rgba(245,158,11,.15); color:#9a6700}
+:root[data-theme="light"] .dc-snr-ico.snmp        {background:rgba(168,85,247,.12); color:#7c3aed}
+:root[data-theme="light"] .dc-snr-ico.dns         {background:rgba(20,184,166,.14); color:#0f766e}
+:root[data-theme="light"] .dc-snr-ico.tls         {background:rgba(6,182,212,.14);  color:#0e7490}
+:root[data-theme="light"] .dc-snr-ico.http_keyword{background:rgba(234,179,8,.15);  color:#854d0e}
+:root[data-theme="light"] .dc-snr-ico.banner      {background:rgba(251,146,60,.15); color:#9a3412}
+:root[data-theme="light"] .dc-snr-ico.vmware      {background:rgba(99,102,241,.12); color:#4338ca}
 .dc-snr-nm{font-size:10px;color:var(--text2);flex:1;min-width:0;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-snr-val{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;flex-shrink:0}
@@ -886,6 +933,7 @@ body{
 .hero-ico-wrap{
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   pointer-events:none;
+  color:var(--accent); /* SVG uses currentColor → follows theme accent */
 }
 
 /* Hero title */
@@ -1308,6 +1356,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   display:flex;align-items:center;justify-content:center;
   box-shadow:0 0 28px rgba(47,129,247,.55),0 4px 16px rgba(0,0,0,.5);
   animation:logoPulse 4s ease-in-out infinite;
+  color:#fff; /* SVG uses currentColor → keep white over blue gradient in both themes */
 }
 .login-title{
   display:flex;align-items:baseline;justify-content:center;gap:0;line-height:1;
@@ -1899,11 +1948,11 @@ tbody.bk-grp-collapsed{display:none;}
 .bk-diff-meta-row{display:flex;gap:14px;align-items:center;font-size:12px;color:var(--text2);}
 .bk-diff-lbl{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;
              letter-spacing:.04em;flex-shrink:0;}
-.bk-dl-del-lbl{background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3);}
-.bk-dl-add-lbl{background:rgba(63,185,80,0.15);color:#3fb950;border:1px solid rgba(63,185,80,0.3);}
+.bk-dl-del-lbl{background:var(--down-bg);color:var(--down);border:1px solid var(--down-border);}
+.bk-dl-add-lbl{background:var(--up-bg);color:var(--up);border:1px solid var(--up-border);}
 .bk-diff-summary{display:flex;gap:10px;align-items:center;font-size:11px;margin-top:4px;flex-wrap:wrap;}
-.bk-diff-adds{color:#3fb950;font-weight:600;}
-.bk-diff-dels{color:#f85149;font-weight:600;}
+.bk-diff-adds{color:var(--up);font-weight:600;}
+.bk-diff-dels{color:var(--down);font-weight:600;}
 .bk-enc-toggle{display:flex;align-items:center;gap:5px;margin-left:auto;color:var(--text2);cursor:pointer;font-size:11px;user-select:none;}
 .bk-enc-toggle input{cursor:pointer;accent-color:var(--accent);}
 .bk-diff-wrap{font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.55;
@@ -1914,16 +1963,16 @@ tbody.bk-grp-collapsed{display:none;}
 .bk-dl-pfx{width:18px;text-align:center;flex-shrink:0;font-weight:700;}
 .bk-dl-txt{flex:1;padding:0 6px;white-space:pre-wrap;word-break:break-all;}
 .bk-dl-eq .bk-dl-txt{color:var(--text2);}
-.bk-dl-add{background:rgba(63,185,80,0.10);}
-.bk-dl-add .bk-dl-pfx,.bk-dl-add .bk-dl-txt{color:#3fb950;}
-.bk-dl-del{background:rgba(248,81,73,0.10);}
-.bk-dl-del .bk-dl-pfx,.bk-dl-del .bk-dl-txt{color:#f85149;}
+.bk-dl-add{background:var(--up-bg);}
+.bk-dl-add .bk-dl-pfx,.bk-dl-add .bk-dl-txt{color:var(--up);}
+.bk-dl-del{background:var(--down-bg);}
+.bk-dl-del .bk-dl-pfx,.bk-dl-del .bk-dl-txt{color:var(--down);}
 .bk-dl-ctx{background:var(--bg2);cursor:pointer;}
 .bk-dl-ctx:hover{background:var(--bg3);}
 .bk-dl-ctx .bk-dl-pfx{color:var(--text3);}
 .bk-rollback{border-top:1px solid var(--border);flex-shrink:0;}
 .bk-rollback summary{padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;
-                      color:#e3b341;user-select:none;}
+                      color:var(--warn);user-select:none;}
 .bk-rollback summary:hover{background:var(--bg3);}
 .bk-rollback-warn{font-size:11px;color:var(--text3);padding:4px 14px 6px;font-style:italic;}
 .bk-rollback pre{margin:0 14px 4px;max-height:30vh;}
@@ -1934,9 +1983,9 @@ tbody.bk-grp-collapsed{display:none;}
              padding:12px 4px;background:var(--bg2);}
 .dw-ncm-n{font-size:1.6rem;font-weight:700;line-height:1;}
 .dw-ncm-l{font-size:0.7rem;color:var(--text2);margin-top:3px;}
-.dw-ncm-ok   .dw-ncm-n{color:#3fb950;}
-.dw-ncm-fail .dw-ncm-n{color:#f85149;}
-.dw-ncm-never .dw-ncm-n{color:#e3b341;}
+.dw-ncm-ok   .dw-ncm-n{color:var(--up);}
+.dw-ncm-fail .dw-ncm-n{color:var(--down);}
+.dw-ncm-never .dw-ncm-n{color:var(--warn);}
 .dw-ncm-total .dw-ncm-n{color:var(--text);font-size:1.2rem;}
 
 /* ── License date input (dark calendar picker) ───────────────────── */

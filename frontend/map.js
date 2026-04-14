@@ -55,7 +55,21 @@ window.addEventListener('message', e => {
       }
     }
   }
+  // Parent-driven theme sync — flips the iframe to match the main app.
+  if (e.data?.type === 'theme') {
+    const t = e.data.value === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('pw_theme', t); } catch(_) {}
+  }
 });
+// Initial theme — read localStorage (same-origin, shared with parent) so the
+// iframe renders with the right palette even before the parent posts a message.
+try {
+  const _t0 = localStorage.getItem('pw_theme');
+  if (_t0 === 'light' || _t0 === 'dark') {
+    document.documentElement.setAttribute('data-theme', _t0);
+  }
+} catch(_) {}
 // Also pause when this document's own visibility changes (e.g. OS switch)
 let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {

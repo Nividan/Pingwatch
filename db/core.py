@@ -596,9 +596,10 @@ def db_init():
             pass
         # Migration: user profiles + groups (v0.8+)
         for _col, _def in [
-            ("full_name", "TEXT DEFAULT ''"),
-            ("email",     "TEXT DEFAULT ''"),
-            ("group_id",  "INTEGER DEFAULT NULL"),
+            ("full_name",        "TEXT DEFAULT ''"),
+            ("email",            "TEXT DEFAULT ''"),
+            ("group_id",         "INTEGER DEFAULT NULL"),
+            ("theme_preference", "TEXT DEFAULT 'dark'"),
         ]:
             try:
                 con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")

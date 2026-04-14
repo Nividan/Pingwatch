@@ -21,15 +21,29 @@ def pg_create_main_schema(cur):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            username  TEXT PRIMARY KEY,
-            pw_hash   TEXT NOT NULL,
-            role      TEXT DEFAULT 'admin',
-            auth_type TEXT DEFAULT 'local',
-            domain    TEXT DEFAULT '',
-            full_name TEXT DEFAULT '',
-            email     TEXT DEFAULT '',
-            group_id  INTEGER DEFAULT NULL
+            username         TEXT PRIMARY KEY,
+            pw_hash          TEXT NOT NULL,
+            role             TEXT DEFAULT 'admin',
+            auth_type        TEXT DEFAULT 'local',
+            domain           TEXT DEFAULT '',
+            full_name        TEXT DEFAULT '',
+            email            TEXT DEFAULT '',
+            group_id         INTEGER DEFAULT NULL,
+            theme_preference TEXT DEFAULT 'dark'
         )""")
+    # Migration: add theme_preference for existing installs
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='main' AND table_name='users'
+                  AND column_name='theme_preference'
+            ) THEN
+                ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'dark';
+            END IF;
+        END $$
+    """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (

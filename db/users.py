@@ -58,10 +58,11 @@ _UNSET = object()
 
 
 def db_update_profile(username: str, full_name: str, email: str,
-                      group_id=_UNSET, role: str = _UNSET) -> bool:
+                      group_id=_UNSET, role: str = _UNSET,
+                      theme_preference: str = _UNSET) -> bool:
     """
     Update user profile fields.
-    group_id and role are only updated when explicitly passed (admin path).
+    group_id, role, and theme_preference are only updated when explicitly passed.
     Returns False if user not found.
     """
     sets = ["full_name=?", "email=?"]
@@ -72,6 +73,9 @@ def db_update_profile(username: str, full_name: str, email: str,
     if role is not _UNSET:
         sets.append("role=?")
         params.append(role)
+    if theme_preference is not _UNSET:
+        sets.append("theme_preference=?")
+        params.append(theme_preference)
     params.append(username)
     try:
         with db_cursor("main") as cur:
@@ -87,6 +91,22 @@ def db_update_profile(username: str, full_name: str, email: str,
 def db_update_own_profile(username: str, full_name: str, email: str) -> bool:
     """Update only full_name and email for the user (self-service, no role/group change)."""
     return db_update_profile(username, full_name, email)
+
+
+def db_update_theme(username: str, theme: str) -> bool:
+    """Persist the user's preferred UI theme ('dark' or 'light')."""
+    if theme not in ("dark", "light"):
+        return False
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"UPDATE users SET theme_preference={ph} WHERE username={ph}",
+                (theme, username))
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"DB update theme error: {e}")
+        return False
 
 
 def db_add_user(username: str, password: str, role: str = "admin") -> bool:

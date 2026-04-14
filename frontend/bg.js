@@ -10,6 +10,18 @@
   const _BG_MS = 1000 / 30;
   let _bgRafId = null;
 
+  // Theme-aware color cache — refreshed on 'themechange'.
+  // Default dark values match the original hardcoded rgbas so first paint
+  // before theme.js runs still looks correct.
+  const C = { accent:[47,129,247], up:[35,209,139] };
+  function _refreshColors(){
+    if (!window.getCssRgb) return;
+    const a = window.getCssRgb('--accent'); if (a) C.accent = a;
+    const u = window.getCssRgb('--up');     if (u) C.up = u;
+  }
+  _refreshColors();
+  window.addEventListener('themechange', _refreshColors);
+
   // Aurora orbs
   const ORBS = [
     {xr:.18, yr:.25, r:.38, h:220, s:.8, spd:.00008},
@@ -72,7 +84,7 @@
         // scan glow on edges
         const sd = Math.min(Math.abs(ay-scan), Math.abs(by-scan));
         const boost = sd < 50 ? .08*(1-sd/50) : 0;
-        ctx.strokeStyle = `rgba(47,140,255,${fade*.09+boost})`;
+        ctx.strokeStyle = `rgba(${C.accent.join(',')},${fade*.09+boost})`;
         ctx.lineWidth = .7;
         ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
       }
@@ -85,29 +97,30 @@
       // glow halo
       if(boost > .1){
         const g2 = ctx.createRadialGradient(x,y,0,x,y,8);
-        g2.addColorStop(0,`rgba(47,140,255,${boost*.3})`);
-        g2.addColorStop(1,'rgba(47,140,255,0)');
+        g2.addColorStop(0,`rgba(${C.accent.join(',')},${boost*.3})`);
+        g2.addColorStop(1,`rgba(${C.accent.join(',')},0)`);
         ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2);
         ctx.fillStyle=g2; ctx.fill();
       }
       ctx.beginPath(); ctx.arc(x,y,n.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(80,155,255,${a})`; ctx.fill();
+      ctx.fillStyle=`rgba(${C.accent.join(',')},${a})`; ctx.fill();
     });
   }
 
   function drawScan(){
     scan = (scan + .35) % H;
+    const acc = C.accent.join(',');
     // primary beam
     const sg = ctx.createLinearGradient(0,scan-60,0,scan+60);
-    sg.addColorStop(0,   'rgba(47,129,247,0)');
-    sg.addColorStop(.45, 'rgba(47,129,247,.055)');
-    sg.addColorStop(.5,  'rgba(100,180,255,.13)');
-    sg.addColorStop(.55, 'rgba(47,129,247,.055)');
-    sg.addColorStop(1,   'rgba(47,129,247,0)');
+    sg.addColorStop(0,   `rgba(${acc},0)`);
+    sg.addColorStop(.45, `rgba(${acc},.055)`);
+    sg.addColorStop(.5,  `rgba(${acc},.18)`);
+    sg.addColorStop(.55, `rgba(${acc},.055)`);
+    sg.addColorStop(1,   `rgba(${acc},0)`);
     ctx.fillStyle=sg;
     ctx.fillRect(0, scan-60, W, 120);
     // thin bright line
-    ctx.strokeStyle='rgba(120,190,255,.18)';
+    ctx.strokeStyle=`rgba(${acc},.22)`;
     ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
@@ -167,6 +180,16 @@
     const RADAR_MS = 1000 / 30;
     let _radarLast = 0;
 
+    // Theme-aware color cache
+    const RC = { accent:[47,129,247], up:[35,209,139] };
+    function _refresh(){
+      if (!window.getCssRgb) return;
+      const a = window.getCssRgb('--accent'); if (a) RC.accent = a;
+      const u = window.getCssRgb('--up');     if (u) RC.up = u;
+    }
+    _refresh();
+    window.addEventListener('themechange', _refresh);
+
     function frame(ts){
       // When hidden, poll slowly instead of burning 60 RAF/s on a visibility check
       if(!cvs.offsetParent){ setTimeout(()=>requestAnimationFrame(frame), 500); return; }
@@ -174,22 +197,25 @@
       _radarLast = ts;
       ctx.clearRect(0,0,W,H);
 
+      const acc = RC.accent.join(',');
+      const up  = RC.up.join(',');
+
       // outer glow ring
       const og=ctx.createRadialGradient(CX,CY,R-4,CX,CY,R+12);
-      og.addColorStop(0,'rgba(47,129,247,.18)');
-      og.addColorStop(1,'rgba(47,129,247,0)');
+      og.addColorStop(0,`rgba(${acc},.18)`);
+      og.addColorStop(1,`rgba(${acc},0)`);
       ctx.beginPath();ctx.arc(CX,CY,R+12,0,Math.PI*2);
       ctx.fillStyle=og;ctx.fill();
 
       // concentric circles
       [R*.28,R*.54,R*.78,R].forEach((r,i)=>{
         ctx.beginPath();ctx.arc(CX,CY,r,0,Math.PI*2);
-        ctx.strokeStyle=`rgba(47,129,247,${.08+i*.04})`;
+        ctx.strokeStyle=`rgba(${acc},${.08+i*.04})`;
         ctx.lineWidth=.8;ctx.stroke();
       });
 
       // crosshairs
-      ctx.strokeStyle='rgba(47,129,247,.12)';ctx.lineWidth=.7;
+      ctx.strokeStyle=`rgba(${acc},.12)`;ctx.lineWidth=.7;
       [-1,0,1].forEach(d=>{
         if(d===0){
           ctx.beginPath();ctx.moveTo(CX-R,CY);ctx.lineTo(CX+R,CY);ctx.stroke();
@@ -209,15 +235,15 @@
         const a1=angle - sweepLen*(frac+1/40);
         ctx.beginPath();ctx.moveTo(CX,CY);
         ctx.arc(CX,CY,R,a1,a0);ctx.closePath();
-        ctx.fillStyle=`rgba(35,209,139,${frac*.12})`;
+        ctx.fillStyle=`rgba(${up},${frac*.12})`;
         ctx.fill();
       }
 
       // sweep leading edge line
       const lx=CX+Math.cos(angle)*R, ly=CY+Math.sin(angle)*R;
       const lg=ctx.createLinearGradient(CX,CY,lx,ly);
-      lg.addColorStop(0,'rgba(35,209,139,0)');
-      lg.addColorStop(1,'rgba(35,209,139,.6)');
+      lg.addColorStop(0,`rgba(${up},0)`);
+      lg.addColorStop(1,`rgba(${up},.6)`);
       ctx.beginPath();ctx.moveTo(CX,CY);ctx.lineTo(lx,ly);
       ctx.strokeStyle=lg;ctx.lineWidth=1.5;ctx.stroke();
 
@@ -231,21 +257,21 @@
         if(b.life<.01&&Math.random()<.005){blips.splice(idx,1);addBlip();return;}
         // glow
         const g=ctx.createRadialGradient(bx,by,0,bx,by,7);
-        g.addColorStop(0,`rgba(35,209,139,${b.life*.7})`);
-        g.addColorStop(1,'rgba(35,209,139,0)');
+        g.addColorStop(0,`rgba(${up},${b.life*.7})`);
+        g.addColorStop(1,`rgba(${up},0)`);
         ctx.beginPath();ctx.arc(bx,by,7,0,Math.PI*2);
         ctx.fillStyle=g;ctx.fill();
         // dot
         ctx.beginPath();ctx.arc(bx,by,2,0,Math.PI*2);
-        ctx.fillStyle=`rgba(35,209,139,${b.life})`;ctx.fill();
+        ctx.fillStyle=`rgba(${up},${b.life})`;ctx.fill();
       });
 
       // center dot
       const cg=ctx.createRadialGradient(CX,CY,0,CX,CY,8);
-      cg.addColorStop(0,'rgba(47,129,247,.9)');
-      cg.addColorStop(1,'rgba(47,129,247,0)');
+      cg.addColorStop(0,`rgba(${acc},.9)`);
+      cg.addColorStop(1,`rgba(${acc},0)`);
       ctx.beginPath();ctx.arc(CX,CY,8,0,Math.PI*2);ctx.fillStyle=cg;ctx.fill();
-      ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle='#60a5fa';ctx.fill();
+      ctx.beginPath();ctx.arc(CX,CY,3,0,Math.PI*2);ctx.fillStyle=`rgb(${acc})`;ctx.fill();
 
       angle=(angle+.036)%(Math.PI*2); // .018*2 — compensate for 30 FPS vs 60 FPS
       requestAnimationFrame(frame);
