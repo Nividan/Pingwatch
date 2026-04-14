@@ -200,14 +200,22 @@ def handle(h, method, path, body):
         # Single persist after the whole batch
         _db_enqueue(lambda: db_save(STATE))
 
-        # Auto-add scanned CIDR to IPAM if it doesn't already exist
+        # Auto-add scanned CIDR to IPAM if it doesn't already exist,
+        # then immediately back-populate allocations from the just-added devices.
+        # Must be a single enqueued function so the subnet exists when sync runs.
         _cidr = str(body.get("cidr", "")).strip()
         if _cidr and "/" in _cidr and created:
             try:
                 existing = {s["cidr"] for s in db_list_subnets()}
                 if _cidr not in existing:
-                    _db_enqueue(lambda _c=_cidr, _u=user:
-                                db_add_subnet(_c, "Discovered", _u))
+                    from db.ipam import ipam_sync_subnet_add
+                    def _create_and_sync(_c=_cidr, _u=user):
+                        try:
+                            sid = db_add_subnet(_c, "Discovered", _u)
+                            ipam_sync_subnet_add(sid, _c)
+                        except Exception as _e:
+                            log.warning(f"discovery IPAM subnet auto-create failed: {_e}")
+                    _db_enqueue(_create_and_sync)
             except Exception:
                 pass  # non-critical — don't fail the bulk add
 
