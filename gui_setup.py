@@ -838,7 +838,9 @@ class DatabasePage(WizardPage):
 
         txt = tk.Text(frm, bg=BG2, fg=TEXT, font=(_FNT, 10),
                       relief="flat", wrap="word", padx=14, pady=10,
-                      cursor="arrow", selectbackground=ACCENT, state="normal")
+                      cursor="xterm", selectbackground=ACCENT,
+                      selectforeground=BG, inactiveselectbackground=ACCENT,
+                      exportselection=True, state="normal")
         sb = ttk.Scrollbar(frm, command=txt.yview)
         txt.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
