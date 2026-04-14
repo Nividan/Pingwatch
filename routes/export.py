@@ -38,6 +38,7 @@ from core.config import (
 )
 from db          import db_log_audit, db_get_audit
 from core.logger import log, LOG_FILES
+from core        import app_state
 
 _LOG_LINE_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+'
@@ -326,16 +327,18 @@ def handle(h, method, path, body):
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_main")
+        _ver = app_state.APP_VERSION
+        _ts  = time.strftime("%Y%m%d-%H%M%S")
         if is_pg():
             try:
                 data  = _pg_dump_bytes('main')
-                fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".sql"
+                fname = f"pingwatch-main-v{_ver}-{_ts}.sql"
             except Exception as e:
                 log.error(f"DB export (PG main): {e}")
                 h._json(500, {"error": "Database export failed — check server logs"}); return True
         else:
             data  = _sqlite_backup_bytes(DB_PATH)
-            fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
+            fname = f"pingwatch-main-v{_ver}-{_ts}.db"
         _send_db(h, data, fname)
         return True
 
@@ -345,10 +348,12 @@ def handle(h, method, path, body):
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_logs")
+        _ver = app_state.APP_VERSION
+        _ts  = time.strftime("%Y%m%d-%H%M%S")
         if is_pg():
             try:
                 data  = _pg_dump_bytes('logs')
-                fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".sql"
+                fname = f"pingwatch-logs-v{_ver}-{_ts}.sql"
             except Exception as e:
                 log.error(f"DB export (PG logs): {e}")
                 h._json(500, {"error": "Database export failed — check server logs"}); return True
@@ -356,7 +361,7 @@ def handle(h, method, path, body):
             if not os.path.exists(LOGS_DB_PATH):
                 h._json(404, {"error": "Logs DB does not exist yet"}); return True
             data  = _sqlite_backup_bytes(LOGS_DB_PATH)
-            fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
+            fname = f"pingwatch-logs-v{_ver}-{_ts}.db"
         _send_db(h, data, fname)
         return True
 
@@ -376,11 +381,12 @@ def handle(h, method, path, body):
                 log.error(f"DB export bundle (PG): {e}")
                 h._json(500, {"error": "Database export failed — check server logs"}); return True
             manifest = {
-                "version":    1,
-                "backend":    "postgresql",
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "has_main":   True,
-                "has_logs":   bool(logs_data),
+                "version":     1,
+                "app_version": app_state.APP_VERSION,
+                "backend":     "postgresql",
+                "created_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "has_main":    True,
+                "has_logs":    bool(logs_data),
             }
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -413,13 +419,14 @@ def handle(h, method, path, body):
                     sv_logs = 1
 
             manifest = {
-                "version":      1,
-                "backend":      "sqlite",
-                "created_at":   time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "schema_main":  sv_main,
-                "schema_logs":  sv_logs,
-                "has_main":     True,
-                "has_logs":     bool(logs_data),
+                "version":     1,
+                "app_version": app_state.APP_VERSION,
+                "backend":     "sqlite",
+                "created_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "schema_main": sv_main,
+                "schema_logs": sv_logs,
+                "has_main":    True,
+                "has_logs":    bool(logs_data),
             }
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -429,7 +436,7 @@ def handle(h, method, path, body):
                 zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
 
         zip_bytes = buf.getvalue()
-        fname = f"pingwatch-bundle-{ts}.zip"
+        fname = f"pingwatch-bundle-v{app_state.APP_VERSION}-{ts}.zip"
         h.send_response(200)
         h.send_header("Content-Type", "application/zip")
         h.send_header("Content-Disposition", f'attachment; filename="{fname}"')

@@ -6,7 +6,18 @@
 <title>Network Topology Manager</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="stylesheet" href="/map.css">
-
+<script>
+// Apply theme synchronously before CSS paints — prevents dark flash on light mode.
+// Same-origin iframe ⇒ shares localStorage with the parent app.
+(function(){
+  try {
+    var t = localStorage.getItem('pw_theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch(_) {}
+})();
+</script>
 </head>
 <body>
 
