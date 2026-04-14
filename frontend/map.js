@@ -44,6 +44,16 @@ window.addEventListener('message', e => {
     _ntmVisible = true;
     _resumeDashBg?.();
     _resumeMainBg?.();
+    // Catchup: apply any device status updates that arrived while map was paused
+    if (Array.isArray(e.data.devices)) {
+      for (const {did, status} of e.data.devices) {
+        const dev = _pwDevMap[did];
+        if (dev && dev.status !== status) {
+          dev.status = status;
+          _schedulePwLiveUpdate(dev.device_id);
+        }
+      }
+    }
   }
 });
 // Also pause when this document's own visibility changes (e.g. OS switch)
@@ -425,6 +435,8 @@ function renderPingWatchCanvas() {
     showPwLinkPanel(selectedEl.data.id);
   } else if (_selectedPwDid) {
     showPwNodePanel(_selectedPwDid);
+  } else if (multiSelect.size > 0) {
+    showMultiPanel();
   } else {
     showPwDashboardPanel();
   }
@@ -466,6 +478,8 @@ function showPwDashboardPanel() {
     </div>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
   `;
+  // Restart dashboard canvas (paused while node/link panel was showing)
+  _resumeDashBg?.();
 }
 
 function _buildIncidentList() {
@@ -558,6 +572,9 @@ function showPwNodePanel(did) {
     ['laptop','Laptop'],['ap','WiFi Access Point'],['connector','Cato Connector'],
     ['remote-pc','Remote PC'],['cloud','Cloud / Internet'],
     ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
+    ['storage','Storage / NAS'],['phone','IP Phone / VoIP'],['camera','IP Camera / CCTV'],
+    ['printer','Printer / MFP'],['load-balancer','Load Balancer'],['hypervisor','Hypervisor / ESXi'],
+    ['ups','UPS / PDU'],['container','Container Host'],['ipmi','IPMI / BMC'],
   ].map(([v,l])=>`<option value="${v}"${v===currentType?' selected':''}>${l}</option>`).join('');
   const sensors = dev.sensors || [];
   const sRows = sensors.map(s => {
@@ -581,6 +598,11 @@ function showPwNodePanel(did) {
       <div class="field-label">HOST / IP</div>
       <span style="color:${col};font-family:'Share Tech Mono',monospace;font-size:11px">${escXml(dev.host)}</span>
     </div>
+    ${(dev.secondary_ips||[]).length ? `
+    <div class="field-group">
+      <div class="field-label">SECONDARY IPS</div>
+      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
+    </div>` : ''}
     <div class="field-group">
       <div class="field-label">GROUP</div>
       <span style="color:rgba(255,255,255,0.5);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
@@ -644,7 +666,7 @@ function startPwSSE() {
     // Threshold events → re-color any PW link assigned to that sensor
     ['threshold_critical', 'threshold_warning', 'threshold_ok'].forEach(evt => {
       pwSSE.addEventListener(evt, e => {
-        if (!isPingWatchPage) return;
+        if (!isPingWatchPage || !_ntmVisible) return;
         const d = JSON.parse(e.data);
         const state = evt === 'threshold_ok' ? 'ok' : evt === 'threshold_warning' ? 'warn' : 'crit';
         _pwSensorThresholdUpdate(d.did, d.sid, state);
@@ -705,10 +727,10 @@ function _pwFindPath(fromDid, toDid) {
 
 // ── Trace animation performance limits ───────────────────────────────────────
 // Max 3 concurrent dots (was 6) — each runs its own rAF loop at 30fps
-const PW_MAX_TRACES = 3;
-// Per-device cooldown: only one trace per device per 4 seconds.
-// With 38 devices probing every 5s, this was firing ~22 traces/second.
-const _pwTraceCooldown = 4000;
+const PW_MAX_TRACES = 2;
+// Per-device cooldown: only one trace per device per 6 seconds.
+// With 62 devices probing every 5s, fewer concurrent traces = less RAF pressure.
+const _pwTraceCooldown = 6000;
 const _pwTraceLastFired = new Map();
 
 function _pwFireTrace(toDid, alive) {
@@ -867,7 +889,7 @@ function _pwLiveUpdate(did) {
   // Update right panel only if relevant and no input is focused
   if (_selectedPwDid === did && !_pwInputFocused()) {
     showPwNodePanel(did);
-  } else if (!_selectedPwDid && !selectedEl && !_pwInputFocused()) {
+  } else if (!_selectedPwDid && !selectedEl && multiSelect.size === 0 && !_pwInputFocused()) {
     showPwDashboardPanel();
   }
 }
@@ -974,6 +996,15 @@ const NODE_SIZE = {
   router:     { w:160,  h:68  },
   vm:         { w:160,  h:68  },
   appliance:  { w:160,  h:68  },
+  storage:    { w:160,  h:68  },
+  phone:      { w:160,  h:68  },
+  camera:     { w:160,  h:68  },
+  printer:    { w:160,  h:68  },
+  'load-balancer':{ w:160, h:68 },
+  hypervisor: { w:160,  h:68  },
+  ups:        { w:160,  h:68  },
+  container:  { w:160,  h:68  },
+  ipmi:       { w:160,  h:68  },
 };
 function nsize(type, node) {
   if (type === 'info-box' && node) {
@@ -1324,9 +1355,9 @@ function renderNodes() {
     g.addEventListener('mousedown', e => startDrag(e, node));
     g.addEventListener('click', e => {
       e.stopPropagation();
+      if (e.shiftKey) { toggleMultiSelect(node); return; }
       if (isPingWatchPage) { showPwNodePanel(node._pwDid); return; }
-      if (e.shiftKey) { toggleMultiSelect(node); }
-      else { multiSelect.clear(); selectNode(node); }
+      multiSelect.clear(); selectNode(node);
     });
     g.addEventListener('touchstart', e => startDrag(e, node), {passive:false});
     layer.appendChild(g);
@@ -1338,23 +1369,9 @@ function renderNodes() {
   _startLedBlink();
 }
 
-let ledIntervals = [];
-let _ledTimer = null;
-
-function clearLedIntervals() {
-  if (_ledTimer) { clearInterval(_ledTimer); _ledTimer = null; }
-  ledIntervals.forEach(clearInterval);
-  ledIntervals = [];
-}
-
-function _startLedBlink() {
-  if (_ledTimer) return; // already running
-  _ledTimer = setInterval(() => {
-    document.querySelectorAll('.led-blink').forEach(led => {
-      led.style.opacity = Math.random() > 0.3 ? '1' : '0.2';
-    });
-  }, 700);
-}
+// LED blink is now pure CSS (@keyframes ledBlink in map.css)
+function clearLedIntervals() {}
+function _startLedBlink() {}
 
 // ═══════════════════════════ NODE RENDERERS ═══════════════════════════
 
@@ -1415,6 +1432,15 @@ function buildNode(node, sel) {
     case 'router':     return renderRouter(node, p, selFilter);
     case 'vm':         return renderVM(node, p, selFilter);
     case 'appliance':  return renderAppliance(node, p, selFilter);
+    case 'storage':    return renderStorage(node, p, selFilter);
+    case 'phone':      return renderPhone(node, p, selFilter);
+    case 'camera':     return renderCamera(node, p, selFilter);
+    case 'printer':    return renderPrinter(node, p, selFilter);
+    case 'load-balancer': return renderLoadBalancer(node, p, selFilter);
+    case 'hypervisor': return renderHypervisor(node, p, selFilter);
+    case 'ups':        return renderUPS(node, p, selFilter);
+    case 'container':  return renderContainer(node, p, selFilter);
+    case 'ipmi':       return renderIPMI(node, p, selFilter);
     default:           return renderGeneric(node, p, selFilter);
   }
 }
@@ -1777,6 +1803,189 @@ function renderAppliance(node, p, sf) {
   </g>`;
 }
 
+// ── Storage / NAS ────────────────────────────────────────────
+function renderStorage(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(30,20,5,0.92)" stroke="#f59e0b" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <rect x="2" y="0" width="26" height="8" rx="3" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.2"/>
+      <rect x="0" y="10" width="30" height="8" rx="3" fill="rgba(245,158,11,0.2)" stroke="#f59e0b" stroke-width="1.2"/>
+      <rect x="2" y="20" width="26" height="8" rx="3" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.2"/>
+      <circle cx="24" cy="14" r="2" fill="#f59e0b" class="led-blink"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#fcd34d" x="52" y="24" fill="${p.name_color||'#fcd34d'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(245,158,11,0.2)"/>
+  </g>`;
+}
+
+// ── IP Phone / VoIP ──────────────────────────────────────────
+function renderPhone(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(5,25,25,0.92)" stroke="#14b8a6" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <path d="M4,8 Q4,4 8,4 L12,4 Q14,4 14,6 L14,12 Q14,14 12,14 L10,14 Q6,18 6,22 Q6,26 10,26 L12,26 Q14,26 14,28 L14,34 Q14,36 12,36 L8,36 Q4,36 4,32 Z" fill="none" stroke="#14b8a6" stroke-width="1.5"/>
+      <path d="M18,10 Q24,4 30,10" fill="none" stroke="#14b8a6" stroke-width="1.2" opacity="0.4"/>
+      <path d="M20,12 Q24,8 28,12" fill="none" stroke="#14b8a6" stroke-width="1.2" opacity="0.7"/>
+      <circle cx="24" cy="14" r="1.5" fill="#14b8a6"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#5eead4" x="52" y="24" fill="${p.name_color||'#5eead4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(20,184,166,0.2)"/>
+  </g>`;
+}
+
+// ── IP Camera / CCTV ─────────────────────────────────────────
+function renderCamera(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(15,12,35,0.92)" stroke="#818cf8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <rect x="0" y="6" width="22" height="16" rx="2" fill="rgba(129,140,248,0.15)" stroke="#818cf8" stroke-width="1.2"/>
+      <circle cx="11" cy="14" r="5" fill="none" stroke="#818cf8" stroke-width="1.2"/>
+      <circle cx="11" cy="14" r="2" fill="#818cf8" opacity="0.8"/>
+      <polygon points="22,10 30,6 30,22 22,18" fill="rgba(129,140,248,0.2)" stroke="#818cf8" stroke-width="1"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#c7d2fe" x="52" y="24" fill="${p.name_color||'#c7d2fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(129,140,248,0.2)"/>
+  </g>`;
+}
+
+// ── Printer / MFP ────────────────────────────────────────────
+function renderPrinter(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(15,18,22,0.92)" stroke="#94a3b8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="2" y="0" width="24" height="10" rx="1" fill="rgba(148,163,184,0.1)" stroke="#94a3b8" stroke-width="1"/>
+      <rect x="0" y="10" width="28" height="14" rx="2" fill="rgba(148,163,184,0.15)" stroke="#94a3b8" stroke-width="1.2"/>
+      <rect x="4" y="24" width="20" height="6" rx="1" fill="rgba(148,163,184,0.1)" stroke="#94a3b8" stroke-width="0.8"/>
+      <rect x="6" y="-4" width="16" height="6" rx="1" fill="rgba(148,163,184,0.08)" stroke="#94a3b8" stroke-width="0.8"/>
+      <circle cx="23" cy="17" r="1.5" fill="#94a3b8" class="led-blink"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#cbd5e1" x="52" y="24" fill="${p.name_color||'#cbd5e1'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(148,163,184,0.2)"/>
+  </g>`;
+}
+
+// ── Load Balancer ────────────────────────────────────────────
+function renderLoadBalancer(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(30,8,20,0.92)" stroke="#ec4899" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,12)">
+      <circle cx="4" cy="14" r="3" fill="#ec4899" opacity="0.8"/>
+      <line x1="7" y1="14" x2="16" y2="14" stroke="#ec4899" stroke-width="1.5"/>
+      <line x1="16" y1="14" x2="28" y2="6" stroke="#ec4899" stroke-width="1.2"/>
+      <line x1="16" y1="14" x2="28" y2="14" stroke="#ec4899" stroke-width="1.2"/>
+      <line x1="16" y1="14" x2="28" y2="22" stroke="#ec4899" stroke-width="1.2"/>
+      <polygon points="26,4 32,6 26,8" fill="#ec4899"/>
+      <polygon points="26,12 32,14 26,16" fill="#ec4899"/>
+      <polygon points="26,20 32,22 26,24" fill="#ec4899"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#f9a8d4" x="52" y="24" fill="${p.name_color||'#f9a8d4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(236,72,153,0.2)"/>
+  </g>`;
+}
+
+// ── Hypervisor / ESXi ────────────────────────────────────────
+function renderHypervisor(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(8,15,40,0.92)" stroke="#3b82f6" stroke-width="1.5" filter="url(#glow-blue)"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="0" y="0" width="30" height="30" rx="2" fill="rgba(59,130,246,0.1)" stroke="#3b82f6" stroke-width="1.2"/>
+      <rect x="3" y="3" width="24" height="7" rx="1" fill="rgba(59,130,246,0.15)" stroke="#3b82f6" stroke-width="0.8"/>
+      <rect x="3" y="12" width="24" height="7" rx="1" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="0.8" opacity="0.8"/>
+      <rect x="3" y="21" width="24" height="7" rx="1" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="0.8" opacity="0.6"/>
+      <circle cx="23" cy="6.5" r="1.5" fill="#3b82f6" class="led-blink"/>
+      <circle cx="23" cy="15.5" r="1.5" fill="#3b82f6" class="led-blink" opacity="0.7"/>
+      <circle cx="23" cy="24.5" r="1.5" fill="#ffd700" class="led-blink" opacity="0.5"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="52" y="24" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(59,130,246,0.2)"/>
+  </g>`;
+}
+
+// ── UPS / PDU ────────────────────────────────────────────────
+function renderUPS(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(15,22,8,0.92)" stroke="#84cc16" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="4" y="0" width="22" height="30" rx="3" fill="rgba(132,204,22,0.1)" stroke="#84cc16" stroke-width="1.2"/>
+      <rect x="10" y="-3" width="10" height="4" rx="1" fill="rgba(132,204,22,0.3)" stroke="#84cc16" stroke-width="0.8"/>
+      <path d="M18,10 L13,18 L17,18 L12,26" fill="none" stroke="#84cc16" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="22" cy="4" r="1.5" fill="#84cc16" class="led-blink"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#bef264" x="52" y="24" fill="${p.name_color||'#bef264'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(132,204,22,0.2)"/>
+  </g>`;
+}
+
+// ── Container Host ───────────────────────────────────────────
+function renderContainer(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(5,20,30,0.92)" stroke="#38bdf8" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <path d="M2,20 L15,26 L28,20 L28,8 L15,2 L2,8 Z" fill="rgba(56,189,248,0.1)" stroke="#38bdf8" stroke-width="1.2"/>
+      <line x1="2" y1="8" x2="15" y2="14" stroke="#38bdf8" stroke-width="0.8" opacity="0.5"/>
+      <line x1="28" y1="8" x2="15" y2="14" stroke="#38bdf8" stroke-width="0.8" opacity="0.5"/>
+      <line x1="15" y1="14" x2="15" y2="26" stroke="#38bdf8" stroke-width="0.8" opacity="0.5"/>
+      <path d="M8,11 L15,14.5 L22,11" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.6"/>
+      <path d="M8,16 L15,19.5 L22,16" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.4"/>
+    </g>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(56,189,248,0.2)"/>
+  </g>`;
+}
+
+// ── IPMI / BMC ───────────────────────────────────────────────
+function renderIPMI(node, p, sf) {
+  const H = 68 + _vlanH(p);
+  return `<g ${sf}>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(30,10,10,0.92)" stroke="#ef4444" stroke-width="1.5"/>
+    <rect x="0" y="0" width="160" height="${H}" rx="4" fill="url(#scanlines)"/>
+    <g transform="translate(10,10)">
+      <rect x="6" y="6" width="18" height="18" rx="2" fill="rgba(239,68,68,0.12)" stroke="#ef4444" stroke-width="1.2"/>
+      <circle cx="15" cy="15" r="3" fill="#ef4444" opacity="0.8"/>
+      ${[10,15,20].map(y=>`<line x1="0" y1="${y}" x2="6" y2="${y}" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+      ${[10,15,20].map(y=>`<line x1="24" y1="${y}" x2="30" y2="${y}" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+      ${[10,15,20].map(x=>`<line x1="${x}" y1="0" x2="${x}" y2="6" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+      ${[10,15,20].map(x=>`<line x1="${x}" y1="24" x2="${x}" y2="30" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
+    </g>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
+    ${vlanBadge(p, 52, H - 19)}
+    <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(239,68,68,0.2)"/>
+  </g>`;
+}
+
 // ═══════════════════════════ DRAG ═══════════════════════════
 const svg = document.getElementById('topo-svg');
 let dragNode = null, dragSVGStart = null, dragNodeStart = null, rafDrag = null, _pwRenderPending = false;
@@ -1790,6 +1999,7 @@ function getSVGPt(e) {
 }
 
 function startDrag(e, node) {
+  if (e.shiftKey) return;  // shift+drag = rubber-band, not single-node drag
   e.preventDefault();
   if (e.altKey) { startLinkDraw(e, node); return; }
   dragNode = node;
@@ -1877,11 +2087,14 @@ svg.addEventListener('mousedown', e => {
     return;
   }
   if (e.button !== 0 || e.altKey || linkDraw) return;
-  const overNode = findNodeAtEvent(e);
-  if (overNode) return;
-  const overGroup = findGroupAtEvent(e);
-  if (overGroup) return;
-  if (!e.shiftKey) { // left drag on empty canvas = pan
+  if (e.shiftKey) {
+    // Shift+drag always starts rubber-band regardless of node/group under cursor
+  } else {
+    const overNode = findNodeAtEvent(e);
+    if (overNode) return;
+    const overGroup = findGroupAtEvent(e);
+    if (overGroup) return;
+    // left drag on empty canvas = pan
     e.preventDefault();
     mmPan = { sx: e.clientX, sy: e.clientY, tx0: vp.tx, ty0: vp.ty };
     svg.style.cursor = 'grabbing';
@@ -1929,6 +2142,7 @@ function selectLink(lk) {
 
 function deselect() {
   selectedEl = null;
+  if (multiSelect.size > 0) { showMultiPanel(); return; }
   if (isPingWatchPage) { _selectedPwDid = null; showPwDashboardPanel(); return; }
   renderNodes();
   renderLinks();
@@ -2744,10 +2958,14 @@ document.getElementById('canvas-wrap').addEventListener('contextmenu', e => {
   if (isPingWatchPage) {
     const n = findNodeAtEvent(e);
     if (n && n._pwDid) {
+      const bulkHtml = multiSelect.size > 0
+        ? `<div class="ctx-sep"></div><div class="ctx-item" style="color:var(--gold)" onclick="ctxAction(()=>bulkLinkSelectedTo('${n._pwDid}'))">⟷ LINK ${multiSelect.size} SELECTED → THIS</div>`
+        : '';
       ctxMenu.innerHTML = `
         <div class="ctx-item" style="color:var(--accent2)" onclick="ctxAction(()=>showPwNodePanel('${n._pwDid}'))">✎ EDIT COLOR</div>
         <div class="ctx-item" style="color:var(--gold)" onclick="ctxAction(()=>ctxDrawLinkFrom('${n.id}'))">⟷ DRAW LINK</div>
         <div class="ctx-item" style="color:#ffd700" onclick="ctxAction(()=>_pwSetTraceSrc('${n._pwDid}'))">◉ SET AS TRACE SOURCE</div>
+        ${bulkHtml}
       `;
       showCtxMenu(e.clientX, e.clientY);
       return;
@@ -2902,6 +3120,177 @@ function _pwLinkModal(src, tgt, onSave) {
     onSave(type, label);
   };
   setTimeout(() => ov.querySelector('#_pwlm_label').focus(), 50);
+}
+
+
+// ═══════════════════════════ BULK LINK ═══════════════════════════
+
+function _createBulkPwLinks(srcDids, tgtDid, linkType, label) {
+  const existingPairs = new Set(
+    pwLinks.flatMap(l => [l.src_did + '→' + l.tgt_did, l.tgt_did + '→' + l.src_did])
+  );
+  let created = 0;
+  const base = Date.now();
+  for (const srcDid of srcDids) {
+    if (String(srcDid) === String(tgtDid)) continue;
+    const key = srcDid + '→' + tgtDid;
+    if (existingPairs.has(key)) continue;
+    pwLinks.push({
+      id: 'pwl_' + base + '_' + created,
+      src_did: srcDid, tgt_did: tgtDid,
+      link_type: linkType, label
+    });
+    existingPairs.add(key);
+    existingPairs.add(tgtDid + '→' + srcDid);
+    created++;
+  }
+  if (created > 0) {
+    _pwSave('pw_links', pwLinks);
+    renderLinks();
+  }
+  return created;
+}
+
+function _getSelectedPwDids() {
+  return [...multiSelect]
+    .map(nid => nodeMap[nid])
+    .filter(n => n && n._pwDid)
+    .map(n => n._pwDid);
+}
+
+function openBulkLinkModal() {
+  if (multiSelect.size === 0) return;
+  const selectedDids = _getSelectedPwDids();
+  if (!selectedDids.length) { toast('No PW devices selected'); return; }
+
+  const selectedSet = new Set(selectedDids.map(String));
+  const targets = pwDevices
+    .filter(d => !selectedSet.has(String(d.device_id)))
+    .map(d => ({ did: d.device_id, name: d.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
+    <div style="margin-bottom:12px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
+      <input id="_blm_search" type="text" placeholder="Search devices…"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;margin-bottom:4px;"/>
+      <select id="_blm_target" size="6"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px;font-size:11px;border-radius:4px;">
+        ${targets.map(t => `<option value="${t.did}" style="background:#0d1a2e;color:#e2e8f0;padding:2px 4px;">${escXml(t.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:12px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+    </div>
+    <div id="_blm_status" style="font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+
+  const close    = () => document.body.removeChild(ov);
+  const searchEl = ov.querySelector('#_blm_search');
+  const selectEl = ov.querySelector('#_blm_target');
+  const statusEl = ov.querySelector('#_blm_status');
+  const yesBtn   = ov.querySelector('#_blm_yes');
+
+  searchEl.addEventListener('input', () => {
+    const q = searchEl.value.trim().toLowerCase();
+    for (const opt of selectEl.options) {
+      opt.hidden = q ? !opt.text.toLowerCase().includes(q) : false;
+    }
+  });
+
+  function updateStatus() {
+    const tgtDid = selectEl.value;
+    if (!tgtDid) { statusEl.textContent = 'Select a target device'; yesBtn.disabled = true; return; }
+    const existingPairs = new Set(
+      pwLinks.flatMap(l => [l.src_did + '→' + l.tgt_did, l.tgt_did + '→' + l.src_did])
+    );
+    let newCount = 0, skipCount = 0;
+    for (const srcDid of selectedDids) {
+      if (String(srcDid) === String(tgtDid)) { skipCount++; continue; }
+      if (existingPairs.has(srcDid + '→' + tgtDid)) { skipCount++; }
+      else { newCount++; }
+    }
+    statusEl.textContent = newCount > 0
+      ? `Will create ${newCount} link(s)` + (skipCount ? ` (${skipCount} skipped)` : '')
+      : 'All links already exist';
+    yesBtn.disabled = newCount === 0;
+    yesBtn.textContent = newCount > 0 ? `ADD ${newCount} LINKS` : 'ADD LINKS';
+  }
+  selectEl.addEventListener('change', updateStatus);
+  updateStatus();
+
+  ov.querySelector('#_blm_no').onclick = close;
+  yesBtn.onclick = () => {
+    const tgtDid   = selectEl.value;
+    const linkType = ov.querySelector('#_blm_type').value;
+    const label    = ov.querySelector('#_blm_label').value.trim();
+    if (!tgtDid) return;
+    close();
+    const created = _createBulkPwLinks(selectedDids, tgtDid, linkType, label);
+    multiSelect.clear(); renderNodes(); deselect();
+    toast(created > 0 ? `${created} link(s) created` : 'All links already exist');
+  };
+
+  setTimeout(() => searchEl.focus(), 50);
+}
+
+function bulkLinkSelectedTo(tgtDid) {
+  const selectedDids = _getSelectedPwDids().filter(d => String(d) !== String(tgtDid));
+  if (!selectedDids.length) { toast('No valid devices to link'); return; }
+
+  const tgtName = _pwDevName(tgtDid);
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
+    <div style="margin-bottom:12px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm2_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm2_label" type="text" placeholder="e.g. IPMI, Mgmt…"
+        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="_blm2_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm2_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD ${selectedDids.length} LINKS</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+
+  const close = () => document.body.removeChild(ov);
+  ov.querySelector('#_blm2_no').onclick = close;
+  ov.querySelector('#_blm2_yes').onclick = () => {
+    const linkType = ov.querySelector('#_blm2_type').value;
+    const label    = ov.querySelector('#_blm2_label').value.trim();
+    close();
+    const created = _createBulkPwLinks(selectedDids, tgtDid, linkType, label);
+    multiSelect.clear(); renderNodes(); deselect();
+    toast(created > 0 ? `${created} link(s) created` : 'All links already exist');
+  };
+
+  setTimeout(() => ov.querySelector('#_blm2_label').focus(), 50);
 }
 
 
@@ -3076,8 +3465,9 @@ function doGroupDrag(e) {
     for (const { node, x0, y0 } of groupDrag.contained) {
       node.x = x0 + dx;
       node.y = y0 + dy;
-      document.getElementById('node-' + node.id)
-        ?.setAttribute('transform', `translate(${node.x},${node.y})`);
+      const t = `translate(${node.x},${node.y})`;
+      document.getElementById('node-' + node.id)?.setAttribute('transform', t);
+      document.getElementById('node-label-' + node.id)?.setAttribute('transform', t);
     }
     if (groupDrag.contained.length) renderLinks();
   }
@@ -3599,17 +3989,127 @@ async function importPwLayout(file) {
 
 // ═══════════════════════════ MULTI-SELECT ═══════════════════════════
 function showMultiPanel() {
-  const panel = document.getElementById('info-panel');
-  panel.innerHTML = `
-    <div class="panel-section">
-      <div class="panel-section-title">MULTI-SELECT</div>
-      <div class="info-row"><span class="info-label">SELECTED</span><span class="info-value">${multiSelect.size} DEVICES</span></div>
-    </div>
-    <div style="padding:0 16px 16px;display:flex;gap:8px;flex-direction:column;">
-      <button class="btn" style="width:100%;border-color:var(--danger);color:var(--danger)" onclick="deleteSelectedNodes()">✕ DELETE SELECTED (${multiSelect.size})</button>
-      <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
-    </div>
-  `;
+  document.getElementById('panel-title').textContent = 'MULTI-SELECT';
+  document.getElementById('panel-icon').textContent = '◈';
+
+  if (isPingWatchPage) {
+    // Gather selected PW devices
+    const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+    const selDevs  = selNodes.map(n => pwDevices.find(d => d.device_id === n._pwDid)).filter(Boolean);
+
+    const upCount   = selDevs.filter(d => d.status === 'up').length;
+    const downCount = selDevs.filter(d => d.status === 'down').length;
+    const unkCount  = selDevs.length - upCount - downCount;
+
+    // Per-device summary rows (capped at 12 to avoid overflow)
+    const devRows = selDevs.slice(0, 12).map(d => {
+      const c = pwStatusColor(d.status);
+      const dot = `<span style="color:${c};font-size:9px">●</span>`;
+      return `<div style="display:flex;align-items:center;gap:5px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
+        ${dot}
+        <span style="font-family:'Share Tech Mono',monospace;font-size:9px;color:rgba(255,255,255,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escXml(d.name)}</span>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">${escXml(d.host)}</span>
+      </div>`;
+    }).join('');
+    const moreRow = selDevs.length > 12
+      ? `<div style="font-size:9px;color:rgba(255,255,255,0.3);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
+      : '';
+
+    const _typeOpts = [
+      ['','— keep current —'],
+      ['switch','Switch'],['bb-switch','Backbone Switch'],['firewall','Firewall'],
+      ['wan-switch','WAN Switch'],['server','Server'],['pc','PC / Workstation'],
+      ['laptop','Laptop'],['ap','WiFi Access Point'],['connector','Cato Connector'],
+      ['remote-pc','Remote PC'],['cloud','Cloud / Internet'],
+      ['router','Router / Gateway'],['vm','Virtual Machine'],['appliance','Network Appliance'],
+    ['storage','Storage / NAS'],['phone','IP Phone / VoIP'],['camera','IP Camera / CCTV'],
+    ['printer','Printer / MFP'],['load-balancer','Load Balancer'],['hypervisor','Hypervisor / ESXi'],
+    ['ups','UPS / PDU'],['container','Container Host'],['ipmi','IPMI / BMC'],
+    ].map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+
+    document.getElementById('panel-body').innerHTML = `
+      <div class="panel-section">
+        <div class="panel-section-title">SELECTION — ${selDevs.length} DEVICES</div>
+        <div style="display:flex;gap:10px;margin-bottom:8px">
+          <span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#00ff9d">▲ ${upCount} UP</span>
+          ${downCount ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#ff3333">▼ ${downCount} DOWN</span>` : ''}
+          ${unkCount  ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#888">? ${unkCount}</span>` : ''}
+        </div>
+        <div style="max-height:160px;overflow-y:auto;">${devRows}${moreRow}</div>
+      </div>
+      <div class="panel-section" style="margin-top:10px">
+        <div class="panel-section-title">BULK SETTINGS</div>
+        <div class="field-group">
+          <div class="field-label">DEVICE ICON</div>
+          <select id="multi-icon-sel"
+            style="background:#0d1a2e;color:#e2e8f0;border:1px solid rgba(0,212,255,0.3);border-radius:4px;padding:4px 6px;font-family:'Share Tech Mono',monospace;font-size:10px;width:100%;cursor:pointer"
+            onchange="setBulkPwNodeType(this.value)">${_typeOpts}</select>
+        </div>
+        <div class="field-group" style="margin-top:8px">
+          <div class="field-label">COLOR OVERRIDE</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="color" id="multi-color-pick" value="#00d4ff"
+                   onchange="setBulkPwNodeColor(this.value)"
+                   style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
+            <button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetBulkPwNodeColor()">Reset all</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById('panel-actions').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:8px;width:100%;">
+        <button class="btn" style="width:100%;border-color:var(--gold);color:var(--gold)" onclick="openBulkLinkModal()">⟷ LINK ALL TO… (${multiSelect.size})</button>
+        <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
+      </div>
+    `;
+  } else {
+    document.getElementById('panel-body').innerHTML = `
+      <div class="panel-section">
+        <div class="panel-section-title">SELECTION</div>
+        <div class="info-row"><span class="info-label">DEVICES</span><span class="info-value">${multiSelect.size}</span></div>
+      </div>
+    `;
+    document.getElementById('panel-actions').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:8px;width:100%;">
+        <button class="btn" style="width:100%;border-color:var(--danger);color:var(--danger)" onclick="deleteSelectedNodes()">✕ DELETE SELECTED (${multiSelect.size})</button>
+        <button class="btn btn-primary" style="width:100%" onclick="multiSelect.clear();renderNodes();deselect()">CLEAR SELECTION</button>
+      </div>
+    `;
+  }
+}
+
+function setBulkPwNodeType(newType) {
+  if (!newType) return;  // "— keep current —" selected
+  const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+  for (const node of selNodes) {
+    const sid = String(node._pwDid);
+    pwOverrides[sid] = { ...(pwOverrides[sid] || {}), node_type: newType };
+    node.type = newType;
+  }
+  _pwSave('pw_node_overrides', pwOverrides);
+  renderPingWatchCanvas();
+  showMultiPanel();
+}
+
+function setBulkPwNodeColor(color) {
+  const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+  for (const node of selNodes) {
+    const sid = String(node._pwDid);
+    pwOverrides[sid] = { ...(pwOverrides[sid] || {}), color };
+  }
+  _pwSave('pw_node_overrides', pwOverrides);
+  renderPingWatchCanvas();
+}
+
+function resetBulkPwNodeColor() {
+  const selNodes = [...multiSelect].map(nid => nodeMap[nid]).filter(n => n && n._pwDid);
+  for (const node of selNodes) {
+    const sid = String(node._pwDid);
+    if (pwOverrides[sid]) delete pwOverrides[sid].color;
+  }
+  _pwSave('pw_node_overrides', pwOverrides);
+  renderPingWatchCanvas();
+  showMultiPanel();
 }
 
 async function deleteSelectedNodes() {
@@ -3706,7 +4206,8 @@ function initDashBg() {
 
   function frame() {
     // Stop-and-restart: don't re-schedule when paused (saves empty RAF/s)
-    if (_bgPaused || !_ntmVisible) { _rafId = null; return; }
+    // Also skip when dashboard panel canvas is not visible (node/link panel showing)
+    if (_bgPaused || !_ntmVisible || !canvas.offsetParent) { _rafId = null; return; }
     _rafId = setTimeout(() => requestAnimationFrame(frame), DB_MS);
 
     const W = canvas.width, H = canvas.height;

@@ -124,9 +124,11 @@ def handle(h, method, path, body):
             load_config()
             # Initialize SQLite databases
             from db import db_init, logs_db_init, db_seed_users
+            from db.core import db_seed_alert_profiles
             db_init()
             logs_db_init()
             db_seed_users()
+            db_seed_alert_profiles()
             log.info("Setup complete: SQLite backend selected")
             h._json(200, {"ok": True, "restart_required": True})
             return True
@@ -165,9 +167,11 @@ def handle(h, method, path, body):
             from db.pg_pool import pg_init_pool
             pg_init_pool()
             from db import db_init, logs_db_init, db_seed_users
+            from db.core import db_seed_alert_profiles
             db_init()
             logs_db_init()
             db_seed_users()
+            db_seed_alert_profiles()
             log.info("Setup complete: PostgreSQL backend selected")
             h._json(200, {"ok": True, "restart_required": True})
         except Exception as e:

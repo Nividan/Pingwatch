@@ -15,8 +15,6 @@ function openAddDevice(){
         <div class="fr"><label class="fl">Group</label>
           <input type="text" id="ad-g" placeholder="Default Group" autocomplete="off"/></div>
       </div>
-      <div class="fr"><label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional — POST on status change)</span></label>
-        <input type="text" id="ad-wh" placeholder="https://hooks.slack.com/…" autocomplete="off"/></div>
       <details class="dev-creds" style="margin-top:10px">
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
@@ -54,7 +52,6 @@ async function submitAddDevice(){
   const name=(document.getElementById('ad-n')?.value||'').trim();
   const host=(document.getElementById('ad-h')?.value||'').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
   const group=(document.getElementById('ad-g')?.value||'Default Group').trim();
-  const webhook_url=(document.getElementById('ad-wh')?.value||'').trim();
   const snmp_community_default=(document.getElementById('ad-snmp-comm')?.value||'').trim();
   const snmp_version_default=document.getElementById('ad-snmp-ver')?.value||'';
   const vmware_user_default=(document.getElementById('ad-vmw-user')?.value||'').trim();
@@ -62,7 +59,7 @@ async function submitAddDevice(){
   if(!name||!host){toast('Name and host are required','err');return;}
   const btn=document.querySelector('#mad .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
-  const payload={name,host,group,webhook_url};
+  const payload={name,host,group};
   if(snmp_community_default) payload.snmp_community_default=snmp_community_default;
   if(snmp_version_default) payload.snmp_version_default=snmp_version_default;
   if(vmware_user_default) payload.vmware_user_default=vmware_user_default;
@@ -94,14 +91,17 @@ async function submitAddDevice(){
 
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────
 
+let _edSecIps = [];   // secondary IPs being edited
+
 function openEditDevice(did){
   const dev = S.devices[did];
   if(!dev) return;
   closeM('dwo');
   closeM('med');
+  _edSecIps = [...(dev.secondary_ips || [])];
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
   const _edGroupItems = _edGroups.map(g =>
-    `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_edgPick('${esc(g)}')">${esc(g)}</div>`
+    `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault()" onclick="_edgPick(this.textContent)">${esc(g)}</div>`
   ).join('');
   const o = document.createElement('div'); o.className='mo'; o.id='med';
   _overlayClose(o, ()=>closeM('med'));
@@ -132,16 +132,49 @@ function openEditDevice(did){
           </div>
         </div>
       </div>
-      <div class="fr">
-        <label class="fl">Webhook URL <span style="color:var(--text3);font-weight:400">(optional)</span></label>
-        <input type="text" id="ed-wh" value="${esc(dev.webhook_url||'')}" placeholder="https://hooks.slack.com/…" autocomplete="off"/>
-      </div>
+      <details class="dev-creds" style="margin-top:10px"${_edSecIps.length?' open':''}>
+        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Secondary IPs <span style="color:var(--text3);font-weight:400">(${_edSecIps.length})</span></summary>
+        <div style="margin-top:8px">
+          <div id="ed-sip-list" style="max-height:160px;overflow-y:auto;margin-bottom:6px"></div>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="ed-sip-input" placeholder="e.g. 10.0.0.5" autocomplete="off"
+                   style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_edSipAdd()}"/>
+            <button class="btn-s" type="button" onclick="_edSipAdd()" style="white-space:nowrap">+ Add</button>
+          </div>
+        </div>
+      </details>
+      <details class="dev-creds" style="margin-top:10px">
+        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Licenses <span id="ed-lic-count" style="color:var(--text3);font-weight:400">(0)</span></summary>
+        <div style="margin-top:8px">
+          <div id="ed-lic-list" style="max-height:220px;overflow-y:auto;margin-bottom:6px"></div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px">
+            <div class="fgrid">
+              <div class="fr" style="margin:0"><input type="text" id="ed-lic-name" placeholder="License name (e.g. FortiCare)" autocomplete="off"/></div>
+              <div class="fr" style="margin:0"><input type="date" id="ed-lic-date" autocomplete="off" class="lic-date-inp"/></div>
+            </div>
+            <div class="fgrid">
+              <div class="fr" style="margin:0"><input type="text" id="ed-lic-note" placeholder="Note (optional)" autocomplete="off"/></div>
+              <div class="fr" style="margin:0;display:flex;gap:6px;align-items:center">
+                <input type="number" id="ed-lic-warn" value="30" min="0" max="365" style="width:60px" title="Warn days before expiry"/>
+                <span style="font-size:10px;color:var(--text3)">warn days</span>
+                <input type="number" id="ed-lic-crit" value="0" min="0" max="365" style="width:60px" title="Crit days before expiry"/>
+                <span style="font-size:10px;color:var(--text3)">crit days</span>
+              </div>
+            </div>
+            <button class="btn-s" type="button" onclick="_edLicAdd('${did}')" style="align-self:flex-start">+ Add License</button>
+          </div>
+        </div>
+      </details>
       <div class="fr" style="margin-top:4px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
           <input type="checkbox" id="ed-am" ${dev.alerts_muted?'checked':''}>
           <span class="fl" style="margin:0">🔕 Mute all alerts for this device</span>
         </label>
         <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Silences DOWN / recovery / threshold alerts for every sensor in this device.</div>
+      </div>
+      <div class="alrt-section" style="margin-top:10px">
+        <div class="alrt-section-hdr">Alert Profile</div>
+        <div id="ed-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
       </div>
       <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default)?' open':''}>
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
@@ -179,6 +212,75 @@ function openEditDevice(did){
     })
   );
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
+  _edSipRender();
+  _edLicLoad(did);
+  _loadDeviceProfileSection(did);
+}
+
+async function _loadDeviceProfileSection(did) {
+  const body = document.getElementById('ed-profile-body');
+  if (!body) return;
+  try {
+    const dev = S.devices[did];
+    const r   = await api('GET', '/api/alert/profiles');
+    const all = r.profiles || [];
+    const devProf   = all.find(p => p.scope_type === 'device' && p.scope_value === did);
+    const groupProf = dev && all.find(p => p.scope_type === 'group' && p.scope_value === (dev.group || 'Default Group'));
+    const globalProf = all.find(p => p.scope_type === 'global');
+    const inherited  = groupProf || globalProf;
+
+    if (devProf) {
+      body.innerHTML = `
+        <div style="margin-bottom:10px">
+          <span class="alrt-override-badge">Override</span>
+          <span style="margin-left:8px;color:var(--text)">${esc(devProf.name)}</span>
+          <span style="margin-left:6px;color:var(--text3);font-size:11px">(${devProf.stages.length} stage${devProf.stages.length === 1 ? '' : 's'})</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-s" onclick="_editProfileFromDevice(${devProf.id})">Edit profile\u2026</button>
+          <button class="btn-s" onclick="_resetDeviceProfile('${esc(did)}', ${devProf.id})">Reset to inherited</button>
+        </div>`;
+    } else {
+      const inheritedFrom = inherited
+        ? `${inherited.scope_type === 'group' ? 'Group' : 'Global'} profile <strong style="color:var(--text)">${esc(inherited.name)}</strong>`
+        : `(none \u2014 no profile resolved)`;
+      body.innerHTML = `
+        <div style="margin-bottom:10px">
+          <span class="alrt-inherit-badge">Inherited</span>
+          <span style="margin-left:8px">${inheritedFrom}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-s" onclick="_overrideDeviceProfile('${esc(did)}')">Override at device level</button>
+          ${inherited ? `<button class="btn-s" onclick="_editProfileFromDevice(${inherited.id})">View inherited profile</button>` : ''}
+        </div>`;
+    }
+  } catch (e) {
+    if (body) body.innerHTML = `<span style="color:var(--down)">Failed to load profile</span>`;
+  }
+}
+
+function _editProfileFromDevice(profileId) {
+  closeM('med');
+  if (typeof openProfileEditor === 'function') openProfileEditor(profileId);
+  else toast('Open the Alerting page to edit profiles', 'err');
+}
+
+function _overrideDeviceProfile(did) {
+  closeM('med');
+  if (typeof openProfileEditor === 'function')
+    openProfileEditor(null, { scope_type: 'device', scope_value: did });
+  else toast('Open the Alerting page to create profiles', 'err');
+}
+
+async function _resetDeviceProfile(did, profileId) {
+  if (!confirm('Delete the device-scoped alert profile?\nThis device will fall back to the group or global profile.')) return;
+  try {
+    await api('DELETE', '/api/alert/profile/' + profileId);
+    toast('Device profile reset', 'ok');
+    _loadDeviceProfileSection(did);
+  } catch (e) {
+    toast('Reset failed: ' + (e.message || e), 'err');
+  }
 }
 
 function _edgShow(){
@@ -218,7 +320,6 @@ async function submitEditDevice(did){
   const name  = (document.getElementById('ed-n')?.value || '').trim();
   const host  = (document.getElementById('ed-h')?.value || '').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
   const group = (document.getElementById('ed-g')?.value || 'Default Group').trim();
-  const webhook_url  = (document.getElementById('ed-wh')?.value || '').trim();
   const alerts_muted = document.getElementById('ed-am')?.checked || false;
   const snmp_community_default = (document.getElementById('ed-snmp-comm')?.value || '').trim();
   const snmp_version_default   = document.getElementById('ed-snmp-ver')?.value || '';
@@ -227,8 +328,9 @@ async function submitEditDevice(did){
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  const payload = {name, host, group, webhook_url, alerts_muted,
-    snmp_community_default, snmp_version_default, vmware_user_default};
+  const payload = {name, host, group, alerts_muted,
+    snmp_community_default, snmp_version_default, vmware_user_default,
+    secondary_ips: _edSecIps};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   let r;
   try{
@@ -242,9 +344,124 @@ async function submitEditDevice(did){
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.webhook_url = webhook_url; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   pruneEmptyGroups();
   updatePills();
   refreshGroupCounts();
   toast(`Saved: ${name}`, 'ok');
+}
+
+// ── Secondary IPs helpers ─────────────────────────────────────────────
+function _edSipRender(){
+  const el = document.getElementById('ed-sip-list');
+  if(!el) return;
+  if(!_edSecIps.length){ el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No secondary IPs</div>'; return; }
+  el.innerHTML = _edSecIps.map((ip,i) =>
+    `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
+      <span style="flex:1;font-size:12px;font-family:monospace">${esc(ip)}</span>
+      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edSipRemove(${i})">✕</button>
+    </div>`
+  ).join('');
+  // update count in summary
+  const summary = document.querySelector('#med details.dev-creds:first-of-type summary span');
+  if(summary) summary.textContent = `(${_edSecIps.length})`;
+}
+function _edSipAdd(){
+  const inp = document.getElementById('ed-sip-input');
+  if(!inp) return;
+  const ip = inp.value.trim().toLowerCase();
+  if(!ip){ toast('Enter an IP address','err'); return; }
+  if(!/^[\w.\-:]+$/.test(ip)){ toast('Invalid IP format','err'); return; }
+  const primary = (document.getElementById('ed-h')?.value || '').trim().toLowerCase();
+  if(ip === primary){ toast('Already the primary host','err'); return; }
+  if(_edSecIps.includes(ip)){ toast('Already in the list','err'); return; }
+  if(_edSecIps.length >= 50){ toast('Maximum 50 secondary IPs','err'); return; }
+  _edSecIps.push(ip);
+  inp.value = '';
+  _edSipRender();
+}
+function _edSipRemove(idx){
+  _edSecIps.splice(idx, 1);
+  _edSipRender();
+}
+
+// ── License helpers ─────────────────────────────────────────────────
+let _edLicenses = [];
+
+function _edLicStatusBadge(lic){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const exp = new Date(lic.expiry_date + 'T00:00:00');
+  const days = Math.ceil((exp - today) / 86400000);
+  const crit = lic.crit_days || 0;
+  const warn = lic.warn_days || 30;
+  if(days <= crit) return `<span style="color:var(--down);font-size:10px;font-weight:600">${days < 0 ? 'Expired '+(-days)+'d ago' : 'Expired'}</span>`;
+  if(days <= warn) return `<span style="color:var(--warn);font-size:10px;font-weight:600">Expiring (${days}d)</span>`;
+  return `<span style="color:var(--up);font-size:10px;font-weight:600">Valid (${days}d)</span>`;
+}
+
+async function _edLicLoad(did){
+  try{
+    const r = await api('GET', `/api/device/${did}/licenses`);
+    _edLicenses = (r && r.licenses) || [];
+  }catch(e){ _edLicenses = []; }
+  _edLicRender(did);
+  // Open section if there are licenses
+  if(_edLicenses.length){
+    const det = document.getElementById('ed-lic-list')?.closest('details');
+    if(det) det.open = true;
+  }
+}
+
+function _edLicRender(did){
+  const el = document.getElementById('ed-lic-list');
+  const cnt = document.getElementById('ed-lic-count');
+  if(cnt) cnt.textContent = `(${_edLicenses.length})`;
+  if(!el) return;
+  if(!_edLicenses.length){
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No licenses</div>';
+    return;
+  }
+  el.innerHTML = _edLicenses.map(lic =>
+    `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;color:var(--text)">${esc(lic.license_name)}</div>
+        <div style="font-size:10px;color:var(--text3);display:flex;gap:8px;align-items:center;margin-top:2px">
+          <span style="font-family:monospace">${esc(lic.expiry_date)}</span>
+          ${_edLicStatusBadge(lic)}
+          ${lic.note ? `<span title="${esc(lic.note)}">📝</span>` : ''}
+          <span style="opacity:0.5">w:${lic.warn_days}d c:${lic.crit_days}d</span>
+        </div>
+      </div>
+      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edLicDel(${lic.id},'${esc(did)}')">✕</button>
+    </div>`
+  ).join('');
+}
+
+async function _edLicAdd(did){
+  const name = document.getElementById('ed-lic-name')?.value.trim();
+  const date = document.getElementById('ed-lic-date')?.value.trim();
+  if(!name || !date){ toast('Name and date are required','err'); return; }
+  const note = document.getElementById('ed-lic-note')?.value.trim() || '';
+  const warn = parseInt(document.getElementById('ed-lic-warn')?.value) || 30;
+  const crit = parseInt(document.getElementById('ed-lic-crit')?.value) || 0;
+  try{
+    const r = await api('POST', `/api/device/${did}/licenses`, {
+      license_name: name, expiry_date: date, note, warn_days: warn, crit_days: crit
+    });
+    if(r && r.licenses) _edLicenses = r.licenses;
+    _edLicRender(did);
+    document.getElementById('ed-lic-name').value = '';
+    document.getElementById('ed-lic-date').value = '';
+    document.getElementById('ed-lic-note').value = '';
+    toast('License added','ok');
+  }catch(e){ toast('Failed to add license','err'); }
+}
+
+async function _edLicDel(licId, did){
+  try{
+    await api('DELETE', `/api/license/${licId}`);
+    _edLicenses = _edLicenses.filter(l => l.id !== licId);
+    _edLicRender(did);
+    toast('License removed','ok');
+  }catch(e){ toast('Failed to delete license','err'); }
 }

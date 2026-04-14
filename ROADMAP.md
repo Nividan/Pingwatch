@@ -21,6 +21,16 @@
   - Domain user creation with role assignment
   - Test Connection & Test User Auth from Settings UI
   - Accepts `user`, `DOMAIN\user`, and `user@domain` login formats
+- LDAP Group Integration
+  - Import AD/LDAP groups into PingWatch (Settings → Groups → Import from LDAP) with per-group role assignment
+  - Auto-provision: unknown LDAP users in imported groups are created automatically on first login with the correct role, display name, and email
+  - Login-time sync: refreshes group, role, and display name from LDAP on every login
+  - Auto-disable: login rejected and account suspended when user is removed from all imported groups in AD
+  - Background sync thread — reconciles LDAP users against AD group membership on a configurable interval (default 60 min, 0 = disabled)
+  - Nested AD groups via `LDAP_MATCHING_RULE_IN_CHAIN` (optional toggle)
+  - Multi-group priority: user in multiple imported groups receives the highest role
+  - Test User Groups diagnostic — admin can look up a user's LDAP group memberships from the UI
+  - LDAP badge on imported groups; LDAP-managed group editor hides member checkboxes
 - IP Address Management (IPAM)
   - Subnet management (CIDR) with host IP expansion
   - Per-IP name/allocation tracking with inline editing
@@ -66,6 +76,17 @@
   - Maintenance windows — suppresses alert dispatch for all/group/device scopes; recurring daily schedule supported
   - Alert history tab with severity filter, acknowledge/resolve workflow
   - Test-fire button per rule (dispatches all actions with synthetic context)
+- Hierarchical alert profiles (replaced condition-based rules engine)
+  - PRTG-style escalation stages: trigger state (Down / Warning / Recovered), per-stage delay (seconds), repeat interval (minutes), and reusable action template
+  - Cascade resolution: sensor → device → group → global; first match wins; result cached on the sensor object and invalidated on any profile change
+  - Reusable action templates ("Email admin", "Slack #ops") defined once and shared across many stages and profiles
+  - Action template editor with checkbox pickers for user and group recipients (no raw IDs)
+  - Recovery stage computes total downtime duration from session start and includes it in the notification
+  - Edit Group modal (`forms-group.js`) — group rename and per-group alert profile in one panel; ⚙️ button on group header + right-click "Edit Group"
+  - Per-device and per-sensor profile override with one-click "Reset to inherited"
+  - Maintenance window suppression and mute-flag gate preserved from previous engine
+  - `alert_profile_state` table persists stage fire history across restarts; `alert_events` updated with profile_id / stage_id / profile_name
+  - Resolved event duration fixed — stops counting once alert_events.resolved_at is set
 - Settings → Sensors tab redesigned as compact table with expandable rows
 - Settings → Logs tab: improved fonts, structured rows, log-level colour coding
 - Home button — PingWatch logo navigates to Dashboard tab
@@ -141,6 +162,12 @@
   - `frontend/forms-settings.js` — `openSettings()` refactored from ~600-line monolith into 10 focused tab-builder functions (`_buildSettingsTab_*`)
 - `db/persistence.py` startup restore — reverted window-function approach (caused 50 s startup on PostgreSQL due to full-table scan bypassing the composite index) back to per-sensor indexed seeks + single batched `GROUP BY` stats query; startup time restored to ~4 s
 
+- Events tab Active / History split
+  - Inner tabs ("Active" / "History") inside Sensor Events panel — Active shows unresolved flaps + alert-linked traps; History shows resolved events
+  - Active tab badge shows live unresolved count; "Resolve All" hidden on History tab
+  - SNMP traps without a linked alert rule default to History (informational, not actionable)
+  - Tab selection persisted in `localStorage` (`pw_evt_inner_tab`)
+- Debug Mode checkbox auto-saves on toggle — no Save button required; reverts on API failure
 - Subnet Discovery — scan a CIDR for unmonitored hosts
   - Full mode (ping + DNS + MAC/OUI lookup + port scan + device-type guess) and Ping-only mode (fast, for /18–/16 ranges)
   - Reuses existing `scan_ports` setting as the single source of truth for port list
@@ -152,6 +179,32 @@
   - Background scan with 1 s SSE-style polling and `DELETE` cancel support; in-memory state, auto-purged after 1 h
   - Dedicated `ThreadPoolExecutor(64)` isolated from sensor probe pool to avoid starving existing probes during large scans
   - Audit log entries for scan start and bulk add
+
+- Subnet Discovery improvements
+  - Per-device group assignment — set a global default group for the batch, override individual rows independently; custom group border accent on overridden rows
+  - "Guess" column renamed to "Type" for clarity
+- NTM live map performance
+  - LED blink animation moved from JS `setInterval` to pure CSS `@keyframes` — compositor-handled, never blocks the main thread; removed `querySelectorAll` churn on every tick
+  - Packet-trace cooldown extended (4 → 6 s), max concurrent traces reduced (3 → 2)
+  - SSE threshold events gated by `_ntmVisible` — map receives no updates while hidden
+  - Link animation step counts halved across all link types — reduces GPU fill rate
+- Alert profile engine recovery bug fix — recovery path now uses `else:` guard so `db_log_event(state="active")` cannot fire immediately after `db_auto_resolve_event()`, eliminating stale active events after sensor recovery
+- TLS sensor threshold fixes
+  - Threshold comparison direction fixed — now alerts when days remaining drops **below** threshold (was inverted: `>=` → `<=`)
+  - Default thresholds corrected from 500/2000 (ms-style) to 30/7 (days)
+  - Add Sensor tab switching now updates threshold labels dynamically (TLS shows "Warn/Crit Days (cert expiry)")
+  - Chart threshold lines show "d" suffix for TLS sensors instead of "ms"
+  - Log messages include "days" unit for TLS threshold events
+- Device License Tracking
+  - `device_licenses` table — per-device license records with `id`, `did`, `license_name`, `expiry_date`, `note`, `warn_days` (default 30), `crit_days` (default 0), `last_status`, `created_at`, `updated_at`; `idx_dev_lic_did` index; SQLite + PostgreSQL schemas
+  - `monitoring/license_checker.py` — `check_license_expirations()` compares expiry dates against today; fires `license_warn` / `license_crit` events into `flap_log` (`stype='license'`) on state change; fires `license_ok` recovery and auto-resolves the active event when renewed; broadcasts `license_status` SSE event; deduplication via `last_status` (no duplicate events unless status changes)
+  - Runs every 6 hours via `autosave_loop` hook (`_iter % 360 == 0`) and immediately after any license add/update via the API
+  - REST API — `GET/POST /api/device/{did}/licenses`, `PATCH/DELETE /api/license/{id}`, `GET /api/licenses`, `GET /api/licenses/summary`, `POST /api/licenses/check` (admin)
+  - Events tab — `license_ok`/`license_warn`/`license_crit` severity mapping; "License" type filter option; 📋 icon
+  - Edit Device modal — collapsible Licenses section (same pattern as Secondary IPs): status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day threshold inputs, add/delete per license
+  - IPAM table — "Licenses" column shows worst license status badge per linked device (`_ipamLicenseMap`); refreshed in parallel with subnet load and on SSE `license_status` events
+  - License Overview dashboard widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted table of expiring/expired licenses (device, license name, expiry date, days remaining, status badge)
+  - SSE listener in `app.js` — `license_status` event refreshes IPAM license map and dashboard widget in real-time
 
 ## 🔴 High Priority
 

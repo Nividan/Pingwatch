@@ -12,8 +12,8 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "0.8.0"
-APP_VERSION_NAME = "Data-Rollup"
+APP_VERSION      = "0.8.1"
+APP_VERSION_NAME = "Bug Fix"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─
@@ -22,6 +22,9 @@ effective_snmp_port = 162
 
 # ── TLS state (set by main() during startup) ─────────────────────
 tls_active = False   # True when the server socket is SSL-wrapped
+
+# ── Server readiness (set True after db_load completes) ──────────
+ready = False
 
 # ── System-tray icon reference (set by main(); used by DB import) ─
 tray_icon = None

@@ -35,8 +35,8 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner, VMware
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
-- 🚨 Rules-based alert engine — conditions, multi-action dispatch (email, webhook, syslog, browser push), cooldown, maintenance windows
-- 🏷 Alert tagging on sensor events — severity badge, rule name, and state shown inline; ACK / Resolve without leaving the Events tab
+- 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays and repeat intervals; cascade resolution (sensor → device → group → global) so one global profile covers everything while individual scopes can override; reusable action templates (email, webhook, syslog, browser push); maintenance window suppression
+- 🏷 Alert tagging on sensor events — severity badge, profile name, and state shown inline; ACK / Resolve without leaving the Events tab; Events tab split into **Active** (unresolved, badge count) and **History** (resolved) inner tabs — SNMP traps without an alert rule go to History automatically
 - 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
 - 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
 - 🌐 Web-based dashboard with live latency sparklines and customizable widgets
@@ -52,7 +52,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🐧 Native Linux/macOS support — headless mode, systemd service, auto package-manager detection
 - 📨 Syslog forwarding — RFC 5424 UDP/TCP to any syslog server
 - 🔁 Server restart and shutdown from the web UI (Settings → General)
-- 🏢 LDAP / Active Directory authentication with encrypted bind credentials
+- 🏢 LDAP / Active Directory authentication with encrypted bind credentials, group import, and auto-provisioning
 - 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration
 - 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (1 per 4 sensors, 64–512 range); manual override available in Settings → General
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
@@ -61,7 +61,8 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
 - ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
 - 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
-- 🔭 Subnet Discovery — scan a CIDR range for unmonitored hosts; two modes (Full: ping + DNS + port scan + device-type guess; Ping only: fast scan for large networks); multi-select results table with MAC/vendor, open ports, multi-NIC duplicate detection, per-device sensor review, and one-click bulk add to a "Discovered" group; maximum scan size /16 (65 534 hosts) with tiered runtime warnings and cancellation support
+- 🔭 Subnet Discovery — scan a CIDR range for unmonitored hosts; two modes (Full: ping + DNS + port scan + device-type guess; Ping only: fast scan for large networks); multi-select results table with MAC/vendor, open ports, multi-NIC duplicate detection, per-device sensor review, and one-click bulk add; **per-device group assignment** — set a default group for the entire batch or override individual rows; maximum scan size /16 (65 534 hosts) with tiered runtime warnings and cancellation support
+- 📋 Device License Tracking — attach software/hardware licenses to any device with expiry dates, configurable warn/critical thresholds (days before expiry), and free-text notes; automatic status check every 6 hours fires Warning/Critical events into the Events tab (deduplication via `last_status` — only fires on state change); recovery event auto-resolves the active alert when a license is renewed; license status badges (Valid / Expiring / Expired) in the Edit Device modal and IPAM table; License Overview dashboard widget shows KPI counts and a sorted table of upcoming expirations; real-time SSE updates on status change
 
 ### Supported Sensor Types
 
@@ -168,6 +169,18 @@ Domain users log in with AD credentials; local users are unaffected. Configure i
 
 Use **Test Connection** to verify the service-account bind and **Test User Auth** to run the full authentication flow before saving.
 
+### LDAP Group Integration
+
+Import AD/LDAP groups into PingWatch and tie them to PingWatch roles and notification groups:
+
+- **Import groups** — use **Settings → Groups → Import from LDAP** to browse and import AD groups. Each imported group gets an LDAP badge and a configurable default role (viewer / operator / admin).
+- **Auto-provision** — enable "Auto-provision" in LDAP Settings and any LDAP user who belongs to an imported group is created automatically on first login with the matching role, display name, and email. No manual user creation required.
+- **Login-time sync** — on every LDAP login, PingWatch refreshes the user's group assignment, role, and display name from LDAP. If the user is removed from all imported groups in AD, login is rejected and the account is suspended (local admin accounts are always unaffected).
+- **Background sync** — a configurable background thread (default every 60 minutes) reconciles all LDAP users against current AD group membership without waiting for a login.
+- **Nested groups** — optional AD recursive membership check using `LDAP_MATCHING_RULE_IN_CHAIN` (AD only).
+- **Multi-group priority** — users in multiple imported groups receive the highest role (admin > operator > viewer).
+- **Test User Groups** — admin diagnostic dialog: enter a username and see exactly which LDAP groups they belong to.
+
 ---
 
 ## IP Address Management (IPAM)
@@ -269,7 +282,7 @@ Browser / Desktop GUI
         ├── vmware/               ← vSphere VM discovery + metric probing
         ├── backup/               ← SSH/Telnet backup engine + scheduler
         ├── snmp/                 ← Trap receiver, enricher, OID catalog
-        └── db/                   ← SQLite persistence (dual write-queues)
+        └── db/                   ← Dual-backend persistence (SQLite / PostgreSQL)
 ```
 
 - **`server.py`** — HTTP(S) dispatcher, starts all background threads
@@ -278,4 +291,4 @@ Browser / Desktop GUI
 - **`backup/engine.py`** — SSH/Telnet connections, TOFU host key verification, enable-mode escalation
 - **`core/auth.py`** — PBKDF2-SHA256 local auth + LDAP branch via `core/ldap_auth.py`
 - **`snmp/`** — UDP trap listener, OID enrichment, vendor fingerprinting
-- **`db/`** — dual SQLite write-queues: Main DB (config/settings) + Logs DB (samples/events)
+- **`db/`** — dual-backend persistence: Main DB (config/settings) + Logs DB (samples/events)

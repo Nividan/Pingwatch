@@ -111,10 +111,11 @@ def db_add_user(username: str, password: str, role: str = "admin") -> bool:
 
 
 def db_delete_user(username: str) -> bool:
-    """Delete a user. Returns False if not found."""
+    """Delete a user and their dashboards. Returns False if not found."""
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
+            cur.execute(f"DELETE FROM dashboards WHERE username={ph}", (username,))
             cur.execute(f"DELETE FROM users WHERE username={ph}", (username,))
             return cur.rowcount > 0
     except Exception as e:
@@ -122,15 +123,19 @@ def db_delete_user(username: str) -> bool:
         return False
 
 
-def db_add_ldap_user(username: str, domain: str, role: str = 'viewer') -> bool:
+def db_add_ldap_user(username: str, domain: str, role: str = 'viewer',
+                     full_name: str = '', email: str = '',
+                     group_id: int | None = None) -> bool:
     """Insert a domain/LDAP user (no local password). Returns False if username exists."""
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
             cur.execute(
-                f"INSERT INTO users (username, pw_hash, role, auth_type, domain) "
-                f"VALUES ({ph},{ph},{ph},{ph},{ph})",
-                (username, '__ldap__', role, 'ldap', domain)
+                f"INSERT INTO users (username, pw_hash, role, auth_type, domain, "
+                f"full_name, email, group_id) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (username, '__ldap__', role, 'ldap', domain,
+                 full_name, email, group_id)
             )
         return True
     except Exception as e:
@@ -156,19 +161,92 @@ def db_set_password(username: str, password: str):
                (_hash_pw(password), username))
 
 
-# ── Dashboard widget layout ───────────────────────────────────────
+# ── Dashboard management (multi-dashboard) ───────────────────────
 
-def db_get_dashboard(username: str) -> str:
-    """Return the stored widgets JSON string for this user (default '[]')."""
+MAX_DASHBOARDS = 10
+
+
+def db_list_dashboards(username: str) -> list:
+    """Return [{id, name, sort_order}] for the user.  No widget payloads."""
     rows = db_query("main",
-                    "SELECT widgets FROM dashboard_widgets WHERE username=?",
+                    "SELECT id, name, sort_order FROM dashboards "
+                    "WHERE username=? ORDER BY sort_order, id",
                     (username,))
-    return rows[0]["widgets"] if rows else "[]"
+    return [{"id": r["id"], "name": r["name"], "sort_order": r["sort_order"]}
+            for r in rows]
 
 
-def db_save_dashboard(username: str, widgets_json: str):
-    """Upsert the widgets JSON string for this user."""
-    db_upsert("main", "dashboard_widgets",
-              ["username", "widgets"],
-              (username, widgets_json),
-              "username")
+def db_get_dashboard(username: str, dashboard_id: int = None) -> dict | None:
+    """Return {id, name, widgets} for a specific dashboard, or None."""
+    row = db_query("main",
+                   "SELECT id, name, widgets FROM dashboards "
+                   "WHERE id=? AND username=?",
+                   (dashboard_id, username))
+    if not row:
+        return None
+    return {"id": row[0]["id"], "name": row[0]["name"],
+            "widgets": row[0]["widgets"]}
+
+
+def db_create_dashboard(username: str, name: str,
+                        widgets_json: str = "[]") -> dict | None:
+    """Create a new dashboard.  Returns {id, name} or None if at limit."""
+    rows = db_query("main",
+                    "SELECT COUNT(*) AS cnt FROM dashboards WHERE username=?",
+                    (username,))
+    if rows and int(rows[0]["cnt"]) >= MAX_DASHBOARDS:
+        return None
+    # Compute next sort_order
+    so_rows = db_query("main",
+                       "SELECT COALESCE(MAX(sort_order),0)+1 AS nxt "
+                       "FROM dashboards WHERE username=?",
+                       (username,))
+    nxt = int(so_rows[0]["nxt"]) if so_rows else 0
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        with pg_cursor("main") as cur:
+            cur.execute(
+                "INSERT INTO dashboards (username, name, sort_order, widgets) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (username, name, nxt, widgets_json))
+            new_id = cur.fetchone()["id"]
+        return {"id": new_id, "name": name}
+    with db_cursor("main") as cur:
+        cur.execute(
+            "INSERT INTO dashboards (username, name, sort_order, widgets) "
+            "VALUES (?, ?, ?, ?)",
+            (username, name, nxt, widgets_json))
+        return {"id": cur.lastrowid, "name": name}
+
+
+def db_rename_dashboard(username: str, dashboard_id: int, name: str) -> bool:
+    """Rename a dashboard.  Returns True on success."""
+    return db_execute("main",
+                      "UPDATE dashboards SET name=? WHERE id=? AND username=?",
+                      (name, dashboard_id, username))
+
+
+def db_delete_dashboard(username: str, dashboard_id: int) -> bool:
+    """Delete a dashboard.  Returns True on success."""
+    return db_execute("main",
+                      "DELETE FROM dashboards WHERE id=? AND username=?",
+                      (dashboard_id, username))
+
+
+def db_save_dashboard(username: str, dashboard_id: int = None,
+                      widgets_json: str = "[]"):
+    """Update widget layout for a specific dashboard."""
+    db_execute("main",
+               "UPDATE dashboards SET widgets=? WHERE id=? AND username=?",
+               (widgets_json, dashboard_id, username))
+
+
+def db_reorder_dashboards(username: str, ordered_ids: list):
+    """Set sort_order based on position in the ordered_ids list."""
+    with db_cursor("main") as cur:
+        ph = "%s" if is_pg() else "?"
+        for i, did in enumerate(ordered_ids):
+            cur.execute(
+                f"UPDATE dashboards SET sort_order={ph} "
+                f"WHERE id={ph} AND username={ph}",
+                (i, did, username))

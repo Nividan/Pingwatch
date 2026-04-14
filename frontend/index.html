@@ -78,6 +78,28 @@
   <div class="tb-right">
     <div class="tb-time" id="clk"></div>
     <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
+    <div class="tb-badges" id="tbBadges">
+      <div class="tb-badge tb-badge-crit" id="badgeCrit" style="display:none"
+           onclick="_openBadgeCrit()" title="Active critical/down events">
+        <span id="badgeCritCnt">0</span>
+      </div>
+      <div class="tb-badge tb-badge-warn" id="badgeWarn" style="display:none"
+           onclick="_openBadgeWarn()" title="Active warning events">
+        <span id="badgeWarnCnt">0</span>
+      </div>
+      <div class="tb-badge tb-badge-ack" id="badgeAck" style="display:none"
+           onclick="_openBadgeAck()" title="Acknowledged events">
+        <span id="badgeAckCnt">0</span>
+      </div>
+      <div class="tb-badge tb-badge-muted" id="badgeMuted" style="display:none"
+           onclick="_openBadgeMuted()" title="Muted or stopped sensors">
+        <span id="badgeMutedCnt">0</span>
+      </div>
+    </div>
+    <div class="tb-log-badge" id="logBadge" style="display:none"
+         onclick="_openLogBadge()" title="New log entries (WARNING+)">
+      New Log Entries <span id="logBadgeCnt">0</span>
+    </div>
     <div class="usr-dd" id="usrDd" style="display:none">
       <button class="usr-dd-trigger" id="usrDdBtn" onclick="_usrDdToggle(event)" aria-haspopup="true" aria-expanded="false">
         <span class="usr-dd-dot"></span>
@@ -108,13 +130,14 @@
     <div id="mainTabs">
       <button class="mtab" id="tabDashboard" onclick="switchMainTab('dashboard')">📊 Dashboard</button>
       <button class="mtab" id="tabDevices" onclick="switchMainTab('devices')">🖧 Devices</button>
-      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events <span class="mtab-badge" id="evtBadge" style="display:none">0</span></button>
+      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events</button>
       <button class="mtab" id="tabMap" onclick="switchMainTab('map')">🌐 Map</button>
       <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
       <button class="mtab" id="tabIpam" onclick="switchMainTab('ipam')">📋 IP Addresses</button>
     </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
+      <div id="dw-tab-bar" class="dw-tab-bar"></div>
       <div id="dw-grid" class="dw-grid"></div>
       <button class="dw-add-btn" onclick="_dwOpenPicker()">＋ Add Widget</button>
     </div>
@@ -130,6 +153,10 @@
       </div>
       <!-- Panel: Sensor Events -->
       <div id="evtstab-panel-sensor-events" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0">
+        <div class="evt-inner-tabs">
+          <button class="evt-inner-tab active" id="evtInnerActive" onclick="_evtSetInnerTab('active')">Active</button>
+          <button class="evt-inner-tab" id="evtInnerHistory" onclick="_evtSetInnerTab('history')">History</button>
+        </div>
         <div class="evt-view-hdr">
           <div>
             <div class="evt-view-title">⚡ Events</div>
@@ -166,6 +193,7 @@
             <option value="down">Down</option>
             <option value="threshold">Threshold</option>
             <option value="trap">SNMP Trap</option>
+            <option value="license">License</option>
           </select>
           <select id="evtFSev" onchange="_onEvtFilterChange()">
             <option value="">All Severity</option>

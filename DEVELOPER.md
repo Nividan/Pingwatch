@@ -36,13 +36,15 @@ Browser / Desktop GUI
         │   ├── logger.py         ← Central logging
         │   └── settings.py       ← Runtime settings cache
         │
-        ├── monitoring/           ← Probes, alerting, topology, subnet discovery
-        │   ├── probes.py         ← Sensor engine
-        │   ├── subnet_discovery.py ← Subnet scan engine (liveness, enrichment, dup detection)
-        │   ├── alert_engine.py   ← Rules-based alert engine (conditions, dispatch, cooldown)
-        │   ├── smtp_alert.py     ← Email notifications
-        │   ├── syslog_client.py  ← RFC 5424 syslog forwarding
-        │   └── network_map.py    ← NTM topology data layer
+        ├── monitoring/           ← Probes, alerting, topology, subnet discovery, license checking
+        │   ├── probes.py              ← Sensor engine
+        │   ├── subnet_discovery.py    ← Subnet scan engine (liveness, enrichment, dup detection)
+        │   ├── alert_profile_engine.py ← PRTG-style profile evaluator (cascade, stage timing, dispatch)
+        │   ├── alert_dispatchers.py   ← Reusable action dispatchers (email, webhook, syslog, browser)
+        │   ├── smtp_alert.py          ← SMTP helper and email rendering
+        │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
+        │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
+        │   └── network_map.py         ← NTM topology data layer
         │
         ├── backup/               ← Config backup engine
         │   ├── engine.py         ← SSH / Telnet backup engine
@@ -92,17 +94,20 @@ pingwatch/
 │   ├── settings.py         ← Thread-safe runtime settings cache (DB-backed)
 │   ├── logger.py           ← App logger, audit logger, in-memory log buffer
 │   ├── auth.py             ← Login, PBKDF2-SHA256, RBAC, session management
-│   ├── ldap_auth.py        ← ldap_authenticate / ldap_test_connection / ldap_test_auth_user
+│   ├── ldap_auth.py        ← LDAP/AD auth, group search, nested membership, background sync
 │   ├── app_state.py        ← Shared globals: STATE, effective ports, TLS flag, tray ref
 │   ├── state.py            ← In-memory Device/Sensor objects, probe threads, SSE broadcast
 │   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
 │
 ├── monitoring/
-│   ├── probes.py           ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
-│   ├── subnet_discovery.py ← Subnet scan engine (liveness + enrichment + duplicate detection)
-│   ├── smtp_alert.py       ← Down/up email alerts with 5-min failure-log suppression
-│   ├── syslog_client.py    ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
-│   └── network_map.py      ← Topology pages, nodes, links, groups (DB-backed)
+│   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
+│   ├── subnet_discovery.py      ← Subnet scan engine (liveness + enrichment + duplicate detection)
+│   ├── alert_profile_engine.py  ← PRTG-style profile evaluator (cascade resolution, stage timing, dispatch hook)
+│   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
+│   ├── smtp_alert.py            ← SMTP connection helper and email rendering (used by alert_dispatchers)
+│   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
+│   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
+│   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
 │
 ├── backup/
 │   ├── engine.py           ← SSH (paramiko) + Telnet connections, TOFU key verify,
@@ -134,15 +139,18 @@ pingwatch/
 │   ├── samples.py          ← Buffered probe writes, history & summary queries
 │   ├── events.py           ← Flap log, SNMP trap log, sensor error log
 │   ├── users.py            ← User management (local + LDAP), profile (full_name, email), app_settings
-│   ├── groups.py           ← User group CRUD and email resolution for alert dispatch
+│   ├── groups.py           ← User group CRUD, email resolution, LDAP group mapping
 │   ├── audit.py            ← Audit log write & query
 │   ├── backups.py          ← Backup settings (encrypted), run history, 3-run retention
 │   ├── trap_defs.py        ← SNMP trap definition queries
-│   └── ipam.py             ← Subnet and IP allocation management
+│   ├── ipam.py             ← Subnet and IP allocation management
+│   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
+│   ├── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
+│   └── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
-│   ├── groups.py           ← User group CRUD and member assignment
+│   ├── groups.py           ← User group CRUD, member assignment, LDAP group import
 │   ├── devices.py          ← Device & sensor CRUD, port scan
 │   ├── monitoring.py       ← SSE, flaps, traps, SNMP
 │   ├── settings.py         ← App settings, server info, restart/shutdown
@@ -150,12 +158,13 @@ pingwatch/
 │   ├── topology.py         ← NTM pages/nodes/links/groups
 │   ├── export.py           ← DB export/import, audit log
 │   ├── backups.py          ← Device config backup API
-│   ├── alert_rules.py      ← Alert rules CRUD, toggle, test-fire
+│   ├── alert_profiles.py   ← Alert profile + action template CRUD, profile test-fire
 │   ├── alert_events.py     ← Alert history, ACK/resolve
 │   ├── maintenance_windows.py ← Maintenance window CRUD
-│   ├── ldap.py             ← LDAP/AD settings & test endpoints
+│   ├── ldap.py             ← LDAP/AD settings, test, group search, user group lookup
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
-│   └── discovery.py        ← Subnet discovery scan + bulk device add
+│   ├── discovery.py        ← Subnet discovery scan + bulk device add
+│   └── licenses.py         ← Device license CRUD + expiration check trigger
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -166,11 +175,11 @@ pingwatch/
     ├── dashboard.js        ← Customizable widget dashboard
     ├── devices.js          ← Device list and detail panel
     ├── sensors.js          ← Sensor list, detail panel, history chart; KPI tiles reflect selected time range
-    ├── events.js           ← Flap/trap/error event log viewer
+    ├── events.js           ← Flap/trap/error event log viewer (Active / History inner tabs)
     ├── backups.js          ← Backup table, config viewer, diff, rollback
     ├── forms-device.js     ← Add/edit device form
     ├── forms-sensor.js     ← Add/edit sensor form
-    ├── forms-settings.js   ← Settings modal (9 tabs)
+    ├── forms-settings.js   ← Settings modal (10 tabs)
     ├── forms-users.js      ← User management
     ├── forms-ldap.js       ← LDAP/AD settings modal
     ├── forms-io.js         ← DB export/import form
@@ -188,7 +197,7 @@ pingwatch/
 ## Backend Modules
 
 ### `server.py`
-HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
+HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog, LDAP sync). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
 `Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
 
@@ -209,8 +218,20 @@ Server-side input validation helpers used by route handlers before persisting us
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
 
+`auth_login()` handles two LDAP paths: (1) **existing LDAP users** — after successful bind, `_ldap_login_sync()` refreshes group/role/display_name from LDAP and rejects login if the user is no longer in any imported group; (2) **unknown users** — if `ldap_enabled` and `ldap_auto_provision` are set, the user is authenticated against LDAP, matched to an imported group, and created automatically via `db_add_ldap_user()`. A race-condition guard retries the normal login path if a concurrent INSERT wins the race.
+
 ### `core/ldap_auth.py`
-LDAP/AD helpers: `ldap_authenticate`, `ldap_test_connection`, `ldap_test_auth_user`. Supports plain LDAP, LDAPS, and StartTLS. Bind password decrypted in-memory only; never logged. `ldap3` import deferred inside functions — the library is optional and local users are unaffected if absent.
+LDAP/AD helpers. Supports plain LDAP, LDAPS, and StartTLS. Bind password decrypted in-memory only; never logged. `ldap3` import deferred inside functions — the library is optional and local users are unaffected if absent.
+
+Key functions:
+- `ldap_authenticate(username, password)` — returns `{"ok": True, "display_name", "email", "member_of", "dn"}` on success or `None` on failure (dict is truthy, None is falsy — backward-compatible).
+- `ldap_test_connection(cfg)` / `ldap_test_auth_user(username, password, cfg)` — diagnostic helpers called from the settings UI.
+- `ldap_search_groups(query, cfg)` — service-account bind, searches `ldap_group_base_dn` with `ldap_group_filter`; returns `(True, [{dn, cn, description, member_count}])` or `(False, error_msg)`.
+- `ldap_get_user_info(username, cfg)` — fetches DN, displayName, mail, memberOf for a user; used by the Test User Groups diagnostic.
+- `ldap_check_nested_membership(user_dn, group_dn, cfg)` — uses AD's `LDAP_MATCHING_RULE_IN_CHAIN` OID (`1.2.840.113556.1.4.1941`) to resolve recursive group membership.
+- `_match_user_to_groups(member_of, user_dn, mapped_groups, cfg)` — finds the best-matching imported group for a user (direct DN match first, then nested fallback); picks the group with the highest role rank (admin > operator > viewer).
+- `ldap_sync_groups()` — iterates all LDAP users in the DB, checks current AD group membership, updates or disables accounts as needed; returns `{"updated": N, "disabled": N, "errors": N}`.
+- `ldap_sync_loop()` — daemon thread that runs `ldap_sync_groups()` on the `ldap_sync_interval` schedule; started by `server.py` on startup.
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
@@ -233,14 +254,26 @@ SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH hos
 ### `backup/db_backup.py`
 Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to run while the DB is being written) to snapshot both Main DB and Logs DB into timestamped files under `backup/database/`. Applies a configurable retention policy (default: keep 7 copies). Triggered by the scheduler and also callable on demand via `POST /api/db/backup/run`.
 
-### `monitoring/alert_engine.py`
-Rules-based alert engine. A bounded daemon queue receives events from `core/state.py` on every sensor state change. The worker thread evaluates all enabled rules against each event: condition matching (AND/OR), maintenance window suppression, cooldown/deduplication (DB-persisted), and multi-action dispatch. Actions: email (group-resolved + raw addresses), HTTP webhook (SSRF-guarded), syslog, and browser push notification via SSE. Rules are cached in memory with a 30-second TTL; `invalidate_rules_cache()` forces an immediate reload after saves. Verifies sensor/device still exists before dispatch to prevent ghost alerts after deletion.
+### `monitoring/alert_profile_engine.py`
+Pure-functional profile evaluator driven by the probe loop. Called from `Sensor._run_once()` after each probe cycle. `resolve_profile_for_sensor()` walks the cascade (sensor → device → group → global), returns the first matching profile, and caches the result on the sensor object (`_resolved_profile_id` / `_resolved_profile_ver`); invalidated by bumping `STATE._profile_cache_ver` whenever any profile changes. `evaluate_and_fire()` checks each stage's trigger state, delay, and repeat interval against the sensor's `_down_since_ts` / `_threshold_triggered_ts` fields. Recovery stages fire once when the sensor returns to OK (provided a state-stage previously fired in the same session) and compute total downtime duration from the `active_session` stored in `alert_profile_state`. Post-recovery, all stage rows for that sensor are cleared and the active alert event is auto-resolved.
+
+**Recovery path note:** `_fire()` uses `if recovery: ... else: db_log_event(...)` — the `else` guard is critical. Without it, `db_log_event(state="active")` would run immediately after `db_auto_resolve_event()`, re-creating the event and leaving a stale active alert visible in the Events tab.
+
+### `monitoring/alert_dispatchers.py`
+Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
 ### `monitoring/smtp_alert.py`
-Down/up email alerts via SMTP when sensor states change. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Delayed DOWN emails (`_smtp_down_delayed`) verify the sensor is still running before sending — prevents alerts for deleted sensors.
+SMTP connection helper and HTML email rendering. `_smtp_connect()` manages the server connection and TLS/auth handshake; `_build_email_html()` / `_build_email_text()` render the notification body. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Used by `alert_dispatchers._dispatch_email`.
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.
+
+### `monitoring/license_checker.py`
+Periodic license expiration checker. `check_license_expirations()` fetches all licenses via `db_get_all_licenses()`, computes `days_left` for each, determines `new_status` (`ok` / `warn` / `crit`) using per-license `warn_days` / `crit_days` thresholds, and fires events only when status changes (deduplication via `last_status`).
+
+On state change: calls `db_update_license_status()`, then `db_log_flap()` with `stype='license'` and `direction='license_warn'` or `'license_crit'`. On recovery (crit/warn → ok): calls `db_auto_resolve_flap()` to close the active event and logs `direction='license_ok'`. Broadcasts `STATE._broadcast("license_status", {...})` after every state change for real-time frontend updates.
+
+Hooked into `db/persistence.py` `autosave_loop` at `_iter % 360 == 0` (every 6 hours). Also called immediately after `POST /api/device/{did}/licenses` and `PATCH /api/license/{id}` so a newly added or updated license is evaluated right away.
 
 ### `vmware/client.py`
 VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM discovery from vCenter/ESXi and real-time metric querying for 16 VM metrics across 6 categories (CPU, Memory, Disk, Datastore, Network, System). Session caching with 25-minute TTL avoids repeated logins; metric caching with 20-second TTL (matching vSphere's realtime sampling interval) avoids redundant QueryPerf calls when multiple sensors target the same VM. `vmware_probe()` returns the standard `{ok, ms, detail, value}` probe contract. `mem_consumed_pct` uses `quickStats.guestMemoryUsage` (actual guest OS memory from VMware Tools) with fallback to `mem.active.average`.
@@ -260,7 +293,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | Module | Endpoints |
 |--------|-----------|
 | `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/users/{u}/profile` |
-| `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members` |
+| `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard`, `/api/db/stats` |
@@ -268,12 +301,13 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
 | `backups.py` | `/api/backups`, `/api/backups/{did}`, `/api/backups/{did}/history`, `/api/backups/{did}/run`, `/api/backups/run/{id}` |
-| `alert_rules.py` | `/api/alert/rules`, `/api/alert/rule`, `/api/alert/rule/{id}`, `/api/alert/rule/{id}/toggle`, `/api/alert/rule/{id}/test` |
+| `alert_profiles.py` | `/api/alert/profiles`, `/api/alert/profile`, `/api/alert/profile/{id}`, `/api/alert/action-templates`, `/api/alert/action-template`, `/api/alert/action-template/{id}`, `/api/alert/profile/{id}/test` |
 | `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/events/resolve-all`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
-| `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth` |
+| `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth`, `/api/ldap/search_groups`, `/api/ldap/test_user_groups` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
+| `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
 
 ---
 
@@ -301,11 +335,14 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
 | `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
-| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch |
+| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
 | `trap_defs.py` | SNMP trap definition queries |
 | `ipam.py` | Subnet and IP allocation management |
+| `alert_profiles.py` | Alert profile CRUD, action template CRUD, stage state tracking (`alert_profile_state`) |
+| `alert_events.py` | Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count |
+| `licenses.py` | `device_licenses` table CRUD — `db_get_licenses(did)`, `db_get_all_licenses()`, `db_add_license()`, `db_update_license()`, `db_delete_license()`, `db_delete_device_licenses(did)`, `db_update_license_status()` (internal), `db_license_summary()` |
 
 ### `app_settings` table
 
@@ -317,6 +354,11 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `snr_type_defaults` | JSON string | Per-sensor-type default intervals/timeouts |
 | `backup_enc_key` | Fernet key (base64) | Encryption key for device backup credentials |
 | `ldap_bind_pass` | Fernet-encrypted | LDAP service-account bind password |
+| `ldap_auto_provision` | `"1"` / `"0"` | Auto-create unknown LDAP users who belong to an imported group on first login |
+| `ldap_group_base_dn` | DN string | Search base for LDAP group browsing (falls back to `ldap_base_dn` when empty) |
+| `ldap_group_filter` | LDAP filter | Group object filter (AD default: `(objectClass=group)`, OpenLDAP: `(objectClass=groupOfNames)`) |
+| `ldap_sync_interval` | integer string (minutes) | Background LDAP group sync interval in minutes; `"0"` = disabled |
+| `ldap_nested_groups` | `"1"` / `"0"` | Enable recursive AD group membership via `LDAP_MATCHING_RULE_IN_CHAIN` (AD-specific) |
 | `tls_enabled` | `"1"` / `"0"` | HTTPS toggle |
 | `http_port` / `https_port` | integer string | Configured listen ports |
 | `db_backup_enabled` | `"1"` / `"0"` | Scheduled SQLite DB backup toggle |
@@ -337,21 +379,22 @@ The frontend is served as static files — no build step.
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
-| `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA) |
+| `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA); includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table with device name, license name, expiry date, days remaining, and status badge |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
-| `events.js` | Flap/trap/error event log with filters; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + rule name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; bulk "Resolve All" button |
+| `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
-| `forms-device.js` | Add/edit device modal |
+| `forms-device.js` | Add/edit device modal; **Licenses section** — collapsible `<details>` with status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day inputs, add/delete per license; `_edLicLoad()`, `_edLicRender()`, `_edLicAdd()`, `_edLicDel()`, `_edLicStatusBadge()` |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, SMTP, Database, Logs, Sensors, Networking, Config Backup, Alert Rules); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Logs tab: Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()` (immediate `PATCH /api/settings`; reverts on failure). Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
-| `forms-ldap.js` | LDAP/AD settings modal |
+| `forms-ldap.js` | LDAP/AD settings modal including Group Integration section (auto-provision, nested groups, group base DN, group filter, sync interval) and Test User Groups sub-dialog |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
-| `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, device-type guess, multi-NIC ⚠ flags), per-device sensor review with inline URL/community inputs, bulk add with live device count |
-| `alerting.js` | Alert rules editor (conditions, collapsible action blocks with group chip selector), alert history viewer, maintenance windows |
-| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing |
+| `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, Type column, multi-NIC ⚠ flags), per-device sensor review, bulk add; **per-device group assignment** — default group dropdown plus per-row group input with `_discGrpFocus`/`_discGrpBlur` datalist UX; `customGroups[ip]` overrides; accent border on overridden rows |
+| `alerting.js` | Alert profiles editor (PRTG-style escalation table with delay / repeat / action columns), reusable action template editor (email with user+group checkbox pickers, webhook, syslog, browser push), alert event history viewer, maintenance windows |
+| `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
+| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLoadLicenses()` fetches `/api/licenses` in parallel with subnet load, `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` via `_ipamOnLicenseUpdate()` |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.js` | NTM canvas engine — drag-and-drop topology editor |
 
@@ -366,7 +409,7 @@ The frontend is served as static files — no build step.
 5. Probe threads in `monitoring/probes.py` run on per-sensor intervals, push results to the Logs DB write-queue, and broadcast state-change events over SSE.
 6. `backup/scheduler.py` fires backup jobs on cron schedule; `backup/engine.py` connects to the device and returns config text to `db/backups.py`.
 7. `snmp/receiver.py` listens on a UDP socket; traps are enriched by `snmp/enricher.py` and injected into the flap pipeline.
-8. `monitoring/smtp_alert.py` and `monitoring/syslog_client.py` react to state-change events from their own listener threads.
+8. After each probe, `monitoring/alert_profile_engine.evaluate_and_fire()` resolves the alert profile for the sensor (cached; cascade: sensor → device → group → global), evaluates each stage's delay and repeat interval, and calls `monitoring/alert_dispatchers` to send email, webhook, syslog, or browser notifications. `monitoring/syslog_client.py` forwards events asynchronously on its own daemon queue.
 
 ---
 
@@ -423,12 +466,14 @@ The frontend is served as static files — no build step.
 
 ### LDAP
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/ldap/settings` | LDAP config (bind password never returned) |
-| `PATCH` | `/api/ldap/settings` | Save LDAP config |
-| `POST` | `/api/ldap/test_connection` | Test service-account bind |
-| `POST` | `/api/ldap/test_auth` | Test full user authentication flow |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/ldap/settings` | admin | LDAP config (bind password never returned) including group integration fields |
+| `PATCH` | `/api/ldap/settings` | admin | Save LDAP config |
+| `POST` | `/api/ldap/test_connection` | admin | Test service-account bind |
+| `POST` | `/api/ldap/test_auth` | admin | Test full user authentication flow |
+| `POST` | `/api/ldap/search_groups` | admin | Browse/search LDAP directory for groups `{query}` → `{ok, groups: [{dn, cn, description, member_count}]}` |
+| `POST` | `/api/ldap/test_user_groups` | admin | Look up a user's LDAP group memberships `{username}` → `{ok, display_name, email, groups: [dn, ...]}` |
 
 ### IPAM
 
@@ -439,6 +484,18 @@ The frontend is served as static files — no build step.
 | `DELETE` | `/api/ipam/subnets/{id}` | Remove subnet and all allocations |
 | `GET` | `/api/ipam/subnets/{id}/ips` | IP allocations for a subnet |
 | `PUT` | `/api/ipam/ips/{subnet_id}/{ip}` | Set or clear the name for an IP |
+
+### Device Licenses
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/device/{did}/licenses` | viewer | List licenses for a device |
+| `POST` | `/api/device/{did}/licenses` | operator | Add license `{license_name, expiry_date, note?, warn_days?, crit_days?}` → `{id, licenses[]}` |
+| `PATCH` | `/api/license/{id}` | operator | Update license fields |
+| `DELETE` | `/api/license/{id}` | operator | Delete a license |
+| `GET` | `/api/licenses` | viewer | All licenses across all devices (for dashboard widget and IPAM map) |
+| `GET` | `/api/licenses/summary` | viewer | Counts by status `{ok, warn, crit, total}` |
+| `POST` | `/api/licenses/check` | admin | Trigger immediate expiration check |
 
 ### User Profiles
 
@@ -457,19 +514,22 @@ The frontend is served as static files — no build step.
 | `PATCH` | `/api/group/{id}` | admin | Update group name / description |
 | `DELETE` | `/api/group/{id}` | admin | Delete group; members are unassigned |
 | `PUT` | `/api/group/{id}/members` | admin | Replace member list `{usernames: [...]}` |
+| `POST` | `/api/user/group/import_ldap` | admin | Bulk-import LDAP groups `{groups: [{dn, cn, description, default_role}]}` — idempotent (skips existing DNs) → `{ok, imported, skipped, groups}` |
 
-### Alert Rules
+### Alert Profiles
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/alert/rules` | viewer | List all rules |
-| `POST` | `/api/alert/rule` | admin | Create rule |
-| `GET` | `/api/alert/rule/{id}` | viewer | Get single rule |
-| `PATCH` | `/api/alert/rule/{id}` | admin | Update rule |
-| `DELETE` | `/api/alert/rule/{id}` | admin | Delete rule |
-| `POST` | `/api/alert/rule/{id}/toggle` | operator | Enable / disable rule |
-| `POST` | `/api/alert/rule/{id}/test` | admin | Test-fire all actions with synthetic event |
-| `POST` | `/api/alert/rules` | admin | Reorder rules `{order: [id, ...]}` |
+| `GET` | `/api/alert/profiles` | viewer | List all profiles with scope and stage count |
+| `POST` | `/api/alert/profile` | admin | Create profile |
+| `GET` | `/api/alert/profile/{id}` | viewer | Get profile with all stages |
+| `PATCH` | `/api/alert/profile/{id}` | admin | Update profile and stages |
+| `DELETE` | `/api/alert/profile/{id}` | admin | Delete profile |
+| `POST` | `/api/alert/profile/{id}/test` | admin | Test-fire all stages with synthetic event |
+| `GET` | `/api/alert/action-templates` | viewer | List all action templates |
+| `POST` | `/api/alert/action-template` | admin | Create action template |
+| `PATCH` | `/api/alert/action-template/{id}` | admin | Update action template |
+| `DELETE` | `/api/alert/action-template/{id}` | admin | Delete action template |
 
 ### Alert Events
 
@@ -526,6 +586,6 @@ The frontend is served as static files — no build step.
 
 ### Adding a new route module
 
-1. Create `routes/<name>.py` with a `handle(method, path, body, req)` function.
+1. Create `routes/<name>.py` with a `handle(h, method, path, body)` function.
 2. Register it in `server.py` by adding a route regex in `core/config.py` and a dispatch call in `server.py`'s request handler.
 3. Add it to the `routes/` table in this document.

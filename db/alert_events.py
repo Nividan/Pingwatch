@@ -1,7 +1,10 @@
 """
-db/alert_events.py — Alert event history and dedup persistence helpers.
+db/alert_events.py — Alert event history persistence helpers.
 
-Tables: alert_events, alert_dedup
+Table: alert_events  (rotational, capped retention)
+
+Used by the PRTG-style alert profile engine. Each row is one fire (or repeat)
+of a profile stage. The Events view in the UI reads from this table.
 """
 
 import sqlite3
@@ -24,13 +27,27 @@ def _row(r) -> dict:
 
 # ── Alert events ──────────────────────────────────────────────────
 
-def db_log_event(rule_id: int, rule_name: str, ctx: dict, state: str = 'active') -> int:
+def db_log_event(profile_id: int, stage_id: int, profile_name: str,
+                 ctx: dict, state: str = 'active') -> int:
     """
-    Log a fired rule event.  If an active event already exists for the same
-    rule + device + sensor, increments repeat_count instead of inserting a new
-    row.  Returns the event id.
+    Log a fired stage event. If an active OR acknowledged event already exists
+    for the same device + sensor, updates that row in place (bump repeat_count,
+    refresh detail/stage/profile, escalate severity but never downgrade).
+    Otherwise inserts a new row. Returns the event id.
+
+    Dedup matches on (did, sid) alone — profile_id is NOT part of the key, so
+    swapping a sensor's profile mid-incident updates the same row instead of
+    creating a new one. This gives "one row per failure session per sensor".
     """
-    now = time.time()
+    now        = time.time()
+    did        = ctx.get('did', '')
+    sid        = ctx.get('sid', '')
+    dname      = ctx.get('dname', '')
+    sname      = ctx.get('sname', '')
+    severity   = ctx.get('severity', '')
+    event_type = ctx.get('event_type', '')
+    detail     = ctx.get('detail', '')
+
     if is_pg():
         from db.pg_pool import pg_conn
         import psycopg2.extras
@@ -38,29 +55,40 @@ def db_log_event(rule_id: int, rule_name: str, ctx: dict, state: str = 'active')
             with pg_conn("main") as con:
                 cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                 cur.execute(
-                    "SELECT id, repeat_count FROM alert_events "
-                    "WHERE rule_id=%s AND did=%s AND sid=%s AND state='active'",
-                    (rule_id, ctx.get('did', ''), ctx.get('sid', ''))
+                    "SELECT id, severity FROM alert_events "
+                    "WHERE did=%s AND sid=%s AND state IN ('active','acknowledged') "
+                    "ORDER BY id DESC LIMIT 1",
+                    (did, sid)
                 )
                 existing = cur.fetchone()
                 if existing and state == 'active':
+                    # Escalate severity (never downgrade). If current row is already
+                    # 'critical', keep it; otherwise adopt the incoming severity.
                     cur.execute(
-                        "UPDATE alert_events SET repeat_count=repeat_count+1, triggered_at=%s WHERE id=%s",
-                        (now, existing['id'])
+                        """UPDATE alert_events SET
+                               repeat_count = repeat_count + 1,
+                               triggered_at = %s,
+                               stage_id     = %s,
+                               profile_id   = %s,
+                               profile_name = %s,
+                               severity     = CASE WHEN severity = 'critical' THEN severity ELSE %s END,
+                               event_type   = CASE WHEN severity = 'critical' THEN event_type ELSE %s END,
+                               detail       = %s
+                           WHERE id = %s""",
+                        (now, stage_id, profile_id, profile_name,
+                         severity, event_type, detail, existing['id'])
                     )
                     eid = existing['id']
                 else:
                     cur.execute(
                         """INSERT INTO alert_events
-                           (rule_id, rule_name, did, sid, dname, sname,
+                           (profile_id, stage_id, profile_name, did, sid, dname, sname,
                             severity, event_type, state, triggered_at, detail)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (
-                            rule_id, rule_name,
-                            ctx.get('did', ''), ctx.get('sid', ''),
-                            ctx.get('dname', ''), ctx.get('sname', ''),
-                            ctx.get('severity', ''), ctx.get('event_type', ''),
-                            state, now, ctx.get('detail', ''),
+                            profile_id, stage_id, profile_name,
+                            did, sid, dname, sname,
+                            severity, event_type, state, now, detail,
                         )
                     )
                     eid = cur.fetchone()['id']
@@ -74,28 +102,45 @@ def db_log_event(rule_id: int, rule_name: str, ctx: dict, state: str = 'active')
     try:
         con.execute("BEGIN IMMEDIATE")
         existing = con.execute(
-            "SELECT id, repeat_count FROM alert_events "
-            "WHERE rule_id=? AND did=? AND sid=? AND state='active'",
-            (rule_id, ctx.get('did', ''), ctx.get('sid', ''))
+            "SELECT id, severity, event_type FROM alert_events "
+            "WHERE did=? AND sid=? AND state IN ('active','acknowledged') "
+            "ORDER BY id DESC LIMIT 1",
+            (did, sid)
         ).fetchone()
         if existing and state == 'active':
+            # Escalate severity but never downgrade (critical stays critical
+            # until the whole session recovers).
+            if existing['severity'] == 'critical':
+                new_sev  = 'critical'
+                new_etyp = existing['event_type']
+            else:
+                new_sev  = severity
+                new_etyp = event_type
             con.execute(
-                "UPDATE alert_events SET repeat_count=repeat_count+1, triggered_at=? WHERE id=?",
-                (now, existing['id'])
+                """UPDATE alert_events SET
+                       repeat_count = repeat_count + 1,
+                       triggered_at = ?,
+                       stage_id     = ?,
+                       profile_id   = ?,
+                       profile_name = ?,
+                       severity     = ?,
+                       event_type   = ?,
+                       detail       = ?
+                   WHERE id = ?""",
+                (now, stage_id, profile_id, profile_name,
+                 new_sev, new_etyp, detail, existing['id'])
             )
             eid = existing['id']
         else:
             cur = con.execute(
                 """INSERT INTO alert_events
-                   (rule_id, rule_name, did, sid, dname, sname,
+                   (profile_id, stage_id, profile_name, did, sid, dname, sname,
                     severity, event_type, state, triggered_at, detail)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    rule_id, rule_name,
-                    ctx.get('did', ''), ctx.get('sid', ''),
-                    ctx.get('dname', ''), ctx.get('sname', ''),
-                    ctx.get('severity', ''), ctx.get('event_type', ''),
-                    state, now, ctx.get('detail', ''),
+                    profile_id, stage_id, profile_name,
+                    did, sid, dname, sname,
+                    severity, event_type, state, now, detail,
                 )
             )
             eid = cur.lastrowid
@@ -265,8 +310,8 @@ def db_resolve_event(event_id: int) -> bool:
         con.close()
 
 
-def db_auto_resolve_event(rule_id: int, did: str, sid: str) -> bool:
-    """Auto-resolve active alert_event for rule+device+sensor on recovery."""
+def db_auto_resolve_event(profile_id: int, did: str, sid: str) -> bool:
+    """Auto-resolve active alert_event for profile+device+sensor on recovery."""
     now = time.time()
     if is_pg():
         from db.pg_pool import pg_cursor
@@ -274,8 +319,8 @@ def db_auto_resolve_event(rule_id: int, did: str, sid: str) -> bool:
             with pg_cursor("main") as cur:
                 cur.execute(
                     "UPDATE alert_events SET state='resolved', resolved_at=%s "
-                    "WHERE rule_id=%s AND did=%s AND sid=%s AND state IN ('active','acknowledged')",
-                    (now, rule_id, did, sid)
+                    "WHERE profile_id=%s AND did=%s AND sid=%s AND state IN ('active','acknowledged')",
+                    (now, profile_id, did, sid)
                 )
                 return cur.rowcount > 0
         except Exception as e:
@@ -286,14 +331,72 @@ def db_auto_resolve_event(rule_id: int, did: str, sid: str) -> bool:
     try:
         con.execute(
             "UPDATE alert_events SET state='resolved', resolved_at=? "
-            "WHERE rule_id=? AND did=? AND sid=? AND state IN ('active','acknowledged')",
-            (now, rule_id, did, sid)
+            "WHERE profile_id=? AND did=? AND sid=? AND state IN ('active','acknowledged')",
+            (now, profile_id, did, sid)
         )
         con.commit()
         return True
     except Exception as e:
         log.error(f"db_auto_resolve_event error: {e}")
         return False
+    finally:
+        con.close()
+
+
+def db_ack_events_by_sensor(did: str, sid: str, actor: str = "") -> None:
+    """ACK all active alert events for a device+sensor pair."""
+    now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_events SET state='acknowledged', ack_by=%s, ack_at=%s "
+                    "WHERE did=%s AND sid=%s AND state='active'",
+                    (actor, now, did, sid)
+                )
+        except Exception as e:
+            log.error(f"db_ack_events_by_sensor error: {e}")
+        return
+    con = _con()
+    try:
+        con.execute(
+            "UPDATE alert_events SET state='acknowledged', ack_by=?, ack_at=? "
+            "WHERE did=? AND sid=? AND state='active'",
+            (actor, now, did, sid)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"db_ack_events_by_sensor error: {e}")
+    finally:
+        con.close()
+
+
+def db_resolve_events_by_sensor(did: str, sid: str) -> None:
+    """Resolve all active/acknowledged alert events for a device+sensor pair."""
+    now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_events SET state='resolved', resolved_at=%s "
+                    "WHERE did=%s AND sid=%s AND state IN ('active','acknowledged')",
+                    (now, did, sid)
+                )
+        except Exception as e:
+            log.error(f"db_resolve_events_by_sensor error: {e}")
+        return
+    con = _con()
+    try:
+        con.execute(
+            "UPDATE alert_events SET state='resolved', resolved_at=? "
+            "WHERE did=? AND sid=? AND state IN ('active','acknowledged')",
+            (now, did, sid)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"db_resolve_events_by_sensor error: {e}")
     finally:
         con.close()
 
@@ -329,18 +432,53 @@ def db_resolve_all_active() -> int:
         con.close()
 
 
-# ── ACK suppression check ────────────────────────────────────────
+# ── Active / ACK suppression checks ─────────────────────────────
 
-def db_has_acked_event(rule_id: int, did: str, sid: str) -> bool:
-    """Return True if an acknowledged (not resolved) event exists for this rule+device+sensor."""
+def db_has_active_event(did: str, sid: str) -> bool:
+    """Return True if any active or acknowledged event exists for this device+sensor.
+
+    Used by the alert engine to detect mid-incident state transitions (e.g.
+    warn→crit session-key change) and suppress duplicate dispatches.
+    """
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("main") as cur:
                 cur.execute(
                     "SELECT 1 FROM alert_events "
-                    "WHERE rule_id=%s AND did=%s AND sid=%s AND state='acknowledged' LIMIT 1",
-                    (rule_id, did, sid)
+                    "WHERE did=%s AND sid=%s AND state IN ('active','acknowledged') LIMIT 1",
+                    (did, sid)
+                )
+                return cur.fetchone() is not None
+        except Exception as e:
+            log.error(f"db_has_active_event error: {e}")
+            return False
+    # SQLite
+    con = _con()
+    try:
+        row = con.execute(
+            "SELECT 1 FROM alert_events "
+            "WHERE did=? AND sid=? AND state IN ('active','acknowledged') LIMIT 1",
+            (did, sid)
+        ).fetchone()
+        return row is not None
+    except Exception as e:
+        log.error(f"db_has_active_event error: {e}")
+        return False
+    finally:
+        con.close()
+
+
+def db_has_acked_event(profile_id: int, did: str, sid: str) -> bool:
+    """Return True if an acknowledged (not resolved) event exists for this profile+device+sensor."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT 1 FROM alert_events "
+                    "WHERE profile_id=%s AND did=%s AND sid=%s AND state='acknowledged' LIMIT 1",
+                    (profile_id, did, sid)
                 )
                 return cur.fetchone() is not None
         except Exception as e:
@@ -351,83 +489,12 @@ def db_has_acked_event(rule_id: int, did: str, sid: str) -> bool:
     try:
         row = con.execute(
             "SELECT 1 FROM alert_events "
-            "WHERE rule_id=? AND did=? AND sid=? AND state='acknowledged' LIMIT 1",
-            (rule_id, did, sid)
+            "WHERE profile_id=? AND did=? AND sid=? AND state='acknowledged' LIMIT 1",
+            (profile_id, did, sid)
         ).fetchone()
         return row is not None
     except Exception as e:
         log.error(f"db_has_acked_event error: {e}")
         return False
-    finally:
-        con.close()
-
-
-# ── Dedup / cooldown persistence ──────────────────────────────────
-
-def db_get_dedup(sig: str) -> dict:
-    if is_pg():
-        from db.pg_pool import pg_cursor
-        try:
-            with pg_cursor("main") as cur:
-                cur.execute(
-                    "SELECT sig, last_fired, fire_count FROM alert_dedup WHERE sig=%s", (sig,)
-                )
-                row = cur.fetchone()
-            return dict(row) if row else None
-        except Exception as e:
-            log.error(f"db_get_dedup error: {e}")
-            return None
-    # SQLite
-    con = _con()
-    try:
-        row = con.execute(
-            "SELECT sig, last_fired, fire_count FROM alert_dedup WHERE sig=?", (sig,)
-        ).fetchone()
-        return _row(row)
-    except Exception as e:
-        log.error(f"db_get_dedup error: {e}")
-        return None
-    finally:
-        con.close()
-
-
-def db_upsert_dedup(sig: str, now: float) -> int:
-    """Upsert dedup record. Returns updated fire_count."""
-    if is_pg():
-        from db.pg_pool import pg_cursor
-        try:
-            with pg_cursor("main") as cur:
-                cur.execute(
-                    """INSERT INTO alert_dedup (sig, last_fired, fire_count) VALUES (%s,%s,1)
-                       ON CONFLICT(sig) DO UPDATE SET
-                         last_fired=EXCLUDED.last_fired,
-                         fire_count=alert_dedup.fire_count+1""",
-                    (sig, now)
-                )
-                cur.execute(
-                    "SELECT fire_count FROM alert_dedup WHERE sig=%s", (sig,)
-                )
-                return cur.fetchone()["fire_count"]
-        except Exception as e:
-            log.error(f"db_upsert_dedup error: {e}")
-            return 1
-    # SQLite
-    con = _con()
-    try:
-        con.execute(
-            """INSERT INTO alert_dedup (sig, last_fired, fire_count) VALUES (?,?,1)
-               ON CONFLICT(sig) DO UPDATE SET
-                 last_fired=excluded.last_fired,
-                 fire_count=fire_count+1""",
-            (sig, now)
-        )
-        con.commit()
-        count = con.execute(
-            "SELECT fire_count FROM alert_dedup WHERE sig=?", (sig,)
-        ).fetchone()[0]
-        return count
-    except Exception as e:
-        log.error(f"db_upsert_dedup error: {e}")
-        return 1
     finally:
         con.close()
