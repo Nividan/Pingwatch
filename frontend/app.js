@@ -341,7 +341,80 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowDown'){e.preventDefault();items[(idx+1)%items.length]?.focus();}
   if(e.key==='ArrowUp'){e.preventDefault();items[(idx-1+items.length)%items.length]?.focus();}
 });
-function onAuthenticated(username){
+// Poll /api/ready until the server has finished db_load(). Returns quickly
+// (~1 request, no splash) in the normal case where the server is already up.
+// Shows a themed splash overlay when the server is mid-restart so the user
+// sees a deliberate "starting up" screen instead of stuck shimmer widgets.
+async function _waitForServerReady(){
+  const splash = document.getElementById('pw-splash');
+  const msg    = document.getElementById('pw-splash-msg');
+  let shown    = false;
+  let firstErrLogged = false;
+  let pollCount = 0;
+  let lastErr   = null;
+  const T0      = Date.now();
+  const MAX_MS  = 60000;
+  const POLL    = 500;
+  const SHOW_AFTER_MS = 300;   // don't flash splash on fast restarts
+  const SLOW_AFTER_MS = 10000;
+
+  while(Date.now() - T0 < MAX_MS){
+    pollCount++;
+    try{
+      const r = await fetch('/api/ready', { cache:'no-store' });
+      if(r.ok){
+        const j = await r.json();
+        if(j.ready){
+          const elapsed = Date.now() - T0;
+          if(shown){
+            console.info(`[pw:ready] server ready after ${elapsed}ms (${pollCount} polls)`);
+            splash.classList.add('fade-out');
+            setTimeout(()=>{ splash.style.display='none'; splash.classList.remove('fade-out'); }, 400);
+          }
+          return true;
+        }
+      } else {
+        lastErr = `HTTP ${r.status}`;
+        if(!firstErrLogged){
+          console.warn(`[pw:ready] /api/ready returned ${r.status} — still polling`);
+          firstErrLogged = true;
+        }
+      }
+    } catch(err){
+      lastErr = (err && err.message) ? err.message : String(err);
+      if(!firstErrLogged){
+        console.warn('[pw:ready] /api/ready fetch failed — server probably still starting:', lastErr);
+        firstErrLogged = true;
+      }
+    }
+
+    // Show splash only after a short delay so brief restarts don't flash it
+    if(!shown && Date.now() - T0 > SHOW_AFTER_MS){
+      console.info('[pw:ready] server not yet ready — showing splash');
+      if(splash) splash.style.display = 'flex';
+      shown = true;
+    }
+    // Escalate message at 10s so the user knows we're still trying
+    if(shown && msg && !msg.dataset.slow && Date.now() - T0 > SLOW_AFTER_MS){
+      msg.textContent = 'Still starting up — this is taking longer than usual…';
+      msg.dataset.slow = '1';
+      console.warn(`[pw:ready] server taking >10s to become ready (last error: ${lastErr || 'none'})`);
+    }
+    await new Promise(res => setTimeout(res, POLL));
+  }
+
+  console.error(`[pw:ready] TIMEOUT after ${MAX_MS}ms — server never became ready. Last error: ${lastErr || 'none'}. Proceeding anyway; UI may be broken.`);
+  if(shown && msg){
+    msg.textContent = 'Server did not become ready. Check server logs.';
+    // Leave the error visible briefly, then dismiss so the user can still try
+    setTimeout(()=>{ if(splash) splash.style.display='none'; }, 3000);
+  } else if(splash){
+    splash.style.display = 'none';
+  }
+  return false;
+}
+
+async function onAuthenticated(username){
   // ── Clean slate: purge stale data from previous session / server restart ──
   for(const k in S.devices)  delete S.devices[k];
   for(const k in S.sensors)  delete S.sensors[k];
@@ -368,6 +441,9 @@ function onAuthenticated(username){
     db.className='usr-dd-badge usr-dd-badge--'+role.toLowerCase();
   }
   applyRbac();
+  // Gate the first data fetch on server readiness — prevents "widgets stuck
+  // loading" when the user logs in between HTTP-bind and db_load() finishing.
+  await _waitForServerReady();
   loadAll();
   connectSSE();
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)

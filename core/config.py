@@ -34,6 +34,7 @@ CERTS_DIR        = os.path.join(_ROOT, "certs")
 TLS_PORT_DEFAULT = 8443
 
 # Pre-compiled HTTP route patterns
+_RE_READY         = re.compile(r'^/api/ready$')
 _RE_DEVICE_LOGS   = re.compile(r'^/api/device/([^/]+)/logs$')
 _RE_DEVICE        = re.compile(r'^/api/device/([^/]+)$')
 _RE_DEVICE_SIP    = re.compile(r'^/api/device/([^/]+)/secondary-ip$')

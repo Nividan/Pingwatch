@@ -1398,6 +1398,37 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
 }
 .lt-watch{font-size:26px;font-weight:300;color:var(--text2);letter-spacing:-.3px}
+
+/* ── Server-readiness splash (shown while db_load() is still running) ── */
+#pw-splash{
+  position:fixed; inset:0; z-index:5000;
+  background:var(--bg);
+  display:flex; align-items:center; justify-content:center;
+  animation: splashFade .25s ease-out;
+}
+#pw-splash.fade-out{ animation: splashFadeOut .35s ease-in forwards; }
+.splash-inner{ text-align:center; max-width:360px; padding:40px; }
+.splash-logo{ color:var(--accent); margin-bottom:20px; display:flex; justify-content:center; }
+.splash-logo svg{ animation: splashPulse 2s ease-in-out infinite; }
+.splash-title{ font-size:26px; font-weight:700; margin-bottom:8px; letter-spacing:-.3px; }
+.splash-sub{ font-size:13px; color:var(--text2); margin-bottom:20px; min-height:18px; }
+.splash-bar{
+  height:3px; width:220px; margin:0 auto;
+  background:var(--bg3); border-radius:2px; overflow:hidden; position:relative;
+}
+.splash-bar-fill{
+  position:absolute; top:0; left:0; height:100%; width:40%;
+  background:linear-gradient(90deg,var(--accent),var(--accent-hover));
+  border-radius:2px;
+  animation: splashProgress 1.4s ease-in-out infinite;
+}
+@keyframes splashFade    { from{opacity:0} to{opacity:1} }
+@keyframes splashFadeOut { from{opacity:1} to{opacity:0; visibility:hidden} }
+@keyframes splashPulse   { 0%,100%{opacity:.7} 50%{opacity:1} }
+@keyframes splashProgress{
+  0%   { left:-40%; }
+  100% { left:100%; }
+}
 .login-sub{font-size:12px;color:var(--text3);letter-spacing:.3px}
 .login-body{padding:28px 32px 32px}
 .login-err{
