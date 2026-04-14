@@ -153,7 +153,7 @@ class WizardController:
     # ── Page management ──────────────────────────────────────────
     def add_page(self, page_cls):
         page = page_cls(self._content, self)
-        page.place(x=0, y=0, relwidth=1, relheight=1)
+        # Don't place yet — show_page() will place the active page
         self.pages.append(page)
 
     def show_page(self, idx):
