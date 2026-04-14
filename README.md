@@ -39,7 +39,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🏷 Alert tagging on sensor events — severity badge, profile name, and state shown inline; ACK / Resolve without leaving the Events tab; Events tab split into **Active** (unresolved, badge count) and **History** (resolved) inner tabs — SNMP traps without an alert rule go to History automatically
 - 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
 - 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
-- 🌐 Web-based dashboard with live latency sparklines and customizable widgets
+- 🌐 Web-based dashboard with live latency sparklines, customizable widgets, and multi-dashboard tabs — create named dashboards (e.g. "NOC", "Server Room") per user; tab bar with right-click rename/delete; new users get a pre-populated default layout
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
@@ -48,12 +48,12 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback with full interface context (`interface X / no … / end / wr`)
 - 🔗 Sensor host linking — sensors inherit the device IP by default; setting a host manually marks it as overridden; clearing the host re-links it to the device
 - 🔍 Per-device port scanner with configurable default ports (Settings → Sensors)
-- 🧙 Interactive first-run setup wizard (`windows\start.bat` / `bash linux/start.sh`)
+- 🧙 Interactive first-run setup wizard — GUI (tkinter, dark-themed) on Windows, CLI fallback on headless/SSH; handles packages, DB backend, ports, TLS, admin user
 - 🐧 Native Linux/macOS support — headless mode, systemd service, auto package-manager detection
 - 📨 Syslog forwarding — RFC 5424 UDP/TCP to any syslog server
 - 🔁 Server restart and shutdown from the web UI (Settings → General)
 - 🏢 LDAP / Active Directory authentication with encrypted bind credentials, group import, and auto-provisioning
-- 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration
+- 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration; sortable columns (click headers) and filter dropdowns for Status (Used/Free) and Licenses
 - 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (1 per 4 sensors, 64–512 range); manual override available in Settings → General
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
 - 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
@@ -112,7 +112,7 @@ windows\start.bat
 sudo bash linux/start.sh
 ```
 
-The first-run wizard checks packages, configures ports, generates a TLS certificate, sets firewall rules, and initialises the database. Subsequent launches skip the wizard. To re-run it:
+On Windows, `start.bat` launches via a Python-based launcher (`windows/launcher.pyw`) that handles admin elevation, first-run detection, and port cleanup — no console window. The first-run wizard (GUI on Windows, CLI on Linux) checks packages, configures ports, generates a TLS certificate, and initialises the database. Subsequent launches skip the wizard. To re-run it:
 
 ```bash
 windows\start.bat --setup        # Windows
@@ -286,7 +286,9 @@ Browser / Desktop GUI
 ```
 
 - **`server.py`** — HTTP(S) dispatcher, starts all background threads
-- **`setup_wizard.py`** — cross-platform first-run wizard (packages, ports, TLS, firewall)
+- **`gui_setup.py`** — tkinter GUI setup wizard (dark-themed, 6-step flow)
+- **`setup_wizard.py`** — cross-platform CLI setup wizard (fallback for headless/SSH)
+- **`core/setup_logic.py`** — shared setup logic (packages, ports, DB init) used by both wizards
 - **`monitoring/probes.py`** — all sensor probe types on per-sensor threads (VMware probes via `vmware/client.py`)
 - **`backup/engine.py`** — SSH/Telnet connections, TOFU host key verification, enable-mode escalation
 - **`core/auth.py`** — PBKDF2-SHA256 local auth + LDAP branch via `core/ldap_auth.py`
