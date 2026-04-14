@@ -17,6 +17,7 @@ from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
 from core.config import (_RE_USER, _RE_USER_PW, _RE_ME_PW,
                          _RE_ME_PROFILE, _RE_USER_PROFILE)
 from core.config import DB_PATH
+from core.logger import log
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
                          db_delete_user, db_set_password, db_get_user_auth_type,
                          db_update_profile, db_update_own_profile)
@@ -175,6 +176,7 @@ def handle(h, method, path, body):
             db_update_profile(username, '', '', group_id=_gid)
         db_log_audit(user, h.client_address[0], 'user_create', username,
                      f"role={new_role},auth_type={auth_type}")
+        log.debug(f"User created: {username!r} role={new_role!r} auth_type={auth_type!r}")
         h._json(200, {"ok": True})
         return True
 
@@ -222,6 +224,7 @@ def handle(h, method, path, body):
             _PW_RESET_LOG[username] = time.time()
         auth_revoke_user_sessions(username)
         db_log_audit(user, h.client_address[0], 'pass_reset', username)
+        log.debug(f"Password reset: {username!r} by {user!r}")
         h._json(200, {"ok": True})
         return True
 
@@ -263,6 +266,7 @@ def handle(h, method, path, body):
             for _old_ip in [k for k, v in _FAIL_LOG.items() if not v and k != ip]:
                 del _FAIL_LOG[_old_ip]
             if len(_FAIL_LOG[ip]) >= _fail_max:
+                log.warning(f"Login rate-limited: {ip} ({_fail_max} attempts in {_fail_window}s)")
                 h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})
                 return True
         username = body.get("username", "").strip()

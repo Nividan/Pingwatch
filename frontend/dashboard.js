@@ -9,6 +9,13 @@ function _fetchAvailability() {
   return _availFetchPromise;
 }
 
+// ── Widget content swap (skip if unchanged, instant write otherwise) ─
+function _dwSwap(body, html) {
+  if (!body) return;
+  if (body.innerHTML === html) return;
+  body.innerHTML = html;
+}
+
 // ── Dashboard widget system ───────────────────────────────────────
 // Widget registry — add entries here to support new widget types
 const _DW_REG = {
@@ -163,17 +170,28 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwNcmStatusRefresh(wid),
     refresh: (wid, _cfg) => _dwNcmStatusRefresh(wid),
   },
+  license_overview: {
+    label: 'License Overview',
+    icon:  '📋',
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
+    refresh: (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
+  },
 };
 
-// ── Persistence (server-side, per user) ───────────────────────────
-let _dwWidgets = null;   // in-memory cache; null = not yet loaded
+// ── Persistence (server-side, per user, multi-dashboard) ─────────
+let _dwDashboards = null;   // [{id, name, sort_order}] metadata
+let _dwActiveId   = null;   // currently displayed dashboard id
+let _dwWidgets    = null;   // widget array for active dashboard
 
 function _dwLoad() {
   return _dwWidgets || [];
 }
 function _dwSave(widgets) {
   _dwWidgets = widgets;
-  fetch('/api/dashboard', {
+  if (!_dwActiveId) return;
+  fetch(`/api/dashboards/${_dwActiveId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ widgets }),
@@ -183,17 +201,62 @@ async function _dwInit() {
   // Clear any stale localStorage data left from the old storage scheme
   try { localStorage.removeItem('pw-dashboard'); } catch {}
 
-  // Already initialized — DOM widgets exist; just refresh content + restart tick
-  // (avoids tearing down/rebuilding DOM and resetting live counters on every tab switch)
-  if (_dwWidgets !== null) {
+  // Already initialized — just refresh content + restart tick
+  if (_dwDashboards !== null && _dwWidgets !== null) {
     _dwLoad().forEach(w => { const r = _DW_REG[w.type]; if (r) r.refresh(w.id, w.cfg); });
     _dwStartTick();
     return;
   }
 
-  // First load — fetch layout from server
+  // Phase 1: fetch dashboard list
   try {
-    const r = await fetch('/api/dashboard');
+    const r = await fetch('/api/dashboards');
+    if (r.ok) {
+      const data = await r.json();
+      _dwDashboards = Array.isArray(data.dashboards) ? data.dashboards : [];
+    } else {
+      _dwDashboards = [];
+    }
+  } catch {
+    _dwDashboards = [];
+  }
+
+  _dwRenderTabBar();
+
+  // Phase 2: switch to last-active or first dashboard
+  const savedId = parseInt(_lsGet('pw-dw-active') || '0', 10);
+  const target = _dwDashboards.find(d => d.id === savedId) || _dwDashboards[0];
+  if (target) {
+    await _dwSwitchTo(target.id);
+  } else {
+    _dwWidgets = [];
+    _dwRenderAll();
+  }
+}
+
+// ── Tab bar ──────────────────────────────────────────────────────
+function _dwRenderTabBar() {
+  const bar = document.getElementById('dw-tab-bar');
+  if (!bar || !_dwDashboards) return;
+  bar.innerHTML = _dwDashboards.map(d =>
+    `<button class="dw-dash-tab${d.id === _dwActiveId ? ' active' : ''}"
+             data-id="${d.id}"
+             onclick="_dwSwitchTo(${d.id})"
+             oncontextmenu="_dwTabCtxMenu(event,${d.id})"
+             title="${esc(d.name)}">${esc(d.name)}</button>`
+  ).join('') +
+  '<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">＋</button>';
+}
+
+async function _dwSwitchTo(id) {
+  _dwActiveId = id;
+  _lsSet('pw-dw-active', id);
+
+  // Stop current tick while loading
+  if (_dwTickTimer) { clearInterval(_dwTickTimer); _dwTickTimer = null; }
+
+  try {
+    const r = await fetch(`/api/dashboards/${id}`);
     if (r.ok) {
       const data = await r.json();
       _dwWidgets = Array.isArray(data.widgets) ? data.widgets : [];
@@ -203,7 +266,160 @@ async function _dwInit() {
   } catch {
     _dwWidgets = [];
   }
+
+  _dwRenderTabBar();
   _dwRenderAll();
+}
+
+// ── Dashboard name modal (shared by create + rename) ─────────────
+function _dwOpenNameModal(title, value, btnLabel, onSubmit) {
+  closeM('dw-name-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'dw-name-modal';
+  _overlayClose(o, () => closeM('dw-name-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,360px)">
+      <div class="mhd">
+        <div class="mttl">${title}</div>
+        <button class="mclose" onclick="closeM('dw-name-modal')">✕</button>
+      </div>
+      <div class="mbdy" style="gap:12px">
+        <div class="fr">
+          <label class="fl">Dashboard Name</label>
+          <input type="text" id="dw-name-inp" value="${esc(value)}" maxlength="50"
+                 placeholder="e.g. NOC Overview" autocomplete="off"/>
+        </div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('dw-name-modal')">Cancel</button>
+        <button class="btn-p" id="dw-name-ok">${btnLabel}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  const inp = document.getElementById('dw-name-inp');
+  const btn = document.getElementById('dw-name-ok');
+  const submit = () => {
+    const v = inp.value.trim();
+    if (!v) { toast('Name is required', 'warn'); return; }
+    closeM('dw-name-modal');
+    onSubmit(v);
+  };
+  btn.addEventListener('click', submit);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  setTimeout(() => { inp.focus(); inp.select(); }, 50);
+}
+
+// ── Dashboard CRUD ───────────────────────────────────────────────
+function _dwCreateDashboard() {
+  _dwOpenNameModal('New Dashboard', '', 'Create', async (name) => {
+    try {
+      const r = await fetch('/api/dashboards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        _dwDashboards.push({ id: d.id, name: d.name, sort_order: _dwDashboards.length });
+        _dwRenderTabBar();
+        await _dwSwitchTo(d.id);
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast(err.error || 'Failed to create dashboard', 'err');
+      }
+    } catch { toast('Failed to create dashboard', 'err'); }
+  });
+}
+
+function _dwRenameDashboard(id) {
+  const dash = _dwDashboards.find(d => d.id === id);
+  if (!dash) return;
+  _dwOpenNameModal('Rename Dashboard', dash.name, 'Rename', async (name) => {
+    if (name === dash.name) return;
+    try {
+      const r = await fetch(`/api/dashboards/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (r.ok) {
+        dash.name = name;
+        _dwRenderTabBar();
+        toast('Dashboard renamed', 'ok');
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast(err.error || 'Failed to rename', 'err');
+      }
+    } catch { toast('Failed to rename', 'err'); }
+  });
+}
+
+function _dwDeleteDashboard(id) {
+  if (_dwDashboards.length <= 1) { toast('Cannot delete the last dashboard', 'warn'); return; }
+  const dash = _dwDashboards.find(d => d.id === id);
+  if (!dash) return;
+  closeM('dw-del-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'dw-del-modal';
+  _overlayClose(o, () => closeM('dw-del-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,380px)">
+      <div class="mhd">
+        <div class="mttl" style="color:var(--down)">Delete Dashboard</div>
+        <button class="mclose" onclick="closeM('dw-del-modal')">✕</button>
+      </div>
+      <div class="mbdy">
+        <p style="margin:0;font-size:13px;color:var(--text2)">
+          Delete <strong style="color:var(--text)">${esc(dash.name)}</strong>?<br/>
+          <span style="color:var(--text3);font-size:11px">All widgets on this dashboard will be removed.</span>
+        </p>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('dw-del-modal')">Cancel</button>
+        <button class="btn-p" style="background:var(--down)" id="dw-del-ok">Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  document.getElementById('dw-del-ok').addEventListener('click', async () => {
+    closeM('dw-del-modal');
+    try {
+      const r = await fetch(`/api/dashboards/${id}`, { method: 'DELETE' });
+      if (r.ok) {
+        _dwDashboards = _dwDashboards.filter(d => d.id !== id);
+        _dwRenderTabBar();
+        if (_dwActiveId === id) {
+          const next = _dwDashboards[0];
+          if (next) await _dwSwitchTo(next.id);
+        }
+        toast('Dashboard deleted', 'ok');
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast(err.error || 'Failed to delete', 'err');
+      }
+    } catch { toast('Failed to delete', 'err'); }
+  });
+}
+
+// ── Tab context menu (right-click) ──────────────────────────────
+function _dwTabCtxMenu(e, id) {
+  e.preventDefault();
+  document.getElementById('dw-tab-ctx')?.remove();
+  const dash = _dwDashboards.find(d => d.id === id);
+  if (!dash) return;
+  const isLast = _dwDashboards.length <= 1;
+  const menu = document.createElement('div');
+  menu.id = 'dw-tab-ctx';
+  menu.className = 'dw-tab-ctx';
+  menu.style.left = e.pageX + 'px';
+  menu.style.top  = e.pageY + 'px';
+  menu.innerHTML =
+    `<div class="dw-ctx-item" onclick="_dwRenameDashboard(${id})">✎ Rename</div>` +
+    `<div class="dw-ctx-item dw-ctx-danger${isLast ? ' disabled' : ''}"
+          onclick="${isLast ? '' : `_dwDeleteDashboard(${id})`}">✕ Delete</div>`;
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', function _rm() {
+    menu.remove(); document.removeEventListener('click', _rm);
+  }), 0);
 }
 
 // ── Dashboard-wide tick (15 s) ────────────────────────────────────
@@ -675,14 +891,23 @@ function _dwRefreshDeviceStatus(wid) {
       <span class="dw-ds-st ${st}">${st}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `
+  _dwSwap(body, `
     <div class="dw-ds-pills">
       <span class="dw-ds-pill up">${cnt.up} Up</span>
       <span class="dw-ds-pill down">${cnt.down} Down</span>
       <span class="dw-ds-pill warn">${cnt.warn} Warning</span>
       ${cnt.idle ? `<span class="dw-ds-pill idle">${cnt.idle} Idle</span>` : ''}
     </div>
-    <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`;
+    <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`);
+}
+
+// ── Reset dashboard state (called on re-authentication) ──────────
+function _dwReset() {
+  _dwDataArrived = false;
+  _dwDashboards = null;
+  _dwActiveId   = null;
+  _dwWidgets    = null;
+  if (_dwTickTimer) { clearInterval(_dwTickTimer); _dwTickTimer = null; }
 }
 
 // ── Loading shimmer clear (called when first real data arrives) ───
@@ -848,14 +1073,14 @@ function _dwRefreshGauge(wid, cfg) {
   const unit = s.stype === 'tls' ? 'd' : 'ms';
   const color = st === 'up' ? 'var(--up)' : st === 'down' ? 'var(--down)' : st === 'warning' ? 'var(--warn)' : 'var(--text3)';
   const typeIco = {ping:'◉',tcp:'⇌',http:'◈',snmp:'◎',dns:'⬡',tls:'🔒',http_keyword:'K',banner:'B'}[s.stype] || '·';
-  body.innerHTML = `
+  _dwSwap(body, `
     <div class="dw-gauge-wrap">
       <div class="dw-gauge-ring" style="--gc:${color}">
         <div class="dw-gauge-val" style="color:${color}">${val}<span class="dw-gauge-unit">${unit}</span></div>
       </div>
       <div class="dw-gauge-name">${esc(s.name)}</div>
       <div class="dw-gauge-st" style="color:${color}">${typeIco} ${st.toUpperCase()}</div>
-    </div>`;
+    </div>`);
 }
 
 // ── Widget: Recent Flap Events ────────────────────────────────────
@@ -889,7 +1114,7 @@ function _dwRefreshFlapEvents(wid, cfg) {
       <span class="dw-fe-name">${esc(name)}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-fe-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-fe-list">${rows}</div>`);
 }
 
 // ── Widget: System Status ─────────────────────────────────────────
@@ -996,7 +1221,7 @@ function _dwRefreshDownDevices(wid) {
       <span class="dw-ds-st ${st}">${st}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-dd-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-dd-list">${rows}</div>`);
 }
 
 // ── Widget: Slowest Ping Devices ──────────────────────────────────
@@ -1033,7 +1258,7 @@ function _dwRefreshTopLatency(wid, cfg) {
       <span class="dw-tl-val" style="color:${color}">${ms}ms</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-tl-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-tl-list">${rows}</div>`);
 }
 
 // ── Widget: Event Summary ─────────────────────────────────────────
@@ -1089,7 +1314,7 @@ async function _dwRefreshEventCount(wid) {
       return `<span class="dw-ec-cell">${n}</span>`;
     }).join('')}
   </div>`;
-  body.innerHTML = `<div class="dw-ec-table">${headerRow}${dataRows}${totalRow}</div>`;
+  _dwSwap(body, `<div class="dw-ec-table">${headerRow}${dataRows}${totalRow}</div>`);
 }
 
 // ── Widget: Packet Loss ───────────────────────────────────────────
@@ -1117,7 +1342,7 @@ function _dwRefreshPacketLoss(wid, cfg) {
       <span class="dw-tl-val" style="color:${color}">${s.loss_pct}%</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-tl-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-tl-list">${rows}</div>`);
 }
 
 // ── Widget: SLA Report ────────────────────────────────────────────
@@ -1162,14 +1387,14 @@ async function _dwFetchSLA(wid, cfg) {
   const dtSec = Math.round(totalFail / totalAll * mins * 60);
   const dtH   = Math.floor(dtSec / 3600);
   const dtM   = String(Math.floor((dtSec % 3600) / 60)).padStart(2, '0');
-  wrap.innerHTML = `
+  _dwSwap(wrap, `
     <div class="dw-sla-pct" style="color:${slaColor}">${slaFixed}<span class="dw-sla-sym">%</span></div>
     <div class="dw-sla-tier" style="color:${slaColor}">${slaLabel}</div>
     <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" style="width:${Math.min(100,slaPct).toFixed(2)}%;background:${slaColor}"></div></div>
     <div class="dw-sla-stats">
       <span><span class="dw-sla-key">Downtime</span>${dtH}h ${dtM}m</span>
       <span><span class="dw-sla-key">Samples</span>${totalAll}</span>
-    </div>`;
+    </div>`);
 }
 
 // ── Widget: Flapping Devices ──────────────────────────────────────
@@ -1216,7 +1441,7 @@ function _dwRefreshFlapDetect(wid, cfg) {
       </div>
       <span class="dw-fd-cnt">${d.count}</span>
     </div>`).join('');
-  body.innerHTML = `<div class="dw-fd-list">${rows}</div>`;
+  _dwSwap(body, `<div class="dw-fd-list">${rows}</div>`);
 }
 
 // ── Widget: Internet Health ───────────────────────────────────────
@@ -1236,6 +1461,10 @@ function _dwIsPrivate(host) {
 function _dwRefreshInternetHealth(wid) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
+  // Throttle: SSE fires this on every sensor update; health status changes rarely.
+  const _now = Date.now();
+  if (_now - (body._ihLastRefresh || 0) < 5000) return;
+  body._ihLastRefresh = _now;
   const external = Object.values(S.sensors).filter(s => {
     let target = s.host;
     if (s.stype === 'http' && s.url) { try { target = new URL(s.url).hostname; } catch {} }
@@ -1266,7 +1495,7 @@ function _dwRefreshInternetHealth(wid) {
       <span class="dw-ih-fail-host">${esc(target || '')}</span>
     </div>`;
   }).join('');
-  body.innerHTML = `<div class="dw-ih-wrap">
+  _dwSwap(body, `<div class="dw-ih-wrap">
     <div class="dw-ih-badge ${badgeCls}">${badgeTxt}</div>
     <div class="dw-ih-counts">
       <span style="color:var(--up)">${up} up</span> ·
@@ -1275,7 +1504,7 @@ function _dwRefreshInternetHealth(wid) {
       <span style="color:var(--text3);font-size:10px"> / ${total} external</span>
     </div>
     ${failed.length ? `<div class="dw-ih-fail-list">${failRows}</div>` : ''}
-  </div>`;
+  </div>`);
 }
 
 // ── Widget: Server Performance ───────────────────────────────────
@@ -1318,18 +1547,19 @@ async function _dwFetchServerPerf(wid) {
   };
   const ramDetail  = `${_fmtBytes(d.ram_used)} / ${_fmtBytes(d.ram_total)}`;
   const diskDetail = `${_fmtBytes(d.disk_used)} / ${_fmtBytes(d.disk_total)}`;
-  body.innerHTML = `<div class="dw-sp-list">
+  _dwSwap(body, `<div class="dw-sp-list">
     ${_gauge(d.cpu_pct,  'CPU',  `${d.cpu_pct}%`)}
     ${_gauge(d.ram_pct,  'RAM',  ramDetail)}
     ${_gauge(d.disk_pct, 'Disk', diskDetail)}
-  </div>`;
+  </div>`);
 }
 
 // ── NCM Backup Status Widget ─────────────────────────────────────
 async function _dwNcmStatusRefresh(wid) {
   const el = document.getElementById(`dw-body-${wid}`);
   if (!el) return;
-  el.innerHTML = '<div class="dw-loading">Loading…</div>';
+  // Don't show "Loading…" on refresh — only on first render
+  if (!el.children.length) el.innerHTML = '<div class="dw-loading">Loading…</div>';
   try {
     const r = await api('GET', '/api/backups');
     const devs = (r.devices || []).filter(d => !d.orphaned);
@@ -1338,7 +1568,7 @@ async function _dwNcmStatusRefresh(wid) {
     const ok      = devs.filter(d => d.last_success === true).length;
     const failed  = devs.filter(d => d.run_count > 0 && d.last_success === false).length;
     const never   = devs.filter(d => d.run_count === 0 && d.enabled).length;
-    el.innerHTML = `
+    _dwSwap(el, `
       <div class="dw-ncm-grid">
         <div class="dw-ncm-kpi dw-ncm-ok">
           <span class="dw-ncm-n">${ok}</span>
@@ -1356,8 +1586,72 @@ async function _dwNcmStatusRefresh(wid) {
           <span class="dw-ncm-n">${enabled}/${total}</span>
           <span class="dw-ncm-l">Enabled</span>
         </div>
-      </div>`;
+      </div>`);
   } catch {
     el.innerHTML = '<div class="dw-err">Failed to load backup status</div>';
+  }
+}
+
+// ── License Overview Widget ──────────────────────────────────────
+async function _dwLicenseOverviewRefresh(wid) {
+  const el = document.getElementById(`dw-body-${wid}`);
+  if (!el) return;
+  if (!el.children.length) el.innerHTML = '<div class="dw-loading">Loading…</div>';
+  try {
+    const [sumR, licR] = await Promise.all([
+      fetch('/api/licenses/summary'),
+      fetch('/api/licenses'),
+    ]);
+    if (!sumR.ok || !licR.ok) throw new Error();
+    const sum = await sumR.json();
+    const { licenses } = await licR.json();
+    const expiring = (licenses || []).filter(l => l.last_status === 'warn' || l.last_status === 'crit');
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const rows = expiring.map(l => {
+      const devName = S.devices[l.did]?.name || l.did;
+      const exp = new Date(l.expiry_date + 'T00:00:00');
+      const daysLeft = Math.round((exp - today) / 86400000);
+      const badge = l.last_status === 'crit'
+        ? '<span class="ipam-lic-crit">Expired</span>'
+        : '<span class="ipam-lic-warn">Expiring</span>';
+      const daysStr = daysLeft < 0
+        ? `${Math.abs(daysLeft)}d ago`
+        : `${daysLeft}d left`;
+      return `<tr>
+        <td style="color:var(--text)">${esc(devName)}</td>
+        <td>${esc(l.license_name)}</td>
+        <td style="font-family:'Courier New',monospace;font-size:10px">${esc(l.expiry_date)}</td>
+        <td style="text-align:right;color:var(--text2);font-size:10px;padding-right:6px">${daysStr}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('');
+    _dwSwap(el, `
+      <div class="dw-ncm-grid">
+        <div class="dw-ncm-kpi" style="border-color:rgba(248,81,73,.3)">
+          <span class="dw-ncm-n" style="color:#f85149">${sum.crit || 0}</span>
+          <span class="dw-ncm-l">Expired</span>
+        </div>
+        <div class="dw-ncm-kpi" style="border-color:rgba(240,165,0,.3)">
+          <span class="dw-ncm-n" style="color:#e3b341">${sum.warn || 0}</span>
+          <span class="dw-ncm-l">Expiring</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-ok">
+          <span class="dw-ncm-n">${sum.ok || 0}</span>
+          <span class="dw-ncm-l">Valid</span>
+        </div>
+        <div class="dw-ncm-kpi dw-ncm-total">
+          <span class="dw-ncm-n">${sum.total || 0}</span>
+          <span class="dw-ncm-l">Total</span>
+        </div>
+      </div>
+      ${expiring.length ? `<table class="dw-lic-tbl">
+        <thead><tr>
+          <th>Device</th><th>License</th><th>Expires</th><th>Days</th><th>Status</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : '<div class="dw-dd-ok" style="margin-top:8px">✓ No expiring licenses</div>'}
+    `);
+  } catch {
+    el.innerHTML = '<div class="dw-err">Failed to load license data</div>';
   }
 }

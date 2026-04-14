@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs
 
 import core.app_state as app_state
 from core.config import (
-    _RE_DEVICE, _RE_DEVICE_ACTION, _RE_DEVICE_LOGS,
+    _RE_DEVICE, _RE_DEVICE_ACTION, _RE_DEVICE_LOGS, _RE_DEVICE_SIP,
     _RE_SENSOR, _RE_SENSOR_ACTION, _RE_SENSOR_ITEM,
     _RE_SENSOR_HISTORY, _RE_SENSOR_SUMMARY, _RE_DEVICE_SCAN,
     _RE_SENSOR_LOGS, _RE_AVAILABILITY,
@@ -323,6 +323,24 @@ def handle(h, method, path, body):
                 for _s in dev.sensors.values():
                     if not _s.host_override:
                         _s.host = h2
+            if "secondary_ips" in body:
+                sips = body["secondary_ips"]
+                if not isinstance(sips, list):
+                    h._json(400, {"error": "secondary_ips must be a list"}); return True
+                if len(sips) > 50:
+                    h._json(400, {"error": "too many secondary IPs (max 50)"}); return True
+                cleaned = []
+                for _sip in sips:
+                    _sip = str(_sip).strip().lower()
+                    if not _sip or len(_sip) > 253:
+                        continue
+                    if not h._valid_host(_sip):
+                        h._json(400, {"error": f"invalid secondary IP: {_sip}"}); return True
+                    if _sip == dev.host.lower():
+                        continue  # skip — same as primary host
+                    if _sip not in cleaned:
+                        cleaned.append(_sip)
+                dev.secondary_ips = cleaned
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name
@@ -333,6 +351,36 @@ def handle(h, method, path, body):
         if "alerts_muted" in body:
             STATE._broadcast("device_status", {"did": did, "status": dev.status})
         h._json(200, {"status": "updated"})
+        return True
+
+    # ── /api/device/{did}/secondary-ip POST ────────────────────────
+    m_sip = _RE_DEVICE_SIP.match(path)
+    if m_sip and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        did = m_sip.group(1)
+        ip = str(body.get("ip", "")).strip().lower()
+        if not ip or len(ip) > 253:
+            h._json(400, {"error": "ip is required"}); return True
+        if not h._valid_host(ip):
+            h._json(400, {"error": "invalid IP address"}); return True
+        with STATE._lock:
+            dev = STATE.devices.get(did)
+            if not dev:
+                h._json(404, {"error": "device not found"}); return True
+            if ip == dev.host.lower():
+                h._json(400, {"error": "IP is already the primary host"}); return True
+            sips = list(getattr(dev, "secondary_ips", []) or [])
+            if ip in sips:
+                h._json(200, {"status": "already_present", "secondary_ips": sips}); return True
+            if len(sips) >= 50:
+                h._json(400, {"error": "too many secondary IPs (max 50)"}); return True
+            sips.append(ip)
+            dev.secondary_ips = sips
+            _dev_name = dev.name
+        _db_enqueue(lambda: db_save(STATE))
+        db_log_audit(user, h.client_address[0], 'device_edit', _dev_name)
+        h._json(200, {"status": "added", "secondary_ips": sips})
         return True
 
     # ── /api/devices/{did} DELETE ─────────────────────────────────

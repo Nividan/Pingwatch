@@ -57,7 +57,7 @@ _STATIC_TYPES = {
 # ── JS files inlined into index.html ─────────────────────────────
 _JS_FILES = [
     "bg.js", "devices.js", "sensors.js",
-    "forms-utils.js", "forms-device.js", "forms-sensor.js",
+    "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
     "forms-discovery.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "alerting.js", "app.js",
@@ -189,6 +189,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
@@ -225,7 +226,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_OPTIONS(self): self._cors()
 
-    _MAX_BODY = 1_048_576  # 1 MB
+    _MAX_BODY = 4_194_304  # 4 MB (accommodates up to 2 MB logo as base64)
 
     def _body(self):
         try:
@@ -320,8 +321,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -350,8 +351,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, alert_rules as _alert_rules_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_rules_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod):
+        from routes import ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -359,12 +360,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_rules_mod, _maint_mod, _groups_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -395,8 +396,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_rules as _alert_rules_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_rules_mod, _maint_mod, _groups_mod, _disc_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -451,10 +452,6 @@ def _start_http_redirect(http_port: int, https_port: int):
 # ── Entry point ───────────────────────────────────────────────────
 
 def main():
-    if SYS in ("Linux", "Darwin") and os.geteuid() != 0:
-        log.warning("ICMP ping may need root on this OS.")
-        log.warning("If pings fail: sudo python3 server.py")
-
     # ── Startup: validate ICMP capability ────────────────────────────
     if SYS in ("Linux", "Darwin"):
         import socket as _socket
@@ -464,7 +461,8 @@ def main():
         except PermissionError:
             log.warning(
                 "ICMP raw socket unavailable — ping sensors will fail. "
-                "Fix: sudo setcap cap_net_raw+ep $(which python3)"
+                "Fix: run as root, or grant CAP_NET_RAW, or: "
+                "sudo setcap cap_net_raw+ep $(which python3)"
             )
 
     # ── Apply pending DB imports ──────────────────────────────────────
@@ -517,7 +515,7 @@ def main():
         if not _ok:
             log.error(f"PostgreSQL connection failed: {_err}")
             log.error("Refusing to start — fix PostgreSQL configuration and restart.")
-            return
+            sys.exit(1)
         pg_init_pool()
         log.info(f"PostgreSQL pool ready: {_cfg['pg_host']}:{_cfg['pg_port']}/{_cfg['pg_database']}")
 
@@ -553,6 +551,11 @@ def main():
     except Exception as _e:
         log.error(f"migrate_topo_from_file failed: {_e}", exc_info=True)
     db_seed_users()
+    try:
+        from db.core import db_seed_alert_profiles
+        db_seed_alert_profiles()
+    except Exception as _e:
+        log.error(f"db_seed_alert_profiles failed: {_e}")
     try:
         from snmp.seeds.loader import load_all_seeds
         load_all_seeds()
@@ -679,6 +682,7 @@ def main():
     # ── Load state & start background threads ──────────────────────
     _t0 = time.time()
     db_load(STATE)
+    app_state.ready = True
     log.info(f"State loaded in {time.time()-_t0:.2f}s — {len(STATE.devices)} device(s)")
     threading.Thread(target=autosave_loop, args=(STATE,), daemon=True).start()
     from snmp.receiver import trap_receiver_loop
@@ -690,10 +694,10 @@ def main():
     log.info(f"SNMP trap receiver started on port {app_state.effective_snmp_port}")
     from backup.scheduler import start_scheduler
     start_scheduler()
-    from monitoring.alert_engine import alert_engine_start
-    alert_engine_start()
     from monitoring.syslog_client import _attach_app_log_handlers
     _attach_app_log_handlers()
+    from core.ldap_auth import ldap_sync_loop
+    threading.Thread(target=ldap_sync_loop, daemon=True, name="ldap-sync").start()
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"

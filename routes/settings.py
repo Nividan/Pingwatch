@@ -14,9 +14,28 @@ import time
 
 import core.app_state as app_state
 from core.config import DB_PATH, LOGS_DB_PATH, BIND, PORT, _RE_DB_STATS
-from db          import _db_enqueue, db_log_audit, db_save_settings, db_get_dashboard, db_save_dashboard
+import re
+from db          import (_db_enqueue, db_log_audit, db_save_settings,
+                         db_list_dashboards, db_get_dashboard,
+                         db_create_dashboard, db_rename_dashboard,
+                         db_delete_dashboard, db_save_dashboard,
+                         db_reorder_dashboards)
 from core.logger import log
 import core.settings as _settings
+
+_RE_DASH = re.compile(r'^/api/dashboards/(\d+)$')
+
+# Default widgets for new users (zero-config, work out of the box)
+_DEFAULT_WIDGETS = [
+    {"id": "_d1", "type": "system_status",   "title": "System Status",                      "cols": 1, "cfg": {}},
+    {"id": "_d2", "type": "server_perf",     "title": "Server Performance",                 "cols": 1, "cfg": {}},
+    {"id": "_d3", "type": "event_count",     "title": "Event Summary",                      "cols": 1, "cfg": {}},
+    {"id": "_d4", "type": "internet_health", "title": "Internet Health",                    "cols": 1, "cfg": {}},
+    {"id": "_d5", "type": "network_avail",   "title": "Network Availability History (24h)", "cols": 1, "cfg": {}},
+    {"id": "_d6", "type": "device_status",   "title": "Device Status",                      "cols": 1, "cfg": {}},
+    {"id": "_d7", "type": "down_devices",    "title": "Down & Warning Devices",             "cols": 1, "cfg": {}},
+    {"id": "_d8", "type": "packet_loss",     "title": "Packet Loss",                        "cols": 1, "cfg": {"limit": 10, "threshold": 1}},
+]
 
 # Prime psutil CPU counter so first real call returns a meaningful value
 try:
@@ -82,7 +101,9 @@ def handle(h, method, path, body):
             "smtp_from":       _settings.get("smtp_from", ""),
             "smtp_to":         _settings.get("smtp_to",   ""),
             "smtp_pass_set":   bool(_settings.get("smtp_pass", "")),
-            "smtp_down_delay": int(_settings.get("smtp_down_delay", 10)),
+            "email_logo":      int(_settings.get("email_logo", 1) or 1),
+            "email_logo_data": _settings.get("email_logo_data", ""),
+            "email_company_name": _settings.get("email_company_name", ""),
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
             "snr_timeout":       int(_settings.get("snr_timeout",       4)),
@@ -250,8 +271,15 @@ def handle(h, method, path, body):
                 _val = str(body[_k]).strip()
                 _settings.load({_k: _val})
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
+        # Server-side logo size guard (2 MB base64 ≈ 2.8 MB string)
+        if "email_logo_data" in body:
+            _logo_val = str(body["email_logo_data"]).strip()
+            if _logo_val and _logo_val != "__remove__" and len(_logo_val) > 2_800_000:
+                h._json(400, {"error": "Logo image too large"})
+                return True
         for _k in (
-            "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to", "smtp_down_delay",
+            "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
+            "email_logo", "email_logo_data", "email_company_name",
             "snr_interval", "snr_timeout",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window",
@@ -402,29 +430,104 @@ def handle(h, method, path, body):
             h._json(500, {"error": "Failed to collect system stats — check server logs"})
         return True
 
-    # ── /api/dashboard GET ────────────────────────────────────────
-    if path == "/api/dashboard" and method == "GET":
+    # ── /api/dashboards  (multi-dashboard CRUD) ────────────────────
+
+    # LIST all dashboards for the user
+    if path == "/api/dashboards" and method == "GET":
         user, _ = h._require("viewer")
         if not user: return True
-        raw = db_get_dashboard(user)
-        try:
-            widgets = json.loads(raw)
-        except Exception:
-            widgets = []
-        h._json(200, {"widgets": widgets})
+        dashboards = db_list_dashboards(user)
+        if not dashboards:
+            # Auto-create "Default" dashboard with starter widgets
+            result = db_create_dashboard(user, "Default",
+                                         json.dumps(_DEFAULT_WIDGETS))
+            dashboards = [result] if result else []
+        h._json(200, {"dashboards": dashboards})
         return True
 
-    # ── /api/dashboard PUT ────────────────────────────────────────
-    if path == "/api/dashboard" and method == "PUT":
+    # CREATE a new dashboard
+    if path == "/api/dashboards" and method == "POST":
         user, _ = h._require("viewer")
         if not user: return True
-        widgets = body.get("widgets")
-        if not isinstance(widgets, list):
-            h._json(400, {"error": "widgets must be an array"}); return True
-        widgets_json = json.dumps(widgets)
-        _db_enqueue(lambda _u=user, _j=widgets_json: db_save_dashboard(_u, _j))
+        name = str(body.get("name", "")).strip()[:50]
+        if not name:
+            h._json(400, {"error": "Name is required"}); return True
+        result = db_create_dashboard(user, name)
+        if not result:
+            h._json(400, {"error": "Dashboard limit reached (10)"}); return True
+        h._json(201, result)
+        return True
+
+    # REORDER tabs
+    if path == "/api/dashboards/reorder" and method == "PUT":
+        user, _ = h._require("viewer")
+        if not user: return True
+        ids = body.get("ids")
+        if not isinstance(ids, list):
+            h._json(400, {"error": "ids must be an array"}); return True
+        _db_enqueue(lambda _u=user, _ids=list(ids):
+                    db_reorder_dashboards(_u, _ids))
         h._json(200, {"ok": True})
         return True
+
+    # Per-dashboard operations: GET / PUT / PATCH / DELETE
+    _m = _RE_DASH.match(path)
+    if _m:
+        did = int(_m.group(1))
+
+        # GET widgets for a specific dashboard
+        if method == "GET":
+            user, _ = h._require("viewer")
+            if not user: return True
+            dash = db_get_dashboard(user, did)
+            if not dash:
+                h._json(404, {"error": "Dashboard not found"}); return True
+            try:
+                widgets = json.loads(dash["widgets"])
+            except Exception:
+                widgets = []
+            h._json(200, {"id": dash["id"], "name": dash["name"],
+                          "widgets": widgets})
+            return True
+
+        # PUT — save widgets
+        if method == "PUT":
+            user, _ = h._require("viewer")
+            if not user: return True
+            widgets = body.get("widgets")
+            if not isinstance(widgets, list):
+                h._json(400, {"error": "widgets must be an array"}); return True
+            wj = json.dumps(widgets)
+            _db_enqueue(lambda _u=user, _d=did, _j=wj:
+                        db_save_dashboard(_u, _d, _j))
+            h._json(200, {"ok": True})
+            return True
+
+        # PATCH — rename
+        if method == "PATCH":
+            user, _ = h._require("viewer")
+            if not user: return True
+            name = str(body.get("name", "")).strip()[:50]
+            if not name:
+                h._json(400, {"error": "Name is required"}); return True
+            ok = db_rename_dashboard(user, did, name)
+            if not ok:
+                h._json(400, {"error": "Rename failed (duplicate name?)"}); return True
+            h._json(200, {"ok": True})
+            return True
+
+        # DELETE
+        if method == "DELETE":
+            user, _ = h._require("viewer")
+            if not user: return True
+            dashboards = db_list_dashboards(user)
+            if len(dashboards) <= 1:
+                h._json(400, {"error": "Cannot delete the last dashboard"}); return True
+            ok = db_delete_dashboard(user, did)
+            if not ok:
+                h._json(404, {"error": "Dashboard not found"}); return True
+            h._json(200, {"ok": True})
+            return True
 
     # ── /api/server/restart POST ──────────────────────────────────
     if path == "/api/server/restart" and method == "POST":

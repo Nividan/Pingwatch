@@ -2,6 +2,7 @@
 db/persistence.py — Device/sensor save, load, and autosave loop.
 """
 
+import json
 import sqlite3
 import time
 
@@ -27,7 +28,8 @@ def _pg_save(state):
              getattr(dev, "snmp_community_default", ""),
              getattr(dev, "snmp_version_default", ""),
              getattr(dev, "vmware_user_default", ""),
-             getattr(dev, "vmware_password_default", ""))
+             getattr(dev, "vmware_password_default", ""),
+             json.dumps(getattr(dev, "secondary_ips", []) or []))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -66,7 +68,8 @@ def _pg_save(state):
                 psycopg2.extras.execute_values(
                     cur,
                     "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
-                    "snmp_community_default,snmp_version_default,vmware_user_default,vmware_password_default) "
+                    "snmp_community_default,snmp_version_default,vmware_user_default,"
+                    "vmware_password_default,secondary_ips) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
@@ -75,7 +78,8 @@ def _pg_save(state):
                     "snmp_community_default=EXCLUDED.snmp_community_default, "
                     "snmp_version_default=EXCLUDED.snmp_version_default, "
                     "vmware_user_default=EXCLUDED.vmware_user_default, "
-                    "vmware_password_default=EXCLUDED.vmware_password_default",
+                    "vmware_password_default=EXCLUDED.vmware_password_default, "
+                    "secondary_ips=EXCLUDED.secondary_ips",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -133,6 +137,11 @@ def _pg_save(state):
 
 def db_save(state):
     """Upsert all devices and sensors; remove deleted rows."""
+    with state._lock:
+        _nd = len(state.devices)
+        _ns = sum(len(d.sensors) for d in state.devices.values())
+    log.debug(f"DB save: {_nd} devices, {_ns} sensors")
+
     if is_pg():
         _pg_save(state)
         return
@@ -147,7 +156,8 @@ def db_save(state):
              getattr(dev, "snmp_community_default", ""),
              getattr(dev, "snmp_version_default", ""),
              getattr(dev, "vmware_user_default", ""),
-             getattr(dev, "vmware_password_default", ""))
+             getattr(dev, "vmware_password_default", ""),
+             json.dumps(getattr(dev, "secondary_ips", []) or []))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -182,7 +192,7 @@ def db_save(state):
     try:
         con = sqlite3.connect(DB_PATH, timeout=15)
         cur = con.cursor()
-        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -231,7 +241,8 @@ def _pg_load(state):
                 "COALESCE(snmp_community_default,'') AS snmp_community_default,"
                 "COALESCE(snmp_version_default,'') AS snmp_version_default,"
                 "COALESCE(vmware_user_default,'') AS vmware_user_default,"
-                "COALESCE(vmware_password_default,'') AS vmware_password_default "
+                "COALESCE(vmware_password_default,'') AS vmware_password_default,"
+                "COALESCE(secondary_ips,'[]') AS secondary_ips "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -276,6 +287,10 @@ def _pg_load(state):
         dev.snmp_version_default    = row[8] or ""
         dev.vmware_user_default     = row[9] or ""
         dev.vmware_password_default = row[10] or ""
+        try:
+            dev.secondary_ips = json.loads(row[11] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            dev.secondary_ips = []
         state.devices[did] = dev
 
     for row in srows:
@@ -377,7 +392,10 @@ def db_load(state):
     try:
         con = sqlite3.connect(DB_PATH, timeout=15)
         devs = con.execute(
-            "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted FROM devices"
+            "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
+            "COALESCE(snmp_community_default,''),COALESCE(snmp_version_default,''),"
+            "COALESCE(vmware_user_default,''),COALESCE(vmware_password_default,''),"
+            "COALESCE(secondary_ips,'[]') FROM devices"
         ).fetchall()
         srows = con.execute(
             "SELECT did,sid,name,stype,host,port,url,interval,timeout,"
@@ -404,7 +422,8 @@ def db_load(state):
 
     max_did = 0
     for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
-         snmp_community_default, snmp_version_default, vmware_user_default, vmware_password_default) in devs:
+         snmp_community_default, snmp_version_default, vmware_user_default,
+         vmware_password_default, secondary_ips_json) in devs:
         dev = Device(did, name, host, grp)
         try:
             n = int(did.replace("d", ""))
@@ -418,6 +437,10 @@ def db_load(state):
         dev.snmp_version_default    = snmp_version_default or ""
         dev.vmware_user_default     = vmware_user_default or ""
         dev.vmware_password_default = vmware_password_default or ""
+        try:
+            dev.secondary_ips = json.loads(secondary_ips_json or "[]")
+        except (json.JSONDecodeError, TypeError):
+            dev.secondary_ips = []
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,
@@ -530,6 +553,13 @@ def autosave_loop(state):
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
             _logs_enqueue(db_clean_samples)
+        if _iter % 360 == 0:   # every ~6 hours — check license expirations
+            try:
+                from monitoring.license_checker import check_license_expirations
+                check_license_expirations()
+            except Exception as _le:
+                from core.logger import log as _llog
+                _llog.warning(f"License check error: {_le}")
         if _iter % 1440 == 0:  # every ~24 hours — maintain PG partitions
             if is_pg():
                 try:

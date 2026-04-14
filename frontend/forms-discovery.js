@@ -13,11 +13,13 @@ const _disc = {
   rows:   [],              // results table data (mutable)
   selected: new Set(),     // ips selected for adding
   customNames: {},         // ip -> overridden name
+  customGroups: {},        // ip -> group override (undefined = follow default _disc.group)
   sensorChecks: {},        // ip -> { key: bool }   key = `${stype}|${port||''}`
   sensorArgs: {},          // ip -> { key: { url, snmp_community, ... } }
   filter: '',
   sortKey: 'ip',
   showDups: 'all',         // 'all' | 'only' | 'hide'
+  group: 'Discovered',     // persisted across step 3→4 navigation
 };
 
 function openDiscoverSubnet(){
@@ -28,10 +30,12 @@ function openDiscoverSubnet(){
   _disc.rows   = [];
   _disc.selected.clear();
   _disc.customNames = {};
+  _disc.customGroups = {};
   _disc.sensorChecks = {};
   _disc.sensorArgs = {};
   _disc.filter = '';
   _disc.showDups = 'all';
+  _disc.group = 'Discovered';
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'mdisc';
@@ -343,7 +347,7 @@ function _discRenderResults(){
   bdy.innerHTML = `
     <div class="disc-result-toolbar">
       <div>
-        <b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found
+        <span id="disc-count"><b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found</span>
         ${dupCount ? `<span class="disc-dup-chip">⚠ ${dupCount} possible duplicate${dupCount===1?'':'s'}</span>` : ''}
       </div>
       <div class="disc-toolbar-right">
@@ -369,27 +373,33 @@ function _discRenderResults(){
           <th style="width:32px"></th>
           <th class="disc-th-sortable" onclick="_discSetSort('ip')">IP</th>
           <th class="disc-th-sortable" onclick="_discSetSort('hostname')">Hostname</th>
+          <th>Group</th>
           <th>MAC / Vendor</th>
           <th class="disc-th-sortable" onclick="_discSetSort('ports')">${isPing?'':'Ports'}</th>
-          <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Guess'}</th>
+          <th class="disc-th-sortable" onclick="_discSetSort('guess')">${isPing?'':'Type'}</th>
           <th>Latency</th>
+          <th></th>
         </tr></thead>
         <tbody id="disc-tbody">
           ${rows.map(r=>_discRowHtml(r,isPing)).join('')}
         </tbody>
       </table>
     </div>
+    <datalist id="disc-groups-dl">${
+      [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
+      .map(g=>`<option value="${esc(g)}"></option>`).join('')
+    }</datalist>
     <div class="disc-foot-opts">
       <div class="fr" style="margin:0">
-        <label class="fl">Group</label>
+        <label class="fl">Group <span style="font-size:10px;color:var(--text3);font-weight:normal">(default for all)</span></label>
         <div style="position:relative">
-          <input type="text" id="disc-group" value="Discovered" placeholder="Discovered" autocomplete="off"
+          <input type="text" id="disc-group" value="${esc(_disc.group)}" placeholder="Discovered" autocomplete="off"
                  style="padding-right:28px"
-                 onfocus="_dgShow()" oninput="_dgFilter(this.value)"/>
+                 onfocus="_dgShow()" oninput="_dgFilter(this.value);_discSetDefaultGroup(this.value)"/>
           <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_dgToggle()">▾</button>
           <div id="disc-group-dd" class="grp-dd" style="display:none">${
             [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort()
-            .map(g=>`<div class="grp-dd-item" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault();_dgPick('${esc(g)}')">${esc(g)}</div>`).join('')
+            .map(g=>`<div class="grp-dd-item" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault()" onclick="_dgPick(this.textContent)">${esc(g)}</div>`).join('')
           }</div>
         </div>
       </div>
@@ -441,6 +451,7 @@ function _dgFilter(v){
 function _dgPick(g){
   const inp = document.getElementById('disc-group');
   if(inp) inp.value = g;
+  _discSetDefaultGroup(g);
   _dgHide();
 }
 
@@ -475,10 +486,19 @@ function _discRowHtml(r, isPing){
           <input type="text" value="${esc(nm)}" placeholder="Device name" oninput="_discSetCustomName('${esc(r.ip)}', this.value)"/>
         </div>
       </td>
+      <td>
+        <input type="text" class="disc-row-grp${_disc.customGroups[r.ip]!==undefined?' disc-row-grp-custom':''}"
+               list="disc-groups-dl" data-ip="${esc(r.ip)}"
+               value="${esc(_disc.customGroups[r.ip]!==undefined?_disc.customGroups[r.ip]:_disc.group)}"
+               placeholder="Group"
+               onfocus="_discGrpFocus(this)" onblur="_discGrpBlur(this,'${esc(r.ip)}')"
+               oninput="_discSetRowGroup('${esc(r.ip)}',this.value)"/>
+      </td>
       <td>${macStr} ${vendStr}</td>
       <td>${isPing?'<span class="disc-muted">—</span>':portChips || '<span class="disc-muted">—</span>'}</td>
       <td>${isPing?'':`<span class="disc-guess">${esc(r.guess||'')}</span>`}</td>
       <td>${ms}</td>
+      <td><button class="btn-s" style="padding:1px 6px;font-size:10px;white-space:nowrap" onclick="event.stopPropagation();_discLinkToDevice('${esc(r.ip)}')" title="Add this IP as a secondary IP of an existing device">🔗 Link</button></td>
     </tr>`;
 }
 
@@ -530,6 +550,40 @@ function _discSetCustomName(ip, value){
   _disc.customNames[ip] = value;
 }
 
+function _discSetDefaultGroup(g){
+  _disc.group = g;
+  // Push new default to all per-row inputs that haven't been manually overridden
+  document.querySelectorAll('.disc-row-grp[data-ip]').forEach(inp => {
+    if(_disc.customGroups[inp.dataset.ip] === undefined){
+      inp.value = g;
+    }
+  });
+}
+
+function _discGrpFocus(inp){
+  inp.dataset.prev = inp.value;
+  inp.value = '';
+}
+function _discGrpBlur(inp, ip){
+  if(!inp.value){
+    // Restore previous value if user clicked away without picking
+    inp.value = inp.dataset.prev || _disc.group;
+    // Make sure state matches
+    if(inp.value === _disc.group) delete _disc.customGroups[ip];
+  }
+}
+
+function _discSetRowGroup(ip, g){
+  // If user types the same as the default, treat as "following default" (no override)
+  if(g === _disc.group || g === ''){
+    delete _disc.customGroups[ip];
+    document.querySelector(`.disc-row-grp[data-ip="${ip}"]`)?.classList.remove('disc-row-grp-custom');
+  } else {
+    _disc.customGroups[ip] = g;
+    document.querySelector(`.disc-row-grp[data-ip="${ip}"]`)?.classList.add('disc-row-grp-custom');
+  }
+}
+
 function _discUpdateNextBtn(){
   const btn = document.getElementById('disc-next-btn');
   if(!btn) return;
@@ -541,6 +595,9 @@ function _discUpdateNextBtn(){
 // ── Step 4: per-device sensor review ────────────────────────────
 function _discRenderSensorReview(){
   if(_disc.selected.size === 0){ toast('Select at least one device','err'); return; }
+  // Save group value before bdy is replaced (input leaves the DOM after this)
+  const _grpEl = document.getElementById('disc-group');
+  if(_grpEl) _disc.group = _grpEl.value.trim() || 'Discovered';
   _disc.step = 4;
   const bdy = document.getElementById('disc-bdy');
   const ft  = document.getElementById('disc-ft');
@@ -617,7 +674,10 @@ function _discRevRowHtml(row, expanded){
             <span class="disc-muted"> (${esc(row.ip)})</span>
             ${row.guess?`<span class="disc-guess">— ${esc(row.guess)}</span>`:''}
           </div>
-          <div class="disc-rev-summary" id="disc-rev-sum-${esc(row.ip).replace(/\./g,'_')}">${summary}</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="disc-rev-summary" id="disc-rev-sum-${esc(row.ip).replace(/\./g,'_')}">${summary}</div>
+            <div style="font-size:10px;color:var(--text3)">→ ${esc((_disc.customGroups[row.ip]!==undefined?_disc.customGroups[row.ip]:_disc.group)||'Discovered')}</div>
+          </div>
         </div>
       </summary>
       <div class="disc-sg-list">${sensorRows}</div>
@@ -677,10 +737,151 @@ function _discUpdateAddBtn(){
   btn.textContent = `Add ${nDev} device${nDev===1?'':'s'} + ${nSens} sensor${nSens===1?'':'s'}`;
 }
 
+// ── Link discovered IP to existing device ─────────────────────
+// Step 1: device picker
+function _discLinkToDevice(ip){
+  const devs = Object.values(S.devices).sort((a,b)=>a.name.localeCompare(b.name));
+  if(!devs.length){ toast('No existing devices to link to','err'); return; }
+  closeM('disc-link-m');
+  const o = document.createElement('div'); o.className='mo'; o.id='disc-link-m';
+  _overlayClose(o, ()=>closeM('disc-link-m'));
+  const devItems = devs.map(d =>
+    `<div class="grp-dd-item" style="padding:6px 10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)"
+          onclick="_discLinkStep2('${esc(ip)}','${esc(d.device_id)}')">
+      <span>${esc(d.name)}</span>
+      <span style="font-size:11px;color:var(--text3);font-family:monospace">${esc(d.host)}</span>
+    </div>`
+  ).join('');
+  o.innerHTML = `
+  <div class="mbox" style="max-width:420px">
+    <div class="mhd">
+      <div class="mttl">Link ${esc(ip)} to device</div>
+      <button class="mclose" onclick="closeM('disc-link-m')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div class="fr">
+        <label class="fl">Search devices</label>
+        <input type="text" id="disc-link-filter" autocomplete="off" placeholder="Filter…"
+               oninput="_discLinkFilter(this.value)"/>
+      </div>
+      <div id="disc-link-list" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px">${devItems}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px">This IP will be added as a secondary IP of the selected device.</div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('disc-link-m')">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>document.getElementById('disc-link-filter')?.focus(), 50);
+}
+function _discLinkFilter(q){
+  q = q.toLowerCase();
+  const list = document.getElementById('disc-link-list');
+  if(!list) return;
+  for(const item of list.children){
+    const text = item.textContent.toLowerCase();
+    item.style.display = text.includes(q) ? '' : 'none';
+  }
+}
+
+// Step 2: confirm + sensor selection
+function _discLinkStep2(ip, did){
+  const dev = S.devices[did];
+  const devName = dev?.name || did;
+  const row = _disc.rows.find(r => r.ip === ip);
+  // Use discovered suggestions; fall back to a single PING if none
+  const suggested = (row?.suggested || []).length > 0
+    ? row.suggested
+    : [{stype:'ping', name:`Ping-${ip}`, port:null}];
+
+  const sensRows = suggested.map((sg, i) => {
+    const label = `${esc(sg.name)} <span style="font-size:10px;color:var(--text3)">(${esc(sg.stype)}${sg.port?':'+sg.port:''})</span>`;
+    return `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--border)">
+      <input type="checkbox" id="dlsnk-${i}" checked>
+      <span>${label}</span>
+    </label>`;
+  }).join('');
+
+  const mbox = document.querySelector('#disc-link-m .mbox');
+  if(!mbox) return;
+  mbox.innerHTML = `
+    <div class="mhd">
+      <div class="mttl">Link ${esc(ip)} → ${esc(devName)}</div>
+      <button class="mclose" onclick="closeM('disc-link-m')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+        <b>${esc(ip)}</b> will be registered as a secondary IP of <b>${esc(devName)}</b>.
+      </div>
+      <div class="fl" style="margin-bottom:6px">Also add sensors on ${esc(devName)}:</div>
+      <div style="border:1px solid var(--border);border-radius:6px;padding:0 10px">${sensRows}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px">Uncheck sensors you don't want to add. All sensors will use this IP as their host.</div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="_discLinkToDevice('${esc(ip)}')">← Back</button>
+      <button class="btn-s" onclick="closeM('disc-link-m')">Cancel</button>
+      <button class="btn-p" onclick="_discLinkConfirm('${esc(ip)}','${esc(did)}',${suggested.length})">Link</button>
+    </div>`;
+}
+
+async function _discLinkConfirm(ip, did, nSuggested){
+  const mbox = document.querySelector('#disc-link-m .mbox');
+  const btn = mbox?.querySelector('.btn-p');
+  if(btn){ btn.disabled=true; btn.textContent='Linking…'; }
+
+  // Collect checked sensors
+  const row = _disc.rows.find(r => r.ip === ip);
+  const suggested = (row?.suggested || []).length > 0
+    ? row.suggested
+    : [{stype:'ping', name:`Ping-${ip}`, port:null}];
+  const toCreate = suggested.filter((_,i)=>document.getElementById(`dlsnk-${i}`)?.checked);
+
+  // 1. Register secondary IP
+  let r;
+  try{ r = await api('POST', `/api/device/${did}/secondary-ip`, {ip}); }
+  catch(e){ toast('Failed to link IP','err'); if(btn){btn.disabled=false;btn.textContent='Link';} return; }
+  if(!r || r.error){ toast(r?.error||'Failed to link','err'); if(btn){btn.disabled=false;btn.textContent='Link';} return; }
+
+  // Update local secondary_ips
+  const dev = S.devices[did];
+  if(dev) dev.secondary_ips = r.secondary_ips || [...(dev.secondary_ips||[]), ip];
+
+  // 2. Create selected sensors
+  let sensCreated = 0, sensFailed = 0;
+  for(const sg of toCreate){
+    const spec = {name: `${sg.name}-${ip}`, type: sg.stype, host: ip};
+    if(sg.port) spec.port = sg.port;
+    if(sg.url)  spec.url  = sg.url;
+    try{
+      const sr = await api('POST', `/api/device/${did}/sensor`, spec);
+      if(sr && sr.sid){
+        await api('POST', `/api/device/${did}/sensor/${sr.sid}/start`);
+        sensCreated++;
+      } else { sensFailed++; }
+    } catch(e){ sensFailed++; }
+  }
+
+  closeM('disc-link-m');
+  // Remove from discovery results
+  _disc.rows = _disc.rows.filter(r => r.ip !== ip);
+  _disc.selected.delete(ip);
+  _discRefreshTbody();
+  _discUpdateCounts();
+
+  const snrMsg = toCreate.length === 0 ? ''
+    : sensFailed ? ` — ${sensCreated} sensor${sensCreated===1?'':'s'} added, ${sensFailed} failed`
+    : ` + ${sensCreated} sensor${sensCreated===1?'':'s'}`;
+  toast(`Linked ${ip} → ${dev?.name || did}${snrMsg}`, sensFailed?'err':'ok');
+}
+function _discUpdateCounts(){
+  const countEl = document.getElementById('disc-count');
+  if(countEl) countEl.innerHTML = `<b>${_disc.rows.length}</b> device${_disc.rows.length===1?'':'s'} found`;
+}
+
 // ── Step 5: bulk add ───────────────────────────────────────────
 async function _discBulkAdd(){
   const btn = document.getElementById('disc-add-btn');
-  const group = (document.getElementById('disc-group')?.value || 'Discovered').trim() || 'Discovered';
+  const defaultGroup = (_disc.group || 'Discovered').trim() || 'Discovered';
   const useHostname = (document.getElementById('disc-naming')?.value || 'hostname') === 'hostname';
   const devices = [];
   for(const ip of _disc.selected){
@@ -699,10 +900,11 @@ async function _discBulkAdd(){
       if(sg.stype === 'snmp' && a.snmp_community) spec.snmp_community = a.snmp_community;
       sensors.push(spec);
     }
+    const devGroup = (_disc.customGroups[ip] !== undefined ? _disc.customGroups[ip] : defaultGroup).trim() || defaultGroup;
     devices.push({
       name:  _discRowName(row, useHostname),
       host:  ip,
-      group,
+      group: devGroup,
       sensors,
     });
   }

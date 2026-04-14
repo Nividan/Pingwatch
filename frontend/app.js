@@ -11,6 +11,7 @@ const TIMINGS = Object.freeze({
 
 // ── App state ────────────────────────────────────────────────────
 const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{}};
+let _loggedOut=false;  // set during intentional logout to suppress "session expired"
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
 let _reconnectTimer  = null;  // guard: only one pending reconnect at a time
@@ -116,25 +117,30 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return;
     resolveFlap(d,'down');
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
     _scheduleRefresh();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
     _scheduleRefresh();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('threshold_ok',e=>{
     const d=_parseSSE(e); if(!d) return;
     resolveFlap(d,'threshold');
     _scheduleRefresh();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
@@ -144,9 +150,24 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
   });
+  sse.addEventListener('license_status',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    if(typeof _ipamOnLicenseUpdate==='function') _ipamOnLicenseUpdate();
+    if(activeMainTab==='dashboard'){
+      _dwLoad().forEach(w=>{
+        if(w.type==='license_overview') _dwLicenseOverviewRefresh(w.id);
+      });
+    }
+  });
   sse.addEventListener('browser_notification',e=>{
     const d=_parseSSE(e); if(!d) return;
     _showBrowserNotif(d);
+    _scheduleBadgePoll();
+  });
+  sse.addEventListener('log_badge',e=>{
+    const d=_parseSSE(e); if(!d) return;
+    _logBadgeTotal=d.total||0;
+    _updateLogBadge();
   });
   sse.onerror=()=>{
     document.getElementById('cbn').style.display='block';
@@ -168,6 +189,11 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
   if (gen !== _resyncGen) return;  // a newer call took over — abort this chain
   try {
     const r = await fetch('/api/devices');
+    if (r.status === 401) {
+      // Server restarted and cleared sessions — show login
+      if (!_loggedOut) showLogin('Server restarted. Please sign in again.');
+      return;
+    }
     if (!r.ok) {
       if (retryCount < 5) setTimeout(() => _sseResync(retryCount + 1, gen), 3000);
       return;
@@ -206,8 +232,12 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     _sseHidden = false;
-    // Flush any pending batch immediately
+    // Flush any pending batch immediately; always resync pills/badge in case
+    // device_status events arrived while the tab was hidden (they update S.devices
+    // but skip _sseBatch when _sseHidden=true, so no flush timer was set).
     if (_sseBatch.timer) { clearTimeout(_sseBatch.timer); _sseBatch.timer=null; _sseFlush(); }
+    updatePills();
+    _badgePoll();
     if (!sse || sse.readyState === EventSource.CLOSED) {
       _sseFirstConnect = false;
       connectSSE();
@@ -258,6 +288,7 @@ async function submitLogin(){
     clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
+    _loggedOut=false;
     S.role=d.role||'viewer';
     if(d.session_ttl)_sessionTtl=d.session_ttl;
     hideLogin();
@@ -269,8 +300,13 @@ async function submitLogin(){
   }finally{clearTimeout(slowHint);}
 }
 async function doLogout(){
+  _loggedOut=true;
   _stopIdleCheck();
-  await fetch('/api/logout',{method:'POST'});
+  if(sse){sse.close();sse=null;}
+  if(_reconnectTimer){clearTimeout(_reconnectTimer);_reconnectTimer=null;}
+  if(_hbSparkInterval){clearInterval(_hbSparkInterval);_hbSparkInterval=null;}
+  if(window._badgePollInterval){clearInterval(window._badgePollInterval);window._badgePollInterval=null;}
+  await fetch('/api/logout',{method:'POST'}).catch(()=>{});
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
   showLogin();
@@ -301,6 +337,21 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowUp'){e.preventDefault();items[(idx-1+items.length)%items.length]?.focus();}
 });
 function onAuthenticated(username){
+  // ── Clean slate: purge stale data from previous session / server restart ──
+  for(const k in S.devices)  delete S.devices[k];
+  for(const k in S.sensors)  delete S.sensors[k];
+  for(const k in S.logs)     delete S.logs[k];
+  for(const k in S.charts)   delete S.charts[k];
+  for(const k in S.devTraps) delete S.devTraps[k];
+  S._devSensors={};
+  FLAPS.length=0; _FLAP_SEEN.clear();
+  if(typeof _dwReset==='function') _dwReset();
+  // Clear stale device cards & group sections from DOM
+  document.querySelectorAll('#dpanels .grp-wrap').forEach(el=>el.remove());
+  // Reset SSE state for clean reconnect
+  _sseFirstConnect=true;
+  _reconnectDelay=TIMINGS.RECONNECT_INITIAL;
+
   document.getElementById('tb-user').textContent=username;
   document.getElementById('usrDd').style.display='';
   const dn=document.getElementById('usr-dd-name');
@@ -317,15 +368,14 @@ function onAuthenticated(username){
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, TIMINGS.SPARK_REFRESH);
-  // Poll active alert count for combined Events badge; clear on re-login to prevent stacking
-  _alertEvtBadgePoll();
-  if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
-  window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, TIMINGS.ALERT_BADGE_POLL);
+  // Poll badge counts (crit/warn/ack/muted); clear on re-login to prevent stacking
+  _badgePoll();
+  if (window._badgePollInterval) clearInterval(window._badgePollInterval);
+  window._badgePollInterval = setInterval(_badgePoll, TIMINGS.ALERT_BADGE_POLL);
+  _logBadgeInit();
   _lastActivity = Date.now();
   _startIdleCheck();
 }
-
-let _alertEvtBadgeCount = 0;
 
 let _sessionTtl   = 86400;
 let _lastActivity = Date.now();
@@ -342,19 +392,168 @@ function _startIdleCheck(){
 }
 function _stopIdleCheck(){ if(_idleTimer){clearInterval(_idleTimer);_idleTimer=null;} }
 
-function _updateEvtBadge() {
-  const n = unseenFlaps;
-  const b = document.getElementById('evtBadge');
-  if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+// ── Status badges (crit / warn / ack / muted) ──────────────────
+let _badgeCounts = {crit:0, warn:0, ack:0, muted:0};
+let _badgeMutedList = [];
+
+function _updateBadges(){
+  const pairs = [
+    ['badgeCrit','badgeCritCnt',_badgeCounts.crit],
+    ['badgeWarn','badgeWarnCnt',_badgeCounts.warn],
+    ['badgeAck','badgeAckCnt',_badgeCounts.ack],
+    ['badgeMuted','badgeMutedCnt',_badgeCounts.muted],
+  ];
+  for(const [elId,cntId,n] of pairs){
+    const el=document.getElementById(elId);
+    const cnt=document.getElementById(cntId);
+    if(!el) continue;
+    if(cnt) cnt.textContent=n;
+    el.style.display = n>0 ? 'flex' : 'none';
+  }
 }
 
-async function _alertEvtBadgePoll() {
-  try {
+function _openBadgeCrit(){
+  switchMainTab('events');
+  if(typeof _evtSetInnerTab==='function') _evtSetInnerTab('active');
+}
+function _openBadgeWarn(){
+  switchMainTab('events');
+  if(typeof _evtSetInnerTab==='function') _evtSetInnerTab('active');
+}
+function _openBadgeAck(){
+  switchMainTab('events');
+  if(typeof _evtSetInnerTab==='function') _evtSetInnerTab('active');
+}
+function _openBadgeMuted(){ _showMutedStoppedModal(); }
+
+let _badgePollTimer = null;
+async function _badgePoll(){
+  try{
     const r = await fetch('/api/alert/events/active');
+    if(!r.ok) return;
+    const d = await r.json();
+    _badgeCounts.crit  = d.crit_count  || 0;
+    _badgeCounts.warn  = d.warn_count  || 0;
+    _badgeCounts.ack   = d.ack_count   || 0;
+    _badgeCounts.muted = d.muted_stopped_count || 0;
+    _badgeMutedList    = d.muted_stopped || [];
+    _updateBadges();
+  } catch(_){}
+}
+
+function _scheduleBadgePoll(){
+  if(_badgePollTimer) return;
+  _badgePollTimer = setTimeout(()=>{
+    _badgePollTimer = null;
+    _badgePoll();
+  }, 2000);
+}
+
+// ── Muted / stopped sensors modal ───────────────────────────────
+function _showMutedStoppedModal(){
+  closeM('ms-modal');
+  const o = document.createElement('div');
+  o.className='mo'; o.id='ms-modal';
+  _overlayClose(o,()=>closeM('ms-modal'));
+  const isOp = S.role==='operator'||S.role==='admin';
+  let rows='';
+  for(const item of _badgeMutedList){
+    const reasons = item.reasons||[];
+    const tags = reasons.map(r=>{
+      if(r==='device_muted') return '<span class="ms-tag dev-muted">Device Muted</span>';
+      if(r==='sensor_muted') return '<span class="ms-tag sen-muted">Sensor Muted</span>';
+      if(r==='stopped')      return '<span class="ms-tag stopped">Stopped</span>';
+      return '';
+    }).join(' ');
+    let acts='';
+    if(isOp){
+      if(reasons.includes('sensor_muted'))
+        acts+=`<button class="btn-s" onclick="_msUnmuteSensor('${esc(item.did)}','${esc(item.sid)}')">Unmute</button> `;
+      if(reasons.includes('device_muted'))
+        acts+=`<button class="btn-s" onclick="_msUnmuteDevice('${esc(item.did)}')">Unmute Device</button> `;
+      if(reasons.includes('stopped'))
+        acts+=`<button class="btn-s" onclick="_msStartSensor('${esc(item.did)}','${esc(item.sid)}')">Start</button> `;
+    }
+    rows+=`<tr><td>${esc(item.dname)}</td><td>${esc(item.sname)}</td><td>${esc(item.stype)}</td><td>${tags}</td><td>${acts}</td></tr>`;
+  }
+  if(!rows) rows='<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">No muted or stopped sensors</td></tr>';
+  o.innerHTML=`<div class="mbox" style="max-width:700px">
+    <div class="mhd"><div class="mttl">Muted &amp; Stopped Sensors</div>
+      <button class="mclose" onclick="closeM('ms-modal')">&#x2715;</button></div>
+    <div class="mbdy" style="max-height:60vh;overflow:auto;padding:0">
+      <table class="ms-tbl"><thead><tr><th>Device</th><th>Sensor</th><th>Type</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>
+    <div class="mft"><button class="btn-s" onclick="closeM('ms-modal')">Close</button></div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+function _msBtnLoading(btn,label){
+  if(!btn)return;
+  btn.disabled=true;
+  btn.textContent=label;
+  btn.style.opacity='0.6';
+}
+async function _msUnmuteSensor(did,sid){
+  const btn=event?.target; _msBtnLoading(btn,'Unmuting…');
+  try{
+    await api('PATCH',`/api/device/${did}/sensor/${sid}`,{alerts_muted:false});
+    toast('Sensor unmuted','ok');
+    await _badgePoll();
+    _showMutedStoppedModal();
+  }catch(_){toast('Failed to unmute sensor','err');_showMutedStoppedModal();}
+}
+async function _msUnmuteDevice(did){
+  const btn=event?.target; _msBtnLoading(btn,'Unmuting…');
+  try{
+    await api('PATCH',`/api/device/${did}`,{alerts_muted:false});
+    toast('Device unmuted','ok');
+    if(S.devices[did]) S.devices[did].alerts_muted=false;
+    await _badgePoll();
+    _showMutedStoppedModal();
+  }catch(_){toast('Failed to unmute device','err');_showMutedStoppedModal();}
+}
+async function _msStartSensor(did,sid){
+  const btn=event?.target; _msBtnLoading(btn,'Starting…');
+  try{
+    await api('POST',`/api/device/${did}/sensor/${sid}/start`);
+    toast('Sensor started','ok');
+    await _badgePoll();
+    _showMutedStoppedModal();
+  }catch(_){toast('Failed to start sensor','err');_showMutedStoppedModal();}
+}
+
+// ── Log badge (WARNING+ entries) ────────────────────────────────
+let _logBadgeTotal = 0;
+
+function _updateLogBadge() {
+  const seen = parseInt(_lsGet('logBadgeSeen') || '0', 10);
+  const unseen = Math.max(0, _logBadgeTotal - seen);
+  const el = document.getElementById('logBadge');
+  const cnt = document.getElementById('logBadgeCnt');
+  if (!el) return;
+  if (S.role === 'viewer') { el.style.display = 'none'; return; }
+  cnt.textContent = unseen;
+  el.style.display = unseen > 0 ? '' : 'none';
+}
+
+async function _logBadgeInit() {
+  try {
+    const r = await fetch('/api/log-badge');
     if (!r.ok) return;
     const d = await r.json();
-    _alertEvtBadgeCount = d.count || 0;
+    _logBadgeTotal = d.total || 0;
+    _updateLogBadge();
   } catch (_) {}
+}
+
+function _openLogBadge() {
+  _lsSet('logBadgeSeen', String(_logBadgeTotal));
+  _updateLogBadge();
+  // Pre-filter to WARNING+ when opening from badge
+  if (typeof _logFilter !== 'undefined') _logFilter.level = 'WARNING';
+  openSettings('logs');
 }
 
 function _requestNotifPermission() {
@@ -422,7 +621,7 @@ async function api(method,path,body=null){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
   const r=await fetch(path,o);
-  if(r.status===401){showLogin('Session expired. Please sign in again.');return {};}
+  if(r.status===401){if(!_loggedOut)showLogin('Session expired. Please sign in again.');return {};}
   if(!r.ok){
     const err=await r.json().catch(()=>({error:r.statusText}));
     throw new Error(err.error||r.statusText);
@@ -727,7 +926,6 @@ function _hbRenderExpanded() {
 const FLAPS=[];   // newest first; size controlled by MAX_FLAPS
 const _FLAP_SEEN=new Set(); // dedup keys to prevent API+SSE duplicates
 let MAX_FLAPS=20;
-let unseenFlaps=0;
 
 function _flapKey(d){
   // Unique key: device+sensor+timestamp+direction (covers both flaps and traps)
@@ -742,10 +940,6 @@ function pushFlap(d){
   FLAPS.unshift(d);
   if(FLAPS.length>MAX_FLAPS) FLAPS.pop();
   renderFlaps();
-  if(activeMainTab!=='events'){
-    unseenFlaps++;
-    _updateEvtBadge();
-  }
   flashDownPill();
 }
 
@@ -772,10 +966,6 @@ function pushThresholdEvent(d, level){
   FLAPS.unshift(entry);
   if(FLAPS.length>MAX_FLAPS)FLAPS.pop();
   renderFlaps();
-  if(activeMainTab!=='events'){
-    unseenFlaps++;
-    _updateEvtBadge();
-  }
 }
 
 function renderFlaps(){
@@ -886,8 +1076,6 @@ function switchMainTab(tab){
     eventsView.style.display='flex';
     emptyMain.style.display='none';
     dpanels.style.display='none';
-    unseenFlaps=0;
-    _updateEvtBadge();
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshEvents();
     if(typeof _evtSubTab==='function') _evtSubTab(_evtActiveSubTab);
@@ -897,7 +1085,11 @@ function switchMainTab(tab){
     mapView.style.display='flex';
     if(_mf&&!_mf.src&&_mf.dataset.src) _mf.src=_mf.dataset.src;
     else if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
-    _mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
+    // Send current device statuses with resume so map can catchup missed events while paused
+    _mf?.contentWindow?.postMessage({
+      type:'ntm_resume',
+      devices:Object.values(S.devices).map(d=>({did:d.did||d.device_id,status:d.status}))
+    },window.location.origin);
   } else if(tab==='backups'){
     backupsView.style.display='flex';
     emptyMain.style.display='none';
@@ -1103,6 +1295,9 @@ async function loadAll(){
     document.getElementById('dpanels').style.display='';
     document.getElementById('devActBar').style.display='';
   }
+  // Signal NTM map iframe to re-fetch fresh data (handles server restart)
+  const _mf=document.getElementById('map-frame');
+  if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
 }
 // App bootstrap — check session before doing anything
 checkAuth();

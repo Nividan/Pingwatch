@@ -50,7 +50,8 @@ def pg_create_main_schema(cur):
             snmp_community_default   TEXT DEFAULT '',
             snmp_version_default     TEXT DEFAULT '',
             vmware_user_default      TEXT DEFAULT '',
-            vmware_password_default  TEXT DEFAULT ''
+            vmware_password_default  TEXT DEFAULT '',
+            secondary_ips            TEXT DEFAULT '[]'
         )""")
 
     cur.execute("""
@@ -105,8 +106,7 @@ def pg_create_main_schema(cur):
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
         ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
-        ("alert_rules", "trigger_count",           "INTEGER DEFAULT 1"),
-        ("alert_rules", "recover_count",           "INTEGER DEFAULT 1"),
+        ("main.devices", "secondary_ips",           "TEXT DEFAULT '[]'"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -134,10 +134,30 @@ def pg_create_main_schema(cur):
         )""")
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS dashboard_widgets (
-            username TEXT PRIMARY KEY,
-            widgets  TEXT NOT NULL DEFAULT '[]'
+        CREATE TABLE IF NOT EXISTS dashboards (
+            id         SERIAL PRIMARY KEY,
+            username   TEXT    NOT NULL,
+            name       TEXT    NOT NULL DEFAULT 'Default',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            widgets    TEXT    NOT NULL DEFAULT '[]'
         )""")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboards_user_name "
+                "ON dashboards(username, name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_dashboards_user "
+                "ON dashboards(username, sort_order)")
+    # ── Migration: dashboard_widgets → dashboards ───────────────
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='main' AND table_name='dashboard_widgets'")
+    if cur.fetchone():
+        cur.execute("SELECT username, widgets FROM main.dashboard_widgets")
+        old = cur.fetchall()
+        for r in old:
+            cur.execute(
+                "INSERT INTO dashboards (username, name, sort_order, widgets) "
+                "VALUES (%s, 'Default', 0, %s) ON CONFLICT (username, name) DO NOTHING",
+                (r[0], r[1]))
+        cur.execute("DROP TABLE main.dashboard_widgets")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS backup_devices (
@@ -253,43 +273,36 @@ def pg_create_main_schema(cur):
         "CREATE INDEX IF NOT EXISTS idx_ip_alloc_device ON ip_allocations(device_id)"
     )
 
-    # ── Alert Rules Engine ───────────────────────────────────────────
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS alert_rules (
-            id              SERIAL PRIMARY KEY,
-            name            TEXT NOT NULL,
-            enabled         INTEGER DEFAULT 1,
-            severity        TEXT DEFAULT 'warning',
-            condition_logic TEXT DEFAULT 'AND',
-            cooldown_s      INTEGER DEFAULT 300,
-            trigger_count   INTEGER DEFAULT 1,
-            recover_count   INTEGER DEFAULT 1,
-            sort_order      INTEGER DEFAULT 0,
-            created_at      DOUBLE PRECISION DEFAULT 0,
-            updated_at      DOUBLE PRECISION DEFAULT 0
-        )""")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS alert_rule_conditions (
-            id         SERIAL PRIMARY KEY,
-            rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-            field      TEXT NOT NULL,
-            op         TEXT NOT NULL,
-            value      TEXT NOT NULL DEFAULT '',
-            sort_order INTEGER DEFAULT 0
-        )""")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS alert_rule_actions (
-            id         SERIAL PRIMARY KEY,
-            rule_id    INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-            atype      TEXT NOT NULL,
-            config     TEXT NOT NULL DEFAULT '{}',
-            sort_order INTEGER DEFAULT 0
-        )""")
+    # ── Alert Profiles (PRTG-style state-trigger system) ─────────────
+    # One-time cleanup of legacy condition-rule tables (idempotent)
+    for _legacy in ("alert_rules", "alert_rule_conditions",
+                    "alert_rule_actions", "alert_dedup"):
+        try:
+            cur.execute("SAVEPOINT _drop_legacy")
+            cur.execute(f"DROP TABLE IF EXISTS {_legacy} CASCADE")
+            cur.execute("RELEASE SAVEPOINT _drop_legacy")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT _drop_legacy")
+    # Hard-replace alert_events if it still has the legacy rule_id column
+    try:
+        cur.execute("SAVEPOINT _replace_events")
+        cur.execute("""
+            SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'alert_events'
+               AND column_name = 'rule_id'
+        """)
+        if cur.fetchone():
+            cur.execute("DROP TABLE alert_events")
+        cur.execute("RELEASE SAVEPOINT _replace_events")
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT _replace_events")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_events (
             id           SERIAL PRIMARY KEY,
-            rule_id      INTEGER DEFAULT 0,
-            rule_name    TEXT DEFAULT '',
+            profile_id   INTEGER DEFAULT 0,
+            stage_id     INTEGER DEFAULT 0,
+            profile_name TEXT DEFAULT '',
             did          TEXT DEFAULT '',
             sid          TEXT DEFAULT '',
             dname        TEXT DEFAULT '',
@@ -304,11 +317,85 @@ def pg_create_main_schema(cur):
             detail       TEXT DEFAULT '',
             repeat_count INTEGER DEFAULT 1
         )""")
+    # Partial index for dedup lookups — only covers unresolved rows.
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_active_sensor "
+        "ON alert_events(did, sid) "
+        "WHERE state IN ('active','acknowledged')"
+    )
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS alert_dedup (
-            sig        TEXT PRIMARY KEY,
-            last_fired DOUBLE PRECISION DEFAULT 0,
-            fire_count INTEGER DEFAULT 1
+        CREATE TABLE IF NOT EXISTS alert_profiles (
+            id          SERIAL PRIMARY KEY,
+            name        TEXT NOT NULL,
+            scope_type  TEXT NOT NULL DEFAULT 'global',
+            scope_value TEXT DEFAULT '',
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            created_at  DOUBLE PRECISION DEFAULT 0,
+            updated_at  DOUBLE PRECISION DEFAULT 0,
+            UNIQUE(scope_type, scope_value)
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alert_profiles_scope "
+        "ON alert_profiles(scope_type, scope_value)"
+    )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS alert_action_templates (
+            id         SERIAL PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE,
+            atype      TEXT NOT NULL,
+            config     TEXT NOT NULL DEFAULT '{}',
+            created_at DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS alert_profile_stages (
+            id            SERIAL PRIMARY KEY,
+            profile_id    INTEGER NOT NULL REFERENCES alert_profiles(id) ON DELETE CASCADE,
+            trigger_state TEXT NOT NULL,
+            delay_s       INTEGER NOT NULL DEFAULT 0,
+            repeat_min    INTEGER NOT NULL DEFAULT 0,
+            action_ids    TEXT NOT NULL DEFAULT '[]',
+            sort_order    INTEGER NOT NULL DEFAULT 0
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profile_stages_profile "
+        "ON alert_profile_stages(profile_id)"
+    )
+    # Migrate action_id (int) → action_ids (json) for existing installs
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='main' AND table_name='alert_profile_stages'
+                  AND column_name='action_ids'
+            ) THEN
+                ALTER TABLE alert_profile_stages ADD COLUMN action_ids TEXT NOT NULL DEFAULT '[]';
+                UPDATE alert_profile_stages
+                   SET action_ids = '['||action_id::text||']'
+                 WHERE action_id IS NOT NULL;
+            END IF;
+        END $$
+    """)
+    # Drop NOT NULL from action_id so new inserts (which omit it) succeed
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='main' AND table_name='alert_profile_stages'
+                  AND column_name='action_id' AND is_nullable = 'NO'
+            ) THEN
+                ALTER TABLE alert_profile_stages ALTER COLUMN action_id DROP NOT NULL;
+            END IF;
+        END $$
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS alert_profile_state (
+            sig            TEXT PRIMARY KEY,
+            first_fire_ts  DOUBLE PRECISION DEFAULT 0,
+            last_fire_ts   DOUBLE PRECISION DEFAULT 0,
+            fire_count     INTEGER DEFAULT 0,
+            active_session TEXT DEFAULT ''
         )""")
 
     # ── Maintenance Windows ──────────────────────────────────────────
@@ -331,10 +418,41 @@ def pg_create_main_schema(cur):
     # ── User Groups ──────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_groups (
-            id          SERIAL PRIMARY KEY,
-            name        TEXT NOT NULL UNIQUE,
-            description TEXT DEFAULT ''
+            id           SERIAL PRIMARY KEY,
+            name         TEXT NOT NULL UNIQUE,
+            description  TEXT DEFAULT '',
+            ldap_dn      TEXT DEFAULT '',
+            default_role TEXT DEFAULT 'viewer'
         )""")
+    # Migration: LDAP group mapping columns
+    for _tbl, _col, _typedef in [
+        ("user_groups", "ldap_dn",      "TEXT DEFAULT ''"),
+        ("user_groups", "default_role",  "TEXT DEFAULT 'viewer'"),
+    ]:
+        try:
+            cur.execute("SAVEPOINT _alter_ug")
+            cur.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_typedef}")
+            cur.execute("RELEASE SAVEPOINT _alter_ug")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT _alter_ug")
+
+    # ── Device license tracking ─────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS device_licenses (
+            id           SERIAL PRIMARY KEY,
+            did          TEXT NOT NULL,
+            license_name TEXT NOT NULL,
+            expiry_date  TEXT NOT NULL,
+            note         TEXT DEFAULT '',
+            warn_days    INTEGER DEFAULT 30,
+            crit_days    INTEGER DEFAULT 0,
+            last_status  TEXT DEFAULT 'ok',
+            created_at   DOUBLE PRECISION DEFAULT 0,
+            updated_at   DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dev_lic_did ON device_licenses(did)"
+    )
 
     # ── Topology map tables ──────────────────────────────────────────
     cur.execute("""

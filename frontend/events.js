@@ -7,7 +7,10 @@ function evtSeverity(d) {
   const dir = d._direction || d.direction || '';
   if (dir === 'recovered')                             return 'recovery';
   if (dir === 'threshold_ok')                          return 'recovery';
+  if (dir === 'license_ok')                            return 'recovery';
   if (dir === 'down')                                  return 'critical';
+  if (dir === 'license_crit')                          return 'critical';
+  if (dir === 'license_warn')                          return 'warning';
   if (dir === 'threshold' && d._thr_level === 'crit') return 'critical';
   if (dir === 'threshold' && d._thr_level === 'warn') return 'warning';
   if (dir === 'trap') {
@@ -23,7 +26,8 @@ const _SEV_LABEL = { critical: 'CRITICAL', warning: 'WARNING', recovery: 'RECOVE
 // ── Icons ─────────────────────────────────────────────────────────
 const _EVT_ICONS = {
   ping: '🖥', tcp: '🔌', http: '🌐', snmp: '📡',
-  dns: '🌐', tls: '🔌', http_keyword: '🌐', banner: '🔌'
+  dns: '🌐', tls: '🔌', http_keyword: '🌐', banner: '🔌',
+  license: '📋'
 };
 const _VENDOR_ICONS = {
   'Fortinet': '🛡', 'Cisco': '🔵', 'Juniper': '🟠',
@@ -136,9 +140,7 @@ async function _refreshAlertCache() {
     _alertEvtCache = d.events || [];
     _alertMap = _buildAlertMap(_alertEvtCache);
     _renderEvtView();
-    const ac = await api('GET', '/api/alert/events/active');
-    _alertEvtBadgeCount = (ac && ac.count) || 0;
-    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
+    if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
   } catch(_) {}
 }
 
@@ -146,7 +148,8 @@ async function _evtAlertAck(id) {
   const d = await api('POST', `/api/alert/event/${id}/ack`);
   if (!d.ok) { toast(d.error || 'Failed to acknowledge', 'err'); return; }
   toast('Alert acknowledged', 'ok');
-  await _refreshAlertCache();
+  await Promise.all([_refreshAlertCache(), _refreshFlapList()]);
+  _renderEvtView();
   if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
     _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
 }
@@ -155,7 +158,8 @@ async function _evtAlertResolve(id) {
   const d = await api('POST', `/api/alert/event/${id}/resolve`);
   if (!d.ok) { toast(d.error || 'Failed to resolve', 'err'); return; }
   toast('Alert resolved', 'ok');
-  await _refreshAlertCache();
+  await Promise.all([_refreshAlertCache(), _refreshFlapList()]);
+  _renderEvtView();
   if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
     _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
 }
@@ -166,6 +170,7 @@ async function _evtFlapAck(flapId) {
   toast('Acknowledged', 'ok');
   await _refreshFlapList();
   _renderEvtView();
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
 async function _evtFlapResolve(flapId) {
@@ -174,11 +179,13 @@ async function _evtFlapResolve(flapId) {
   toast('Resolved', 'ok');
   await _refreshFlapList();
   _renderEvtView();
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
 async function _evtResolveAll() {
-  const count = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
-  if (!count) { toast('No active alerts to resolve', 'info'); return; }
+  const alertCount = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
+  const flapCount  = (typeof FLAPS !== 'undefined' ? FLAPS : []).filter(f => f.id && (f.ack_state || 'active') !== 'resolved').length;
+  if (!alertCount && !flapCount) { toast('No active events to resolve', 'info'); return; }
   _pwConfirm(`Resolve all active alerts and flaps?`, async () => {
     try {
       const d = await api('POST', '/api/alert/events/resolve-all');
@@ -197,6 +204,21 @@ let _evtActiveSubTab = (() => {
   try { return localStorage.getItem('pw_evt_subtab') || 'sensor-events'; } catch { return 'sensor-events'; }
 })();
 
+// ── Inner tab state (Active / History) ───────────────────────────
+let _evtInnerTab = (() => {
+  try { return localStorage.getItem('pw_evt_inner_tab') || 'active'; } catch { return 'active'; }
+})();
+
+function _evtSetInnerTab(tab) {
+  _evtInnerTab = tab;
+  try { localStorage.setItem('pw_evt_inner_tab', tab); } catch(_) {}
+  document.getElementById('evtInnerActive')?.classList.toggle('active', tab === 'active');
+  document.getElementById('evtInnerHistory')?.classList.toggle('active', tab === 'history');
+  const resolveBtn = document.querySelector('.evt-resolve-all-btn');
+  if (resolveBtn) resolveBtn.style.display = (tab === 'active') ? '' : 'none';
+  _renderEvtView();
+}
+
 function _evtSubTab(name) {
   _evtActiveSubTab = name;
   try { localStorage.setItem('pw_evt_subtab', name); } catch(_) {}
@@ -210,8 +232,11 @@ function _evtSubTab(name) {
     if (typeof _alertingLoadEvents === 'function')
       _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
   }
-  if (name === 'sensor-events' && _alertMap === null) {
-    _loadAlertCache();
+  if (name === 'sensor-events') {
+    if (_alertMap === null) _loadAlertCache();
+    document.getElementById('evtInnerActive')?.classList.toggle('active', _evtInnerTab === 'active');
+    document.getElementById('evtInnerHistory')?.classList.toggle('active', _evtInnerTab === 'history');
+    _renderEvtView();
   }
 }
 
@@ -229,9 +254,25 @@ const EVT_FILTER = {
   category: ''
 };
 
+function _isEvtActive(d) {
+  const dir = d._direction || d.direction || '';
+  if (dir === 'trap') {
+    const ae = _matchAlertEvt(d);
+    return ae ? ae.state !== 'resolved' : false;
+  }
+  return (d.ack_state || 'active') !== 'resolved';
+}
+
 function _applyEvtFilters() {
   // Make shallow copy so we can add _duration without mutating FLAPS
   let result = FLAPS.map(d => Object.assign({}, d));
+
+  // Partition by inner tab (Active vs History)
+  if (_evtInnerTab === 'active') {
+    result = result.filter(d => _isEvtActive(d));
+  } else if (_evtInnerTab === 'history') {
+    result = result.filter(d => !_isEvtActive(d));
+  }
 
   // Time range
   if (EVT_FILTER.timeRange !== 'all') {
@@ -272,7 +313,11 @@ function _applyEvtFilters() {
 
   // Event type
   if (EVT_FILTER.type) {
-    result = result.filter(d => (d._direction || d.direction) === EVT_FILTER.type);
+    result = result.filter(d => {
+      const dir = d._direction || d.direction || '';
+      if (EVT_FILTER.type === 'license') return dir.startsWith('license');
+      return dir === EVT_FILTER.type;
+    });
   }
 
   // Severity
@@ -438,7 +483,9 @@ function _buildEvtCard(d) {
     ? (icon + ' ' + esc(_trapLabel(d)))
     : (icon + ' ' + esc(d.sname||''));
   const dispHost = isTrap ? esc(d.src_ip||'') : esc(d.host||'');
-  const durStr   = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : null);
+  const _cardAlertEvt = _matchAlertEvt(d);
+  const { secs: _cardDurSecs, live: _cardDurLive } = _iipGetDuration(d, _cardAlertEvt);
+  const durStr   = (!_cardDurLive && _cardDurSecs > 0) ? _fmtDuration(_cardDurSecs) : null;
   const unknownCls = (isTrap && !d.enriched) ? ' evt-trap-unknown' : '';
 
   const row = document.createElement('div');
@@ -484,9 +531,10 @@ function _buildEvtTable(events) {
     const vendorCell = isTrap
       ? (d.vendor && d.vendor !== 'Unknown' ? _vendorBadge(d) + (d.category ? `<span class="evt-cat-badge">${esc(d.category)}</span>` : '') : '—')
       : '—';
-    const durStr = d.duration > 0 ? _fmtDuration(d.duration) : (d._duration != null ? _fmtDuration(d._duration) : '—');
-    // Build alert tag cell
+    // Build alert tag cell — computed first so durStr can use alertEvt.resolved_at
     const alertEvt = _matchAlertEvt(d);
+    const { secs: _durSecs, live: _durLive } = _iipGetDuration(d, alertEvt);
+    const durStr = (!_durLive && _durSecs > 0) ? _fmtDuration(_durSecs) : '—';
     let alertCell = '<td></td>';
     if (alertEvt) {
       const isActive = alertEvt.state === 'active';
@@ -497,23 +545,27 @@ function _buildEvtTable(events) {
       const repeatBadge = alertEvt.repeat_count > 1
         ? `<span class="aev-repeat" title="Fired ${alertEvt.repeat_count} times">×${alertEvt.repeat_count}</span>`
         : '';
-      const btns = isActive
+      // Flap-level ACK/Resolve buttons (event is the source of truth)
+      const flapState = d.ack_state || 'active';
+      const flapActive = flapState === 'active';
+      const flapAcked  = flapState === 'acknowledged';
+      const flapBtns = (flapActive || flapAcked) && d.id
         ? `<div class="aev-btns">` +
-            `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtAlertAck(${alertEvt.id})">✓ ACK</button>` +
-            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">◉ Resolve</button>` +
+            (flapActive ? `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtFlapAck(${d.id})">✓ ACK</button>` : '') +
+            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtFlapResolve(${d.id})">◉ Resolve</button>` +
           `</div>`
         : '';
-      const resTag = alertEvt.state === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
+      const resTag = flapState === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
       alertCell =
         `<td class="aev-cell">` +
           `<div class="${tagCls}">` +
             `<span class="aev-dot"></span>` +
-            `<span class="aev-rule" title="${esc(alertEvt.rule_name)}">${esc(alertEvt.rule_name)}</span>` +
+            `<span class="aev-rule" title="${esc(alertEvt.profile_name)}">${esc(alertEvt.profile_name)}</span>` +
             `<span class="aev-st ${stCls}">${stLabel}</span>` +
             repeatBadge +
           `</div>` +
           resTag +
-          btns +
+          flapBtns +
         `</td>`;
     } else if (d.id) {
       const flapState = d.ack_state || 'active';
@@ -587,6 +639,14 @@ function _renderEvtView() {
     if (el) el.style.display = _showCustom ? '' : 'none';
   });
 
+  // Sync inner tab buttons
+  document.getElementById('evtInnerActive')?.classList.toggle('active', _evtInnerTab === 'active');
+  document.getElementById('evtInnerHistory')?.classList.toggle('active', _evtInnerTab === 'history');
+
+  // Resolve All only on Active tab
+  const resolveBtn = document.querySelector('.evt-resolve-all-btn');
+  if (resolveBtn) resolveBtn.style.display = (_evtInnerTab === 'active') ? '' : 'none';
+
   const events = _applyEvtFilters();
 
   // Update result count
@@ -618,7 +678,7 @@ function _openEvtDetail(d) {
   if (!panel) return;
   panel.innerHTML = _buildIIP(d, alertEvt);
   document.getElementById('evtDetailModal').style.display = 'flex';
-  _startEvtDurTimer(d);
+  _startEvtDurTimer(d, alertEvt);
 }
 
 function _closeEvtDetail() {
@@ -630,11 +690,18 @@ function _closeEvtDetail() {
 }
 
 // Returns {secs, live}: secs = current duration value, live = whether it should tick
-function _iipGetDuration(d) {
+function _iipGetDuration(d, alertEvt) {
   const dir        = d._direction || d.direction || '';
   const isRecovery = dir === 'recovered' || dir === 'threshold_ok';
   const tsSec      = d.ts ? new Date(d.ts).getTime() / 1000 : 0;
   const dTs        = d.ts ? new Date(d.ts).getTime() : 0;
+
+  // d.duration is the authoritative outage duration written to DB at recovery time.
+  // Use it first — avoids mismatches from alertEvt.resolved_at which may belong to
+  // a different alert period (match window is loose).
+  if (d.duration > 0) {
+    return { secs: d.duration, live: false };
+  }
 
   // Recovery row: _calcDurations pre-computed down→up (only for plain 'recovered' direction)
   if (isRecovery && d._duration != null) {
@@ -667,9 +734,20 @@ function _iipGetDuration(d) {
     }
   }
 
-  // Resolved/acked with no matching event in FLAPS — use ack_at as end time
-  const state = d.ack_state || 'active';
-  if ((state === 'resolved' || state === 'acknowledged') && d.ack_at && tsSec) {
+  // Combined resolved check (mirrors _iipStatus logic): either source wins
+  const isResolved = (alertEvt && alertEvt.state === 'resolved') ||
+                     d.ack_state === 'resolved';
+  if (isResolved) {
+    const endTs = (alertEvt && alertEvt.resolved_at) || d.ack_at || 0;
+    if (endTs && tsSec) {
+      return { secs: Math.max(0, Math.floor(endTs - tsSec)), live: false };
+    }
+    // Resolved but no end timestamp — freeze at current age
+    return { secs: d.ts ? Math.max(0, Math.floor((Date.now() - dTs) / 1000)) : 0, live: false };
+  }
+
+  // Acknowledged flap with ack_at — freeze duration
+  if (d.ack_state === 'acknowledged' && d.ack_at && tsSec) {
     return { secs: Math.max(0, Math.floor(d.ack_at - tsSec)), live: false };
   }
 
@@ -678,9 +756,9 @@ function _iipGetDuration(d) {
   return { secs, live: true };
 }
 
-function _startEvtDurTimer(d) {
+function _startEvtDurTimer(d, alertEvt) {
   clearInterval(_evtDetailTimer);
-  const { live } = _iipGetDuration(d);
+  const { live } = _iipGetDuration(d, alertEvt);
   if (!live) return;  // static duration — no ticker needed
   _evtDetailTimer = setInterval(() => {
     const el = document.getElementById('iip-dur-live');
@@ -725,20 +803,17 @@ function _buildIIP(d, alertEvt) {
 }
 
 function _iipStatus(d, alertEvt) {
-  // Use the most-resolved state between flap-native and alert event
-  const _rank    = { active: 0, acknowledged: 1, resolved: 2 };
+  // Flap is the source of truth for event state
   const flapSt   = d.ack_state || 'active';
-  const alertSt  = alertEvt ? (alertEvt.state || 'active') : 'active';
-  const state    = _rank[alertSt] >= _rank[flapSt] ? alertSt : flapSt;
-  const isActive = state === 'active';
-  const isAcked  = state === 'acknowledged';
-  const isRes    = state === 'resolved';
+  const isActive = flapSt === 'active';
+  const isAcked  = flapSt === 'acknowledged';
+  const isRes    = flapSt === 'resolved';
   const badgeCls = isActive ? 'iip-st-active' : isAcked ? 'iip-st-ack' : 'iip-st-res';
   const badgeTxt = isActive ? '● Active' : isAcked ? '◐ Acknowledged' : '✓ Resolved';
 
   const utcStr = d.ts ? _iipFmtDt(d.ts) : '—';
 
-  const { secs: durSecs } = _iipGetDuration(d);
+  const { secs: durSecs } = _iipGetDuration(d, alertEvt);
   const initDur = _fmtDuration(durSecs);
 
   let ackmeta = '';
@@ -747,12 +822,22 @@ function _iipStatus(d, alertEvt) {
     ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
   }
 
+  // ACK/Resolve buttons on the event (flap), not the alert
+  let btns = '';
+  if ((isActive || isAcked) && d.id) {
+    btns = `<div class="iip-btns" style="margin-top:8px">` +
+      (isActive ? `<button class="aev-btn-ack" onclick="_iipFlapAck(${d.id})">✓ Acknowledge</button> ` : '') +
+      `<button class="aev-btn-res" onclick="_iipFlapResolve(${d.id})">◉ Resolve</button>` +
+    `</div>`;
+  }
+
   return `<div class="iip-section">
     <div class="iip-section-title">STATUS</div>
     <div class="iip-st-row"><span class="iip-st-badge ${badgeCls}">${badgeTxt}</span></div>
     <div class="iip-time-row"><span class="iip-mono">${esc(utcStr)}</span></div>
     <div class="iip-dur-row">Duration: <span id="iip-dur-live" class="iip-dur-live">${initDur}</span></div>
     ${ackmeta}
+    ${btns}
   </div>`;
 }
 
@@ -865,17 +950,10 @@ function _iipTrapEnrich(d) {
 }
 
 function _iipAlert(alertEvt) {
-  const isActive = alertEvt.state === 'active';
-  const isRes    = alertEvt.state === 'resolved';
   const stCls    = {active:'aev-st-active', acknowledged:'aev-st-ack', resolved:'aev-st-res'}[alertEvt.state] || '';
   const stLbl    = {active:'● Active', acknowledged:'◐ Acknowledged', resolved:'✓ Resolved'}[alertEvt.state] || alertEvt.state;
   const firedTs  = alertEvt.triggered_at ? _iipFmtDt(new Date(alertEvt.triggered_at * 1000)) : '—';
   const repeat   = (alertEvt.repeat_count || 1) > 1 ? `<span class="iip-repeat">×${alertEvt.repeat_count}</span>` : '';
-  const btns = !isRes
-    ? `<div class="iip-btns">` +
-        (isActive ? `<button class="aev-btn-ack" onclick="_iipAlertAck(${alertEvt.id})">✓ ACK Alert</button>` : '') +
-        `<button class="aev-btn-res" onclick="_iipAlertResolve(${alertEvt.id})">◉ Resolve Alert</button>` +
-      `</div>` : '';
   return `<div class="iip-section">
     <div class="iip-section-title">ALERT RULE</div>
     <div class="iip-id-row">
@@ -887,7 +965,6 @@ function _iipAlert(alertEvt) {
       <span class="iip-id-label">Fired</span>
       <span class="iip-mono">${esc(firedTs)}</span>${repeat}
     </div>
-    ${btns}
   </div>`;
 }
 

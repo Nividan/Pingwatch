@@ -153,7 +153,6 @@ function _buildSettingsTab_users(sr, ur) {
       <div id="userTableWrap">${renderUserTable(ur.users||[])}</div>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="openAddUser()">＋ Add User</button>
-        <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="openLdapSettings()">🔐 LDAP Settings</button>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:12px">Change Password</div>
@@ -187,6 +186,7 @@ function _buildSettingsTab_groups() {
       <div class="alrt-panel-hdr" style="margin-bottom:10px">
         <span style="color:var(--text3);font-size:12px">Manage alert recipient groups. Assign users to groups and use groups in alert rule email actions.</span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="_groupsOpenEditor(null)">＋ New Group</button>
+        <button class="btn-s rbac-admin" id="btn-import-ldap-group" style="font-size:12px;padding:5px 12px;display:none" onclick="_groupsImportLdap()">Import from LDAP</button>
       </div>
       <div id="group-list"><div class="alrt-loading">Loading…</div></div>
     </div>`;
@@ -198,6 +198,7 @@ function _buildSettingsTab_integrations(sr) {
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
+        <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD</button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -228,16 +229,48 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr"><label class="fl">To</label>
             <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
         </div>
-        <div class="fr" style="margin-top:8px"><label class="fl">Down Alert Delay (seconds)</label>
-          <input type="number" id="st-smtp-delay" value="${sr.smtp_down_delay??10}" min="0" max="3600" style="max-width:100px"/>
-          <div class="fh">Wait this many seconds before sending a DOWN email — if sensor recovers in time, no email is sent. Set to 0 to alert immediately.</div>
+        <!-- Email Style -->
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Email Style</div>
+          <div class="fr" style="margin-top:0">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+              <input type="checkbox" id="st-email-logo" ${sr.email_logo!==0?'checked':''}>
+              <span class="fl" style="margin:0">Show logo in alert emails</span>
+            </label>
+            <div class="fh" style="margin-left:24px">Displayed in the email header bar</div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Logo Image</label>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div id="st-logo-preview" style="width:120px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
+                ${sr.email_logo_data
+                  ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:116px;max-height:44px;object-fit:contain"/>'
+                  : '<span style="color:var(--text3);font-size:9px">Default</span>'}
+              </div>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <label class="btn-s" style="cursor:pointer;display:inline-block;text-align:center">
+                  Upload
+                  <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/gif,image/svg+xml" style="display:none"
+                         onchange="_stLogoFileChange(this)"/>
+                </label>
+                <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
+                        onclick="_stLogoRemove()">Remove</button>
+              </div>
+              <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG — max 2 MB</span>
+            </div>
+            <input type="hidden" id="st-email-logo-data" value=""/>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Company Name</label>
+            <input type="text" id="st-email-company" value="${esc(sr.email_company_name||'')}" placeholder="PingWatch" style="max-width:260px"/>
+            <div class="fh">Shown in email header and footer — leave blank for "PingWatch"</div>
+          </div>
         </div>
-        <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
-          <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
+        <div style="margin-top:14px">
           <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text3)">
-          Emails are sent on sensor DOWN and RECOVERED events.
+          SMTP credentials power email actions in <b>Alert Profiles</b>. Per-stage delay and repeat are configured per profile.
         </div>
       </div>
 
@@ -310,6 +343,91 @@ function _buildSettingsTab_integrations(sr) {
             <div class="fh">Requires syslog forwarding to be enabled and configured above</div>
           </div>
         </div>
+      </div>
+
+      <!-- ── LDAP sub-panel ── -->
+      <div id="ipanel-ldap" style="display:none">
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable LDAP / Active Directory Authentication</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Domain users are verified against this server at login. Add them under Users with auth type "Domain".</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="ldap-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- Connection -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Connection</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">LDAP Server</label>
+            <input type="text" id="ldap-server" placeholder="dc.example.com or 192.168.1.10" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="ldap-port" value="389" min="1" max="65535" style="max-width:100px"/></div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Security</label>
+            <select id="ldap-ssl" style="max-width:240px" onchange="_ldapSslChange()">
+              <option value="0">None — plain LDAP (port 389)</option>
+              <option value="1">LDAPS — TLS from start (port 636)</option>
+              <option value="2">StartTLS — upgrade connection (port 389)</option>
+            </select>
+          </div>
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="ldap-timeout" value="10" min="1" max="120" style="max-width:80px"/></div>
+        </div>
+        <div class="fr"><label class="fl">Base DN</label>
+          <input type="text" id="ldap-base-dn" placeholder="DC=example,DC=com" autocomplete="off"/></div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Bind DN</label>
+            <input type="text" id="ldap-bind-dn" placeholder="CN=svc-pingwatch,OU=Service Accounts,DC=example,DC=com" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Bind Password</label>
+            <input type="password" id="ldap-bind-pass" placeholder="bind password" autocomplete="new-password"/></div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">User Search Filter</label>
+            <input type="text" id="ldap-user-filter" placeholder="(sAMAccountName={username})" autocomplete="off"/>
+            <div class="fh">Use <code style="font-family:monospace;color:var(--accent)">{username}</code> as the placeholder</div>
+          </div>
+          <div class="fr"><label class="fl">NetBIOS Domain</label>
+            <input type="text" id="ldap-domain" placeholder="EXAMPLE (optional)" autocomplete="off"/></div>
+        </div>
+
+        <!-- Test buttons -->
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testLdapConnection()">▶ Test Connection</button>
+          <button class="btn-s" style="font-size:12px" onclick="openLdapTestAuth()">▶ Test User Auth</button>
+          <div id="ldap-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+
+        <!-- Group Integration -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Group Integration</div>
+          <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="ldap-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision unknown users at login
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="ldap-nested-groups" style="width:14px;height:14px;cursor:pointer"/>
+              Nested groups (LDAP_MATCHING_RULE_IN_CHAIN)
+            </label>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Group Search Base</label>
+              <input type="text" id="ldap-group-base-dn" placeholder="OU=Groups,DC=example,DC=com (optional)" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Sync Interval (min)</label>
+              <input type="number" id="ldap-sync-interval" value="60" min="0" max="1440" style="max-width:80px" title="0 = disabled"/></div>
+          </div>
+          <div class="fr"><label class="fl">Group Filter</label>
+            <input type="text" id="ldap-group-filter" placeholder="(objectClass=group)" autocomplete="off"/>
+            <div class="fh">AD: <code style="font-family:monospace;color:var(--accent)">(objectClass=group)</code> &nbsp; OpenLDAP: <code style="font-family:monospace;color:var(--accent)">(objectClass=groupOfNames)</code></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn-s" style="font-size:12px" onclick="openLdapTestUserGroups()">▶ Test User Groups</button>
+          </div>
+        </div>
+
       </div>
     </div>`;
 }
@@ -406,7 +524,7 @@ function _buildSettingsTab_logs(sr) {
   return `<div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
       <div style="padding:10px 14px 6px;border-bottom:1px solid var(--border)">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''}/>
+          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
           <span style="font-size:12px;font-weight:600;color:var(--text2)">Debug Mode</span>
         </label>
         <div class="fh" style="margin-top:4px">Enable verbose debug logging. When off, only INFO and above is written to log files.</div>
@@ -584,15 +702,30 @@ function _buildSettingsTab_backup(sr) {
 function _buildSettingsTab_alertRules() {
   return `<div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr">
-        <span style="color:var(--text3);font-size:12px">Rules are evaluated in order for every sensor event.</span>
-        <button class="btn-p rbac-admin" onclick="_alertingOpenEditor(null)">＋ New Rule</button>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text2)">📋 Alert Profiles</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">Escalation policies cascade global → group → device → sensor. First match wins.</div>
+        </div>
+        <button class="btn-p rbac-admin" onclick="openProfileEditor(null)">＋ New Profile</button>
       </div>
       <div id="alrt-list"><div class="alrt-loading">Loading…</div></div>
+
+      <div style="margin:16px 0 8px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="alrt-panel-hdr">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text2)">📨 Action Templates</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">Reusable notification targets. Define once, reference from any profile stage.</div>
+          </div>
+          <button class="btn-p rbac-admin" onclick="openTemplateEditor(null)">＋ New Template</button>
+        </div>
+        <div id="alrt-tpl-list"><div class="alrt-loading">Loading…</div></div>
+      </div>
+
       <div style="margin:16px 0 8px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="alrt-panel-hdr">
           <div>
             <div style="font-size:13px;font-weight:600;color:var(--text2)">🛠 Maintenance Windows</div>
-            <div style="font-size:12px;color:var(--text3);margin-top:2px">Suppress notifications during scheduled maintenance. Rules still evaluate.</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">Suppress notifications during scheduled maintenance. Profiles still evaluate.</div>
           </div>
           <button class="btn-p rbac-admin" onclick="_alertMaintOpen(null)">＋ New Window</button>
         </div>
@@ -601,7 +734,7 @@ function _buildSettingsTab_alertRules() {
     </div>`;
 }
 
-async function openSettings(){
+async function openSettings(initialTab){
   _stopLogLive();
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
@@ -629,7 +762,7 @@ async function openSettings(){
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
-      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Rules</button>
+      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}
@@ -685,6 +818,9 @@ async function openSettings(){
     </div><!-- /stab-layout -->
   </div>`;
   document.body.appendChild(o);
+  if (initialTab && initialTab !== 'general') {
+    switchSettingsTab(initialTab);
+  }
 }
 
 
@@ -1269,6 +1405,10 @@ async function _loadLogTab() {
   const lbl = document.getElementById('log-footer-label');
   if (!el) return;
 
+  // Sync dropdown values with _logFilter (may have been set externally, e.g. badge click)
+  const _lfEl = document.getElementById('logFLevel');
+  if (_lfEl && _lfEl.value !== _logFilter.level) _lfEl.value = _logFilter.level;
+
   const parsed = _parseLogSearch(_logFilter.search);
   const params = new URLSearchParams();
   const level = parsed.level || _logFilter.level;
@@ -1390,8 +1530,8 @@ function _logDownload(filename, content, mime) {
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
 
-const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:500,  http_keyword:500,  banner:300};
-const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:2000, http_keyword:1500, banner:1000};
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000};
 
 const _SDR_META = {
   ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},
@@ -1623,8 +1763,12 @@ async function saveSettings(){
     smtp_user:       document.getElementById('st-smtp-user')?.value.trim()||'',
     smtp_from:       document.getElementById('st-smtp-from')?.value.trim()||'',
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
-    smtp_down_delay: parseInt(document.getElementById('st-smtp-delay')?.value)??10,
+    email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
+    email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
   };
+  const logoData=document.getElementById('st-email-logo-data')?.value||'';
+  if(logoData==='__remove__') smtp.email_logo_data='';
+  else if(logoData) smtp.email_logo_data=logoData;
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
   Object.assign(body,smtp);
@@ -1654,6 +1798,12 @@ async function saveSettings(){
     document.title='PingWatch \u2014 '+(body.org_name||'Network Monitor');
   }
   toast('Settings saved','ok');
+}
+
+async function _saveDebugMode(cb) {
+  const r = await api('PATCH', '/api/settings', { debug_mode: cb.checked ? 1 : 0 });
+  if (!r.ok) { toast('Failed to save debug mode', 'err'); cb.checked = !cb.checked; return; }
+  toast(cb.checked ? 'Debug mode enabled' : 'Debug mode disabled', 'ok');
 }
 
 async function saveSecuritySettings(){
@@ -1964,7 +2114,7 @@ function _renderIntegStatus(id, status) {
 }
 
 function switchIntegTab(name) {
-  ['smtp', 'syslog'].forEach(t => {
+  ['smtp', 'syslog', 'ldap'].forEach(t => {
     document.getElementById(`itab-${t}`)?.classList.toggle('itab-active', t === name);
     const p = document.getElementById(`ipanel-${t}`);
     if (p) p.style.display = t === name ? '' : 'none';
@@ -1974,6 +2124,8 @@ function switchIntegTab(name) {
   const testSyslogBtn = document.getElementById('integ-btn-test-syslog');
   if (testSmtpBtn)   testSmtpBtn.style.display   = name === 'smtp'   ? '' : 'none';
   if (testSyslogBtn) testSyslogBtn.style.display  = name === 'syslog' ? '' : 'none';
+  // Load LDAP fields each time the tab is shown
+  if (name === 'ldap') _loadLdapPanel();
 }
 
 async function _loadIntegrationsStatus() {
@@ -1983,7 +2135,9 @@ async function _loadIntegrationsStatus() {
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
-  const activeSubTab = document.getElementById('ipanel-smtp')?.style.display !== 'none' ? 'smtp' : 'syslog';
+  const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+    t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
+  ) || 'smtp';
   switchIntegTab(activeSubTab);
 }
 
@@ -1991,15 +2145,52 @@ async function _saveIntegrations() {
   const btn = document.getElementById('integ-btn-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
   try {
-    const activeSubTab = document.getElementById('ipanel-smtp')?.style.display !== 'none' ? 'smtp' : 'syslog';
+    const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+      t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
+    ) || 'smtp';
     if (activeSubTab === 'smtp') {
       await saveSettings();
+    } else if (activeSubTab === 'ldap') {
+      await saveLdapSettings();
     } else {
       await saveSyslogSettings();
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   }
+}
+
+async function _loadLdapPanel() {
+  let s;
+  try {
+    s = await api('GET', '/api/ldap/settings');
+  } catch(e) {
+    toast('Failed to load LDAP settings', 'err');
+    return;
+  }
+  if (s.error) { toast(s.error, 'err'); return; }
+  const set    = (id, val) => { const el = document.getElementById(id); if (el) el.value = String(val ?? ''); };
+  const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+  setChk('ldap-enabled',        s.ldap_enabled);
+  set('ldap-server',            s.ldap_server || '');
+  set('ldap-port',              s.ldap_port   || 389);
+  const sslEl = document.getElementById('ldap-ssl');
+  if (sslEl) sslEl.value = String(s.ldap_ssl ?? 0);
+  set('ldap-timeout',           s.ldap_timeout || 10);
+  set('ldap-base-dn',           s.ldap_base_dn || '');
+  set('ldap-bind-dn',           s.ldap_bind_dn || '');
+  const passEl = document.getElementById('ldap-bind-pass');
+  if (passEl) passEl.placeholder = s.ldap_bind_pass_set ? '●●●●●●●● (set — leave blank to keep)' : 'bind password';
+  set('ldap-user-filter',       s.ldap_user_filter  || '(sAMAccountName={username})');
+  set('ldap-domain',            s.ldap_domain       || '');
+  setChk('ldap-auto-provision', s.ldap_auto_provision);
+  setChk('ldap-nested-groups',  s.ldap_nested_groups);
+  set('ldap-group-base-dn',     s.ldap_group_base_dn  || '');
+  set('ldap-sync-interval',     s.ldap_sync_interval  ?? 60);
+  set('ldap-group-filter',      s.ldap_group_filter   || '(objectClass=group)');
+  // Clear any stale test result
+  const res = document.getElementById('ldap-test-result');
+  if (res) res.innerHTML = '';
 }
 
 async function saveSyslogSettings(){
@@ -2046,6 +2237,34 @@ async function testSyslog(){
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Send Test Message'; }
   }
+}
+
+function _stLogoFileChange(input){
+  const file=input.files&&input.files[0];
+  if(!file) return;
+  if(file.size>2*1024*1024){ toast('Logo must be under 2 MB','err'); input.value=''; return; }
+  const allowed=['image/png','image/jpeg','image/gif','image/svg+xml'];
+  if(!allowed.includes(file.type)){ toast('Unsupported format — use PNG, JPEG, or SVG','err'); input.value=''; return; }
+  const reader=new FileReader();
+  reader.onload=function(){
+    const dataUrl=reader.result;
+    document.getElementById('st-email-logo-data').value=dataUrl;
+    const prev=document.getElementById('st-logo-preview');
+    if(prev) prev.innerHTML=`<img src="${dataUrl}" style="max-width:116px;max-height:44px;object-fit:contain"/>`;
+    const rmBtn=document.getElementById('st-logo-remove');
+    if(rmBtn) rmBtn.style.display='';
+  };
+  reader.readAsDataURL(file);
+}
+
+function _stLogoRemove(){
+  document.getElementById('st-email-logo-data').value='__remove__';
+  const prev=document.getElementById('st-logo-preview');
+  if(prev) prev.innerHTML='<span style="color:var(--text3);font-size:9px">Default</span>';
+  const rmBtn=document.getElementById('st-logo-remove');
+  if(rmBtn) rmBtn.style.display='none';
+  const input=document.getElementById('st-logo-file');
+  if(input) input.value='';
 }
 
 async function testSmtp(){
@@ -2123,20 +2342,30 @@ async function _groupsLoad(){
   }catch(e){
     wrap.innerHTML='<div style="color:var(--err);font-size:12px">Failed to load groups.</div>';
   }
+  // Show "Import from LDAP" button if LDAP is enabled
+  try{
+    const ldap = await api('GET','/api/ldap/settings');
+    const btn = document.getElementById('btn-import-ldap-group');
+    if(btn) btn.style.display = ldap.ldap_enabled ? '' : 'none';
+  }catch(_){}
 }
 
 function _groupsRender(groups){
   if(!groups.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No groups yet. Create one to use as alert email recipients.</div>';
-  const rows=groups.map(g=>`
+  const rows=groups.map(g=>{
+    const ldapBadge = g.ldap_dn ? '<span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:3px;margin-left:6px">LDAP</span>' : '';
+    const roleBadge = g.ldap_dn ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">(${esc(g.default_role||'viewer')})</span>` : '';
+    return `
     <tr>
-      <td><strong>${esc(g.name)}</strong></td>
+      <td><strong>${esc(g.name)}</strong>${ldapBadge}${roleBadge}</td>
       <td style="color:var(--text3)">${esc(g.description||'')}</td>
       <td style="text-align:center">${g.member_count}</td>
       <td><div class="usr-act">
         <button onclick="_groupsOpenEditor(${g.id})">✏ Edit</button>
         <button class="del" onclick="_groupsDelete(${g.id},'${esc(g.name)}')">🗑 Delete</button>
       </div></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `<table class="usr-table">
     <thead><tr><th>Name</th><th>Description</th><th style="text-align:center">Members</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
@@ -2153,13 +2382,38 @@ async function _groupsOpenEditor(id){
   if(id){
     group=(_groupsCache||[]).find(g=>g.id===id)||null;
   }
-  const memberUsernames=new Set(users.filter(u=>u.group_id===id).map(u=>u.username));
-  const memberList=users.map(u=>`
-    <label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
-      <input type="checkbox" data-uname="${esc(u.username)}" ${memberUsernames.has(u.username)?'checked':''}/>
-      <span>${esc(u.username)}</span>
-      <span style="color:var(--text3);font-size:11px">${esc(u.role)}</span>
-    </label>`).join('');
+
+  const isLdap = !!(group && group.ldap_dn);
+
+  // For local groups: member checkboxes. For LDAP groups: role selector + info.
+  let membersHtml = '';
+  if (isLdap) {
+    const roleOpts = ['viewer','operator','admin'].map(r =>
+      `<option value="${r}" ${(group.default_role||'viewer')===r?'selected':''}>${r}</option>`
+    ).join('');
+    membersHtml = `
+      <div class="fr"><label class="fl">Default Role</label>
+        <select id="grp-default-role" style="max-width:160px">${roleOpts}</select>
+      </div>
+      <div class="fr"><label class="fl">LDAP DN</label>
+        <input type="text" value="${esc(group.ldap_dn)}" readonly style="color:var(--text3);background:var(--bg2)"/></div>
+      <div class="fh" style="margin-top:4px">Members of this group are managed through LDAP. Users are assigned when they log in or during background sync.</div>`;
+  } else {
+    const memberUsernames=new Set(users.filter(u=>u.group_id===id).map(u=>u.username));
+    const memberList=users.map(u=>`
+      <label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+        <input type="checkbox" data-uname="${esc(u.username)}" ${memberUsernames.has(u.username)?'checked':''}/>
+        <span>${esc(u.username)}</span>
+        <span style="color:var(--text3);font-size:11px">${esc(u.role)}</span>
+      </label>`).join('');
+    membersHtml = `
+      <div class="fr"><label class="fl" style="margin-bottom:6px">Members</label>
+        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+          ${memberList||'<span style="color:var(--text3);font-size:12px">No users found.</span>'}
+        </div>
+        <div class="fh">A user can belong to only one group. Changing group here removes them from their previous group.</div>
+      </div>`;
+  }
 
   closeM('m-grp-ed');
   const o=document.createElement('div'); o.className='mo'; o.id='m-grp-ed';
@@ -2167,7 +2421,7 @@ async function _groupsOpenEditor(id){
   o.innerHTML=`
   <div class="mbox" style="max-width:420px">
     <div class="mhd">
-      <div class="mttl">${id?'Edit Group':'New Group'}</div>
+      <div class="mttl">${id?'Edit Group':'New Group'}${isLdap?' <span style="font-size:11px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:3px;margin-left:6px">LDAP</span>':''}</div>
       <button class="mclose" onclick="closeM('m-grp-ed')">✕</button>
     </div>
     <div class="mbdy">
@@ -2175,12 +2429,7 @@ async function _groupsOpenEditor(id){
         <input type="text" id="grp-name" value="${esc(group?.name||'')}" placeholder="NOC Team" maxlength="100" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Description</label>
         <input type="text" id="grp-desc" value="${esc(group?.description||'')}" placeholder="Optional description" maxlength="500" autocomplete="off"/></div>
-      <div class="fr"><label class="fl" style="margin-bottom:6px">Members</label>
-        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-          ${memberList||'<span style="color:var(--text3);font-size:12px">No users found.</span>'}
-        </div>
-        <div class="fh">A user can belong to only one group. Changing group here removes them from their previous group.</div>
-      </div>
+      ${membersHtml}
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('m-grp-ed')">Cancel</button>
@@ -2197,17 +2446,25 @@ async function _groupsSave(id){
   if(!name){toast('Group name is required','err');return;}
   const btn=document.querySelector('#m-grp-ed .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
+
+  // Check if this is an LDAP-mapped group (has default_role selector)
+  const roleEl = document.getElementById('grp-default-role');
+  const isLdap = !!roleEl;
+
   try{
     let r;
+    const patchBody = {name, description: desc};
+    if (isLdap && roleEl) patchBody.default_role = roleEl.value;
+
     if(id){
-      r=await api('PATCH',`/api/user/group/${id}`,{name,description:desc});
+      r=await api('PATCH',`/api/user/group/${id}`, patchBody);
     }else{
       r=await api('POST','/api/user/group',{name,description:desc});
       id=r.id;
     }
     if(r.error){toast(r.error,'err');return;}
-    // Save members
-    if(id){
+    // Save members (only for local groups — LDAP groups manage membership via LDAP)
+    if(id && !isLdap){
       const checks=document.querySelectorAll('#m-grp-ed [data-uname]');
       const usernames=Array.from(checks).filter(c=>c.checked).map(c=>c.dataset.uname);
       await api('PUT',`/api/user/group/${id}/members`,{usernames});
@@ -2246,6 +2503,119 @@ async function _groupsDelete(id, name){
   }
   if(typeof _aeInvalidateGroups==='function') _aeInvalidateGroups();
   toast(`Group "${name}" deleted`,'ok');
+}
+
+// ── LDAP GROUP IMPORT MODAL ──────────────────────────────────────
+
+async function _groupsImportLdap() {
+  closeM('m-grp-imp');
+  const o = document.createElement('div'); o.className = 'mo'; o.id = 'm-grp-imp';
+  _overlayClose(o, () => closeM('m-grp-imp'));
+  o.innerHTML = `
+  <div class="mbox" style="max-width:640px;width:96vw">
+    <div class="mhd">
+      <div class="mttl">Import LDAP Groups</div>
+      <button class="mclose" onclick="closeM('m-grp-imp')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div class="fh" style="margin-bottom:8px">Search your LDAP directory for groups and import them into PingWatch. Set a default role for users who auto-provision through each group.</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="ldap-grp-search" placeholder="Search by group name (leave empty for all)" autocomplete="off" style="flex:1"/>
+        <button class="btn-p" style="font-size:12px;white-space:nowrap" onclick="_ldapGroupSearch()">Search</button>
+      </div>
+      <div id="ldap-grp-results" style="margin-top:10px;min-height:40px"></div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('m-grp-imp')">Cancel</button>
+      <button class="btn-p" id="btn-ldap-grp-import" style="display:none" onclick="_ldapGroupImport()">Import Selected</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => document.getElementById('ldap-grp-search')?.focus(), 50);
+}
+
+let _ldapGroupSearchResults = [];
+
+async function _ldapGroupSearch() {
+  const query = (document.getElementById('ldap-grp-search')?.value || '').trim();
+  const resEl = document.getElementById('ldap-grp-results');
+  const impBtn = document.getElementById('btn-ldap-grp-import');
+  if (resEl) resEl.innerHTML = '<div style="color:var(--text3);font-size:12px">Searching LDAP…</div>';
+  if (impBtn) impBtn.style.display = 'none';
+  let r;
+  try {
+    r = await api('POST', '/api/ldap/search_groups', {query});
+  } catch (e) {
+    if (resEl) resEl.innerHTML = '<div style="color:var(--down);font-size:12px">Search request failed.</div>';
+    return;
+  }
+  if (!r.ok) {
+    if (resEl) resEl.innerHTML = `<div style="color:var(--down);font-size:12px">${esc(r.message || 'Search failed')}</div>`;
+    return;
+  }
+  _ldapGroupSearchResults = r.groups || [];
+  if (!_ldapGroupSearchResults.length) {
+    if (resEl) resEl.innerHTML = '<div style="color:var(--text3);font-size:12px">No groups found.</div>';
+    return;
+  }
+  // Build results table
+  const rows = _ldapGroupSearchResults.map((g, i) => {
+    const roleOpts = ['viewer', 'operator', 'admin'].map(rv =>
+      `<option value="${rv}">${rv}</option>`
+    ).join('');
+    return `<tr>
+      <td><label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" data-ldap-idx="${i}"/>
+        <span style="font-weight:500">${esc(g.cn)}</span>
+      </label></td>
+      <td style="color:var(--text3);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${esc(g.dn)}">${esc(g.description || '')}</td>
+      <td style="text-align:center">${g.member_count}</td>
+      <td><select data-ldap-role="${i}" style="font-size:11px;padding:2px 4px">${roleOpts}</select></td>
+    </tr>`;
+  }).join('');
+  if (resEl) resEl.innerHTML = `
+    <div style="font-size:11px;color:var(--text3);margin-bottom:4px">${_ldapGroupSearchResults.length} group(s) found</div>
+    <div style="max-height:300px;overflow-y:auto">
+    <table class="usr-table" style="font-size:12px">
+      <thead><tr><th>Group</th><th>Description</th><th style="text-align:center">Members</th><th>Role</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  if (impBtn) impBtn.style.display = '';
+}
+
+async function _ldapGroupImport() {
+  const checks = document.querySelectorAll('#m-grp-imp [data-ldap-idx]');
+  const items = [];
+  checks.forEach(cb => {
+    if (!cb.checked) return;
+    const idx = parseInt(cb.dataset.ldapIdx);
+    const g = _ldapGroupSearchResults[idx];
+    if (!g) return;
+    const roleEl = document.querySelector(`#m-grp-imp [data-ldap-role="${idx}"]`);
+    items.push({
+      dn: g.dn,
+      cn: g.cn,
+      description: g.description || '',
+      default_role: roleEl ? roleEl.value : 'viewer',
+    });
+  });
+  if (!items.length) { toast('No groups selected', 'err'); return; }
+  const btn = document.getElementById('btn-ldap-grp-import');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  let r;
+  try {
+    r = await api('POST', '/api/user/group/import_ldap', {groups: items});
+  } catch (e) {
+    toast('Import request failed', 'err'); return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Import Selected'; }
+  }
+  if (r.error) { toast(r.error, 'err'); return; }
+  _groupsCache = r.groups || _groupsCache;
+  const wrap = document.getElementById('group-list');
+  if (wrap) wrap.innerHTML = _groupsRender(_groupsCache || []);
+  closeM('m-grp-imp');
+  toast(`Imported ${r.imported} group(s)${r.skipped ? `, ${r.skipped} skipped` : ''}`, 'ok');
 }
 
 // ── USER PROFILE MODAL (admin path, opens from Users tab) ─────────

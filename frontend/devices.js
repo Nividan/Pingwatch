@@ -63,9 +63,16 @@ function ensureGroupSection(group){
 
   const label=document.createElement('div');
   label.className='grp-label';
-  label.title='Double-click to rename';
   label.textContent=group;
-  label.addEventListener('dblclick',function(){ renameGroup(label, group); });
+
+  const editBtn=document.createElement('button');
+  editBtn.className='grp-edit-btn rbac-operator';
+  editBtn.title='Edit group settings';
+  editBtn.innerHTML='⚙️';
+  editBtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    if (typeof openEditGroup === 'function') openEditGroup(group);
+  });
 
   const cnt=document.createElement('div');
   cnt.className='grp-count'; cnt.id=gcid; cnt.textContent='0';
@@ -77,7 +84,7 @@ function ensureGroupSection(group){
   summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
 
   hdr.appendChild(dragH); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
-  hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
+  hdr.appendChild(editBtn); hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
 
   // Grid
   const grid=document.createElement('div');
@@ -160,7 +167,7 @@ function _devSnrSummaryHtml(did){
 }
 
 // ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
-let _dcm=null;
+let _dcm=null, _ctxGrp=null;
 
 function _showDcm(x,y){
   if(!_dcm) return;
@@ -184,6 +191,7 @@ function _initDevCtxMenu(){
     e.preventDefault();
     const card=e.target.closest('.dc:not(.dc-add)');
     const row =e.target.closest('.dc-list-row');
+    const grpHdr=e.target.closest('.grp-hdr');
     const raw =(card?.id||row?.id||'');
     const did =raw.replace(/^dp-|^dpl-/,'') || null;
     if(did&&S.devices[did]){
@@ -196,6 +204,12 @@ function _initDevCtxMenu(){
         <div class="dci ${muted?'dci-green':'dci-warn'}" onclick="_hideDcm();_toggleMuteDevice('${did}')">
           ${muted?'🔔 Unmute Alerts':'🔕 Mute Alerts'}
         </div>`;
+    } else if(grpHdr){
+      _ctxGrp=grpHdr.closest('.grp-wrap')?.dataset.grpName||'';
+      _dcm.innerHTML=`
+        <div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openEditGroup==='function')openEditGroup(_ctxGrp)">⚙️ Edit Group</div>
+        <div class="dci-sep"></div>
+        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp)">🖥️ Add Device</div>`;
     } else {
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
@@ -356,6 +370,7 @@ function cardHTML(dev){
     </div>
   </div>`;
 }
+
 
 function listRowHTML(dev){
   const st=dev.device_id ? (dev.status||'unknown') : 'unknown';
@@ -652,10 +667,20 @@ function renameGroup(labelEl, oldName){
       const fresh=wrap.querySelector('.dc-add');
       fresh.addEventListener('click',function(){ openAddDeviceGroup(newName); });
     }
-    // Update the label's own listener
+    // Update the label text
     labelEl.replaceWith(labelEl.cloneNode(true));
     const newLabel=wrap.querySelector('.grp-label');
-    newLabel.addEventListener('dblclick',function(){ renameGroup(newLabel, newName); });
+    newLabel.textContent=newName;
+    // Rebind gear button so it carries the new group name
+    const gear=wrap.querySelector('.grp-edit-btn');
+    if(gear){
+      gear.replaceWith(gear.cloneNode(true));
+      const freshGear=wrap.querySelector('.grp-edit-btn');
+      freshGear.addEventListener('click',function(e){
+        e.stopPropagation();
+        if (typeof openEditGroup === 'function') openEditGroup(newName);
+      });
+    }
     cntId_refresh(wrap, newName);
   }
   toast('Group renamed to "'+newName+'"','ok');
@@ -944,9 +969,11 @@ function _applyDevFilter(query){
     if(!stMatch) return;
     if(q){
       const nameMatch=dev.name.toLowerCase().includes(q);
+      const hostMatch=(dev.host||'').toLowerCase().includes(q);
+      const secIpMatch=(dev.secondary_ips||[]).some(ip=>ip.toLowerCase().includes(q));
       const sensorMatch=S._devSensors[did]&&[...S._devSensors[did]]
         .some(k=>S.sensors[k]&&S.sensors[k].name.toLowerCase().includes(q));
-      if(!nameMatch&&!sensorMatch) return;
+      if(!nameMatch&&!hostMatch&&!secIpMatch&&!sensorMatch) return;
     }
     _filteredDids.push(did);
   });
