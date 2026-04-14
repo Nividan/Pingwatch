@@ -109,8 +109,8 @@ class WizardController:
 
         root.title("PingWatch Setup")
         root.configure(bg=BG)
-        root.geometry("720x640")
-        root.minsize(680, 580)
+        root.geometry("720x700")
+        root.minsize(680, 600)
         root.resizable(True, True)
 
         # ── Header ───────────────────────────────────────────────
@@ -270,8 +270,24 @@ class PackagesPage(WizardPage):
         _label(self, "Verifying required and optional dependencies",
                size=10, color=TEXT2).pack(anchor="w")
 
-        self._rows_frame = tk.Frame(self, bg=BG)
-        self._rows_frame.pack(fill="both", expand=True, pady=10)
+        # Scrollable container for package rows
+        self._canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
+        self._scrollbar = tk.Scrollbar(self, orient="vertical",
+                                       command=self._canvas.yview,
+                                       bg=BG3, troughcolor=BG2)
+        self._rows_frame = tk.Frame(self._canvas, bg=BG)
+        self._rows_frame.bind("<Configure>",
+            lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        self._canvas_win = self._canvas.create_window((0, 0), window=self._rows_frame, anchor="nw")
+        self._canvas.configure(yscrollcommand=self._scrollbar.set)
+        self._canvas.bind("<Configure>",
+            lambda e: self._canvas.itemconfig(self._canvas_win, width=e.width))
+        self._scrollbar.pack(side="right", fill="y", pady=10)
+        self._canvas.pack(side="left", fill="both", expand=True, pady=10)
+        # Mouse wheel scrolling
+        def _on_mousewheel(e):
+            self._canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        self._canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         self._pkg_widgets = {}
         self._checked = False
