@@ -27,6 +27,8 @@ from core.setup_logic import (
     detect_pg_server, generate_pg_password, test_pg_connection,
     pg_install_instructions,
     default_wizard_state, save_wizard_config, initialize_database,
+    win_firewall_check, win_firewall_add, get_firewall_rules,
+    win_create_shortcut, win_task_exists, win_install_task,
 )
 
 # ── High-DPI awareness (Windows) ────────────────────────────────────────────
@@ -56,7 +58,7 @@ _MONO = "Consolas" if sys.platform == "win32" else \
         "Menlo" if sys.platform == "darwin" else "DejaVu Sans Mono"
 
 # ── Step names ──────────────────────────────────────────────────────────────
-_STEPS = ["Welcome", "Packages", "Database", "Network", "Security", "Summary"]
+_STEPS = ["Welcome", "Packages", "Database", "Network", "Security", "System", "Summary"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -109,8 +111,8 @@ class WizardController:
 
         root.title("PingWatch Setup")
         root.configure(bg=BG)
-        root.geometry("720x700")
-        root.minsize(680, 600)
+        root.geometry("760x740")
+        root.minsize(700, 640)
         root.resizable(True, True)
 
         # Window icon (title bar + taskbar)
@@ -753,7 +755,162 @@ class SecurityPage(WizardPage):
         return True
 
 
-# ── 6. Summary ──────────────────────────────────────────────────────────────
+# ── 6. System (Firewall + Shortcut + Auto-Start) ───────────────────────────
+
+class SystemPage(WizardPage):
+    def __init__(self, parent, ctrl):
+        super().__init__(parent, ctrl)
+        _label(self, "System Integration", size=14, bold=True).pack(anchor="w", pady=(8, 4))
+        _label(self, "Firewall rules, desktop shortcut, and auto-start",
+               size=10, color=TEXT2).pack(anchor="w", pady=(0, 12))
+
+        self._rows = {}
+
+        # ── Firewall section ─────────────────────────────────────
+        if sys.platform == "win32":
+            _label(self, "Windows Firewall", size=11, bold=True,
+                   color=TEXT2).pack(anchor="w", pady=(4, 2))
+            self._fw_frame = tk.Frame(self, bg=BG)
+            self._fw_frame.pack(fill="x", pady=(0, 8))
+
+        # ── Desktop shortcut ─────────────────────────────────────
+        sc_row = tk.Frame(self, bg=BG2, padx=8, pady=6)
+        sc_row.pack(fill="x", pady=2)
+        self._sc_icon = tk.Label(sc_row, text="○", bg=BG2, fg=TEXT3,
+                                 font=(_MONO, 12), width=2)
+        self._sc_icon.pack(side="left")
+        tk.Label(sc_row, text="Desktop Shortcut", bg=BG2, fg=TEXT,
+                 font=(_FNT, 10, "bold")).pack(side="left", padx=(4, 0))
+        tk.Label(sc_row, text="— PingWatch.lnk on your desktop",
+                 bg=BG2, fg=TEXT2, font=(_FNT, 10)).pack(side="left", padx=(4, 0))
+        self._sc_btn = _btn(sc_row, "Create", self._create_shortcut, "accent")
+        self._sc_btn.pack(side="right")
+        self._sc_status = tk.Label(sc_row, text="", bg=BG2, fg=TEXT3,
+                                   font=(_FNT, 9))
+        self._sc_status.pack(side="right", padx=(0, 8))
+
+        # ── Auto-start ───────────────────────────────────────────
+        if sys.platform == "win32":
+            _label(self, "", size=4).pack()
+            _label(self, "Auto-Start", size=11, bold=True,
+                   color=TEXT2).pack(anchor="w", pady=(4, 2))
+
+            as_row = tk.Frame(self, bg=BG, padx=8, pady=4)
+            as_row.pack(fill="x")
+            self._as_mode = tk.StringVar(value="system")
+            tk.Radiobutton(as_row, text="Start at boot (SYSTEM, headless — no login required)",
+                           variable=self._as_mode, value="system",
+                           bg=BG, fg=TEXT2, selectcolor=BG3,
+                           activebackground=BG, activeforeground=TEXT2,
+                           font=(_FNT, 10)).pack(anchor="w")
+            tk.Radiobutton(as_row, text="Start at logon (current user — tray icon works)",
+                           variable=self._as_mode, value="user",
+                           bg=BG, fg=TEXT2, selectcolor=BG3,
+                           activebackground=BG, activeforeground=TEXT2,
+                           font=(_FNT, 10)).pack(anchor="w")
+
+            btn_row = tk.Frame(self, bg=BG, padx=8)
+            btn_row.pack(fill="x", pady=(4, 0))
+            self._as_icon = tk.Label(btn_row, text="○", bg=BG, fg=TEXT3,
+                                     font=(_MONO, 12), width=2)
+            self._as_icon.pack(side="left")
+            self._as_btn = _btn(btn_row, "Install Task", self._install_task, "accent")
+            self._as_btn.pack(side="left", padx=(4, 0))
+            self._as_status = tk.Label(btn_row, text="", bg=BG, fg=TEXT3,
+                                       font=(_FNT, 9))
+            self._as_status.pack(side="left", padx=8)
+
+    def on_enter(self):
+        if sys.platform == "win32":
+            self._check_firewall()
+            self._check_task()
+        self._check_shortcut()
+
+    def _check_firewall(self):
+        for w in self._fw_frame.winfo_children():
+            w.destroy()
+        rules = get_firewall_rules(self.ctrl.state)
+        for i, (proto, port, name) in enumerate(rules):
+            row = tk.Frame(self._fw_frame, bg=BG2 if i % 2 == 0 else BG,
+                           padx=8, pady=3)
+            row.pack(fill="x")
+            exists = win_firewall_check(name)
+            icon = tk.Label(row, text="✓" if exists else "✗",
+                            bg=row["bg"], fg=GREEN if exists else YELLOW,
+                            font=(_MONO, 12), width=2)
+            icon.pack(side="left")
+            tk.Label(row, text=f"{proto} {port}", bg=row["bg"], fg=TEXT,
+                     font=(_MONO, 10)).pack(side="left", padx=(4, 0))
+            tk.Label(row, text=f"— {name}", bg=row["bg"], fg=TEXT2,
+                     font=(_FNT, 10)).pack(side="left", padx=(4, 0))
+            if not exists:
+                btn = _btn(row, "Add Rule",
+                           lambda n=name, p=proto, pt=port, r=row, ic=icon:
+                               self._add_fw_rule(n, p, pt, r, ic),
+                           "accent")
+                btn.pack(side="right")
+
+    def _add_fw_rule(self, name, proto, port, row, icon):
+        ok, msg = win_firewall_add(name, proto, port)
+        if ok:
+            icon.config(text="✓", fg=GREEN)
+            # Remove the Add Rule button
+            for w in row.winfo_children():
+                if isinstance(w, tk.Button):
+                    w.pack_forget()
+        else:
+            icon.config(text="✗", fg=RED)
+
+    def _check_shortcut(self):
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        exists = os.path.isfile(os.path.join(desktop, "PingWatch.lnk"))
+        if exists:
+            self._sc_icon.config(text="✓", fg=GREEN)
+            self._sc_btn.pack_forget()
+            self._sc_status.config(text="Already exists", fg=GREEN)
+
+    def _create_shortcut(self):
+        self._sc_btn.config(state="disabled", text="Creating…")
+        ok, msg = win_create_shortcut()
+        if ok:
+            self._sc_icon.config(text="✓", fg=GREEN)
+            self._sc_btn.pack_forget()
+            self._sc_status.config(text=msg, fg=GREEN)
+        else:
+            self._sc_btn.config(state="normal", text="Retry")
+            self._sc_status.config(text=msg, fg=RED)
+
+    def _check_task(self):
+        if win_task_exists():
+            self._as_icon.config(text="✓", fg=GREEN)
+            self._as_status.config(text="Task already installed", fg=GREEN)
+            self._as_btn.config(text="Reinstall")
+
+    def _install_task(self):
+        self._as_btn.config(state="disabled", text="Installing…")
+        self._as_status.config(text="", fg=TEXT3)
+        self.ctrl.set_busy(True)
+        as_system = (self._as_mode.get() == "system")
+
+        def _worker():
+            ok, msg = win_install_task(as_system=as_system)
+            self.ctrl.root.after(0, lambda: self._task_done(ok, msg))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _task_done(self, ok, msg):
+        self.ctrl.set_busy(False)
+        if ok:
+            self._as_icon.config(text="✓", fg=GREEN)
+            self._as_btn.config(state="normal", text="Reinstall")
+            self._as_status.config(text=msg, fg=GREEN)
+        else:
+            self._as_icon.config(text="✗", fg=RED)
+            self._as_btn.config(state="normal", text="Retry")
+            self._as_status.config(text=msg, fg=RED)
+
+
+# ── 7. Summary ──────────────────────────────────────────────────────────────
 
 class SummaryPage(WizardPage):
     def __init__(self, parent, ctrl):
@@ -848,6 +1005,7 @@ def run_wizard() -> bool:
     ctrl.add_page(DatabasePage)
     ctrl.add_page(NetworkPage)
     ctrl.add_page(SecurityPage)
+    ctrl.add_page(SystemPage)
     ctrl.add_page(SummaryPage)
     ctrl.show_page(0)
 

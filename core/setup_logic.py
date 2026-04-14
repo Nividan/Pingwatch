@@ -551,3 +551,132 @@ def initialize_database(state: dict, progress_cb=None) -> "tuple[bool, str]":
         return True, ""
     except Exception as e:
         return False, str(e)
+
+
+# ── Windows Firewall ────────────────────────────────────────────────────────
+
+def win_firewall_check(name: str) -> bool:
+    """Return True if a Windows Firewall rule with this name exists."""
+    try:
+        r = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
+            capture_output=True)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def win_firewall_add(name: str, proto: str, port: int) -> "tuple[bool, str]":
+    """Add a Windows Firewall inbound allow rule. Returns (ok, message)."""
+    try:
+        r = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={name}", "dir=in", "action=allow",
+             f"protocol={proto}", f"localport={port}"],
+            capture_output=True, text=True)
+        if r.returncode == 0:
+            return True, f"Rule added: {proto} {port}"
+        return False, (r.stderr or r.stdout or "Unknown error").strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def get_firewall_rules(state: dict) -> list:
+    """Return list of (proto, port, rule_name) tuples from wizard state."""
+    rules = [("TCP", state.get("http_port", 7070), "PingWatch HTTP")]
+    if state.get("tls_enabled"):
+        rules.append(("TCP", state.get("tls_port", 8443), "PingWatch HTTPS"))
+    rules.append(("UDP", state.get("snmp_port", 162), "PingWatch SNMP traps"))
+    return rules
+
+
+# ── Desktop shortcut (Windows) ──────────────────────────────────────────────
+
+def win_create_shortcut() -> "tuple[bool, str]":
+    """Create a PingWatch desktop shortcut. Returns (ok, message)."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    shortcut_path = os.path.join(desktop, "PingWatch.lnk")
+    if os.path.isfile(shortcut_path):
+        return True, "Shortcut already exists"
+    target = os.path.join(_root, "windows", "start.bat")
+    icon = os.path.join(_root, "frontend", "favicon.ico")
+    ps_cmd = (
+        f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
+        f'$s.TargetPath="{target}";'
+        f'$s.WorkingDirectory="{_root}";'
+        f'$s.IconLocation="{icon},0";'
+        f'$s.Description="PingWatch Network Monitor";'
+        f'$s.Save()'
+    )
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return True, f"Created: {shortcut_path}"
+        return False, (r.stderr or "PowerShell shortcut creation failed").strip()
+    except Exception as e:
+        return False, str(e)
+
+
+# ── Windows Task Scheduler (auto-start) ────────────────────────────────────
+
+def win_task_exists(task_name: str = "PingWatch") -> bool:
+    """Return True if the scheduled task already exists."""
+    try:
+        r = subprocess.run(["schtasks", "/query", "/tn", task_name],
+                           capture_output=True)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def win_install_task(as_system: bool = True,
+                     task_name: str = "PingWatch") -> "tuple[bool, str]":
+    """Register PingWatch as a Windows startup task. Returns (ok, message)."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _pythonw = sys.executable.replace("python.exe", "pythonw.exe")
+    if not os.path.isfile(_pythonw):
+        _pythonw = sys.executable
+    _server_py = os.path.join(_root, "server.py")
+
+    def _pse(s):
+        return s.replace("'", "''")
+
+    _args = f'"{_pse(_server_py)}"'
+    if as_system:
+        _args += " --headless"
+        _principal = "$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest"
+        _trigger = "$t = New-ScheduledTaskTrigger -AtStartup"
+    else:
+        import getpass
+        _cur_user = os.environ.get("USERNAME") or getpass.getuser()
+        _principal = (
+            f"$p = New-ScheduledTaskPrincipal "
+            f"-UserId '{_pse(_cur_user)}' -RunLevel Highest -LogonType Interactive"
+        )
+        _trigger = "$t = New-ScheduledTaskTrigger -AtLogOn"
+
+    _ps_lines = [
+        f"$a = New-ScheduledTaskAction -Execute '{_pse(_pythonw)}' "
+        f"-Argument '{_args}' -WorkingDirectory '{_pse(_root)}'",
+        _trigger,
+        _principal,
+        "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries",
+        f"Register-ScheduledTask -TaskName '{task_name}' "
+        f"-Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null",
+    ]
+    _ps_script = "; ".join(_ps_lines)
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", _ps_script],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            mode = "at boot (SYSTEM, headless)" if as_system else "at logon (current user)"
+            return True, f"Task '{task_name}' installed — starts {mode}"
+        err = (r.stderr or r.stdout or "").strip().splitlines()
+        return False, err[0][:200] if err else "Task registration failed"
+    except subprocess.TimeoutExpired:
+        return False, "PowerShell timed out (30s)"
+    except Exception as e:
+        return False, str(e)
