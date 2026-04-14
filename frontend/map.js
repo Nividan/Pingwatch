@@ -44,6 +44,16 @@ window.addEventListener('message', e => {
     _ntmVisible = true;
     _resumeDashBg?.();
     _resumeMainBg?.();
+    // Catchup: apply any device status updates that arrived while map was paused
+    if (Array.isArray(e.data.devices)) {
+      for (const {did, status} of e.data.devices) {
+        const dev = _pwDevMap[did];
+        if (dev && dev.status !== status) {
+          dev.status = status;
+          _schedulePwLiveUpdate(dev.device_id);
+        }
+      }
+    }
   }
 });
 // Also pause when this document's own visibility changes (e.g. OS switch)
