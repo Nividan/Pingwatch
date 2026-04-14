@@ -128,6 +128,41 @@ journalctl -u pingwatch -f                     # live logs
 sudo bash linux/start.sh --uninstall-service
 ```
 
+### Air-Gapped Installation
+
+PingWatch has **zero external runtime dependencies** — no CDN fonts, no telemetry, no update checks. It runs fully offline once installed. The only step that needs internet is fetching Python packages, which you do once on a connected machine and transfer to the air-gapped target.
+
+**On an internet-connected machine:**
+
+1. Install the matching Python version (3.8+) and clone/download the repo.
+2. Pre-download all Python dependencies as wheels:
+   ```bash
+   pip download -r requirements.txt -d ./wheels
+   ```
+3. Copy the entire `Pingwatch/` folder (including `./wheels/`) to the air-gapped host (USB, approved file share, etc.).
+
+**On the air-gapped host:**
+
+1. Install Python 3.8+ from an offline installer (Windows `.exe` / Linux `.deb` / `.rpm`).
+2. Install PostgreSQL (optional — skip for SQLite) and `net-snmp` (optional — skip if no SNMP sensors) from your organization's internal package mirror or offline installer.
+3. Install the pre-downloaded wheels:
+   ```bash
+   pip install --no-index --find-links ./wheels -r requirements.txt
+   ```
+4. Launch PingWatch normally (`windows\start.bat` or `sudo bash linux/start.sh`). The first-run wizard will detect that all packages are present and skip the download step.
+
+**Configuration notes for air-gapped environments:**
+
+| Feature | How to configure |
+|---------|-----------------|
+| **TLS certificate** | Use the built-in self-signed generator (Settings → Networking → HTTPS / TLS) or import your internal PKI certificate. Do **not** use ACME / Let's Encrypt — it requires internet. |
+| **Email alerts** | Point SMTP to your internal mail relay, or skip email and use webhook / syslog / browser push instead. |
+| **Webhook alerts** | Target internal URLs only. The built-in SSRF guard rejects public/external IPs. |
+| **DNS probes** | Point at your internal DNS servers. |
+| **Device backups** | SSH/Telnet to internal devices — already LAN-only. |
+
+All monitoring features (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner, VMware), the dashboard, topology map, IPAM, alerting, and backup engine work identically online and offline.
+
 ---
 
 ## Usage

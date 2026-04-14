@@ -836,10 +836,14 @@ class DatabasePage(WizardPage):
                        highlightbackground=BORDER)
         frm.pack(fill="both", expand=True, padx=16, pady=(0, 12))
 
+        # selectbackground uses a neutral mid-tone (BG4) so every tag colour
+        # (green commands, blue link, gray paragraphs, yellow notes, white
+        # headings) stays readable when highlighted. Tag foregrounds override
+        # selectforeground in Tk, so we don't set it.
         txt = tk.Text(frm, bg=BG2, fg=TEXT, font=(_FNT, 10),
                       relief="flat", wrap="word", padx=14, pady=10,
-                      cursor="xterm", selectbackground=ACCENT,
-                      selectforeground=BG, inactiveselectbackground=ACCENT,
+                      cursor="xterm",
+                      selectbackground="#3a4561", inactiveselectbackground="#3a4561",
                       exportselection=True, state="normal")
         sb = ttk.Scrollbar(frm, command=txt.yview)
         txt.configure(yscrollcommand=sb.set)

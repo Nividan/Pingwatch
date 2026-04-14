@@ -239,6 +239,11 @@
   - One-time vs recurring time fields are now separate — datetime pickers hidden when "Recurring" is checked; recurring windows auto-set start/end timestamps to now → +10 years so `db_active_windows()` always includes them
   - Maintenance window list shows device name instead of device ID for device-scoped windows
 - Stop All device sensors fix — stopped sensors are excluded from `Device.status` evaluation so a fully-stopped device shows gray (unknown) instead of red (down); `stop_device()` broadcasts an SSE `device_status` event immediately and auto-resolves open flap events
+- Air-gapped compatibility — zero external runtime dependencies
+  - Self-hosted Google Fonts — Exo 2, JetBrains Mono, Orbitron, Share Tech Mono downloaded as `.woff2` to `frontend/fonts/` (~179 KB); `@font-face` rules added to `style.css`, `map.css`, and inline `<style>` in `setup.html`; all three `<link href="https://fonts.googleapis.com/...">` tags removed from `index.html`, `setup.html`, `map.html`
+  - `map.js::_inlineFontsForExport()` rewritten to fetch local `/fonts/*.woff2` and base64-embed them into exported PNGs (no more external fetch + `AbortController` timeout); works fully offline
+  - CSP tightened in `server.py` — dropped `https://fonts.googleapis.com` from `style-src` and `https://fonts.gstatic.com` from `font-src`; now pure `'self'`
+  - Air-gapped installation guide added to `README.md` (pre-downloaded wheels, self-signed TLS instead of ACME, internal SMTP relay, etc.)
 
 ## 🔴 High Priority
 

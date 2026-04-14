@@ -193,7 +193,8 @@ pingwatch/
     ├── bg.js               ← Animated background canvas
     ├── map.html            ← Network Topology Manager shell
     ├── map.css             ← NTM styles
-    └── map.js              ← NTM canvas engine
+    ├── map.js              ← NTM canvas engine
+    └── fonts/              ← Self-hosted woff2 files — Exo 2, JetBrains Mono, Orbitron, Share Tech Mono (no CDN dependency; air-gapped safe)
 ```
 
 ---
@@ -410,6 +411,7 @@ The frontend is served as static files — no build step.
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **sortable columns** (click headers, ▲/▼ arrows) on all 7 columns with IP-numeric, alpha, and date comparators; **filter dropdowns** on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None); sort + filter + text search compose together; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.js` | NTM canvas engine — drag-and-drop topology editor |
+| `fonts/` | Self-hosted `.woff2` font files (Exo 2, JetBrains Mono, Orbitron, Share Tech Mono). Referenced by `@font-face` rules in `style.css` + `map.css` + inline `<style>` in `setup.html`. No external CDN — PingWatch has zero network dependencies at runtime (air-gapped safe). CSP reflects this: `style-src 'self' 'unsafe-inline'; font-src 'self';` in `server.py`. For PNG topology exports, `map.js::_inlineFontsForExport()` base64-embeds the Orbitron + Share Tech Mono woff2 files so exported images render correctly outside the app. |
 
 ---
 
