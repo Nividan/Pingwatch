@@ -220,7 +220,7 @@ Python-based Windows launcher replacing start.bat logic. Admin elevation via `ct
 ### `core/state.py`
 In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to all connected clients. The probe loop calculates live traffic rates for Counter32/Counter64 SNMP OIDs (`_fmt_bps`, wraparound-safe delta / elapsed) and stores the formatted rate in `last_value`. `Sensor.host_override` tracks whether the host was set manually (not inherited from the device); device IP changes propagate to all non-overridden sensors.
 
-`Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. This ensures VMware and other threshold-bearing sensors correctly colour the device tile without requiring a probe failure.
+`Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. Only active (running, non-muted) sensors contribute — stopped sensors are excluded so a fully-stopped device shows `"unknown"` (gray) rather than `"down"`. `stop_device()` broadcasts an SSE `device_status` event immediately after stopping all sensors and auto-resolves open flap events via `db_resolve_flaps_by_sensor()` so the Events tab clears without manual intervention.
 
 ### `core/constants.py`
 Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
@@ -578,7 +578,7 @@ The frontend is served as static files — no build step.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/alert/windows` | viewer | List all maintenance windows |
-| `POST` | `/api/alert/window` | admin | Create window |
+| `POST` | `/api/alert/windows` | admin | Create window |
 | `PATCH` | `/api/alert/window/{id}` | admin | Update window |
 | `DELETE` | `/api/alert/window/{id}` | admin | Delete window |
 

@@ -234,6 +234,12 @@
   - `windows/launcher.pyw` — Python-based launcher replacing start.bat logic (admin elevation, first-run detection, port cleanup)
   - `windows/start.bat` reduced to a 4-line shim
 
+- Maintenance window improvements
+  - Scope field replaced with device/group dropdown — no more typing raw IDs; device picker populated live from `S.devices`; group picker populated from unique group names
+  - One-time vs recurring time fields are now separate — datetime pickers hidden when "Recurring" is checked; recurring windows auto-set start/end timestamps to now → +10 years so `db_active_windows()` always includes them
+  - Maintenance window list shows device name instead of device ID for device-scoped windows
+- Stop All device sensors fix — stopped sensors are excluded from `Device.status` evaluation so a fully-stopped device shows gray (unknown) instead of red (down); `stop_device()` broadcasts an SSE `device_status` event immediately and auto-resolves open flap events
+
 ## 🔴 High Priority
 
 ## ⚙️ Medium Priority
