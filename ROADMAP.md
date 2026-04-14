@@ -206,6 +206,40 @@
   - License Overview dashboard widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted table of expiring/expired licenses (device, license name, expiry date, days remaining, status badge)
   - SSE listener in `app.js` — `license_status` event refreshes IPAM license map and dashboard widget in real-time
 
+- Multi-dashboard tabs
+  - Per-user named dashboards (up to 10) with tab bar above widget grid
+  - Create / rename / delete dashboards via right-click context menu
+  - Tab switching preserves widgets; last-active tab remembered in localStorage
+  - New users auto-created a "Default" dashboard with 8 starter widgets (System Status, Server Perf, Event Summary, Internet Health, Network Avail, Device Status, Down Devices, Packet Loss)
+  - `dashboards` table replaces `dashboard_widgets`; idempotent migration on startup
+  - API: `GET/POST /api/dashboards`, `GET/PUT/PATCH/DELETE /api/dashboards/{id}`, `PUT /api/dashboards/reorder`
+- Professional SMTP alert email redesign
+  - Hero logo section (up to 2 MB, centered, company name below)
+  - Colored status banner with timestamp
+  - Sensor breadcrumb path (Group > Device > Sensor)
+  - Detail callout box with severity-tinted background
+  - Stats grid: Sensor Details, Performance, Thresholds, Statistics
+  - Subject line uses configured company name
+  - Test email renders full professional layout with mock sensor data
+- IPAM table sort and filter
+  - Clickable column headers for ascending/descending sort on all 7 columns
+  - Filter dropdowns on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None)
+  - Sort, filter, and text search compose together
+- GUI setup wizard (Windows)
+  - Dark-themed tkinter wizard (`gui_setup.py`) matching PingWatch's colour palette
+  - 6-step flow: Welcome, Packages, Database, Network, Security, Summary
+  - Background threads for pip installs and PostgreSQL connection tests
+  - Falls back to CLI `setup_wizard.py` when tkinter is unavailable
+  - `core/setup_logic.py` — shared non-UI logic extracted from setup_wizard.py
+  - `windows/launcher.pyw` — Python-based launcher replacing start.bat logic (admin elevation, first-run detection, port cleanup)
+  - `windows/start.bat` reduced to a 4-line shim
+
+- Maintenance window improvements
+  - Scope field replaced with device/group dropdown — no more typing raw IDs; device picker populated live from `S.devices`; group picker populated from unique group names
+  - One-time vs recurring time fields are now separate — datetime pickers hidden when "Recurring" is checked; recurring windows auto-set start/end timestamps to now → +10 years so `db_active_windows()` always includes them
+  - Maintenance window list shows device name instead of device ID for device-scoped windows
+- Stop All device sensors fix — stopped sensors are excluded from `Device.status` evaluation so a fully-stopped device shows gray (unknown) instead of red (down); `stop_device()` broadcasts an SSE `device_status` event immediately and auto-resolves open flap events
+
 ## 🔴 High Priority
 
 ## ⚙️ Medium Priority

@@ -26,6 +26,7 @@ from db import (
     db_list_subnets,
     db_get_subnet,
     db_add_subnet,
+    db_rename_subnet,
     db_delete_subnet,
     db_get_allocations,
     db_upsert_allocation,
@@ -117,6 +118,22 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: ipam_sync_subnet_add(_sid, _cidr))
         db_log_audit(user, h.client_address[0], 'ipam_subnet_add', canonical)
         h._json(201, {'ok': True, 'id': new_id, 'cidr': canonical})
+        return True
+
+    # ── PATCH /api/ipam/subnets/<id> — rename ─────────────────────
+    m = _RE_IPAM_SUBNET.match(path)
+    if m and method == 'PATCH':
+        user, _ = h._require('operator')
+        if not user: return True
+        subnet_id = int(m.group(1))
+        sub = db_get_subnet(subnet_id)
+        if not sub:
+            h._json(404, {'error': 'Subnet not found'}); return True
+        name = (body.get('name') or '').strip()[:80]
+        db_rename_subnet(subnet_id, name)
+        db_log_audit(user, h.client_address[0], 'ipam_subnet_rename',
+                     f"{sub['cidr']} → {name!r}")
+        h._json(200, {'ok': True})
         return True
 
     # ── DELETE /api/ipam/subnets/<id> ─────────────────────────────

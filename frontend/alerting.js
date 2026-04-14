@@ -823,9 +823,12 @@ function _alertMaintRenderList(windows) {
     const active  = w.start_ts <= now && w.end_ts >= now;
     const start   = new Date(w.start_ts * 1000).toLocaleString();
     const end     = new Date(w.end_ts   * 1000).toLocaleString();
+    const _devForScope = w.scope_type === 'device'
+      ? Object.values(S.devices || {}).find(d => String(d.device_id) === String(w.scope_value))
+      : null;
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
                    : w.scope_type === 'group'  ? `Group: ${esc(w.scope_value)}`
-                   : `Device: ${esc(w.scope_value)}`;
+                   : `Device: ${esc(_devForScope ? _devForScope.name : w.scope_value)}`;
     const recurLbl = w.recurring
       ? `Recurring days ${esc(w.recur_days)} ${esc(w.recur_start)}–${esc(w.recur_end)}`
       : 'One-time';
@@ -902,10 +905,10 @@ function _alertMaintOpen(id) {
           </select>
         </div>
         <div class="fr" id="mw-scope-val-row" style="${scopeType==='all'?'display:none':''}">
-          <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Group name':'Device ID'}</label>
-          <input type="text" id="mw-scope-val" value="${esc(scopeVal)}" autocomplete="off"/>
+          <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Device group':'Device'}</label>
+          ${_mwScopeInner(scopeType, scopeVal)}
         </div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div id="mw-onetime-row" style="${recurring?'display:none':'display:flex'};gap:12px;flex-wrap:wrap">
           <div class="fr" style="flex:1;min-width:160px">
             <label class="fl">Start</label>
             <input type="datetime-local" id="mw-start" value="${startDt}"/>
@@ -955,19 +958,43 @@ function _alertMaintOpen(id) {
   setTimeout(() => document.getElementById('mw-name')?.focus(), 60);
 }
 
+function _mwScopeInner(scopeType, curVal) {
+  if (scopeType === 'device') {
+    const opts = Object.values(S.devices || {})
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      .map(d => `<option value="${esc(d.device_id)}" ${String(d.device_id) === String(curVal) ? 'selected' : ''}>${esc(d.name)} — ${esc(d.host)}</option>`)
+      .join('');
+    return `<select id="mw-scope-val" style="width:100%">${opts || '<option value="">No devices</option>'}</select>`;
+  }
+  if (scopeType === 'group') {
+    const groups = [...new Set(Object.values(S.devices || {}).map(d => d.group).filter(Boolean))].sort();
+    const opts = groups.map(g => `<option value="${esc(g)}" ${g === curVal ? 'selected' : ''}>${esc(g)}</option>`).join('');
+    return `<select id="mw-scope-val" style="width:100%">${opts || '<option value="">No groups</option>'}</select>`;
+  }
+  return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" autocomplete="off"/>`;
+}
+
 function _mwScopeChange() {
   const sel = document.getElementById('mw-scope')?.value;
   const row = document.getElementById('mw-scope-val-row');
   const lbl = document.getElementById('mw-scope-val-lbl');
   if (!row) return;
   row.style.display = sel === 'all' ? 'none' : '';
-  if (lbl) lbl.textContent = sel === 'group' ? 'Group name' : 'Device ID';
+  if (lbl) lbl.textContent = sel === 'group' ? 'Device group' : 'Device';
+  // Replace the control with the appropriate dropdown for the new scope type
+  const existing = document.getElementById('mw-scope-val');
+  if (existing) existing.outerHTML = _mwScopeInner(sel, '');
 }
 
 function _mwRecurChange() {
-  const checked = document.getElementById('mw-recurring')?.checked;
-  const panel   = document.getElementById('mw-recur-panel');
-  if (panel) panel.style.display = checked ? '' : 'none';
+  const checked    = document.getElementById('mw-recurring')?.checked;
+  const panel      = document.getElementById('mw-recur-panel');
+  const onetimeRow = document.getElementById('mw-onetime-row');
+  console.log('[mw] _mwRecurChange checked=', checked,
+              'panel=', !!panel, 'onetimeRow=', !!onetimeRow);
+  if (!onetimeRow) console.error('[mw] mw-onetime-row not found in DOM');
+  if (panel)      panel.style.display      = checked ? '' : 'none';
+  if (onetimeRow) onetimeRow.style.display = checked ? 'none' : 'flex';
 }
 
 function _mwDayToggle(btn) {
@@ -987,8 +1014,12 @@ async function _alertMaintSave(id) {
   const activeDays = [...document.querySelectorAll('.alrt-day-btn.active')]
     .map(b => b.dataset.day).join(',');
 
-  const startTs = startRaw ? Math.floor(new Date(startRaw).getTime() / 1000) : 0;
-  const endTs   = endRaw   ? Math.floor(new Date(endRaw).getTime()   / 1000) : 0;
+  // For recurring windows the datetime pickers are hidden — auto-set a permanent range
+  const nowSec = Math.floor(Date.now() / 1000);
+  const startTs = recurring ? nowSec
+                : (startRaw ? Math.floor(new Date(startRaw).getTime() / 1000) : 0);
+  const endTs   = recurring ? nowSec + 10 * 365 * 24 * 3600          // 10 years
+                : (endRaw   ? Math.floor(new Date(endRaw).getTime()   / 1000) : 0);
 
   const payload = {
     name, scope_type: scopeType, scope_value: scopeVal,
@@ -1002,7 +1033,8 @@ async function _alertMaintSave(id) {
 
   const isNew  = id === null;
   const method = isNew ? 'POST'  : 'PATCH';
-  const path   = isNew ? '/api/alert/window' : `/api/alert/window/${id}`;
+  const path   = isNew ? '/api/alert/windows' : `/api/alert/window/${id}`;
+  console.log('[mw] save method=', method, 'path=', path, 'payload=', payload);
   try {
     await api(method, path, payload);
     toast(isNew ? `Window "${name}" created` : `Window "${name}" updated`, 'ok');

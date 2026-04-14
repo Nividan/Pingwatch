@@ -137,6 +137,34 @@ def db_add_subnet(cidr: str, name: str, user: str) -> int:
         con.close()
 
 
+def db_rename_subnet(subnet_id: int, name: str) -> None:
+    """Rename a subnet's label. Enqueued write."""
+    now = time.time()
+    def _do():
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor('main') as cur:
+                    cur.execute(
+                        "UPDATE ipam_subnets SET name=%s WHERE id=%s",
+                        (name, subnet_id)
+                    )
+                log.debug(f"IPAM subnet {subnet_id} renamed to {name!r}")
+            except Exception as e:
+                log.error(f"IPAM rename subnet error (id={subnet_id}): {e}")
+            return
+        con = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            con.execute("UPDATE ipam_subnets SET name=? WHERE id=?", (name, subnet_id))
+            con.commit()
+            log.debug(f"IPAM subnet {subnet_id} renamed to {name!r}")
+        except Exception as e:
+            log.error(f"IPAM rename subnet error (id={subnet_id}): {e}")
+        finally:
+            con.close()
+    _db_enqueue(_do)
+
+
 def db_delete_subnet(subnet_id: int) -> None:
     """Delete a subnet and all its IP allocations (enqueued write)."""
     def _do():
