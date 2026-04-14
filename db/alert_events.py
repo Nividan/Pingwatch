@@ -343,6 +343,64 @@ def db_auto_resolve_event(profile_id: int, did: str, sid: str) -> bool:
         con.close()
 
 
+def db_ack_events_by_sensor(did: str, sid: str, actor: str = "") -> None:
+    """ACK all active alert events for a device+sensor pair."""
+    now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_events SET state='acknowledged', ack_by=%s, ack_at=%s "
+                    "WHERE did=%s AND sid=%s AND state='active'",
+                    (actor, now, did, sid)
+                )
+        except Exception as e:
+            log.error(f"db_ack_events_by_sensor error: {e}")
+        return
+    con = _con()
+    try:
+        con.execute(
+            "UPDATE alert_events SET state='acknowledged', ack_by=?, ack_at=? "
+            "WHERE did=? AND sid=? AND state='active'",
+            (actor, now, did, sid)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"db_ack_events_by_sensor error: {e}")
+    finally:
+        con.close()
+
+
+def db_resolve_events_by_sensor(did: str, sid: str) -> None:
+    """Resolve all active/acknowledged alert events for a device+sensor pair."""
+    now = time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE alert_events SET state='resolved', resolved_at=%s "
+                    "WHERE did=%s AND sid=%s AND state IN ('active','acknowledged')",
+                    (now, did, sid)
+                )
+        except Exception as e:
+            log.error(f"db_resolve_events_by_sensor error: {e}")
+        return
+    con = _con()
+    try:
+        con.execute(
+            "UPDATE alert_events SET state='resolved', resolved_at=? "
+            "WHERE did=? AND sid=? AND state IN ('active','acknowledged')",
+            (now, did, sid)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"db_resolve_events_by_sensor error: {e}")
+    finally:
+        con.close()
+
+
 def db_resolve_all_active() -> int:
     """Resolve all active/acknowledged alert events.  Returns count resolved."""
     now = time.time()

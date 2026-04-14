@@ -148,7 +148,8 @@ async function _evtAlertAck(id) {
   const d = await api('POST', `/api/alert/event/${id}/ack`);
   if (!d.ok) { toast(d.error || 'Failed to acknowledge', 'err'); return; }
   toast('Alert acknowledged', 'ok');
-  await _refreshAlertCache();
+  await Promise.all([_refreshAlertCache(), _refreshFlapList()]);
+  _renderEvtView();
   if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
     _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
 }
@@ -157,7 +158,8 @@ async function _evtAlertResolve(id) {
   const d = await api('POST', `/api/alert/event/${id}/resolve`);
   if (!d.ok) { toast(d.error || 'Failed to resolve', 'err'); return; }
   toast('Alert resolved', 'ok');
-  await _refreshAlertCache();
+  await Promise.all([_refreshAlertCache(), _refreshFlapList()]);
+  _renderEvtView();
   if (typeof _alertingLoadEvents === 'function' && _evtActiveSubTab === 'alert-history')
     _alertingLoadEvents(_alertEvtFilter ?? 'all', true);
 }
@@ -168,6 +170,7 @@ async function _evtFlapAck(flapId) {
   toast('Acknowledged', 'ok');
   await _refreshFlapList();
   _renderEvtView();
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
 async function _evtFlapResolve(flapId) {
@@ -176,6 +179,7 @@ async function _evtFlapResolve(flapId) {
   toast('Resolved', 'ok');
   await _refreshFlapList();
   _renderEvtView();
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
 async function _evtResolveAll() {
@@ -541,13 +545,17 @@ function _buildEvtTable(events) {
       const repeatBadge = alertEvt.repeat_count > 1
         ? `<span class="aev-repeat" title="Fired ${alertEvt.repeat_count} times">×${alertEvt.repeat_count}</span>`
         : '';
-      const btns = isActive
+      // Flap-level ACK/Resolve buttons (event is the source of truth)
+      const flapState = d.ack_state || 'active';
+      const flapActive = flapState === 'active';
+      const flapAcked  = flapState === 'acknowledged';
+      const flapBtns = (flapActive || flapAcked) && d.id
         ? `<div class="aev-btns">` +
-            `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtAlertAck(${alertEvt.id})">✓ ACK</button>` +
-            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtAlertResolve(${alertEvt.id})">◉ Resolve</button>` +
+            (flapActive ? `<button class="aev-btn-ack" onclick="event.stopPropagation();_evtFlapAck(${d.id})">✓ ACK</button>` : '') +
+            `<button class="aev-btn-res" onclick="event.stopPropagation();_evtFlapResolve(${d.id})">◉ Resolve</button>` +
           `</div>`
         : '';
-      const resTag = alertEvt.state === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
+      const resTag = flapState === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
       alertCell =
         `<td class="aev-cell">` +
           `<div class="${tagCls}">` +
@@ -557,7 +565,7 @@ function _buildEvtTable(events) {
             repeatBadge +
           `</div>` +
           resTag +
-          btns +
+          flapBtns +
         `</td>`;
     } else if (d.id) {
       const flapState = d.ack_state || 'active';
@@ -795,14 +803,11 @@ function _buildIIP(d, alertEvt) {
 }
 
 function _iipStatus(d, alertEvt) {
-  // Use the most-resolved state between flap-native and alert event
-  const _rank    = { active: 0, acknowledged: 1, resolved: 2 };
+  // Flap is the source of truth for event state
   const flapSt   = d.ack_state || 'active';
-  const alertSt  = alertEvt ? (alertEvt.state || 'active') : 'active';
-  const state    = _rank[alertSt] >= _rank[flapSt] ? alertSt : flapSt;
-  const isActive = state === 'active';
-  const isAcked  = state === 'acknowledged';
-  const isRes    = state === 'resolved';
+  const isActive = flapSt === 'active';
+  const isAcked  = flapSt === 'acknowledged';
+  const isRes    = flapSt === 'resolved';
   const badgeCls = isActive ? 'iip-st-active' : isAcked ? 'iip-st-ack' : 'iip-st-res';
   const badgeTxt = isActive ? '● Active' : isAcked ? '◐ Acknowledged' : '✓ Resolved';
 
@@ -817,12 +822,22 @@ function _iipStatus(d, alertEvt) {
     ackmeta = `<div class="iip-ack-meta">Acknowledged by <strong>${esc(d.ack_by)}</strong>${ackTs ? ' at ' + ackTs : ''}</div>`;
   }
 
+  // ACK/Resolve buttons on the event (flap), not the alert
+  let btns = '';
+  if ((isActive || isAcked) && d.id) {
+    btns = `<div class="iip-btns" style="margin-top:8px">` +
+      (isActive ? `<button class="aev-btn-ack" onclick="_iipFlapAck(${d.id})">✓ Acknowledge</button> ` : '') +
+      `<button class="aev-btn-res" onclick="_iipFlapResolve(${d.id})">◉ Resolve</button>` +
+    `</div>`;
+  }
+
   return `<div class="iip-section">
     <div class="iip-section-title">STATUS</div>
     <div class="iip-st-row"><span class="iip-st-badge ${badgeCls}">${badgeTxt}</span></div>
     <div class="iip-time-row"><span class="iip-mono">${esc(utcStr)}</span></div>
     <div class="iip-dur-row">Duration: <span id="iip-dur-live" class="iip-dur-live">${initDur}</span></div>
     ${ackmeta}
+    ${btns}
   </div>`;
 }
 
@@ -935,17 +950,10 @@ function _iipTrapEnrich(d) {
 }
 
 function _iipAlert(alertEvt) {
-  const isActive = alertEvt.state === 'active';
-  const isRes    = alertEvt.state === 'resolved';
   const stCls    = {active:'aev-st-active', acknowledged:'aev-st-ack', resolved:'aev-st-res'}[alertEvt.state] || '';
   const stLbl    = {active:'● Active', acknowledged:'◐ Acknowledged', resolved:'✓ Resolved'}[alertEvt.state] || alertEvt.state;
   const firedTs  = alertEvt.triggered_at ? _iipFmtDt(new Date(alertEvt.triggered_at * 1000)) : '—';
   const repeat   = (alertEvt.repeat_count || 1) > 1 ? `<span class="iip-repeat">×${alertEvt.repeat_count}</span>` : '';
-  const btns = !isRes
-    ? `<div class="iip-btns">` +
-        (isActive ? `<button class="aev-btn-ack" onclick="_iipAlertAck(${alertEvt.id})">✓ ACK Alert</button>` : '') +
-        `<button class="aev-btn-res" onclick="_iipAlertResolve(${alertEvt.id})">◉ Resolve Alert</button>` +
-      `</div>` : '';
   return `<div class="iip-section">
     <div class="iip-section-title">ALERT RULE</div>
     <div class="iip-id-row">
@@ -957,7 +965,6 @@ function _iipAlert(alertEvt) {
       <span class="iip-id-label">Fired</span>
       <span class="iip-mono">${esc(firedTs)}</span>${repeat}
     </div>
-    ${btns}
   </div>`;
 }
 

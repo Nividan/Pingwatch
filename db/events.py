@@ -369,6 +369,66 @@ def db_resolve_flap(flap_id):
         if con: con.close()
 
 
+def db_ack_flaps_by_sensor(did, sid, actor=""):
+    """ACK all active flaps for a device+sensor pair."""
+    import time as _time
+    now = _time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                cur.execute(
+                    "UPDATE flap_log SET ack_state='acknowledged', ack_by=%s, ack_at=%s "
+                    "WHERE did=%s AND sid=%s AND COALESCE(ack_state,'active')='active'",
+                    (actor, now, did, sid)
+                )
+        except Exception as e:
+            log.error(f"db_ack_flaps_by_sensor error: {e}")
+        return
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+    try:
+        con.execute(
+            "UPDATE flap_log SET ack_state='acknowledged', ack_by=?, ack_at=? "
+            "WHERE did=? AND sid=? AND COALESCE(ack_state,'active')='active'",
+            (actor, now, did, sid)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"db_ack_flaps_by_sensor error: {e}")
+    finally:
+        con.close()
+
+
+def db_resolve_flaps_by_sensor(did, sid):
+    """Resolve all active/acknowledged flaps for a device+sensor pair."""
+    import time as _time
+    now = _time.time()
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                cur.execute(
+                    "UPDATE flap_log SET ack_state='resolved', ack_at=%s "
+                    "WHERE did=%s AND sid=%s AND COALESCE(ack_state,'active') IN ('active','acknowledged')",
+                    (now, did, sid)
+                )
+        except Exception as e:
+            log.error(f"db_resolve_flaps_by_sensor error: {e}")
+        return
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+    try:
+        con.execute(
+            "UPDATE flap_log SET ack_state='resolved', ack_at=? "
+            "WHERE did=? AND sid=? AND COALESCE(ack_state,'active') IN ('active','acknowledged')",
+            (now, did, sid)
+        )
+        con.commit()
+    except Exception as e:
+        log.error(f"db_resolve_flaps_by_sensor error: {e}")
+    finally:
+        con.close()
+
+
 def db_count_active_flaps() -> int:
     """Count flap_log entries with ack_state in ('active','acknowledged')."""
     if is_pg():
