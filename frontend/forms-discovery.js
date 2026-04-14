@@ -912,7 +912,8 @@ async function _discBulkAdd(){
   if(btn){ btn.disabled = true; btn.textContent = 'Adding…'; }
   let r;
   try{
-    r = await api('POST', '/api/discovery/bulk-add', {devices});
+    const cidr = (_disc.state && _disc.state.cidr) || '';
+    r = await api('POST', '/api/discovery/bulk-add', {devices, cidr});
   }catch(e){
     toast('Bulk add failed','err');
     if(btn){ btn.disabled = false; _discUpdateAddBtn(); }

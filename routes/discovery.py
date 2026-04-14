@@ -11,7 +11,7 @@ from core.config import (
     _RE_DISCOVERY_SCAN, _RE_DISCOVERY_STATUS, _RE_DISCOVERY_BULK_ADD,
 )
 from db import _db_enqueue, db_save, db_log_audit
-from db.ipam import ipam_sync_device_add
+from db.ipam import ipam_sync_device_add, db_list_subnets, db_add_subnet
 from core.logger import log
 from monitoring.subnet_discovery import start_scan, get_scan, cancel_scan
 
@@ -199,6 +199,18 @@ def handle(h, method, path, body):
 
         # Single persist after the whole batch
         _db_enqueue(lambda: db_save(STATE))
+
+        # Auto-add scanned CIDR to IPAM if it doesn't already exist
+        _cidr = str(body.get("cidr", "")).strip()
+        if _cidr and "/" in _cidr and created:
+            try:
+                existing = {s["cidr"] for s in db_list_subnets()}
+                if _cidr not in existing:
+                    _db_enqueue(lambda _c=_cidr, _u=user:
+                                db_add_subnet(_c, "Discovered", _u))
+            except Exception:
+                pass  # non-critical — don't fail the bulk add
+
         try:
             db_log_audit(user, h.client_address[0],
                          "subnet_bulk_add",
