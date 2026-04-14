@@ -984,9 +984,12 @@ function _mwScopeChange() {
 }
 
 function _mwRecurChange() {
-  const checked   = document.getElementById('mw-recurring')?.checked;
-  const panel     = document.getElementById('mw-recur-panel');
+  const checked    = document.getElementById('mw-recurring')?.checked;
+  const panel      = document.getElementById('mw-recur-panel');
   const onetimeRow = document.getElementById('mw-onetime-row');
+  console.log('[mw] _mwRecurChange checked=', checked,
+              'panel=', !!panel, 'onetimeRow=', !!onetimeRow);
+  if (!onetimeRow) console.error('[mw] mw-onetime-row not found in DOM');
   if (panel)      panel.style.display      = checked ? '' : 'none';
   if (onetimeRow) onetimeRow.style.display = checked ? 'none' : 'flex';
 }
@@ -1028,6 +1031,7 @@ async function _alertMaintSave(id) {
   const isNew  = id === null;
   const method = isNew ? 'POST'  : 'PATCH';
   const path   = isNew ? '/api/alert/windows' : `/api/alert/window/${id}`;
+  console.log('[mw] save method=', method, 'path=', path, 'payload=', payload);
   try {
     await api(method, path, payload);
     toast(isNew ? `Window "${name}" created` : `Window "${name}" updated`, 'ok');
