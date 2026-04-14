@@ -175,8 +175,14 @@ def install_snmpget() -> "tuple[bool, str]":
     import shutil
     _sys = platform.system()
     if _sys == "Windows":
-        # Download pre-built net-snmp binary and install silently
-        _url = "https://sourceforge.net/projects/net-snmp/files/net-snmp%20binaries/5.7-binaries/net-snmp-5.7.0-1.x64.exe/download"
+        import struct
+        _bits = struct.calcsize("P") * 8
+        if _bits == 64:
+            _url = "https://sourceforge.net/projects/net-snmp/files/net-snmp%20binaries/5.5-binaries/net-snmp-5.5.0-2.x64.exe/download"
+            _ver = "5.5.0 x64"
+        else:
+            _url = "https://sourceforge.net/projects/net-snmp/files/net-snmp%20binaries/5.7-binaries/net-snmp-5.7.0-1.x86.exe/download"
+            _ver = "5.7.0 x86"
         _installer = os.path.join(os.environ.get("TEMP", "."), "net-snmp-setup.exe")
         try:
             import urllib.request
@@ -190,7 +196,7 @@ def install_snmpget() -> "tuple[bool, str]":
             # Check if snmpget is now available in the default install path
             _snmp_bin = r"C:\usr\bin\snmpget.exe"
             if os.path.isfile(_snmp_bin) or shutil.which("snmpget"):
-                return True, "Installed net-snmp 5.7"
+                return True, f"Installed net-snmp {_ver}"
             return False, f"Installer ran but snmpget not found (exit code {r.returncode})"
         except subprocess.TimeoutExpired:
             return False, "Installer timed out (120s)"
