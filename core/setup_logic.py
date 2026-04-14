@@ -166,6 +166,61 @@ def check_ping() -> bool:
     return shutil.which("ping") is not None
 
 
+def install_snmpget() -> "tuple[bool, str]":
+    """Attempt to install net-snmp via the system package manager.
+
+    Returns (success, message).
+    """
+    import platform
+    import shutil
+    _sys = platform.system()
+    if _sys == "Windows":
+        # Try Chocolatey
+        if shutil.which("choco"):
+            try:
+                r = subprocess.run(["choco", "install", "net-snmp", "-y"],
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    return True, "Installed via Chocolatey"
+            except Exception:
+                pass
+        # Try winget
+        if shutil.which("winget"):
+            try:
+                r = subprocess.run(["winget", "install", "net-snmp.net-snmp"],
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    return True, "Installed via winget"
+            except Exception:
+                pass
+        return False, "Neither Chocolatey nor winget available"
+    elif _sys == "Linux":
+        for pkg_mgr, pkg_name in [
+            ("apt-get", "snmp"), ("dnf", "net-snmp-utils"), ("yum", "net-snmp-utils"),
+        ]:
+            if shutil.which(pkg_mgr):
+                try:
+                    r = subprocess.run(
+                        ["sudo", pkg_mgr, "install", "-y", pkg_name],
+                        capture_output=True, text=True)
+                    if r.returncode == 0:
+                        return True, f"Installed via {pkg_mgr}"
+                except Exception:
+                    pass
+        return False, "No supported package manager found"
+    elif _sys == "Darwin":
+        if shutil.which("brew"):
+            try:
+                r = subprocess.run(["brew", "install", "net-snmp"],
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    return True, "Installed via Homebrew"
+            except Exception:
+                pass
+        return False, "Homebrew not available"
+    return False, "Unsupported platform"
+
+
 # ── Port helpers ────────────────────────────────────────────────────────────
 
 def port_in_use(port: int) -> "int | None":

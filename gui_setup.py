@@ -22,7 +22,7 @@ from tkinter import ttk, filedialog
 
 from core.setup_logic import (
     PACKAGES, check_import, pip_available, pip_install,
-    check_snmpget, check_ping,
+    check_snmpget, check_ping, install_snmpget,
     port_in_use, kill_port_processes,
     detect_pg_server, generate_pg_password, test_pg_connection,
     pg_install_instructions,
@@ -332,7 +332,8 @@ class PackagesPage(WizardPage):
             "Download: https://sourceforge.net/projects/net-snmp/files/net-snmp/"
         )
         self._add_tool_row(n,     "_snmpget", "snmpget",
-                           "SNMP sensor polling (net-snmp)", hint=_snmp_hint)
+                           "SNMP sensor polling (net-snmp)", hint=_snmp_hint,
+                           install_fn=install_snmpget)
         _ping_hint = (
             "Windows: ping is built-in — check your PATH\n"
             "Linux: sudo apt install iputils-ping"
@@ -340,8 +341,8 @@ class PackagesPage(WizardPage):
         self._add_tool_row(n + 1, "_ping",    "ping",
                            "ICMP ping sensor", hint=_ping_hint)
 
-    def _add_tool_row(self, idx, key, name, desc, hint=""):
-        """Add a system tool row (snmpget, ping) — not pip-installable."""
+    def _add_tool_row(self, idx, key, name, desc, hint="", install_fn=None):
+        """Add a system tool row (snmpget, ping) with optional install button."""
         outer = tk.Frame(self._rows_frame, bg=BG2 if idx % 2 == 0 else BG)
         outer.pack(fill="x")
         row = tk.Frame(outer, bg=outer["bg"], pady=4, padx=8)
@@ -353,12 +354,51 @@ class PackagesPage(WizardPage):
                  font=(_FNT, 10, "bold")).pack(side="left", padx=(4, 0))
         tk.Label(row, text=f"— {desc}", bg=row["bg"], fg=TEXT2,
                  font=(_FNT, 10)).pack(side="left", padx=(4, 0))
-        # Hint label (hidden until tool is missing)
-        hint_lbl = tk.Label(outer, text=hint, bg=outer["bg"], fg=TEXT3,
-                            font=(_FNT, 9), anchor="w", padx=32, wraplength=600,
-                            justify="left")
-        self._pkg_widgets[key] = {"icon": icon, "btn": None, "row": row,
-                                  "hint": hint_lbl}
+        # Install button (hidden until tool is missing and install_fn provided)
+        btn = None
+        if install_fn:
+            btn = _btn(row, "Install", lambda: self._install_tool(key, install_fn),
+                       "accent")
+        # Hint — selectable Text widget so users can copy commands
+        hint_w = None
+        if hint:
+            lines = hint.count("\n") + 1
+            hint_w = tk.Text(outer, bg=outer["bg"], fg=TEXT3, font=(_MONO, 9),
+                             height=lines, relief="flat", bd=0, padx=32,
+                             highlightthickness=0, wrap="word", cursor="arrow")
+            hint_w.insert("1.0", hint)
+            hint_w.config(state="disabled")  # read-only but selectable
+        self._pkg_widgets[key] = {"icon": icon, "btn": btn, "row": row,
+                                  "hint": hint_w}
+
+    def _install_tool(self, key, install_fn):
+        """Run a system tool installer in a background thread."""
+        w = self._pkg_widgets[key]
+        if w["btn"]:
+            w["btn"].config(state="disabled", text="Installing…")
+        w["icon"].config(text="⟳", fg=YELLOW)
+        self.ctrl.set_busy(True)
+
+        def _worker():
+            ok, msg = install_fn()
+            self.ctrl.root.after(0, lambda: self._tool_install_done(key, ok, msg))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _tool_install_done(self, key, ok, msg):
+        w = self._pkg_widgets[key]
+        self.ctrl.set_busy(False)
+        check_fn = check_snmpget if key == "_snmpget" else check_ping
+        if ok or check_fn():
+            w["icon"].config(text="✓", fg=GREEN)
+            if w["btn"]:
+                w["btn"].pack_forget()
+            if w.get("hint"):
+                w["hint"].pack_forget()
+        else:
+            w["icon"].config(text="✗", fg=YELLOW)
+            if w["btn"]:
+                w["btn"].config(state="normal", text="Retry")
 
     def _check_all(self):
         self._checked = True
@@ -380,8 +420,10 @@ class PackagesPage(WizardPage):
                     w["icon"].config(text="✓", fg=GREEN)
                 else:
                     w["icon"].config(text="✗", fg=YELLOW)
+                    if w.get("btn"):
+                        w["btn"].pack(side="right")
                     if w.get("hint"):
-                        w["hint"].pack(fill="x")
+                        w["hint"].pack(fill="x", pady=(0, 4))
 
     def _install_pkg(self, pkg):
         w = self._pkg_widgets[pkg["import"]]
