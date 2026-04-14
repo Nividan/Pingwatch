@@ -3863,27 +3863,31 @@ function exportSVG() {
 }
 
 async function _inlineFontsForExport() {
-  // Fetch Google Fonts CSS then inline each font as base64.
-  // 4-second hard timeout per request — if Google Fonts is unreachable
-  // (firewall / no internet) we skip font inlining rather than hanging forever.
-  function _ft(url) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
-    return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+  // Inline self-hosted fonts into the exported SVG/PNG so labels render
+  // correctly when the file is opened outside the app. Fetched from /fonts/
+  // — no external CDN dependency, works fully offline.
+  const FONTS = [
+    { family: 'Orbitron',        weight: 400, file: 'orbitron-v35-latin-regular.woff2'        },
+    { family: 'Orbitron',        weight: 700, file: 'orbitron-v35-latin-700.woff2'            },
+    { family: 'Orbitron',        weight: 900, file: 'orbitron-v35-latin-900.woff2'            },
+    { family: 'Share Tech Mono', weight: 400, file: 'share-tech-mono-v16-latin-regular.woff2' },
+  ];
+  const parts = [];
+  for (const f of FONTS) {
+    try {
+      const blob = await fetch('/fonts/' + f.file).then(r => r.blob());
+      const b64 = await new Promise(res => {
+        const rd = new FileReader();
+        rd.onload = () => res(rd.result);
+        rd.readAsDataURL(blob);
+      });
+      parts.push(
+        `@font-face{font-family:'${f.family}';font-style:normal;` +
+        `font-weight:${f.weight};src:url(${b64}) format('woff2');}`
+      );
+    } catch {}
   }
-  const GFONTS = 'https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap';
-  try {
-    let css = await _ft(GFONTS).then(r => r.text());
-    const fontUrls = [...css.matchAll(/url\((https:\/\/[^)]+)\)/g)].map(m => m[1]);
-    for (const fu of fontUrls) {
-      try {
-        const blob = await _ft(fu).then(r => r.blob());
-        const b64 = await new Promise(res => { const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(blob); });
-        css = css.replaceAll(fu, b64);
-      } catch {}
-    }
-    return css;
-  } catch { return ''; }
+  return parts.join('\n');
 }
 
 async function exportPNG() {
