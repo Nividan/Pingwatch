@@ -117,60 +117,236 @@ def _fmt_ts(ts_str: str) -> str:
         return str(ts_str)
 
 
+def _detail_bg(severity: str) -> str:
+    """Return tinted background color for the detail callout box."""
+    sv = (severity or '').lower()
+    if sv in ('critical', 'down'):
+        return '#fef2f2'
+    if sv == 'warning':
+        return '#fef9f0'
+    if sv == 'recovery':
+        return '#f0f9f4'
+    return '#f0f4fe'
+
+
+def _html_logo_section(logo: bool, company: str) -> str:
+    """Render the hero logo section — large centered logo + company name."""
+    if not logo:
+        return ''
+    _co = _safe(company) if company else 'PingWatch'
+    return (
+        f'<tr><td align="center" style="padding:24px 24px 16px;background:#ffffff">'
+        f'<img src="cid:pwlogo" width="180" height="60" '
+        f'alt="{_co}" style="display:block;max-width:180px;max-height:60px;'
+        f'width:auto;height:auto;margin:0 auto"/>'
+        f'</td></tr>'
+    )
+
+
+def _html_status_banner(color: str, emoji: str, label: str, ts_str: str) -> str:
+    """Render the colored status banner with timestamp."""
+    return (
+        f'<tr><td style="background:{color};padding:18px 24px" bgcolor="{color}">'
+        f'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+        f'<td style="color:#ffffff;font-size:22px;font-weight:700">'
+        f'<span style="font-size:26px;vertical-align:middle">{emoji}</span>'
+        f'&nbsp; {label}</td>'
+        f'<td align="right" style="color:rgba(255,255,255,.8);font-size:12px;'
+        f'vertical-align:middle">{ts_str}</td>'
+        f'</tr></table></td></tr>'
+    )
+
+
+def _html_breadcrumb(ctx: dict) -> str:
+    """Render the Group > Device > Sensor (Type) breadcrumb path."""
+    if not ctx:
+        return ''
+    parts = []
+    grp = _safe(ctx.get('grp', ''))
+    if grp:
+        parts.append(grp)
+    parts.append(_safe(ctx.get('dname', '')))
+    sname = _safe(ctx.get('sname', ''))
+    stype = _safe(ctx.get('stype', ''))
+    parts.append(f'{sname} ({stype})' if stype else sname)
+    sep = ' <span style="color:#bbb;margin:0 6px">&rsaquo;</span> '
+    crumb = sep.join(f'<span style="color:#555">{p}</span>' for p in parts if p)
+    return (
+        f'<tr><td style="background:#f8f9fa;padding:10px 24px;'
+        f'border-bottom:1px solid #e8e8e8;font-size:12px;'
+        f'font-family:Arial,Helvetica,sans-serif">{crumb}</td></tr>'
+    )
+
+
+def _html_detail_box(detail: str, color: str, severity: str) -> str:
+    """Render the highlighted detail/message callout box."""
+    if not detail:
+        return ''
+    bg = _detail_bg(severity)
+    return (
+        f'<tr><td style="padding:20px 24px 4px">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" '
+        f'style="border-left:4px solid {color};border-radius:0 4px 4px 0">'
+        f'<tr><td style="background:{bg};padding:14px 16px">'
+        f'<div style="font-size:10px;font-weight:700;color:#888;'
+        f'text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">'
+        f'Last Message</div>'
+        f'<div style="font-size:13px;color:#333;line-height:1.5;'
+        f'word-break:break-word">{_safe(detail)}</div>'
+        f'</td></tr></table></td></tr>'
+    )
+
+
+def _html_stat_row(label: str, value: str, odd: bool) -> str:
+    """Render a single stats grid row with alternating background."""
+    bg = '#ffffff' if odd else '#f8f9fa'
+    return (
+        f'<tr><td style="background:{bg};padding:7px 12px;font-size:12px;'
+        f'color:#888;width:120px;border-bottom:1px solid #f0f0f0">{label}</td>'
+        f'<td style="background:{bg};padding:7px 12px;font-size:12px;'
+        f'color:#222;border-bottom:1px solid #f0f0f0">{value}</td></tr>'
+    )
+
+
+def _html_section_hdr(title: str) -> str:
+    """Render a section header row in the stats grid."""
+    return (
+        f'<tr><td colspan="2" style="padding:12px 12px 4px;font-size:10px;'
+        f'font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;'
+        f'border-bottom:1px solid #e0e0e0">{title}</td></tr>'
+    )
+
+
+def _html_stats_grid(ctx: dict) -> str:
+    """Render the full monitoring stats grid with section headers."""
+    if not ctx:
+        return ''
+    html = ''
+    ri = 0   # row index for alternating colors
+
+    # — Sensor Details —
+    html += _html_section_hdr('Sensor Details')
+    for lbl, val in [
+        ('Host',     _safe(ctx.get('host', '')) or '\u2014'),
+        ('Type',     _safe(ctx.get('stype', '')) or '\u2014'),
+        ('Group',    _safe(ctx.get('grp', '')) or '\u2014'),
+        ('Interval', f"{ctx['interval']}s" if ctx.get('interval') else '\u2014'),
+    ]:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    # — Performance —
+    html += _html_section_hdr('Performance')
+    ms = ctx.get('ms')
+    perf = [
+        ('Latency',     f'{ms:.1f} ms' if ms is not None else '\u2014'),
+        ('Packet Loss', f"{ctx.get('loss_pct', 0)}%"),
+    ]
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        perf.append(('Downtime', dur))
+    for lbl, val in perf:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    # — Thresholds (only if any are configured) —
+    thr = []
+    if ctx.get('warn_ms'):
+        thr.append(('Warn Latency', f"&gt; {ctx['warn_ms']} ms"))
+    if ctx.get('crit_ms'):
+        thr.append(('Crit Latency', f"&gt; {ctx['crit_ms']} ms"))
+    if ctx.get('loss_warn_pct'):
+        thr.append(('Warn Loss', f"&gt; {ctx['loss_warn_pct']}%"))
+    if ctx.get('loss_crit_pct'):
+        thr.append(('Crit Loss', f"&gt; {ctx['loss_crit_pct']}%"))
+    if thr:
+        html += _html_section_hdr('Thresholds')
+        for lbl, val in thr:
+            html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    # — Statistics (only if probes have run) —
+    stat = []
+    if ctx.get('uptime_pct') is not None:
+        stat.append(('Uptime', f"{ctx['uptime_pct']}%"))
+    if ctx.get('total'):
+        stat.append(('Probes', f"{ctx.get('success', 0):,} / {ctx['total']:,}"))
+    if ctx.get('avg_ms') is not None:
+        stat.append(('Avg Latency', f"{ctx['avg_ms']:.1f} ms"))
+    if ctx.get('min_ms') is not None and ctx.get('max_ms') is not None:
+        stat.append(('Min / Max', f"{ctx['min_ms']:.1f} / {ctx['max_ms']:.1f} ms"))
+    if stat:
+        html += _html_section_hdr('Statistics')
+        for lbl, val in stat:
+            html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    return (
+        f'<tr><td style="padding:8px 24px 16px">'
+        f'<table width="100%" cellpadding="0" cellspacing="0">'
+        f'{html}</table></td></tr>'
+    )
+
+
+def _html_legacy_rows(rows: list) -> str:
+    """Render simple key-value rows (backward compat for test_smtp without ctx)."""
+    tr = ''
+    for i, (lbl, val) in enumerate(rows):
+        bg = '#ffffff' if i % 2 == 0 else '#f8f9fa'
+        tr += (
+            f'<tr><td style="background:{bg};color:#888;width:100px;'
+            f'padding:7px 12px;font-size:13px;border-bottom:1px solid #f0f0f0">{lbl}</td>'
+            f'<td style="background:{bg};padding:7px 12px;font-size:13px;'
+            f'color:#222;border-bottom:1px solid #f0f0f0">{val}</td></tr>'
+        )
+    return (
+        f'<tr><td style="padding:16px 24px">'
+        f'<table width="100%" cellpadding="0" cellspacing="0">'
+        f'{tr}</table></td></tr>'
+    )
+
+
+def _html_footer(company: str) -> str:
+    """Render the email footer row."""
+    _co = _safe(company) if company else 'PingWatch'
+    return (
+        f'<tr><td style="background:#f8f8f8;padding:14px 24px;'
+        f'border-top:1px solid #e8e8e8">'
+        f'<span style="font-size:11px;color:#aaa">'
+        f'{_co} &nbsp;&middot;&nbsp; Alert Engine</span></td></tr>'
+    )
+
+
 def _build_alert_html(rows: list, event_type: str, severity: str,
                       title_device: str, title_sensor: str,
-                      logo: bool = True, company: str = 'PingWatch') -> str:
-    """Render a clean HTML email body. rows = list of (label, value) tuples."""
-    color, _emoji, label = _status_style(event_type, severity)
-    table_rows = ''.join(
-        f'<tr style="border-bottom:1px solid #e8e8e8">'
-        f'<td style="color:#888;width:80px;padding:7px 4px;font-size:13px">{lbl}</td>'
-        f'<td style="padding:7px 4px;font-size:13px;color:#222">{val}</td>'
-        f'</tr>'
-        for lbl, val in rows
-    )
-    sev_badge = (
-        f'<span style="background:{color};color:#fff;padding:2px 9px;'
-        f'border-radius:4px;font-size:11px;font-weight:700">{severity.upper()}</span>'
-    )
-    # Replace severity row value with badge
-    table_rows = table_rows.replace(
-        f'<td style="padding:7px 4px;font-size:13px;color:#222">{severity}</td>',
-        f'<td style="padding:7px 4px">{sev_badge}</td>'
-    )
-    # Branding bar (logo + company name)
+                      logo: bool = True, company: str = 'PingWatch',
+                      ctx: dict = None) -> str:
+    """Render a professional HTML email body.
+
+    When ctx is provided, renders the full enriched layout with stats grid,
+    breadcrumb path, and highlighted detail message. When ctx is None, falls
+    back to simple key-value rows (used by test_smtp).
+    """
+    color, emoji, label = _status_style(event_type, severity)
     _co = _safe(company) if company else 'PingWatch'
-    if logo:
-        branding = (
-            f'<tr><td style="background:#141b24;padding:12px 24px">'
-            f'<img src="cid:pwlogo" width="24" height="24" '
-            f'alt="" style="vertical-align:middle;display:inline-block"/>'
-            f'<span style="color:#fff;font-size:15px;font-weight:600;margin-left:8px;'
-            f'vertical-align:middle;letter-spacing:.3px">{_co}</span>'
-            f'</td></tr>'
-        )
-    else:
-        branding = ''
+    ts_str = _fmt_ts(ctx.get('ts', '')) if ctx else ''
+
+    logo_s      = _html_logo_section(logo, _co)
+    banner_s    = _html_status_banner(color, emoji, label, ts_str)
+    breadcrumb_s = _html_breadcrumb(ctx) if ctx else ''
+    detail_val  = _safe(ctx.get('detail', '')) if ctx else ''
+    detail_s    = _html_detail_box(detail_val, color, severity)
+    stats_s     = _html_stats_grid(ctx) if ctx else _html_legacy_rows(rows)
+    footer_s    = _html_footer(_co)
+
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,Helvetica,sans-serif">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f0f0;padding:24px 0">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f0f0;padding:32px 0">
 <tr><td align="center">
-<table width="520" cellpadding="0" cellspacing="0"
-       style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.13)">
-  {branding}
-  <tr><td style="background:{color};padding:18px 24px">
-    <div style="font-size:26px;display:inline-block;vertical-align:middle">{_emoji}</div>
-    <span style="color:#fff;font-size:20px;font-weight:700;margin-left:10px;vertical-align:middle">{label}</span>
-    <div style="color:rgba(255,255,255,.82);font-size:12px;margin-top:5px">
-      {title_device} &nbsp;/&nbsp; {title_sensor}
-    </div>
-  </td></tr>
-  <tr><td style="padding:18px 24px 8px">
-    <table width="100%" cellpadding="0" cellspacing="0">{table_rows}</table>
-  </td></tr>
-  <tr><td style="background:#f8f8f8;padding:10px 24px;border-top:1px solid #e8e8e8">
-    <span style="font-size:11px;color:#aaa">{_co} &nbsp;·&nbsp; Alert Engine</span>
-  </td></tr>
+<table width="580" cellpadding="0" cellspacing="0"
+       style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.12)">
+  {logo_s}
+  {banner_s}
+  {breadcrumb_s}
+  {detail_s}
+  {stats_s}
+  {footer_s}
 </table>
 </td></tr>
 </table>
@@ -231,16 +407,19 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
     dname      = _safe(ctx.get('dname',      ''))
     sname      = _safe(ctx.get('sname',      ''))
     _c, emoji, _lbl = _status_style(event_type, severity)
+    _logo    = str(_cfg('email_logo', '1')) == '1'
+    _company = _cfg('email_company_name', '') or 'PingWatch'
 
     if subject_tpl:
         subject = _fmt(subject_tpl)
     else:
-        subject = f"[PingWatch] {emoji} {severity.upper()} — {dname}/{sname}"
+        subject = f"[{_safe(_company)}] {emoji} {severity.upper()} \u2014 {dname}/{sname}"
 
     if body_tpl:
         body = _fmt(body_tpl)
         html = None
     else:
+        # Plain-text fallback body
         rows = [
             ('Event',    event_type),
             ('Device',   dname),
@@ -252,12 +431,17 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
         _dur = _fmt_duration(ctx.get('duration_s'))
         if _dur:
             rows.append(('Duration', _dur))
+        if ctx.get('interval'):
+            rows.append(('Interval', f"{ctx['interval']}s"))
+        ms = ctx.get('ms')
+        if ms is not None:
+            rows.append(('Latency', f"{ms:.1f} ms"))
+        if ctx.get('uptime_pct') is not None:
+            rows.append(('Uptime', f"{ctx['uptime_pct']}%"))
         rows.append(('Detail', _safe(ctx.get('detail', ''))))
-        body = '\n'.join(f"{lbl:<8}: {val}" for lbl, val in rows)
-        _logo = str(_cfg('email_logo', '1')) == '1'
-        _company = _cfg('email_company_name', '') or 'PingWatch'
+        body = '\n'.join(f"{lbl:<12}: {val}" for lbl, val in rows)
         html = _build_alert_html(rows, event_type, severity, dname, sname,
-                                 logo=_logo, company=_company)
+                                 logo=_logo, company=_company, ctx=ctx)
 
     recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
     _use_logo = html is not None and str(_cfg('email_logo', '1')) == '1'
@@ -300,14 +484,22 @@ def test_smtp(cfg):
         _company = _cfg('email_company_name', '') or 'PingWatch'
         subject   = f'[{_company}] SMTP test \u2014 connection OK'
         body      = f'This is a test email from {_company} alert system.'
-        rows = [
-            ('Status', 'SMTP connection successful'),
-            ('From',   from_addr),
-            ('To',     to_addr),
-            ('Time',   _fmt_ts(datetime.datetime.now(datetime.timezone.utc).isoformat())),
-        ]
+        _now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        mock_ctx = {
+            'dname': 'Example Server', 'sname': 'ICMP Ping',
+            'host': '192.168.1.1', 'stype': 'ping', 'grp': 'Production',
+            'ms': 12.4, 'loss_pct': 0,
+            'detail': 'This is a test email. SMTP connection is working correctly.',
+            'interval': 60, 'warn_ms': 100, 'crit_ms': 200,
+            'loss_warn_pct': 10, 'loss_crit_pct': 50,
+            'total': 1440, 'success': 1438, 'uptime_pct': 99.9,
+            'avg_ms': 14.2, 'min_ms': 8.1, 'max_ms': 45.3,
+            'severity': 'info', 'event_type': 'info', 'ts': _now_iso,
+        }
+        rows = [('Status', 'SMTP test successful')]
         html = _build_alert_html(rows, 'info', 'info', 'SMTP Test', 'Connection OK',
-                                 logo=_logo, company=_company)
+                                 logo=_logo, company=_company, ctx=mock_ctx)
         srv.sendmail(from_addr, [to_addr],
                      _build_msg(subject, body, from_addr, to_addr, html, logo=_logo).as_string())
         srv.quit(); srv = None

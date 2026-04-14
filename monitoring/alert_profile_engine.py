@@ -105,6 +105,19 @@ def _build_ctx(dev, sensor, current_state: str, trigger_state: str,
             "%Y-%m-%dT%H:%M:%SZ"),
         "severity":  _SEV_BY_STATE.get(trigger_state, "info"),
         "event_type": _EVENT_TYPE_BY_STATE.get(trigger_state, trigger_state),
+        # Enriched fields for professional email template
+        "interval":      getattr(sensor, "interval", None),
+        "warn_ms":       getattr(sensor, "warn_ms", None),
+        "crit_ms":       getattr(sensor, "crit_ms", None),
+        "loss_warn_pct": getattr(sensor, "loss_warn_pct", 0),
+        "loss_crit_pct": getattr(sensor, "loss_crit_pct", 0),
+        "total":         sensor.total,
+        "success":       sensor.success,
+        "uptime_pct":    round(sensor.success / sensor.total * 100, 1) if sensor.total else None,
+        "avg_ms":        sensor.avg_ms,
+        "min_ms":        sensor.min_ms,
+        "max_ms":        sensor.max_ms,
+        "alive":         sensor.alive,
     }
     if duration_s is not None:
         ctx["duration_s"] = int(duration_s)
