@@ -18,6 +18,28 @@ from db.backend import is_pg
 from core.logger import log
 
 
+def _get_flap_sensor(flap_id):
+    """Return (did, sid) for a flap_log entry, or None."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                cur.execute("SELECT did, sid FROM flap_log WHERE id=%s", (flap_id,))
+                row = cur.fetchone()
+            return (row["did"], row["sid"]) if row else None
+        except Exception:
+            return None
+    try:
+        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+        try:
+            row = con.execute("SELECT did, sid FROM flap_log WHERE id=?", (flap_id,)).fetchone()
+            return (row[0], row[1]) if row else None
+        finally:
+            con.close()
+    except Exception:
+        return None
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE
@@ -251,6 +273,12 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid id"}); return True
         actor = user or ""
         ok = db_ack_flap(flap_id, actor)
+        if ok:
+            # Propagate ACK to matching alert events
+            _flap_sensor = _get_flap_sensor(flap_id)
+            if _flap_sensor:
+                from db.alert_events import db_ack_events_by_sensor
+                db_ack_events_by_sensor(_flap_sensor[0], _flap_sensor[1], actor)
         h._json(200, {"ok": ok})
         return True
 
@@ -263,6 +291,12 @@ def handle(h, method, path, body):
         except (IndexError, ValueError):
             h._json(400, {"error": "invalid id"}); return True
         ok = db_resolve_flap(flap_id)
+        if ok:
+            # Propagate resolve to matching alert events
+            _flap_sensor = _get_flap_sensor(flap_id)
+            if _flap_sensor:
+                from db.alert_events import db_resolve_events_by_sensor
+                db_resolve_events_by_sensor(_flap_sensor[0], _flap_sensor[1])
         h._json(200, {"ok": ok})
         return True
 

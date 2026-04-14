@@ -737,9 +737,6 @@ function _alertEvtRow(e) {
     ? `<span class="alrt-repeat" title="Fired ${e.repeat_count} times">×${e.repeat_count}</span>` : '';
   const ackInfo = e.state === 'acknowledged' && e.ack_by
     ? `<span style="color:var(--text3);font-size:10px">ack by ${esc(e.ack_by)}</span>` : '';
-  const btns = e.state === 'active' ? `
-    <button class="btn-sm rbac-op" onclick="_alertAck(${e.id})">ACK</button>
-    <button class="btn-sm rbac-op" onclick="_alertResolve(${e.id})">Resolve</button>` : '';
   const sevCls = e.severity === 'critical' ? 'alrt-sev-crit'
                : e.severity === 'recovery' ? 'alrt-sev-recovery'
                : e.severity === 'info'     ? 'alrt-sev-info' : 'alrt-sev-warn';
@@ -760,7 +757,7 @@ function _alertEvtRow(e) {
           ${ackInfo}
         </div>
       </div>
-      <div class="alrt-card-btns">${btns}</div>
+      <div class="alrt-card-btns"></div>
     </div>`;
 }
 
@@ -777,6 +774,7 @@ async function _alertAck(id) {
   }
   toast('Alert acknowledged', 'ok');
   _alertingLoadEvents(_alertEvtFilter, true);
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
 async function _alertResolve(id) {
@@ -792,6 +790,7 @@ async function _alertResolve(id) {
   }
   toast('Alert resolved', 'ok');
   _alertingLoadEvents(_alertEvtFilter, true);
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
 // ═══════════════════════════════════════════════════════════════
