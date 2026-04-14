@@ -492,7 +492,16 @@ class PackagesPage(WizardPage):
 class DatabasePage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "Database Backend", size=14, bold=True).pack(anchor="w", pady=(8, 4))
+        # ── Header row: title + help button ──────────────────────
+        hdr = tk.Frame(self, bg=BG)
+        hdr.pack(fill="x", pady=(8, 4))
+        _label(hdr, "Database Backend", size=14, bold=True).pack(side="left")
+        tk.Button(hdr, text=" ? ", command=self._show_pg_help,
+                  bg=BG3, fg=ACCENT, activebackground=BG3, activeforeground=ACCENT,
+                  relief="flat", bd=0, padx=5, pady=0,
+                  font=(_FNT, 10, "bold"), cursor="hand2",
+                  highlightthickness=1, highlightbackground=BORDER
+                  ).pack(side="left", padx=(8, 0))
         _label(self, "Choose where PingWatch stores its data",
                size=10, color=TEXT2).pack(anchor="w", pady=(0, 12))
 
@@ -590,6 +599,90 @@ class DatabasePage(WizardPage):
 
     def validate(self) -> bool:
         return True
+
+    def _show_pg_help(self):
+        """Open a dark-themed modal with PostgreSQL installation instructions."""
+        win = tk.Toplevel(self.ctrl.root)
+        win.title("How to Install PostgreSQL")
+        win.geometry("560x500")
+        win.resizable(False, False)
+        win.configure(bg=BG)
+        win.grab_set()
+
+        tk.Label(win, text="PostgreSQL Installation Guide",
+                 bg=BG, fg=TEXT, font=(_FNT, 13, "bold"),
+                 pady=14).pack(fill="x", padx=20, anchor="w")
+
+        # ── Scrollable text area ──────────────────────────────────
+        frm = tk.Frame(win, bg=BG2, highlightthickness=1,
+                       highlightbackground=BORDER)
+        frm.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        txt = tk.Text(frm, bg=BG2, fg=TEXT, font=(_FNT, 10),
+                      relief="flat", wrap="word", padx=14, pady=10,
+                      cursor="arrow", selectbackground=ACCENT, state="normal")
+        sb = tk.Scrollbar(frm, command=txt.yview, bg=BG3,
+                          troughcolor=BG, highlightthickness=0)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        txt.pack(fill="both", expand=True)
+
+        txt.tag_configure("h",    font=(_FNT, 11, "bold"), foreground=TEXT,
+                          spacing1=12, spacing3=4)
+        txt.tag_configure("p",    font=(_FNT, 10), foreground=TEXT2, spacing3=3)
+        txt.tag_configure("cmd",  font=(_MONO, 10), foreground=GREEN,
+                          background=BG3, lmargin1=14, lmargin2=14,
+                          spacing1=2, spacing3=2)
+        txt.tag_configure("note", font=(_FNT, 9), foreground=YELLOW, spacing1=6)
+        txt.tag_configure("link", font=(_FNT, 10), foreground=ACCENT, underline=True)
+
+        is_win = sys.platform == "win32"
+        install_cmd = pg_install_instructions()
+
+        def ins(text, tag="p"):
+            txt.insert("end", text + "\n", tag)
+
+        # Step 1 — Install
+        ins("Step 1 — Install PostgreSQL", "h")
+        if is_win:
+            ins("Option A — via winget (Windows 10/11 built-in):", "p")
+            ins("winget install -e --id PostgreSQL.PostgreSQL.16", "cmd")
+            ins("This launches the GUI installer — note the superuser password you set.", "note")
+            ins("\nOption B — download the official installer:", "p")
+            link_url = "https://www.postgresql.org/download/windows/"
+            txt.insert("end", link_url + "\n", "link")
+            txt.tag_bind("link", "<Button-1>",
+                         lambda e: __import__("webbrowser").open(link_url))
+            txt.tag_bind("link", "<Enter>", lambda e: txt.configure(cursor="hand2"))
+            txt.tag_bind("link", "<Leave>", lambda e: txt.configure(cursor="arrow"))
+        else:
+            ins("Run in a terminal:", "p")
+            ins(install_cmd, "cmd")
+
+        # Step 2 — Create DB + user
+        ins("\nStep 2 — Create the PingWatch database and user", "h")
+        if is_win:
+            ins('Open "SQL Shell (psql)" from the Start menu, log in as postgres, then run:', "p")
+        else:
+            ins("Open a psql session as the postgres superuser:", "p")
+            ins("sudo -u postgres psql", "cmd")
+            ins("Then run:", "p")
+        ins("CREATE USER pingwatch WITH PASSWORD 'your_password';", "cmd")
+        ins("CREATE DATABASE pingwatch OWNER pingwatch;", "cmd")
+        ins("\\q", "cmd")
+
+        # Step 3 — Fill in wizard
+        ins("\nStep 3 — Enter the connection details here", "h")
+        ins("  Host:      localhost\n"
+            "  Port:      5432\n"
+            "  Database:  pingwatch\n"
+            "  User:      pingwatch\n"
+            "  Password:  (the password you chose above)", "p")
+        ins("Click Test Connection to verify before continuing.", "note")
+
+        txt.configure(state="disabled")
+
+        _btn(win, "Close", win.destroy, "accent").pack(pady=(0, 16))
 
 
 # ── 4. Network ──────────────────────────────────────────────────────────────

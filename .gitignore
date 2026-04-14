@@ -1,3 +1,6 @@
+# ── Runtime config (contains credentials — never commit) ──────
+pingwatch.conf
+
 # ── Database ──────────────────────────────────────────────────
 pingwatch.db
 pingwatch.db-wal
