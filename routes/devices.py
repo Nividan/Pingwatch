@@ -26,6 +26,8 @@ from db     import (
     _db_enqueue, db_save, db_log_audit,
     db_load_err_logs, db_clear_err_logs, db_clear_sensor_err_logs,
     db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
+    db_resolve_events_by_sensor, db_resolve_flaps_by_sensor,
+    db_clear_stage_state_for_sensor,
 )
 from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete
 from monitoring.network_map import topo_prune_pw_links
@@ -391,12 +393,20 @@ def handle(h, method, path, body):
         with STATE._lock:
             dd     = STATE.devices.get(ddid)
             ddname = dd.name if dd else ddid
+        # Collect sensor IDs before removing the device (for event cleanup)
+        with STATE._lock:
+            _sensor_ids = list(dd.sensors.keys()) if dd else []
         STATE.remove_device(ddid)
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _dd = ddid
         _db_enqueue(lambda: ipam_sync_device_delete(_dd))
         _db_enqueue(lambda: topo_prune_pw_links(_dd))
+        # Auto-resolve active events/flaps for all sensors in the deleted device
+        for _sid in _sensor_ids:
+            _db_enqueue(lambda _d=_dd, _s=_sid: db_resolve_events_by_sensor(_d, _s))
+            _db_enqueue(lambda _d=_dd, _s=_sid: db_resolve_flaps_by_sensor(_d, _s))
+            _db_enqueue(lambda _d=_dd, _s=_sid: db_clear_stage_state_for_sensor(_d, _s))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
         h._json(200, {"status": "ok"})
         return True
@@ -522,6 +532,11 @@ def handle(h, method, path, body):
         STATE.remove_sensor(sdid, ssid)
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
+        # Auto-resolve active events/flaps for the deleted sensor
+        _sd, _ss = sdid, ssid
+        _db_enqueue(lambda: db_resolve_events_by_sensor(_sd, _ss))
+        _db_enqueue(lambda: db_resolve_flaps_by_sensor(_sd, _ss))
+        _db_enqueue(lambda: db_clear_stage_state_for_sensor(_sd, _ss))
         db_log_audit(user, h.client_address[0], 'sensor_delete', f"{sdname}/{ssname}")
         h._json(200, {"status": "ok"})
         return True

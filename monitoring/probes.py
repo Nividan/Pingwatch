@@ -21,6 +21,10 @@ def probe_ping(host, timeout=4):
         kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if SYS == "Windows" else {}
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 2, **kw)
         out = r.stdout + r.stderr
+        # Reject ICMP error replies — on Windows "Destination host unreachable"
+        # still counts as a received packet (exit code 0) but the host doesn't exist.
+        if re.search(r"(Destination host unreachable|TTL expired in transit)", out, re.IGNORECASE):
+            return {"ok": False, "ms": None, "detail": "Host unreachable"}
         for pat in [r"time[=<]([\d.]+)\s*ms", r"Zeit[=<]([\d.]+)\s*ms"]:
             m = re.search(pat, out, re.IGNORECASE)
             if m:

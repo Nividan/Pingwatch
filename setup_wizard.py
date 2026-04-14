@@ -36,6 +36,21 @@ sys.path.insert(0, _BASE)
 
 from core.config import DB_PATH, LOGS_DB_PATH, PORT, TLS_PORT_DEFAULT, CERTS_DIR, SNMP_TRAP_PORT
 import core.app_state as app_state
+from core.setup_logic import (                          # shared non-UI logic
+    PACKAGES as _PACKAGES,
+    check_import as _check_import,
+    pip_install as _pip_install,
+    pip_available,
+    check_snmpget as _check_snmpget,
+    check_ping as _check_ping_binary,
+    port_in_use as _port_in_use,
+    check_webserver_on_port as _check_webserver_on_port,
+    pid_name as _pid_name,
+    kill_pid as _kill_pid,
+    generate_pg_password as _generate_pg_password,
+    detect_pg_server as _detect_pg_server,
+    pg_install_instructions as _pg_install_instructions,
+)
 
 # ── ANSI colour helpers ───────────────────────────────────────────────────────
 def _enable_ansi_windows() -> bool:
@@ -231,139 +246,7 @@ atexit.register(_cleanup_on_abort)
 # Step helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Package definitions ───────────────────────────────────────────────────────
-_PACKAGES = [
-    {
-        "import":   "tkinter",
-        "name":     "tkinter",
-        "install":  None,   # stdlib — cannot be pip-installed
-        "pip":      None,
-        "desc":     "status window GUI",
-        "required": False,  # server runs headlessly without it
-    },
-    {
-        "import":       "pystray",
-        "name":         "pystray",
-        "install":      "pystray>=0.19.5",
-        "pip":          True,
-        "desc":         "system tray icon",
-        "required":     False,
-        "desktop_only": True,   # skip automatically in headless mode
-    },
-    {
-        "import":       "PIL",
-        "name":         "Pillow",
-        "install":      "Pillow>=10.0.0",
-        "pip":          True,
-        "desc":         "image support (tray icon)",
-        "required":     False,
-        "desktop_only": True,   # skip automatically in headless mode
-    },
-    {
-        "import":   "paramiko",
-        "name":     "paramiko",
-        "install":  "paramiko>=3.0.0",
-        "pip":      True,
-        "desc":     "SSH device backups",
-        "required": False,
-    },
-    {
-        "import":   "cryptography",
-        "name":     "cryptography",
-        "install":  "cryptography>=41.0.0",
-        "pip":      True,
-        "desc":     "TLS certificate generation & encryption",
-        "required": True,
-    },
-    {
-        "import":   "ldap3",
-        "name":     "ldap3",
-        "install":  "ldap3>=2.9.0",
-        "pip":      True,
-        "desc":     "LDAP / Active Directory authentication",
-        "required": False,
-    },
-    {
-        "import":   "psutil",
-        "name":     "psutil",
-        "install":  "psutil>=5.9.0",
-        "pip":      True,
-        "desc":     "server CPU / RAM / disk monitoring widget",
-        "required": False,
-    },
-    {
-        "import":   "pyVmomi",
-        "name":     "pyvmomi",
-        "install":  "pyvmomi>=8.0.0",
-        "pip":      True,
-        "desc":     "VMware vCenter / ESXi VM metrics",
-        "required": False,
-    },
-]
-
 _SNMP_TOOL = "snmpget"
-
-
-def _check_import(module_name: str) -> bool:
-    try:
-        __import__(module_name)
-        return True
-    except ImportError:
-        return False
-
-
-def _pip_install(package_spec: str) -> "tuple[bool, str]":
-    """Try pip install. Returns (success, error_snippet).
-
-    Attempts the current interpreter's pip first, then --user flag on
-    non-Windows (avoids permission errors when not running in a venv).
-    """
-    last_err = ""
-
-    # Try 1: standard pip via current interpreter
-    try:
-        r = subprocess.run(
-            [sys.executable, "-m", "pip", "install", package_spec],
-            capture_output=True, text=True,
-        )
-        if r.returncode == 0:
-            return True, ""
-        last_err = (r.stderr or r.stdout or "").strip()
-    except Exception as e:
-        last_err = str(e)
-
-    # Try 2: --user flag (avoids permission errors outside a venv on Linux/macOS)
-    if sys.platform != "win32":
-        try:
-            r2 = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--user", package_spec],
-                capture_output=True, text=True,
-            )
-            if r2.returncode == 0:
-                return True, ""
-            last_err = (r2.stderr or r2.stdout or last_err).strip()
-        except Exception:
-            pass
-
-    # Try 3: --break-system-packages (PEP 668 — Debian/Ubuntu 23.04+ with Python 3.12+)
-    if sys.platform != "win32" and "externally-managed-environment" in last_err:
-        try:
-            r3 = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--break-system-packages", package_spec],
-                capture_output=True, text=True,
-            )
-            if r3.returncode == 0:
-                return True, ""
-            last_err = (r3.stderr or r3.stdout or last_err).strip()
-        except Exception:
-            pass
-
-    return False, last_err
-
-
-def _check_snmpget() -> bool:
-    import shutil
-    return shutil.which("snmpget") is not None
 
 
 def step1_packages():
@@ -801,102 +684,7 @@ def _restart_service() -> bool:
         return False
 
 
-# ── Port helpers ──────────────────────────────────────────────────────────────
-
-def _port_in_use(port: int) -> "int | None":
-    """Return a truthy value if the port is in use, None if free.
-    Uses a pure-Python socket bind test — works on all platforms without
-    PowerShell, lsof, or ss.  Returns 1 (dummy PID) when the port is busy
-    so callers can distinguish busy vs free while keeping the same API."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind(('127.0.0.1', port))
-            return None   # bind succeeded → port is free
-        except PermissionError:
-            # Cannot bind privileged port (<1024) without root — port may be free.
-            # Try an outbound connect to see if something is actually listening.
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as cs:
-                    cs.settimeout(0.5)
-                    cs.connect(('127.0.0.1', port))
-                return 1   # something answered → port is occupied
-            except OSError:
-                return None   # nothing answered → port is free
-        except OSError:
-            return 1      # address already in use → port is occupied
-
-
-def _check_webserver_on_port(port: int) -> "str | None":
-    """Return the name of a web server occupying the port, or None.
-    Only checked on Linux when a process IS listening (helps surface
-    Apache2/nginx conflicts that would otherwise silently block PingWatch)."""
-    if sys.platform == "win32":
-        return None
-    try:
-        import shutil as _sh
-        # ss -tlnp is fastest; fall back to lsof
-        if _sh.which("ss"):
-            r = subprocess.run(
-                ["ss", "-tlnp", f"sport = :{port}"],
-                capture_output=True, text=True,
-            )
-            out = r.stdout.lower()
-        elif _sh.which("lsof"):
-            r = subprocess.run(
-                ["lsof", "-i", f"tcp:{port}", "-s", "tcp:LISTEN", "-F", "c"],
-                capture_output=True, text=True,
-            )
-            out = r.stdout.lower()
-        else:
-            return None
-        for svc in ("apache2", "apache", "httpd", "nginx", "lighttpd", "caddy"):
-            if svc in out:
-                return svc
-    except Exception:
-        pass
-    return None
-
-
-def _pid_name(pid: int) -> str:
-    """Best-effort process name for the given PID (or 'unknown')."""
-    try:
-        if sys.platform == "win32":
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 f"(Get-Process -Id {pid} -EA SilentlyContinue).Name"],
-                capture_output=True, text=True,
-            )
-            return r.stdout.strip() or "unknown"
-        else:
-            # /proc/PID/comm on Linux; ps on macOS
-            import shutil as _sh
-            if _sh.which("ps"):
-                r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="],
-                                   capture_output=True, text=True)
-                return r.stdout.strip() or "unknown"
-    except Exception:
-        pass
-    return "unknown"
-
-
-def _kill_pid(pid: int) -> bool:
-    """Attempt to kill the given PID. Cross-platform."""
-    try:
-        if sys.platform == "win32":
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 f"Stop-Process -Id {pid} -Force -EA SilentlyContinue"],
-                capture_output=True,
-            )
-            return r.returncode == 0
-        else:
-            import signal
-            os.kill(pid, signal.SIGTERM)
-            return True
-    except Exception:
-        return False
-
+# ── Port helpers (logic imported from core.setup_logic) ──────────────────────
 
 def _ask_port(label: str, default: int, protocol: str = "TCP") -> int:
     """Interactive port selection with conflict detection. Returns chosen port."""
@@ -970,78 +758,6 @@ def _ask_port(label: str, default: int, protocol: str = "TCP") -> int:
         # choice == "2" or invalid → loop back and ask for port again
         _tag("info", "Enter a different port:")
 
-
-def _generate_pg_password(length: int = 20) -> str:
-    """Generate a random alphanumeric password."""
-    import random, string
-    chars = string.ascii_letters + string.digits
-    return "".join(random.SystemRandom().choices(chars, k=length))
-
-
-def _detect_pg_server() -> "tuple[bool, str]":
-    """Return (installed, version_string)."""
-    import shutil as _sh
-    for cmd in (["psql", "--version"], ["pg_isready", "--version"]):
-        if _sh.which(cmd[0]):
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                ver = (r.stdout or r.stderr or "").strip().splitlines()[0]
-                return True, ver
-            except Exception:
-                return True, cmd[0]
-    # Windows: psql is rarely in PATH — scan default install directories
-    if sys.platform == "win32":
-        import glob as _glob
-        _candidates = _glob.glob(
-            r"C:\Program Files\PostgreSQL\*\bin\psql.exe"
-        )
-        if _candidates:
-            _psql_exe = sorted(_candidates)[-1]  # highest version
-            try:
-                r = subprocess.run([_psql_exe, "--version"],
-                                   capture_output=True, text=True, timeout=5)
-                ver = (r.stdout or r.stderr or "").strip().splitlines()[0]
-                return True, ver
-            except Exception:
-                return True, _psql_exe
-    return False, ""
-
-
-def _pg_install_instructions() -> str:
-    """Return distro-specific install instructions for PostgreSQL."""
-    import platform as _plat, shutil as _sh
-    _sys = _plat.system()
-    if _sys == "Linux":
-        distro = ""
-        try:
-            with open("/etc/os-release") as f:
-                for line in f:
-                    if line.startswith("ID="):
-                        distro = line.strip().split("=")[1].strip('"').lower()
-                        break
-        except Exception:
-            pass
-        if distro in ("ubuntu", "debian", "pop", "mint", "elementary", "raspbian"):
-            return "sudo apt install postgresql postgresql-contrib"
-        if distro in ("rhel", "centos", "rocky", "almalinux"):
-            return ("sudo dnf install postgresql-server postgresql && "
-                    "sudo postgresql-setup --initdb && "
-                    "sudo systemctl enable --now postgresql")
-        if distro == "fedora":
-            return ("sudo dnf install postgresql-server && "
-                    "sudo postgresql-setup --initdb && "
-                    "sudo systemctl enable --now postgresql")
-        # Generic: try to detect package manager
-        if _sh.which("apt-get"):
-            return "sudo apt install postgresql postgresql-contrib"
-        if _sh.which("dnf"):
-            return "sudo dnf install postgresql-server postgresql"
-        if _sh.which("yum"):
-            return "sudo yum install postgresql-server postgresql"
-        return "Install PostgreSQL using your distribution's package manager"
-    if _sys == "Darwin":
-        return "brew install postgresql@16 && brew services start postgresql@16"
-    return "Download from https://www.postgresql.org/download/"
 
 
 def step2_database():

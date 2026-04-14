@@ -76,14 +76,16 @@ Browser / Desktop GUI
 ```
 pingwatch/
 ├── server.py               ← HTTP/HTTPS dispatcher + entry point
-├── setup_wizard.py         ← First-run interactive setup wizard
+├── setup_wizard.py         ← First-run CLI setup wizard (headless/SSH fallback)
+├── gui_setup.py            ← First-run tkinter GUI setup wizard (dark-themed, 6 steps)
 ├── gui.py                  ← Desktop status window (tkinter)
 ├── linux/
 │   ├── start.sh            ← Linux/macOS launcher + service installer
 │   └── pingwatch.service   ← systemd unit file
 ├── windows/
-│   ├── start.bat           ← Windows console launcher
-│   └── pingwatch.pyw       ← Windows windowless launcher
+│   ├── start.bat           ← Windows shim (calls launcher.pyw)
+│   ├── launcher.pyw        ← Python-based launcher (admin elevation, wizard, port cleanup)
+│   └── pingwatch.pyw       ← Windows windowless launcher (direct server start)
 ├── requirements.txt        ← Python dependencies
 ├── ssh_known_hosts.txt     ← SSH TOFU host key store (auto-created)
 │
@@ -95,9 +97,11 @@ pingwatch/
 │   ├── logger.py           ← App logger, audit logger, in-memory log buffer
 │   ├── auth.py             ← Login, PBKDF2-SHA256, RBAC, session management
 │   ├── ldap_auth.py        ← LDAP/AD auth, group search, nested membership, background sync
+│   ├── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
 │   ├── app_state.py        ← Shared globals: STATE, effective ports, TLS flag, tray ref
 │   ├── state.py            ← In-memory Device/Sensor objects, probe threads, SSE broadcast
-│   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
+│   ├── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
+│   └── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
 │
 ├── monitoring/
 │   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
@@ -202,12 +206,21 @@ HTTP(S) dispatcher and application entry point. Serves static files, delegates e
 `Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
 
 ### `setup_wizard.py`
-Cross-platform first-run wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only).
+Cross-platform first-run CLI wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only). Logic delegated to `core/setup_logic.py`.
+
+### `gui_setup.py`
+Dark-themed tkinter GUI setup wizard. 6-step flow (Welcome → Packages → Database → Network → Security → Summary) with frame-swapping `WizardController`. Step indicator dots, Back/Next/Finish navigation. Background threads for pip installs and PG connection tests. Imports all logic from `core/setup_logic.py`. Falls back to CLI `setup_wizard.py` if tkinter is unavailable. Entry point: `run_wizard() -> bool`.
+
+### `core/setup_logic.py`
+Shared non-UI setup logic used by both `setup_wizard.py` (CLI) and `gui_setup.py` (tkinter). Pure-functional helpers: `PACKAGES` list, `check_import()`, `pip_install()`, `port_in_use()`, `kill_port_processes()`, `detect_pg_server()`, `test_pg_connection()`, `generate_pg_password()`, `initialize_database()`, `save_wizard_config()`. Long-running functions accept optional `progress_cb` for GUI updates.
+
+### `windows/launcher.pyw`
+Python-based Windows launcher replacing start.bat logic. Admin elevation via `ctypes.windll.shell32.ShellExecuteW`, first-run detection (`db.backend.needs_setup()`), GUI wizard launch with CLI fallback, port cleanup via `core.setup_logic.kill_port_processes()`, then `server.main()`. The `.pyw` extension suppresses the console window.
 
 ### `core/state.py`
 In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe threads, and broadcasts SSE events to all connected clients. The probe loop calculates live traffic rates for Counter32/Counter64 SNMP OIDs (`_fmt_bps`, wraparound-safe delta / elapsed) and stores the formatted rate in `last_value`. `Sensor.host_override` tracks whether the host was set manually (not inherited from the device); device IP changes propagate to all non-overridden sensors.
 
-`Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. This ensures VMware and other threshold-bearing sensors correctly colour the device tile without requiring a probe failure.
+`Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. Only active (running, non-muted) sensors contribute — stopped sensors are excluded so a fully-stopped device shows `"unknown"` (gray) rather than `"down"`. `stop_device()` broadcasts an SSE `device_status` event immediately after stopping all sensors and auto-resolves open flap events via `db_resolve_flaps_by_sensor()` so the Events tab clears without manual intervention.
 
 ### `core/constants.py`
 Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
@@ -263,7 +276,7 @@ Pure-functional profile evaluator driven by the probe loop. Called from `Sensor.
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
 ### `monitoring/smtp_alert.py`
-SMTP connection helper and HTML email rendering. `_smtp_connect()` manages the server connection and TLS/auth handshake; `_build_email_html()` / `_build_email_text()` render the notification body. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Used by `alert_dispatchers._dispatch_email`.
+SMTP connection helper and professional HTML email rendering. `_smtp_connect()` manages the server connection and TLS/auth handshake. The email template uses a PRTG-inspired layout: hero logo section (up to 2 MB, centered, company name below), colored status banner with timestamp, sensor breadcrumb path (Group > Device > Sensor), severity-tinted detail callout box, and a 4-section stats grid (Sensor Details, Performance, Thresholds, Statistics). Section builders (`_html_logo_section`, `_html_status_banner`, `_html_breadcrumb`, `_html_detail_box`, `_html_stats_grid`, `_html_footer`) compose the final HTML. Subject line uses configured company name. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Used by `alert_dispatchers._dispatch_email`.
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.
@@ -296,7 +309,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboard`, `/api/db/stats` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
@@ -334,7 +347,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store |
+| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder) |
 | `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
@@ -379,7 +392,7 @@ The frontend is served as static files — no build step.
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
-| `dashboard.js` | Customizable widget dashboard (device cards, sparklines, uptime bars, SLA); includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table with device name, license name, expiry date, days remaining, and status badge |
+| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
 | `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
@@ -394,7 +407,7 @@ The frontend is served as static files — no build step.
 | `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, Type column, multi-NIC ⚠ flags), per-device sensor review, bulk add; **per-device group assignment** — default group dropdown plus per-row group input with `_discGrpFocus`/`_discGrpBlur` datalist UX; `customGroups[ip]` overrides; accent border on overridden rows |
 | `alerting.js` | Alert profiles editor (PRTG-style escalation table with delay / repeat / action columns), reusable action template editor (email with user+group checkbox pickers, webhook, syslog, browser push), alert event history viewer, maintenance windows |
 | `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
-| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLoadLicenses()` fetches `/api/licenses` in parallel with subnet load, `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` via `_ipamOnLicenseUpdate()` |
+| `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **sortable columns** (click headers, ▲/▼ arrows) on all 7 columns with IP-numeric, alpha, and date comparators; **filter dropdowns** on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None); sort + filter + text search compose together; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` |
 | `bg.js` | Animated background canvas (aurora + radar) |
 | `map.js` | NTM canvas engine — drag-and-drop topology editor |
 
@@ -442,6 +455,18 @@ The frontend is served as static files — no build step.
 | `POST` | `/api/server/restart` | Restart the server process |
 | `POST` | `/api/server/shutdown` | Shutdown the server process |
 | `POST` | `/api/db/backup/run` | Trigger an immediate DB snapshot *(admin only)* |
+
+### Dashboards
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/dashboards` | List user's dashboards (id, name only); auto-creates "Default" with starter widgets for new users |
+| `POST` | `/api/dashboards` | Create dashboard `{name}` (max 10 per user) |
+| `GET` | `/api/dashboards/{id}` | Get dashboard widgets |
+| `PUT` | `/api/dashboards/{id}` | Save widgets `{widgets: [...]}` |
+| `PATCH` | `/api/dashboards/{id}` | Rename dashboard `{name}` |
+| `DELETE` | `/api/dashboards/{id}` | Delete dashboard (rejects if last) |
+| `PUT` | `/api/dashboards/reorder` | Reorder tabs `{ids: [3, 1, 2]}` |
 
 ### TLS
 
@@ -553,7 +578,7 @@ The frontend is served as static files — no build step.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/alert/windows` | viewer | List all maintenance windows |
-| `POST` | `/api/alert/window` | admin | Create window |
+| `POST` | `/api/alert/windows` | admin | Create window |
 | `PATCH` | `/api/alert/window/{id}` | admin | Update window |
 | `DELETE` | `/api/alert/window/{id}` | admin | Delete window |
 

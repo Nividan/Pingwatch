@@ -293,7 +293,7 @@ function calcPwLayout(devices) {
     const g = dev.group || 'Default Group';
     (byGroup[g] = byGroup[g] || []).push(dev);
   }
-  const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60;
+  const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60, MAX_ROWS = 5;
   const syntheticNodes = [], syntheticGroups = [];
   // Smart-placement dirty flags — batched save at end of pass
   let _pwNodeDirty = false, _pwGroupDirty = false;
@@ -303,8 +303,8 @@ function calcPwLayout(devices) {
     const sizes = devs.map(d => nsize(pwDeviceType(d), null) || { w: 170, h: 95 });
     const NW    = Math.max(...sizes.map(s => s.w)) + 30;   // slot width  = widest node + gap
     const NH    = Math.max(...sizes.map(s => s.h)) + 28;   // slot height = tallest node + gap
-    const ncols = Math.min(devs.length, 3);
-    const nrows = Math.ceil(devs.length / 3);
+    const nrows = Math.min(devs.length, MAX_ROWS);          // column-major: max 5 rows per column
+    const ncols = Math.ceil(devs.length / MAX_ROWS);
     return { gname, devs, NW, NH,
              w: ncols * NW + PAD * 2,
              h: nrows * NH + PAD * 2 + 28 };   // 28px = group title bar
@@ -338,9 +338,9 @@ function calcPwLayout(devices) {
       }
 
       if (!hasAnyOverride) {
-        // Pristine group — deterministic grid (unchanged legacy behavior)
+        // Pristine group — column-major grid (max MAX_ROWS per column)
         devs.forEach((dev, i) => {
-          const dc = i % 3, dr = Math.floor(i / 3);
+          const dc = Math.floor(i / MAX_ROWS), dr = i % MAX_ROWS;
           syntheticNodes.push(deviceToNode(dev,
             gax + PAD + dc * NW,
             gay + PAD + 28 + dr * NH));
@@ -414,16 +414,21 @@ function renderPingWatchCanvas() {
   groups = syntheticGroups;
   nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
   groupMap = Object.fromEntries(groups.map(g => [g.id, g]));
-  // Always inject the Internet cloud node
-  const _iOvr = pwOverrides[PW_INTERNET_DID] || {};
-  const _iNode = {
-    id: 'pw_internet', name: 'Internet', type: 'cloud',
-    x: _iOvr.x ?? 60, y: _iOvr.y ?? 60,
-    _pwDid: PW_INTERNET_DID,
-    properties: { ip_color: '#ffd700' }
-  };
-  nodes.push(_iNode);
-  nodeMap['pw_internet'] = _iNode;
+  // Inject internet cloud only when at least one link connects to it
+  const _hasInternetLinks = pwLinks.some(
+    l => l.src_did === PW_INTERNET_DID || l.tgt_did === PW_INTERNET_DID
+  );
+  if (_hasInternetLinks) {
+    const _iOvr = pwOverrides[PW_INTERNET_DID] || {};
+    const _iNode = {
+      id: 'pw_internet', name: 'Internet', type: 'cloud',
+      x: _iOvr.x ?? 60, y: _iOvr.y ?? 60,
+      _pwDid: PW_INTERNET_DID,
+      properties: { ip_color: '#ffd700' }
+    };
+    nodes.push(_iNode);
+    nodeMap['pw_internet'] = _iNode;
+  }
   render();
   const _animL = document.getElementById('anim-layer');
   if (_animL) { _animL.innerHTML = ''; _pwActiveTraces = 0; }
@@ -689,6 +694,39 @@ function _pwSensorThresholdUpdate(did, sid, state) {
 
 function stopPwSSE() {
   if (pwSSE) { try { pwSSE.close(); } catch(e) {} pwSSE = null; }
+}
+
+// ── Connect device to Internet cloud ──────────────────────────────────────────
+
+function connectDeviceToInternet(pwDid) {
+  const did = String(pwDid);
+  // Already connected?
+  if (pwLinks.some(l =>
+    (String(l.src_did) === did && l.tgt_did === PW_INTERNET_DID) ||
+    (l.src_did === PW_INTERNET_DID && String(l.tgt_did) === did)
+  )) {
+    toast('Already connected to Internet');
+    return;
+  }
+  // Place cloud above all nodes (centered horizontally, above topmost node)
+  if (!pwOverrides[PW_INTERNET_DID]) {
+    const xs = nodes.map(n => n.x).filter(x => isFinite(x));
+    const ys = nodes.map(n => n.y).filter(y => isFinite(y));
+    const cx = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : 60;
+    const topY = ys.length ? Math.min(...ys) : 60;
+    pwOverrides[PW_INTERNET_DID] = { x: Math.max(20, cx - 30), y: Math.max(20, topY - 180) };
+    _pwSave('pw_node_overrides', pwOverrides);
+  }
+  // Create internet link
+  const newLink = {
+    id: 'pwl_' + Date.now(),
+    src_did: did, tgt_did: PW_INTERNET_DID,
+    link_type: 'internet', label: ''
+  };
+  pwLinks.push(newLink);
+  _pwSave('pw_links', pwLinks);
+  renderPingWatchCanvas();
+  toast('Connected to Internet');
 }
 
 // ═══════════════════════════ PACKET TRACE ANIMATION ═══════════════════════════
@@ -2961,9 +2999,13 @@ document.getElementById('canvas-wrap').addEventListener('contextmenu', e => {
       const bulkHtml = multiSelect.size > 0
         ? `<div class="ctx-sep"></div><div class="ctx-item" style="color:var(--gold)" onclick="ctxAction(()=>bulkLinkSelectedTo('${n._pwDid}'))">⟷ LINK ${multiSelect.size} SELECTED → THIS</div>`
         : '';
+      const _inetItem = n._pwDid !== PW_INTERNET_DID
+        ? `<div class="ctx-item" style="color:#ffd700" onclick="ctxAction(()=>connectDeviceToInternet('${n._pwDid}'))">🌐 CONNECT TO INTERNET</div>`
+        : '';
       ctxMenu.innerHTML = `
         <div class="ctx-item" style="color:var(--accent2)" onclick="ctxAction(()=>showPwNodePanel('${n._pwDid}'))">✎ EDIT COLOR</div>
         <div class="ctx-item" style="color:var(--gold)" onclick="ctxAction(()=>ctxDrawLinkFrom('${n.id}'))">⟷ DRAW LINK</div>
+        ${_inetItem}
         <div class="ctx-item" style="color:#ffd700" onclick="ctxAction(()=>_pwSetTraceSrc('${n._pwDid}'))">◉ SET AS TRACE SOURCE</div>
         ${bulkHtml}
       `;

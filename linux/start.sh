@@ -115,8 +115,16 @@ fi
 # ── First-run / forced setup ────────────────────────────────
 CONF="$PROJECT_ROOT/pingwatch.conf"
 if [ ! -f "$CONF" ] || [ "${1:-}" = "--setup" ]; then
-    echo "[SETUP] Running first-run setup wizard..."
-    "$PYTHON" "$PROJECT_ROOT/setup_wizard.py" "$@"
+    echo "[SETUP] Running setup wizard..."
+    # Try GUI wizard first (tkinter); fall back to CLI if no display or no tkinter
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        "$PYTHON" -c "from gui_setup import run_wizard; exit(0 if run_wizard() else 1)" 2>/dev/null && WIZARD_OK=1 || WIZARD_OK=0
+    else
+        WIZARD_OK=0
+    fi
+    if [ "$WIZARD_OK" = "0" ]; then
+        "$PYTHON" "$PROJECT_ROOT/setup_wizard.py" "$@"
+    fi
     # If the wizard restarted the systemd service, don't launch a second instance
     if command -v systemctl &>/dev/null && systemctl is-active --quiet pingwatch 2>/dev/null; then
         exit 0
