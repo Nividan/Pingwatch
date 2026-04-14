@@ -125,6 +125,7 @@ from db.alert_events import (
     db_resolve_event,
     db_auto_resolve_event,
     db_resolve_all_active,
+    db_resolve_events_by_sensor,
     db_has_acked_event,
     db_has_active_event,
 )

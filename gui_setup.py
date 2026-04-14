@@ -811,9 +811,8 @@ class SystemPage(WizardPage):
 
             btn_row = tk.Frame(self, bg=BG, padx=8)
             btn_row.pack(fill="x", pady=(4, 0))
-            self._as_icon = tk.Label(btn_row, text="○", bg=BG, fg=TEXT3,
+            self._as_icon = tk.Label(btn_row, text="", bg=BG, fg=TEXT3,
                                      font=(_MONO, 12), width=2)
-            self._as_icon.pack(side="left")
             self._as_btn = _btn(btn_row, "Install Task", self._install_task, "accent")
             self._as_btn.pack(side="left", padx=(4, 0))
             self._as_status = tk.Label(btn_row, text="", bg=BG, fg=TEXT3,
