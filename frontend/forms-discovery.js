@@ -652,10 +652,12 @@ function _discRevRowHtml(row, expanded){
     if(sg.stype === 'http'){
       const url = (args[key] && args[key].url) || sg.url || '';
       const isHttps = sg.port === 443 || sg.port === 8443;
-      const verifyChecked = !(args[key] && args[key].verify_ssl === false);
-      const sslChk = isHttps
-        ? `<label class="cb-row disc-sg-ssl"><input type="checkbox" ${verifyChecked?'checked':''} onchange="_discSetArg('${esc(row.ip)}','${esc(key)}','verify_ssl',this.checked)"/> Verify SSL certificate</label>`
-        : '';
+      // Default: verify SSL for HTTPS ports, skip for plain HTTP ports
+      const defaultVerify = isHttps;
+      const verifyChecked = args[key] && args[key].verify_ssl !== undefined
+        ? args[key].verify_ssl !== false
+        : defaultVerify;
+      const sslChk = `<label class="cb-row disc-sg-ssl"><input type="checkbox" ${verifyChecked?'checked':''} onchange="_discSetArg('${esc(row.ip)}','${esc(key)}','verify_ssl',this.checked)"/> Verify SSL certificate</label>`;
       extra = `<input type="text" class="disc-sg-extra" placeholder="URL" value="${esc(url)}" oninput="_discSetArg('${esc(row.ip)}','${esc(key)}','url',this.value)"/>${sslChk}`;
     } else if(sg.stype === 'snmp'){
       const comm = (args[key] && args[key].snmp_community) || '';
@@ -902,7 +904,11 @@ async function _discBulkAdd(){
       if(sg.port) spec.port = sg.port;
       const a = args[key] || {};
       if(sg.stype === 'http' && (a.url || sg.url)) spec.url = a.url || sg.url;
-      if(sg.stype === 'http' && a.verify_ssl === false) spec.verify_ssl = false;
+      if(sg.stype === 'http'){
+        const isHttps = sg.port === 443 || sg.port === 8443;
+        const verify = (a.verify_ssl !== undefined) ? (a.verify_ssl !== false) : isHttps;
+        if(!verify) spec.verify_ssl = false;
+      }
       if(sg.stype === 'snmp' && a.snmp_community) spec.snmp_community = a.snmp_community;
       sensors.push(spec);
     }

@@ -37,6 +37,7 @@ function _ipamRenderShell() {
         <option value="">— Select a subnet —</option>
       </select>
       <button class="btn-sm btn-accent rbac-op" onclick="_ipamOpenAddSubnet()">＋ Add Subnet</button>
+      <button class="btn-sm rbac-op" id="ipam-ren-btn" onclick="_ipamOpenRename()" disabled>✎ Rename</button>
       <button class="btn-sm rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled style="color:var(--down)">✕ Remove</button>
       <button class="btn-sm rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">Refresh DNS</button>
       <div style="width:1px;height:18px;background:var(--border);margin:0 4px"></div>
@@ -100,6 +101,7 @@ async function _ipamLoadSubnets() {
   } else {
     _ipamSelectedId = null;
     document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
+    document.getElementById('ipam-ren-btn')?.setAttribute('disabled', '');
     _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
   }
 }
@@ -129,6 +131,7 @@ async function _ipamOnSubnetChange(idVal) {
   if (!id) {
     _ipamSelectedId = null;
     document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
+    document.getElementById('ipam-ren-btn')?.setAttribute('disabled', '');
     _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
     return;
   }
@@ -136,6 +139,7 @@ async function _ipamOnSubnetChange(idVal) {
   _ipamSortCol = 'status_ip'; _ipamSortDir = 1;
   _ipamFilterStatus = ''; _ipamFilterLic = '';
   document.getElementById('ipam-rm-btn')?.removeAttribute('disabled');
+  document.getElementById('ipam-ren-btn')?.removeAttribute('disabled');
   // Keep select in sync
   const sel = document.getElementById('ipam-sel');
   if (sel) sel.value = id;
@@ -603,6 +607,64 @@ async function _ipamSaveSubnet() {
   await _ipamLoadSubnets();
   // Auto-select the new subnet
   if (d.id) _ipamOnSubnetChange(d.id);
+}
+
+// ── Rename subnet ──────────────────────────────────────────────────────────
+function _ipamOpenRename() {
+  if (!_ipamSelectedId) return;
+  const sub = _ipamSubnets.find(s => s.id === _ipamSelectedId);
+  if (!sub) return;
+  closeM('ipam-ren-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'ipam-ren-modal';
+  _overlayClose(o, () => closeM('ipam-ren-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,380px)">
+      <div class="mhd">
+        <div class="mttl">✎ Rename Subnet</div>
+        <button class="mclose" onclick="closeM('ipam-ren-modal')">✕</button>
+      </div>
+      <div class="mbdy" style="gap:12px">
+        <div class="fr">
+          <label class="fl">CIDR</label>
+          <input type="text" value="${esc(sub.cidr)}" disabled style="font-family:'Courier New',monospace;opacity:.6"/>
+        </div>
+        <div class="fr">
+          <label class="fl">Label</label>
+          <input type="text" id="ipam-ren-name" value="${esc(sub.name||'')}" placeholder="e.g. Office LAN" autocomplete="off"/>
+        </div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('ipam-ren-modal')">Cancel</button>
+        <button class="btn-p" id="ipam-ren-save" onclick="_ipamSaveRename()">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  const inp = o.querySelector('#ipam-ren-name');
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') _ipamSaveRename(); });
+  setTimeout(() => { inp.focus(); inp.select(); }, 50);
+}
+
+async function _ipamSaveRename() {
+  if (!_ipamSelectedId) return;
+  const name = (document.getElementById('ipam-ren-name')?.value || '').trim();
+  const btn = document.getElementById('ipam-ren-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    toast(d.error || 'Rename failed', 'err');
+    return;
+  }
+  closeM('ipam-ren-modal');
+  toast('Subnet renamed', 'ok');
+  _ipamGlobalCache = null;
+  await _ipamLoadSubnets();
 }
 
 // ── Remove subnet ──────────────────────────────────────────────────────────
