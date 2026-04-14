@@ -35,6 +35,19 @@
   --topbar-border: rgba(33,41,58,.7);
   --body-grad-1:   rgba(17,30,60,.6);
   --body-grad-2:   rgba(10,25,50,.5);
+  /* Semantic surface tokens — flip with the theme. Used by panels, cards, modals,
+     device-window, sensor-tile, etc. that used to hard-code dark rgba. */
+  --card-bg:          rgba(13,17,23,.78);
+  --card-bg-soft:     rgba(13,17,23,.55);
+  --card-bg-subtle:   rgba(13,17,23,.35);
+  --panel-bg:         rgba(22,27,34,.85);
+  --panel-bg-strong:  rgba(22,27,34,.95);
+  --panel-bg-glass:   rgba(22,27,34,.50);
+  --modal-overlay:    rgba(5,8,14,.72);
+  --modal-overlay-strong: rgba(5,8,14,.78);
+  --surface-inset:    rgba(0,0,0,.15);
+  --surface-inset-soft:rgba(0,0,0,.10);
+  --surface-inset-strong:rgba(0,0,0,.25);
 }
 /* ── Light theme palette ─────────────────────────────────────────
    Flipped via <html data-theme="light">. All UI rules using
@@ -63,6 +76,18 @@
   --topbar-border: rgba(208,215,222,.90);
   --body-grad-1:   transparent;
   --body-grad-2:   transparent;
+  /* Light-mode surfaces — white/near-white panels; overlays stay dim but lighter */
+  --card-bg:          rgba(255,255,255,.96);
+  --card-bg-soft:     rgba(246,248,250,.85);
+  --card-bg-subtle:   rgba(234,238,242,.60);
+  --panel-bg:         rgba(255,255,255,.95);
+  --panel-bg-strong:  rgba(255,255,255,.98);
+  --panel-bg-glass:   rgba(255,255,255,.70);
+  --modal-overlay:    rgba(15,23,42,.35);
+  --modal-overlay-strong: rgba(15,23,42,.45);
+  --surface-inset:    rgba(13,17,23,.05);
+  --surface-inset-soft:rgba(13,17,23,.03);
+  --surface-inset-strong:rgba(13,17,23,.08);
 }
 html,body{height:100%;overflow:hidden}
 body{
@@ -216,7 +241,7 @@ body{
 
 .dp-btn{
   padding:5px 12px;border-radius:5px;font-size:11px;font-weight:500;
-  border:1px solid var(--border);background:rgba(28,35,51,.8);color:var(--text2);
+  border:1px solid var(--border);background:var(--bg3);color:var(--text2);
   cursor:pointer;transition:all .15s;
 }
 .dp-btn:hover{background:var(--bg4);color:var(--text);border-color:var(--border2);box-shadow:0 2px 8px rgba(0,0,0,.3)}
@@ -303,7 +328,7 @@ body{
   position:relative;
   border-radius:16px;
   border:1px solid var(--border);
-  background:rgba(13,17,23,.78);
+  background:var(--card-bg);
   backdrop-filter:blur(14px);
   -webkit-backdrop-filter:blur(14px);
   cursor:pointer;
@@ -519,14 +544,14 @@ body{
 .dc-list-row{
   display:flex;align-items:center;gap:14px;
   padding:9px 16px;border-radius:10px;
-  background:rgba(13,17,23,.55);
+  background:var(--card-bg-soft);
   border:1px solid var(--border);
   border-left:3px solid var(--text3);
   cursor:pointer;
   transition:background .15s, border-color .15s, box-shadow .2s, transform .15s;
 }
 .dc-list-row:hover{
-  background:rgba(28,35,51,.7);
+  background:var(--bg3);
   border-color:var(--border2);
   box-shadow:0 2px 12px rgba(0,0,0,.3);
   transform:translateX(2px);
@@ -557,8 +582,8 @@ body{
 .dc-list-row:hover .dlr-snr{background:rgba(255,255,255,.07)}
 .dc-list-row .dlr-more{font-size:9px;color:var(--text3);white-space:nowrap;padding:2px 4px}
 /* Alternating row tint */
-.dc-list-row:nth-child(even){background:rgba(13,17,23,.35)}
-.dc-list-row:nth-child(even):hover{background:rgba(28,35,51,.6)}
+.dc-list-row:nth-child(even){background:var(--card-bg-subtle)}
+.dc-list-row:nth-child(even):hover{background:var(--bg3)}
 .dc-list-row.down:nth-child(even){background:rgba(248,81,73,.02)}
 .dc-list-row.warn:nth-child(even){background:rgba(240,165,0,.02)}
 /* Sensor type icon + pill colors in list rows */
@@ -685,7 +710,7 @@ body{
 
 /* ── Sensor tile ── */
 .stl{
-  background:rgba(22,27,34,.85);
+  background:var(--panel-bg);
   border:1px solid var(--border);border-radius:8px;
   overflow:hidden;cursor:pointer;
   transition:border-color .2s,box-shadow .2s,transform .18s;
@@ -743,7 +768,7 @@ body{
 .stl-spark{padding:6px 14px 0;height:44px}
 .stl-spark canvas{width:100%;height:38px;display:block}
 .stl-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);border-top:1px solid var(--border)}
-.stl-stat{background:rgba(22,27,34,.8);padding:8px 10px;text-align:center}
+.stl-stat{background:var(--panel-bg);padding:8px 10px;text-align:center}
 .stl-sv{font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace;color:var(--text2)}
 .stl-sk{font-size:9.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px}
 /* Threshold state coloring */
@@ -772,7 +797,7 @@ body{
 .s-ico.vmware      {background:rgba(168,85,247,.2);color:#c084fc}
 .dc-snr-ico.vmware {background:rgba(168,85,247,.2);color:#c084fc}
 /* ── VMware VM sensor groups ─────────────────────────────────────── */
-.vm-grp{grid-column:1/-1;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:rgba(22,27,34,.85)}
+.vm-grp{grid-column:1/-1;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel-bg)}
 .vm-grp-hdr{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg2);cursor:pointer;user-select:none}
 .vm-grp-hdr:hover{background:var(--bg3)}
 .vm-grp-arr{font-size:10px;color:var(--text3);transition:transform .15s;width:10px;flex-shrink:0}
@@ -829,13 +854,13 @@ body{
    DEVICE WINDOW (full overlay)
    ════════════════════════════════════════════ */
 .dwo{
-  position:fixed;inset:0;background:rgba(5,8,14,.78);
+  position:fixed;inset:0;background:var(--modal-overlay-strong);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   z-index:500;display:flex;align-items:center;justify-content:center;
   animation:fadeIn .18s ease;
 }
 .dwbox{
-  background:rgba(13,17,23,.96);
+  background:var(--card-bg);
   border:1px solid var(--border2);border-radius:16px;
   box-shadow:0 32px 100px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.04);
   width:min(920px,96vw);max-height:90vh;
@@ -957,7 +982,7 @@ body{
 .hero-caps{
   display:flex;align-items:center;gap:0;
   border:1px solid var(--border);border-radius:8px;overflow:hidden;
-  background:rgba(22,27,34,.5);backdrop-filter:blur(8px);
+  background:var(--panel-bg-glass);backdrop-filter:blur(8px);
   margin:4px 0;
 }
 .hcap{
@@ -994,14 +1019,14 @@ body{
 
 /* ── Modals ── */
 .mo{
-  position:fixed;inset:0;background:rgba(5,8,14,.72);backdrop-filter:blur(6px);
+  position:fixed;inset:0;background:var(--modal-overlay);backdrop-filter:blur(6px);
   -webkit-backdrop-filter:blur(6px);
   z-index:1000;display:flex;align-items:center;justify-content:center;
   animation:fadeIn .18s ease;
 }
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 .mbox{
-  background:rgba(22,27,34,.95);
+  background:var(--panel-bg-strong);
   border:1px solid var(--border2);border-radius:12px;
   box-shadow:0 24px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.04);
   min-width:420px;max-width:540px;width:100%;
@@ -1161,12 +1186,12 @@ select{cursor:pointer;appearance:none;
 
 /* ── Detail window ── */
 .dmo{
-  position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(3px);
+  position:fixed;inset:0;background:var(--modal-overlay);backdrop-filter:blur(3px);
   z-index:1000;display:flex;align-items:center;justify-content:center;
   animation:fadeIn .15s ease;
 }
 .dmbox{
-  background:rgba(22,27,34,.96);
+  background:var(--panel-bg-strong);
   border:1px solid var(--border2);border-radius:12px;
   box-shadow:0 24px 80px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.04);
   width:780px;max-width:96vw;max-height:88vh;
@@ -1309,7 +1334,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 /* ── Toast & banners ── */
 #toast{position:fixed;bottom:20px;right:20px;z-index:2000;display:flex;flex-direction:column;gap:6px}
 .ti{
-  background:rgba(22,27,34,.95);
+  background:var(--panel-bg-strong);
   border:1px solid var(--border2);border-radius:8px;
   padding:10px 18px;font-size:12px;
   box-shadow:0 8px 32px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.04);
@@ -1331,8 +1356,8 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 #login-screen{
   position:fixed;inset:0;z-index:9000;
   background:
-    radial-gradient(ellipse 80% 60% at 20% 20%, rgba(17,30,60,.7) 0%, transparent 60%),
-    radial-gradient(ellipse 70% 50% at 80% 80%, rgba(10,25,50,.6) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 20% 20%, var(--body-grad-1) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 50% at 80% 80%, var(--body-grad-2) 0%, transparent 55%),
     var(--bg);
   display:flex;align-items:center;justify-content:center;
 }
