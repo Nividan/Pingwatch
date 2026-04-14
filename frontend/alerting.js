@@ -905,7 +905,7 @@ function _alertMaintOpen(id) {
           <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Device group':'Device'}</label>
           ${_mwScopeInner(scopeType, scopeVal)}
         </div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div id="mw-onetime-row" style="${recurring?'display:none':'display:flex'};gap:12px;flex-wrap:wrap">
           <div class="fr" style="flex:1;min-width:160px">
             <label class="fl">Start</label>
             <input type="datetime-local" id="mw-start" value="${startDt}"/>
@@ -984,9 +984,11 @@ function _mwScopeChange() {
 }
 
 function _mwRecurChange() {
-  const checked = document.getElementById('mw-recurring')?.checked;
-  const panel   = document.getElementById('mw-recur-panel');
-  if (panel) panel.style.display = checked ? '' : 'none';
+  const checked   = document.getElementById('mw-recurring')?.checked;
+  const panel     = document.getElementById('mw-recur-panel');
+  const onetimeRow = document.getElementById('mw-onetime-row');
+  if (panel)      panel.style.display      = checked ? '' : 'none';
+  if (onetimeRow) onetimeRow.style.display = checked ? 'none' : 'flex';
 }
 
 function _mwDayToggle(btn) {
@@ -1006,8 +1008,12 @@ async function _alertMaintSave(id) {
   const activeDays = [...document.querySelectorAll('.alrt-day-btn.active')]
     .map(b => b.dataset.day).join(',');
 
-  const startTs = startRaw ? Math.floor(new Date(startRaw).getTime() / 1000) : 0;
-  const endTs   = endRaw   ? Math.floor(new Date(endRaw).getTime()   / 1000) : 0;
+  // For recurring windows the datetime pickers are hidden — auto-set a permanent range
+  const nowSec = Math.floor(Date.now() / 1000);
+  const startTs = recurring ? nowSec
+                : (startRaw ? Math.floor(new Date(startRaw).getTime() / 1000) : 0);
+  const endTs   = recurring ? nowSec + 10 * 365 * 24 * 3600          // 10 years
+                : (endRaw   ? Math.floor(new Date(endRaw).getTime()   / 1000) : 0);
 
   const payload = {
     name, scope_type: scopeType, scope_value: scopeVal,
@@ -1021,7 +1027,7 @@ async function _alertMaintSave(id) {
 
   const isNew  = id === null;
   const method = isNew ? 'POST'  : 'PATCH';
-  const path   = isNew ? '/api/alert/window' : `/api/alert/window/${id}`;
+  const path   = isNew ? '/api/alert/windows' : `/api/alert/window/${id}`;
   try {
     await api(method, path, payload);
     toast(isNew ? `Window "${name}" created` : `Window "${name}" updated`, 'ok');
