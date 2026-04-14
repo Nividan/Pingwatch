@@ -20,7 +20,7 @@ from core.config import DB_PATH
 from core.logger import log
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
                          db_delete_user, db_set_password, db_get_user_auth_type,
-                         db_update_profile, db_update_own_profile)
+                         db_update_profile, db_update_own_profile, db_update_theme)
 from db.backend  import is_pg
 from core.app_state import tls_active
 import core.settings as _settings
@@ -29,25 +29,35 @@ _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 
 def _get_user_profile(username: str) -> dict:
-    """Return {full_name, email} for username."""
+    """Return {full_name, email, theme_preference} for username."""
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("main") as cur:
                 cur.execute(
-                    "SELECT full_name, email FROM users WHERE username=%s", (username,)
+                    "SELECT full_name, email, theme_preference "
+                    "FROM users WHERE username=%s", (username,)
                 )
                 row = cur.fetchone()
-            return {"full_name": row["full_name"] or "", "email": row["email"] or ""} if row else {}
+            if not row:
+                return {}
+            return {"full_name":        row["full_name"] or "",
+                    "email":            row["email"]     or "",
+                    "theme_preference": row["theme_preference"] or "dark"}
         except Exception:
             return {}
     # SQLite
     con = sqlite3.connect(DB_PATH)
     try:
         row = con.execute(
-            "SELECT full_name, email FROM users WHERE username=?", (username,)
+            "SELECT full_name, email, theme_preference "
+            "FROM users WHERE username=?", (username,)
         ).fetchone()
-        return {"full_name": row[0] or "", "email": row[1] or ""} if row else {}
+        if not row:
+            return {}
+        return {"full_name":        row[0] or "",
+                "email":            row[1] or "",
+                "theme_preference": row[2] or "dark"}
     except Exception:
         return {}
     finally:
@@ -76,11 +86,26 @@ def handle(h, method, path, body):
             role    = auth_check_role(token) or "viewer"
             profile = _get_user_profile(user)
             h._json(200, {"username": user, "role": role,
-                          "full_name":   profile.get("full_name", ""),
-                          "email":       profile.get("email", ""),
+                          "full_name":        profile.get("full_name", ""),
+                          "email":            profile.get("email", ""),
+                          "theme_preference": profile.get("theme_preference", "dark"),
                           "session_ttl": int(_settings.get("session_ttl", 86400))})
         else:
             h._json(401, {"error": "unauthorized"})
+        return True
+
+    # ── /api/me/theme PATCH ───────────────────────────────────────
+    # Lightweight endpoint for theme-only updates (avoids a full profile payload).
+    if path == "/api/me/theme" and method == "PATCH":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        theme = str(body.get("theme", "")).strip().lower()
+        if theme not in ("dark", "light"):
+            h._json(400, {"error": "invalid theme"}); return True
+        if not db_update_theme(me, theme):
+            h._json(500, {"error": "update failed"}); return True
+        h._json(200, {"ok": True, "theme": theme})
         return True
 
     # ── /api/me/profile PATCH ─────────────────────────────────────
@@ -93,6 +118,10 @@ def handle(h, method, path, body):
         if email and not _RE_EMAIL.match(email):
             h._json(400, {"error": "invalid email address"}); return True
         db_update_own_profile(me, full_name, email)
+        # Optional theme update alongside profile edit
+        theme = str(body.get("theme_preference", "")).strip().lower()
+        if theme in ("dark", "light"):
+            db_update_theme(me, theme)
         db_log_audit(me, h.client_address[0], 'profile_update', me)
         h._json(200, {"ok": True})
         return True

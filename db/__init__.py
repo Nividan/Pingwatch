@@ -65,6 +65,7 @@ from db.users       import (
     db_reorder_dashboards,
     db_update_profile,
     db_update_own_profile,
+    db_update_theme,
 )
 
 # groups

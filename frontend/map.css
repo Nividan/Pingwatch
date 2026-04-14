@@ -9,6 +9,7 @@
 @font-face{font-family:'Share Tech Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/share-tech-mono-v16-latin-regular.woff2') format('woff2')}
 
 :root {
+  color-scheme: dark;
   --bg: #060a0f;
   --grid: rgba(0,200,255,0.04);
   --accent: #00d4ff;
@@ -20,6 +21,22 @@
   --orange: #ff8c00;
   --panel: rgba(8,16,30,0.96);
   --panel-border: rgba(0,212,255,0.2);
+}
+/* Light theme — muted blue palette over a near-white canvas.
+   Status colors darken for AA contrast; grid fades to a cool gray. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0f4f8;
+  --grid: rgba(9,105,218,0.05);
+  --accent: #0969da;
+  --accent2: #1a7f37;
+  --warn: #9a6700;
+  --danger: #cf222e;
+  --gold: #9a6700;
+  --purple: #7c3aed;
+  --orange: #9a3412;
+  --panel: rgba(255,255,255,0.96);
+  --panel-border: rgba(9,105,218,0.25);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:var(--bg); font-family:'Exo 2',sans-serif; height:100vh; overflow:hidden; display:flex; flex-direction:column; }

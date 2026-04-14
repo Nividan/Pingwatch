@@ -306,7 +306,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 
 | Module | Endpoints |
 |--------|-----------|
-| `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/users/{u}/profile` |
+| `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
@@ -348,7 +348,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder) |
+| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`, `theme_preference`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder); `db_update_theme(username, theme)` helper validates `dark` / `light` before writing |
 | `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
@@ -392,7 +392,8 @@ The frontend is served as static files — no build step.
 |------|---------|
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
-| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
+| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.); reconciles `theme_preference` from `/api/me` into `setTheme(..., {sync:false})` after login |
+| `theme.js` | Theme manager — public API `getTheme()` / `setTheme(t, opts)` / `toggleTheme()` / `getCssVar(name)`. `setTheme` writes `<html data-theme>`, persists `localStorage.pw_theme`, postMessages the map iframe, dispatches a `themechange` `CustomEvent`, refreshes the user-menu button label, and fires `PATCH /api/me/theme` in the background (skipped when `opts.sync===false` to avoid echo when mirroring the server value). An inline bootstrap script in `<head>` applies the attribute synchronously before CSS paints — prevents FOUC. Loaded first in the JS bundle so downstream modules can call `getCssVar()` during init. |
 | `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
@@ -528,8 +529,9 @@ The frontend is served as static files — no build step.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/me` | any | Own username, role, full_name, email |
-| `PATCH` | `/api/me/profile` | any | Update own full_name and email |
+| `GET` | `/api/me` | any | Own username, role, full_name, email, theme_preference |
+| `PATCH` | `/api/me/profile` | any | Update own full_name and email (also accepts optional `theme_preference`) |
+| `PATCH` | `/api/me/theme` | any | Update own theme preference `{theme: "dark"\|"light"}` — fired in the background by `setTheme()` |
 | `PATCH` | `/api/users/{u}/profile` | admin or self | Update profile; admin can also set group_id and role |
 
 ### User Groups

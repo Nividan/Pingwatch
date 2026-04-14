@@ -56,6 +56,7 @@ _STATIC_TYPES = {
 
 # ── JS files inlined into index.html ─────────────────────────────
 _JS_FILES = [
+    "theme.js",
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",

@@ -4,6 +4,37 @@ function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='d
 const msC = msColor;
 function fmtTs(ts){try{return new Date(ts).toLocaleTimeString('en-GB');}catch(e){return ts;}}
 
+// ── Theme-aware color cache for canvas charts ────────────────────
+// Canvas can't read CSS vars directly when building rgba() strings, so we
+// cache the RGB tuples and refresh on 'themechange'. Defaults match the
+// dark palette so first paint (before theme.js runs) still looks right.
+const _SCC = {
+  accent: [47,129,247],   // --accent
+  up:     [35,209,139],   // --up
+  warn:   [240,165,0],    // --warn
+  down:   [248,81,73],    // --down
+  text:   [230,237,243],  // --text (near-white in dark, near-black in light)
+  bg:     [13,17,23],     // --bg
+  bg2:    [22,27,34],     // --bg2
+};
+function _refreshChartColors(){
+  if (!window.getCssRgb) return;
+  const m = { accent:'--accent', up:'--up', warn:'--warn', down:'--down',
+              text:'--text', bg:'--bg', bg2:'--bg2' };
+  for (const k in m) { const v = window.getCssRgb(m[k]); if (v) _SCC[k] = v; }
+}
+_refreshChartColors();
+window.addEventListener('themechange', () => {
+  _refreshChartColors();
+  // Redraw every open history chart so they pick up the new palette
+  try {
+    for (const key in _histCache) {
+      const [did, sid] = key.split('/');
+      if (did && sid) dmHistRedraw(did, sid);
+    }
+  } catch(_) {}
+});
+
 function tileHTML(s){
   const st=s.alive===true?'up':s.alive===false?'down':'';
   const isSnmp=s.stype==='snmp';
@@ -493,13 +524,14 @@ function drawSpk(key,history){
   const pts=[];
   history.forEach((v,i)=>{if(v!==null)pts.push({x:i*step,y:H-(v/maxV)*(H-3)});});
   if(pts.length<2)return;
+  const _up = _SCC.up.join(',');
   const g=ctx.createLinearGradient(0,0,0,H);
-  g.addColorStop(0,'rgba(46,204,113,.22)');g.addColorStop(1,'rgba(46,204,113,0)');
+  g.addColorStop(0,`rgba(${_up},.22)`);g.addColorStop(1,`rgba(${_up},0)`);
   ctx.beginPath();ctx.moveTo(pts[0].x,H);
   pts.forEach(p=>ctx.lineTo(p.x,p.y));
   ctx.lineTo(pts[pts.length-1].x,H);ctx.closePath();ctx.fillStyle=g;ctx.fill();
   ctx.beginPath();pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-  ctx.strokeStyle='#2ecc71';ctx.lineWidth=1.5;ctx.stroke();
+  ctx.strokeStyle=`rgb(${_up})`;ctx.lineWidth=1.5;ctx.stroke();
 }
 
 // ── Device status recalc ─────────────────────────────────────────
@@ -1225,9 +1257,9 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
     const statusColor = isDown ? 'var(--down)' : 'var(--up)';
     const statusText  = isDown ? '● DOWN' : '● UP';
     const lossColor   = (nearest?.loss_pct || 0) > 5 ? 'var(--warn)' : 'var(--text)';
-    const _hdrStyle = `font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:7px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.1)`;
-    const _valStyle = `font-size:1.1rem;font-weight:700;color:#7ec8ff;text-align:center;margin-bottom:8px;font-variant-numeric:tabular-nums`;
-    const _ftStyle  = `margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,.1);font-size:.76rem`;
+    const _hdrStyle = `font-size:.82rem;font-weight:600;color:var(--text);margin-bottom:7px;padding-bottom:6px;border-bottom:1px solid var(--border)`;
+    const _valStyle = `font-size:1.1rem;font-weight:700;color:var(--accent);text-align:center;margin-bottom:8px;font-variant-numeric:tabular-nums`;
+    const _ftStyle  = `margin-top:7px;padding-top:5px;border-top:1px solid var(--border);font-size:.76rem`;
     if (_isCounter) {
       tip.innerHTML =
         `<div style="${_hdrStyle}">${lbl}</div>` +
@@ -1288,7 +1320,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
     // Redraw chart then overdraw crosshair + highlight point
     dmHistRedraw(did, sid);
     const cctx = canvas.getContext('2d');
-    cctx.strokeStyle = 'rgba(255,255,255,.22)';
+    cctx.strokeStyle = `rgba(${_SCC.text.join(',')},.22)`;
     cctx.lineWidth = 1;
     cctx.setLineDash([3, 3]);
     cctx.beginPath(); cctx.moveTo(mx, TOP); cctx.lineTo(mx, canvas.height - BOT); cctx.stroke();
@@ -1330,8 +1362,8 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
       // Draw dot exactly on the drawn line
       if (dotCanvasY != null) {
         cctx.beginPath(); cctx.arc(mx, dotCanvasY, 5, 0, Math.PI * 2);
-        cctx.fillStyle = '#7ec8ff'; cctx.fill();
-        cctx.strokeStyle = 'rgba(255,255,255,.9)'; cctx.lineWidth = 1.5; cctx.stroke();
+        cctx.fillStyle = `rgb(${_SCC.accent.join(',')})`; cctx.fill();
+        cctx.strokeStyle = `rgba(${_SCC.text.join(',')},.9)`; cctx.lineWidth = 1.5; cctx.stroke();
       }
     }
   }, { signal });
@@ -1352,13 +1384,18 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   ctx.clearRect(0, 0, W, H);
 
   // ── Background ────────────────────────────────────────────────
+  const _txt = _SCC.text.join(',');
+  const _acc = _SCC.accent.join(',');
+  const _dn  = _SCC.down.join(',');
+  const _wn  = _SCC.warn.join(',');
+  const _upC = _SCC.up.join(',');
   const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-  bgGrad.addColorStop(0, '#0d1520');
-  bgGrad.addColorStop(1, '#060c16');
+  bgGrad.addColorStop(0, `rgb(${_SCC.bg2.join(',')})`);
+  bgGrad.addColorStop(1, `rgb(${_SCC.bg.join(',')})`);
   ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
   if (!samples.length && !summary.length) {
-    ctx.fillStyle = '#8b949e'; ctx.font = '13px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(${_txt},.6)`; ctx.font = '13px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('No data for this period', W / 2, H / 2);
     if (statsEl) statsEl.textContent = 'No data';
     return;
@@ -1408,26 +1445,26 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   ctx.font = 'bold 11px Inter,sans-serif';
   [0.2, 0.4, 0.6, 0.8, 1.0].forEach(f => {
     const y = (H - BOT) - f * plotH;
-    ctx.strokeStyle = 'rgba(255,255,255,.08)';
+    ctx.strokeStyle = `rgba(${_txt},.08)`;
     ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(200,210,220,.92)'; ctx.textAlign = 'right';
+    ctx.fillStyle = `rgba(${_txt},.78)`; ctx.textAlign = 'right';
     const _yLbl = _isCounter
       ? _fmtRateYLabel(maxY * f, snmpUnit)
       : _isVmware ? _fmtVmYLabel(maxY * f, _vmU2)
       : (Math.round(maxY * f) >= 1000 ? (Math.round(maxY * f) / 1000).toFixed(1) + 's' : Math.round(maxY * f) + 'ms');
     ctx.fillText(_yLbl, LEFT - 4, y + 4);
     if (togLoss && !_isCounter) {
-      ctx.fillStyle = 'rgba(240,165,0,.9)'; ctx.textAlign = 'left';
+      ctx.fillStyle = `rgba(${_wn},.9)`; ctx.textAlign = 'left';
       ctx.fillText(Math.round(100 * f) + '%', W - RIGHT + 4, y + 4);
     }
   });
-  ctx.fillStyle = 'rgba(200,210,220,.6)'; ctx.textAlign = 'right';
+  ctx.fillStyle = `rgba(${_txt},.5)`; ctx.textAlign = 'right';
   ctx.fillText('0', LEFT - 4, H - BOT + 4);
   // Y/X axis border lines
-  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = `rgba(${_txt},.12)`; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(LEFT, TOP); ctx.lineTo(LEFT, H - BOT); ctx.stroke();
   if (togLoss && !_isCounter) {
-    ctx.strokeStyle = 'rgba(240,165,0,.2)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = `rgba(${_wn},.2)`; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(W - RIGHT, TOP); ctx.lineTo(W - RIGHT, H - BOT); ctx.stroke();
   }
 
@@ -1446,25 +1483,25 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   for (let ts = _firstGrid; ts < windowEnd; ts += _gInt) {
     const x = xOf(ts);
     if (x < LEFT + 14) continue;
-    ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = `rgba(${_txt},.06)`; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, H - BOT); ctx.stroke();
     const d = new Date(ts * 1000);
     const lbl = _gInt < 86400
       ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false})
       : d.toLocaleDateString([], {month:'short',day:'numeric'});
-    ctx.fillStyle = 'rgba(200,210,220,.85)'; ctx.font = '11px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(${_txt},.72)`; ctx.font = '11px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(lbl, x, H - 3);
   }
 
   // ── 3. Downtime spans ─────────────────────────────────────────
-  ctx.fillStyle = 'rgba(248,81,73,.10)';
+  ctx.fillStyle = `rgba(${_dn},.10)`;
   for (const r of summary) {
     if (r.ok === 0 && r.fail > 0) {
       const x1 = Math.max(LEFT, xOf(r.ts));
       const x2 = Math.min(W - RIGHT, xOf(r.ts + 3600));
       if (x2 > x1) {
         ctx.fillRect(x1, TOP, x2 - x1, plotH);
-        ctx.strokeStyle = 'rgba(248,81,73,.35)'; ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(${_dn},.35)`; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x1, TOP + 1); ctx.lineTo(x2, TOP + 1); ctx.stroke();
       }
     }
@@ -1477,8 +1514,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       if ((r.loss_pct || 0) === 0) continue;
       const x = xOf(r.ts + 1800) - barW / 2;
       const yTop = yLoss(r.loss_pct);
-      ctx.fillStyle = 'rgba(240,165,0,.4)';
-      ctx.shadowColor = 'rgba(240,165,0,.35)';
+      ctx.fillStyle = `rgba(${_wn},.4)`;
+      ctx.shadowColor = `rgba(${_wn},.35)`;
       ctx.shadowBlur = 4;
       if (ctx.roundRect) {
         ctx.beginPath();
@@ -1509,7 +1546,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
         const x = xOf(r.ts + 1800);
         i === 0 ? ctx.moveTo(x, yOf(r.min_ms)) : ctx.lineTo(x, yOf(r.min_ms));
       });
-      ctx.strokeStyle = 'rgba(35,209,139,1)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = `rgb(${_upC})`; ctx.lineWidth = 1; ctx.stroke();
       ctx.globalAlpha = 1.0;
     }
   }
@@ -1542,8 +1579,8 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       if (pts.length < 2) return;
       const gapThresh = (tsRange / pts.length) * gapMult;
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#7ec8ff';
-      ctx.shadowColor = 'rgba(126,200,255,.5)';
+      ctx.strokeStyle = `rgb(${_acc})`;
+      ctx.shadowColor = `rgba(${_acc},.5)`;
       ctx.shadowBlur = 3;
       let segStart = 0;
       for (let i = 1; i <= pts.length; i++) {
@@ -1687,26 +1724,26 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   ctx.font = 'bold 11px Inter,sans-serif';
   if (_sen?.warn_ms > 0 && _sen.warn_ms <= maxY) {
     const wy = yOf(_sen.warn_ms);
-    ctx.strokeStyle = 'rgba(240,165,0,.5)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = `rgba(${_wn},.5)`; ctx.lineWidth = 1;
     ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(LEFT, wy); ctx.lineTo(W - RIGHT, wy); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(240,165,0,.85)'; ctx.textAlign = 'left';
+    ctx.fillStyle = `rgba(${_wn},.85)`; ctx.textAlign = 'left';
     ctx.fillText(_isCounter ? 'warn '+_fmtRateThrLabel(_sen.warn_ms,snmpUnit) : _isVmware ? 'warn '+_fmtVmVal(_sen.warn_ms,_vmU2) : _sen?.stype==='tls' ? 'warn '+_sen.warn_ms+'d' : 'warn '+_sen.warn_ms+'ms', LEFT + 4, wy - 3);
   }
   if (_sen?.crit_ms > 0 && _sen.crit_ms <= maxY) {
     const cy = yOf(_sen.crit_ms);
-    ctx.strokeStyle = 'rgba(248,81,73,.5)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = `rgba(${_dn},.5)`; ctx.lineWidth = 1;
     ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(LEFT, cy); ctx.lineTo(W - RIGHT, cy); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(248,81,73,.85)'; ctx.textAlign = 'left';
+    ctx.fillStyle = `rgba(${_dn},.85)`; ctx.textAlign = 'left';
     ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : _isVmware ? 'crit '+_fmtVmVal(_sen.crit_ms,_vmU2) : _sen?.stype==='tls' ? 'crit '+_sen.crit_ms+'d' : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
   }
 
   // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──
   if (minutes <= 60) {
-    ctx.strokeStyle = 'rgba(248,81,73,.55)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = `rgba(${_dn},.55)`; ctx.lineWidth = 1;
     samples.filter(p => !p.ok).forEach(p => {
       const x = xOf(p.ts);
       ctx.beginPath(); ctx.moveTo(x, H - BOT); ctx.lineTo(x, H - BOT - 8); ctx.stroke();
@@ -1992,7 +2029,8 @@ function drawDmChart(canvas,history){
   canvas.width=canvas.offsetWidth||620;
   const W=canvas.width,H=110,ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,W,H);
-  ctx.strokeStyle='rgba(255,255,255,0.04)';ctx.lineWidth=1;ctx.setLineDash([3,4]);
+  const _txt2=_SCC.text.join(','), _up2=_SCC.up.join(','), _dn2=_SCC.down.join(',');
+  ctx.strokeStyle=`rgba(${_txt2},0.04)`;ctx.lineWidth=1;ctx.setLineDash([3,4]);
   [.2,.4,.6,.8].forEach(p=>{const y=H-p*(H-10);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
   ctx.setLineDash([]);
   if(!history||history.length<2)return;
@@ -2004,20 +2042,20 @@ function drawDmChart(canvas,history){
     if(v!==null)pts.push({x:i*step,y:H-(v/maxV)*(H-10)});
     else{
       const cx=i*step,cy=H/2;
-      ctx.strokeStyle='rgba(231,76,60,.7)';ctx.lineWidth=1.5;
+      ctx.strokeStyle=`rgba(${_dn2},.7)`;ctx.lineWidth=1.5;
       ctx.beginPath();ctx.moveTo(cx-5,cy-5);ctx.lineTo(cx+5,cy+5);ctx.stroke();
       ctx.beginPath();ctx.moveTo(cx+5,cy-5);ctx.lineTo(cx-5,cy+5);ctx.stroke();
     }
   });
   if(pts.length<2)return;
   const g=ctx.createLinearGradient(0,0,0,H);
-  g.addColorStop(0,'rgba(46,204,113,.18)');g.addColorStop(1,'rgba(46,204,113,0)');
+  g.addColorStop(0,`rgba(${_up2},.18)`);g.addColorStop(1,`rgba(${_up2},0)`);
   ctx.beginPath();ctx.moveTo(pts[0].x,H);pts.forEach(p=>ctx.lineTo(p.x,p.y));
   ctx.lineTo(pts[pts.length-1].x,H);ctx.closePath();ctx.fillStyle=g;ctx.fill();
   ctx.beginPath();pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-  ctx.strokeStyle='rgba(46,204,113,.2)';ctx.lineWidth=6;ctx.stroke();
+  ctx.strokeStyle=`rgba(${_up2},.2)`;ctx.lineWidth=6;ctx.stroke();
   ctx.beginPath();pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-  ctx.strokeStyle='#2ecc71';ctx.lineWidth=2;ctx.stroke();
+  ctx.strokeStyle=`rgb(${_up2})`;ctx.lineWidth=2;ctx.stroke();
   const lp=pts[pts.length-1];
-  ctx.beginPath();ctx.arc(lp.x,lp.y,4,0,Math.PI*2);ctx.fillStyle='#2ecc71';ctx.fill();
+  ctx.beginPath();ctx.arc(lp.x,lp.y,4,0,Math.PI*2);ctx.fillStyle=`rgb(${_up2})`;ctx.fill();
 }

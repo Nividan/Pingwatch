@@ -55,7 +55,7 @@
   - Edit Link: fixed source and target device changes not being saved
 - User profile dropdown (top bar)
   - Username, role badge, green status dot
-  - Settings shortcut, Change Password modal, Theme stub, Sign Out
+  - Settings shortcut, Change Password modal, Theme toggle, Sign Out
   - Keyboard navigation, close on ESC / outside click
   - Edit Profile shortcut (opens self-service name + email editor)
 - User profiles and groups
@@ -245,15 +245,23 @@
   - CSP tightened in `server.py` — dropped `https://fonts.googleapis.com` from `style-src` and `https://fonts.gstatic.com` from `font-src`; now pure `'self'`
   - Air-gapped installation guide added to `README.md` (pre-downloaded wheels, self-signed TLS instead of ACME, internal SMTP relay, etc.)
 
+- Light / Dark theme toggle
+  - Full GitHub-Light CSS variable palette via `:root[data-theme="light"]` override block in `style.css`; dark remains the default; `color-scheme` toggled so native controls (date pickers, scrollbars) follow the theme
+  - Inline `<head>` bootstrap script reads `localStorage.pw_theme` and applies `data-theme` before CSS paints — prevents flash-of-unthemed-content on reload
+  - Hybrid persistence — `localStorage` (`pw_theme`) for instant per-browser apply + new `users.theme_preference` column for authoritative cross-device sync; `/api/me` returns the server value on login and reconciles into localStorage (skipped server echo via `{sync:false}`)
+  - `frontend/theme.js` module — public API (`getTheme`, `setTheme`, `toggleTheme`, `getCssVar`); loaded first in the JS bundle so downstream modules can read theme-aware CSS variables
+  - `PATCH /api/me/theme` endpoint (any role, validates `dark` / `light`) fired in the background by `setTheme()`
+  - User menu "◐ Theme" item re-enabled — label flips between "☀ Switch to Light" and "🌙 Switch to Dark" based on current theme
+  - Login-screen SVGs converted to `currentColor` so the logo follows the theme before `/api/me` returns
+  - `themechange` `CustomEvent` dispatched on toggle + postMessage to the map iframe — hook point for canvas / iframe redraws in Phase 2
+
 ## 🔴 High Priority
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
 
 ## 🎨 Low Priority
-- Theme support
-  - Dark / light theme toggle (stub already in user menu)
-  - Persist theme preference per user
-  - Compact mode
-  - Accessible contrast mode
-  - Spacing / alignment cleanup
+- Compact mode
+- Accessible contrast mode
+- Spacing / alignment cleanup
+- Light-theme Phase 2 — canvas drawers (starfield, sparklines, sensor history chart) and the Topology Map iframe still use dark-mode colours; pending `getCssVar`-driven redraws triggered by the `themechange` event

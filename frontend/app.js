@@ -291,6 +291,11 @@ async function submitLogin(){
     _loggedOut=false;
     S.role=d.role||'viewer';
     if(d.session_ttl)_sessionTtl=d.session_ttl;
+    // Fetch full profile (incl. theme_preference) — /api/login doesn't return it
+    try{
+      const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+      if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});
+    }catch(e){}
     hideLogin();
     try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
     onAuthenticated(d.username);
@@ -602,7 +607,7 @@ async function checkAuth(){
   document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
-    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; onAuthenticated(d.username);}
+    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}
     else{showLogin();}
   }catch(e){showLogin();}
 }
