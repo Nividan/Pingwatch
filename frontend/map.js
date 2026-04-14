@@ -293,7 +293,7 @@ function calcPwLayout(devices) {
     const g = dev.group || 'Default Group';
     (byGroup[g] = byGroup[g] || []).push(dev);
   }
-  const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60;
+  const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60, MAX_ROWS = 5;
   const syntheticNodes = [], syntheticGroups = [];
   // Smart-placement dirty flags — batched save at end of pass
   let _pwNodeDirty = false, _pwGroupDirty = false;
@@ -303,8 +303,8 @@ function calcPwLayout(devices) {
     const sizes = devs.map(d => nsize(pwDeviceType(d), null) || { w: 170, h: 95 });
     const NW    = Math.max(...sizes.map(s => s.w)) + 30;   // slot width  = widest node + gap
     const NH    = Math.max(...sizes.map(s => s.h)) + 28;   // slot height = tallest node + gap
-    const ncols = Math.min(devs.length, 3);
-    const nrows = Math.ceil(devs.length / 3);
+    const nrows = Math.min(devs.length, MAX_ROWS);          // column-major: max 5 rows per column
+    const ncols = Math.ceil(devs.length / MAX_ROWS);
     return { gname, devs, NW, NH,
              w: ncols * NW + PAD * 2,
              h: nrows * NH + PAD * 2 + 28 };   // 28px = group title bar
@@ -338,9 +338,9 @@ function calcPwLayout(devices) {
       }
 
       if (!hasAnyOverride) {
-        // Pristine group — deterministic grid (unchanged legacy behavior)
+        // Pristine group — column-major grid (max MAX_ROWS per column)
         devs.forEach((dev, i) => {
-          const dc = i % 3, dr = Math.floor(i / 3);
+          const dc = Math.floor(i / MAX_ROWS), dr = i % MAX_ROWS;
           syntheticNodes.push(deviceToNode(dev,
             gax + PAD + dc * NW,
             gay + PAD + 28 + dr * NH));
@@ -708,15 +708,14 @@ function connectDeviceToInternet(pwDid) {
     toast('Already connected to Internet');
     return;
   }
-  // Place cloud above the device if no position override exists yet
+  // Place cloud above all nodes (centered horizontally, above topmost node)
   if (!pwOverrides[PW_INTERNET_DID]) {
-    const devNode = nodes.find(n => String(n._pwDid) === did);
-    if (devNode) {
-      const ix = Math.max(20, devNode.x - 30);
-      const iy = Math.max(20, devNode.y - 180);
-      pwOverrides[PW_INTERNET_DID] = { x: ix, y: iy };
-      _pwSave('pw_node_overrides', pwOverrides);
-    }
+    const xs = nodes.map(n => n.x).filter(x => isFinite(x));
+    const ys = nodes.map(n => n.y).filter(y => isFinite(y));
+    const cx = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : 60;
+    const topY = ys.length ? Math.min(...ys) : 60;
+    pwOverrides[PW_INTERNET_DID] = { x: Math.max(20, cx - 30), y: Math.max(20, topY - 180) };
+    _pwSave('pw_node_overrides', pwOverrides);
   }
   // Create internet link
   const newLink = {
