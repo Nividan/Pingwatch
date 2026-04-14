@@ -43,6 +43,7 @@ if sys.platform == "win32":
 BG     = "#0d1117"
 BG2    = "#161b22"
 BG3    = "#1c2128"
+BG4    = "#243044"   # elevated surface — hover / active states
 BORDER = "#30363d"
 TEXT   = "#e6edf3"
 TEXT2  = "#8b949e"
@@ -51,6 +52,7 @@ GREEN  = "#23d18b"
 RED    = "#f85149"
 YELLOW = "#f0a500"
 ACCENT = "#2f81f7"
+ACCENT_HOVER = "#388bfd"
 
 _FNT = "Segoe UI" if sys.platform == "win32" else \
        "Helvetica Neue" if sys.platform == "darwin" else "DejaVu Sans"
@@ -59,6 +61,9 @@ _MONO = "Consolas" if sys.platform == "win32" else \
 
 # ── Step names ──────────────────────────────────────────────────────────────
 _STEPS = ["Welcome", "Packages", "Database", "Network", "Security", "System", "Summary"]
+
+# ── Braille spinner frames (reused across pages) ────────────────────────────
+_SPIN_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -81,19 +86,147 @@ def _label(parent, text, size=11, color=TEXT, bold=False, **kw):
 
 
 def _btn(parent, text, command, style="default"):
+    # (bg, fg, border, hover_bg)
     colors = {
-        "default": (BG3, TEXT2, BORDER),
-        "accent":  (ACCENT, "#fff", ACCENT),
-        "danger":  (RED, "#fff", RED),
+        "default": (BG3,    TEXT2, BORDER, BG4),
+        "accent":  (ACCENT, "#fff", ACCENT, ACCENT_HOVER),
+        "danger":  (RED,    "#fff", RED,    "#ff6b63"),
+        "ghost":   (BG,     TEXT3, BG,     BG2),
     }
-    bg, fg, bd = colors.get(style, colors["default"])
+    bg, fg, bd, hover_bg = colors.get(style, colors["default"])
     b = tk.Button(parent, text=text, command=command,
-                  bg=bg, fg=fg, activebackground=bg, activeforeground=fg,
+                  bg=bg, fg=fg, activebackground=hover_bg, activeforeground=fg,
                   disabledforeground=fg,
                   relief="flat", bd=0, padx=16, pady=6,
                   font=(_FNT, 10), cursor="hand2",
-                  highlightthickness=1, highlightbackground=bd)
+                  highlightthickness=1, highlightbackground=bd,
+                  highlightcolor=bd)
+    # Hover feedback — only when button is in its normal state
+    def _on_enter(_e, w=b, c=hover_bg):
+        if str(w["state"]) == "normal":
+            w.config(bg=c)
+    def _on_leave(_e, w=b, c=bg):
+        if str(w["state"]) == "normal":
+            w.config(bg=c)
+    b.bind("<Enter>", _on_enter)
+    b.bind("<Leave>", _on_leave)
     return b
+
+
+def _page_title(parent, title, subtitle=None):
+    """Render the standard page-title + subtitle stack. Returns (title_lbl, sub_lbl)."""
+    t = _label(parent, title, size=16, bold=True)
+    t.pack(anchor="w", pady=(8, 2))
+    s = None
+    if subtitle:
+        s = _label(parent, subtitle, size=10, color=TEXT2)
+        s.pack(anchor="w", pady=(0, 12))
+    return t, s
+
+
+def _as_pill(label_widget, text, color, bg=BG2):
+    """Style an existing Label as an inline tinted pill with the given color."""
+    label_widget.config(
+        text=f"  {text}  ", fg=color, bg=bg,
+        highlightbackground=color, highlightcolor=color,
+        highlightthickness=1, bd=0, padx=0, pady=0,
+        font=(_FNT, 9, "bold"),
+    )
+
+
+def _start_spinner(root, label_widget, color=YELLOW):
+    """Animate a braille spinner on `label_widget`.
+
+    Returns a ``stop()`` callable — invoke it to halt the animation.
+    Safe to call when the widget has been destroyed.
+    """
+    state = {"idx": 0, "after_id": None, "alive": True}
+
+    def tick():
+        if not state["alive"]:
+            return
+        try:
+            label_widget.config(text=_SPIN_FRAMES[state["idx"]], fg=color)
+        except tk.TclError:
+            state["alive"] = False
+            return
+        state["idx"] = (state["idx"] + 1) % len(_SPIN_FRAMES)
+        state["after_id"] = root.after(80, tick)
+
+    def stop():
+        state["alive"] = False
+        if state["after_id"]:
+            try:
+                root.after_cancel(state["after_id"])
+            except Exception:
+                pass
+            state["after_id"] = None
+
+    state["after_id"] = root.after(0, tick)
+    return stop
+
+
+def _bind_row_hover(row, normal_bg, hover_bg):
+    """Highlight a row (Frame + its Label children) on mouse hover.
+
+    Uses a deferred-leave trick so that moving the cursor from the row onto
+    one of its child labels does NOT cause a flicker back to normal_bg.
+    """
+    widgets = [row]
+    for child in row.winfo_children():
+        if isinstance(child, tk.Label):
+            widgets.append(child)
+
+    pending = [None]  # after-id of the deferred _set(normal) call
+
+    def _set(bg):
+        for w in widgets:
+            try:
+                w.config(bg=bg)
+            except tk.TclError:
+                pass
+
+    def _enter(_e):
+        if pending[0]:
+            try:
+                row.after_cancel(pending[0])
+            except Exception:
+                pass
+            pending[0] = None
+        _set(hover_bg)
+
+    def _leave(_e):
+        if pending[0]:
+            try:
+                row.after_cancel(pending[0])
+            except Exception:
+                pass
+
+        def _apply():
+            _set(normal_bg)
+            pending[0] = None
+
+        pending[0] = row.after(1, _apply)
+
+    for w in widgets:
+        w.bind("<Enter>", _enter)
+        w.bind("<Leave>", _leave)
+
+
+def _password_strength(pw):
+    """Return a 0.0–1.0 score for the given password. Purely cosmetic."""
+    if not pw:
+        return 0.0
+    score = min(len(pw) / 20.0, 0.6)           # length contributes up to 0.6
+    if any(c.isupper() for c in pw) and any(c.islower() for c in pw):
+        score += 0.1
+    if any(c.isdigit() for c in pw):
+        score += 0.1
+    if any(not c.isalnum() for c in pw):
+        score += 0.1
+    if len(pw) >= 12:
+        score += 0.1
+    return min(score, 1.0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -111,8 +244,8 @@ class WizardController:
 
         root.title("PingWatch Setup")
         root.configure(bg=BG)
-        root.geometry("760x740")
-        root.minsize(700, 640)
+        root.geometry("820x780")
+        root.minsize(760, 700)
         root.resizable(True, True)
 
         # Window icon (title bar + taskbar)
@@ -123,34 +256,58 @@ class WizardController:
             except Exception:
                 pass
 
-        # ── Header ───────────────────────────────────────────────
-        hdr = tk.Frame(root, bg=BG2, height=52)
+        # ── Header — Ping + Watch wordmark (mirrors gui.py) ──────
+        hdr = tk.Frame(root, bg=BG2, height=58)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-        tk.Label(hdr, text="◉ PingWatch Setup", bg=BG2, fg=TEXT,
-                 font=(_FNT, 14, "bold"), padx=16).pack(side="left")
+        logo = tk.Frame(hdr, bg=BG2)
+        logo.pack(side="left", padx=(18, 0), pady=8)
+        tk.Label(logo, text="●", fg=GREEN, bg=BG2,
+                 font=(_FNT, 17)).pack(side="left", padx=(0, 6))
+        tk.Label(logo, text="Ping", fg=TEXT, bg=BG2,
+                 font=(_FNT, 19, "bold")).pack(side="left")
+        tk.Label(logo, text="Watch", fg=ACCENT, bg=BG2,
+                 font=(_FNT, 19, "bold")).pack(side="left")
+        tk.Label(logo, text="   First-run Setup", fg=TEXT2, bg=BG2,
+                 font=(_FNT, 11)).pack(side="left", pady=(4, 0))
 
-        # ── Step dots ────────────────────────────────────────────
-        self._dot_frame = tk.Frame(root, bg=BG, pady=10)
-        self._dot_frame.pack(fill="x")
+        # Thin accent strip underneath header — ties wizard to status window
+        tk.Frame(root, bg=ACCENT, height=3).pack(fill="x")
+
+        # ── Step indicator — dots + connecting lines ─────────────
+        self._dot_frame = tk.Frame(root, bg=BG, pady=12)
+        self._dot_frame.pack(fill="x", padx=24)
         self._dots = []
+        self._lines = []
+        N = len(_STEPS)
+        # Dots live at even columns (weight 0, fixed min); lines at odd (weight 1, expand)
+        for i in range(N):
+            self._dot_frame.columnconfigure(2 * i, weight=0, minsize=70)
+        for i in range(N - 1):
+            self._dot_frame.columnconfigure(2 * i + 1, weight=1)
         for i, name in enumerate(_STEPS):
-            f = tk.Frame(self._dot_frame, bg=BG)
-            f.pack(side="left", expand=True)
-            dot = tk.Label(f, text="●", bg=BG, fg=TEXT3, font=(_FNT, 10))
-            dot.pack()
-            lbl = tk.Label(f, text=name, bg=BG, fg=TEXT3, font=(_FNT, 8))
-            lbl.pack()
+            dot = tk.Label(self._dot_frame, text="○", bg=BG, fg=TEXT2,
+                           font=(_FNT, 14))
+            dot.grid(row=0, column=2 * i, sticky="n")
+            lbl = tk.Label(self._dot_frame, text=name, bg=BG, fg=TEXT2,
+                           font=(_FNT, 9))
+            lbl.grid(row=1, column=2 * i, pady=(2, 0), sticky="n")
             self._dots.append((dot, lbl))
+            if i < N - 1:
+                line = tk.Frame(self._dot_frame, bg=BORDER, height=2)
+                line.grid(row=0, column=2 * i + 1, sticky="ew",
+                          padx=4, pady=(11, 0))
+                self._lines.append(line)
 
         # ── Content frame ────────────────────────────────────────
         self._content = tk.Frame(root, bg=BG)
         self._content.pack(fill="both", expand=True, padx=24, pady=(0, 8))
 
-        # ── Navigation bar ───────────────────────────────────────
+        # ── Navigation bar — top divider + styled buttons ────────
+        tk.Frame(root, bg=BORDER, height=1).pack(fill="x")
         nav = tk.Frame(root, bg=BG, pady=10)
         nav.pack(fill="x", padx=24)
-        self.btn_cancel = _btn(nav, "Cancel", self._on_cancel)
+        self.btn_cancel = _btn(nav, "Cancel", self._on_cancel, "ghost")
         self.btn_cancel.pack(side="left")
         self.btn_finish = _btn(nav, "Finish", self._on_finish, "accent")
         self.btn_finish.pack(side="right")
@@ -186,14 +343,20 @@ class WizardController:
         self.btn_finish.config(state="normal" if not self._busy else "disabled")
         for i, (dot, lbl) in enumerate(self._dots):
             if i < self.current:
-                dot.config(fg=GREEN)
+                # Completed — green checkmark
+                dot.config(text="✓", fg=GREEN, font=(_FNT, 13, "bold"))
                 lbl.config(fg=GREEN)
             elif i == self.current:
-                dot.config(fg=ACCENT)
-                lbl.config(fg=ACCENT)
+                # Current step — filled accent dot
+                dot.config(text="●", fg=ACCENT, font=(_FNT, 14))
+                lbl.config(fg=ACCENT, font=(_FNT, 9, "bold"))
             else:
-                dot.config(fg=TEXT3)
-                lbl.config(fg=TEXT3)
+                # Pending — hollow dot
+                dot.config(text="○", fg=TEXT2, font=(_FNT, 14))
+                lbl.config(fg=TEXT2, font=(_FNT, 9))
+        # Color connector segments: GREEN where the step before it is completed
+        for i, line in enumerate(self._lines):
+            line.config(bg=GREEN if i < self.current else BORDER)
 
     def set_busy(self, busy):
         self._busy = busy
@@ -256,19 +419,44 @@ class WizardPage(tk.Frame):
 class WelcomePage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "Welcome to PingWatch", size=18, bold=True).pack(pady=(30, 8))
-        _label(self, "Network Monitoring Made Simple", size=12, color=TEXT2).pack()
-        _label(self, "", size=6).pack()  # spacer
-        info = (
-            "This wizard will guide you through the initial setup:\n\n"
-            "  ●  Check and install required packages\n"
-            "  ●  Choose your database backend\n"
-            "  ●  Configure network ports and TLS\n"
-            "  ●  Create your administrator account\n\n"
-            "You can re-run this wizard later with  --setup"
-        )
-        _label(self, info, size=11, color=TEXT2, justify="left",
-               anchor="w", wraplength=500).pack(fill="x", pady=10)
+
+        # ── Big logomark ─────────────────────────────────────────
+        mark = tk.Frame(self, bg=BG)
+        mark.pack(pady=(28, 4))
+        tk.Label(mark, text="●", fg=GREEN, bg=BG,
+                 font=(_FNT, 44)).pack(side="left", padx=(0, 10))
+        tk.Label(mark, text="Ping", fg=TEXT, bg=BG,
+                 font=(_FNT, 34, "bold")).pack(side="left")
+        tk.Label(mark, text="Watch", fg=ACCENT, bg=BG,
+                 font=(_FNT, 34, "bold")).pack(side="left")
+
+        _label(self, "Network Monitoring Made Simple", size=12,
+               color=TEXT2).pack(pady=(0, 18))
+
+        # ── Feature card panel ───────────────────────────────────
+        card = tk.Frame(self, bg=BG2, highlightthickness=1,
+                        highlightbackground=BORDER, padx=22, pady=16)
+        card.pack(fill="x", padx=40)
+
+        tk.Label(card, text="This wizard will guide you through:",
+                 bg=BG2, fg=TEXT, font=(_FNT, 11, "bold"),
+                 anchor="w").pack(fill="x", pady=(0, 10))
+
+        for glyph, color, label in [
+            ("◉", ACCENT, "Check and install required packages"),
+            ("◈", GREEN,  "Choose your database backend"),
+            ("⚡", YELLOW, "Configure network ports and TLS"),
+            ("⚿", ACCENT, "Create your administrator account"),
+        ]:
+            row = tk.Frame(card, bg=BG2)
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=glyph, bg=BG2, fg=color,
+                     font=(_FNT, 13), width=3).pack(side="left")
+            tk.Label(row, text=label, bg=BG2, fg=TEXT2,
+                     font=(_FNT, 11), anchor="w").pack(side="left")
+
+        _label(self, "You can re-run this wizard later with  --setup",
+               size=9, color=TEXT3).pack(pady=(18, 0))
 
 
 # ── 2. Packages ─────────────────────────────────────────────────────────────
@@ -276,15 +464,13 @@ class WelcomePage(WizardPage):
 class PackagesPage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "Package Check", size=14, bold=True).pack(anchor="w", pady=(8, 4))
-        _label(self, "Verifying required and optional dependencies",
-               size=10, color=TEXT2).pack(anchor="w")
+        _page_title(self, "Package Check",
+                    "Verifying required and optional dependencies")
 
         # Scrollable container for package rows
         self._canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
-        self._scrollbar = tk.Scrollbar(self, orient="vertical",
-                                       command=self._canvas.yview,
-                                       bg=BG3, troughcolor=BG2)
+        self._scrollbar = ttk.Scrollbar(self, orient="vertical",
+                                        command=self._canvas.yview)
         self._rows_frame = tk.Frame(self._canvas, bg=BG)
         self._rows_frame.bind("<Configure>",
             lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
@@ -312,26 +498,31 @@ class PackagesPage(WizardPage):
             w.destroy()
         self._pkg_widgets = {}
         for i, pkg in enumerate(PACKAGES):
-            row = tk.Frame(self._rows_frame, bg=BG2 if i % 2 == 0 else BG,
-                           pady=4, padx=8)
+            row_bg = BG2 if i % 2 == 0 else BG
+            row = tk.Frame(self._rows_frame, bg=row_bg, pady=5, padx=8)
             row.pack(fill="x")
-            icon = tk.Label(row, text="…", bg=row["bg"], fg=TEXT3,
-                            font=(_MONO, 12), width=2)
+            icon = tk.Label(row, text="○", bg=row_bg, fg=TEXT2,
+                            font=(_MONO, 12), width=3)
             icon.pack(side="left")
             name_lbl = tk.Label(row, text=f"{pkg['name']}",
-                                bg=row["bg"], fg=TEXT, font=(_FNT, 10, "bold"))
+                                bg=row_bg, fg=TEXT, font=(_FNT, 10, "bold"))
             name_lbl.pack(side="left", padx=(4, 0))
             desc_lbl = tk.Label(row, text=f"— {pkg['desc']}",
-                                bg=row["bg"], fg=TEXT2, font=(_FNT, 10))
+                                bg=row_bg, fg=TEXT2, font=(_FNT, 10))
             desc_lbl.pack(side="left", padx=(4, 0))
-            req_lbl = tk.Label(row, text="(required)" if pkg.get("required") else "",
-                               bg=row["bg"], fg=YELLOW if pkg.get("required") else TEXT3,
-                               font=(_FNT, 9))
-            req_lbl.pack(side="left", padx=(4, 0))
+            # "(required)" tag: informational, use muted TEXT2 bold (not warning-yellow)
+            if pkg.get("required"):
+                req_lbl = tk.Label(row, text="(required)",
+                                   bg=row_bg, fg=TEXT2, font=(_FNT, 9, "bold"))
+                req_lbl.pack(side="left", padx=(4, 0))
             btn = _btn(row, "Install", lambda p=pkg: self._install_pkg(p), "accent")
             btn.pack(side="right")
             btn.pack_forget()  # hidden until needed
-            self._pkg_widgets[pkg["import"]] = {"icon": icon, "btn": btn, "row": row}
+            self._pkg_widgets[pkg["import"]] = {
+                "icon": icon, "btn": btn, "row": row,
+                "normal_bg": row_bg, "spin_stop": None,
+            }
+            _bind_row_hover(row, row_bg, BG3)
 
         # System tools (not pip-installable)
         n = len(PACKAGES)
@@ -353,16 +544,17 @@ class PackagesPage(WizardPage):
 
     def _add_tool_row(self, idx, key, name, desc, hint="", install_fn=None):
         """Add a system tool row (snmpget, ping) with optional install button."""
-        outer = tk.Frame(self._rows_frame, bg=BG2 if idx % 2 == 0 else BG)
+        row_bg = BG2 if idx % 2 == 0 else BG
+        outer = tk.Frame(self._rows_frame, bg=row_bg)
         outer.pack(fill="x")
-        row = tk.Frame(outer, bg=outer["bg"], pady=4, padx=8)
+        row = tk.Frame(outer, bg=row_bg, pady=5, padx=8)
         row.pack(fill="x")
-        icon = tk.Label(row, text="…", bg=row["bg"], fg=TEXT3,
-                        font=(_MONO, 12), width=2)
+        icon = tk.Label(row, text="○", bg=row_bg, fg=TEXT2,
+                        font=(_MONO, 12), width=3)
         icon.pack(side="left")
-        tk.Label(row, text=name, bg=row["bg"], fg=TEXT,
+        tk.Label(row, text=name, bg=row_bg, fg=TEXT,
                  font=(_FNT, 10, "bold")).pack(side="left", padx=(4, 0))
-        tk.Label(row, text=f"— {desc}", bg=row["bg"], fg=TEXT2,
+        tk.Label(row, text=f"— {desc}", bg=row_bg, fg=TEXT2,
                  font=(_FNT, 10)).pack(side="left", padx=(4, 0))
         # Install button (hidden until tool is missing and install_fn provided)
         btn = None
@@ -373,20 +565,24 @@ class PackagesPage(WizardPage):
         hint_w = None
         if hint:
             lines = hint.count("\n") + 1
-            hint_w = tk.Text(outer, bg=outer["bg"], fg=TEXT3, font=(_MONO, 9),
+            hint_w = tk.Text(outer, bg=row_bg, fg=TEXT3, font=(_MONO, 9),
                              height=lines, relief="flat", bd=0, padx=32,
                              highlightthickness=0, wrap="word", cursor="arrow")
             hint_w.insert("1.0", hint)
             hint_w.config(state="disabled")  # read-only but selectable
-        self._pkg_widgets[key] = {"icon": icon, "btn": btn, "row": row,
-                                  "hint": hint_w}
+        self._pkg_widgets[key] = {
+            "icon": icon, "btn": btn, "row": row, "hint": hint_w,
+            "normal_bg": row_bg, "spin_stop": None,
+        }
+        _bind_row_hover(row, row_bg, BG3)
 
     def _install_tool(self, key, install_fn):
         """Run a system tool installer in a background thread."""
         w = self._pkg_widgets[key]
         if w["btn"]:
             w["btn"].config(state="disabled", text="Installing…")
-        w["icon"].config(text="⟳", fg=YELLOW)
+        # Animated spinner instead of static glyph
+        w["spin_stop"] = _start_spinner(self.ctrl.root, w["icon"], YELLOW)
         self.ctrl.set_busy(True)
 
         def _worker():
@@ -397,6 +593,9 @@ class PackagesPage(WizardPage):
 
     def _tool_install_done(self, key, ok, msg):
         w = self._pkg_widgets[key]
+        if w.get("spin_stop"):
+            w["spin_stop"]()
+            w["spin_stop"] = None
         self.ctrl.set_busy(False)
         check_fn = check_snmpget if key == "_snmpget" else check_ping
         if ok or check_fn():
@@ -447,7 +646,7 @@ class PackagesPage(WizardPage):
     def _install_pkg(self, pkg):
         w = self._pkg_widgets[pkg["import"]]
         w["btn"].config(state="disabled", text="Installing…")
-        w["icon"].config(text="⟳", fg=YELLOW)
+        w["spin_stop"] = _start_spinner(self.ctrl.root, w["icon"], YELLOW)
         self.ctrl.set_busy(True)
 
         def _worker():
@@ -458,6 +657,9 @@ class PackagesPage(WizardPage):
 
     def _install_done(self, pkg, ok, err):
         w = self._pkg_widgets[pkg["import"]]
+        if w.get("spin_stop"):
+            w["spin_stop"]()
+            w["spin_stop"] = None
         self.ctrl.set_busy(False)
         if ok or check_import(pkg["import"]):
             w["icon"].config(text="✓", fg=GREEN)
@@ -494,8 +696,8 @@ class DatabasePage(WizardPage):
         super().__init__(parent, ctrl)
         # ── Header row: title + help button ──────────────────────
         hdr = tk.Frame(self, bg=BG)
-        hdr.pack(fill="x", pady=(8, 4))
-        _label(hdr, "Database Backend", size=14, bold=True).pack(side="left")
+        hdr.pack(fill="x", pady=(8, 2))
+        _label(hdr, "Database Backend", size=16, bold=True).pack(side="left")
         tk.Button(hdr, text=" ? ", command=self._show_pg_help,
                   bg=BG3, fg=ACCENT, activebackground=BG3, activeforeground=ACCENT,
                   relief="flat", bd=0, padx=5, pady=0,
@@ -506,32 +708,16 @@ class DatabasePage(WizardPage):
                size=10, color=TEXT2).pack(anchor="w", pady=(0, 12))
 
         self._choice = tk.StringVar(value="sqlite")
+        self._cards = {}  # value -> card Frame (for selection styling)
 
         # ── SQLite card ──────────────────────────────────────────
-        f1 = tk.Frame(self, bg=BG2, highlightthickness=1,
-                      highlightbackground=BORDER, padx=12, pady=10)
-        f1.pack(fill="x", pady=4)
-        tk.Radiobutton(f1, text="SQLite — Zero configuration",
-                       variable=self._choice, value="sqlite",
-                       bg=BG2, fg=TEXT, selectcolor=BG3,
-                       activebackground=BG2, activeforeground=TEXT,
-                       font=(_FNT, 11, "bold"),
-                       command=self._on_choice).pack(anchor="w")
-        tk.Label(f1, text="Data stored locally. Best for single-server deployments.",
-                 bg=BG2, fg=TEXT2, font=(_FNT, 10)).pack(anchor="w", padx=(20, 0))
-
+        f1 = self._make_card("sqlite",
+                             "SQLite — Zero configuration",
+                             "Data stored locally. Best for single-server deployments.")
         # ── PostgreSQL card ──────────────────────────────────────
-        f2 = tk.Frame(self, bg=BG2, highlightthickness=1,
-                      highlightbackground=BORDER, padx=12, pady=10)
-        f2.pack(fill="x", pady=4)
-        tk.Radiobutton(f2, text="PostgreSQL — External database server",
-                       variable=self._choice, value="postgresql",
-                       bg=BG2, fg=TEXT, selectcolor=BG3,
-                       activebackground=BG2, activeforeground=TEXT,
-                       font=(_FNT, 11, "bold"),
-                       command=self._on_choice).pack(anchor="w")
-        tk.Label(f2, text="Best for production environments.",
-                 bg=BG2, fg=TEXT2, font=(_FNT, 10)).pack(anchor="w", padx=(20, 0))
+        f2 = self._make_card("postgresql",
+                             "PostgreSQL — External database server",
+                             "Best for production environments.")
 
         # ── PG connection form (hidden by default) ───────────────
         self._pg_frame = tk.Frame(self, bg=BG)
@@ -559,12 +745,44 @@ class DatabasePage(WizardPage):
                                   font=(_FNT, 10))
         self._test_lbl.pack(side="left", padx=8)
 
+    def _make_card(self, value, title, subtitle):
+        """Build a clickable backend-choice card. Selection → accent border."""
+        card = tk.Frame(self, bg=BG2, highlightthickness=2,
+                        highlightbackground=BORDER, padx=14, pady=12)
+        card.pack(fill="x", pady=5)
+        rb = tk.Radiobutton(card, text=title,
+                            variable=self._choice, value=value,
+                            bg=BG2, fg=TEXT, selectcolor=BG3,
+                            activebackground=BG2, activeforeground=TEXT,
+                            font=(_FNT, 11, "bold"),
+                            command=self._on_choice)
+        rb.pack(anchor="w")
+        sub = tk.Label(card, text=subtitle,
+                       bg=BG2, fg=TEXT2, font=(_FNT, 10))
+        sub.pack(anchor="w", padx=(22, 0))
+
+        # Make the whole card clickable (not just the radio)
+        def _pick(_e=None):
+            self._choice.set(value)
+            self._on_choice()
+        for w in (card, rb, sub):
+            w.bind("<Button-1>", _pick)
+            w.configure(cursor="hand2")
+
+        self._cards[value] = card
+        return card
+
     def on_enter(self):
         self._choice.set(self.ctrl.state.get("db_backend", "sqlite"))
         self._on_choice()
 
     def _on_choice(self):
-        if self._choice.get() == "postgresql":
+        # Update card borders: selected = ACCENT, others = BORDER
+        sel = self._choice.get()
+        for val, card in self._cards.items():
+            card.config(highlightbackground=ACCENT if val == sel else BORDER)
+        # Show/hide PG connection form
+        if sel == "postgresql":
             self._pg_frame.pack(fill="x", pady=(8, 0))
         else:
             self._pg_frame.pack_forget()
@@ -586,10 +804,10 @@ class DatabasePage(WizardPage):
     def _test_done(self, ok, msg):
         self.ctrl.set_busy(False)
         self._test_btn.config(state="normal", text="Test Connection")
-        if ok:
-            self._test_lbl.config(text=f"✓ {msg}", fg=GREEN)
-        else:
-            self._test_lbl.config(text=f"✗ {msg}", fg=RED)
+        color = GREEN if ok else RED
+        glyph = "✓" if ok else "✗"
+        self._test_lbl.config(text=f"{glyph} {msg}", fg=color,
+                              font=(_FNT, 10, "bold"))
 
     def on_leave(self):
         self.ctrl.state["db_backend"] = self._choice.get()
@@ -621,8 +839,7 @@ class DatabasePage(WizardPage):
         txt = tk.Text(frm, bg=BG2, fg=TEXT, font=(_FNT, 10),
                       relief="flat", wrap="word", padx=14, pady=10,
                       cursor="arrow", selectbackground=ACCENT, state="normal")
-        sb = tk.Scrollbar(frm, command=txt.yview, bg=BG3,
-                          troughcolor=BG, highlightthickness=0)
+        sb = ttk.Scrollbar(frm, command=txt.yview)
         txt.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         txt.pack(fill="both", expand=True)
@@ -680,7 +897,15 @@ class DatabasePage(WizardPage):
             "  Password:  (the password you chose above)", "p")
         ins("Click Test Connection to verify before continuing.", "note")
 
-        txt.configure(state="disabled")
+        # Read-only but selectable/copyable
+        def _block_edit(event):
+            if event.state & 0x4 and event.keysym.lower() in ('c', 'a'):
+                return None  # allow Ctrl+C, Ctrl+A
+            if event.keysym in ('Left', 'Right', 'Up', 'Down',
+                                 'Home', 'End', 'Prior', 'Next'):
+                return None  # allow navigation
+            return "break"
+        txt.bind("<Key>", _block_edit)
 
         _btn(win, "Close", win.destroy, "accent").pack(pady=(0, 16))
 
@@ -690,9 +915,8 @@ class DatabasePage(WizardPage):
 class NetworkPage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "Network Configuration", size=14, bold=True).pack(anchor="w", pady=(8, 4))
-        _label(self, "Configure ports and TLS encryption",
-               size=10, color=TEXT2).pack(anchor="w", pady=(0, 10))
+        _page_title(self, "Network Configuration",
+                    "Configure ports and TLS encryption")
 
         # ── Port fields ──────────────────────────────────────────
         ports_f = tk.Frame(self, bg=BG)
@@ -713,13 +937,15 @@ class NetworkPage(WizardPage):
             e.insert(0, str(ctrl.state.get(key, default)))
             e.pack(side="left", padx=(6, 0))
             self._port_entries[key] = e
+            # Status pill — configured later in on_enter via _as_pill()
             status = tk.Label(row, text="", bg=BG, fg=TEXT3, font=(_FNT, 9))
-            status.pack(side="left", padx=6)
+            status.pack(side="left", padx=(10, 0), ipady=1)
             self._port_status[key] = status
 
         # ── TLS section ──────────────────────────────────────────
         _label(self, "", size=4).pack()  # spacer
-        _label(self, "TLS / HTTPS", size=12, bold=True).pack(anchor="w")
+        _label(self, "TLS / HTTPS", size=11, bold=True, color=TEXT).pack(
+            anchor="w", pady=(4, 2))
 
         self._tls_enabled = tk.BooleanVar(value=True)
         tk.Checkbutton(self, text="Enable HTTPS (recommended)",
@@ -752,18 +978,18 @@ class NetworkPage(WizardPage):
         self._org_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
     def on_enter(self):
-        # Check port availability
+        # Check port availability — render each status as a tinted pill
         for key, e in self._port_entries.items():
+            lbl = self._port_status[key]
             try:
                 p = int(e.get())
                 pid = port_in_use(p)
-                lbl = self._port_status[key]
                 if pid is None:
-                    lbl.config(text="✓ Available", fg=GREEN)
+                    _as_pill(lbl, "✓ Available", GREEN)
                 else:
-                    lbl.config(text="✗ In use", fg=RED)
+                    _as_pill(lbl, "✗ In use", RED)
             except ValueError:
-                self._port_status[key].config(text="Invalid", fg=RED)
+                _as_pill(lbl, "Invalid", RED)
 
     def on_leave(self):
         for key, e in self._port_entries.items():
@@ -782,7 +1008,7 @@ class NetworkPage(WizardPage):
                 if not (1 <= p <= 65535):
                     raise ValueError
             except ValueError:
-                self._port_status[key].config(text="Invalid port", fg=RED)
+                _as_pill(self._port_status[key], "Invalid port", RED)
                 return False
         return True
 
@@ -792,9 +1018,8 @@ class NetworkPage(WizardPage):
 class SecurityPage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "Administrator Account", size=14, bold=True).pack(anchor="w", pady=(8, 4))
-        _label(self, "Create the initial admin user for the web dashboard",
-               size=10, color=TEXT2).pack(anchor="w", pady=(0, 16))
+        _page_title(self, "Administrator Account",
+                    "Create the initial admin user for the web dashboard")
 
         fields_f = tk.Frame(self, bg=BG)
         fields_f.pack(fill="x")
@@ -808,24 +1033,62 @@ class SecurityPage(WizardPage):
         self._user_entry.insert(0, "admin")
         self._user_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
-        # Password
+        # Password + show/hide toggle
+        self._pw_visible = False
         row2 = tk.Frame(fields_f, bg=BG)
         row2.pack(fill="x", pady=4)
         tk.Label(row2, text="Password", bg=BG, fg=TEXT2,
                  font=(_FNT, 10), width=16, anchor="e").pack(side="left")
         self._pass_entry = _entry(row2, show="●")
         self._pass_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self._pass_entry.bind("<KeyRelease>", self._update_strength)
+        self._toggle_btn = _btn(row2, "Show", self._toggle_pw)
+        self._toggle_btn.pack(side="left", padx=(6, 0))
+
+        # Strength bar — thin colored fill below the password row
+        bar_row = tk.Frame(fields_f, bg=BG)
+        bar_row.pack(fill="x", padx=(110, 58))  # align with entry width
+        self._pw_bar = tk.Canvas(bar_row, bg=BG2, height=4,
+                                 highlightthickness=0)
+        self._pw_bar.pack(fill="x")
+        self._pw_bar_rect = self._pw_bar.create_rectangle(
+            0, 0, 0, 4, fill=RED, outline="")
 
         # Confirm
         row3 = tk.Frame(fields_f, bg=BG)
-        row3.pack(fill="x", pady=4)
+        row3.pack(fill="x", pady=(6, 4))
         tk.Label(row3, text="Confirm Password", bg=BG, fg=TEXT2,
                  font=(_FNT, 10), width=16, anchor="e").pack(side="left")
         self._pass2_entry = _entry(row3, show="●")
         self._pass2_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        # Spacer matching the Show/Hide button so Confirm row aligns
+        tk.Label(row3, text=" ", bg=BG, width=7).pack(side="left", padx=(6, 0))
 
         self._err_lbl = tk.Label(self, text="", bg=BG, fg=RED, font=(_FNT, 10))
         self._err_lbl.pack(anchor="w", pady=(8, 0))
+
+    def _toggle_pw(self):
+        self._pw_visible = not self._pw_visible
+        show = "" if self._pw_visible else "●"
+        self._pass_entry.config(show=show)
+        self._pass2_entry.config(show=show)
+        self._toggle_btn.config(text="Hide" if self._pw_visible else "Show")
+
+    def _update_strength(self, _event=None):
+        pw = self._pass_entry.get()
+        strength = _password_strength(pw)
+        # Redraw fill width proportional to strength
+        self._pw_bar.update_idletasks()
+        full = max(self._pw_bar.winfo_width(), 1)
+        width = int(full * strength)
+        if strength < 0.4:
+            color = RED
+        elif strength < 0.75:
+            color = YELLOW
+        else:
+            color = GREEN
+        self._pw_bar.coords(self._pw_bar_rect, 0, 0, width, 4)
+        self._pw_bar.itemconfig(self._pw_bar_rect, fill=color)
 
     def on_leave(self):
         self.ctrl.state["admin_user"] = self._user_entry.get().strip()
@@ -853,24 +1116,23 @@ class SecurityPage(WizardPage):
 class SystemPage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "System Integration", size=14, bold=True).pack(anchor="w", pady=(8, 4))
-        _label(self, "Firewall rules, desktop shortcut, and auto-start",
-               size=10, color=TEXT2).pack(anchor="w", pady=(0, 12))
+        _page_title(self, "System Integration",
+                    "Firewall rules, desktop shortcut, and auto-start")
 
         self._rows = {}
 
         # ── Firewall section ─────────────────────────────────────
         if sys.platform == "win32":
             _label(self, "Windows Firewall", size=11, bold=True,
-                   color=TEXT2).pack(anchor="w", pady=(4, 2))
+                   color=TEXT).pack(anchor="w", pady=(6, 2))
             self._fw_frame = tk.Frame(self, bg=BG)
             self._fw_frame.pack(fill="x", pady=(0, 8))
 
         # ── Desktop shortcut ─────────────────────────────────────
         sc_row = tk.Frame(self, bg=BG2, padx=8, pady=6)
         sc_row.pack(fill="x", pady=2)
-        self._sc_icon = tk.Label(sc_row, text="○", bg=BG2, fg=TEXT3,
-                                 font=(_MONO, 12), width=2)
+        self._sc_icon = tk.Label(sc_row, text="○", bg=BG2, fg=TEXT2,
+                                 font=(_MONO, 12), width=3)
         self._sc_icon.pack(side="left")
         tk.Label(sc_row, text="Desktop Shortcut", bg=BG2, fg=TEXT,
                  font=(_FNT, 10, "bold")).pack(side="left", padx=(4, 0))
@@ -886,7 +1148,7 @@ class SystemPage(WizardPage):
         if sys.platform == "win32":
             _label(self, "", size=4).pack()
             _label(self, "Auto-Start", size=11, bold=True,
-                   color=TEXT2).pack(anchor="w", pady=(4, 2))
+                   color=TEXT).pack(anchor="w", pady=(6, 2))
 
             as_row = tk.Frame(self, bg=BG, padx=8, pady=4)
             as_row.pack(fill="x")
@@ -981,6 +1243,7 @@ class SystemPage(WizardPage):
     def _install_task(self):
         self._as_btn.config(state="disabled", text="Installing…")
         self._as_status.config(text="", fg=TEXT3)
+        self._as_spin = _start_spinner(self.ctrl.root, self._as_icon, YELLOW)
         self.ctrl.set_busy(True)
         as_system = (self._as_mode.get() == "system")
 
@@ -991,6 +1254,9 @@ class SystemPage(WizardPage):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _task_done(self, ok, msg):
+        if getattr(self, "_as_spin", None):
+            self._as_spin()
+            self._as_spin = None
         self.ctrl.set_busy(False)
         if ok:
             self._as_icon.config(text="✓", fg=GREEN)
@@ -1007,53 +1273,81 @@ class SystemPage(WizardPage):
 class SummaryPage(WizardPage):
     def __init__(self, parent, ctrl):
         super().__init__(parent, ctrl)
-        _label(self, "Review & Finish", size=14, bold=True).pack(anchor="w", pady=(8, 4))
-        _label(self, "Review your settings and click Finish to complete setup",
-               size=10, color=TEXT2).pack(anchor="w", pady=(0, 10))
+        _page_title(self, "Review & Finish",
+                    "Review your settings and click Finish to complete setup")
 
         self._summary_frame = tk.Frame(self, bg=BG2, highlightthickness=1,
                                        highlightbackground=BORDER, padx=12, pady=10)
         self._summary_frame.pack(fill="both", expand=True)
 
+        # Big success checkmark — only shown after DB init succeeds
+        self._success_lbl = tk.Label(self, text="", bg=BG, fg=GREEN,
+                                     font=(_FNT, 36, "bold"))
+
         self._status_lbl = tk.Label(self, text="", bg=BG, fg=TEXT2,
-                                    font=(_FNT, 10))
+                                    font=(_FNT, 11))
         self._status_lbl.pack(pady=(8, 0))
 
-        self._progress = ttk.Progressbar(self, mode="indeterminate", length=300)
+        self._progress = ttk.Progressbar(self, mode="indeterminate", length=500)
         # Don't pack yet — shown during install
 
+    def _add_section(self, title):
+        """Render a small-caps section heading + thin divider inside the summary frame."""
+        # Top divider (skip for first section)
+        if self._summary_frame.winfo_children():
+            tk.Frame(self._summary_frame, bg=BORDER, height=1).pack(
+                fill="x", pady=(8, 4))
+        tk.Label(self._summary_frame, text=title,
+                 bg=BG2, fg=TEXT3, font=(_FNT, 9, "bold"),
+                 anchor="w").pack(fill="x", pady=(0, 4))
+
+    def _add_row(self, idx_in_section, label, value):
+        bg = BG2 if idx_in_section % 2 == 0 else BG3
+        row = tk.Frame(self._summary_frame, bg=bg, padx=8, pady=4)
+        row.pack(fill="x")
+        tk.Label(row, text=label, bg=bg, fg=TEXT2,
+                 font=(_FNT, 10), width=16, anchor="e").pack(side="left")
+        tk.Label(row, text=value, bg=bg, fg=TEXT,
+                 font=(_FNT, 10, "bold")).pack(side="left", padx=(8, 0))
+
     def on_enter(self):
-        # Rebuild summary
+        # Rebuild summary (clear + render by section)
         for w in self._summary_frame.winfo_children():
             w.destroy()
         st = self.ctrl.state
-        rows = [
-            ("Database", st["db_backend"].title()),
-            ("HTTP Port", str(st.get("http_port", 7070))),
-            ("HTTPS", "Enabled" if st.get("tls_enabled") else "Disabled"),
-            ("HTTPS Port", str(st.get("tls_port", 8443)) if st.get("tls_enabled") else "—"),
-            ("SNMP Port", str(st.get("snmp_port", 162))),
-            ("Organization", st.get("org_name", "PingWatch")),
-            ("Admin User", st.get("admin_user", "admin")),
-        ]
-        if st["db_backend"] == "postgresql":
-            rows.insert(1, ("PG Host", f"{st.get('pg_host', 'localhost')}:{st.get('pg_port', 5432)}"))
-            rows.insert(2, ("PG Database", st.get("pg_database", "pingwatch")))
 
-        for i, (label, value) in enumerate(rows):
-            bg = BG2 if i % 2 == 0 else BG3
-            row = tk.Frame(self._summary_frame, bg=bg, padx=8, pady=4)
-            row.pack(fill="x")
-            tk.Label(row, text=label, bg=bg, fg=TEXT2,
-                     font=(_FNT, 10), width=16, anchor="e").pack(side="left")
-            tk.Label(row, text=value, bg=bg, fg=TEXT,
-                     font=(_FNT, 10, "bold")).pack(side="left", padx=(8, 0))
+        # ── Database ──
+        self._add_section("DATABASE")
+        db_rows = [("Backend", st["db_backend"].title())]
+        if st["db_backend"] == "postgresql":
+            db_rows.append(("PG Host",
+                            f"{st.get('pg_host', 'localhost')}:{st.get('pg_port', 5432)}"))
+            db_rows.append(("PG Database", st.get("pg_database", "pingwatch")))
+        for i, (l, v) in enumerate(db_rows):
+            self._add_row(i, l, v)
+
+        # ── Network ──
+        self._add_section("NETWORK")
+        tls_on = bool(st.get("tls_enabled"))
+        net_rows = [
+            ("HTTP Port",  str(st.get("http_port", 7070))),
+            ("HTTPS",      "Enabled" if tls_on else "Disabled"),
+            ("HTTPS Port", str(st.get("tls_port", 8443)) if tls_on else "—"),
+            ("SNMP Port",  str(st.get("snmp_port", 162))),
+            ("Organization", st.get("org_name", "PingWatch")),
+        ]
+        for i, (l, v) in enumerate(net_rows):
+            self._add_row(i, l, v)
+
+        # ── Security ──
+        self._add_section("SECURITY")
+        self._add_row(0, "Admin User", st.get("admin_user", "admin"))
 
     def do_finish(self):
         """Called by Finish button — runs DB init in background."""
         self.ctrl.set_busy(True)
         self._status_lbl.config(text="Initializing…", fg=YELLOW)
-        self._progress.pack(pady=(4, 0))
+        self._progress.pack(fill="x", padx=40, pady=(6, 0))
         self._progress.start(15)
 
         def _worker():
@@ -1071,8 +1365,12 @@ class SummaryPage(WizardPage):
         self._progress.pack_forget()
         self.ctrl.set_busy(False)
         if ok:
-            self._status_lbl.config(text="✓ Setup complete!", fg=GREEN)
-            self.ctrl.root.after(800, self.ctrl.finish_ok)
+            # Large green ✓ before auto-close
+            self._success_lbl.config(text="✓")
+            self._success_lbl.pack(pady=(10, 0), before=self._status_lbl)
+            self._status_lbl.config(text="Setup complete!", fg=GREEN,
+                                    font=(_FNT, 12, "bold"))
+            self.ctrl.root.after(1200, self.ctrl.finish_ok)
         else:
             self._status_lbl.config(text=f"✗ {err}", fg=RED)
 
@@ -1085,11 +1383,20 @@ def run_wizard() -> bool:
     """Launch the setup wizard.  Returns True if completed, False if cancelled."""
     root = tk.Tk()
 
-    # Apply ttk dark theme
+    # Apply ttk dark theme — progressbar + scrollbar blend with dark chrome
     style = ttk.Style(root)
     style.theme_use("clam")
     style.configure("TProgressbar", background=ACCENT,
-                    troughcolor=BG3, borderwidth=0)
+                    troughcolor=BG3, borderwidth=0, thickness=6)
+    style.configure("Vertical.TScrollbar",
+                    background=BG3, troughcolor=BG, bordercolor=BG,
+                    arrowcolor=TEXT2, gripcount=0, relief="flat")
+    style.map("Vertical.TScrollbar",
+              background=[("active", BG4), ("pressed", BG4)],
+              arrowcolor=[("active", TEXT)])
+    style.configure("Horizontal.TScrollbar",
+                    background=BG3, troughcolor=BG, bordercolor=BG,
+                    arrowcolor=TEXT2, gripcount=0, relief="flat")
 
     ctrl = WizardController(root)
     ctrl.add_page(WelcomePage)
