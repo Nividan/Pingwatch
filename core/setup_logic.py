@@ -175,50 +175,32 @@ def install_snmpget() -> "tuple[bool, str]":
     import shutil
     _sys = platform.system()
     if _sys == "Windows":
-        # Find choco — check PATH first, then default install location
-        choco = shutil.which("choco")
-        if not choco:
-            _default = r"C:\ProgramData\chocolatey\bin\choco.exe"
-            if os.path.isfile(_default):
-                choco = _default
-        if choco:
+        # Download pre-built net-snmp binary and install silently
+        _url = "https://sourceforge.net/projects/net-snmp/files/net-snmp%20binaries/5.7-binaries/net-snmp-5.7.0-1.x64.exe/download"
+        _installer = os.path.join(os.environ.get("TEMP", "."), "net-snmp-setup.exe")
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(_url, _installer)
+        except Exception as e:
+            return False, f"Download failed: {e}"
+        try:
+            # /S = silent install; net-snmp NSIS installer supports it
+            r = subprocess.run([_installer, "/S"], capture_output=True,
+                               text=True, timeout=120)
+            # Check if snmpget is now available in the default install path
+            _snmp_bin = r"C:\usr\bin\snmpget.exe"
+            if os.path.isfile(_snmp_bin) or shutil.which("snmpget"):
+                return True, "Installed net-snmp 5.7"
+            return False, f"Installer ran but snmpget not found (exit code {r.returncode})"
+        except subprocess.TimeoutExpired:
+            return False, "Installer timed out (120s)"
+        except Exception as e:
+            return False, f"Install failed: {e}"
+        finally:
             try:
-                r = subprocess.run([choco, "install", "net-snmp", "-y", "--no-progress"],
-                                   capture_output=True, text=True, timeout=120)
-                if r.returncode == 0:
-                    return True, "Installed via Chocolatey"
-                # Extract useful error from choco output
-                out = (r.stdout or "") + "\n" + (r.stderr or "")
-                # Find lines with "Error" or "not installed" or meaningful info
-                err_lines = [ln.strip() for ln in out.splitlines()
-                             if ln.strip() and any(kw in ln.lower()
-                             for kw in ("error", "fail", "not found", "not install",
-                                        "unable", "cannot", "packages failed"))]
-                err_msg = err_lines[-1][:200] if err_lines else f"choco exited with code {r.returncode}"
-                return False, err_msg
-            except subprocess.TimeoutExpired:
-                return False, "Chocolatey install timed out (120s)"
-            except Exception as e:
-                return False, str(e)
-        # Find winget — check PATH then default locations
-        winget = shutil.which("winget")
-        if not winget:
-            import glob
-            _candidates = glob.glob(
-                r"C:\Users\*\AppData\Local\Microsoft\WindowsApps\winget.exe"
-            )
-            if _candidates:
-                winget = _candidates[0]
-        if winget:
-            try:
-                r = subprocess.run([winget, "install", "net-snmp.net-snmp"],
-                                   capture_output=True, text=True)
-                if r.returncode == 0:
-                    return True, "Installed via winget"
-                return False, (r.stderr or r.stdout or "winget install failed").strip().splitlines()[-1][:200]
-            except Exception as e:
-                return False, str(e)
-        return False, "Neither Chocolatey nor winget found. Install Chocolatey first, then click Retry."
+                os.unlink(_installer)
+            except Exception:
+                pass
     elif _sys == "Linux":
         for pkg_mgr, pkg_name in [
             ("apt-get", "snmp"), ("dnf", "net-snmp-utils"), ("yum", "net-snmp-utils"),
