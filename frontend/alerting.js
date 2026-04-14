@@ -823,9 +823,12 @@ function _alertMaintRenderList(windows) {
     const active  = w.start_ts <= now && w.end_ts >= now;
     const start   = new Date(w.start_ts * 1000).toLocaleString();
     const end     = new Date(w.end_ts   * 1000).toLocaleString();
+    const _devForScope = w.scope_type === 'device'
+      ? Object.values(S.devices || {}).find(d => String(d.device_id) === String(w.scope_value))
+      : null;
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
                    : w.scope_type === 'group'  ? `Group: ${esc(w.scope_value)}`
-                   : `Device: ${esc(w.scope_value)}`;
+                   : `Device: ${esc(_devForScope ? _devForScope.name : w.scope_value)}`;
     const recurLbl = w.recurring
       ? `Recurring days ${esc(w.recur_days)} ${esc(w.recur_start)}–${esc(w.recur_end)}`
       : 'One-time';
