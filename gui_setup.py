@@ -109,8 +109,8 @@ class WizardController:
 
         root.title("PingWatch Setup")
         root.configure(bg=BG)
-        root.geometry("620x520")
-        root.minsize(580, 480)
+        root.geometry("720x640")
+        root.minsize(680, 580)
         root.resizable(True, True)
 
         # ── Header ───────────────────────────────────────────────
@@ -309,15 +309,26 @@ class PackagesPage(WizardPage):
 
         # System tools (not pip-installable)
         n = len(PACKAGES)
+        _snmp_hint = (
+            "Windows: choco install net-snmp  or  winget install net-snmp.net-snmp\n"
+            "Linux: sudo apt install snmp  or  sudo dnf install net-snmp-utils\n"
+            "macOS: brew install net-snmp\n"
+            "Download: https://sourceforge.net/projects/net-snmp/files/net-snmp/"
+        )
         self._add_tool_row(n,     "_snmpget", "snmpget",
-                           "SNMP sensor polling (net-snmp)")
+                           "SNMP sensor polling (net-snmp)", hint=_snmp_hint)
+        _ping_hint = (
+            "Windows: ping is built-in — check your PATH\n"
+            "Linux: sudo apt install iputils-ping"
+        )
         self._add_tool_row(n + 1, "_ping",    "ping",
-                           "ICMP ping sensor")
+                           "ICMP ping sensor", hint=_ping_hint)
 
-    def _add_tool_row(self, idx, key, name, desc, required=False):
+    def _add_tool_row(self, idx, key, name, desc, hint=""):
         """Add a system tool row (snmpget, ping) — not pip-installable."""
-        row = tk.Frame(self._rows_frame, bg=BG2 if idx % 2 == 0 else BG,
-                       pady=4, padx=8)
+        outer = tk.Frame(self._rows_frame, bg=BG2 if idx % 2 == 0 else BG)
+        outer.pack(fill="x")
+        row = tk.Frame(outer, bg=outer["bg"], pady=4, padx=8)
         row.pack(fill="x")
         icon = tk.Label(row, text="…", bg=row["bg"], fg=TEXT3,
                         font=(_MONO, 12), width=2)
@@ -326,10 +337,12 @@ class PackagesPage(WizardPage):
                  font=(_FNT, 10, "bold")).pack(side="left", padx=(4, 0))
         tk.Label(row, text=f"— {desc}", bg=row["bg"], fg=TEXT2,
                  font=(_FNT, 10)).pack(side="left", padx=(4, 0))
-        if required:
-            tk.Label(row, text="(required)", bg=row["bg"], fg=YELLOW,
-                     font=(_FNT, 9)).pack(side="left", padx=(4, 0))
-        self._pkg_widgets[key] = {"icon": icon, "btn": None, "row": row}
+        # Hint label (hidden until tool is missing)
+        hint_lbl = tk.Label(outer, text=hint, bg=outer["bg"], fg=TEXT3,
+                            font=(_FNT, 9), anchor="w", padx=32, wraplength=600,
+                            justify="left")
+        self._pkg_widgets[key] = {"icon": icon, "btn": None, "row": row,
+                                  "hint": hint_lbl}
 
     def _check_all(self):
         self._checked = True
@@ -351,6 +364,8 @@ class PackagesPage(WizardPage):
                     w["icon"].config(text="✓", fg=GREEN)
                 else:
                     w["icon"].config(text="✗", fg=YELLOW)
+                    if w.get("hint"):
+                        w["hint"].pack(fill="x")
 
     def _install_pkg(self, pkg):
         w = self._pkg_widgets[pkg["import"]]
