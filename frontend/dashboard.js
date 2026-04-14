@@ -271,71 +271,133 @@ async function _dwSwitchTo(id) {
   _dwRenderAll();
 }
 
-// ── Dashboard CRUD ───────────────────────────────────────────────
-async function _dwCreateDashboard() {
-  const name = prompt('Dashboard name:');
-  if (!name || !name.trim()) return;
-  try {
-    const r = await fetch('/api/dashboards', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim() }),
-    });
-    if (r.ok) {
-      const d = await r.json();
-      _dwDashboards.push({ id: d.id, name: d.name, sort_order: _dwDashboards.length });
-      _dwRenderTabBar();
-      await _dwSwitchTo(d.id);
-    } else {
-      const err = await r.json().catch(() => ({}));
-      toast(err.error || 'Failed to create dashboard', 'err');
-    }
-  } catch { toast('Failed to create dashboard', 'err'); }
+// ── Dashboard name modal (shared by create + rename) ─────────────
+function _dwOpenNameModal(title, value, btnLabel, onSubmit) {
+  closeM('dw-name-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'dw-name-modal';
+  _overlayClose(o, () => closeM('dw-name-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,360px)">
+      <div class="mhd">
+        <div class="mttl">${title}</div>
+        <button class="mclose" onclick="closeM('dw-name-modal')">✕</button>
+      </div>
+      <div class="mbdy" style="gap:12px">
+        <div class="fr">
+          <label class="fl">Dashboard Name</label>
+          <input type="text" id="dw-name-inp" value="${esc(value)}" maxlength="50"
+                 placeholder="e.g. NOC Overview" autocomplete="off"/>
+        </div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('dw-name-modal')">Cancel</button>
+        <button class="btn-p" id="dw-name-ok">${btnLabel}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  const inp = document.getElementById('dw-name-inp');
+  const btn = document.getElementById('dw-name-ok');
+  const submit = () => {
+    const v = inp.value.trim();
+    if (!v) { toast('Name is required', 'warn'); return; }
+    closeM('dw-name-modal');
+    onSubmit(v);
+  };
+  btn.addEventListener('click', submit);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  setTimeout(() => { inp.focus(); inp.select(); }, 50);
 }
 
-async function _dwRenameDashboard(id) {
+// ── Dashboard CRUD ───────────────────────────────────────────────
+function _dwCreateDashboard() {
+  _dwOpenNameModal('New Dashboard', '', 'Create', async (name) => {
+    try {
+      const r = await fetch('/api/dashboards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        _dwDashboards.push({ id: d.id, name: d.name, sort_order: _dwDashboards.length });
+        _dwRenderTabBar();
+        await _dwSwitchTo(d.id);
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast(err.error || 'Failed to create dashboard', 'err');
+      }
+    } catch { toast('Failed to create dashboard', 'err'); }
+  });
+}
+
+function _dwRenameDashboard(id) {
   const dash = _dwDashboards.find(d => d.id === id);
   if (!dash) return;
-  const name = prompt('Rename dashboard:', dash.name);
-  if (!name || !name.trim() || name.trim() === dash.name) return;
-  try {
-    const r = await fetch(`/api/dashboards/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim() }),
-    });
-    if (r.ok) {
-      dash.name = name.trim();
-      _dwRenderTabBar();
-      toast('Dashboard renamed', 'ok');
-    } else {
-      const err = await r.json().catch(() => ({}));
-      toast(err.error || 'Failed to rename', 'err');
-    }
-  } catch { toast('Failed to rename', 'err'); }
+  _dwOpenNameModal('Rename Dashboard', dash.name, 'Rename', async (name) => {
+    if (name === dash.name) return;
+    try {
+      const r = await fetch(`/api/dashboards/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (r.ok) {
+        dash.name = name;
+        _dwRenderTabBar();
+        toast('Dashboard renamed', 'ok');
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast(err.error || 'Failed to rename', 'err');
+      }
+    } catch { toast('Failed to rename', 'err'); }
+  });
 }
 
-async function _dwDeleteDashboard(id) {
+function _dwDeleteDashboard(id) {
   if (_dwDashboards.length <= 1) { toast('Cannot delete the last dashboard', 'warn'); return; }
   const dash = _dwDashboards.find(d => d.id === id);
   if (!dash) return;
-  if (!confirm(`Delete dashboard "${dash.name}"?\nAll widgets on it will be removed.`)) return;
-  try {
-    const r = await fetch(`/api/dashboards/${id}`, { method: 'DELETE' });
-    if (r.ok) {
-      _dwDashboards = _dwDashboards.filter(d => d.id !== id);
-      _dwRenderTabBar();
-      // Switch to first remaining if we deleted the active one
-      if (_dwActiveId === id) {
-        const next = _dwDashboards[0];
-        if (next) await _dwSwitchTo(next.id);
+  closeM('dw-del-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'dw-del-modal';
+  _overlayClose(o, () => closeM('dw-del-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,380px)">
+      <div class="mhd">
+        <div class="mttl" style="color:var(--down)">Delete Dashboard</div>
+        <button class="mclose" onclick="closeM('dw-del-modal')">✕</button>
+      </div>
+      <div class="mbdy">
+        <p style="margin:0;font-size:13px;color:var(--text2)">
+          Delete <strong style="color:var(--text)">${esc(dash.name)}</strong>?<br/>
+          <span style="color:var(--text3);font-size:11px">All widgets on this dashboard will be removed.</span>
+        </p>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('dw-del-modal')">Cancel</button>
+        <button class="btn-p" style="background:var(--down)" id="dw-del-ok">Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  document.getElementById('dw-del-ok').addEventListener('click', async () => {
+    closeM('dw-del-modal');
+    try {
+      const r = await fetch(`/api/dashboards/${id}`, { method: 'DELETE' });
+      if (r.ok) {
+        _dwDashboards = _dwDashboards.filter(d => d.id !== id);
+        _dwRenderTabBar();
+        if (_dwActiveId === id) {
+          const next = _dwDashboards[0];
+          if (next) await _dwSwitchTo(next.id);
+        }
+        toast('Dashboard deleted', 'ok');
+      } else {
+        const err = await r.json().catch(() => ({}));
+        toast(err.error || 'Failed to delete', 'err');
       }
-      toast('Dashboard deleted', 'ok');
-    } else {
-      const err = await r.json().catch(() => ({}));
-      toast(err.error || 'Failed to delete', 'err');
-    }
-  } catch { toast('Failed to delete', 'err'); }
+    } catch { toast('Failed to delete', 'err'); }
+  });
 }
 
 // ── Tab context menu (right-click) ──────────────────────────────
