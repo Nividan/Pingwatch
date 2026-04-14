@@ -489,30 +489,39 @@ function _showMutedStoppedModal(){
   document.body.appendChild(o);
 }
 
+function _msBtnLoading(btn,label){
+  if(!btn)return;
+  btn.disabled=true;
+  btn.textContent=label;
+  btn.style.opacity='0.6';
+}
 async function _msUnmuteSensor(did,sid){
+  const btn=event?.target; _msBtnLoading(btn,'Unmuting…');
   try{
     await api('PATCH',`/api/device/${did}/sensor/${sid}`,{alerts_muted:false});
     toast('Sensor unmuted','ok');
     await _badgePoll();
     _showMutedStoppedModal();
-  }catch(_){toast('Failed to unmute sensor','err');}
+  }catch(_){toast('Failed to unmute sensor','err');_showMutedStoppedModal();}
 }
 async function _msUnmuteDevice(did){
+  const btn=event?.target; _msBtnLoading(btn,'Unmuting…');
   try{
     await api('PATCH',`/api/device/${did}`,{alerts_muted:false});
     toast('Device unmuted','ok');
     if(S.devices[did]) S.devices[did].alerts_muted=false;
     await _badgePoll();
     _showMutedStoppedModal();
-  }catch(_){toast('Failed to unmute device','err');}
+  }catch(_){toast('Failed to unmute device','err');_showMutedStoppedModal();}
 }
 async function _msStartSensor(did,sid){
+  const btn=event?.target; _msBtnLoading(btn,'Starting…');
   try{
     await api('POST',`/api/device/${did}/sensor/${sid}/start`);
     toast('Sensor started','ok');
     await _badgePoll();
     _showMutedStoppedModal();
-  }catch(_){toast('Failed to start sensor','err');}
+  }catch(_){toast('Failed to start sensor','err');_showMutedStoppedModal();}
 }
 
 // ── Log badge (WARNING+ entries) ────────────────────────────────

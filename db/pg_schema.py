@@ -134,10 +134,30 @@ def pg_create_main_schema(cur):
         )""")
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS dashboard_widgets (
-            username TEXT PRIMARY KEY,
-            widgets  TEXT NOT NULL DEFAULT '[]'
+        CREATE TABLE IF NOT EXISTS dashboards (
+            id         SERIAL PRIMARY KEY,
+            username   TEXT    NOT NULL,
+            name       TEXT    NOT NULL DEFAULT 'Default',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            widgets    TEXT    NOT NULL DEFAULT '[]'
         )""")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboards_user_name "
+                "ON dashboards(username, name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_dashboards_user "
+                "ON dashboards(username, sort_order)")
+    # ── Migration: dashboard_widgets → dashboards ───────────────
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='main' AND table_name='dashboard_widgets'")
+    if cur.fetchone():
+        cur.execute("SELECT username, widgets FROM main.dashboard_widgets")
+        old = cur.fetchall()
+        for r in old:
+            cur.execute(
+                "INSERT INTO dashboards (username, name, sort_order, widgets) "
+                "VALUES (%s, 'Default', 0, %s) ON CONFLICT (username, name) DO NOTHING",
+                (r["username"], r["widgets"]))
+        cur.execute("DROP TABLE main.dashboard_widgets")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS backup_devices (
