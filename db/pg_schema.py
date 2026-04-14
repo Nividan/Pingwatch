@@ -156,7 +156,7 @@ def pg_create_main_schema(cur):
             cur.execute(
                 "INSERT INTO dashboards (username, name, sort_order, widgets) "
                 "VALUES (%s, 'Default', 0, %s) ON CONFLICT (username, name) DO NOTHING",
-                (r["username"], r["widgets"]))
+                (r[0], r[1]))
         cur.execute("DROP TABLE main.dashboard_widgets")
 
     cur.execute("""
