@@ -183,11 +183,21 @@ def install_snmpget() -> "tuple[bool, str]":
                 choco = _default
         if choco:
             try:
-                r = subprocess.run([choco, "install", "net-snmp", "-y"],
-                                   capture_output=True, text=True)
+                r = subprocess.run([choco, "install", "net-snmp", "-y", "--no-progress"],
+                                   capture_output=True, text=True, timeout=120)
                 if r.returncode == 0:
                     return True, "Installed via Chocolatey"
-                return False, (r.stderr or r.stdout or "choco install failed").strip().splitlines()[-1][:200]
+                # Extract useful error from choco output
+                out = (r.stdout or "") + "\n" + (r.stderr or "")
+                # Find lines with "Error" or "not installed" or meaningful info
+                err_lines = [ln.strip() for ln in out.splitlines()
+                             if ln.strip() and any(kw in ln.lower()
+                             for kw in ("error", "fail", "not found", "not install",
+                                        "unable", "cannot", "packages failed"))]
+                err_msg = err_lines[-1][:200] if err_lines else f"choco exited with code {r.returncode}"
+                return False, err_msg
+            except subprocess.TimeoutExpired:
+                return False, "Chocolatey install timed out (120s)"
             except Exception as e:
                 return False, str(e)
         # Find winget — check PATH then default locations
