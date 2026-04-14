@@ -180,15 +180,18 @@ const _DW_REG = {
   },
 };
 
-// ── Persistence (server-side, per user) ───────────────────────────
-let _dwWidgets = null;   // in-memory cache; null = not yet loaded
+// ── Persistence (server-side, per user, multi-dashboard) ─────────
+let _dwDashboards = null;   // [{id, name, sort_order}] metadata
+let _dwActiveId   = null;   // currently displayed dashboard id
+let _dwWidgets    = null;   // widget array for active dashboard
 
 function _dwLoad() {
   return _dwWidgets || [];
 }
 function _dwSave(widgets) {
   _dwWidgets = widgets;
-  fetch('/api/dashboard', {
+  if (!_dwActiveId) return;
+  fetch(`/api/dashboards/${_dwActiveId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ widgets }),
@@ -198,17 +201,62 @@ async function _dwInit() {
   // Clear any stale localStorage data left from the old storage scheme
   try { localStorage.removeItem('pw-dashboard'); } catch {}
 
-  // Already initialized — DOM widgets exist; just refresh content + restart tick
-  // (avoids tearing down/rebuilding DOM and resetting live counters on every tab switch)
-  if (_dwWidgets !== null) {
+  // Already initialized — just refresh content + restart tick
+  if (_dwDashboards !== null && _dwWidgets !== null) {
     _dwLoad().forEach(w => { const r = _DW_REG[w.type]; if (r) r.refresh(w.id, w.cfg); });
     _dwStartTick();
     return;
   }
 
-  // First load — fetch layout from server
+  // Phase 1: fetch dashboard list
   try {
-    const r = await fetch('/api/dashboard');
+    const r = await fetch('/api/dashboards');
+    if (r.ok) {
+      const data = await r.json();
+      _dwDashboards = Array.isArray(data.dashboards) ? data.dashboards : [];
+    } else {
+      _dwDashboards = [];
+    }
+  } catch {
+    _dwDashboards = [];
+  }
+
+  _dwRenderTabBar();
+
+  // Phase 2: switch to last-active or first dashboard
+  const savedId = parseInt(_lsGet('pw-dw-active') || '0', 10);
+  const target = _dwDashboards.find(d => d.id === savedId) || _dwDashboards[0];
+  if (target) {
+    await _dwSwitchTo(target.id);
+  } else {
+    _dwWidgets = [];
+    _dwRenderAll();
+  }
+}
+
+// ── Tab bar ──────────────────────────────────────────────────────
+function _dwRenderTabBar() {
+  const bar = document.getElementById('dw-tab-bar');
+  if (!bar || !_dwDashboards) return;
+  bar.innerHTML = _dwDashboards.map(d =>
+    `<button class="dw-dash-tab${d.id === _dwActiveId ? ' active' : ''}"
+             data-id="${d.id}"
+             onclick="_dwSwitchTo(${d.id})"
+             oncontextmenu="_dwTabCtxMenu(event,${d.id})"
+             title="${esc(d.name)}">${esc(d.name)}</button>`
+  ).join('') +
+  '<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">＋</button>';
+}
+
+async function _dwSwitchTo(id) {
+  _dwActiveId = id;
+  _lsSet('pw-dw-active', id);
+
+  // Stop current tick while loading
+  if (_dwTickTimer) { clearInterval(_dwTickTimer); _dwTickTimer = null; }
+
+  try {
+    const r = await fetch(`/api/dashboards/${id}`);
     if (r.ok) {
       const data = await r.json();
       _dwWidgets = Array.isArray(data.widgets) ? data.widgets : [];
@@ -218,7 +266,98 @@ async function _dwInit() {
   } catch {
     _dwWidgets = [];
   }
+
+  _dwRenderTabBar();
   _dwRenderAll();
+}
+
+// ── Dashboard CRUD ───────────────────────────────────────────────
+async function _dwCreateDashboard() {
+  const name = prompt('Dashboard name:');
+  if (!name || !name.trim()) return;
+  try {
+    const r = await fetch('/api/dashboards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      _dwDashboards.push({ id: d.id, name: d.name, sort_order: _dwDashboards.length });
+      _dwRenderTabBar();
+      await _dwSwitchTo(d.id);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Failed to create dashboard', 'err');
+    }
+  } catch { toast('Failed to create dashboard', 'err'); }
+}
+
+async function _dwRenameDashboard(id) {
+  const dash = _dwDashboards.find(d => d.id === id);
+  if (!dash) return;
+  const name = prompt('Rename dashboard:', dash.name);
+  if (!name || !name.trim() || name.trim() === dash.name) return;
+  try {
+    const r = await fetch(`/api/dashboards/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    if (r.ok) {
+      dash.name = name.trim();
+      _dwRenderTabBar();
+      toast('Dashboard renamed', 'ok');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Failed to rename', 'err');
+    }
+  } catch { toast('Failed to rename', 'err'); }
+}
+
+async function _dwDeleteDashboard(id) {
+  if (_dwDashboards.length <= 1) { toast('Cannot delete the last dashboard', 'warn'); return; }
+  const dash = _dwDashboards.find(d => d.id === id);
+  if (!dash) return;
+  if (!confirm(`Delete dashboard "${dash.name}"?\nAll widgets on it will be removed.`)) return;
+  try {
+    const r = await fetch(`/api/dashboards/${id}`, { method: 'DELETE' });
+    if (r.ok) {
+      _dwDashboards = _dwDashboards.filter(d => d.id !== id);
+      _dwRenderTabBar();
+      // Switch to first remaining if we deleted the active one
+      if (_dwActiveId === id) {
+        const next = _dwDashboards[0];
+        if (next) await _dwSwitchTo(next.id);
+      }
+      toast('Dashboard deleted', 'ok');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Failed to delete', 'err');
+    }
+  } catch { toast('Failed to delete', 'err'); }
+}
+
+// ── Tab context menu (right-click) ──────────────────────────────
+function _dwTabCtxMenu(e, id) {
+  e.preventDefault();
+  document.getElementById('dw-tab-ctx')?.remove();
+  const dash = _dwDashboards.find(d => d.id === id);
+  if (!dash) return;
+  const isLast = _dwDashboards.length <= 1;
+  const menu = document.createElement('div');
+  menu.id = 'dw-tab-ctx';
+  menu.className = 'dw-tab-ctx';
+  menu.style.left = e.pageX + 'px';
+  menu.style.top  = e.pageY + 'px';
+  menu.innerHTML =
+    `<div class="dw-ctx-item" onclick="_dwRenameDashboard(${id})">✎ Rename</div>` +
+    `<div class="dw-ctx-item dw-ctx-danger${isLast ? ' disabled' : ''}"
+          onclick="${isLast ? '' : `_dwDeleteDashboard(${id})`}">✕ Delete</div>`;
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', function _rm() {
+    menu.remove(); document.removeEventListener('click', _rm);
+  }), 0);
 }
 
 // ── Dashboard-wide tick (15 s) ────────────────────────────────────
@@ -703,7 +842,9 @@ function _dwRefreshDeviceStatus(wid) {
 // ── Reset dashboard state (called on re-authentication) ──────────
 function _dwReset() {
   _dwDataArrived = false;
-  _dwWidgets = null;
+  _dwDashboards = null;
+  _dwActiveId   = null;
+  _dwWidgets    = null;
   if (_dwTickTimer) { clearInterval(_dwTickTimer); _dwTickTimer = null; }
 }
 

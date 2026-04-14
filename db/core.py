@@ -225,10 +225,29 @@ def db_init():
                 detail TEXT    DEFAULT ''
             )""")
         con.execute("""
-            CREATE TABLE IF NOT EXISTS dashboard_widgets (
-                username TEXT PRIMARY KEY,
-                widgets  TEXT NOT NULL DEFAULT '[]'
+            CREATE TABLE IF NOT EXISTS dashboards (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                username   TEXT    NOT NULL,
+                name       TEXT    NOT NULL DEFAULT 'Default',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                widgets    TEXT    NOT NULL DEFAULT '[]'
             )""")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboards_user_name "
+                    "ON dashboards(username, name)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_dashboards_user "
+                    "ON dashboards(username, sort_order)")
+        # ── Migration: dashboard_widgets → dashboards ───────────────
+        try:
+            old = con.execute("SELECT username, widgets FROM dashboard_widgets").fetchall()
+            for r in old:
+                con.execute(
+                    "INSERT OR IGNORE INTO dashboards (username, name, sort_order, widgets) "
+                    "VALUES (?, 'Default', 0, ?)", (r[0], r[1]))
+            con.execute("DROP TABLE dashboard_widgets")
+            con.commit()
+            log.info("Migrated dashboard_widgets → dashboards")
+        except Exception:
+            pass  # already migrated or table never existed
         con.execute("""
             CREATE TABLE IF NOT EXISTS backup_devices (
                 did          TEXT PRIMARY KEY,

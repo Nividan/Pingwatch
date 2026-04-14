@@ -23,7 +23,7 @@ _MAIN_TABLES = [
     "sensors",
     "app_settings",
     "audit_log",
-    "dashboard_widgets",
+    "dashboards",
     "schema_version",
     "enterprise_oid_map",
     "trap_definitions",
@@ -58,6 +58,7 @@ _LOGS_TABLES = [
 _SERIAL_TABLES = {
     "main": [
         ("audit_log", "id"),
+        ("dashboards", "id"),
         ("alert_action_templates", "id"),
         ("alert_profiles", "id"),
         ("alert_profile_stages", "id"),
