@@ -12,8 +12,8 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "0.8.1"
-APP_VERSION_NAME = "Bug Fix"
+APP_VERSION      = "0.9.0"
+APP_VERSION_NAME = "Alert Orchestration & Discovery"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─
