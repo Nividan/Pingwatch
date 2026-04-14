@@ -175,25 +175,40 @@ def install_snmpget() -> "tuple[bool, str]":
     import shutil
     _sys = platform.system()
     if _sys == "Windows":
-        # Try Chocolatey
-        if shutil.which("choco"):
+        # Find choco — check PATH first, then default install location
+        choco = shutil.which("choco")
+        if not choco:
+            _default = r"C:\ProgramData\chocolatey\bin\choco.exe"
+            if os.path.isfile(_default):
+                choco = _default
+        if choco:
             try:
-                r = subprocess.run(["choco", "install", "net-snmp", "-y"],
+                r = subprocess.run([choco, "install", "net-snmp", "-y"],
                                    capture_output=True, text=True)
                 if r.returncode == 0:
                     return True, "Installed via Chocolatey"
-            except Exception:
-                pass
-        # Try winget
-        if shutil.which("winget"):
+                return False, (r.stderr or r.stdout or "choco install failed").strip().splitlines()[-1][:200]
+            except Exception as e:
+                return False, str(e)
+        # Find winget — check PATH then default locations
+        winget = shutil.which("winget")
+        if not winget:
+            import glob
+            _candidates = glob.glob(
+                r"C:\Users\*\AppData\Local\Microsoft\WindowsApps\winget.exe"
+            )
+            if _candidates:
+                winget = _candidates[0]
+        if winget:
             try:
-                r = subprocess.run(["winget", "install", "net-snmp.net-snmp"],
+                r = subprocess.run([winget, "install", "net-snmp.net-snmp"],
                                    capture_output=True, text=True)
                 if r.returncode == 0:
                     return True, "Installed via winget"
-            except Exception:
-                pass
-        return False, "Neither Chocolatey nor winget available"
+                return False, (r.stderr or r.stdout or "winget install failed").strip().splitlines()[-1][:200]
+            except Exception as e:
+                return False, str(e)
+        return False, "Neither Chocolatey nor winget found. Install Chocolatey first, then click Retry."
     elif _sys == "Linux":
         for pkg_mgr, pkg_name in [
             ("apt-get", "snmp"), ("dnf", "net-snmp-utils"), ("yum", "net-snmp-utils"),
