@@ -87,6 +87,7 @@ def _btn(parent, text, command, style="default"):
     bg, fg, bd = colors.get(style, colors["default"])
     b = tk.Button(parent, text=text, command=command,
                   bg=bg, fg=fg, activebackground=bg, activeforeground=fg,
+                  disabledforeground=fg,
                   relief="flat", bd=0, padx=16, pady=6,
                   font=(_FNT, 10), cursor="hand2",
                   highlightthickness=1, highlightbackground=bd)
@@ -306,8 +307,33 @@ class PackagesPage(WizardPage):
             btn.pack_forget()  # hidden until needed
             self._pkg_widgets[pkg["import"]] = {"icon": icon, "btn": btn, "row": row}
 
+        # System tools (not pip-installable)
+        n = len(PACKAGES)
+        self._add_tool_row(n,     "_snmpget", "snmpget",
+                           "SNMP sensor polling (net-snmp)")
+        self._add_tool_row(n + 1, "_ping",    "ping",
+                           "ICMP ping sensor")
+
+    def _add_tool_row(self, idx, key, name, desc, required=False):
+        """Add a system tool row (snmpget, ping) — not pip-installable."""
+        row = tk.Frame(self._rows_frame, bg=BG2 if idx % 2 == 0 else BG,
+                       pady=4, padx=8)
+        row.pack(fill="x")
+        icon = tk.Label(row, text="…", bg=row["bg"], fg=TEXT3,
+                        font=(_MONO, 12), width=2)
+        icon.pack(side="left")
+        tk.Label(row, text=name, bg=row["bg"], fg=TEXT,
+                 font=(_FNT, 10, "bold")).pack(side="left", padx=(4, 0))
+        tk.Label(row, text=f"— {desc}", bg=row["bg"], fg=TEXT2,
+                 font=(_FNT, 10)).pack(side="left", padx=(4, 0))
+        if required:
+            tk.Label(row, text="(required)", bg=row["bg"], fg=YELLOW,
+                     font=(_FNT, 9)).pack(side="left", padx=(4, 0))
+        self._pkg_widgets[key] = {"icon": icon, "btn": None, "row": row}
+
     def _check_all(self):
         self._checked = True
+        # Python packages
         for pkg in PACKAGES:
             ok = check_import(pkg["import"])
             w = self._pkg_widgets[pkg["import"]]
@@ -317,6 +343,14 @@ class PackagesPage(WizardPage):
                 w["icon"].config(text="✗", fg=RED)
                 if pkg.get("pip"):
                     w["btn"].pack(side="right")
+        # System tools
+        for key, check_fn in [("_snmpget", check_snmpget), ("_ping", check_ping)]:
+            if key in self._pkg_widgets:
+                w = self._pkg_widgets[key]
+                if check_fn():
+                    w["icon"].config(text="✓", fg=GREEN)
+                else:
+                    w["icon"].config(text="✗", fg=YELLOW)
 
     def _install_pkg(self, pkg):
         w = self._pkg_widgets[pkg["import"]]
