@@ -21,6 +21,27 @@
 <body>
 <canvas id="netbg"></canvas>
 
+<!-- Server-readiness splash — shown during restart window while db_load() is still running.
+     Toggled by _waitForServerReady() in app.js. Hidden by default. -->
+<div id="pw-splash" style="display:none" aria-live="polite" aria-busy="true">
+  <div class="splash-inner">
+    <div class="splash-logo">
+      <svg width="40" height="40" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <circle cx="10" cy="10" r="8.5" stroke="currentColor" stroke-width="1" opacity=".35"/>
+        <circle cx="10" cy="10" r="5"   stroke="currentColor" stroke-width="1" opacity=".55"/>
+        <circle cx="10" cy="10" r="2"   fill="currentColor" opacity=".9"/>
+        <line x1="1.5" y1="10" x2="5"    y2="10" stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+        <line x1="15"  y1="10" x2="18.5" y2="10" stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+        <line x1="10"  y1="1.5" x2="10" y2="5"    stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+        <line x1="10"  y1="15"  x2="10" y2="18.5" stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+      </svg>
+    </div>
+    <div class="splash-title"><span class="lt-ping">Ping</span><span class="lt-watch">Watch</span></div>
+    <div class="splash-sub" id="pw-splash-msg">Starting up — loading devices and sensors…</div>
+    <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+  </div>
+</div>
+
 <!-- Login screen -->
 <div id="login-screen" style="display:none">
   <div class="login-box">

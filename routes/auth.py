@@ -15,7 +15,7 @@ import time
 from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
                          auth_revoke_user_sessions, auth_verify_current)
 from core.config import (_RE_USER, _RE_USER_PW, _RE_ME_PW,
-                         _RE_ME_PROFILE, _RE_USER_PROFILE)
+                         _RE_ME_PROFILE, _RE_USER_PROFILE, _RE_READY)
 from core.config import DB_PATH
 from core.logger import log
 from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_user,
@@ -23,6 +23,7 @@ from db          import (db_log_audit, db_list_users, db_add_user, db_add_ldap_u
                          db_update_profile, db_update_own_profile, db_update_theme)
 from db.backend  import is_pg
 from core.app_state import tls_active
+import core.app_state as app_state
 import core.settings as _settings
 
 _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -77,6 +78,18 @@ _PW_RESET_COOLDOWN  = 10   # seconds between resets for the same user
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+
+    # ── /api/ready ────────────────────────────────────────────────
+    # Unauthenticated readiness probe — polled by the frontend splash
+    # while db_load() is still running after a restart. Returns a simple
+    # boolean so the client knows when it's safe to call /api/devices etc.
+    # No sensitive data leaked (just a flag + version string).
+    if _RE_READY.match(path) and method == "GET":
+        h._json(200, {
+            "ready":   bool(app_state.ready),
+            "version": app_state.APP_VERSION,
+        })
+        return True
 
     # ── /api/me ───────────────────────────────────────────────────
     if path == "/api/me" and method == "GET":
