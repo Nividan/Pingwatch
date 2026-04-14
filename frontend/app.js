@@ -232,8 +232,12 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     _sseHidden = false;
-    // Flush any pending batch immediately
+    // Flush any pending batch immediately; always resync pills/badge in case
+    // device_status events arrived while the tab was hidden (they update S.devices
+    // but skip _sseBatch when _sseHidden=true, so no flush timer was set).
     if (_sseBatch.timer) { clearTimeout(_sseBatch.timer); _sseBatch.timer=null; _sseFlush(); }
+    updatePills();
+    _alertEvtBadgePoll();
     if (!sse || sse.readyState === EventSource.CLOSED) {
       _sseFirstConnect = false;
       connectSSE();
@@ -996,7 +1000,11 @@ function switchMainTab(tab){
     mapView.style.display='flex';
     if(_mf&&!_mf.src&&_mf.dataset.src) _mf.src=_mf.dataset.src;
     else if(_mf&&_mf.contentWindow) _mf.contentWindow.postMessage({type:'pw_reload_pages'},window.location.origin);
-    _mf?.contentWindow?.postMessage({type:'ntm_resume'},window.location.origin);
+    // Send current device statuses with resume so map can catchup missed events while paused
+    _mf?.contentWindow?.postMessage({
+      type:'ntm_resume',
+      devices:Object.values(S.devices).map(d=>({did:d.did||d.device_id,status:d.status}))
+    },window.location.origin);
   } else if(tab==='backups'){
     backupsView.style.display='flex';
     emptyMain.style.display='none';
