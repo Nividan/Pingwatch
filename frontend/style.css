@@ -1275,7 +1275,12 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
                     padding:8px 14px;text-align:center;font-size:.7rem;
                     color:var(--text3);min-width:72px;
                     transition:transform .15s ease,box-shadow .15s ease;}
+:root[data-theme="light"] .dm-kpi-item{
+  background:linear-gradient(180deg,#ffffff,#eef2f6);
+  border-color:var(--border);
+}
 .dm-kpi-item:hover {transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.4);}
+:root[data-theme="light"] .dm-kpi-item:hover{box-shadow:0 6px 20px rgba(31,35,40,.12);}
 .dm-kpi-item span  {display:block;font-size:1.1rem;font-weight:700;
                     color:var(--text);margin-top:3px;font-variant-numeric:tabular-nums;}
 .dm-kpi-good span  {color:var(--up);}
@@ -1549,6 +1554,12 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-row-used td:first-child{border-left:3px solid var(--up);}
 .ipam-row-free td:first-child{border-left:3px solid transparent;}
 .ipam-tbl tr:hover td{background:rgba(255,255,255,.05)!important;}
+/* Light mode: boost used-row tint and darken hover so populated vs. free
+   rows remain clearly distinguishable on a white table */
+:root[data-theme="light"] .ipam-row-used td{background:rgba(26,127,55,.09);}
+:root[data-theme="light"] .ipam-row-free td{background:var(--bg);}
+:root[data-theme="light"] .ipam-tbl tr:hover td{background:rgba(9,105,218,.06)!important;}
+:root[data-theme="light"] .ipam-row-used:hover td{background:rgba(26,127,55,.15)!important;}
 .ipam-ip{font-family:'Courier New',monospace;color:var(--text)!important;white-space:nowrap;}
 .ipam-used{background:rgba(0,255,150,.15);color:var(--up)!important;
   border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap;}
@@ -1556,6 +1567,11 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-lic-ok  {background:rgba(0,255,150,.1);color:var(--up)!important;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap;}
 .ipam-lic-warn{background:rgba(240,165,0,.12);color:var(--warn)!important;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap;}
 .ipam-lic-crit{background:rgba(248,81,73,.12);color:var(--down)!important;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap;}
+/* Light mode: bump badge alphas so status pills read clearly on white */
+:root[data-theme="light"] .ipam-used     {background:rgba(26,127,55,.18);}
+:root[data-theme="light"] .ipam-lic-ok   {background:rgba(26,127,55,.16);}
+:root[data-theme="light"] .ipam-lic-warn {background:rgba(154,103,0,.18);}
+:root[data-theme="light"] .ipam-lic-crit {background:rgba(207,34,46,.16);}
 .ipam-name-cell{cursor:pointer;min-width:180px;}
 .ipam-name-cell:hover{background:rgba(99,102,241,.08)!important;}
 .ipam-name-inp{background:var(--bg2);border:1px solid var(--accent);border-radius:3px;

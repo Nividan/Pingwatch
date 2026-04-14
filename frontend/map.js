@@ -60,6 +60,8 @@ window.addEventListener('message', e => {
     const t = e.data.value === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', t);
     try { localStorage.setItem('pw_theme', t); } catch(_) {}
+    _ntmRefreshBgPalette();
+    window.dispatchEvent(new CustomEvent('ntm_themechange', { detail: t }));
   }
 });
 // Initial theme — read localStorage (same-origin, shared with parent) so the
@@ -70,6 +72,61 @@ try {
     document.documentElement.setAttribute('data-theme', _t0);
   }
 } catch(_) {}
+
+// ── Canvas-BG palettes ────────────────────────────────────────────────────
+// Canvas draws don't inherit CSS vars — they need explicit rgba strings at
+// draw time. We keep two palettes and flip `_NTM_BG` on theme change.
+// Light palette mirrors --accent (#0969da) / --up (#1a7f37) / --purple.
+const _NTM_BG_PALETTES = {
+  dark: {
+    baseFill:     'rgba(4,8,20,0.62)',
+    hexStroke:    'rgba(0,212,255,1)',
+    stream:       [0,212,255],
+    streamHot:    [180,255,255],
+    particleC:    [0,212,255],
+    particleG:    [0,255,157],
+    particleP:    [168,85,247],
+    connections:  'rgba(0,212,255,0.08)',
+    scanSoft:     'rgba(0,212,255,0.03)',
+    scanLine:     'rgba(0,212,255,0.07)',
+    corners:      'rgba(0,212,255,0.55)',
+    cornersDim:   'rgba(0,212,255,0.25)',
+    crosshair:    'rgba(0,212,255,0.1)',
+    ringC:        [0,212,255],
+    ringG:        [0,255,157],
+    ringP:        [168,85,247],
+    dashConn:     'rgba(0,212,255,0.12)',
+    dashScanSoft: 'rgba(0,212,255,0.04)',
+    dashScanLine: 'rgba(0,212,255,0.10)',
+  },
+  light: {
+    baseFill:     'rgba(240,244,248,0.78)',
+    hexStroke:    'rgba(9,105,218,1)',
+    stream:       [9,105,218],
+    streamHot:    [9,105,218],
+    particleC:    [9,105,218],
+    particleG:    [26,127,55],
+    particleP:    [124,58,237],
+    connections:  'rgba(9,105,218,0.14)',
+    scanSoft:     'rgba(9,105,218,0.05)',
+    scanLine:     'rgba(9,105,218,0.14)',
+    corners:      'rgba(9,105,218,0.7)',
+    cornersDim:   'rgba(9,105,218,0.3)',
+    crosshair:    'rgba(9,105,218,0.16)',
+    ringC:        [9,105,218],
+    ringG:        [26,127,55],
+    ringP:        [124,58,237],
+    dashConn:     'rgba(9,105,218,0.18)',
+    dashScanSoft: 'rgba(9,105,218,0.06)',
+    dashScanLine: 'rgba(9,105,218,0.16)',
+  },
+};
+let _NTM_BG = _NTM_BG_PALETTES.dark;
+function _ntmRefreshBgPalette() {
+  const t = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  _NTM_BG = _NTM_BG_PALETTES[t];
+}
+_ntmRefreshBgPalette();
 // Also pause when this document's own visibility changes (e.g. OS switch)
 let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
@@ -4284,7 +4341,7 @@ function initDashBg() {
     // Connections — single batched path (1 stroke call instead of N)
     const MD2 = 90 * 90;
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(0,212,255,0.12)';
+    ctx.strokeStyle = _NTM_BG.dashConn;
     ctx.lineWidth = 0.6;
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
@@ -4298,19 +4355,20 @@ function initDashBg() {
     ctx.stroke();
 
     // Particles
+    const pc = _NTM_BG.particleC;
     pts.forEach(p => {
       const glow = 0.45 + 0.4 * Math.sin(t * 1.6 + p.ph);
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,212,255,${glow.toFixed(2)})`;
+      ctx.fillStyle = `rgba(${pc[0]},${pc[1]},${pc[2]},${glow.toFixed(2)})`;
       ctx.fill();
     });
 
     // Scan bar — simple fillRect, no gradient allocation
     scanY = (scanY + 0.4) % H;
-    ctx.fillStyle = 'rgba(0,212,255,0.04)';
+    ctx.fillStyle = _NTM_BG.dashScanSoft;
     ctx.fillRect(0, scanY - 18, W, 22);
-    ctx.fillStyle = 'rgba(0,212,255,0.10)';
+    ctx.fillStyle = _NTM_BG.dashScanLine;
     ctx.fillRect(0, scanY, W, 1);
   }
 
@@ -4429,6 +4487,7 @@ function initMainBg() {
   const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ';
 
   // ── Offscreen hex grid cache ──────────────────────────────────────────────
+  // Stroke color is baked in; theme changes invalidate via the listener below.
   let hexCache = null, hexCacheW = 0, hexCacheH = 0;
   function buildHexCache(W, H) {
     if (hexCacheW === W && hexCacheH === H) return; // already up to date
@@ -4436,7 +4495,7 @@ function initMainBg() {
     hexCache = new OffscreenCanvas(W, H);
     const hx = hexCache.getContext('2d');
     const R = 38;
-    hx.strokeStyle = 'rgba(0,212,255,1)'; // will be tinted via globalAlpha
+    hx.strokeStyle = _NTM_BG.hexStroke; // will be tinted via globalAlpha
     hx.lineWidth = 0.5;
     const rw = R * Math.sqrt(3), rh = R * 1.5;
     const cols2 = Math.ceil(W / rw) + 2, rows2 = Math.ceil(H / rh) + 2;
@@ -4501,11 +4560,13 @@ function initMainBg() {
 
   // Spawn a ring pulse at a random position
   function spawnRing() {
+    const r = Math.random();
+    const rgb = r < 0.2 ? _NTM_BG.ringG : r < 0.4 ? _NTM_BG.ringP : _NTM_BG.ringC;
     rings.push({
       x: 80 + Math.random() * (canvas.width - 160),
       y: 80 + Math.random() * (canvas.height - 160),
       r: 0, maxR: 60 + Math.random() * 90,
-      col: Math.random() < 0.2 ? 'rgba(0,255,157,' : Math.random() < 0.2 ? 'rgba(168,85,247,' : 'rgba(0,212,255,',
+      col: `rgba(${rgb[0]},${rgb[1]},${rgb[2]},`,
     });
   }
 
@@ -4519,15 +4580,15 @@ function initMainBg() {
       [0, H,  1, -1],
       [W, H, -1, -1],
     ].forEach(([cx, cy, dx, dy]) => {
-      ctx.strokeStyle = 'rgba(0,212,255,0.55)';
+      ctx.strokeStyle = _NTM_BG.corners;
       ctx.beginPath(); ctx.moveTo(cx + dx*sz, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy*sz); ctx.stroke();
       // inner tick
-      ctx.strokeStyle = 'rgba(0,212,255,0.25)';
+      ctx.strokeStyle = _NTM_BG.cornersDim;
       ctx.beginPath(); ctx.moveTo(cx + dx*8, cy + dy*3); ctx.lineTo(cx + dx*3, cy + dy*3); ctx.lineTo(cx + dx*3, cy + dy*8); ctx.stroke();
     });
     // center crosshair
     const mx = W / 2, my = H / 2, cs = 14;
-    ctx.strokeStyle = 'rgba(0,212,255,0.1)';
+    ctx.strokeStyle = _NTM_BG.crosshair;
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(mx - cs, my); ctx.lineTo(mx + cs, my); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(mx, my - cs); ctx.lineTo(mx, my + cs); ctx.stroke();
@@ -4542,8 +4603,9 @@ function initMainBg() {
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
+    const BG = _NTM_BG; // snapshot once per frame for minor perf
 
-    ctx.fillStyle = 'rgba(4,8,20,0.62)';
+    ctx.fillStyle = BG.baseFill;
     ctx.fillRect(0, 0, W, H);
 
     // Hex grid (cached offscreen canvas, just drawImage + globalAlpha pulse)
@@ -4551,6 +4613,7 @@ function initMainBg() {
 
     // Data streams
     ctx.font = '10px Share Tech Mono';
+    const sC = BG.stream, sH = BG.streamHot;
     streams.forEach(s => {
       s.y += s.speed;
       s.tick++;
@@ -4560,7 +4623,9 @@ function initMainBg() {
         const fy = s.y - i * 14;
         if (fy < -14 || fy > H + 14) continue;
         const fade = (1 - i / s.len) * s.opacity;
-        ctx.fillStyle = i === 0 ? `rgba(180,255,255,${(s.opacity * 3).toFixed(3)})` : `rgba(0,212,255,${fade.toFixed(3)})`;
+        ctx.fillStyle = i === 0
+          ? `rgba(${sH[0]},${sH[1]},${sH[2]},${(s.opacity * 3).toFixed(3)})`
+          : `rgba(${sC[0]},${sC[1]},${sC[2]},${fade.toFixed(3)})`;
         ctx.fillText(s.chars[i % s.chars.length], s.x - 5, fy);
       }
     });
@@ -4571,7 +4636,7 @@ function initMainBg() {
     // Connections — single batched path (1 stroke call instead of N)
     const MD2 = 110 * 110;
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(0,212,255,0.08)';
+    ctx.strokeStyle = BG.connections;
     ctx.lineWidth = 0.6;
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
@@ -4584,11 +4649,13 @@ function initMainBg() {
     }
     ctx.stroke();
 
+    const pC = BG.particleC, pG = BG.particleG, pP = BG.particleP;
     pts.forEach(p => {
       const pulse = 0.35 + 0.5 * Math.sin(t * 1.5 + p.ph);
       const a = pulse.toFixed(2);
+      const rgb = p.col === 'g' ? pG : p.col === 'p' ? pP : pC;
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = p.col === 'g' ? `rgba(0,255,157,${a})` : p.col === 'p' ? `rgba(168,85,247,${a})` : `rgba(0,212,255,${a})`;
+      ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
       ctx.fill();
     });
 
@@ -4608,9 +4675,9 @@ function initMainBg() {
 
     // Scan line — simple fillRect, no gradient allocation per frame
     scanY = (scanY + 0.55) % H;
-    ctx.fillStyle = 'rgba(0,212,255,0.03)';
+    ctx.fillStyle = BG.scanSoft;
     ctx.fillRect(0, scanY - 35, W, 39);
-    ctx.fillStyle = 'rgba(0,212,255,0.07)';
+    ctx.fillStyle = BG.scanLine;
     ctx.fillRect(0, scanY, W, 1);
 
     // Corner HUD
@@ -4618,6 +4685,12 @@ function initMainBg() {
   }
 
   function startMainBg() { if (!_bgRafId) _bgRafId = requestAnimationFrame(frame); }
+
+  // Theme flip — invalidate hex cache so it rebuilds with the new stroke color
+  window.addEventListener('ntm_themechange', () => {
+    hexCacheW = hexCacheH = 0;
+    if (!_bgRafId) startMainBg();
+  });
 
   resize();
   startMainBg();
