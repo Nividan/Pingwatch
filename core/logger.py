@@ -132,14 +132,17 @@ def set_debug_mode(enabled: bool):
 
     Called at startup from server.py and at runtime from settings PATCH.
     Sensor and audit loggers are unaffected (always INFO).
+    Only logs when the level actually changes (suppresses spurious startup/save noise).
     """
     lvl = logging.DEBUG if enabled else logging.INFO
+    changed = (_fh.level != lvl)
     _fh.setLevel(lvl)
     _bkh.setLevel(lvl)
     log_buffer.setLevel(lvl)
     if _ch is not None:
         _ch.setLevel(lvl)
-    log.info(f"Debug mode {'enabled' if enabled else 'disabled'}")
+    if changed:
+        log.info(f"Debug mode {'enabled' if enabled else 'disabled'}")
 
 
 # ── Public map consumed by the log-viewer API (/api/logs/{key}) ───────────
