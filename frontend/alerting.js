@@ -695,10 +695,7 @@ async function _alertingFetchEvents(state, panelId) {
   try {
     const d = await api('GET', `/api/alert/events?${qs}`);
     const events = d.events || [];
-    if (typeof _alertEvtBadgeCount !== 'undefined') {
-      _alertEvtBadgeCount = d.active_count || 0;
-      if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
-    }
+    if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
     if (!events.length) {
       list.innerHTML = '<div class="alrt-empty">No events.</div>';
       document.getElementById(`alrt-evt-pager-${panelId}`).innerHTML = '';

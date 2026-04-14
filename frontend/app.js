@@ -117,30 +117,30 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return; d._direction='down'; pushFlap(d);
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
-    _scheduleActiveEvtPoll();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('flap_recovered',e=>{
     const d=_parseSSE(e); if(!d) return;
     resolveFlap(d,'down');
     if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
     _scheduleRefresh();
-    _scheduleActiveEvtPoll();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('threshold_warning',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'warn');
     _scheduleRefresh();
-    _scheduleActiveEvtPoll();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('threshold_critical',e=>{
     const d=_parseSSE(e); if(!d) return; pushThresholdEvent(d,'crit');
     _scheduleRefresh();
-    _scheduleActiveEvtPoll();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('threshold_ok',e=>{
     const d=_parseSSE(e); if(!d) return;
     resolveFlap(d,'threshold');
     _scheduleRefresh();
-    _scheduleActiveEvtPoll();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('snmp_trap',e=>{
     const d=_parseSSE(e); if(!d) return; d._direction='trap'; pushFlap(d);
@@ -162,7 +162,7 @@ function connectSSE(){
   sse.addEventListener('browser_notification',e=>{
     const d=_parseSSE(e); if(!d) return;
     _showBrowserNotif(d);
-    _scheduleActiveEvtPoll();
+    _scheduleBadgePoll();
   });
   sse.addEventListener('log_badge',e=>{
     const d=_parseSSE(e); if(!d) return;
@@ -237,7 +237,7 @@ document.addEventListener('visibilitychange', () => {
     // but skip _sseBatch when _sseHidden=true, so no flush timer was set).
     if (_sseBatch.timer) { clearTimeout(_sseBatch.timer); _sseBatch.timer=null; _sseFlush(); }
     updatePills();
-    _alertEvtBadgePoll();
+    _badgePoll();
     if (!sse || sse.readyState === EventSource.CLOSED) {
       _sseFirstConnect = false;
       connectSSE();
@@ -305,7 +305,7 @@ async function doLogout(){
   if(sse){sse.close();sse=null;}
   if(_reconnectTimer){clearTimeout(_reconnectTimer);_reconnectTimer=null;}
   if(_hbSparkInterval){clearInterval(_hbSparkInterval);_hbSparkInterval=null;}
-  if(window._alertEvtBadgeInterval){clearInterval(window._alertEvtBadgeInterval);window._alertEvtBadgeInterval=null;}
+  if(window._badgePollInterval){clearInterval(window._badgePollInterval);window._badgePollInterval=null;}
   await fetch('/api/logout',{method:'POST'}).catch(()=>{});
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
@@ -368,16 +368,14 @@ function onAuthenticated(username){
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, TIMINGS.SPARK_REFRESH);
-  // Poll active alert count for combined Events badge; clear on re-login to prevent stacking
-  _alertEvtBadgePoll();
-  if (window._alertEvtBadgeInterval) clearInterval(window._alertEvtBadgeInterval);
-  window._alertEvtBadgeInterval = setInterval(_alertEvtBadgePoll, TIMINGS.ALERT_BADGE_POLL);
+  // Poll badge counts (crit/warn/ack/muted); clear on re-login to prevent stacking
+  _badgePoll();
+  if (window._badgePollInterval) clearInterval(window._badgePollInterval);
+  window._badgePollInterval = setInterval(_badgePoll, TIMINGS.ALERT_BADGE_POLL);
   _logBadgeInit();
   _lastActivity = Date.now();
   _startIdleCheck();
 }
-
-let _alertEvtBadgeCount = 0;
 
 let _sessionTtl   = 86400;
 let _lastActivity = Date.now();
@@ -394,49 +392,127 @@ function _startIdleCheck(){
 }
 function _stopIdleCheck(){ if(_idleTimer){clearInterval(_idleTimer);_idleTimer=null;} }
 
-let _alertEvtBadgeSeverity = 'warning'; // 'critical' or 'warning'
+// ── Status badges (crit / warn / ack / muted) ──────────────────
+let _badgeCounts = {crit:0, warn:0, ack:0, muted:0};
+let _badgeMutedList = [];
 
-function _updateEvtBadge() {
-  const n = _alertEvtBadgeCount;
-  const el = document.getElementById('activeEvtBadge');
-  const cnt = document.getElementById('activeEvtBadgeCnt');
-  if (!el) return;
-  if (cnt) cnt.textContent = n;
-  el.style.display = n > 0 ? 'flex' : 'none';
-  el.className = 'tb-active-evt-badge ' + (_alertEvtBadgeSeverity === 'critical' ? 'crit' : 'warn');
+function _updateBadges(){
+  const pairs = [
+    ['badgeCrit','badgeCritCnt',_badgeCounts.crit],
+    ['badgeWarn','badgeWarnCnt',_badgeCounts.warn],
+    ['badgeAck','badgeAckCnt',_badgeCounts.ack],
+    ['badgeMuted','badgeMutedCnt',_badgeCounts.muted],
+  ];
+  for(const [elId,cntId,n] of pairs){
+    const el=document.getElementById(elId);
+    const cnt=document.getElementById(cntId);
+    if(!el) continue;
+    if(cnt) cnt.textContent=n;
+    el.style.display = n>0 ? 'flex' : 'none';
+  }
 }
 
-function _openActiveEvtBadge() {
+function _openBadgeCrit(){
   switchMainTab('events');
-  if (typeof _evtSetInnerTab === 'function') _evtSetInnerTab('active');
+  if(typeof _evtSetInnerTab==='function') _evtSetInnerTab('active');
 }
+function _openBadgeWarn(){
+  switchMainTab('events');
+  if(typeof _evtSetInnerTab==='function') _evtSetInnerTab('active');
+}
+function _openBadgeAck(){
+  switchMainTab('events');
+  if(typeof _evtSetInnerTab==='function') _evtSetInnerTab('active');
+}
+function _openBadgeMuted(){ _showMutedStoppedModal(); }
 
-let _activeEvtPollTimer = null;
-async function _alertEvtBadgePoll() {
-  try {
+let _badgePollTimer = null;
+async function _badgePoll(){
+  try{
     const r = await fetch('/api/alert/events/active');
-    if (!r.ok) return;
+    if(!r.ok) return;
     const d = await r.json();
-    _alertEvtBadgeCount = d.count || 0;
-    // Severity from in-memory FLAPS: critical if any active down event, else warning
-    const activeFlaps = typeof FLAPS !== 'undefined'
-      ? FLAPS.filter(f => (f.ack_state || 'active') !== 'resolved')
-      : [];
-    const hasCrit = activeFlaps.some(f => {
-      const dir = f._direction || f.direction || '';
-      return dir === 'down' || (dir === 'threshold' && f._thr_level === 'crit');
-    });
-    _alertEvtBadgeSeverity = hasCrit ? 'critical' : 'warning';
-    _updateEvtBadge();
-  } catch (_) {}
+    _badgeCounts.crit  = d.crit_count  || 0;
+    _badgeCounts.warn  = d.warn_count  || 0;
+    _badgeCounts.ack   = d.ack_count   || 0;
+    _badgeCounts.muted = d.muted_stopped_count || 0;
+    _badgeMutedList    = d.muted_stopped || [];
+    _updateBadges();
+  } catch(_){}
 }
 
-function _scheduleActiveEvtPoll() {
-  if (_activeEvtPollTimer) return;
-  _activeEvtPollTimer = setTimeout(() => {
-    _activeEvtPollTimer = null;
-    _alertEvtBadgePoll();
+function _scheduleBadgePoll(){
+  if(_badgePollTimer) return;
+  _badgePollTimer = setTimeout(()=>{
+    _badgePollTimer = null;
+    _badgePoll();
   }, 2000);
+}
+
+// ── Muted / stopped sensors modal ───────────────────────────────
+function _showMutedStoppedModal(){
+  closeM('ms-modal');
+  const o = document.createElement('div');
+  o.className='mo'; o.id='ms-modal';
+  _overlayClose(o,()=>closeM('ms-modal'));
+  const isOp = S.role==='operator'||S.role==='admin';
+  let rows='';
+  for(const item of _badgeMutedList){
+    const reasons = item.reasons||[];
+    const tags = reasons.map(r=>{
+      if(r==='device_muted') return '<span class="ms-tag dev-muted">Device Muted</span>';
+      if(r==='sensor_muted') return '<span class="ms-tag sen-muted">Sensor Muted</span>';
+      if(r==='stopped')      return '<span class="ms-tag stopped">Stopped</span>';
+      return '';
+    }).join(' ');
+    let acts='';
+    if(isOp){
+      if(reasons.includes('sensor_muted'))
+        acts+=`<button class="btn-s" onclick="_msUnmuteSensor('${esc(item.did)}','${esc(item.sid)}')">Unmute</button> `;
+      if(reasons.includes('device_muted'))
+        acts+=`<button class="btn-s" onclick="_msUnmuteDevice('${esc(item.did)}')">Unmute Device</button> `;
+      if(reasons.includes('stopped'))
+        acts+=`<button class="btn-s" onclick="_msStartSensor('${esc(item.did)}','${esc(item.sid)}')">Start</button> `;
+    }
+    rows+=`<tr><td>${esc(item.dname)}</td><td>${esc(item.sname)}</td><td>${esc(item.stype)}</td><td>${tags}</td><td>${acts}</td></tr>`;
+  }
+  if(!rows) rows='<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">No muted or stopped sensors</td></tr>';
+  o.innerHTML=`<div class="mbox" style="max-width:700px">
+    <div class="mhd"><div class="mttl">Muted &amp; Stopped Sensors</div>
+      <button class="mclose" onclick="closeM('ms-modal')">&#x2715;</button></div>
+    <div class="mbdy" style="max-height:60vh;overflow:auto;padding:0">
+      <table class="ms-tbl"><thead><tr><th>Device</th><th>Sensor</th><th>Type</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>
+    <div class="mft"><button class="btn-s" onclick="closeM('ms-modal')">Close</button></div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+async function _msUnmuteSensor(did,sid){
+  try{
+    await api('PATCH',`/api/device/${did}/sensor/${sid}`,{alerts_muted:false});
+    toast('Sensor unmuted','ok');
+    await _badgePoll();
+    _showMutedStoppedModal();
+  }catch(_){toast('Failed to unmute sensor','err');}
+}
+async function _msUnmuteDevice(did){
+  try{
+    await api('PATCH',`/api/device/${did}`,{alerts_muted:false});
+    toast('Device unmuted','ok');
+    if(S.devices[did]) S.devices[did].alerts_muted=false;
+    await _badgePoll();
+    _showMutedStoppedModal();
+  }catch(_){toast('Failed to unmute device','err');}
+}
+async function _msStartSensor(did,sid){
+  try{
+    await api('POST',`/api/device/${did}/sensor/${sid}/start`);
+    toast('Sensor started','ok');
+    await _badgePoll();
+    _showMutedStoppedModal();
+  }catch(_){toast('Failed to start sensor','err');}
 }
 
 // ── Log badge (WARNING+ entries) ────────────────────────────────

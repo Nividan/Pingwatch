@@ -397,6 +397,54 @@ def db_count_active_flaps() -> int:
         con.close()
 
 
+_FLAP_SEVERITY_SQL = (
+    "SELECT "
+    "SUM(CASE WHEN COALESCE(ack_state,'active')='active' "
+    "         AND direction IN ('down','threshold_crit','license_crit') "
+    "    THEN 1 ELSE 0 END) AS crit_count, "
+    "SUM(CASE WHEN COALESCE(ack_state,'active')='active' "
+    "         AND direction IN ('threshold_warn','license_warn') "
+    "    THEN 1 ELSE 0 END) AS warn_count, "
+    "SUM(CASE WHEN COALESCE(ack_state,'active')='acknowledged' "
+    "    THEN 1 ELSE 0 END) AS ack_count "
+    "FROM flap_log "
+    "WHERE COALESCE(ack_state,'active') IN ('active','acknowledged')"
+)
+
+_ZERO_SEVERITY = {"crit": 0, "warn": 0, "ack": 0}
+
+
+def db_count_active_flaps_by_severity() -> dict:
+    """Return active flap counts broken down by severity and ack state."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                cur.execute(_FLAP_SEVERITY_SQL)
+                row = cur.fetchone()
+                return {
+                    "crit": row["crit_count"] or 0,
+                    "warn": row["warn_count"] or 0,
+                    "ack":  row["ack_count"] or 0,
+                }
+        except Exception as e:
+            log.error(f"db_count_active_flaps_by_severity error: {e}")
+            return dict(_ZERO_SEVERITY)
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+    try:
+        row = con.execute(_FLAP_SEVERITY_SQL).fetchone()
+        return {
+            "crit": row[0] or 0,
+            "warn": row[1] or 0,
+            "ack":  row[2] or 0,
+        }
+    except Exception as e:
+        log.error(f"db_count_active_flaps_by_severity error: {e}")
+        return dict(_ZERO_SEVERITY)
+    finally:
+        con.close()
+
+
 def db_resolve_all_flaps() -> int:
     """Resolve all active/acknowledged flaps.  Returns count resolved."""
     import time as _time

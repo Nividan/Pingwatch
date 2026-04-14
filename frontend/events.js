@@ -140,9 +140,7 @@ async function _refreshAlertCache() {
     _alertEvtCache = d.events || [];
     _alertMap = _buildAlertMap(_alertEvtCache);
     _renderEvtView();
-    const ac = await api('GET', '/api/alert/events/active');
-    _alertEvtBadgeCount = (ac && ac.count) || 0;
-    if (typeof _updateEvtBadge === 'function') _updateEvtBadge();
+    if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
   } catch(_) {}
 }
 

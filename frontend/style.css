@@ -73,16 +73,19 @@ body{
   background:var(--bg3);
 }
 .tb-db-dot{width:5px;height:5px;border-radius:50%;background:#23d18b;box-shadow:0 0 6px #23d18b}
-.tb-active-evt-badge{
-  display:flex;align-items:center;gap:6px;
-  font-size:10px;font-weight:600;color:#fff;
-  padding:3px 10px;border-radius:20px;
-  cursor:pointer;white-space:nowrap;transition:background .15s;
+.tb-badges{display:flex;align-items:center;gap:4px}
+.tb-badge{
+  display:flex;align-items:center;justify-content:center;
+  min-width:22px;height:22px;
+  font-size:10px;font-weight:700;color:#fff;
+  padding:0 6px;border-radius:12px;
+  cursor:pointer;white-space:nowrap;transition:opacity .15s;
 }
-.tb-active-evt-badge.warn{background:var(--warn)}
-.tb-active-evt-badge.warn:hover{background:#cc8c00}
-.tb-active-evt-badge.crit{background:var(--down)}
-.tb-active-evt-badge.crit:hover{background:#d63843}
+.tb-badge:hover{opacity:.8}
+.tb-badge-crit{background:var(--down)}
+.tb-badge-warn{background:var(--warn)}
+.tb-badge-ack{background:var(--accent)}
+.tb-badge-muted{background:var(--pause)}
 .tb-log-badge{
   display:flex;align-items:center;gap:6px;
   font-size:10px;font-weight:600;color:#fff;
@@ -957,6 +960,14 @@ body{
 }
 .mclose:hover{background:var(--down-bg);border-color:var(--down-border);color:var(--down)}
 .mbdy{padding:20px}
+/* Muted/stopped modal */
+.ms-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.ms-tbl th{text-align:left;padding:6px 8px;color:var(--text3);border-bottom:1px solid var(--border);font-weight:600}
+.ms-tbl td{padding:6px 8px;border-bottom:1px solid var(--border)}
+.ms-tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:600;margin-right:4px}
+.ms-tag.dev-muted{background:var(--pause-bg);color:var(--pause);border:1px solid var(--pause-border)}
+.ms-tag.sen-muted{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border)}
+.ms-tag.stopped{background:var(--down-bg);color:var(--down);border:1px solid var(--down-border)}
 /* Settings sidebar layout */
 .stab-layout{display:flex;flex:1;min-height:0;overflow:hidden}
 .stab-sidebar{

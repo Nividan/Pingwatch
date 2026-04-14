@@ -39,10 +39,35 @@ def handle(h, method, path, body):
     if _RE_ALERT_EVENTS_ACTIVE.match(path) and method == "GET":
         user, _ = h._require("viewer")
         if not user: return True
-        from db.events import db_count_active_flaps
-        count  = db_count_active_flaps()
+        from db.events import db_count_active_flaps_by_severity
+        from core.app_state import STATE
+        counts = db_count_active_flaps_by_severity()
         events = db_list_events(state='active', limit=50)
-        h._json(200, {"count": count, "events": events})
+        # Muted / stopped sensors from live state
+        muted_stopped = []
+        with STATE._lock:
+            for dev in STATE.devices.values():
+                dm = dev.alerts_muted
+                for s in dev.sensors.values():
+                    reasons = []
+                    if dm:             reasons.append("device_muted")
+                    if s.alerts_muted: reasons.append("sensor_muted")
+                    if not s.running:  reasons.append("stopped")
+                    if reasons:
+                        muted_stopped.append({
+                            "did": dev.device_id, "dname": dev.name,
+                            "sid": s.sensor_id,   "sname": s.name,
+                            "stype": s.stype,     "reasons": reasons,
+                        })
+        h._json(200, {
+            "count":               counts["crit"] + counts["warn"] + counts["ack"],
+            "crit_count":          counts["crit"],
+            "warn_count":          counts["warn"],
+            "ack_count":           counts["ack"],
+            "muted_stopped_count": len(muted_stopped),
+            "muted_stopped":       muted_stopped,
+            "events":              events,
+        })
         return True
 
     # GET /api/alert/events
