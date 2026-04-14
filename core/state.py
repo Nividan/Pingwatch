@@ -254,6 +254,7 @@ class Sensor:
             "has_vmware_password":   bool(self.vmware_password),
             "threshold_state":       self._threshold_state,
             "alive":          self.alive,
+            "running":        self.running,
             "last_ms":        self.last_ms,
             "last_detail":    self.last_detail,
             "last_value":     self.last_value,
