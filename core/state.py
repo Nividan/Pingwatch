@@ -292,7 +292,7 @@ class Device:
 
     @property
     def status(self):
-        active = [s for s in self.sensors.values() if not s.alerts_muted]
+        active = [s for s in self.sensors.values() if not s.alerts_muted and s.running]
         vals = [s.alive for s in active]
         if not vals or all(v is None for v in vals): return "unknown"
         if any(v is False for v in vals): return "down"
@@ -506,11 +506,24 @@ class MonitorState:
             self.start_sensor(did, sid)
 
     def stop_device(self, did):
+        from db import _logs_enqueue
+        from db.events import db_resolve_flaps_by_sensor
         with self._lock:
             dev = self.devices.get(did)
             sids = list(dev.sensors) if dev else []
         for sid in sids:
             self.stop_sensor(did, sid)
+        # Broadcast updated state so UI immediately reflects stopped/paused status
+        with self._lock:
+            dev = self.devices.get(did)
+            sensor_dicts = [s.to_dict() for s in dev.sensors.values()] if dev else []
+            new_status = dev.status if dev else "unknown"
+        for sd in sensor_dicts:
+            self._broadcast("sensor", sd)
+        self._broadcast("device_status", {"did": did, "status": new_status})
+        # Auto-resolve active flap events — device is intentionally stopped
+        for sid in sids:
+            _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
 
     def start_all(self):
         for did in list(self.devices):

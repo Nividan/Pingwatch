@@ -902,8 +902,8 @@ function _alertMaintOpen(id) {
           </select>
         </div>
         <div class="fr" id="mw-scope-val-row" style="${scopeType==='all'?'display:none':''}">
-          <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Group name':'Device ID'}</label>
-          <input type="text" id="mw-scope-val" value="${esc(scopeVal)}" autocomplete="off"/>
+          <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Device group':'Device'}</label>
+          ${_mwScopeInner(scopeType, scopeVal)}
         </div>
         <div style="display:flex;gap:12px;flex-wrap:wrap">
           <div class="fr" style="flex:1;min-width:160px">
@@ -955,13 +955,32 @@ function _alertMaintOpen(id) {
   setTimeout(() => document.getElementById('mw-name')?.focus(), 60);
 }
 
+function _mwScopeInner(scopeType, curVal) {
+  if (scopeType === 'device') {
+    const opts = Object.values(S.devices || {})
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      .map(d => `<option value="${esc(d.device_id)}" ${String(d.device_id) === String(curVal) ? 'selected' : ''}>${esc(d.name)} — ${esc(d.host)}</option>`)
+      .join('');
+    return `<select id="mw-scope-val" style="width:100%">${opts || '<option value="">No devices</option>'}</select>`;
+  }
+  if (scopeType === 'group') {
+    const groups = [...new Set(Object.values(S.devices || {}).map(d => d.group).filter(Boolean))].sort();
+    const opts = groups.map(g => `<option value="${esc(g)}" ${g === curVal ? 'selected' : ''}>${esc(g)}</option>`).join('');
+    return `<select id="mw-scope-val" style="width:100%">${opts || '<option value="">No groups</option>'}</select>`;
+  }
+  return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" autocomplete="off"/>`;
+}
+
 function _mwScopeChange() {
   const sel = document.getElementById('mw-scope')?.value;
   const row = document.getElementById('mw-scope-val-row');
   const lbl = document.getElementById('mw-scope-val-lbl');
   if (!row) return;
   row.style.display = sel === 'all' ? 'none' : '';
-  if (lbl) lbl.textContent = sel === 'group' ? 'Group name' : 'Device ID';
+  if (lbl) lbl.textContent = sel === 'group' ? 'Device group' : 'Device';
+  // Replace the control with the appropriate dropdown for the new scope type
+  const existing = document.getElementById('mw-scope-val');
+  if (existing) existing.outerHTML = _mwScopeInner(sel, '');
 }
 
 function _mwRecurChange() {
