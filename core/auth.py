@@ -107,7 +107,11 @@ def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
         display_name = ldap_result.get('display_name', '')
         if display_name:
             try:
-                db_update_profile(clean, display_name, '',
+                # Preserve existing email — don't overwrite with empty string
+                from routes.auth import _get_user_profile
+                profile = _get_user_profile(clean)
+                existing_email = profile.get('email', '')
+                db_update_profile(clean, display_name, existing_email,
                                   group_id=current_group_id, role=current_role)
             except Exception:
                 pass
@@ -144,7 +148,11 @@ def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
               f"role={new_role!r} display_name={display_name!r}")
     try:
         # Always update to keep in sync; db_update_profile is a no-op if nothing changed
-        db_update_profile(clean, display_name or '', '',
+        # Preserve existing email — don't overwrite with empty string
+        from routes.auth import _get_user_profile
+        profile = _get_user_profile(clean)
+        existing_email = profile.get('email', '')
+        db_update_profile(clean, display_name or '', existing_email,
                           group_id=best['id'], role=new_role)
     except Exception as e:
         log.error(f"LDAP login sync: profile update failed for {clean!r}: {e}")

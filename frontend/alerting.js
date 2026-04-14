@@ -768,15 +768,31 @@ function _alertEvtRow(e) {
 }
 
 async function _alertAck(id) {
-  try { await api('POST', `/api/alert/event/${id}/ack`); }
-  catch (e) { toast(e.message, 'err'); return; }
+  try {
+    const d = await api('POST', `/api/alert/event/${id}/ack`);
+    if (!d || !d.ok) {
+      toast(d?.error || 'Failed to acknowledge', 'err');
+      return;
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+    return;
+  }
   toast('Alert acknowledged', 'ok');
   _alertingLoadEvents(_alertEvtFilter, true);
 }
 
 async function _alertResolve(id) {
-  try { await api('POST', `/api/alert/event/${id}/resolve`); }
-  catch (e) { toast(e.message, 'err'); return; }
+  try {
+    const d = await api('POST', `/api/alert/event/${id}/resolve`);
+    if (!d || !d.ok) {
+      toast(d?.error || 'Failed to resolve', 'err');
+      return;
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+    return;
+  }
   toast('Alert resolved', 'ok');
   _alertingLoadEvents(_alertEvtFilter, true);
 }
