@@ -853,8 +853,12 @@ class DatabasePage(WizardPage):
         txt.tag_configure("h",    font=(_FNT, 11, "bold"), foreground=TEXT,
                           spacing1=12, spacing3=4)
         txt.tag_configure("p",    font=(_FNT, 10), foreground=TEXT2, spacing3=3)
+        # selectbackground on the tag overrides the tag background during
+        # selection — without this, BG3 would paint over the selection
+        # highlight and commands couldn't be visually marked.
         txt.tag_configure("cmd",  font=(_MONO, 10), foreground=GREEN,
-                          background=BG3, lmargin1=14, lmargin2=14,
+                          background=BG3, selectbackground="#3a4561",
+                          lmargin1=14, lmargin2=14,
                           spacing1=2, spacing3=2)
         txt.tag_configure("note", font=(_FNT, 9), foreground=YELLOW, spacing1=6)
         txt.tag_configure("link", font=(_FNT, 10), foreground=ACCENT, underline=True)
