@@ -1479,6 +1479,14 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-ts{color:var(--text3)!important;font-size:10px;white-space:nowrap;}
 .ipam-dns{font-size:0.78rem;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;}
 .ipam-dev-badge{font-size:10px;opacity:.65;margin-right:3px;vertical-align:middle;}
+.ipam-th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
+.ipam-th-sort:hover{color:var(--accent);}
+.ipam-th-active{color:var(--accent)!important;}
+.ipam-th-filter{vertical-align:middle;}
+.ipam-th-filter .ipam-th-sort{display:block;margin-bottom:3px;}
+.ipam-col-filter{background:var(--bg3);border:1px solid var(--border);border-radius:3px;
+  color:var(--text2);font-size:10px;padding:1px 4px;cursor:pointer;outline:none;max-width:80px;}
+.ipam-col-filter:focus{border-color:var(--accent);}
 
 /* ── Log viewer (Settings → Logs tab) ──────────────────────────────────── */
 .log-subtab-bar{display:flex;align-items:center;gap:4px;padding:8px 12px;

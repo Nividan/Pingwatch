@@ -12,6 +12,12 @@ const _IPAM_PAGE_SIZE = 200;
 let _ipamGlobalCache  = null;   // flat array of all IPs across all subnets, with subnetLabel; null = stale
 let _ipamLicenseMap   = {};     // did → worst license status (ok/warn/crit)
 
+// ── Sort / filter state ─────────────────────────────────────────────────────
+let _ipamSortCol      = 'status_ip'; // default: Used first, then by IP
+let _ipamSortDir      = 1;           // 1 = ascending, -1 = descending
+let _ipamFilterStatus = '';          // '' = all, 'used', 'free'
+let _ipamFilterLic    = '';          // '' = all, 'ok', 'warn', 'crit', 'none'
+
 // ── Init ───────────────────────────────────────────────────────────────────
 async function _ipamInit() {
   // Build the toolbar/shell only once; always re-fetch data on tab switch
@@ -127,6 +133,8 @@ async function _ipamOnSubnetChange(idVal) {
     return;
   }
   _ipamSelectedId = id;
+  _ipamSortCol = 'status_ip'; _ipamSortDir = 1;
+  _ipamFilterStatus = ''; _ipamFilterLic = '';
   document.getElementById('ipam-rm-btn')?.removeAttribute('disabled');
   // Keep select in sync
   const sel = document.getElementById('ipam-sel');
@@ -150,11 +158,6 @@ async function _ipamOnSubnetChange(idVal) {
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
           device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
       : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
-  });
-  // Sort: Used (named) first, then Free, both groups sorted numerically by IP
-  _ipamAllIps.sort((a, b) => {
-    if (!!a.name !== !!b.name) return a.name ? -1 : 1;
-    return _ipamIpCmp(a.ip, b.ip);
   });
 
   const search = document.getElementById('ipam-search')?.value || '';
@@ -188,6 +191,81 @@ function _ipamExpandCidr(cidr) {
 }
 function _n2ip(n) {
   return `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
+}
+
+// ── Sort / filter helpers ──────────────────────────────────────────────────
+
+function _ipamSetSort(col) {
+  if (_ipamSortCol === col) {
+    _ipamSortDir *= -1; // toggle direction
+  } else {
+    _ipamSortCol = col;
+    _ipamSortDir = 1;
+  }
+  _ipamPage = 0;
+  _ipamApplyFilter(document.getElementById('ipam-search')?.value || '');
+}
+
+function _ipamSetFilterStatus(val) {
+  _ipamFilterStatus = val;
+  _ipamPage = 0;
+  _ipamApplyFilter(document.getElementById('ipam-search')?.value || '');
+}
+
+function _ipamSetFilterLic(val) {
+  _ipamFilterLic = val;
+  _ipamPage = 0;
+  _ipamApplyFilter(document.getElementById('ipam-search')?.value || '');
+}
+
+function _ipamLicVal(e) {
+  if (!e.device_id) return 'none';
+  const st = _ipamLicenseMap[e.device_id];
+  return st || 'none';
+}
+
+function _ipamSortCmp(a, b) {
+  const d = _ipamSortDir;
+  const col = _ipamSortCol;
+  let r = 0;
+  switch (col) {
+    case 'ip':
+      r = _ipamIpCmp(a.ip, b.ip); break;
+    case 'name':
+      r = (a.name || '').localeCompare(b.name || ''); break;
+    case 'dns':
+      r = (a.dns_name || '').localeCompare(b.dns_name || ''); break;
+    case 'status':
+      r = (a.name ? 0 : 1) - (b.name ? 0 : 1); break;
+    case 'license': {
+      const p = { crit: 3, warn: 2, ok: 1, none: 0 };
+      r = (p[_ipamLicVal(a)] || 0) - (p[_ipamLicVal(b)] || 0);
+      break;
+    }
+    case 'modified_by':
+      r = (a.modified_by || '').localeCompare(b.modified_by || ''); break;
+    case 'modified_at':
+      r = (a.modified_at || 0) - (b.modified_at || 0); break;
+    case 'status_ip': // default: Used first, then by IP
+      r = (a.name ? 0 : 1) - (b.name ? 0 : 1);
+      if (r === 0) r = _ipamIpCmp(a.ip, b.ip);
+      return r; // default sort ignores direction toggle
+    default:
+      r = _ipamIpCmp(a.ip, b.ip);
+  }
+  if (r === 0) r = _ipamIpCmp(a.ip, b.ip); // tiebreak by IP
+  return r * d;
+}
+
+function _ipamSortArrow(col) {
+  if (_ipamSortCol !== col) return '';
+  return _ipamSortDir === 1 ? ' ▲' : ' ▼';
+}
+
+function _ipamThHtml(col, label) {
+  const active = (_ipamSortCol === col) ? ' ipam-th-active' : '';
+  const arrow = _ipamSortArrow(col);
+  return `<th class="ipam-th-sort${active}" onclick="_ipamSetSort('${col}')">${label}${arrow}</th>`;
 }
 
 // ── Search / filter ────────────────────────────────────────────────────────
@@ -289,14 +367,24 @@ function _ipamRenderGlobalResults(results, q) {
 
 function _ipamApplyFilter(q) {
   const lq = (q || '').toLowerCase().trim();
+  let arr = _ipamAllIps;
+
+  // Text search
   if (lq) {
-    _ipamFiltered = _ipamAllIps.filter(e =>
+    arr = arr.filter(e =>
       e.ip.includes(lq) || e.name.toLowerCase().includes(lq) ||
       (e.dns_name || '').toLowerCase().includes(lq)
     );
-  } else {
-    _ipamFiltered = _ipamAllIps;
   }
+  // Status column filter
+  if (_ipamFilterStatus === 'used')  arr = arr.filter(e => !!e.name);
+  if (_ipamFilterStatus === 'free')  arr = arr.filter(e => !e.name);
+  // License column filter
+  if (_ipamFilterLic) {
+    arr = arr.filter(e => _ipamLicVal(e) === _ipamFilterLic);
+  }
+  // Sort
+  _ipamFiltered = arr.slice().sort(_ipamSortCmp);
   _ipamRenderTable();
 }
 
@@ -349,17 +437,37 @@ function _ipamRenderTable() {
     </tr>`;
   }).join('');
 
+  // Status filter dropdown
+  const stOpts = [['','All'],['used','Used'],['free','Free']];
+  const stSel = stOpts.map(([v,l]) =>
+    `<option value="${v}"${_ipamFilterStatus===v?' selected':''}>${l}</option>`
+  ).join('');
+
+  // License filter dropdown
+  const licOpts = [['','All'],['ok','Valid'],['warn','Expiring'],['crit','Expired'],['none','None']];
+  const licSel = licOpts.map(([v,l]) =>
+    `<option value="${v}"${_ipamFilterLic===v?' selected':''}>${l}</option>`
+  ).join('');
+
   wrap.innerHTML = `
     <table class="ipam-tbl">
       <thead>
         <tr>
-          <th>IP Address</th>
-          <th>Name / Description</th>
-          <th>DNS</th>
-          <th>Status</th>
-          <th>Licenses</th>
-          <th>Modified By</th>
-          <th>Last Modified</th>
+          ${_ipamThHtml('ip', 'IP Address')}
+          ${_ipamThHtml('name', 'Name / Description')}
+          ${_ipamThHtml('dns', 'DNS')}
+          <th class="ipam-th-filter">
+            <span class="ipam-th-sort${_ipamSortCol==='status'?' ipam-th-active':''}"
+                  onclick="_ipamSetSort('status')">Status${_ipamSortArrow('status')}</span>
+            <select class="ipam-col-filter" onchange="_ipamSetFilterStatus(this.value)">${stSel}</select>
+          </th>
+          <th class="ipam-th-filter">
+            <span class="ipam-th-sort${_ipamSortCol==='license'?' ipam-th-active':''}"
+                  onclick="_ipamSetSort('license')">Licenses${_ipamSortArrow('license')}</span>
+            <select class="ipam-col-filter" onchange="_ipamSetFilterLic(this.value)">${licSel}</select>
+          </th>
+          ${_ipamThHtml('modified_by', 'Modified By')}
+          ${_ipamThHtml('modified_at', 'Last Modified')}
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -418,12 +526,7 @@ function _ipamEditCell(td, ip) {
       entry.device_id   = '';   // user took ownership
     }
     _ipamGlobalCache = null;  // invalidate cross-subnet cache
-    // Re-sort (named IPs float to top)
     const search = document.getElementById('ipam-search')?.value || '';
-    _ipamAllIps.sort((a, b) => {
-      if (!!a.name !== !!b.name) return a.name ? -1 : 1;
-      return _ipamIpCmp(a.ip, b.ip);
-    });
     _ipamApplyFilter(search);
     toast(newName ? `${ip} → "${newName}"` : `${ip} cleared`, 'ok');
   };
@@ -567,10 +670,6 @@ async function _ipamReloadCurrentSubnet() {
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
           device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
       : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
-  });
-  _ipamAllIps.sort((a, b) => {
-    if (!!a.name !== !!b.name) return a.name ? -1 : 1;
-    return _ipamIpCmp(a.ip, b.ip);
   });
   const search = document.getElementById('ipam-search')?.value || '';
   _ipamApplyFilter(search);
