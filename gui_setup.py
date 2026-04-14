@@ -113,6 +113,14 @@ class WizardController:
         root.minsize(680, 600)
         root.resizable(True, True)
 
+        # Window icon (title bar + taskbar)
+        _ico = os.path.join(_BASE, "frontend", "favicon.ico")
+        if os.path.isfile(_ico):
+            try:
+                root.iconbitmap(_ico)
+            except Exception:
+                pass
+
         # ── Header ───────────────────────────────────────────────
         hdr = tk.Frame(root, bg=BG2, height=52)
         hdr.pack(fill="x")
@@ -395,10 +403,19 @@ class PackagesPage(WizardPage):
                 w["btn"].pack_forget()
             if w.get("hint"):
                 w["hint"].pack_forget()
+            if w.get("err_lbl"):
+                w["err_lbl"].pack_forget()
         else:
             w["icon"].config(text="✗", fg=YELLOW)
             if w["btn"]:
                 w["btn"].config(state="normal", text="Retry")
+            # Show error message
+            if not w.get("err_lbl"):
+                parent = w["row"].master  # outer frame
+                w["err_lbl"] = tk.Label(parent, text="", bg=parent["bg"], fg=RED,
+                                        font=(_FNT, 9), anchor="w", padx=32)
+            w["err_lbl"].config(text=f"Install failed: {msg}")
+            w["err_lbl"].pack(fill="x")
 
     def _check_all(self):
         self._checked = True
@@ -440,12 +457,24 @@ class PackagesPage(WizardPage):
     def _install_done(self, pkg, ok, err):
         w = self._pkg_widgets[pkg["import"]]
         self.ctrl.set_busy(False)
-        if ok:
+        if ok or check_import(pkg["import"]):
             w["icon"].config(text="✓", fg=GREEN)
             w["btn"].pack_forget()
+            if w.get("err_lbl"):
+                w["err_lbl"].pack_forget()
         else:
             w["icon"].config(text="✗", fg=RED)
             w["btn"].config(state="normal", text="Retry")
+            # Show error message
+            if not w.get("err_lbl"):
+                parent = w["row"].master
+                w["err_lbl"] = tk.Label(parent, text="", bg=parent["bg"], fg=RED,
+                                        font=(_FNT, 9), anchor="w", padx=32,
+                                        wraplength=600, justify="left")
+            # Truncate long pip errors to first meaningful line
+            short_err = (err or "Unknown error").strip().splitlines()[-1][:200]
+            w["err_lbl"].config(text=f"Install failed: {short_err}")
+            w["err_lbl"].pack(fill="x")
 
     def validate(self) -> bool:
         for pkg in PACKAGES:
