@@ -594,16 +594,29 @@ def get_firewall_rules(state: dict) -> list:
 
 def win_create_shortcut() -> "tuple[bool, str]":
     """Create a PingWatch desktop shortcut. Returns (ok, message)."""
+    import sys
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     shortcut_path = os.path.join(desktop, "PingWatch.lnk")
     if os.path.isfile(shortcut_path):
         return True, "Shortcut already exists"
-    target = os.path.join(_root, "windows", "start.bat")
     icon = os.path.join(_root, "frontend", "favicon.ico")
+
+    # Prefer pythonw.exe + launcher.pyw (no console window) over start.bat
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    launcher = os.path.join(_root, "windows", "launcher.pyw")
+    if os.path.isfile(pythonw) and os.path.isfile(launcher):
+        target = pythonw
+        # Backtick-escape double quotes inside a PowerShell double-quoted string
+        args_line = f'$s.Arguments="`"{launcher}`"";'
+    else:
+        target = os.path.join(_root, "windows", "start.bat")
+        args_line = ''
+
     ps_cmd = (
         f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
         f'$s.TargetPath="{target}";'
+        f'{args_line}'
         f'$s.WorkingDirectory="{_root}";'
         f'$s.IconLocation="{icon},0";'
         f'$s.Description="PingWatch Network Monitor";'
