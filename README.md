@@ -265,6 +265,9 @@ Click any device row in the Backups tab to open the Config Viewer:
 <img width="500" height="492" alt="IPAM" src="https://github.com/user-attachments/assets/42864325-72b5-4e7b-80ea-16637beb0d5f" />
 <img width="800" height="364" alt="IPAM Subnets" src="https://github.com/user-attachments/assets/2397d53a-8891-4a96-a5f3-865dcb859f6c" />
 
+### Setup GUI Wizard
+<img width="800" height="820" alt="image" src="https://github.com/user-attachments/assets/2e9620c7-a727-4b6b-8b62-82a363950644" />
+
 ---
 
 ## Architecture
