@@ -252,6 +252,12 @@ def handle(h, method, path, body):
                 _val = str(body[_k]).strip()
                 _settings.load({_k: _val})
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
+        # Server-side logo size guard (2 MB base64 ≈ 2.8 MB string)
+        if "email_logo_data" in body:
+            _logo_val = str(body["email_logo_data"]).strip()
+            if _logo_val and _logo_val != "__remove__" and len(_logo_val) > 2_800_000:
+                h._json(400, {"error": "Logo image too large"})
+                return True
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
             "email_logo", "email_logo_data", "email_company_name",

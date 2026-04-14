@@ -242,9 +242,9 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr" style="margin-top:10px">
             <label class="fl">Logo Image</label>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <div id="st-logo-preview" style="width:48px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
+              <div id="st-logo-preview" style="width:120px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
                 ${sr.email_logo_data
-                  ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:44px;max-height:44px;object-fit:contain"/>'
+                  ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:116px;max-height:44px;object-fit:contain"/>'
                   : '<span style="color:var(--text3);font-size:9px">Default</span>'}
               </div>
               <div style="display:flex;flex-direction:column;gap:4px">
@@ -256,7 +256,7 @@ function _buildSettingsTab_integrations(sr) {
                 <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
                         onclick="_stLogoRemove()">Remove</button>
               </div>
-              <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG — max 200 KB</span>
+              <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG — max 2 MB</span>
             </div>
             <input type="hidden" id="st-email-logo-data" value=""/>
           </div>
@@ -2243,7 +2243,7 @@ async function testSyslog(){
 function _stLogoFileChange(input){
   const file=input.files&&input.files[0];
   if(!file) return;
-  if(file.size>200*1024){ toast('Logo must be under 200 KB','err'); input.value=''; return; }
+  if(file.size>2*1024*1024){ toast('Logo must be under 2 MB','err'); input.value=''; return; }
   const allowed=['image/png','image/jpeg','image/gif','image/svg+xml'];
   if(!allowed.includes(file.type)){ toast('Unsupported format — use PNG, JPEG, or SVG','err'); input.value=''; return; }
   const reader=new FileReader();
@@ -2251,7 +2251,7 @@ function _stLogoFileChange(input){
     const dataUrl=reader.result;
     document.getElementById('st-email-logo-data').value=dataUrl;
     const prev=document.getElementById('st-logo-preview');
-    if(prev) prev.innerHTML=`<img src="${dataUrl}" style="max-width:44px;max-height:44px;object-fit:contain"/>`;
+    if(prev) prev.innerHTML=`<img src="${dataUrl}" style="max-width:116px;max-height:44px;object-fit:contain"/>`;
     const rmBtn=document.getElementById('st-logo-remove');
     if(rmBtn) rmBtn.style.display='';
   };
