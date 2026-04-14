@@ -266,8 +266,7 @@ function _buildSettingsTab_integrations(sr) {
             <div class="fh">Shown in email header and footer — leave blank for "PingWatch"</div>
           </div>
         </div>
-        <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
-          <button class="btn-p" style="font-size:12px;padding:7px 14px" onclick="testSmtp()">Send Test Email</button>
+        <div style="margin-top:14px">
           <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text3)">
