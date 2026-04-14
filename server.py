@@ -226,7 +226,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_OPTIONS(self): self._cors()
 
-    _MAX_BODY = 1_048_576  # 1 MB
+    _MAX_BODY = 4_194_304  # 4 MB (accommodates up to 2 MB logo as base64)
 
     def _body(self):
         try:
