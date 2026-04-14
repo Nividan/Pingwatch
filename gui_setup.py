@@ -897,15 +897,56 @@ class DatabasePage(WizardPage):
             "  Password:  (the password you chose above)", "p")
         ins("Click Test Connection to verify before continuing.", "note")
 
-        # Read-only but selectable/copyable
+        # ── Read-only but selectable/copyable ─────────────────────
+        # Explicit Ctrl+C / Ctrl+A handlers bypass flaky event.state parsing.
+
+        def _copy_selection(_e=None):
+            try:
+                sel = txt.get("sel.first", "sel.last")
+            except tk.TclError:
+                return "break"  # nothing selected
+            if sel:
+                txt.clipboard_clear()
+                txt.clipboard_append(sel)
+                txt.update()  # flush clipboard on Windows
+            return "break"
+
+        def _select_all(_e=None):
+            txt.tag_add("sel", "1.0", "end-1c")
+            txt.mark_set("insert", "1.0")
+            return "break"
+
+        # Explicit accelerator bindings (handle both lowercase and Shift variants)
+        for seq in ("<Control-c>", "<Control-C>"):
+            txt.bind(seq, _copy_selection)
+        for seq in ("<Control-a>", "<Control-A>"):
+            txt.bind(seq, _select_all)
+
+        # Block every other key so the widget stays read-only, but let
+        # navigation keys through so arrow/Home/End still work.
+        _NAV = {"Left", "Right", "Up", "Down", "Home", "End",
+                "Prior", "Next", "Shift_L", "Shift_R",
+                "Control_L", "Control_R"}
+
         def _block_edit(event):
-            if event.state & 0x4 and event.keysym.lower() in ('c', 'a'):
-                return None  # allow Ctrl+C, Ctrl+A
-            if event.keysym in ('Left', 'Right', 'Up', 'Down',
-                                 'Home', 'End', 'Prior', 'Next'):
-                return None  # allow navigation
+            if event.keysym in _NAV:
+                return None
             return "break"
         txt.bind("<Key>", _block_edit)
+
+        # Right-click context menu — gives mouse users an obvious Copy path
+        ctx = tk.Menu(txt, tearoff=0, bg=BG3, fg=TEXT,
+                      activebackground=BG4, activeforeground=TEXT,
+                      bd=0, relief="flat")
+        ctx.add_command(label="Copy", command=_copy_selection)
+        ctx.add_command(label="Select All", command=_select_all)
+
+        def _show_ctx(event):
+            try:
+                ctx.tk_popup(event.x_root, event.y_root)
+            finally:
+                ctx.grab_release()
+        txt.bind("<Button-3>", _show_ctx)
 
         _btn(win, "Close", win.destroy, "accent").pack(pady=(0, 16))
 
