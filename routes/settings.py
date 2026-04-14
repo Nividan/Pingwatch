@@ -83,6 +83,7 @@ def handle(h, method, path, body):
             "smtp_to":         _settings.get("smtp_to",   ""),
             "smtp_pass_set":   bool(_settings.get("smtp_pass", "")),
             "email_logo":      int(_settings.get("email_logo", 1) or 1),
+            "email_logo_data": _settings.get("email_logo_data", ""),
             "email_company_name": _settings.get("email_company_name", ""),
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
@@ -253,7 +254,7 @@ def handle(h, method, path, body):
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
-            "email_logo", "email_company_name",
+            "email_logo", "email_logo_data", "email_company_name",
             "snr_interval", "snr_timeout",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window",

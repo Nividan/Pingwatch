@@ -1,9 +1,11 @@
 """smtp_alert.py — stdlib SMTP email alerting for PingWatch."""
+import base64
 import datetime
 import smtplib
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 from core.logger import log
 from core.settings import get as _cfg
 
@@ -15,33 +17,61 @@ _ERROR_SUPPRESS_S = 300         # seconds between identical error logs
 _last_ok_ts: float = 0          # timestamp of last successful send / test
 _last_err: dict = {'ts': 0.0, 'msg': ''}  # last error
 
-# PingWatch radar logo — base64 SVG (white on transparent, renders on dark/colored bg)
+# PingWatch radar logo — 28x28 PNG (white on transparent, renders on dark/colored bg)
 _LOGO_B64 = (
-    "PHN2ZyB3aWR0aD0iMjgiIGhlaWdodD0iMjgiIHZpZXdCb3g9IjAgMCAyMCAyMCIgeG1sbnM9"
-    "Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMCIgY3k9IjEwIiBy"
-    "PSI4LjUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwuNCkiIHN0cm9rZS13aWR0aD0iMSIg"
-    "ZmlsbD0ibm9uZSIvPjxjaXJjbGUgY3g9IjEwIiBjeT0iMTAiIHI9IjUiIHN0cm9rZT0icmdi"
-    "YSgyNTUsMjU1LDI1NSwuNikiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIvPjxjaXJj"
-    "bGUgY3g9IjEwIiBjeT0iMTAiIHI9IjIiIGZpbGw9IndoaXRlIiBvcGFjaXR5PSIuOSIvPjxs"
-    "aW5lIHgxPSIxLjUiIHkxPSIxMCIgeDI9IjUiIHkyPSIxMCIgc3Ryb2tlPSJ3aGl0ZSIgc3Ry"
-    "b2tlLXdpZHRoPSIxLjIiIG9wYWNpdHk9Ii43Ii8+PGxpbmUgeDE9IjE1IiB5MT0iMTAiIHgy"
-    "PSIxOC41IiB5Mj0iMTAiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMS4yIiBvcGFj"
-    "aXR5PSIuNyIvPjxsaW5lIHgxPSIxMCIgeTE9IjEuNSIgeDI9IjEwIiB5Mj0iNSIgc3Ryb2tl"
-    "PSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG9wYWNpdHk9Ii43Ii8+PGxpbmUgeDE9IjEw"
-    "IiB5MT0iMTUiIHgyPSIxMCIgeTI9IjE4LjUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0"
-    "aD0iMS4yIiBvcGFjaXR5PSIuNyIvPjwvc3ZnPg=="
+    "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAABDklEQVR4nN2WTQqEMAyFBYVZ"
+    "9gCzc6Pg1oXbnqEewAN4h7nMHMH7dVJ4hRAj4+gQwcUHEtM+8tK/IsZYWHJ04ALuJ/gkeib"
+    "YI/ZXwZLwRCA6wjFBh1hATnlWsMFkboelDrnNUcFk13CgTwPG/iTYbIg9YN0EPGKaqFrpVs+"
+    "CEk8CM9ESFWgRm5T8oPVUE/RKz16YfMuRFjmyp36PoKxu+iLGRWWlK6fkoLSnOtGzeYdYZh"
+    "Y97aLYp9rK5HZ6pbqaGEGtVMltdFGs2PyxKGQ7KzFpEnqDUfyrhK2reS8TNLf0skVjvi2yja"
+    "Yb3/xoS5ge3nzFml1PvFLtAtY4fQHznpo9MSQmjyiN+75LTwt+AKhpaURxnEx6AAAAAElFTk"
+    "SuQmCC"
 )
 
 
-def _build_msg(subject, body, from_addr, to_addr, html=None):
-    """Build a MIME message. If html is provided, sends multipart/alternative."""
+def _resolve_logo():
+    """Return (image_bytes, mime_subtype) for the email logo.
+
+    Uses custom uploaded logo if available, otherwise falls back to built-in default.
+    """
+    custom = _cfg('email_logo_data', '')
+    if custom:
+        # Custom logo stored as data URI: "data:image/png;base64,..."
+        try:
+            header, b64 = custom.split(',', 1)
+            img_bytes = base64.b64decode(b64)
+            if 'svg' in header:
+                return img_bytes, 'svg+xml'
+            elif 'jpeg' in header or 'jpg' in header:
+                return img_bytes, 'jpeg'
+            elif 'gif' in header:
+                return img_bytes, 'gif'
+            return img_bytes, 'png'
+        except Exception:
+            pass  # fall through to default
+    return base64.b64decode(_LOGO_B64), 'png'
+
+
+def _build_msg(subject, body, from_addr, to_addr, html=None, logo=False):
+    """Build a MIME message with optional inline logo via CID attachment."""
     if html:
-        msg = MIMEMultipart('alternative')
+        alt = MIMEMultipart('alternative')
+        alt.attach(MIMEText(body, 'plain'))
+        alt.attach(MIMEText(html, 'html'))
+        if logo:
+            # Wrap in multipart/related so CID image resolves
+            msg = MIMEMultipart('related')
+            msg.attach(alt)
+            img_data, img_sub = _resolve_logo()
+            img = MIMEImage(img_data, _subtype=img_sub)
+            img.add_header('Content-ID', '<pwlogo>')
+            img.add_header('Content-Disposition', 'inline', filename='logo.png')
+            msg.attach(img)
+        else:
+            msg = alt
         msg['Subject'] = subject
         msg['From']    = from_addr
         msg['To']      = to_addr
-        msg.attach(MIMEText(body, 'plain'))
-        msg.attach(MIMEText(html, 'html'))
     else:
         msg = MIMEMultipart()
         msg['Subject'] = subject
@@ -113,7 +143,7 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
     if logo:
         branding = (
             f'<tr><td style="background:#141b24;padding:12px 24px">'
-            f'<img src="data:image/svg+xml;base64,{_LOGO_B64}" width="24" height="24" '
+            f'<img src="cid:pwlogo" width="24" height="24" '
             f'alt="" style="vertical-align:middle;display:inline-block"/>'
             f'<span style="color:#fff;font-size:15px;font-weight:600;margin-left:8px;'
             f'vertical-align:middle;letter-spacing:.3px">{_co}</span>'
@@ -230,12 +260,13 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
                                  logo=_logo, company=_company)
 
     recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
+    _use_logo = html is not None and str(_cfg('email_logo', '1')) == '1'
     srv = None
     try:
         srv = _connect(host, port, tls, user, password)
         for rcpt in recipients:
             srv.sendmail(from_addr, [rcpt],
-                         _build_msg(subject, body, from_addr, rcpt, html).as_string())
+                         _build_msg(subject, body, from_addr, rcpt, html, logo=_use_logo).as_string())
         srv.quit(); srv = None
         _last_error.pop(host, None)
         global _last_ok_ts; _last_ok_ts = time.time()
@@ -278,7 +309,7 @@ def test_smtp(cfg):
         html = _build_alert_html(rows, 'info', 'info', 'SMTP Test', 'Connection OK',
                                  logo=_logo, company=_company)
         srv.sendmail(from_addr, [to_addr],
-                     _build_msg(subject, body, from_addr, to_addr, html).as_string())
+                     _build_msg(subject, body, from_addr, to_addr, html, logo=_logo).as_string())
         srv.quit(); srv = None
         _last_ok_ts = time.time()
         return True, 'Test email sent successfully.'

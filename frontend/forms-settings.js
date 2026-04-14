@@ -237,7 +237,28 @@ function _buildSettingsTab_integrations(sr) {
               <input type="checkbox" id="st-email-logo" ${sr.email_logo!==0?'checked':''}>
               <span class="fl" style="margin:0">Show logo in alert emails</span>
             </label>
-            <div class="fh" style="margin-left:24px">PingWatch radar icon displayed in the email header</div>
+            <div class="fh" style="margin-left:24px">Displayed in the email header bar</div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Logo Image</label>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div id="st-logo-preview" style="width:48px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
+                ${sr.email_logo_data
+                  ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:44px;max-height:44px;object-fit:contain"/>'
+                  : '<span style="color:var(--text3);font-size:9px">Default</span>'}
+              </div>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <label class="btn-s" style="cursor:pointer;display:inline-block;text-align:center">
+                  Upload
+                  <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/gif,image/svg+xml" style="display:none"
+                         onchange="_stLogoFileChange(this)"/>
+                </label>
+                <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
+                        onclick="_stLogoRemove()">Remove</button>
+              </div>
+              <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG — max 200 KB</span>
+            </div>
+            <input type="hidden" id="st-email-logo-data" value=""/>
           </div>
           <div class="fr" style="margin-top:10px">
             <label class="fl">Company Name</label>
@@ -1746,6 +1767,9 @@ async function saveSettings(){
     email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
     email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
   };
+  const logoData=document.getElementById('st-email-logo-data')?.value||'';
+  if(logoData==='__remove__') smtp.email_logo_data='';
+  else if(logoData) smtp.email_logo_data=logoData;
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
   Object.assign(body,smtp);
@@ -2214,6 +2238,34 @@ async function testSyslog(){
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Send Test Message'; }
   }
+}
+
+function _stLogoFileChange(input){
+  const file=input.files&&input.files[0];
+  if(!file) return;
+  if(file.size>200*1024){ toast('Logo must be under 200 KB','err'); input.value=''; return; }
+  const allowed=['image/png','image/jpeg','image/gif','image/svg+xml'];
+  if(!allowed.includes(file.type)){ toast('Unsupported format — use PNG, JPEG, or SVG','err'); input.value=''; return; }
+  const reader=new FileReader();
+  reader.onload=function(){
+    const dataUrl=reader.result;
+    document.getElementById('st-email-logo-data').value=dataUrl;
+    const prev=document.getElementById('st-logo-preview');
+    if(prev) prev.innerHTML=`<img src="${dataUrl}" style="max-width:44px;max-height:44px;object-fit:contain"/>`;
+    const rmBtn=document.getElementById('st-logo-remove');
+    if(rmBtn) rmBtn.style.display='';
+  };
+  reader.readAsDataURL(file);
+}
+
+function _stLogoRemove(){
+  document.getElementById('st-email-logo-data').value='__remove__';
+  const prev=document.getElementById('st-logo-preview');
+  if(prev) prev.innerHTML='<span style="color:var(--text3);font-size:9px">Default</span>';
+  const rmBtn=document.getElementById('st-logo-remove');
+  if(rmBtn) rmBtn.style.display='none';
+  const input=document.getElementById('st-logo-file');
+  if(input) input.value='';
 }
 
 async function testSmtp(){
