@@ -134,11 +134,16 @@ def _html_logo_section(logo: bool, company: str) -> str:
     if not logo:
         return ''
     _co = _safe(company) if company else 'PingWatch'
+    name_html = (
+        f'<div style="margin-top:8px;font-size:14px;color:#6b7280;'
+        f'font-family:Arial,Helvetica,sans-serif">{_co}</div>'
+    ) if company else ''
     return (
         f'<tr><td align="center" style="padding:24px 24px 16px;background:#ffffff">'
         f'<img src="cid:pwlogo" width="180" height="60" '
         f'alt="{_co}" style="display:block;max-width:180px;max-height:60px;'
         f'width:auto;height:auto;margin:0 auto"/>'
+        f'{name_html}'
         f'</td></tr>'
     )
 
