@@ -119,16 +119,6 @@ function _buildSettingsTab_general(sr) {
           <input type="text" id="st-orgname" value="${esc(sr.org_name||'')}" placeholder="Network Monitor" style="max-width:260px"/>
           <div class="fh">Shown in the top bar and browser tab title</div></div>
       </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Latency Colour Thresholds</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
-            <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl" style="color:var(--warn)">Warn (yellow) &lt; (ms)</label>
-            <input type="number" id="st-lwarn" value="${sr.latency_warn_ms||300}" min="1" max="10000" style="max-width:100px"/></div>
-        </div>
-        <div class="fh">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
-      </div>
       <div class="fr" style="margin-top:16px">
         <div class="fl" style="margin-bottom:10px">Server Info</div>
         <div class="st-info-grid">
@@ -609,9 +599,23 @@ function _buildSettingsTab_sensors(sr) {
             <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
           <div class="fr"><label class="fl">Timeout (s)</label>
             <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Fail after <span class="fh" style="font-weight:400">(consecutive fails before DOWN)</span></label>
+            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||2}" min="1" max="20" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Recover after <span class="fh" style="font-weight:400">(consecutive OKs before UP)</span></label>
+            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="20" style="max-width:100px"/></div>
         </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
+        <div class="fh" style="margin-bottom:10px">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
+            <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl" style="color:var(--warn)">Warn (yellow) &lt; (ms)</label>
+            <input type="number" id="st-lwarn" value="${sr.latency_warn_ms||300}" min="1" max="10000" style="max-width:100px"/></div>
+        </div>
+      </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Port Scanner</div>
         <div class="fh" style="margin-bottom:10px">Choose which ports are probed when you click "Scan" on a device. Custom ports use a TCP probe.</div>
@@ -1704,9 +1708,17 @@ async function saveSensorTypeDefaults(){
   });
   const snrIv  = parseInt(document.getElementById('st-snr-iv')?.value);
   const snrTmo = parseInt(document.getElementById('st-snr-tmo')?.value);
+  const snrFa  = parseInt(document.getElementById('st-snr-fa')?.value);
+  const snrRa  = parseInt(document.getElementById('st-snr-ra')?.value);
+  const lGood  = parseInt(document.getElementById('st-lgood')?.value);
+  const lWarn  = parseInt(document.getElementById('st-lwarn')?.value);
   const globalDefaults = {};
-  if(snrIv  >= 1) globalDefaults.snr_interval     = snrIv;
+  if(snrIv  >= 1) globalDefaults.snr_interval      = snrIv;
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
+  if(snrFa  >= 1) globalDefaults.snr_fail_after    = snrFa;
+  if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
+  if(lGood  >= 1) globalDefaults.latency_good_ms   = lGood;
+  if(lWarn  >= 1) globalDefaults.latency_warn_ms   = lWarn;
   // Collect scan_ports from checkboxes + custom input
   const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
   const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();
@@ -1717,8 +1729,12 @@ async function saveSensorTypeDefaults(){
   if(!r.ok){ toast('Save failed','err'); return; }
   window._snrTypeDefaults = result;
   window._snrDef = window._snrDef || {};
-  if(globalDefaults.snr_interval)     window._snrDef.interval     = globalDefaults.snr_interval;
-  if(globalDefaults.snr_timeout)      window._snrDef.timeout      = globalDefaults.snr_timeout;
+  if(globalDefaults.snr_interval)      window._snrDef.interval      = globalDefaults.snr_interval;
+  if(globalDefaults.snr_timeout)       window._snrDef.timeout       = globalDefaults.snr_timeout;
+  if(globalDefaults.snr_fail_after)    window._snrDef.fail_after    = globalDefaults.snr_fail_after;
+  if(globalDefaults.snr_recover_after) window._snrDef.recover_after = globalDefaults.snr_recover_after;
+  if(globalDefaults.latency_good_ms)   window._lGood                = globalDefaults.latency_good_ms;
+  if(globalDefaults.latency_warn_ms)   window._lWarn                = globalDefaults.latency_warn_ms;
   toast('Sensor defaults saved','ok');
 }
 
@@ -1800,10 +1816,6 @@ async function saveSettings(){
   if(flapDb>=50)   body.max_flap_entries=flapDb;
   if(trapDb>=50)   body.max_trap_entries=trapDb;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
-  const lGood=parseInt(document.getElementById('st-lgood')?.value);
-  const lWarn=parseInt(document.getElementById('st-lwarn')?.value);
-  if(lGood>=1) body.latency_good_ms=lGood;
-  if(lWarn>=1) body.latency_warn_ms=lWarn;
   const smtp={
     smtp_host:       document.getElementById('st-smtp-host')?.value.trim()||'',
     smtp_port:       parseInt(document.getElementById('st-smtp-port')?.value)||587,
@@ -1837,8 +1849,6 @@ async function saveSettings(){
     if(typeof _sessionTtl!=='undefined') _sessionTtl=body.session_ttl;
   }
   if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
-  if(body.latency_good_ms)   window._lGood=body.latency_good_ms;
-  if(body.latency_warn_ms)   window._lWarn=body.latency_warn_ms;
   if('org_name' in body){
     window._snrDef=window._snrDef||{};
     const el=document.getElementById('tbVer');

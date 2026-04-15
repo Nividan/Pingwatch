@@ -303,7 +303,7 @@ def db_init():
             ("retention_days",     "365"),
             ("snr_interval",       "5"),
             ("snr_timeout",        "4"),
-            ("snr_fail_after",     "1"),
+            ("snr_fail_after",     "2"),
             ("snr_recover_after",  "1"),
             ("max_flaps_display",  "20"),
             ("max_flap_entries",   "500"),
@@ -402,7 +402,7 @@ def db_init():
                 pass
         # New sensor columns (debounce, thresholds, new probe fields)
         for col_def in [
-            "fail_after    INTEGER DEFAULT 1",
+            "fail_after    INTEGER DEFAULT 2",
             "recover_after INTEGER DEFAULT 1",
             "warn_ms       INTEGER",
             "crit_ms       INTEGER",

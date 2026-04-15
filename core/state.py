@@ -139,10 +139,11 @@ class Sensor:
         self.dns_record_type       = "A"
         self.dns_server            = ""
         self.http_expected_status  = 0
-        # Debounce — now handled by alert rules (trigger_count / recover_count).
-        # Hardcoded to 1 so sensor fires events immediately on first state change.
-        self.fail_after    = 1
-        self.recover_after = 1
+        # Debounce — requires N consecutive failures before flap event fires.
+        # Default 2 avoids noise from transient single-probe drops (common with ICMP).
+        # Alert rules add a second debounce layer (trigger_count / duration).
+        self.fail_after    = int(fail_after or 2)
+        self.recover_after = int(recover_after or 1)
         # Thresholds
         self.warn_ms       = warn_ms
         self.crit_ms       = crit_ms
@@ -470,7 +471,7 @@ class MonitorState:
                    port=None, url=None, interval=5, timeout=4,
                    verify_ssl=True, snmp_community="public",
                    snmp_oid="1.3.6.1.2.1.1.1.0", snmp_version="2c",
-                   fail_after=1, recover_after=1,
+                   fail_after=2, recover_after=1,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
                    vmware_user="", vmware_password="",

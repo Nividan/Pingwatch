@@ -1388,8 +1388,10 @@ async function loadAll(){
     window._lGood = _sr.latency_good_ms || 100;
     window._lWarn = _sr.latency_warn_ms || 300;
     window._snrDef = {
-      interval:     _sr.snr_interval     || 5,
-      timeout:      _sr.snr_timeout      || 4,
+      interval:      _sr.snr_interval      || 5,
+      timeout:       _sr.snr_timeout       || 4,
+      fail_after:    _sr.snr_fail_after    || 2,
+      recover_after: _sr.snr_recover_after || 1,
     };
     window._snrTypeDefaults = _sr.snr_type_defaults || {};
     const orgName = (_sr.org_name || '').trim();

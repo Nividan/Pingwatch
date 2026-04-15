@@ -640,8 +640,15 @@ def handle(h, method, path, body):
             h._json(400, {"error": "url must start with http:// or https://"}); return True
         if stype in ("ping", "tcp", "snmp", "dns") and host and not h._valid_host(host):
             h._json(400, {"error": "invalid host"}); return True
+        try:
+            import core.settings as _settings
+            _fa = int(_settings.get("snr_fail_after",    2) or 2)
+            _ra = int(_settings.get("snr_recover_after", 1) or 1)
+        except (TypeError, ValueError):
+            _fa, _ra = 2, 1
         sid = STATE.add_sensor(did, name, stype, host, port, url,
                                iv, to, vssl, comm, oid, sver,
+                               fail_after=_fa, recover_after=_ra,
                                warn_ms=wms, crit_ms=cms,
                                loss_warn_pct=lwp, loss_crit_pct=lcp,
                                keyword=kw, keyword_case=kwc, banner_regex=bnr,
