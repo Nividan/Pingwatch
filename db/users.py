@@ -36,22 +36,25 @@ def db_save_settings(d: dict):
 # ── User management ───────────────────────────────────────────────
 
 def db_list_users() -> list:
-    """Return all users as [{username, role, auth_type, domain, full_name, email, group_id, group_name}]."""
+    """Return all users as [{username, role, auth_type, domain, full_name, email, group_id, group_name, totp_enabled}]."""
     rows = db_query("main", """
         SELECT u.username, u.role, u.auth_type, u.domain,
-               u.full_name, u.email, u.group_id, g.name AS group_name
+               u.full_name, u.email, u.group_id, u.totp_enabled,
+               g.name AS group_name
         FROM users u
         LEFT JOIN user_groups g ON g.id = u.group_id
         ORDER BY u.username
     """)
-    return [{"username":  r["username"],
-             "role":       r["role"],
-             "auth_type":  r["auth_type"] or "local",
-             "domain":     r["domain"]    or "",
-             "full_name":  r["full_name"] or "",
-             "email":      r["email"]     or "",
-             "group_id":   r["group_id"],
-             "group_name": r["group_name"] or ""} for r in rows]
+    return [{"username":     r["username"],
+             "role":         r["role"],
+             "auth_type":    r["auth_type"] or "local",
+             "domain":       r["domain"]    or "",
+             "full_name":    r["full_name"] or "",
+             "email":        r["email"]     or "",
+             "group_id":     r["group_id"],
+             "group_name":   r["group_name"] or "",
+             "totp_enabled": int(r.get("totp_enabled") or 0) if isinstance(r, dict)
+                             else int(r["totp_enabled"] or 0)} for r in rows]
 
 
 _UNSET = object()

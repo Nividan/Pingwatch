@@ -705,6 +705,16 @@ def main():
     _local_url = f"{_scheme}://127.0.0.1:{app_state.effective_port}"
     log.info(f"PingWatch ready -> {_local_url}")
 
+    # Optional-dep warnings — make missing modules visible at startup instead of
+    # failing later inside a request handler.
+    try:
+        from core.auth import totp_available
+        if not totp_available():
+            log.warning("Optional dependency 'pyotp' not installed — 2FA endpoints will return 503. "
+                        "Install with: pip install pyotp")
+    except Exception:
+        pass
+
     # ── GUI ────────────────────────────────────────────────────────
     from core.logger import log_buffer
     _headless_stop = threading.Event()

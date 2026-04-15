@@ -333,7 +333,7 @@ def handle(h, method, path, body):
         # ── 2FA gate: if user has TOTP enabled, revoke this session and
         # require a second-factor step before issuing the cookie.
         from core.auth import auth_logout as _logout
-        from core.auth import totp_create_challenge
+        from core.auth import totp_create_challenge, totp_available
         from db.users import db_get_totp
         clean_user = username.split('\\', 1)[1] if '\\' in username else (
                      username.split('@')[0] if '@' in username else username)
@@ -342,6 +342,13 @@ def handle(h, method, path, body):
         except Exception:
             totp = {"enabled": 0}
         if totp.get("enabled"):
+            if not totp_available():
+                # User has 2FA enrolled but pyotp is no longer installed.
+                # Fail safe: refuse the login (better than silently bypassing 2FA).
+                _logout(token)
+                log.error(f"User {clean_user!r} has 2FA enabled but pyotp is not installed — login refused")
+                h._json(503, {"error": "2FA required but server is missing pyotp. Contact administrator."})
+                return True
             _logout(token)   # discard the just-created session
             cid = totp_create_challenge(clean_user, role)
             db_log_audit(clean_user, ip, 'login_totp_challenge', clean_user)
@@ -361,6 +368,10 @@ def handle(h, method, path, body):
     # Second-factor verification step. Body: {challenge_id, code}.
     # `code` may be a 6-digit TOTP code or a recovery code.
     if path == "/api/login/totp" and method == "POST":
+        from core.auth import totp_available
+        if not totp_available():
+            h._json(503, {"error": "2FA support not installed on server (pyotp missing)"})
+            return True
         from core.auth import (
             totp_resolve_challenge, totp_consume_challenge, totp_verify,
             totp_consume_recovery, _create_session,
@@ -422,6 +433,10 @@ def handle(h, method, path, body):
     if path == "/api/me/totp/setup" and method == "POST":
         me = h._auth()
         if not me: return True
+        from core.auth import totp_available
+        if not totp_available():
+            h._json(503, {"error": "2FA support not installed on server (pyotp missing)"})
+            return True
         from core.auth import totp_generate_secret, totp_provisioning_uri
         from db.users import db_get_totp, db_set_totp
         existing = db_get_totp(me)
@@ -439,6 +454,10 @@ def handle(h, method, path, body):
     if path == "/api/me/totp/verify" and method == "POST":
         me = h._auth()
         if not me: return True
+        from core.auth import totp_available
+        if not totp_available():
+            h._json(503, {"error": "2FA support not installed on server (pyotp missing)"})
+            return True
         from core.auth import totp_verify, totp_generate_recovery_codes
         from db.users import db_get_totp, db_set_totp
         code = (body.get("code") or "").strip()
@@ -459,6 +478,10 @@ def handle(h, method, path, body):
     if path == "/api/me/totp/disable" and method == "POST":
         me = h._auth()
         if not me: return True
+        from core.auth import totp_available
+        if not totp_available():
+            h._json(503, {"error": "2FA support not installed on server (pyotp missing)"})
+            return True
         from core.auth import auth_verify_current, totp_verify
         from db.users import db_get_totp, db_clear_totp
         password = body.get("password", "")

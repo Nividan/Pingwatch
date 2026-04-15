@@ -402,6 +402,7 @@ def step1_packages():
                     "cryptography": ("python3-cryptography", None),
                     "ldap3":        ("python3-ldap3",   None),
                     "psutil":       ("python3-psutil",  None),
+                    "pyotp":        ("python3-pyotp",   None),
                 }
                 _apt_entry = _apt_map.get(pkg["name"])
 
@@ -431,6 +432,7 @@ def step1_packages():
                                 "python3-cryptography": "python3-cryptography",
                                 "python3-ldap3":        "python3-ldap3",
                                 "python3-psutil":       "python3-psutil",
+                                "python3-pyotp":        "python3-pyotp",
                             }
                             _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
                             r = subprocess.run(

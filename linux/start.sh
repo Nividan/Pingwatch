@@ -90,6 +90,7 @@ _PACKAGES = [
     ("pystray",      "system tray icon",                        False),
     ("PIL",          "image support (tray icon)",               False),
     ("ldap3",        "LDAP / Active Directory authentication",  False),
+    ("pyotp",        "two-factor authentication (TOTP)",        False),
     ("tkinter",      "status window GUI",                       False),
 ]
 all_ok = True
