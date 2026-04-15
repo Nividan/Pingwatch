@@ -600,12 +600,15 @@ def db_init():
             con.commit()
         except Exception:
             pass
-        # Migration: user profiles + groups (v0.8+)
+        # Migration: user profiles + groups (v0.8+) and TOTP 2FA (v0.9.2+)
         for _col, _def in [
             ("full_name",        "TEXT DEFAULT ''"),
             ("email",            "TEXT DEFAULT ''"),
             ("group_id",         "INTEGER DEFAULT NULL"),
             ("theme_preference", "TEXT DEFAULT 'dark'"),
+            ("totp_secret",      "TEXT DEFAULT ''"),
+            ("totp_enabled",     "INTEGER DEFAULT 0"),
+            ("totp_recovery",    "TEXT DEFAULT ''"),
         ]:
             try:
                 con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")

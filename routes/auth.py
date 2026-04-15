@@ -98,10 +98,16 @@ def handle(h, method, path, body):
         if user:
             role    = auth_check_role(token) or "viewer"
             profile = _get_user_profile(user)
+            try:
+                from db.users import db_get_totp
+                _totp_enabled = int(db_get_totp(user).get("enabled", 0))
+            except Exception:
+                _totp_enabled = 0
             h._json(200, {"username": user, "role": role,
                           "full_name":        profile.get("full_name", ""),
                           "email":            profile.get("email", ""),
                           "theme_preference": profile.get("theme_preference", "dark"),
+                          "totp_enabled":     _totp_enabled,
                           "session_ttl": int(_settings.get("session_ttl", 86400))})
         else:
             h._json(401, {"error": "unauthorized"})
@@ -322,14 +328,169 @@ def handle(h, method, path, body):
             return True
         with _FAIL_LOCK:
             _FAIL_LOG.pop(ip, None)
-        db_log_audit(username, ip, 'login_ok', username)
         role = auth_check_role(token) or "viewer"
+
+        # ── 2FA gate: if user has TOTP enabled, revoke this session and
+        # require a second-factor step before issuing the cookie.
+        from core.auth import auth_logout as _logout
+        from core.auth import totp_create_challenge
+        from db.users import db_get_totp
+        clean_user = username.split('\\', 1)[1] if '\\' in username else (
+                     username.split('@')[0] if '@' in username else username)
+        try:
+            totp = db_get_totp(clean_user)
+        except Exception:
+            totp = {"enabled": 0}
+        if totp.get("enabled"):
+            _logout(token)   # discard the just-created session
+            cid = totp_create_challenge(clean_user, role)
+            db_log_audit(clean_user, ip, 'login_totp_challenge', clean_user)
+            h._json(200, {"totp_required": True, "challenge_id": cid})
+            return True
+
+        db_log_audit(username, ip, 'login_ok', username)
         _sec = "; Secure" if tls_active else ""
         h._send_with_cookie(
             200, {"ok": True, "username": username, "role": role,
                   "session_ttl": int(_settings.get("session_ttl", 86400))},
             f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
         )
+        return True
+
+    # ── /api/login/totp POST ──────────────────────────────────────
+    # Second-factor verification step. Body: {challenge_id, code}.
+    # `code` may be a 6-digit TOTP code or a recovery code.
+    if path == "/api/login/totp" and method == "POST":
+        from core.auth import (
+            totp_resolve_challenge, totp_consume_challenge, totp_verify,
+            totp_consume_recovery, _create_session,
+        )
+        from db.users import db_get_totp, db_set_totp
+        ip = h.client_address[0]
+        cid  = (body.get("challenge_id") or "").strip()
+        code = (body.get("code") or "").strip()
+        challenge = totp_resolve_challenge(cid)
+        if not challenge:
+            h._json(401, {"error": "Challenge expired or invalid"})
+            return True
+        # Rate-limit failed second-factor attempts on the same IP
+        with _FAIL_LOCK:
+            now = time.time()
+            _fail_window = int(_settings.get("login_fail_window", _FAIL_WINDOW))
+            _fail_max    = int(_settings.get("login_fail_max",    _FAIL_MAX))
+            _FAIL_LOG[ip] = [t for t in _FAIL_LOG.get(ip, []) if now - t < _fail_window]
+            if len(_FAIL_LOG[ip]) >= _fail_max:
+                h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})
+                return True
+        username = challenge["username"]
+        role     = challenge["role"]
+        totp     = db_get_totp(username)
+        ok = False
+        if totp_verify(totp.get("secret", ""), code):
+            ok = True
+        else:
+            consumed, new_json = totp_consume_recovery(totp.get("recovery_json", ""), code)
+            if consumed:
+                ok = True
+                # Persist the recovery-code list with this code removed
+                try:
+                    db_set_totp(username, totp.get("secret", ""), 1, new_json)
+                except Exception:
+                    pass
+                db_log_audit(username, ip, 'totp_recovery_used', username)
+        if not ok:
+            with _FAIL_LOCK:
+                _FAIL_LOG.setdefault(ip, []).append(time.time())
+            db_log_audit(username, ip, 'totp_failed', username)
+            h._json(401, {"error": "Invalid 2FA code"})
+            return True
+        # Success — issue the real session
+        totp_consume_challenge(cid)
+        with _FAIL_LOCK:
+            _FAIL_LOG.pop(ip, None)
+        token = _create_session(username, role)
+        db_log_audit(username, ip, 'login_ok', username)
+        _sec = "; Secure" if tls_active else ""
+        h._send_with_cookie(
+            200, {"ok": True, "username": username, "role": role,
+                  "session_ttl": int(_settings.get("session_ttl", 86400))},
+            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
+        )
+        return True
+
+    # ── /api/me/totp/setup POST — issue secret + provisioning URI ─
+    if path == "/api/me/totp/setup" and method == "POST":
+        me = h._auth()
+        if not me: return True
+        from core.auth import totp_generate_secret, totp_provisioning_uri
+        from db.users import db_get_totp, db_set_totp
+        existing = db_get_totp(me)
+        if existing.get("enabled"):
+            h._json(409, {"error": "2FA is already enabled. Disable it first."})
+            return True
+        secret = totp_generate_secret()
+        # Persist secret with enabled=0 (pending verification)
+        db_set_totp(me, secret, 0, "")
+        uri = totp_provisioning_uri(me, secret)
+        h._json(200, {"secret": secret, "provisioning_uri": uri})
+        return True
+
+    # ── /api/me/totp/verify POST — confirm enrolment ──────────────
+    if path == "/api/me/totp/verify" and method == "POST":
+        me = h._auth()
+        if not me: return True
+        from core.auth import totp_verify, totp_generate_recovery_codes
+        from db.users import db_get_totp, db_set_totp
+        code = (body.get("code") or "").strip()
+        totp = db_get_totp(me)
+        if not totp.get("secret"):
+            h._json(400, {"error": "Run /api/me/totp/setup first"})
+            return True
+        if not totp_verify(totp["secret"], code):
+            h._json(401, {"error": "Invalid 2FA code"})
+            return True
+        plain, hashed_json = totp_generate_recovery_codes(10)
+        db_set_totp(me, totp["secret"], 1, hashed_json)
+        db_log_audit(me, h.client_address[0], 'totp_enabled', me)
+        h._json(200, {"ok": True, "recovery_codes": plain})
+        return True
+
+    # ── /api/me/totp/disable POST — turn off 2FA ──────────────────
+    if path == "/api/me/totp/disable" and method == "POST":
+        me = h._auth()
+        if not me: return True
+        from core.auth import auth_verify_current, totp_verify
+        from db.users import db_get_totp, db_clear_totp
+        password = body.get("password", "")
+        code     = (body.get("code") or "").strip()
+        if not auth_verify_current(me, password):
+            h._json(401, {"error": "Invalid password"})
+            return True
+        totp = db_get_totp(me)
+        if totp.get("enabled") and not totp_verify(totp.get("secret", ""), code):
+            h._json(401, {"error": "Invalid 2FA code"})
+            return True
+        db_clear_totp(me)
+        db_log_audit(me, h.client_address[0], 'totp_disabled', me)
+        h._json(200, {"ok": True})
+        return True
+
+    # ── /api/users/{name}/totp/reset POST (admin) — clear a user's 2FA ──
+    if method == "POST" and path.startswith("/api/users/") and path.endswith("/totp/reset"):
+        admin, _ = h._require("admin")
+        if not admin: return True
+        from db.users import db_clear_totp
+        target = path[len("/api/users/"):-len("/totp/reset")]
+        if not target:
+            h._json(400, {"error": "username required"})
+            return True
+        try:
+            db_clear_totp(target)
+            db_log_audit(admin, h.client_address[0], 'totp_admin_reset', target)
+            h._json(200, {"ok": True})
+        except Exception as e:
+            log.error(f"totp_admin_reset error: {e}")
+            h._json(500, {"error": "Reset failed"})
         return True
 
     # ── /api/logout POST ──────────────────────────────────────────

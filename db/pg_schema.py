@@ -29,7 +29,10 @@ def pg_create_main_schema(cur):
             full_name        TEXT DEFAULT '',
             email            TEXT DEFAULT '',
             group_id         INTEGER DEFAULT NULL,
-            theme_preference TEXT DEFAULT 'dark'
+            theme_preference TEXT DEFAULT 'dark',
+            totp_secret      TEXT DEFAULT '',
+            totp_enabled     INTEGER DEFAULT 0,
+            totp_recovery    TEXT DEFAULT ''
         )""")
     # Migration: add theme_preference for existing installs
     cur.execute("""
@@ -41,6 +44,27 @@ def pg_create_main_schema(cur):
                   AND column_name='theme_preference'
             ) THEN
                 ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'dark';
+            END IF;
+        END $$
+    """)
+    # Migration: add TOTP columns for existing installs (2FA)
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_secret') THEN
+                ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT '';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_enabled') THEN
+                ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_recovery') THEN
+                ALTER TABLE users ADD COLUMN totp_recovery TEXT DEFAULT '';
             END IF;
         END $$
     """)

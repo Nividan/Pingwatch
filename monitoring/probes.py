@@ -12,9 +12,20 @@ import urllib.request
 
 from core.config import SYS
 from core.logger import log_sensors
+from core.validation import _HOST_RE
+
+
+def _validate_host_quick(host) -> bool:
+    """Fast non-raising hostname check for the probe hot path.
+
+    Rejects obviously-malformed strings before spawning a subprocess.
+    """
+    return isinstance(host, str) and bool(host) and bool(_HOST_RE.match(host.strip()))
 
 
 def probe_ping(host, timeout=4):
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
     cmd = (["ping", "-n", "2", "-w", str(timeout * 1000), host] if SYS == "Windows"
            else ["ping", "-c", "2", "-W", str(timeout), host])
     try:
@@ -41,6 +52,8 @@ def probe_ping(host, timeout=4):
 
 
 def probe_tcp(host, port, timeout=5):
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
     t0 = time.time()
     try:
         s = socket.create_connection((host, int(port)), timeout=timeout)
