@@ -464,9 +464,17 @@ function _dwRenderAll() {
     const reg = _DW_REG[w.type];
     if (reg) reg.render(w.id, w.cfg);
   });
-  // Show shimmer loading overlay until first real data arrives
-  if (!Object.keys(S.sensors).length && !Object.keys(S.devices).length) {
+  // Show shimmer loading overlay until first real data arrives.
+  // Only add the class if data hasn't already been marked as arrived AND
+  // the state is genuinely empty — this prevents a stuck shimmer when
+  // _dwClearLoading() fires before _dwRenderAll() completes (race between
+  // loadAll's /api/devices and _dwInit's /api/dashboards).
+  const _stateEmpty = !Object.keys(S.sensors).length && !Object.keys(S.devices).length;
+  if (!_dwDataArrived && _stateEmpty) {
+    console.debug('[pw:dw] render: state empty, adding shimmer');
     grid.querySelectorAll('.dw-body').forEach(el => el.classList.add('dw-loading'));
+  } else if (_dwDataArrived) {
+    console.debug('[pw:dw] render: data already arrived, skipping shimmer');
   }
   _dwStartTick();
 }
@@ -913,10 +921,17 @@ function _dwReset() {
 // ── Loading shimmer clear (called when first real data arrives) ───
 let _dwDataArrived = false;
 function _dwClearLoading() {
+  // Always remove the class — idempotent, handles races where the shimmer is
+  // added AFTER an earlier _dwClearLoading call (e.g. _dwRenderAll runs late).
+  const removed = document.querySelectorAll('.dw-body.dw-loading');
+  if (removed.length) {
+    console.debug(`[pw:dw] clearLoading: removing shimmer from ${removed.length} widget(s)`);
+    removed.forEach(el => el.classList.remove('dw-loading'));
+  }
   if (_dwDataArrived) return;
   _dwDataArrived = true;
-  document.querySelectorAll('.dw-body.dw-loading').forEach(el => el.classList.remove('dw-loading'));
-  // Refresh all widgets with real data
+  console.debug('[pw:dw] clearLoading: first data arrival — refreshing all widgets');
+  // Refresh all widgets with real data (only on first call)
   _dwLoad().forEach(w => {
     const reg = _DW_REG[w.type];
     if (reg) reg.refresh(w.id, w.cfg);
