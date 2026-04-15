@@ -552,3 +552,47 @@ def totp_resolve_challenge(cid: str) -> dict:
 def totp_consume_challenge(cid: str) -> None:
     with _TOTP_CHALLENGE_LOCK:
         _TOTP_CHALLENGES.pop(cid, None)
+
+
+def parse_user_agent_label(ua: str) -> str:
+    """Derive a short human-readable label from a User-Agent string.
+
+    Examples:
+      "Mozilla/5.0 (Windows NT 10.0; Win64) ... Chrome/120.0 ..."  → "Chrome on Windows"
+      "Mozilla/5.0 (Macintosh; ...) ... Safari/537.36"             → "Safari on macOS"
+      "Mozilla/5.0 (X11; Linux ...) ... Firefox/121.0"             → "Firefox on Linux"
+    No external library — simple substring checks are good enough.
+    """
+    if not ua:
+        return "Unknown browser"
+    ua_l = ua.lower()
+
+    # Browser
+    if "edg/" in ua_l or "edge/" in ua_l:
+        browser = "Edge"
+    elif "opr/" in ua_l or "opera" in ua_l:
+        browser = "Opera"
+    elif "chrome/" in ua_l or "chromium/" in ua_l:
+        browser = "Chrome"
+    elif "firefox/" in ua_l:
+        browser = "Firefox"
+    elif "safari/" in ua_l:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+
+    # OS
+    if "windows" in ua_l:
+        os_name = "Windows"
+    elif "macintosh" in ua_l or "mac os" in ua_l:
+        os_name = "macOS"
+    elif "iphone" in ua_l or "ipad" in ua_l:
+        os_name = "iOS"
+    elif "android" in ua_l:
+        os_name = "Android"
+    elif "linux" in ua_l:
+        os_name = "Linux"
+    else:
+        os_name = "Unknown OS"
+
+    return f"{browser} on {os_name}"

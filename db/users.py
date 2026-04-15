@@ -303,3 +303,134 @@ def db_set_totp(username: str, secret: str, enabled: int, recovery_json: str = "
 def db_clear_totp(username: str) -> bool:
     """Disable TOTP and clear the secret + recovery codes."""
     return db_set_totp(username, "", 0, "")
+
+
+# ── Trusted devices (Remember 2FA) ──────────────────────────────
+
+def db_get_remember_hours(username: str) -> int:
+    """Return the user's max trusted-device duration in hours (default 9)."""
+    r = db_query_one("main", "SELECT totp_remember_hours FROM users WHERE username=?",
+                     (username,))
+    if not r:
+        return 9
+    v = r["totp_remember_hours"] if isinstance(r, dict) else r[0]
+    try:
+        return max(0, int(v or 9))
+    except (TypeError, ValueError):
+        return 9
+
+
+def db_set_remember_hours(username: str, hours: int) -> bool:
+    """Persist the user's preferred trusted-device duration (0–720 h)."""
+    hours = max(0, min(720, int(hours)))
+    return db_execute("main",
+                      "UPDATE users SET totp_remember_hours=? WHERE username=?",
+                      (hours, username))
+
+
+def db_add_trusted_device(username: str, token_hash: str, device_label: str,
+                           hours: int, ip: str, ua: str):
+    """Insert a trusted-device row and return its id (int) or None on error."""
+    import time as _t
+    now = _t.time()
+    expires = now + hours * 3600
+    try:
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "INSERT INTO trusted_devices "
+                    "(username, token_hash, device_label, created_at, expires_at, "
+                    "last_used_at, ip, user_agent) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (username, token_hash, device_label, now, expires, now, ip, ua)
+                )
+                row = cur.fetchone()
+                return row["id"] if row else None
+        with db_cursor("main") as cur:
+            cur.execute(
+                "INSERT INTO trusted_devices "
+                "(username, token_hash, device_label, created_at, expires_at, "
+                "last_used_at, ip, user_agent) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (username, token_hash, device_label, now, expires, now, ip, ua)
+            )
+            return cur.lastrowid
+    except Exception as e:
+        log.error(f"DB add trusted device error: {e}")
+        return None
+
+
+def db_lookup_trusted_device(username: str, token_hash: str):
+    """Return the trusted-device row if valid (not expired), else None."""
+    import time as _t
+    r = db_query_one(
+        "main",
+        "SELECT id, username, device_label, created_at, expires_at, "
+        "last_used_at, ip, user_agent "
+        "FROM trusted_devices "
+        "WHERE token_hash=? AND username=? AND expires_at>?",
+        (token_hash, username, _t.time())
+    )
+    if not r:
+        return None
+    return dict(r) if not isinstance(r, dict) else r
+
+
+def db_touch_trusted_device(device_id: int, ip: str) -> bool:
+    """Update last_used_at and ip for a trusted device."""
+    import time as _t
+    return db_execute("main",
+                      "UPDATE trusted_devices SET last_used_at=?, ip=? WHERE id=?",
+                      (_t.time(), ip, device_id))
+
+
+def db_list_trusted_devices(username: str) -> list:
+    """Return [{id, device_label, created_at, expires_at, last_used_at, ip}] for the user."""
+    rows = db_query("main",
+                    "SELECT id, device_label, created_at, expires_at, last_used_at, ip "
+                    "FROM trusted_devices WHERE username=? ORDER BY created_at DESC",
+                    (username,))
+    return [{"id":           r["id"] if isinstance(r, dict) else r[0],
+             "device_label": (r["device_label"] if isinstance(r, dict) else r[1]) or "",
+             "created_at":   r["created_at"]   if isinstance(r, dict) else r[2],
+             "expires_at":   r["expires_at"]   if isinstance(r, dict) else r[3],
+             "last_used_at": r["last_used_at"] if isinstance(r, dict) else r[4],
+             "ip":           (r["ip"]          if isinstance(r, dict) else r[5]) or ""}
+            for r in rows]
+
+
+def db_revoke_trusted_device(username: str, device_id: int) -> bool:
+    """Delete a single trusted-device row (only if it belongs to username)."""
+    return db_execute("main",
+                      "DELETE FROM trusted_devices WHERE id=? AND username=?",
+                      (device_id, username))
+
+
+def db_revoke_trusted_devices(username: str) -> int:
+    """Delete ALL trusted-device rows for a user. Returns number deleted."""
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"DELETE FROM trusted_devices WHERE username={ph}", (username,)
+            )
+            return cur.rowcount
+    except Exception as e:
+        log.error(f"DB revoke trusted devices error: {e}")
+        return 0
+
+
+def db_sweep_expired_trusted_devices() -> int:
+    """Delete expired trusted-device rows. Returns number deleted."""
+    import time as _t
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"DELETE FROM trusted_devices WHERE expires_at<{ph}", (_t.time(),)
+            )
+            return cur.rowcount
+    except Exception as e:
+        log.error(f"DB sweep trusted devices error: {e}")
+        return 0

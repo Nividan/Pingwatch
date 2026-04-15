@@ -7,7 +7,9 @@ Handles: /api/login, /api/logout, /api/me, /api/me/password,
          /api/me/profile (PATCH), /api/users/{u}/profile (PATCH).
 """
 
+import hashlib
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -26,7 +28,32 @@ from core.app_state import tls_active
 import core.app_state as app_state
 import core.settings as _settings
 
-_RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+_RE_EMAIL         = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+_RE_TRUSTED_DEV   = re.compile(r'^/api/me/trusted-devices/(\d+)$')
+_TRUSTED_COOKIE   = "pw_trusted"
+
+
+def _get_cookie(h, name: str) -> str:
+    """Extract a named cookie value from the request headers, or ''."""
+    for part in h.headers.get("Cookie", "").split(";"):
+        p = part.strip()
+        prefix = name + "="
+        if p.startswith(prefix):
+            return p[len(prefix):]
+    return ""
+
+
+def _trusted_cookie_header(token: str, max_age: int, tls: bool) -> str:
+    """Build a Set-Cookie header value for pw_trusted."""
+    _sec = "; Secure" if tls else ""
+    return (f"{_TRUSTED_COOKIE}={token}; HttpOnly; Path=/; "
+            f"SameSite=Strict; Max-Age={max_age}{_sec}")
+
+
+def _clear_trusted_cookie(tls: bool) -> str:
+    """Build a Set-Cookie header to clear pw_trusted."""
+    _sec = "; Secure" if tls else ""
+    return f"{_TRUSTED_COOKIE}=; HttpOnly; Path=/; Max-Age=0{_sec}"
 
 
 def _get_user_profile(username: str) -> dict:
@@ -271,6 +298,8 @@ def handle(h, method, path, body):
         with _PW_RESET_LOCK:
             _PW_RESET_LOG[username] = time.time()
         auth_revoke_user_sessions(username)
+        from db.users import db_revoke_trusted_devices as _revoke_td
+        _revoke_td(username)
         db_log_audit(user, h.client_address[0], 'pass_reset', username)
         log.debug(f"Password reset: {username!r} by {user!r}")
         h._json(200, {"ok": True})
@@ -297,6 +326,8 @@ def handle(h, method, path, body):
             h._json(400, {"error": "Current password is incorrect"})
             return True
         db_set_password(me, new_pw)
+        from db.users import db_revoke_trusted_devices as _revoke_td
+        _revoke_td(me)
         db_log_audit(me, h.client_address[0], 'pass_change', me)
         h._json(200, {"ok": True})
         return True
@@ -330,11 +361,11 @@ def handle(h, method, path, body):
             _FAIL_LOG.pop(ip, None)
         role = auth_check_role(token) or "viewer"
 
-        # ── 2FA gate: if user has TOTP enabled, revoke this session and
-        # require a second-factor step before issuing the cookie.
+        # ── 2FA gate: if user has TOTP enabled, check trusted-device cookie
+        # first — if valid, skip the TOTP challenge entirely.
         from core.auth import auth_logout as _logout
         from core.auth import totp_create_challenge, totp_available
-        from db.users import db_get_totp
+        from db.users import db_get_totp, db_get_remember_hours
         clean_user = username.split('\\', 1)[1] if '\\' in username else (
                      username.split('@')[0] if '@' in username else username)
         try:
@@ -342,6 +373,30 @@ def handle(h, method, path, body):
         except Exception:
             totp = {"enabled": 0}
         if totp.get("enabled"):
+            # Check for a valid trusted-device cookie
+            _trusted_raw = _get_cookie(h, _TRUSTED_COOKIE)
+            if _trusted_raw:
+                from db.users import db_lookup_trusted_device, db_touch_trusted_device
+                _tok_hash = hashlib.sha256(_trusted_raw.encode()).hexdigest()
+                _td_row = db_lookup_trusted_device(clean_user, _tok_hash)
+                if _td_row:
+                    # Trusted device — skip TOTP, issue full session
+                    db_touch_trusted_device(_td_row["id"], ip)
+                    db_log_audit(clean_user, ip, 'login_ok_trusted_device', clean_user)
+                    _sec = "; Secure" if tls_active else ""
+                    remember_hours = db_get_remember_hours(clean_user)
+                    _new_max_age = remember_hours * 3600
+                    h._send_with_cookies(
+                        200,
+                        {"ok": True, "username": username, "role": role,
+                         "session_ttl": int(_settings.get("session_ttl", 86400))},
+                        [
+                            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}",
+                            _trusted_cookie_header(_trusted_raw, _new_max_age, bool(tls_active)),
+                        ]
+                    )
+                    return True
+
             if not totp_available():
                 # User has 2FA enrolled but pyotp is no longer installed.
                 # Fail safe: refuse the login (better than silently bypassing 2FA).
@@ -352,7 +407,9 @@ def handle(h, method, path, body):
             _logout(token)   # discard the just-created session
             cid = totp_create_challenge(clean_user, role)
             db_log_audit(clean_user, ip, 'login_totp_challenge', clean_user)
-            h._json(200, {"totp_required": True, "challenge_id": cid})
+            _remember_max = db_get_remember_hours(clean_user)
+            h._json(200, {"totp_required": True, "challenge_id": cid,
+                          "remember_hours_max": _remember_max})
             return True
 
         db_log_audit(username, ip, 'login_ok', username)
@@ -422,10 +479,42 @@ def handle(h, method, path, body):
         token = _create_session(username, role)
         db_log_audit(username, ip, 'login_ok', username)
         _sec = "; Secure" if tls_active else ""
+        _session_cookie = (f"session={token}; HttpOnly; Path=/; "
+                           f"SameSite=Strict; Max-Age=2592000{_sec}")
+
+        # ── Trusted device: remember this device? ─────────────────
+        remember       = bool(body.get("remember", False))
+        remember_hours = int(body.get("remember_hours", 9) or 9)
+        if remember and remember_hours > 0:
+            from db.users import (db_get_remember_hours, db_add_trusted_device)
+            from core.auth import parse_user_agent_label
+            _max_hours = db_get_remember_hours(username)
+            if _max_hours > 0:
+                remember_hours = max(1, min(remember_hours, _max_hours))
+                _raw_token = secrets.token_urlsafe(32)
+                _tok_hash  = hashlib.sha256(_raw_token.encode()).hexdigest()
+                _ua_label  = parse_user_agent_label(
+                    h.headers.get("User-Agent", ""))
+                db_add_trusted_device(
+                    username, _tok_hash, _ua_label, remember_hours,
+                    ip, h.headers.get("User-Agent", "")
+                )
+                db_log_audit(username, ip, 'trusted_device_added', username,
+                             f"label={_ua_label!r} hours={remember_hours}")
+                _td_cookie = _trusted_cookie_header(
+                    _raw_token, remember_hours * 3600, bool(tls_active))
+                h._send_with_cookies(
+                    200,
+                    {"ok": True, "username": username, "role": role,
+                     "session_ttl": int(_settings.get("session_ttl", 86400))},
+                    [_session_cookie, _td_cookie]
+                )
+                return True
+
         h._send_with_cookie(
             200, {"ok": True, "username": username, "role": role,
                   "session_ttl": int(_settings.get("session_ttl", 86400))},
-            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
+            _session_cookie
         )
         return True
 
@@ -494,8 +583,13 @@ def handle(h, method, path, body):
             h._json(401, {"error": "Invalid 2FA code"})
             return True
         db_clear_totp(me)
+        from db.users import db_revoke_trusted_devices as _revoke_td
+        _revoke_td(me)
         db_log_audit(me, h.client_address[0], 'totp_disabled', me)
-        h._json(200, {"ok": True})
+        # Clear the trusted-device cookie (devices no longer valid) but keep the session
+        h._send_with_cookies(200, {"ok": True}, [
+            _clear_trusted_cookie(bool(tls_active)),
+        ])
         return True
 
     # ── /api/users/{name}/totp/reset POST (admin) — clear a user's 2FA ──
@@ -509,11 +603,97 @@ def handle(h, method, path, body):
             return True
         try:
             db_clear_totp(target)
+            from db.users import db_revoke_trusted_devices as _revoke_td
+            _revoke_td(target)
             db_log_audit(admin, h.client_address[0], 'totp_admin_reset', target)
             h._json(200, {"ok": True})
         except Exception as e:
             log.error(f"totp_admin_reset error: {e}")
             h._json(500, {"error": "Reset failed"})
+        return True
+
+    # ── /api/me/trusted-devices GET — list own trusted devices ────
+    if path == "/api/me/trusted-devices" and method == "GET":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        from db.users import db_list_trusted_devices, db_get_remember_hours
+        devices = db_list_trusted_devices(me)
+        # Tag the current device (if any)
+        _current_hash = ""
+        _trusted_raw = _get_cookie(h, _TRUSTED_COOKIE)
+        if _trusted_raw:
+            _current_hash = hashlib.sha256(_trusted_raw.encode()).hexdigest()
+        current_id = None
+        if _current_hash:
+            from db.users import db_lookup_trusted_device
+            _row = db_lookup_trusted_device(me, _current_hash)
+            if _row:
+                current_id = _row["id"]
+        for d in devices:
+            d["current"] = (d["id"] == current_id)
+        h._json(200, {"devices": devices,
+                      "remember_hours": db_get_remember_hours(me)})
+        return True
+
+    # ── /api/me/trusted-devices DELETE — revoke all ────────────────
+    if path == "/api/me/trusted-devices" and method == "DELETE":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        from db.users import db_revoke_trusted_devices
+        n = db_revoke_trusted_devices(me)
+        db_log_audit(me, h.client_address[0], 'trusted_devices_revoke_all', me,
+                     f"count={n}")
+        _sec = "; Secure" if tls_active else ""
+        h._send_with_cookies(200, {"ok": True, "revoked": n}, [
+            _clear_trusted_cookie(bool(tls_active)),
+        ])
+        return True
+
+    # ── /api/me/trusted-devices/{id} DELETE — revoke one device ───
+    _td_match = _RE_TRUSTED_DEV.match(path)
+    if _td_match and method == "DELETE":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        dev_id = int(_td_match.group(1))
+        from db.users import db_revoke_trusted_device, db_lookup_trusted_device
+        # Check if this is the current device — if so, clear the cookie too
+        _trusted_raw = _get_cookie(h, _TRUSTED_COOKIE)
+        _is_current = False
+        if _trusted_raw:
+            _current_hash = hashlib.sha256(_trusted_raw.encode()).hexdigest()
+            _row = db_lookup_trusted_device(me, _current_hash)
+            if _row and _row["id"] == dev_id:
+                _is_current = True
+        ok = db_revoke_trusted_device(me, dev_id)
+        if not ok:
+            h._json(404, {"error": "Device not found"}); return True
+        db_log_audit(me, h.client_address[0], 'trusted_device_revoked', me,
+                     f"id={dev_id}")
+        if _is_current:
+            _sec = "; Secure" if tls_active else ""
+            h._send_with_cookies(200, {"ok": True}, [
+                _clear_trusted_cookie(bool(tls_active)),
+            ])
+        else:
+            h._json(200, {"ok": True})
+        return True
+
+    # ── /api/me/totp/remember-hours PATCH — set personal default ──
+    if path == "/api/me/totp/remember-hours" and method == "PATCH":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        try:
+            hours = int(body.get("hours", 9))
+        except (TypeError, ValueError):
+            h._json(400, {"error": "hours must be an integer"}); return True
+        hours = max(0, min(720, hours))
+        from db.users import db_set_remember_hours
+        db_set_remember_hours(me, hours)
+        h._json(200, {"ok": True, "hours": hours})
         return True
 
     # ── /api/logout POST ──────────────────────────────────────────
@@ -523,7 +703,10 @@ def handle(h, method, path, body):
         if token: auth_logout(token)
         db_log_audit(me_logout, h.client_address[0], 'logout', me_logout)
         _sec = "; Secure" if tls_active else ""
-        h._send_with_cookie(200, {"ok": True}, f"session=; HttpOnly; Path=/; Max-Age=0{_sec}")
+        h._send_with_cookies(200, {"ok": True}, [
+            f"session=; HttpOnly; Path=/; Max-Age=0{_sec}",
+            _clear_trusted_cookie(bool(tls_active)),
+        ])
         return True
 
     return False

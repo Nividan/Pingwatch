@@ -155,6 +155,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_with_cookies(self, code, data, cookies):
+        """Send JSON response with multiple Set-Cookie headers."""
+        body = json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        for c in cookies:
+            self.send_header("Set-Cookie", c)
+        self._sec_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
     import re as _re
     _HOST_RE = _re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(:\d+)?$')
 

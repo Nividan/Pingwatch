@@ -70,15 +70,70 @@ async function _openProfileModal(){
 
 // ── Two-Factor Authentication (TOTP) ─────────────────────────────
 async function _open2faModal(){
-  // Fetch current TOTP state via /api/me
+  // Fetch current TOTP state + trusted devices in parallel
   let me={username:'',totp_enabled:0};
-  try{ const r=await api('GET','/api/me'); Object.assign(me,r); }catch(_){}
+  let tdData={devices:[],remember_hours:9};
+  try{
+    const [meR, tdR]=await Promise.all([api('GET','/api/me'), api('GET','/api/me/trusted-devices')]);
+    Object.assign(me, meR);
+    if(tdR&&!tdR.error) Object.assign(tdData, tdR);
+  }catch(_){}
   closeM('m-2fa');
   const o=document.createElement('div'); o.className='mo'; o.id='m-2fa';
   _overlayClose(o,()=>closeM('m-2fa'));
   const enabled=!!me.totp_enabled;
+
+  const _fmtDate=(ts)=>{
+    if(!ts) return '—';
+    const d=new Date(ts*1000);
+    return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+  };
+
+  const _trustedSection=enabled ? (()=>{
+    const devs=tdData.devices||[];
+    const devRows=devs.length ? devs.map(d=>`
+      <tr>
+        <td>${esc(d.device_label||'Unknown')}</td>
+        <td style="color:var(--text2)">${esc(d.ip||'')}</td>
+        <td style="color:var(--text2)">${_fmtDate(d.last_used_at)}</td>
+        <td style="color:var(--text2)">${_fmtDate(d.expires_at)}</td>
+        <td>${d.current?'<span style="color:var(--accent);font-size:11px">this device</span>':''}</td>
+        <td><button class="btn-xs btn-d" onclick="_2faRevokeDevice(${d.id})">Revoke</button></td>
+      </tr>`).join('')
+      : `<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:10px">No trusted devices</td></tr>`;
+    return `
+      <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <b>Trusted Devices</b>
+          ${devs.length?`<button class="btn-xs btn-d" onclick="_2faRevokeAllDevices()">Revoke all</button>`:''}
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;font-size:12px;border-collapse:collapse">
+            <thead><tr style="color:var(--text2)">
+              <th style="text-align:left;padding:4px 6px">Browser</th>
+              <th style="text-align:left;padding:4px 6px">IP</th>
+              <th style="text-align:left;padding:4px 6px">Last used</th>
+              <th style="text-align:left;padding:4px 6px">Expires</th>
+              <th></th><th></th>
+            </tr></thead>
+            <tbody>${devRows}</tbody>
+          </table>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Default remember duration (0=disabled, max 720 h)</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="number" id="tfa-remember-hrs" min="0" max="720"
+                   value="${parseInt(tdData.remember_hours||9)}"
+                   style="width:70px;text-align:center"/>
+            <span style="color:var(--text2)">hours</span>
+            <button class="btn-s" onclick="_2faSaveRememberHours()">Save</button>
+          </div>
+        </div>
+      </div>`;
+  })() : '';
+
   o.innerHTML=`
-    <div class="mbox" style="max-width:480px">
+    <div class="mbox" style="max-width:560px">
       <div class="mhd">
         <div class="mttl">🔐 Two-Factor Authentication</div>
         <button class="mclose" onclick="closeM('m-2fa')">✕</button>
@@ -90,7 +145,8 @@ async function _open2faModal(){
                <input type="password" id="tfa-pass" autocomplete="current-password"/></div>
              <div class="fr"><label class="fl">Current 2FA code</label>
                <input type="text" id="tfa-code" maxlength="6" autocomplete="one-time-code"
-                      style="font-family:monospace;letter-spacing:2px;text-align:center"/></div>`
+                      style="font-family:monospace;letter-spacing:2px;text-align:center"/></div>
+             ${_trustedSection}`
           : `<div style="margin-bottom:14px">2FA is currently <b>disabled</b>. Click below to enrol.</div>`
         }
       </div>
@@ -152,6 +208,36 @@ async function _2faDisable(){
   if(r.error){ toast(r.error,'err'); return; }
   toast('2FA disabled','ok');
   closeM('m-2fa');
+}
+
+async function _2faRevokeDevice(id){
+  if(!confirm('Revoke this trusted device? You will need to enter your 2FA code next time you log in from it.')) return;
+  try{
+    const r=await api('DELETE',`/api/me/trusted-devices/${id}`);
+    if(r.error){ toast(r.error,'err'); return; }
+    toast('Device revoked','ok');
+    _open2faModal();  // refresh
+  }catch(e){ toast('Revoke failed','err'); }
+}
+
+async function _2faRevokeAllDevices(){
+  if(!confirm('Revoke ALL trusted devices? You will need to enter your 2FA code next time you log in.')) return;
+  try{
+    const r=await api('DELETE','/api/me/trusted-devices');
+    if(r.error){ toast(r.error,'err'); return; }
+    toast(`Revoked ${r.revoked||0} device(s)`,'ok');
+    _open2faModal();  // refresh
+  }catch(e){ toast('Revoke failed','err'); }
+}
+
+async function _2faSaveRememberHours(){
+  const hours=parseInt(document.getElementById('tfa-remember-hrs')?.value||'9',10);
+  if(isNaN(hours)||hours<0||hours>720){ toast('Enter 0–720 hours','err'); return; }
+  try{
+    const r=await api('PATCH','/api/me/totp/remember-hours',{hours});
+    if(r.error){ toast(r.error,'err'); return; }
+    toast('Saved','ok');
+  }catch(e){ toast('Save failed','err'); }
 }
 
 
