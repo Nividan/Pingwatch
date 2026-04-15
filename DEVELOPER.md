@@ -288,6 +288,8 @@ Cold-start suppression is enforced in two layers: (1) sample-count bootstrap via
 
 When anomaly causes the `_threshold_state` transition to `"warn"`, the sensor sets `_anom_caused_warn = True` for that probe; the flap-log emit branch in `_run_once()` reads the flag and writes `direction='anomaly_warn'` instead of `'threshold_warn'`. The Events tab (app.js normalization + events.js branches) maps `anomaly_warn` to `_direction='anomaly'` / `_thr_level='warn'` and renders the "🧠 Anomaly" pill / filter.
 
+**Mass-enable paths.** Two admin-scoped entry points bypass sensor-by-sensor clicking: (1) `anomaly_default_new_sensors` setting — when on, the sensor POST path in `routes/devices.py` sets `anomaly_enabled=1` on newly created sensors whose `stype` is in `SUPPORTED_STYPES`; (2) `POST /api/anomaly/bulk-enable` in `routes/settings.py` walks `STATE.devices.*.sensors.*`, flips `anomaly_enabled=1` on every off-and-supported sensor, and calls `reset_baseline()` on each so the cold-start clock ticks from the click — no alert storm possible because the full 24 h suppression window applies uniformly. Audit entry `anomaly_bulk_enable` records `enabled=N skipped=M`.
+
 ### `monitoring/alert_dispatchers.py`
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
@@ -323,9 +325,9 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 |--------|-----------|
 | `auth.py` | `/api/login`, `/api/login/totp`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile`, `/api/me/totp/setup`, `/api/me/totp/verify`, `/api/me/totp/disable`, `/api/me/totp/remember-hours`, `/api/me/trusted-devices`, `/api/me/trusted-devices/{id}`, `/api/users/{u}/totp/reset` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
-| `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
+| `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats`, `/api/anomaly/bulk-enable` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
@@ -457,9 +459,11 @@ The frontend is served as static files — no build step.
 | `DELETE` | `/api/devices/{did}` | Delete device |
 | `GET` | `/api/sensors/{did}` | List sensors for a device |
 | `POST` | `/api/sensors/{did}` | Add a sensor |
-| `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor |
+| `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor (accepts `anomaly_enabled`, `anomaly_sensitivity`, `anomaly_min_samples`) |
 | `DELETE` | `/api/sensors/{did}/{sid}` | Delete a sensor |
+| `POST` | `/api/sensors/{did}/{sid}/anomaly/reset` | Wipe the learned anomaly baseline (in-memory + DB row); operator role |
 | `POST` | `/api/device/{did}/scan` | Trigger port scan (async) |
+| `POST` | `/api/anomaly/bulk-enable` | Enable anomaly detection on every supported sensor that's currently off; resets each baseline to a fresh cold-start window; admin role |
 
 ### Settings
 

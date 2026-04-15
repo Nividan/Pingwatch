@@ -298,7 +298,9 @@
   - Supported sensor types: `ping`, `tcp`, `http`, `dns`, `http_keyword`, `banner` (SNMP / TLS / VMware excluded in v1)
   - `flap_log.direction='anomaly_warn'` distinguishes anomaly-caused warnings from static-threshold warnings in the Events tab (🧠 badge + filter pill)
   - UI: collapsible "🧠 Anomaly Detection" section on the sensor edit modal (sensitivity + min samples + live baseline readout + Reset button); baseline band overlay on the sensor history chart
-  - Settings → General → Login Security: global enable, cold-start window, checkpoint interval
+  - Settings → Sensors tab → 🧠 Anomaly Detection: three-group layout (Global master switch + cold-start / checkpoint knobs; Defaults for new sensors; Apply to existing sensors)
+  - Auto-enable on new sensors — `anomaly_default_new_sensors` setting; sensor POST enables anomaly automatically on supported types (`ping`, `tcp`, `http`, `dns`, `http_keyword`, `banner`) when the admin opts in
+  - Bulk enable on existing sensors — `POST /api/anomaly/bulk-enable` (admin) flips every supported sensor's `anomaly_enabled=1` and resets each baseline so the 24h cold-start ticks from the click, preventing an alert storm
   - `POST /api/sensors/{did}/{sid}/anomaly/reset` — wipe in-memory + DB baseline (operator role)
 
 ## 🔴 High Priority
