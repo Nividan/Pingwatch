@@ -164,6 +164,7 @@ body{
     <div class="step-dot" data-step="2"></div>
     <div class="step-dot" data-step="3"></div>
     <div class="step-dot" data-step="4"></div>
+    <div class="step-dot" data-step="5"></div>
   </div>
 
   <!-- Step 1: Choose Backend -->
@@ -257,7 +258,94 @@ CREATE DATABASE pingwatch OWNER pingwatch;
     <div class="status-msg" id="conn-status"></div>
     <div class="btn-row btn-row-spread" style="margin-top:20px">
       <button class="btn btn-secondary" onclick="goStep(3)">Back</button>
-      <button class="btn btn-primary" id="btn-complete" onclick="completeSetup()" disabled>Complete Setup</button>
+      <button class="btn btn-primary" id="btn-complete" onclick="completeSetup()" disabled>Continue</button>
+    </div>
+  </div>
+
+  <!-- Step 5: Optional Settings (shared by SQLite and PostgreSQL flows) -->
+  <div class="setup-card hidden" id="step5">
+    <div class="card-title">Optional Settings</div>
+    <div class="card-desc">Configure these now or skip — all settings can be changed later in the Settings panel.</div>
+    <div id="step5-status" class="status-msg" style="display:none"></div>
+
+    <!-- Organisation -->
+    <div class="field" style="margin-top:8px">
+      <label>Organisation Name</label>
+      <input type="text" id="ss-orgname" value="PingWatch" placeholder="Network Monitor" maxlength="120">
+      <div style="font-size:11px;color:var(--text2);margin-top:3px">Shown in the top bar and browser tab title.</div>
+    </div>
+
+    <!-- SMTP -->
+    <details style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:10px">
+      <summary style="cursor:pointer;font-weight:600">Email Alerts (SMTP) <span style="color:var(--text2);font-weight:400;font-size:12px">— optional</span></summary>
+      <div style="margin-top:10px">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Recipients come from user accounts — this only configures the sender.</div>
+        <div class="field-row">
+          <div class="field"><label>SMTP Host</label>
+            <input type="text" id="ss-smtp-host" placeholder="smtp.gmail.com"></div>
+          <div class="field"><label>Port</label>
+            <input type="number" id="ss-smtp-port" value="587" min="1" max="65535"></div>
+        </div>
+        <div class="field"><label>Security</label>
+          <select id="ss-smtp-tls">
+            <option value="starttls" selected>STARTTLS (port 587)</option>
+            <option value="ssl">SSL/TLS (port 465)</option>
+            <option value="none">None (port 25)</option>
+          </select></div>
+        <div class="field-row">
+          <div class="field"><label>Username</label>
+            <input type="text" id="ss-smtp-user" placeholder="user@example.com"></div>
+          <div class="field"><label>Password</label>
+            <input type="password" id="ss-smtp-pass" placeholder="••••••••"></div>
+        </div>
+        <div class="field"><label>From address</label>
+          <input type="text" id="ss-smtp-from" placeholder="pingwatch@example.com"></div>
+      </div>
+    </details>
+
+    <!-- Syslog -->
+    <details style="margin-top:10px;border:1px solid var(--border);border-radius:6px;padding:10px">
+      <summary style="cursor:pointer;font-weight:600">Syslog Forwarding <span style="color:var(--text2);font-weight:400;font-size:12px">— optional</span></summary>
+      <div style="margin-top:10px">
+        <div class="field-row">
+          <div class="field"><label>Server IP / Hostname</label>
+            <input type="text" id="ss-sl-host" placeholder="192.168.1.100 or syslog.example.com"></div>
+          <div class="field"><label>Port</label>
+            <input type="number" id="ss-sl-port" value="514" min="1" max="65535"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Protocol</label>
+            <select id="ss-sl-proto">
+              <option value="udp" selected>UDP</option>
+              <option value="tcp">TCP</option>
+            </select></div>
+          <div class="field"><label>Minimum Severity</label>
+            <select id="ss-sl-sev">
+              <option value="critical">Critical only</option>
+              <option value="warning" selected>Warning and above</option>
+              <option value="info">All events</option>
+            </select></div>
+        </div>
+      </div>
+    </details>
+
+    <!-- Anomaly -->
+    <details style="margin-top:10px;margin-bottom:14px;border:1px solid var(--border);border-radius:6px;padding:10px">
+      <summary style="cursor:pointer;font-weight:600">Anomaly Detection <span style="color:var(--text2);font-weight:400;font-size:12px">— optional</span></summary>
+      <div style="margin-top:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="ss-anom-default">
+          <span>Enable anomaly detection by default on new sensors</span>
+        </label>
+        <div style="font-size:11px;color:var(--text2);margin-top:6px;margin-left:24px">
+          Learns normal sensor behaviour and alerts on deviations. Supported for ping/tcp/http/dns/http_keyword/banner sensors. You can still toggle per sensor after creation.
+        </div>
+      </div>
+    </details>
+
+    <div class="btn-row btn-row-spread">
+      <button class="btn btn-secondary" onclick="finaliseSetup(true)" id="btn-skip5">Skip All</button>
+      <button class="btn btn-primary" onclick="finaliseSetup(false)" id="btn-save5">Save &amp; Finish</button>
     </div>
   </div>
 
@@ -285,7 +373,7 @@ function selectBackend(b) {
 }
 
 function goStep(n) {
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 1; i <= 5; i++) {
     const el = document.getElementById('step' + i);
     if (el) el.classList.toggle('hidden', i !== n);
   }
@@ -306,32 +394,127 @@ function goStep(n) {
 
 function step1Next() {
   if (_backend === 'sqlite') {
-    completeSqlite();
+    // SQLite has no DB config — jump straight to optional settings.
+    goStep(5);
   } else {
     goStep(2);
   }
 }
 
-async function completeSqlite() {
-  document.getElementById('btn-step1').disabled = true;
-  document.getElementById('btn-step1').textContent = 'Setting up...';
+// Collect optional-settings values from step 5. Invalid/empty fields are
+// skipped silently — a typo must never block setup. The server also validates.
+function _collectOptionalSettings() {
+  const out = {};
+  const warnings = [];
+  const _trim = id => (document.getElementById(id)?.value || '').trim();
+  const _int  = id => {
+    const v = parseInt(document.getElementById(id)?.value);
+    return Number.isFinite(v) ? v : null;
+  };
+
+  const org = _trim('ss-orgname');
+  if (org) out.org_name = org.slice(0, 120);
+
+  const smtpHost = _trim('ss-smtp-host');
+  if (smtpHost) {
+    // Very permissive hostname check — server re-validates on use.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:\-]*$/.test(smtpHost)) {
+      warnings.push(`SMTP host "${smtpHost}" looks unusual — saved anyway.`);
+    }
+    out.smtp_host = smtpHost;
+    const p = _int('ss-smtp-port');
+    out.smtp_port = (p && p >= 1 && p <= 65535) ? p : 587;
+    out.smtp_tls  = document.getElementById('ss-smtp-tls')?.value || 'starttls';
+    const u = _trim('ss-smtp-user');
+    if (u) out.smtp_user = u;
+    const pw = document.getElementById('ss-smtp-pass')?.value || '';
+    if (pw) out.smtp_pass = pw;
+    const from = _trim('ss-smtp-from');
+    if (from) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from)) {
+        warnings.push(`"${from}" doesn't look like a valid email — saved anyway.`);
+      }
+      out.smtp_from = from;
+    }
+  }
+
+  const slHost = _trim('ss-sl-host');
+  if (slHost) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:\-]*$/.test(slHost)) {
+      warnings.push(`Syslog host "${slHost}" looks unusual — saved anyway.`);
+    }
+    out.syslog_host = slHost;
+    const sp = _int('ss-sl-port');
+    out.syslog_port = (sp && sp >= 1 && sp <= 65535) ? sp : 514;
+    out.syslog_proto = document.getElementById('ss-sl-proto')?.value || 'udp';
+    out.syslog_min_severity = document.getElementById('ss-sl-sev')?.value || 'warning';
+  }
+
+  if (document.getElementById('ss-anom-default')?.checked) {
+    out.anomaly_default_new_sensors = 1;
+  }
+
+  return {settings: out, warnings};
+}
+
+async function finaliseSetup(skip) {
+  const btnSkip = document.getElementById('btn-skip5');
+  const btnSave = document.getElementById('btn-save5');
+  const status  = document.getElementById('step5-status');
+  btnSkip.disabled = true; btnSave.disabled = true;
+  btnSave.innerHTML = '<span class="spinner"></span> Setting up...';
+  status.style.display = 'none';
+
+  let optional = {};
+  if (!skip) {
+    try {
+      const collected = _collectOptionalSettings();
+      optional = collected.settings;
+      if (collected.warnings.length) {
+        status.className = 'status-msg';
+        status.style.display = 'block';
+        status.style.color = 'var(--warn, #f0a500)';
+        status.textContent = collected.warnings.join(' ');
+      }
+    } catch (e) {
+      // A bug in the collector must not break setup — log + continue with empty optional.
+      console.warn('setup: optional settings collector threw', e);
+    }
+  }
+
+  const payload = {backend: _backend, ...optional};
+  if (_backend === 'postgresql') {
+    payload.host     = document.getElementById('pg-host').value;
+    payload.port     = parseInt(document.getElementById('pg-port').value) || 5432;
+    payload.database = document.getElementById('pg-database').value;
+    payload.user     = document.getElementById('pg-user').value;
+    payload.password = document.getElementById('pg-password').value;
+  }
+
   try {
     const r = await fetch('/api/setup/complete', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({backend: 'sqlite'})
+      body: JSON.stringify(payload)
     });
     const d = await r.json();
     if (d.ok) {
       showDone();
     } else {
-      alert('Setup failed: ' + (d.error || 'unknown error'));
+      status.className = 'status-msg err';
+      status.style.display = 'block';
+      status.style.color = '';
+      status.innerHTML = '<span class="check-fail">&#10007;</span> ' + escHtml(d.error || 'Setup failed');
+      btnSkip.disabled = false; btnSave.disabled = false;
+      btnSave.innerHTML = 'Save &amp; Finish';
     }
   } catch (e) {
-    alert('Setup failed: ' + e.message);
+    status.className = 'status-msg err';
+    status.style.display = 'block';
+    status.innerHTML = '<span class="check-fail">&#10007;</span> ' + escHtml(e.message);
+    btnSkip.disabled = false; btnSave.disabled = false;
+    btnSave.innerHTML = 'Save &amp; Finish';
   }
-  document.getElementById('btn-step1').disabled = false;
-  document.getElementById('btn-step1').textContent = 'Continue';
 }
 
 async function checkPg() {
@@ -421,42 +604,13 @@ async function testConnection() {
   btn.innerHTML = 'Test Connection';
 }
 
-async function completeSetup() {
-  const btn = document.getElementById('btn-complete');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Setting up...';
-  try {
-    const r = await fetch('/api/setup/complete', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        backend: 'postgresql',
-        host: document.getElementById('pg-host').value,
-        port: parseInt(document.getElementById('pg-port').value) || 5432,
-        database: document.getElementById('pg-database').value,
-        user: document.getElementById('pg-user').value,
-        password: document.getElementById('pg-password').value,
-      })
-    });
-    const d = await r.json();
-    if (d.ok) {
-      showDone();
-    } else {
-      const st = document.getElementById('conn-status');
-      st.className = 'status-msg err';
-      st.innerHTML = '<span class="check-fail">&#10007;</span> ' + escHtml(d.error || 'Setup failed');
-      btn.disabled = false;
-      btn.innerHTML = 'Complete Setup';
-    }
-  } catch (e) {
-    alert('Setup failed: ' + e.message);
-    btn.disabled = false;
-    btn.innerHTML = 'Complete Setup';
-  }
+// PostgreSQL path: Test Connection succeeded → move to optional-settings step.
+function completeSetup() {
+  goStep(5);
 }
 
 function showDone() {
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 1; i <= 5; i++) {
     const el = document.getElementById('step' + i);
     if (el) el.classList.add('hidden');
   }

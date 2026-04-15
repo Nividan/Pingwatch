@@ -5,10 +5,118 @@ Handles: /api/setup/check-pg, /api/setup/test-connection, /api/setup/complete
 """
 
 import platform
+import re
 import shutil
 import subprocess
 
 from core.logger import log
+
+
+_HOST_RE  = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,252}$")
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _collect_optional_settings(body: dict) -> dict:
+    """Extract optional settings from the setup payload.
+
+    Invalid/out-of-range values are logged and dropped — they never fail
+    the whole setup request. An empty dict means "user skipped."
+    """
+    out = {}
+
+    def _warn(field, val, reason):
+        # Avoid leaking full input back; just note that a field was rejected.
+        preview = str(val)[:40] if val is not None else ""
+        log.warning(f"setup: rejected optional setting '{field}' "
+                    f"(reason: {reason}, input preview: {preview!r})")
+
+    # Organisation name — free-form, just length-limit
+    org = body.get("org_name")
+    if isinstance(org, str) and org.strip():
+        out["org_name"] = org.strip()[:120]
+
+    # SMTP
+    smtp_host = body.get("smtp_host")
+    if isinstance(smtp_host, str) and smtp_host.strip():
+        host = smtp_host.strip()
+        if not _HOST_RE.match(host):
+            _warn("smtp_host", host, "hostname format")
+            # Save anyway — user may know what they're doing and server-side
+            # SMTP connect will surface the real failure when alerts fire.
+        out["smtp_host"] = host
+        try:
+            p = int(body.get("smtp_port", 587))
+            out["smtp_port"] = str(p if 1 <= p <= 65535 else 587)
+        except (TypeError, ValueError):
+            _warn("smtp_port", body.get("smtp_port"), "not an integer")
+            out["smtp_port"] = "587"
+        tls = str(body.get("smtp_tls", "starttls")).strip().lower()
+        if tls not in ("starttls", "ssl", "none"):
+            _warn("smtp_tls", tls, "unknown mode")
+            tls = "starttls"
+        out["smtp_tls"] = tls
+        user = body.get("smtp_user")
+        if isinstance(user, str):
+            out["smtp_user"] = user.strip()[:256]
+        pw = body.get("smtp_pass")
+        if isinstance(pw, str) and pw:
+            out["smtp_pass"] = pw
+        frm = body.get("smtp_from")
+        if isinstance(frm, str) and frm.strip():
+            frm = frm.strip()
+            if not _EMAIL_RE.match(frm):
+                _warn("smtp_from", frm, "not an email address")
+            out["smtp_from"] = frm[:256]
+
+    # Syslog
+    sl_host = body.get("syslog_host")
+    if isinstance(sl_host, str) and sl_host.strip():
+        host = sl_host.strip()
+        if not _HOST_RE.match(host):
+            _warn("syslog_host", host, "hostname format")
+        out["syslog_host"] = host
+        try:
+            p = int(body.get("syslog_port", 514))
+            out["syslog_port"] = str(p if 1 <= p <= 65535 else 514)
+        except (TypeError, ValueError):
+            _warn("syslog_port", body.get("syslog_port"), "not an integer")
+            out["syslog_port"] = "514"
+        proto = str(body.get("syslog_proto", "udp")).strip().lower()
+        if proto not in ("udp", "tcp"):
+            _warn("syslog_proto", proto, "must be udp/tcp")
+            proto = "udp"
+        out["syslog_proto"] = proto
+        sev = str(body.get("syslog_min_severity", "warning")).strip().lower()
+        if sev not in ("critical", "warning", "info"):
+            _warn("syslog_min_severity", sev, "must be critical/warning/info")
+            sev = "warning"
+        out["syslog_min_severity"] = sev
+
+    # Anomaly default
+    anom = body.get("anomaly_default_new_sensors")
+    if anom:
+        try:
+            out["anomaly_default_new_sensors"] = "1" if int(anom) else "0"
+        except (TypeError, ValueError):
+            # Truthy-but-unparseable values (e.g. "yes") — treat as on.
+            out["anomaly_default_new_sensors"] = "1"
+
+    return out
+
+
+def _persist_optional_settings(settings: dict) -> None:
+    """Best-effort save. Any exception is logged and swallowed — setup must
+    not fail because an optional field hit a DB quirk."""
+    if not settings:
+        return
+    try:
+        from db.users import db_save_settings
+        db_save_settings(settings)
+        log.info(f"setup: saved {len(settings)} optional setting(s): "
+                 f"{sorted(settings.keys())}")
+    except Exception as e:
+        log.warning(f"setup: failed to persist optional settings "
+                    f"({type(e).__name__}: {e}) — user can re-enter via Settings UI.")
 
 
 def _detect_pg():
@@ -129,6 +237,7 @@ def handle(h, method, path, body):
             logs_db_init()
             db_seed_users()
             db_seed_alert_profiles()
+            _persist_optional_settings(_collect_optional_settings(body))
             log.info("Setup complete: SQLite backend selected")
             h._json(200, {"ok": True, "restart_required": True})
             return True
@@ -172,6 +281,7 @@ def handle(h, method, path, body):
             logs_db_init()
             db_seed_users()
             db_seed_alert_profiles()
+            _persist_optional_settings(_collect_optional_settings(body))
             log.info("Setup complete: PostgreSQL backend selected")
             h._json(200, {"ok": True, "restart_required": True})
         except Exception as e:
