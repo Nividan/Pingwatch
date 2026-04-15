@@ -669,6 +669,12 @@ def handle(h, method, path, body):
                 # Optional anomaly config on create (UI enables post-creation; API may set here).
                 if "anomaly_enabled" in body:
                     s2.anomaly_enabled = 1 if body["anomaly_enabled"] else 0
+                else:
+                    import core.settings as _anom_st_mod
+                    if int(_anom_st_mod.get("anomaly_default_new_sensors", 0) or 0):
+                        from monitoring.anomaly import SUPPORTED_STYPES as _ANOM_STYPES
+                        if s2.stype in _ANOM_STYPES:
+                            s2.anomaly_enabled = 1
                 if "anomaly_sensitivity" in body:
                     try:
                         _sv = int(body["anomaly_sensitivity"])

@@ -182,6 +182,13 @@ function _buildSettingsTab_users(sr, ur) {
           </label>
           <div class="fh" style="margin-left:24px;margin-top:3px">Individual sensors must also opt in (Edit sensor → Anomaly Detection).</div>
         </div>
+        <div class="fr" style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-anom-auto" ${sr.anomaly_default_new_sensors?'checked':''}>
+            <span class="fl" style="margin:0">Auto-enable on newly created sensors</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">Only affects sensors created after this setting is saved. Existing sensors unchanged — use the button below to backfill.</div>
+        </div>
         <div class="fgrid" style="margin-top:10px">
           <div class="fr"><label class="fl">Cold-start suppression (h)</label>
             <input type="number" id="st-anom-cold" value="${sr.anomaly_cold_start_hours??24}" min="0" max="168" style="max-width:100px"/>
@@ -190,8 +197,21 @@ function _buildSettingsTab_users(sr, ur) {
             <input type="number" id="st-anom-ckpt" value="${sr.anomaly_checkpoint_interval_s??3600}" min="60" max="86400" style="max-width:100px"/>
             <div class="fh">How often to save learned baselines to disk. Default 3600 s (1 hour).</div></div>
         </div>
+        <div style="margin-top:12px">
+          <button class="btn-s rbac-admin" onclick="_anomBulkEnable()" style="font-size:12px;padding:6px 14px">Enable on all existing supported sensors</button>
+          <div class="fh" style="margin-top:4px">Turns on anomaly detection for every ping / tcp / http / dns / http_keyword / banner sensor. Each gets a fresh cold-start window — no alert storm.</div>
+        </div>
       </div>
     </div>`;
+}
+
+async function _anomBulkEnable(){
+  if(!confirm('Enable anomaly detection on all supported sensors (ping, tcp, http, dns, http_keyword, banner)?\n\nEach gets a fresh cold-start window — no alerts fire for the first 24 hours.')) return;
+  try{
+    const r=await api('POST','/api/anomaly/bulk-enable',{});
+    if(r&&r.error){toast(r.error,'err');return;}
+    toast(`Enabled on ${r.enabled} sensor(s); skipped ${r.skipped}`,'ok');
+  }catch(e){toast('Bulk enable failed','err');}
 }
 
 function _buildSettingsTab_groups() {
@@ -1869,6 +1889,7 @@ async function saveSecuritySettings(){
   const failWin     = parseInt(document.getElementById('st-fail-win')?.value);
   const totpRemem   = parseInt(document.getElementById('st-totp-remember')?.value);
   const anomEn      = document.getElementById('st-anom-en')?.checked;
+  const anomAuto    = document.getElementById('st-anom-auto')?.checked;
   const anomCold    = parseInt(document.getElementById('st-anom-cold')?.value);
   const anomCkpt    = parseInt(document.getElementById('st-anom-ckpt')?.value);
   const body = {};
@@ -1878,6 +1899,8 @@ async function saveSecuritySettings(){
                            body.totp_remember_hours   = totpRemem;
   if(typeof anomEn === 'boolean')
                            body.anomaly_global_enabled = anomEn ? 1 : 0;
+  if(typeof anomAuto === 'boolean')
+                           body.anomaly_default_new_sensors = anomAuto ? 1 : 0;
   if(!isNaN(anomCold) && anomCold >= 0 && anomCold <= 168)
                            body.anomaly_cold_start_hours = anomCold;
   if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)

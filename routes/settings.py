@@ -121,6 +121,7 @@ def handle(h, method, path, body):
             "anomaly_global_enabled":        int(_settings.get("anomaly_global_enabled", 1)),
             "anomaly_cold_start_hours":      int(_settings.get("anomaly_cold_start_hours", 24)),
             "anomaly_checkpoint_interval_s": int(_settings.get("anomaly_checkpoint_interval_s", 3600)),
+            "anomaly_default_new_sensors":   int(_settings.get("anomaly_default_new_sensors", 0)),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -291,7 +292,7 @@ def handle(h, method, path, body):
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window", "totp_remember_hours",
             "anomaly_global_enabled", "anomaly_cold_start_hours",
-            "anomaly_checkpoint_interval_s",
+            "anomaly_checkpoint_interval_s", "anomaly_default_new_sensors",
             "org_name", "latency_good_ms", "latency_warn_ms",
             "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):
@@ -754,6 +755,37 @@ def handle(h, method, path, body):
         except Exception as e:
             log.error(f"Migration failed: {e}")
             h._json(500, {"ok": False, "error": "Migration failed — check server logs"})
+        return True
+
+    # ── /api/anomaly/bulk-enable POST — enable anomaly on all supported sensors ──
+    if path == "/api/anomaly/bulk-enable" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from monitoring.anomaly import SUPPORTED_STYPES, reset_baseline
+        from db import db_save, db_reset_anomaly_baseline
+        STATE = app_state.STATE
+        enabled = 0
+        skipped = 0
+        reset_targets = []
+        with STATE._lock:
+            for dev in STATE.devices.values():
+                for s in dev.sensors.values():
+                    if s.stype not in SUPPORTED_STYPES:
+                        skipped += 1
+                        continue
+                    if s.anomaly_enabled:
+                        skipped += 1
+                        continue
+                    s.anomaly_enabled = 1
+                    reset_baseline(s)
+                    reset_targets.append((dev.device_id, s.sensor_id))
+                    enabled += 1
+        for _d, _s in reset_targets:
+            _db_enqueue(lambda _d=_d, _s=_s: db_reset_anomaly_baseline(_d, _s))
+        _db_enqueue(lambda: db_save(STATE))
+        db_log_audit(user, h.client_address[0], 'anomaly_bulk_enable',
+                     '', f"enabled={enabled} skipped={skipped}")
+        h._json(200, {"ok": True, "enabled": enabled, "skipped": skipped})
         return True
 
     return False
