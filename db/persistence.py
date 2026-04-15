@@ -553,13 +553,24 @@ def autosave_loop(state):
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
             _logs_enqueue(db_clean_samples)
-        if _iter % 360 == 0:   # every ~6 hours — check license expirations
+        if _iter % 360 == 0:   # every ~6 hours
+            # Check license expirations
             try:
                 from monitoring.license_checker import check_license_expirations
                 check_license_expirations()
             except Exception as _le:
                 from core.logger import log as _llog
                 _llog.warning(f"License check error: {_le}")
+            # Sweep expired trusted-device rows
+            try:
+                from db.users import db_sweep_expired_trusted_devices
+                _n = db_sweep_expired_trusted_devices()
+                if _n:
+                    from core.logger import log as _llog
+                    _llog.debug(f"Swept {_n} expired trusted-device row(s)")
+            except Exception as _tde:
+                from core.logger import log as _llog
+                _llog.warning(f"Trusted device sweep error: {_tde}")
         if _iter % 1440 == 0:  # every ~24 hours — maintain PG partitions
             if is_pg():
                 try:

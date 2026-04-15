@@ -21,18 +21,19 @@ def pg_create_main_schema(cur):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            username         TEXT PRIMARY KEY,
-            pw_hash          TEXT NOT NULL,
-            role             TEXT DEFAULT 'admin',
-            auth_type        TEXT DEFAULT 'local',
-            domain           TEXT DEFAULT '',
-            full_name        TEXT DEFAULT '',
-            email            TEXT DEFAULT '',
-            group_id         INTEGER DEFAULT NULL,
-            theme_preference TEXT DEFAULT 'dark',
-            totp_secret      TEXT DEFAULT '',
-            totp_enabled     INTEGER DEFAULT 0,
-            totp_recovery    TEXT DEFAULT ''
+            username            TEXT PRIMARY KEY,
+            pw_hash             TEXT NOT NULL,
+            role                TEXT DEFAULT 'admin',
+            auth_type           TEXT DEFAULT 'local',
+            domain              TEXT DEFAULT '',
+            full_name           TEXT DEFAULT '',
+            email               TEXT DEFAULT '',
+            group_id            INTEGER DEFAULT NULL,
+            theme_preference    TEXT DEFAULT 'dark',
+            totp_secret         TEXT DEFAULT '',
+            totp_enabled        INTEGER DEFAULT 0,
+            totp_recovery       TEXT DEFAULT '',
+            totp_remember_hours INTEGER DEFAULT 9
         )""")
     # Migration: add theme_preference for existing installs
     cur.execute("""
@@ -65,6 +66,11 @@ def pg_create_main_schema(cur):
                            WHERE table_schema='main' AND table_name='users'
                              AND column_name='totp_recovery') THEN
                 ALTER TABLE users ADD COLUMN totp_recovery TEXT DEFAULT '';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_remember_hours') THEN
+                ALTER TABLE users ADD COLUMN totp_remember_hours INTEGER DEFAULT 9;
             END IF;
         END $$
     """)
@@ -490,6 +496,28 @@ def pg_create_main_schema(cur):
         )""")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_dev_lic_did ON device_licenses(did)"
+    )
+
+    # ── Trusted devices (Remember 2FA) ───────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS trusted_devices (
+            id           SERIAL PRIMARY KEY,
+            username     TEXT    NOT NULL,
+            token_hash   TEXT    NOT NULL UNIQUE,
+            device_label TEXT    DEFAULT '',
+            created_at   DOUBLE PRECISION DEFAULT 0,
+            expires_at   DOUBLE PRECISION DEFAULT 0,
+            last_used_at DOUBLE PRECISION DEFAULT 0,
+            ip           TEXT    DEFAULT '',
+            user_agent   TEXT    DEFAULT ''
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trusted_dev_user "
+        "ON trusted_devices(username)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trusted_dev_exp "
+        "ON trusted_devices(expires_at)"
     )
 
     # ── Topology map tables ──────────────────────────────────────────

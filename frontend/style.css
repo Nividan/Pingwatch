@@ -1155,6 +1155,10 @@ select{cursor:pointer;appearance:none;
 .btn-danger:active{transform:translateY(0)}
 .btn-s{background:var(--bg3);color:var(--text2);border:1px solid var(--border);padding:8px 16px;border-radius:4px;font-size:13px;font-weight:500;cursor:pointer;transition:all .12s}
 .btn-s:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
+.btn-xs{padding:3px 8px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--bg3);color:var(--text2);transition:background .12s}
+.btn-xs:hover{background:var(--bg4);color:var(--text)}
+.btn-xs.btn-d{color:var(--down,#f85149);border-color:var(--down,#f85149)}
+.btn-xs.btn-d:hover{background:rgba(248,81,73,.12)}
 .btn-sm{
   padding:5px 13px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;
   border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.05);

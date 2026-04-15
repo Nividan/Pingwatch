@@ -66,6 +66,20 @@ from db.users       import (
     db_update_profile,
     db_update_own_profile,
     db_update_theme,
+    # TOTP helpers
+    db_get_totp,
+    db_set_totp,
+    db_clear_totp,
+    # Trusted devices (Remember 2FA)
+    db_get_remember_hours,
+    db_set_remember_hours,
+    db_add_trusted_device,
+    db_lookup_trusted_device,
+    db_touch_trusted_device,
+    db_list_trusted_devices,
+    db_revoke_trusted_device,
+    db_revoke_trusted_devices,
+    db_sweep_expired_trusted_devices,
 )
 
 # groups
@@ -185,6 +199,13 @@ __all__ = [
     "db_rename_dashboard", "db_delete_dashboard", "db_save_dashboard",
     "db_reorder_dashboards",
     "db_update_profile", "db_update_own_profile",
+    # TOTP helpers
+    "db_get_totp", "db_set_totp", "db_clear_totp",
+    # Trusted devices
+    "db_get_remember_hours", "db_set_remember_hours",
+    "db_add_trusted_device", "db_lookup_trusted_device", "db_touch_trusted_device",
+    "db_list_trusted_devices", "db_revoke_trusted_device",
+    "db_revoke_trusted_devices", "db_sweep_expired_trusted_devices",
     # groups
     "db_list_groups", "db_create_group", "db_update_group", "db_delete_group",
     "db_update_group_members", "db_resolve_group_emails", "db_get_ldap_mapped_groups",

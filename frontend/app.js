@@ -291,7 +291,7 @@ async function submitLogin(){
     // 2FA gate: server says password OK but second factor required
     if(d.totp_required){
       btn.textContent='Sign In';
-      _show2faPrompt(d.challenge_id, user);
+      _show2faPrompt(d.challenge_id, user, d.remember_hours_max||0);
       return;
     }
     _loggedOut=false;
@@ -311,7 +311,7 @@ async function submitLogin(){
   }finally{clearTimeout(slowHint);}
 }
 // ── Two-factor authentication prompt ─────────────────────────────
-function _show2faPrompt(challengeId, username){
+function _show2faPrompt(challengeId, username, rememberHoursMax){
   // Replace login form with TOTP input. Reuses login-screen container.
   const screen=document.getElementById('login-screen');
   if(!screen) return;
@@ -335,6 +335,24 @@ function _show2faPrompt(challengeId, username){
   codeField.style.display='block';
   codeField.value='';
   setTimeout(()=>codeField.focus(),50);
+
+  // "Remember this device" row — only shown if user's max > 0
+  let rememberRow=document.getElementById('login-remember-row');
+  if(rememberRow) rememberRow.remove();
+  const maxHours=parseInt(rememberHoursMax||0,10);
+  if(maxHours>0){
+    rememberRow=document.createElement('div');
+    rememberRow.id='login-remember-row';
+    rememberRow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;color:var(--text2)';
+    const defaultHours=Math.min(9,maxHours);
+    rememberRow.innerHTML=
+      `<input type="checkbox" id="login-remember-chk" style="cursor:pointer">`+
+      `<label for="login-remember-chk" style="cursor:pointer">Remember this device for</label>`+
+      `<input type="number" id="login-remember-hrs" min="1" max="${maxHours}" value="${defaultHours}"`+
+      ` style="width:52px;padding:2px 4px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:4px;text-align:center"> hours`;
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(rememberRow, codeField.nextSibling);}
+  }
+
   const btn=document.getElementById('login-btn');
   if(btn){btn.textContent='Verify'; btn.disabled=false;}
   // Override button click handler temporarily
@@ -342,9 +360,12 @@ function _show2faPrompt(challengeId, username){
     const code=(codeField.value||'').trim();
     if(!code){_showLoginErr('Enter your 2FA code'); return;}
     btn.disabled=true; btn.textContent='Verifying…';
+    const remember=maxHours>0&&!!document.getElementById('login-remember-chk')?.checked;
+    const rememberHours=remember?Math.max(1,Math.min(maxHours,
+      parseInt(document.getElementById('login-remember-hrs')?.value||'9',10))):0;
     try{
       const r=await fetch('/api/login/totp',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({challenge_id:challengeId, code})});
+        body:JSON.stringify({challenge_id:challengeId, code, remember, remember_hours:rememberHours})});
       const d=await r.json();
       if(!r.ok||d.error){
         _showLoginErr(d.error||'Verification failed');
@@ -365,6 +386,8 @@ function _show2faPrompt(challengeId, username){
       if(userField){userField.disabled=false;}
       if(passField){passField.style.display='block';}
       if(codeField){codeField.style.display='none';}
+      const rr=document.getElementById('login-remember-row');
+      if(rr) rr.remove();
     }catch(e){
       _showLoginErr('Server error. Try again.');
       btn.disabled=false; btn.textContent='Verify';

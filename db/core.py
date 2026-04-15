@@ -602,13 +602,14 @@ def db_init():
             pass
         # Migration: user profiles + groups (v0.8+) and TOTP 2FA (v0.9.2+)
         for _col, _def in [
-            ("full_name",        "TEXT DEFAULT ''"),
-            ("email",            "TEXT DEFAULT ''"),
-            ("group_id",         "INTEGER DEFAULT NULL"),
-            ("theme_preference", "TEXT DEFAULT 'dark'"),
-            ("totp_secret",      "TEXT DEFAULT ''"),
-            ("totp_enabled",     "INTEGER DEFAULT 0"),
-            ("totp_recovery",    "TEXT DEFAULT ''"),
+            ("full_name",           "TEXT DEFAULT ''"),
+            ("email",               "TEXT DEFAULT ''"),
+            ("group_id",            "INTEGER DEFAULT NULL"),
+            ("theme_preference",    "TEXT DEFAULT 'dark'"),
+            ("totp_secret",         "TEXT DEFAULT ''"),
+            ("totp_enabled",        "INTEGER DEFAULT 0"),
+            ("totp_recovery",       "TEXT DEFAULT ''"),
+            ("totp_remember_hours", "INTEGER DEFAULT 9"),
         ]:
             try:
                 con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")
@@ -741,6 +742,27 @@ def db_init():
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_dev_lic_did ON device_licenses(did)"
+        )
+        # ── Trusted devices (Remember 2FA) ────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS trusted_devices (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                username     TEXT    NOT NULL,
+                token_hash   TEXT    NOT NULL UNIQUE,
+                device_label TEXT    DEFAULT '',
+                created_at   REAL    DEFAULT 0,
+                expires_at   REAL    DEFAULT 0,
+                last_used_at REAL    DEFAULT 0,
+                ip           TEXT    DEFAULT '',
+                user_agent   TEXT    DEFAULT ''
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trusted_dev_user "
+            "ON trusted_devices(username)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trusted_dev_exp "
+            "ON trusted_devices(expires_at)"
         )
         con.commit()
         # Migration: LDAP group mapping columns (v0.9+)
