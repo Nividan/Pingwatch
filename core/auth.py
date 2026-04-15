@@ -485,19 +485,23 @@ def totp_provisioning_uri(username: str, secret: str, issuer: str = "PingWatch")
     return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
 
 
-def totp_qr_png_data_url(uri: str) -> str:
-    """Render ``uri`` as a QR code PNG, return a base64 data URL (``data:image/png;base64,...``).
+def totp_qr_data_url(uri: str) -> str:
+    """Render ``uri`` as a QR code SVG, return a base64 data URL (``data:image/svg+xml;base64,...``).
 
-    Returns an empty string if the optional ``qrcode`` dep is not installed.
+    SVG is used (not PNG) so the ``qrcode`` lib works without Pillow — qrcode 8.x
+    no longer pulls Pillow as a transitive dep. Returns an empty string if the
+    optional ``qrcode`` dep is not installed.
     """
     try:
         import io, base64
         import qrcode
-        img = qrcode.make(uri, box_size=6, border=2)
+        import qrcode.image.svg
+        img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgImage, box_size=10, border=2)
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-    except Exception:
+        img.save(buf)
+        return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as e:
+        log.warning(f"totp_qr: failed to render QR code ({type(e).__name__}: {e})")
         return ""
 
 
