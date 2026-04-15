@@ -48,13 +48,9 @@ function sensorFormHTML(dev, s=null) {
     <input type="text" id="as-n" value="${esc(s?.name||'')}" placeholder="Ping, HTTPS health, sysDescr…" autocomplete="off"/></div>
   <!-- PING -->
   <div class="fg ${curType==='ping'?'vis':''}" id="fg-ping">
-    <div class="fgrid">
-      <div class="fr"><label class="fl">Host / IP</label>
-        <input type="text" id="as-ph" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
-        ${hostStatusHtml}</div>
-      <div class="fr"><label class="fl">Timeout (s)</label>
-        <input type="number" id="as-pto" value="${s?.timeout||4}" min="1" max="30"/></div>
-    </div>
+    <div class="fr"><label class="fl">Host / IP</label>
+      <input type="text" id="as-ph" value="${esc(defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+      ${hostStatusHtml}</div>
   </div>
   <!-- TCP -->
   <div class="fg ${curType==='tcp'?'vis':''}" id="fg-tcp">
