@@ -11,6 +11,7 @@ let _ipamShellInited  = false;  // shell HTML built once; data always refreshed 
 const _IPAM_PAGE_SIZE = 200;
 let _ipamGlobalCache  = null;   // flat array of all IPs across all subnets, with subnetLabel; null = stale
 let _ipamLicenseMap   = {};     // did → worst license status (ok/warn/crit)
+let _ipamDnsInterval  = null;   // active DNS-refresh poll interval (cleared on subnet change / nav away)
 
 // ── Sort / filter state ─────────────────────────────────────────────────────
 let _ipamSortCol      = 'status_ip'; // default: Used first, then by IP
@@ -127,6 +128,7 @@ function _ipamShowEmptyTable(msg) {
 
 // ── Subnet selection ───────────────────────────────────────────────────────
 async function _ipamOnSubnetChange(idVal) {
+  _ipamCancelDnsInterval();   // cancel any in-flight DNS poll for previous subnet
   const id = parseInt(idVal);
   if (!id) {
     _ipamSelectedId = null;
@@ -737,25 +739,34 @@ async function _ipamReloadCurrentSubnet() {
   _ipamApplyFilter(search);
 }
 
+function _ipamCancelDnsInterval() {
+  if (_ipamDnsInterval) {
+    clearInterval(_ipamDnsInterval);
+    _ipamDnsInterval = null;
+  }
+}
+
 async function _ipamRefreshDns() {
   if (!_ipamSelectedId) return;
   const btn = document.getElementById('ipam-dns-btn');
+  _ipamCancelDnsInterval();   // cancel any previous in-flight poll
   if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Refresh DNS'; } };
   try {
     const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}/dns/refresh`, {method: 'POST'});
-    if (r.status === 409) { toast('DNS refresh already in progress', 'warn'); return; }
-    if (!r.ok) { toast('DNS refresh failed', 'err'); return; }
+    if (r.status === 409) { toast('DNS refresh already in progress', 'warn'); resetBtn(); return; }
+    if (!r.ok) { toast('DNS refresh failed', 'err'); resetBtn(); return; }
     let polls = 0;
-    const interval = setInterval(async () => {
+    _ipamDnsInterval = setInterval(async () => {
       polls++;
       await _ipamReloadCurrentSubnet();
       if (polls >= 20) {
-        clearInterval(interval);
-        if (btn) { btn.disabled = false; btn.textContent = 'Refresh DNS'; }
+        _ipamCancelDnsInterval();
+        resetBtn();
       }
     }, 3000);
   } catch {
     toast('DNS refresh failed', 'err');
-    if (btn) { btn.disabled = false; btn.textContent = 'Refresh DNS'; }
+    resetBtn();
   }
 }

@@ -85,8 +85,10 @@ def _backup_pg_schema(cfg, schema, dest_path, label, log):
     os.close(fd)
 
     moved = False
+    pgpass = None
     try:
-        env = {**os.environ, 'PGPASSWORD': cfg.get('pg_password', '')}
+        from db.backend import pg_env as _pg_env
+        env, pgpass = _pg_env(cfg)
         cmd = [
             'pg_dump',
             '-h', cfg['pg_host'],
@@ -106,6 +108,11 @@ def _backup_pg_schema(cfg, schema, dest_path, label, log):
             _sh.copy2(tmp, dest_str)
         moved = True
     finally:
+        if pgpass:
+            try:
+                os.unlink(pgpass)
+            except OSError:
+                pass
         if not moved or not same_fs:
             try:
                 os.unlink(tmp)

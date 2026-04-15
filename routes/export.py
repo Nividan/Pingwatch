@@ -73,12 +73,13 @@ def _sqlite_backup_bytes(src_path) -> bytes:
 def _pg_dump_bytes(schema: str) -> bytes:
     """Run pg_dump for one schema and return the SQL dump as bytes."""
     import subprocess as _sp
-    from db.backend import get_config
+    from db.backend import get_config, pg_env as _pg_env
     cfg = get_config()
     fd, tmp = tempfile.mkstemp(suffix=".sql")
     os.close(fd)
+    pgpass = None
     try:
-        env = {**os.environ, 'PGPASSWORD': cfg.get('pg_password', '')}
+        env, pgpass = _pg_env(cfg)
         cmd = [
             'pg_dump',
             '-h', cfg['pg_host'],
@@ -95,6 +96,11 @@ def _pg_dump_bytes(schema: str) -> bytes:
         with open(tmp, "rb") as fh:
             return fh.read()
     finally:
+        if pgpass:
+            try:
+                os.unlink(pgpass)
+            except OSError:
+                pass
         try:
             os.unlink(tmp)
         except OSError:
@@ -262,7 +268,8 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
         h._json(400, {"error": "No PostgreSQL dumps found in bundle (expected pingwatch_main.sql / pingwatch_logs.sql)"}); return True
 
     cfg = get_config()
-    env = {**os.environ, "PGPASSWORD": cfg.get("pg_password", "")}
+    from db.backend import pg_env as _pg_env
+    env, pgpass = _pg_env(cfg)
     base_cmd = [
         "psql",
         "-h", cfg["pg_host"],
@@ -294,13 +301,13 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
             log.info("DB import (PG): logs schema restored")
     except Exception as e:
         log.error(f"DB import (PG): restore failed — {e}")
-        for t in (tmp_main, tmp_logs):
+        for t in (tmp_main, tmp_logs, pgpass):
             if t:
                 try: os.unlink(t)
                 except OSError: pass
         h._json(500, {"error": "PostgreSQL restore failed — check server logs"}); return True
 
-    for t in (tmp_main, tmp_logs):
+    for t in (tmp_main, tmp_logs, pgpass):
         if t:
             try: os.unlink(t)
             except OSError: pass

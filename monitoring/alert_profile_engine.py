@@ -22,9 +22,62 @@ Cache invalidation:
     forcing every sensor to re-resolve on its next probe.
 """
 
+import threading
 import time
 
 from core.logger import log
+
+
+# ── Scope-level profile cache ─────────────────────────────────────
+# Keyed by (scope_type, scope_value) → profile dict (or None).
+# Invalidated when _profile_cache_ver changes. Thread-safe via a lock;
+# reads are fast (held briefly), writes only happen on cache miss or version bump.
+
+_scope_cache: dict = {}          # (scope_type, scope_value) → profile | None
+_scope_cache_ver: int = -1       # last version the cache was built for
+_scope_cache_lock = threading.Lock()
+
+
+def _get_scope_cached(scope_type: str, scope_value: str, cur_ver: int):
+    """Return profile from scope cache; None if not found; _MISS sentinel if stale."""
+    with _scope_cache_lock:
+        if _scope_cache_ver != cur_ver:
+            return _MISS   # cache is stale — caller must re-query
+        return _scope_cache.get((scope_type, scope_value), None)
+
+
+def _set_scope_cached(scope_type: str, scope_value: str, cur_ver: int, profile):
+    global _scope_cache_ver
+    with _scope_cache_lock:
+        if _scope_cache_ver != cur_ver:
+            # Another thread already rebuilt the cache for a newer version; discard
+            return
+        _scope_cache[(scope_type, scope_value)] = profile
+        _scope_cache_ver = cur_ver
+
+
+def _invalidate_scope_cache(cur_ver: int):
+    """Clear scope cache when the profile version has advanced."""
+    global _scope_cache, _scope_cache_ver
+    with _scope_cache_lock:
+        if _scope_cache_ver != cur_ver:
+            _scope_cache = {}
+            _scope_cache_ver = cur_ver
+
+
+_MISS = object()   # sentinel: cache miss (not found vs. known-None)
+
+
+def _scope_get_profile(scope_type, scope_value, cur_ver, db_get_profile_for_scope):
+    """Lookup a scope in the cache; fall back to DB on miss."""
+    cached = _get_scope_cached(scope_type, scope_value, cur_ver)
+    if cached is _MISS:
+        # Cache is stale — rebuild entry from DB
+        profile = db_get_profile_for_scope(scope_type, scope_value)
+        _set_scope_cached(scope_type, scope_value, cur_ver, profile)
+        return profile
+    # cached is either a profile dict or None (explicitly cached as not found)
+    return cached
 
 
 # ── Profile resolution (cascade) ─────────────────────────────────
@@ -32,11 +85,16 @@ from core.logger import log
 def resolve_profile_for_sensor(dev, sensor) -> dict | None:
     """Return the profile that applies to this sensor, or None.
 
-    Cached on sensor._resolved_profile_id, invalidated when
-    STATE._profile_cache_ver changes.
+    Two-level cache:
+      1. Per-sensor: sensor._resolved_profile (full dict) — zero DB hits on
+         the hot probe path once resolved for this version.
+      2. Scope-level: _scope_cache — first probe for each unique scope queries
+         the DB once; all subsequent sensors sharing that scope get a cache hit.
+    Both caches are invalidated when STATE._profile_cache_ver changes (on any
+    profile write).
     """
     from core.app_state import STATE
-    from db.alert_profiles import db_get_profile, db_get_profile_for_scope
+    from db.alert_profiles import db_get_profile_for_scope
 
     cur_ver = getattr(STATE, "_profile_cache_ver", 0)
     if (getattr(sensor, "_resolved_profile_ver", -1) == cur_ver
@@ -47,21 +105,24 @@ def resolve_profile_for_sensor(dev, sensor) -> dict | None:
         # Return the cached profile dict — no DB hit on the hot probe path
         return getattr(sensor, "_resolved_profile", None)
 
+    # Version changed (or first time) — invalidate scope cache if needed
+    _invalidate_scope_cache(cur_ver)
+
     profile = None
     did = dev.did if hasattr(dev, "did") else getattr(dev, "device_id", "")
     sid = sensor.sensor_id
 
     # 1. sensor scope
-    profile = db_get_profile_for_scope("sensor", f"{did}/{sid}")
+    profile = _scope_get_profile("sensor", f"{did}/{sid}", cur_ver, db_get_profile_for_scope)
     # 2. device scope
     if not profile:
-        profile = db_get_profile_for_scope("device", did)
+        profile = _scope_get_profile("device", did, cur_ver, db_get_profile_for_scope)
     # 3. group scope
     if not profile and getattr(dev, "group", ""):
-        profile = db_get_profile_for_scope("group", dev.group)
+        profile = _scope_get_profile("group", dev.group, cur_ver, db_get_profile_for_scope)
     # 4. global
     if not profile:
-        profile = db_get_profile_for_scope("global", "")
+        profile = _scope_get_profile("global", "", cur_ver, db_get_profile_for_scope)
 
     sensor._resolved_profile_id  = profile["id"] if profile else 0
     sensor._resolved_profile     = profile           # cache full dict, not just id
@@ -315,8 +376,8 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
         try:
             db_log_event(profile["id"], stage["id"], profile["name"],
                          ctx, state="suppressed")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"alert_profile_engine: db_log_event (suppressed) error: {e}")
         log.debug(f"alert_profile_engine: stage {stage['id']} "
                   f"suppressed by maintenance window {mw_name!r}")
         # Still mark as fired so we don't keep retrying every probe

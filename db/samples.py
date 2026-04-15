@@ -19,11 +19,27 @@ from db.core   import _logs_enqueue
 # ── Sample write buffer (batches per-probe inserts) ───────────────
 _SAMPLE_BUF: list    = []
 _SAMPLE_BUF_LOCK     = threading.Lock()
+_SAMPLE_BUF_MAX      = 50_000   # hard cap — drop oldest if writer stalls
+_sample_overflow_logged = 0.0   # rate-limit the overflow warning
 
 
 def db_buffer_sample(did, sid, ok, ms, value, ts):
-    """Append one probe result to the in-memory buffer (thread-safe, no I/O)."""
+    """Append one probe result to the in-memory buffer (thread-safe, no I/O).
+
+    If the buffer exceeds _SAMPLE_BUF_MAX (writer stalled), the oldest row
+    is dropped to prevent unbounded memory growth.
+    """
+    global _sample_overflow_logged
     with _SAMPLE_BUF_LOCK:
+        if len(_SAMPLE_BUF) >= _SAMPLE_BUF_MAX:
+            _SAMPLE_BUF.pop(0)   # drop oldest
+            now = time.time()
+            if now - _sample_overflow_logged > 60:
+                log.warning(
+                    "Sample buffer full (%d rows) — oldest row dropped. "
+                    "DB writer may be stalled.", _SAMPLE_BUF_MAX
+                )
+                _sample_overflow_logged = now
         _SAMPLE_BUF.append((ts, did, sid, int(ok), ms, value))
 
 
@@ -60,20 +76,19 @@ def _do_insert_samples(rows):
 
 
 def db_flush_samples():
-    """Drain the buffer and write directly (used at shutdown — no queue)."""
+    """Drain the buffer and write directly (used at shutdown — no queue).
+
+    Errors are logged inside _do_insert_samples; samples that fail at
+    shutdown are intentionally discarded rather than risking duplicates
+    on the next start.
+    """
     with _SAMPLE_BUF_LOCK:
         if not _SAMPLE_BUF:
             return
         rows = _SAMPLE_BUF[:]
         _SAMPLE_BUF.clear()
     log.debug(f"Sample flush: {len(rows)} rows")
-    try:
-        _do_insert_samples(rows)
-    except Exception:
-        # Re-prepend rows so they are retried on the next flush
-        with _SAMPLE_BUF_LOCK:
-            for r in reversed(rows):
-                _SAMPLE_BUF.insert(0, r)
+    _do_insert_samples(rows)
 
 
 def _sample_flush_loop():

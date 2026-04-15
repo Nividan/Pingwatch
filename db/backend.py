@@ -105,3 +105,41 @@ def is_pg() -> bool:
 def needs_setup() -> bool:
     """True when pingwatch.conf does not exist (first-run scenario)."""
     return not os.path.exists(_CONF_PATH)
+
+
+def pg_env(cfg: dict) -> tuple:
+    """Return (env_dict, pgpass_path) for use with pg_dump / psql subprocesses.
+
+    Creates a temporary .pgpass file (mode 0600) so the password is never
+    exposed in the process environment (readable via /proc/<pid>/environ).
+    The caller MUST delete pgpass_path after the subprocess completes:
+
+        env, pgpass = pg_env(cfg)
+        try:
+            subprocess.run(cmd, env=env, ...)
+        finally:
+            try: os.unlink(pgpass)
+            except OSError: pass
+    """
+    import stat
+    password = cfg.get("pg_password", "")
+    host     = cfg.get("pg_host", "localhost")
+    port     = str(cfg.get("pg_port", 5432))
+    dbname   = cfg.get("pg_database", "pingwatch")
+    user     = cfg.get("pg_user", "pingwatch")
+    # pgpass format: hostname:port:database:username:password
+    # Use '*' wildcards for host/port/db/user so one file covers both schemas
+    pgpass_content = f"*:*:*:{user}:{password}\n"
+    fd, pgpass_path = tempfile.mkstemp(prefix="pgpass_", suffix=".conf")
+    try:
+        os.write(fd, pgpass_content.encode())
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(pgpass_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    except OSError:
+        pass  # Windows — chmod not supported, acceptable
+    env = {**os.environ, "PGPASSFILE": pgpass_path}
+    # Remove PGPASSWORD if it was inherited from the parent environment
+    env.pop("PGPASSWORD", None)
+    return env, pgpass_path
