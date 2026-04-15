@@ -112,8 +112,9 @@ def handle(h, method, path, body):
             "max_flap_entries":  int(_settings.get("max_flap_entries",  500)),
             "max_trap_entries":  int(_settings.get("max_trap_entries",  500)),
             # Group C — security
-            "login_fail_max":    int(_settings.get("login_fail_max",    5)),
-            "login_fail_window": int(_settings.get("login_fail_window", 60)),
+            "login_fail_max":        int(_settings.get("login_fail_max",        5)),
+            "login_fail_window":     int(_settings.get("login_fail_window",     60)),
+            "totp_remember_hours":   int(_settings.get("totp_remember_hours",   9)),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -282,7 +283,7 @@ def handle(h, method, path, body):
             "email_logo", "email_logo_data", "email_company_name",
             "snr_interval", "snr_timeout",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
-            "login_fail_max", "login_fail_window",
+            "login_fail_max", "login_fail_window", "totp_remember_hours",
             "org_name", "latency_good_ms", "latency_warn_ms",
             "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):

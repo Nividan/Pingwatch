@@ -72,7 +72,7 @@ async function _openProfileModal(){
 async function _open2faModal(){
   // Fetch current TOTP state + trusted devices in parallel
   let me={username:'',totp_enabled:0};
-  let tdData={devices:[],remember_hours:9};
+  let tdData={devices:[]};
   try{
     const [meR, tdR]=await Promise.all([api('GET','/api/me'), api('GET','/api/me/trusted-devices')]);
     Object.assign(me, meR);
@@ -118,16 +118,6 @@ async function _open2faModal(){
             </tr></thead>
             <tbody>${devRows}</tbody>
           </table>
-        </div>
-        <div class="fr" style="margin-top:14px">
-          <label class="fl">Default remember duration (0=disabled, max 720 h)</label>
-          <div style="display:flex;gap:6px;align-items:center">
-            <input type="number" id="tfa-remember-hrs" min="0" max="720"
-                   value="${parseInt(tdData.remember_hours||9)}"
-                   style="width:70px;text-align:center"/>
-            <span style="color:var(--text2)">hours</span>
-            <button class="btn-s" onclick="_2faSaveRememberHours()">Save</button>
-          </div>
         </div>
       </div>`;
   })() : '';
@@ -235,16 +225,6 @@ async function _2faRevokeAllDevices(){
     toast(`Revoked ${r.revoked||0} device(s)`,'ok');
     _open2faModal();  // refresh
   }catch(e){ toast('Revoke failed','err'); }
-}
-
-async function _2faSaveRememberHours(){
-  const hours=parseInt(document.getElementById('tfa-remember-hrs')?.value||'9',10);
-  if(isNaN(hours)||hours<0||hours>720){ toast('Enter 0–720 hours','err'); return; }
-  try{
-    const r=await api('PATCH','/api/me/totp/remember-hours',{hours});
-    if(r.error){ toast(r.error,'err'); return; }
-    toast('Saved','ok');
-  }catch(e){ toast('Save failed','err'); }
 }
 
 
