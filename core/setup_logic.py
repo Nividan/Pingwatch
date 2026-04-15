@@ -87,6 +87,14 @@ PACKAGES = [
         "desc":     "two-factor authentication (TOTP)",
         "required": False,
     },
+    {
+        "import":   "qrcode",
+        "name":     "qrcode",
+        "install":  "qrcode>=7.4.0",
+        "pip":      True,
+        "desc":     "QR code image rendering for 2FA enrolment",
+        "required": False,
+    },
 ]
 
 

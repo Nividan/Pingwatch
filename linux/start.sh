@@ -91,6 +91,7 @@ _PACKAGES = [
     ("PIL",          "image support (tray icon)",               False),
     ("ldap3",        "LDAP / Active Directory authentication",  False),
     ("pyotp",        "two-factor authentication (TOTP)",        False),
+    ("qrcode",       "QR code rendering for 2FA enrolment",     False),
     ("tkinter",      "status window GUI",                       False),
 ]
 all_ok = True

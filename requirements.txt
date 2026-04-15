@@ -6,6 +6,7 @@ cryptography>=41.0.0
 ldap3>=2.9
 psutil>=5.9.0
 pyotp>=2.9.0   # TOTP (RFC 6238) — two-factor authentication
+qrcode>=7.4.0  # QR code image rendering for 2FA enrolment
 
 # Optional: PostgreSQL backend (required only if using PostgreSQL instead of SQLite)
 psycopg2-binary>=2.9.9

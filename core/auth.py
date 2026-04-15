@@ -485,6 +485,22 @@ def totp_provisioning_uri(username: str, secret: str, issuer: str = "PingWatch")
     return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
 
 
+def totp_qr_png_data_url(uri: str) -> str:
+    """Render ``uri`` as a QR code PNG, return a base64 data URL (``data:image/png;base64,...``).
+
+    Returns an empty string if the optional ``qrcode`` dep is not installed.
+    """
+    try:
+        import io, base64
+        import qrcode
+        img = qrcode.make(uri, box_size=6, border=2)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
 def totp_verify(secret: str, code: str) -> bool:
     if not secret or not code:
         return False
