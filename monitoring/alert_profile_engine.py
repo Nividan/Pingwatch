@@ -44,7 +44,8 @@ def resolve_profile_for_sensor(dev, sensor) -> dict | None:
         pid = sensor._resolved_profile_id
         if pid == 0:
             return None
-        return db_get_profile(pid)
+        # Return the cached profile dict — no DB hit on the hot probe path
+        return getattr(sensor, "_resolved_profile", None)
 
     profile = None
     did = dev.did if hasattr(dev, "did") else getattr(dev, "device_id", "")
@@ -63,6 +64,7 @@ def resolve_profile_for_sensor(dev, sensor) -> dict | None:
         profile = db_get_profile_for_scope("global", "")
 
     sensor._resolved_profile_id  = profile["id"] if profile else 0
+    sensor._resolved_profile     = profile           # cache full dict, not just id
     sensor._resolved_profile_ver = cur_ver
     return profile
 
