@@ -166,10 +166,17 @@ async function _2faStartSetup(){
   if(r.error){ toast(r.error,'err'); return; }
   const body=document.getElementById('tfa-body');
   if(!body) return;
+  const qrBlock=r.qr_png
+    ? `<div style="display:flex;justify-content:center;margin-bottom:14px">
+         <img src="${esc(r.qr_png)}" alt="2FA QR code" width="200" height="200"
+              style="background:#fff;padding:10px;border-radius:6px;border:1px solid var(--border)"/>
+       </div>
+       <div style="margin-bottom:8px;font-size:12px;color:var(--text2);text-align:center">Scan this QR code with your authenticator app, or enter the setup key manually:</div>`
+    : `<div style="margin-bottom:12px">Add this account to your authenticator app (Google Authenticator, Authy, 1Password, etc.):</div>
+       <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;font-family:monospace;font-size:12px;word-break:break-all;user-select:all">${esc(r.provisioning_uri)}</div>
+       <div style="margin-bottom:8px;font-size:12px;color:var(--text2)">Or enter this secret manually:</div>`;
   body.innerHTML=`
-    <div style="margin-bottom:12px">Add this account to your authenticator app (Google Authenticator, Authy, 1Password, etc.):</div>
-    <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;font-family:monospace;font-size:12px;word-break:break-all;user-select:all">${esc(r.provisioning_uri)}</div>
-    <div style="margin-bottom:8px;font-size:12px;color:var(--text2)">Or enter this secret manually:</div>
+    ${qrBlock}
     <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:14px;letter-spacing:1px;user-select:all;text-align:center">${esc(r.secret)}</div>
     <div class="fr"><label class="fl">Enter 6-digit code from your app</label>
       <input type="text" id="tfa-verify-code" maxlength="6" autocomplete="one-time-code"

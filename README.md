@@ -43,6 +43,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🌐 Web-based dashboard with live latency sparklines, customizable widgets, and multi-dashboard tabs — create named dashboards (e.g. "NOC", "Server Room") per user; tab bar with right-click rename/delete; new users get a pre-populated default layout
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
+- 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; authenticator-app QR enrolment, recovery codes, admin device reset; "Remember this device" trusted-device tokens (server-side, revocable, configurable up to 30 days)
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
 - 📤 Database export and import (individual DBs or full ZIP bundle)
 - 🖥 Native desktop status window with optional system-tray icon

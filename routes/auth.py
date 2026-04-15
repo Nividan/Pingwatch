@@ -526,7 +526,7 @@ def handle(h, method, path, body):
         if not totp_available():
             h._json(503, {"error": "2FA support not installed on server (pyotp missing)"})
             return True
-        from core.auth import totp_generate_secret, totp_provisioning_uri
+        from core.auth import totp_generate_secret, totp_provisioning_uri, totp_qr_png_data_url
         from db.users import db_get_totp, db_set_totp
         existing = db_get_totp(me)
         if existing.get("enabled"):
@@ -536,7 +536,8 @@ def handle(h, method, path, body):
         # Persist secret with enabled=0 (pending verification)
         db_set_totp(me, secret, 0, "")
         uri = totp_provisioning_uri(me, secret)
-        h._json(200, {"secret": secret, "provisioning_uri": uri})
+        qr = totp_qr_png_data_url(uri)
+        h._json(200, {"secret": secret, "provisioning_uri": uri, "qr_png": qr})
         return True
 
     # ── /api/me/totp/verify POST — confirm enrolment ──────────────

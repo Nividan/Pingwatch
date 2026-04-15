@@ -263,19 +263,30 @@
   - History-modal KPI tiles (`.dm-kpi-item`) — hardcoded navy gradient flipped to `#ffffff → #eef2f6` with a softened hover shadow in light mode
   - Login-screen `.lt-ping` wordmark — gradient converted from hardcoded sky-blues to `var(--accent)` / `var(--accent-hover)` so the brand text darkens for AA contrast on the white `.login-box`; `.login-box` itself now uses `--panel-bg-strong` + `--accent-glow`
 
-## 🚨 Critical Priority
-- **2FA (TOTP)** — authenticator-app second factor for all users; optional per user, enforceable per role; recovery codes; admin reset for lost devices
-- **Audit leftovers from v0.9.1** — outstanding items from the full-project audit:
-  - P1 — cache `dev.status` (invalidate on sensor state change); 2–5× CPU reduction on large devices
-  - P3 — scheduler heap tombstones for deleted sensors
-  - P4 — per-subscriber SSE sender threads (decouple slow browsers from probe loop)
-  - MI1 — replace `SELECT *` in `db/alert_events.py` and `db/alert_profiles.py` with explicit column lists
-  - MI2 — hostname format regex (`^[A-Za-z0-9._:\-]+$`) in `monitoring/probes.py` before subprocess
-  - MI3 — `_evtDetailTimer` in `frontend/events.js` moved to per-modal scope
-  - R1 — consolidate remaining inline `is_pg()` branches into `db/helpers.py` helpers
-  - R3 — batched `_broadcast` accepting a list of `(event, data)` tuples per probe-end
-  - R4 — split orchestration helpers out of `routes/devices.py` and `routes/monitoring.py`
-  - F1 — verify today's `_alert_has_fired` fix in production; extend caching to DOWN-state path if needed
+- Two-factor authentication (TOTP)
+  - Optional per user; enforceable per role (viewer / operator / admin)
+  - Setup flow with QR code + manual secret; TOTP verify step at login
+  - Recovery codes — 8 single-use backup codes at enrolment; admin reset for lost devices (`/api/users/{u}/totp/reset`)
+  - Audit log entries for all 2FA events (enable, disable, login, recovery use, admin reset)
+
+- Remember this device (trusted-device tokens)
+  - `pw_trusted` HttpOnly SameSite=Strict cookie; raw token is SHA-256 hashed before DB storage — a DB read-only leak does not yield bypass tokens
+  - Default 9 hours (one workday); user-configurable up to 30 days; 0 = always prompt TOTP
+  - `trusted_devices` table with device label (parsed from User-Agent), IP, last used, expiry; server-side storage allows revocation
+  - Auto-revoke on: password change, 2FA disable, admin TOTP reset
+  - Trusted Devices management UI in 2FA settings — device label, IP, last used, expiry; per-device Revoke + Revoke All; current device flagged
+  - Background sweep of expired rows every 6 hours via `autosave_loop`
+
+- Performance & code quality improvements
+  - `dev.status` cached on the sensor object and invalidated on state change — 2–5× CPU reduction for large devices
+  - Scheduler heap tombstones for deleted sensors — stale entries no longer accumulate in the min-heap
+  - Per-subscriber SSE sender threads — slow browsers no longer block the probe loop
+  - `SELECT *` replaced with explicit column lists in `db/alert_events.py` and `db/alert_profiles.py`
+  - Hostname format regex validation in `monitoring/probes.py` before subprocess
+  - `_evtDetailTimer` scoped per modal in `frontend/events.js`
+  - `_broadcast` refactored to accept a list of `(event, data)` tuples per probe end
+  - Orchestration helpers extracted from route modules into dedicated helpers
+  - `db/helpers.py` unified dual-backend query layer (`db_query`, `db_execute`, `db_upsert`, `db_cursor`); new code uses these instead of inline `if is_pg()` branches
 
 ## 🔴 High Priority
 - **Auto-Discovery with Sensor Templates** — extend the Subnet Discovery wizard; named bundles ("Web Server" = ping + http:443 + tls, "Domain Controller" = ping + tcp:389 + dns) stored as JSON in `app_settings`; per-row template picker in the discovery result grid

@@ -727,6 +727,12 @@ def main():
     except Exception:
         pass
 
+    try:
+        import qrcode  # noqa: F401
+    except Exception:
+        log.warning("Optional dependency 'qrcode' not installed — 2FA enrolment will show the "
+                    "provisioning URI only (no scannable QR image). Install with: pip install qrcode")
+
     # ── GUI ────────────────────────────────────────────────────────
     from core.logger import log_buffer
     _headless_stop = threading.Event()

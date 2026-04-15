@@ -206,6 +206,8 @@ HTTP(S) dispatcher and application entry point. Serves static files, delegates e
 
 `Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
 
+`Handler._send_with_cookies(code, data, cookies)` — sends a JSON response with multiple `Set-Cookie` headers; `cookies` is a list of pre-formatted cookie strings. Used by login and 2FA endpoints that must set both the `session` and `pw_trusted` cookies atomically in a single response.
+
 ### `setup_wizard.py`
 Cross-platform first-run CLI wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only). Logic delegated to `core/setup_logic.py`.
 
@@ -231,6 +233,8 @@ Server-side input validation helpers used by route handlers before persisting us
 
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
+
+`parse_user_agent_label(ua)` — pure-string parser that converts a User-Agent header into a human-readable device label (e.g. `"Chrome on Windows"`, `"Firefox on Linux"`). No library dependency. Used when inserting a new trusted-device record so the Trusted Devices list shows a meaningful name instead of the raw UA string.
 
 `auth_login()` handles two LDAP paths: (1) **existing LDAP users** — after successful bind, `_ldap_login_sync()` refreshes group/role/display_name from LDAP and rejects login if the user is no longer in any imported group; (2) **unknown users** — if `ldap_enabled` and `ldap_auto_provision` are set, the user is authenticated against LDAP, matched to an imported group, and created automatically via `db_add_ldap_user()`. A race-condition guard retries the normal login path if a concurrent INSERT wins the race.
 
@@ -306,7 +310,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 
 | Module | Endpoints |
 |--------|-----------|
-| `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile` |
+| `auth.py` | `/api/login`, `/api/login/totp`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile`, `/api/me/totp/setup`, `/api/me/totp/verify`, `/api/me/totp/disable`, `/api/me/totp/remember-hours`, `/api/me/trusted-devices`, `/api/me/trusted-devices/{id}`, `/api/users/{u}/totp/reset` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
 | `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
@@ -348,7 +352,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`, `theme_preference`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder); `db_update_theme(username, theme)` helper validates `dark` / `light` before writing |
+| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`, `theme_preference`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder); TOTP helpers (`db_get_totp`, `db_set_totp`, `db_clear_totp`); trusted-device helpers (`db_add_trusted_device`, `db_lookup_trusted_device`, `db_touch_trusted_device`, `db_list_trusted_devices`, `db_revoke_trusted_device`, `db_revoke_trusted_devices`, `db_sweep_expired_trusted_devices`, `db_get_remember_hours`, `db_set_remember_hours`) |
 | `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
@@ -533,6 +537,25 @@ The frontend is served as static files — no build step.
 | `PATCH` | `/api/me/profile` | any | Update own full_name and email (also accepts optional `theme_preference`) |
 | `PATCH` | `/api/me/theme` | any | Update own theme preference `{theme: "dark"\|"light"}` — fired in the background by `setTheme()` |
 | `PATCH` | `/api/users/{u}/profile` | admin or self | Update profile; admin can also set group_id and role |
+
+### Two-Factor Authentication
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/me/totp/setup` | any | Generate TOTP secret + QR code URI `{secret, qr_uri}`. Idempotent — safe to call multiple times before verification. |
+| `POST` | `/api/me/totp/verify` | any | Confirm enrolment `{code, secret}`. Activates 2FA and returns 8 single-use recovery codes. |
+| `POST` | `/api/me/totp/disable` | any | Disable 2FA for self `{password}`. Revokes all trusted devices for the user. |
+| `POST` | `/api/users/{u}/totp/reset` | admin | Admin: disable 2FA for `{u}` and revoke all their trusted devices. |
+| `POST` | `/api/login/totp` | — | Complete a TOTP challenge `{challenge_id, code, remember?, remember_hours?}`. On success sets `session` cookie; optionally sets `pw_trusted` cookie when `remember=true`. |
+
+### Trusted Devices
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/me/trusted-devices` | viewer | List own trusted devices — label, IP, last used, expiry; includes `remember_hours` preference; current device flagged with `current: true` |
+| `DELETE` | `/api/me/trusted-devices` | viewer | Revoke all own trusted devices and clear the `pw_trusted` cookie |
+| `DELETE` | `/api/me/trusted-devices/{id}` | viewer | Revoke one trusted device; clears `pw_trusted` cookie if the request matches the current device |
+| `PATCH` | `/api/me/totp/remember-hours` | viewer | Set personal default remember duration `{hours: 9}` (0–720; 0 = always prompt TOTP) |
 
 ### User Groups
 
