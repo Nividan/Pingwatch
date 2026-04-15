@@ -107,6 +107,8 @@ def handle(h, method, path, body):
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
             "snr_timeout":       int(_settings.get("snr_timeout",       4)),
+            "snr_fail_after":    int(_settings.get("snr_fail_after",    2)),
+            "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
             # Group B — event & history limits
             "max_flaps_display": int(_settings.get("max_flaps_display", 20)),
             "max_flap_entries":  int(_settings.get("max_flap_entries",  500)),
@@ -285,7 +287,7 @@ def handle(h, method, path, body):
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
             "email_logo", "email_logo_data", "email_company_name",
-            "snr_interval", "snr_timeout",
+            "snr_interval", "snr_timeout", "snr_fail_after", "snr_recover_after",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window", "totp_remember_hours",
             "anomaly_global_enabled", "anomaly_cold_start_hours",
