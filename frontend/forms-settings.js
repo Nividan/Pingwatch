@@ -180,7 +180,7 @@ function _buildSettingsTab_users(sr, ur) {
         <div class="fgrid" style="margin-top:10px">
           <div class="fr"><label class="fl">2FA remember duration (h)</label>
             <input type="number" id="st-totp-remember" value="${sr.totp_remember_hours??9}" min="0" max="720" style="max-width:100px"/>
-            <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled)</div></div>
+            <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled, max 720 h / 30 days)</div></div>
         </div>
       </div>
     </div>`;
