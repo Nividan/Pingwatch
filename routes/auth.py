@@ -365,7 +365,7 @@ def handle(h, method, path, body):
         # first — if valid, skip the TOTP challenge entirely.
         from core.auth import auth_logout as _logout
         from core.auth import totp_create_challenge, totp_available
-        from db.users import db_get_totp, db_get_remember_hours
+        from db.users import db_get_totp
         clean_user = username.split('\\', 1)[1] if '\\' in username else (
                      username.split('@')[0] if '@' in username else username)
         try:
@@ -384,7 +384,7 @@ def handle(h, method, path, body):
                     db_touch_trusted_device(_td_row["id"], ip)
                     db_log_audit(clean_user, ip, 'login_ok_trusted_device', clean_user)
                     _sec = "; Secure" if tls_active else ""
-                    remember_hours = db_get_remember_hours(clean_user)
+                    remember_hours = int(_settings.get("totp_remember_hours", 9))
                     _new_max_age = remember_hours * 3600
                     h._send_with_cookies(
                         200,
@@ -407,7 +407,7 @@ def handle(h, method, path, body):
             _logout(token)   # discard the just-created session
             cid = totp_create_challenge(clean_user, role)
             db_log_audit(clean_user, ip, 'login_totp_challenge', clean_user)
-            _remember_max = db_get_remember_hours(clean_user)
+            _remember_max = int(_settings.get("totp_remember_hours", 9))
             h._json(200, {"totp_required": True, "challenge_id": cid,
                           "remember_hours_max": _remember_max})
             return True
@@ -486,9 +486,9 @@ def handle(h, method, path, body):
         remember       = bool(body.get("remember", False))
         remember_hours = int(body.get("remember_hours", 9) or 9)
         if remember and remember_hours > 0:
-            from db.users import (db_get_remember_hours, db_add_trusted_device)
+            from db.users import db_add_trusted_device
             from core.auth import parse_user_agent_label
-            _max_hours = db_get_remember_hours(username)
+            _max_hours = int(_settings.get("totp_remember_hours", 9))
             if _max_hours > 0:
                 remember_hours = max(1, min(remember_hours, _max_hours))
                 _raw_token = secrets.token_urlsafe(32)
@@ -618,7 +618,7 @@ def handle(h, method, path, body):
         me = auth_check(h._get_token())
         if not me:
             h._json(401, {"error": "unauthorized"}); return True
-        from db.users import db_list_trusted_devices, db_get_remember_hours
+        from db.users import db_list_trusted_devices
         devices = db_list_trusted_devices(me)
         # Tag the current device (if any)
         _current_hash = ""
@@ -633,8 +633,7 @@ def handle(h, method, path, body):
                 current_id = _row["id"]
         for d in devices:
             d["current"] = (d["id"] == current_id)
-        h._json(200, {"devices": devices,
-                      "remember_hours": db_get_remember_hours(me)})
+        h._json(200, {"devices": devices})
         return True
 
     # ── /api/me/trusted-devices DELETE — revoke all ────────────────
@@ -682,21 +681,6 @@ def handle(h, method, path, body):
             h._json(200, {"ok": True})
         return True
 
-    # ── /api/me/totp/remember-hours PATCH — set personal default ──
-    if path == "/api/me/totp/remember-hours" and method == "PATCH":
-        me = auth_check(h._get_token())
-        if not me:
-            h._json(401, {"error": "unauthorized"}); return True
-        try:
-            hours = int(body.get("hours", 9))
-        except (TypeError, ValueError):
-            h._json(400, {"error": "hours must be an integer"}); return True
-        hours = max(0, min(720, hours))
-        from db.users import db_set_remember_hours
-        db_set_remember_hours(me, hours)
-        h._json(200, {"ok": True, "hours": hours})
-        return True
-
     # ── /api/logout POST ──────────────────────────────────────────
     if path == "/api/logout" and method == "POST":
         token     = h._get_token()
@@ -704,10 +688,8 @@ def handle(h, method, path, body):
         if token: auth_logout(token)
         db_log_audit(me_logout, h.client_address[0], 'logout', me_logout)
         _sec = "; Secure" if tls_active else ""
-        h._send_with_cookies(200, {"ok": True}, [
-            f"session=; HttpOnly; Path=/; Max-Age=0{_sec}",
-            _clear_trusted_cookie(bool(tls_active)),
-        ])
+        h._send_with_cookie(200, {"ok": True},
+            f"session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0{_sec}")
         return True
 
     return False

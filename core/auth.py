@@ -496,7 +496,10 @@ def totp_qr_data_url(uri: str) -> str:
         import io, base64
         import qrcode
         import qrcode.image.svg
-        img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgImage, box_size=10, border=2)
+        # SvgPathImage merges all modules into one <path>, avoiding subpixel gaps
+        # that SvgImage (one <rect> per module) produces when the browser downscales.
+        # border=4 is the QR-spec quiet zone — some scanners (e.g. Ente Auth) require it.
+        img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=4)
         buf = io.BytesIO()
         img.save(buf)
         return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode("ascii")

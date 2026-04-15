@@ -177,6 +177,11 @@ function _buildSettingsTab_users(sr, ur) {
             <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
             <div class="fh">Window to count failed attempts</div></div>
         </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">2FA remember duration (h)</label>
+            <input type="number" id="st-totp-remember" value="${sr.totp_remember_hours??9}" min="0" max="720" style="max-width:100px"/>
+            <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled)</div></div>
+        </div>
       </div>
     </div>`;
 }
@@ -1832,11 +1837,14 @@ async function _saveDebugMode(cb) {
 }
 
 async function saveSecuritySettings(){
-  const failMax = parseInt(document.getElementById('st-fail-max')?.value);
-  const failWin = parseInt(document.getElementById('st-fail-win')?.value);
+  const failMax     = parseInt(document.getElementById('st-fail-max')?.value);
+  const failWin     = parseInt(document.getElementById('st-fail-win')?.value);
+  const totpRemem   = parseInt(document.getElementById('st-totp-remember')?.value);
   const body = {};
-  if(failMax >= 1)  body.login_fail_max    = failMax;
-  if(failWin >= 10) body.login_fail_window = failWin;
+  if(failMax >= 1)         body.login_fail_max        = failMax;
+  if(failWin >= 10)        body.login_fail_window     = failWin;
+  if(!isNaN(totpRemem) && totpRemem >= 0 && totpRemem <= 720)
+                           body.totp_remember_hours   = totpRemem;
   const r = await api('PATCH', '/api/settings', body);
   if(!r.ok){ toast('Failed to save security settings','err'); return; }
   toast('Security settings saved','ok');
