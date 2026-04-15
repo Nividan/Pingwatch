@@ -166,9 +166,9 @@ async function _2faStartSetup(){
   if(r.error){ toast(r.error,'err'); return; }
   const body=document.getElementById('tfa-body');
   if(!body) return;
-  const qrBlock=r.qr_png
+  const qrBlock=r.qr_img
     ? `<div style="display:flex;justify-content:center;margin-bottom:14px">
-         <img src="${esc(r.qr_png)}" alt="2FA QR code" width="200" height="200"
+         <img src="${esc(r.qr_img)}" alt="2FA QR code" width="220" height="220"
               style="background:#fff;padding:10px;border-radius:6px;border:1px solid var(--border)"/>
        </div>
        <div style="margin-bottom:8px;font-size:12px;color:var(--text2);text-align:center">Scan this QR code with your authenticator app, or enter the setup key manually:</div>`
