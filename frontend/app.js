@@ -1141,6 +1141,8 @@ function switchMainTab(tab){
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
   document.getElementById('devActBar').style.display='none';
+  // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
+  if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
   const _mf=document.getElementById('map-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
   const _isMap = tab === 'map';

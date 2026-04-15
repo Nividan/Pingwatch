@@ -20,26 +20,32 @@ _LOGS_QUEUE: queue.Queue = queue.Queue()
 
 def _db_writer_loop():
     """Drain _DB_QUEUE and execute each callable sequentially."""
-    while True:
-        fn = _DB_QUEUE.get()
-        if fn is None:   # sentinel for clean shutdown (not yet used)
-            break
-        try:
-            fn()
-        except Exception as e:
-            log.error(f"DB writer error: {e}")
+    try:
+        while True:
+            fn = _DB_QUEUE.get()
+            if fn is None:   # sentinel for clean shutdown (not yet used)
+                break
+            try:
+                fn()
+            except Exception as e:
+                log.error(f"DB writer error: {e}")
+    except Exception as e:
+        log.critical(f"DB writer thread crashed — writes will queue forever: {e}")
 
 
 def _logs_writer_loop():
     """Drain _LOGS_QUEUE and execute each callable sequentially."""
-    while True:
-        fn = _LOGS_QUEUE.get()
-        if fn is None:   # sentinel for clean shutdown (not yet used)
-            break
-        try:
-            fn()
-        except Exception as e:
-            log.error(f"Logs DB writer error: {e}")
+    try:
+        while True:
+            fn = _LOGS_QUEUE.get()
+            if fn is None:   # sentinel for clean shutdown (not yet used)
+                break
+            try:
+                fn()
+            except Exception as e:
+                log.error(f"Logs DB writer error: {e}")
+    except Exception as e:
+        log.critical(f"Logs DB writer thread crashed — writes will queue forever: {e}")
 
 
 threading.Thread(target=_db_writer_loop,   daemon=True, name="db-main-writer").start()
