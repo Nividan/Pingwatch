@@ -320,11 +320,8 @@ def handle(h, method, path, body):
                     h._json(400, {"error": "host too long (max 253)"}); return True
                 if not h._valid_host(h2):
                     h._json(400, {"error": "invalid host"}); return True
-                dev.host = h2
-                # Propagate new host to all sensors that haven't been manually overridden
-                for _s in list(dev.sensors.values()):
-                    if not _s.host_override:
-                        _s.host = h2
+                from core.orchestration import propagate_device_host
+                propagate_device_host(dev, h2)
             if "secondary_ips" in body:
                 sips = body["secondary_ips"]
                 if not isinstance(sips, list):

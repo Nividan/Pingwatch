@@ -21,12 +21,14 @@ class _SensorScheduler:
     Thread cost: exactly 1, regardless of sensor count.
     """
     def __init__(self, executor, run_fn):
-        self._heap     = []          # (run_at, seq, did, sid)
-        self._seq      = 0
-        self._lock     = threading.RLock()
-        self._wake     = threading.Event()
-        self._executor = executor
-        self._run_fn   = run_fn
+        self._heap       = []        # (run_at, seq, did, sid)
+        self._seq        = 0
+        self._lock       = threading.RLock()
+        self._wake       = threading.Event()
+        self._executor   = executor
+        self._run_fn     = run_fn
+        self._tombstones = set()     # {(did, sid)} — skip these when popped
+        self._live_count = 0         # updated by schedule() + cancel(); used for prune threshold
         t = threading.Thread(target=self._loop, daemon=True, name='pw-sched')
         t.start()
 
@@ -35,7 +37,25 @@ class _SensorScheduler:
         with self._lock:
             self._seq += 1
             heapq.heappush(self._heap, (time.monotonic() + delay, self._seq, did, sid))
+            # Clear any tombstone — sensor has been re-scheduled (add-back case)
+            self._tombstones.discard((did, sid))
         self._wake.set()
+
+    def cancel(self, did, sid):
+        """Mark (did, sid) entries in the heap as stale. They'll be skipped when popped."""
+        with self._lock:
+            self._tombstones.add((did, sid))
+
+    def _prune(self, live_count: int):
+        """Rebuild the heap without stale/tombstoned entries. Called by _loop when
+        the heap has grown to more than 2x the live sensor count, to reclaim memory
+        from long-interval sensors whose tombstones have been sitting in the heap."""
+        with self._lock:
+            if not self._tombstones:
+                return
+            self._heap = [e for e in self._heap if (e[2], e[3]) not in self._tombstones]
+            heapq.heapify(self._heap)
+            self._tombstones.clear()
 
     def _loop(self):
         while True:
@@ -43,9 +63,18 @@ class _SensorScheduler:
                 now = time.monotonic()
                 while self._heap and self._heap[0][0] <= now:
                     _, _, did, sid = heapq.heappop(self._heap)
+                    if (did, sid) in self._tombstones:
+                        continue   # sensor was deleted/stopped — skip
                     self._executor.submit(self._run_fn, did, sid)
                     now = time.monotonic()
                 sleep_for = (self._heap[0][0] - now) if self._heap else 60.0
+                heap_size = len(self._heap)
+                tomb_size = len(self._tombstones)
+            # Prune outside the inner hot path when heap has drifted; the scheduler
+            # owner passes live_count via cancel() accounting, but a heuristic
+            # threshold on tombstone count keeps this simple and safe.
+            if tomb_size > 100 and heap_size > 2 * max(tomb_size, 1):
+                self._prune(heap_size - tomb_size)
             self._wake.wait(timeout=min(sleep_for, 1.0))
             self._wake.clear()
 
@@ -285,20 +314,37 @@ class Device:
         self.snmp_version_default    = ""
         self.vmware_user_default     = ""
         self.vmware_password_default = ""
+        # Cached status string; invalidated (set to None) whenever a sensor's
+        # alive / _threshold_state / running / alerts_muted changes, or when
+        # a sensor is added/removed. Recomputed on next read.
+        self._cached_status = None
 
     def next_sid(self):
         self._sid_ctr += 1
         return f"s{self._sid_ctr}"
 
+    def invalidate_status(self):
+        """Clear cached status so the next read recomputes from live sensor state."""
+        self._cached_status = None
+
     @property
     def status(self):
+        if self._cached_status is not None:
+            return self._cached_status
         active = [s for s in self.sensors.values() if not s.alerts_muted and s.running]
         vals = [s.alive for s in active]
-        if not vals or all(v is None for v in vals): return "unknown"
-        if any(v is False for v in vals): return "down"
-        if any(s._threshold_state == "crit" for s in active): return "down"
-        if any(s._threshold_state == "warn" for s in active): return "warn"
-        return "up"
+        if not vals or all(v is None for v in vals):
+            result = "unknown"
+        elif any(v is False for v in vals):
+            result = "down"
+        elif any(s._threshold_state == "crit" for s in active):
+            result = "down"
+        elif any(s._threshold_state == "warn" for s in active):
+            result = "warn"
+        else:
+            result = "up"
+        self._cached_status = result
+        return result
 
     def to_dict(self):
         return {
@@ -389,8 +435,12 @@ class MonitorState:
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return False
+            sids = list(dev.sensors.keys())
             for s in dev.sensors.values(): s.running = False
+            dev.invalidate_status()
             del self.devices[did]
+        for sid in sids:
+            self._scheduler.cancel(did, sid)
         return True
 
     def get_device(self, did):
@@ -437,6 +487,7 @@ class MonitorState:
             if not s: return False
             was_running = s.running
             s.running = False
+            dev.invalidate_status()
             s._stopped.clear()
         s._stopped.wait(timeout=3.0)   # wait for _run_once to exit (≤0.5s normally)
         if not s._stopped.is_set():
@@ -465,6 +516,7 @@ class MonitorState:
                             v = dev.host
                             s.host_override = False
                     setattr(s, k, v)
+            dev.invalidate_status()
         if was_running:
             self.start_sensor(did, sid)
         return True
@@ -476,7 +528,9 @@ class MonitorState:
             s = dev.sensors.get(sid)
             if not s: return False
             s.running = False
+            dev.invalidate_status()
             del dev.sensors[sid]
+        self._scheduler.cancel(did, sid)
         return True
 
     def start_sensor(self, did, sid):
@@ -486,6 +540,7 @@ class MonitorState:
             s = dev.sensors.get(sid)
         if not s or s.running: return
         s.running = True
+        dev.invalidate_status()
         s._stopped.clear()
         self._executor.submit(self._run_once, did, sid)
 
@@ -496,6 +551,8 @@ class MonitorState:
                 s = dev.sensors.get(sid)
                 if s:
                     s.running = False
+                    dev.invalidate_status()
+        self._scheduler.cancel(did, sid)
                     # Scheduler entry will be ignored — _run_once checks s.running at entry
 
     def start_device(self, did):
@@ -518,9 +575,9 @@ class MonitorState:
             dev = self.devices.get(did)
             sensor_dicts = [s.to_dict() for s in dev.sensors.values()] if dev else []
             new_status = dev.status if dev else "unknown"
-        for sd in sensor_dicts:
-            self._broadcast("sensor", sd)
-        self._broadcast("device_status", {"did": did, "status": new_status})
+        batch = [("sensor", sd) for sd in sensor_dicts]
+        batch.append(("device_status", {"did": did, "status": new_status}))
+        self._broadcast_batch(batch)
         # Auto-resolve active flap events — device is intentionally stopped
         for sid in sids:
             _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
@@ -567,6 +624,8 @@ class MonitorState:
         _log_msg = result.get("detail", "")   # default; overridden in ok branch for SNMP
         if result["ok"]:
             s.success    += 1
+            if s.alive is not True:
+                dev.invalidate_status()
             s.alive       = True
             s.last_ms     = result["ms"]
             s.last_detail = result["detail"]
@@ -639,6 +698,8 @@ class MonitorState:
                 if s._consec_ok >= 60:
                     s._recovery_pending = False
         else:
+            if s.alive is not False:
+                dev.invalidate_status()
             s.alive       = False
             s.last_ms     = None
             s.last_detail = result["detail"]
@@ -713,6 +774,7 @@ class MonitorState:
             # State CHANGED — reset counter, do full broadcast
             _prev_thr = s._threshold_state
             s._threshold_state = _new_thr
+            dev.invalidate_status()
             s._consec_threshold = 1
             if _new_thr != "ok" and not _muted:
                 s._threshold_recovery_pending = False
@@ -818,11 +880,13 @@ class MonitorState:
                 log_sensors.warning(f"alert_profile_engine error: {_ape}")
 
         s.thr_history.append(s._threshold_state)
+        _probe_end_batch = []
         if result["ok"]:
             _log_type = "err" if s._threshold_state == "crit" else ("warn" if s._threshold_state == "warn" else "ok")
-            self._broadcast("log", {"did": did, "sid": sid, "msg": _log_msg, "type": _log_type})
-        self._broadcast("sensor", s.to_dict())
-        self._broadcast("device_status", {"did": did, "status": dev.status})
+            _probe_end_batch.append(("log", {"did": did, "sid": sid, "msg": _log_msg, "type": _log_type}))
+        _probe_end_batch.append(("sensor", s.to_dict()))
+        _probe_end_batch.append(("device_status", {"did": did, "status": dev.status}))
+        self._broadcast_batch(_probe_end_batch)
 
         # Release thread immediately — scheduler fires next probe after interval
         if s.running:
@@ -843,26 +907,77 @@ class MonitorState:
             try: self._sse.remove(q)
             except ValueError: pass
 
+    # Event types that are forwarded to remote syslog.
+    _SYSLOG_EVENTS = ('flap_down', 'flap_recovered', 'snmp_trap',
+                      'threshold_critical', 'threshold_warning', 'threshold_ok')
+
+    def _start_broadcaster(self):
+        """Start the dedicated broadcaster thread that decouples probe workers
+        from SSE fan-out. Probe workers push events onto `_bcast_queue`; this
+        thread pulls and serialises fan-out to every subscriber.
+        """
+        if getattr(self, "_bcast_started", False):
+            return
+        self._bcast_queue = queue.Queue(maxsize=10000)
+        self._bcast_started = True
+        t = threading.Thread(target=self._broadcaster_loop, daemon=True, name='pw-sse-fanout')
+        t.start()
+
+    def _broadcaster_loop(self):
+        while True:
+            events = self._bcast_queue.get()
+            if events is None:
+                break
+            try:
+                self._fanout(events)
+            except Exception as e:
+                log_sensors.warning("broadcaster loop error: %s", e)
+
     def _broadcast(self, event, data):
-        msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
+        self._broadcast_batch([(event, data)])
+
+    def _broadcast_batch(self, events):
+        """Enqueue a list of (event, data) tuples onto the broadcaster queue.
+
+        Probe workers return immediately — fan-out happens on a dedicated thread.
+        Callers on the probe hot path pass multiple events per cycle; batching
+        avoids N queue puts and N subscribers-lock acquisitions.
+        """
+        if not events:
+            return
+        self._start_broadcaster()
+        try:
+            self._bcast_queue.put_nowait(events)
+        except queue.Full:
+            # Broadcaster is saturated (10k pending batches). Fan out inline as a
+            # fallback so events aren't silently dropped.
+            self._fanout(events)
+
+    def _fanout(self, events):
+        """Actual subscriber fan-out. Runs on the broadcaster thread."""
+        msgs = [f"event: {ev}\ndata: {json.dumps(dt)}\n\n" for ev, dt in events]
         with self._lock:
             subscribers = list(self._sse)
         dead = []
         for q in subscribers:
-            try: q.put_nowait(msg)
-            except queue.Full: dead.append(q)
+            try:
+                for msg in msgs:
+                    q.put_nowait(msg)
+            except queue.Full:
+                dead.append(q)
         if dead:
             with self._lock:
                 for d in dead:
                     try: self._sse.remove(d)
                     except ValueError: pass
-        if event in ('flap_down', 'flap_recovered', 'snmp_trap',
-                     'threshold_critical', 'threshold_warning', 'threshold_ok'):
-            try:
-                from monitoring.syslog_client import syslog_send
-                syslog_send(event, data)
-            except Exception:
-                pass
+        # Forward alert-category events to remote syslog (best-effort, non-blocking)
+        for ev, dt in events:
+            if ev in self._SYSLOG_EVENTS:
+                try:
+                    from monitoring.syslog_client import syslog_send
+                    syslog_send(ev, dt)
+                except Exception:
+                    pass
 
     def all_devices(self):
         with self._lock:

@@ -85,7 +85,19 @@ let _alertMap      = null;  // did::sid → [alert events]; null = not loaded ye
 
 // ── Incident Investigation Panel state ────────────────────────────
 let _evtDetailCurrent = null;
-let _evtDetailTimer   = null;
+
+// Timers attached to their modal element via WeakMap — no stale module-level
+// reference if multiple detail modals ever coexist.
+const _evtDetailTimers = new WeakMap();
+
+function _evtStopModalTimer(modalEl) {
+  if (!modalEl) return;
+  const t = _evtDetailTimers.get(modalEl);
+  if (t) {
+    clearInterval(t);
+    _evtDetailTimers.delete(modalEl);
+  }
+}
 
 function _buildAlertMap(alertEvents) {
   const map = {};
@@ -684,8 +696,7 @@ function _openEvtDetail(d) {
 function _closeEvtDetail() {
   const m = document.getElementById('evtDetailModal');
   if (m) m.style.display = 'none';
-  clearInterval(_evtDetailTimer);
-  _evtDetailTimer = null;
+  _evtStopModalTimer(m);
   _evtDetailCurrent = null;
 }
 
@@ -757,15 +768,17 @@ function _iipGetDuration(d, alertEvt) {
 }
 
 function _startEvtDurTimer(d, alertEvt) {
-  clearInterval(_evtDetailTimer);
+  const modal = document.getElementById('evtDetailModal');
+  _evtStopModalTimer(modal);
   const { live } = _iipGetDuration(d, alertEvt);
   if (!live) return;  // static duration — no ticker needed
-  _evtDetailTimer = setInterval(() => {
+  const timer = setInterval(() => {
     const el = document.getElementById('iip-dur-live');
-    if (!el) { clearInterval(_evtDetailTimer); return; }
+    if (!el) { _evtStopModalTimer(modal); return; }
     const sec = Math.max(0, Math.floor((Date.now() - new Date(d.ts).getTime()) / 1000));
     el.textContent = _fmtDuration(sec);
   }, 1000);
+  if (modal) _evtDetailTimers.set(modal, timer);
 }
 
 // Close panel on backdrop click (ignore mousedown-inside drags)

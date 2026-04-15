@@ -263,12 +263,42 @@
   - History-modal KPI tiles (`.dm-kpi-item`) — hardcoded navy gradient flipped to `#ffffff → #eef2f6` with a softened hover shadow in light mode
   - Login-screen `.lt-ping` wordmark — gradient converted from hardcoded sky-blues to `var(--accent)` / `var(--accent-hover)` so the brand text darkens for AA contrast on the white `.login-box`; `.login-box` itself now uses `--panel-bg-strong` + `--accent-glow`
 
+## 🚨 Critical Priority
+- **2FA (TOTP)** — authenticator-app second factor for all users; optional per user, enforceable per role; recovery codes; admin reset for lost devices
+- **Audit leftovers from v0.9.1** — outstanding items from the full-project audit:
+  - P1 — cache `dev.status` (invalidate on sensor state change); 2–5× CPU reduction on large devices
+  - P3 — scheduler heap tombstones for deleted sensors
+  - P4 — per-subscriber SSE sender threads (decouple slow browsers from probe loop)
+  - MI1 — replace `SELECT *` in `db/alert_events.py` and `db/alert_profiles.py` with explicit column lists
+  - MI2 — hostname format regex (`^[A-Za-z0-9._:\-]+$`) in `monitoring/probes.py` before subprocess
+  - MI3 — `_evtDetailTimer` in `frontend/events.js` moved to per-modal scope
+  - R1 — consolidate remaining inline `is_pg()` branches into `db/helpers.py` helpers
+  - R3 — batched `_broadcast` accepting a list of `(event, data)` tuples per probe-end
+  - R4 — split orchestration helpers out of `routes/devices.py` and `routes/monitoring.py`
+  - F1 — verify today's `_alert_has_fired` fix in production; extend caching to DOWN-state path if needed
+
 ## 🔴 High Priority
+- **Auto-Discovery with Sensor Templates** — extend the Subnet Discovery wizard; named bundles ("Web Server" = ping + http:443 + tls, "Domain Controller" = ping + tcp:389 + dns) stored as JSON in `app_settings`; per-row template picker in the discovery result grid
+- **SLA / Uptime Reports (PDF Export)** — scheduled monthly/quarterly reports per device or group, emailed to a user group; sourced from `sensor_samples_5m`
+- **Anomaly Detection** — learned baselines (EWMA or median + MAD) per sensor; opt-in; fires `warn` when current latency/loss deviates from learned normal range, in addition to static thresholds
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment
+- **Parent-Child Dependency Suppression** — optional `parent_device_id` per device; when parent is `down`, children's dispatches marked `suppressed_by_parent` (event row still logged, no email/webhook); needs good UX for picking the parent tree (possibly leaning on NTM)
+- **Teams First-Class Integration** — new `teams` dispatcher with native adaptive-card formatting (colour, fields); generic webhook preserved for everything else
+- **Session Management Widget** — user can see + revoke their active sessions; consider as a dashboard widget and/or user-menu entry
+- **Probe types to add** — `smtp` (MAIL FROM round-trip), `ldap` (bind test), `postgres` / `mysql` (connection test)
+- **SAML / OIDC SSO** — unlocks enterprise buyers that LDAP alone can't cover
+- **API Tokens** — PingWatch REST API tokens (same endpoints the UI uses, not direct DB); per-token scope (read-only / full); for scripts, CI, Terraform
+- **Further sample rollup (1 h / 1 d)** — extend existing 5-min rollup to hourly/daily buckets for multi-year retention at tiny storage cost; needs a design pass before committing
 
 ## 🎨 Low Priority
 - Compact mode
 - Accessible contrast mode
 - Spacing / alignment cleanup
+- **Bulk operations** — pause/resume/delete/move N sensors with checkboxes
+- **Keyboard shortcuts** — `g d` → devices, `g e` → events, `/` → focus search
+- **Favorites** — star a sensor; pinned at top of device card
+- **IPv6 dashboards** — IPAM UI currently assumes IPv4
+- **Distributed probes** — lightweight remote agent shipping results back
+- **HA / clustering** — active-passive with shared PG

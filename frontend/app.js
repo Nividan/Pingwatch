@@ -288,6 +288,12 @@ async function submitLogin(){
     clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
+    // 2FA gate: server says password OK but second factor required
+    if(d.totp_required){
+      btn.textContent='Sign In';
+      _show2faPrompt(d.challenge_id, user);
+      return;
+    }
     _loggedOut=false;
     S.role=d.role||'viewer';
     if(d.session_ttl)_sessionTtl=d.session_ttl;
@@ -304,6 +310,74 @@ async function submitLogin(){
     showLogin(msg);btn.textContent='Sign In';
   }finally{clearTimeout(slowHint);}
 }
+// ── Two-factor authentication prompt ─────────────────────────────
+function _show2faPrompt(challengeId, username){
+  // Replace login form with TOTP input. Reuses login-screen container.
+  const screen=document.getElementById('login-screen');
+  if(!screen) return;
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=''; err.style.display='none';}
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){userField.disabled=true;}
+  if(passField){passField.style.display='none';}
+  let codeField=document.getElementById('login-totp');
+  if(!codeField){
+    codeField=document.createElement('input');
+    codeField.type='text';
+    codeField.id='login-totp';
+    codeField.placeholder='6-digit code or recovery code';
+    codeField.autocomplete='one-time-code';
+    codeField.maxLength=20;
+    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(codeField, passField.nextSibling);}
+  }
+  codeField.style.display='block';
+  codeField.value='';
+  setTimeout(()=>codeField.focus(),50);
+  const btn=document.getElementById('login-btn');
+  if(btn){btn.textContent='Verify'; btn.disabled=false;}
+  // Override button click handler temporarily
+  const submit=async()=>{
+    const code=(codeField.value||'').trim();
+    if(!code){_showLoginErr('Enter your 2FA code'); return;}
+    btn.disabled=true; btn.textContent='Verifying…';
+    try{
+      const r=await fetch('/api/login/totp',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({challenge_id:challengeId, code})});
+      const d=await r.json();
+      if(!r.ok||d.error){
+        _showLoginErr(d.error||'Verification failed');
+        btn.disabled=false; btn.textContent='Verify';
+        return;
+      }
+      _loggedOut=false;
+      S.role=d.role||'viewer';
+      if(d.session_ttl)_sessionTtl=d.session_ttl;
+      try{
+        const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+        if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});
+      }catch(e){}
+      hideLogin();
+      try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
+      onAuthenticated(d.username);
+      // Reset login UI for next time
+      if(userField){userField.disabled=false;}
+      if(passField){passField.style.display='block';}
+      if(codeField){codeField.style.display='none';}
+    }catch(e){
+      _showLoginErr('Server error. Try again.');
+      btn.disabled=false; btn.textContent='Verify';
+    }
+  };
+  btn.onclick=submit;
+  codeField.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault(); submit();} };
+}
+function _showLoginErr(msg){
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=msg; err.style.display='block';}
+}
+
 async function doLogout(){
   _loggedOut=true;
   _stopIdleCheck();

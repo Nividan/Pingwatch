@@ -68,6 +68,93 @@ async function _openProfileModal(){
   setTimeout(()=>document.getElementById('myp-name')?.focus(),50);
 }
 
+// ── Two-Factor Authentication (TOTP) ─────────────────────────────
+async function _open2faModal(){
+  // Fetch current TOTP state via /api/me
+  let me={username:'',totp_enabled:0};
+  try{ const r=await api('GET','/api/me'); Object.assign(me,r); }catch(_){}
+  closeM('m-2fa');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-2fa';
+  _overlayClose(o,()=>closeM('m-2fa'));
+  const enabled=!!me.totp_enabled;
+  o.innerHTML=`
+    <div class="mbox" style="max-width:480px">
+      <div class="mhd">
+        <div class="mttl">🔐 Two-Factor Authentication</div>
+        <button class="mclose" onclick="closeM('m-2fa')">✕</button>
+      </div>
+      <div class="mbdy" id="tfa-body">
+        ${enabled
+          ? `<div style="margin-bottom:14px">2FA is <b style="color:#4caf50">ENABLED</b> on your account.</div>
+             <div class="fr"><label class="fl">Current password</label>
+               <input type="password" id="tfa-pass" autocomplete="current-password"/></div>
+             <div class="fr"><label class="fl">Current 2FA code</label>
+               <input type="text" id="tfa-code" maxlength="6" autocomplete="one-time-code"
+                      style="font-family:monospace;letter-spacing:2px;text-align:center"/></div>`
+          : `<div style="margin-bottom:14px">2FA is currently <b>disabled</b>. Click below to enrol.</div>`
+        }
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('m-2fa')">Cancel</button>
+        ${enabled
+          ? `<button class="btn-p" onclick="_2faDisable()">Disable 2FA</button>`
+          : `<button class="btn-p" onclick="_2faStartSetup()">Enable 2FA</button>`}
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+async function _2faStartSetup(){
+  let r;
+  try{ r=await api('POST','/api/me/totp/setup',{}); }catch(e){ toast('Setup failed','err'); return; }
+  if(r.error){ toast(r.error,'err'); return; }
+  const body=document.getElementById('tfa-body');
+  if(!body) return;
+  body.innerHTML=`
+    <div style="margin-bottom:12px">Add this account to your authenticator app (Google Authenticator, Authy, 1Password, etc.):</div>
+    <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;font-family:monospace;font-size:12px;word-break:break-all;user-select:all">${esc(r.provisioning_uri)}</div>
+    <div style="margin-bottom:8px;font-size:12px;color:var(--text2)">Or enter this secret manually:</div>
+    <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:14px;letter-spacing:1px;user-select:all;text-align:center">${esc(r.secret)}</div>
+    <div class="fr"><label class="fl">Enter 6-digit code from your app</label>
+      <input type="text" id="tfa-verify-code" maxlength="6" autocomplete="one-time-code"
+             style="font-family:monospace;letter-spacing:3px;text-align:center;font-size:18px"/></div>`;
+  const ft=document.querySelector('#m-2fa .mft');
+  if(ft){ ft.innerHTML=`<button class="btn-s" onclick="closeM('m-2fa')">Cancel</button>
+                       <button class="btn-p" onclick="_2faVerifyEnrol()">Verify & Enable</button>`; }
+  setTimeout(()=>document.getElementById('tfa-verify-code')?.focus(),50);
+}
+
+async function _2faVerifyEnrol(){
+  const code=(document.getElementById('tfa-verify-code')?.value||'').trim();
+  if(!code){ toast('Enter the code','err'); return; }
+  let r;
+  try{ r=await api('POST','/api/me/totp/verify',{code}); }catch(e){ toast('Verification failed','err'); return; }
+  if(r.error){ toast(r.error,'err'); return; }
+  const body=document.getElementById('tfa-body');
+  if(!body) return;
+  body.innerHTML=`
+    <div style="margin-bottom:12px;color:#4caf50;font-weight:600">✓ 2FA enabled successfully.</div>
+    <div style="margin-bottom:10px">Save these recovery codes somewhere safe. Each can be used once if you lose access to your authenticator app:</div>
+    <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:10px;font-family:monospace;font-size:14px;line-height:1.8;letter-spacing:1px;user-select:all;column-count:2;column-gap:20px">
+      ${(r.recovery_codes||[]).map(c=>esc(c)).join('<br/>')}
+    </div>
+    <div style="font-size:12px;color:var(--text2)">Each code works only once. Store them in a password manager.</div>`;
+  const ft=document.querySelector('#m-2fa .mft');
+  if(ft){ ft.innerHTML=`<button class="btn-p" onclick="closeM('m-2fa')">I've saved them</button>`; }
+}
+
+async function _2faDisable(){
+  const password=document.getElementById('tfa-pass')?.value||'';
+  const code=(document.getElementById('tfa-code')?.value||'').trim();
+  if(!password||!code){ toast('Password and code required','err'); return; }
+  let r;
+  try{ r=await api('POST','/api/me/totp/disable',{password,code}); }catch(e){ toast('Disable failed','err'); return; }
+  if(r.error){ toast(r.error,'err'); return; }
+  toast('2FA disabled','ok');
+  closeM('m-2fa');
+}
+
+
 async function _submitProfileModal(username, isAdmin){
   const full_name=(document.getElementById('myp-name')?.value||'').trim();
   const email=(document.getElementById('myp-email')?.value||'').trim();

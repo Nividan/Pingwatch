@@ -9,7 +9,7 @@ directly with a single try/except branch.
 
 from core.logger import log
 from db.backend  import is_pg
-from db.helpers  import db_query, db_execute, db_upsert, db_cursor
+from db.helpers  import db_query, db_query_one, db_execute, db_upsert, db_cursor
 
 
 # ── App settings ─────────────────────────────────────────────────
@@ -270,3 +270,33 @@ def db_reorder_dashboards(username: str, ordered_ids: list):
                 f"UPDATE dashboards SET sort_order={ph} "
                 f"WHERE id={ph} AND username={ph}",
                 (i, did, username))
+
+
+# ── TOTP (2FA) ───────────────────────────────────────────────────
+
+def db_get_totp(username: str) -> dict:
+    """Return {secret, enabled, recovery_json} for a user. Empty values if not set."""
+    r = db_query_one("main",
+            "SELECT totp_secret, totp_enabled, totp_recovery FROM users WHERE username=?",
+            (username,))
+    if not r:
+        return {"secret": "", "enabled": 0, "recovery_json": ""}
+    d = dict(r) if not isinstance(r, dict) else r
+    return {
+        "secret":        d.get("totp_secret") or "",
+        "enabled":       int(d.get("totp_enabled") or 0),
+        "recovery_json": d.get("totp_recovery") or "",
+    }
+
+
+def db_set_totp(username: str, secret: str, enabled: int, recovery_json: str = "") -> bool:
+    """Upsert TOTP state for a user."""
+    return db_execute("main",
+                      "UPDATE users SET totp_secret=?, totp_enabled=?, totp_recovery=? "
+                      "WHERE username=?",
+                      (secret, int(bool(enabled)), recovery_json, username))
+
+
+def db_clear_totp(username: str) -> bool:
+    """Disable TOTP and clear the secret + recovery codes."""
+    return db_set_totp(username, "", 0, "")

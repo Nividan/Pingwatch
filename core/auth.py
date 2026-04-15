@@ -455,3 +455,91 @@ def auth_check_role(token: str):
     if not s or s["expires"] < time.time():
         return None
     return s.get("role", "viewer")
+
+
+# ── TOTP (RFC 6238 — Google Authenticator compatible) ────────────
+
+# Pending TOTP challenges keyed by short-lived id. Issued on POST /api/login when
+# the user has TOTP enabled; consumed by POST /api/login/totp.
+_TOTP_CHALLENGES: dict = {}        # cid -> {username, role, expires}
+_TOTP_CHALLENGE_LOCK         = threading.Lock()
+_TOTP_CHALLENGE_TTL_SEC      = 300   # 5 minutes
+
+
+def totp_generate_secret() -> str:
+    import pyotp
+    return pyotp.random_base32()
+
+
+def totp_provisioning_uri(username: str, secret: str, issuer: str = "PingWatch") -> str:
+    import pyotp
+    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
+
+
+def totp_verify(secret: str, code: str) -> bool:
+    if not secret or not code:
+        return False
+    try:
+        import pyotp
+        return pyotp.TOTP(secret).verify(str(code).strip(), valid_window=1)
+    except Exception:
+        return False
+
+
+def totp_generate_recovery_codes(n: int = 10) -> tuple:
+    """Return (plaintext_list, hashed_list_json_string).
+
+    Plaintext is shown to the user once (download/print). The hashed list is
+    persisted; consumption removes the hash from the JSON array.
+    """
+    import json
+    plain  = ["-".join(secrets.token_hex(2) for _ in range(2)) for _ in range(n)]  # e.g. abcd-1234
+    hashed = [hashlib.sha256(c.encode()).hexdigest() for c in plain]
+    return plain, json.dumps(hashed)
+
+
+def totp_consume_recovery(stored_json: str, code: str) -> tuple:
+    """If `code` matches one of the hashed codes in `stored_json`, return
+    (True, new_json_with_code_removed). Otherwise return (False, stored_json)."""
+    import json
+    if not stored_json or not code:
+        return False, stored_json
+    try:
+        hashed_list = json.loads(stored_json)
+    except Exception:
+        return False, stored_json
+    code_hash = hashlib.sha256(str(code).strip().encode()).hexdigest()
+    if code_hash in hashed_list:
+        hashed_list.remove(code_hash)
+        return True, json.dumps(hashed_list)
+    return False, stored_json
+
+
+def totp_create_challenge(username: str, role: str) -> str:
+    """Issue a short-lived challenge id for the second-factor step."""
+    cid = secrets.token_urlsafe(24)
+    with _TOTP_CHALLENGE_LOCK:
+        # Opportunistic GC of expired entries
+        now = time.time()
+        for k in [k for k, v in _TOTP_CHALLENGES.items() if v["expires"] < now]:
+            _TOTP_CHALLENGES.pop(k, None)
+        _TOTP_CHALLENGES[cid] = {
+            "username": username,
+            "role":     role,
+            "expires":  now + _TOTP_CHALLENGE_TTL_SEC,
+        }
+    return cid
+
+
+def totp_resolve_challenge(cid: str) -> dict:
+    """Return {username, role} for a valid challenge, or None. Does NOT consume."""
+    with _TOTP_CHALLENGE_LOCK:
+        entry = _TOTP_CHALLENGES.get(cid)
+        if not entry or entry["expires"] < time.time():
+            return None
+        return {"username": entry["username"], "role": entry["role"]}
+
+
+def totp_consume_challenge(cid: str) -> None:
+    with _TOTP_CHALLENGE_LOCK:
+        _TOTP_CHALLENGES.pop(cid, None)
