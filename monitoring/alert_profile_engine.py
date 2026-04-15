@@ -330,6 +330,11 @@ def evaluate_and_fire(dev, sensor) -> None:
     # This must run even if no recovery stage dispatched (e.g. profile has
     # no recovery stage, or its recovery stage has no action templates).
     if current_state == "ok":
+        # Fast path: if no stage has ever fired for this sensor (in this process
+        # run), there is nothing to clean up — skip the per-stage DB reads.
+        # _alert_has_fired is set True inside _fire() and cleared here after cleanup.
+        if not getattr(sensor, "_alert_has_fired", False):
+            return
         should_cleanup = fired_recovery
         if not should_cleanup:
             for s in stages:
@@ -343,6 +348,7 @@ def evaluate_and_fire(dev, sensor) -> None:
             try:
                 db_clear_stage_state_for_sensor(did, sid)
                 db_auto_resolve_event(profile["id"], did, sid)
+                sensor._alert_has_fired = False   # no active state left in DB
             except Exception as e:
                 log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
 
@@ -367,6 +373,11 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
     """Build context, check maintenance, dispatch the action, log the event."""
     from db.alert_profiles import db_get_action_template
     from db.alert_events  import db_has_acked_event
+
+    # Mark that this sensor has active alert state in DB (cleared after cleanup).
+    # Used to skip the per-stage DB reads in the OK-state cleanup path for
+    # sensors that have never fired (the dominant case).
+    sensor._alert_has_fired = True
 
     ctx = _build_ctx(dev, sensor, sensor._threshold_state, trig,
                      duration_s=duration_s)
