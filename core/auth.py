@@ -466,6 +466,15 @@ _TOTP_CHALLENGE_LOCK         = threading.Lock()
 _TOTP_CHALLENGE_TTL_SEC      = 300   # 5 minutes
 
 
+def totp_available() -> bool:
+    """Return True if the optional pyotp dependency is importable."""
+    try:
+        import pyotp  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def totp_generate_secret() -> str:
     import pyotp
     return pyotp.random_base32()

@@ -79,6 +79,14 @@ PACKAGES = [
         "desc":     "VMware vCenter / ESXi VM metrics",
         "required": False,
     },
+    {
+        "import":   "pyotp",
+        "name":     "pyotp",
+        "install":  "pyotp>=2.9.0",
+        "pip":      True,
+        "desc":     "two-factor authentication (TOTP)",
+        "required": False,
+    },
 ]
 
 

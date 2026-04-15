@@ -1707,10 +1707,16 @@ function renderUserTable(users){
       ?`<span class="usr-badge-ldap">🌐 Domain</span>`
       :`<span class="usr-badge-local">🔑 Local</span>`;
     const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
+    const totpBtn=u.totp_enabled
+      ?`<button onclick="adminReset2FA('${esc(u.username)}')" title="Disable this user's two-factor authentication (e.g. lost phone)">🔐 Reset 2FA</button>`
+      :'';
+    const totpBadge=u.totp_enabled
+      ?`<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:3px;background:#2a3a2a;color:#4caf50;margin-left:4px" title="Two-factor authentication enabled">2FA</span>`
+      :'';
     const uq=encodeURIComponent(u.username);
     return `
     <tr>
-      <td><strong>${esc(u.username)}</strong></td>
+      <td><strong>${esc(u.username)}</strong>${totpBadge}</td>
       <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.full_name||'')}">${esc(u.full_name||'—')}</td>
       <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.email||'')}">${esc(u.email||'—')}</td>
       <td>${esc(u.group_name||'—')}</td>
@@ -1719,6 +1725,7 @@ function renderUserTable(users){
       <td><div class="usr-act">
         <button onclick="_openUserProfileModal('${esc(u.username)}')">✏ Edit</button>
         ${resetBtn}
+        ${totpBtn}
         <button class="del" onclick="deleteUser('${esc(u.username)}')">🗑 Delete</button>
       </div></td>
     </tr>`;
@@ -1727,6 +1734,24 @@ function renderUserTable(users){
     <thead><tr><th>Username</th><th>Full Name</th><th>Email</th><th>Group</th><th>Role</th><th>Auth</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+async function adminReset2FA(username){
+  if(!confirm(`Disable two-factor authentication for "${username}"?\n\nThe user will be able to log in with just their password.\nThey can re-enrol from their profile menu afterward.`)) return;
+  let r;
+  try{
+    r=await api('POST',`/api/users/${encodeURIComponent(username)}/totp/reset`,{});
+  }catch(e){ toast('Reset failed','err'); return; }
+  if(r&&r.error){ toast(r.error,'err'); return; }
+  toast(`2FA disabled for ${username}`,'ok');
+  // Refresh user table
+  const wrap=document.getElementById('userTableWrap');
+  if(wrap){
+    try{
+      const ur=await api('GET','/api/users');
+      wrap.innerHTML=renderUserTable(ur.users||[]);
+    }catch(e){}
+  }
 }
 
 async function saveSettings(){
