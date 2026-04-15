@@ -183,6 +183,24 @@ function _buildSettingsTab_users(sr, ur) {
             <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled, max 720 h / 30 days)</div></div>
         </div>
       </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">🧠 Anomaly Detection</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-anom-en" ${sr.anomaly_global_enabled!==0?'checked':''}>
+            <span class="fl" style="margin:0">Enable anomaly detection system-wide</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">Individual sensors must also opt in (Edit sensor → Anomaly Detection).</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Cold-start suppression (h)</label>
+            <input type="number" id="st-anom-cold" value="${sr.anomaly_cold_start_hours??24}" min="0" max="168" style="max-width:100px"/>
+            <div class="fh">No anomaly alerts fire for this long after a sensor first enables detection. Prevents false positives during learning.</div></div>
+          <div class="fr"><label class="fl">Baseline checkpoint (s)</label>
+            <input type="number" id="st-anom-ckpt" value="${sr.anomaly_checkpoint_interval_s??3600}" min="60" max="86400" style="max-width:100px"/>
+            <div class="fh">How often to save learned baselines to disk. Default 3600 s (1 hour).</div></div>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -1840,11 +1858,20 @@ async function saveSecuritySettings(){
   const failMax     = parseInt(document.getElementById('st-fail-max')?.value);
   const failWin     = parseInt(document.getElementById('st-fail-win')?.value);
   const totpRemem   = parseInt(document.getElementById('st-totp-remember')?.value);
+  const anomEn      = document.getElementById('st-anom-en')?.checked;
+  const anomCold    = parseInt(document.getElementById('st-anom-cold')?.value);
+  const anomCkpt    = parseInt(document.getElementById('st-anom-ckpt')?.value);
   const body = {};
   if(failMax >= 1)         body.login_fail_max        = failMax;
   if(failWin >= 10)        body.login_fail_window     = failWin;
   if(!isNaN(totpRemem) && totpRemem >= 0 && totpRemem <= 720)
                            body.totp_remember_hours   = totpRemem;
+  if(typeof anomEn === 'boolean')
+                           body.anomaly_global_enabled = anomEn ? 1 : 0;
+  if(!isNaN(anomCold) && anomCold >= 0 && anomCold <= 168)
+                           body.anomaly_cold_start_hours = anomCold;
+  if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)
+                           body.anomaly_checkpoint_interval_s = anomCkpt;
   const r = await api('PATCH', '/api/settings', body);
   if(!r.ok){ toast('Failed to save security settings','err'); return; }
   toast('Security settings saved','ok');

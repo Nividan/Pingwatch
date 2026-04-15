@@ -11,9 +11,12 @@ Handles: /api/devices (GET), /api/device (POST), /api/devices/{did} (GET/PATCH/D
 """
 
 import re
+import re as _re_mod
 import threading
 import time as _time
 from urllib.parse import urlparse, parse_qs
+
+_RE_SENSOR_ANOMALY_RESET = _re_mod.compile(r"^/api/sensors/([^/]+)/([^/]+)/anomaly/reset$")
 
 import core.app_state as app_state
 from core.config import (
@@ -28,6 +31,7 @@ from db     import (
     db_clear_device_traps, db_load_history, db_load_summary, db_load_availability,
     db_resolve_events_by_sensor, db_resolve_flaps_by_sensor,
     db_clear_stage_state_for_sensor,
+    db_reset_anomaly_baseline,
 )
 from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete
 from monitoring.network_map import topo_prune_pw_links
@@ -474,8 +478,24 @@ def handle(h, method, path, body):
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
                   "snmp_unit",
                   "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
-                  "vmware_disk_path"]:
+                  "vmware_disk_path",
+                  "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
+        # Normalize anomaly fields to safe ranges
+        if "anomaly_enabled" in kwargs:
+            kwargs["anomaly_enabled"] = 1 if kwargs["anomaly_enabled"] else 0
+        if "anomaly_sensitivity" in kwargs:
+            try:
+                _s = int(kwargs["anomaly_sensitivity"])
+                kwargs["anomaly_sensitivity"] = 1 if _s < 1 else (3 if _s > 3 else _s)
+            except (TypeError, ValueError):
+                h._json(400, {"error": "anomaly_sensitivity must be 1, 2, or 3"}); return True
+        if "anomaly_min_samples" in kwargs:
+            try:
+                _m = int(kwargs["anomaly_min_samples"])
+                kwargs["anomaly_min_samples"] = max(5, min(10000, _m))
+            except (TypeError, ValueError):
+                h._json(400, {"error": "anomaly_min_samples must be an integer"}); return True
         # VMware password: encrypt if provided, skip if empty (keep existing)
         if body.get("vmware_password"):
             from db.backups import encrypt_pw
@@ -515,6 +535,25 @@ def handle(h, method, path, body):
         if "alerts_muted" in body and _se_dev:
             STATE._broadcast("device_status", {"did": did, "status": _se_dev.status})
         h._json(200, {"status": "updated"})
+        return True
+
+    # ── /api/sensors/{did}/{sid}/anomaly/reset POST ───────────────
+    mar = _RE_SENSOR_ANOMALY_RESET.match(path) if _RE_SENSOR_ANOMALY_RESET else None
+    if mar and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        rdid, rsid = mar.group(1), mar.group(2)
+        with STATE._lock:
+            rdev = STATE.devices.get(rdid)
+            rsen = rdev.sensors.get(rsid) if rdev else None
+            if not rsen:
+                h._json(404, {"error": "sensor not found"}); return True
+            from monitoring.anomaly import reset_baseline as _anom_reset
+            _anom_reset(rsen)
+            _rdname, _rsname = rdev.name, rsen.name
+        _db_enqueue(lambda: db_reset_anomaly_baseline(rdid, rsid))
+        db_log_audit(user, h.client_address[0], 'anomaly_baseline_reset', f"{_rdname}/{_rsname}")
+        h._json(200, {"ok": True, "baseline_reset": True})
         return True
 
     # ── /api/sensors/{did}/{sid} DELETE ──────────────────────────
@@ -620,6 +659,20 @@ def handle(h, method, path, body):
                 s2.dns_record_type      = body.get("dns_record_type", "A")
                 s2.dns_server           = body.get("dns_server", "")
                 s2.http_expected_status = xstat
+                # Optional anomaly config on create (UI enables post-creation; API may set here).
+                if "anomaly_enabled" in body:
+                    s2.anomaly_enabled = 1 if body["anomaly_enabled"] else 0
+                if "anomaly_sensitivity" in body:
+                    try:
+                        _sv = int(body["anomaly_sensitivity"])
+                        s2.anomaly_sensitivity = 1 if _sv < 1 else (3 if _sv > 3 else _sv)
+                    except (TypeError, ValueError):
+                        pass
+                if "anomaly_min_samples" in body:
+                    try:
+                        s2.anomaly_min_samples = max(5, min(10000, int(body["anomaly_min_samples"])))
+                    except (TypeError, ValueError):
+                        pass
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _dev_name = dev.name if dev else did

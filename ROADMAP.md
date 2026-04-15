@@ -288,10 +288,22 @@
   - Orchestration helpers extracted from route modules into dedicated helpers
   - `db/helpers.py` unified dual-backend query layer (`db_query`, `db_execute`, `db_upsert`, `db_cursor`); new code uses these instead of inline `if is_pg()` branches
 
+- Anomaly detection (learned baselines) — opt-in per sensor
+  - Per-sensor EWMA mean + variance (Welford-style update); O(1) hot path, 3 floats per sensor — safe at 10k-sensor scale
+  - Upper-tail z-test with variance floor (`max(σ, 10 ms, 0.2·μ)`); sensitivity dropdown (Strict/Balanced/Relaxed → k=3/4/6); 3-sample debounce
+  - Can only promote `ok → warn` — never fires crit; static thresholds remain the authoritative source for critical alerts, no double alerts when both would fire
+  - Cold-start suppression: no alerts until `min_samples` reached AND `anomaly_cold_start_hours` elapsed (default 50 samples + 24 h)
+  - Global kill switch (`anomaly_global_enabled`) + per-sensor opt-in; failed probes never update the baseline
+  - Baseline checkpointed to `sensor_anomaly_baselines` hourly via `autosave_loop`; restored on startup so a restart doesn't reset learning
+  - Supported sensor types: `ping`, `tcp`, `http`, `dns`, `http_keyword`, `banner` (SNMP / TLS / VMware excluded in v1)
+  - `flap_log.direction='anomaly_warn'` distinguishes anomaly-caused warnings from static-threshold warnings in the Events tab (🧠 badge + filter pill)
+  - UI: collapsible "🧠 Anomaly Detection" section on the sensor edit modal (sensitivity + min samples + live baseline readout + Reset button); baseline band overlay on the sensor history chart
+  - Settings → General → Login Security: global enable, cold-start window, checkpoint interval
+  - `POST /api/sensors/{did}/{sid}/anomaly/reset` — wipe in-memory + DB baseline (operator role)
+
 ## 🔴 High Priority
 - **Auto-Discovery with Sensor Templates** — extend the Subnet Discovery wizard; named bundles ("Web Server" = ping + http:443 + tls, "Domain Controller" = ping + tcp:389 + dns) stored as JSON in `app_settings`; per-row template picker in the discovery result grid
 - **SLA / Uptime Reports (PDF Export)** — scheduled monthly/quarterly reports per device or group, emailed to a user group; sourced from `sensor_samples_5m`
-- **Anomaly Detection** — learned baselines (EWMA or median + MAD) per sensor; opt-in; fires `warn` when current latency/loss deviates from learned normal range, in addition to static thresholds
 
 ## ⚙️ Medium Priority
 - Fix sensor tile alignment

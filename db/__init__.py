@@ -12,7 +12,11 @@ from db.core        import db_init, db_seed_users, db_seed_alert_profiles, \
                            _db_enqueue, _logs_enqueue, logs_db_init
 
 # persistence — device/sensor save/load + autosave
-from db.persistence import db_load, db_save, autosave_loop
+from db.persistence import (
+    db_load, db_save, autosave_loop,
+    db_load_anomaly_baselines, db_checkpoint_anomaly_baselines,
+    db_reset_anomaly_baseline,
+)
 
 # samples — buffered probe writes + history queries
 from db.samples     import (
@@ -182,6 +186,8 @@ __all__ = [
     "_logs_enqueue", "logs_db_init",
     # persistence
     "db_load", "db_save", "autosave_loop",
+    "db_load_anomaly_baselines", "db_checkpoint_anomaly_baselines",
+    "db_reset_anomaly_baseline",
     # samples
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",

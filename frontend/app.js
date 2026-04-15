@@ -1201,6 +1201,7 @@ async function _refreshFlapList(){
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='anomaly_warn'){f._direction='anomaly';f._thr_level='warn';}
       else f._direction=f.direction||'down';
       byKey[_flapKey(f)]=f;
     });
@@ -1322,6 +1323,7 @@ async function _refreshEvents(){
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='anomaly_warn'){f._direction='anomaly';f._thr_level='warn';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
@@ -1412,6 +1414,7 @@ async function loadAll(){
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='anomaly_warn'){f._direction='anomaly';f._thr_level='warn';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });

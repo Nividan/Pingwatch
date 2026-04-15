@@ -13,6 +13,7 @@ function evtSeverity(d) {
   if (dir === 'license_warn')                          return 'warning';
   if (dir === 'threshold' && d._thr_level === 'crit') return 'critical';
   if (dir === 'threshold' && d._thr_level === 'warn') return 'warning';
+  if (dir === 'anomaly')                              return 'warning';
   if (dir === 'trap') {
     // Use enriched severity if available
     const s = d.severity || 'warning';
@@ -40,6 +41,7 @@ function evtIcon(d) {
   if (dir === 'trap') return _VENDOR_ICONS[d.vendor] || '📡';
   if (dir === 'threshold') return '⚠️';
   if (dir === 'threshold_ok') return '✅';
+  if (dir === 'anomaly') return '🧠';
   return _EVT_ICONS[d.stype] || '⚠️';
 }
 function _trapLabel(d) {
@@ -860,7 +862,9 @@ function _iipIdentity(d) {
   const typeLabel = {
     down: 'Device / Sensor Down', recovered: 'Recovery',
     threshold: 'Threshold Alert (' + (d._thr_level||'') + ')',
-    threshold_ok: 'Threshold Recovered', trap: 'SNMP Trap', info: 'Info'
+    threshold_ok: 'Threshold Recovered',
+    anomaly: '🧠 Anomaly (learned baseline)',
+    trap: 'SNMP Trap', info: 'Info'
   }[_dir] || _dir || '—';
   const host    = isTrap ? (d.src_ip||'—') : (d.host||'—');
   const sensor  = isTrap ? (d.trap_oid ? d.trap_oid.split('.').slice(-4).join('.') : 'SNMP Trap') : (d.sname||'—');

@@ -51,7 +51,10 @@ def _pg_save(state):
              getattr(s, "vmware_password", ""),
              getattr(s, "vmware_vm_id", ""),
              getattr(s, "vmware_vm_name", ""),
-             getattr(s, "vmware_metric", ""))
+             getattr(s, "vmware_metric", ""),
+             int(getattr(s, "anomaly_enabled", 0) or 0),
+             int(getattr(s, "anomaly_sensitivity", 2) or 2),
+             int(getattr(s, "anomaly_min_samples", 50) or 50))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -101,7 +104,8 @@ def _pg_save(state):
                     "fail_after,recover_after,warn_ms,crit_ms,"
                     "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
                     "alerts_muted,host_override,snmp_unit,"
-                    "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric) "
+                    "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
+                    "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -119,7 +123,10 @@ def _pg_save(state):
                     "host_override=EXCLUDED.host_override, snmp_unit=EXCLUDED.snmp_unit, "
                     "vmware_user=EXCLUDED.vmware_user, vmware_password=EXCLUDED.vmware_password, "
                     "vmware_vm_id=EXCLUDED.vmware_vm_id, vmware_vm_name=EXCLUDED.vmware_vm_name, "
-                    "vmware_metric=EXCLUDED.vmware_metric",
+                    "vmware_metric=EXCLUDED.vmware_metric, "
+                    "anomaly_enabled=EXCLUDED.anomaly_enabled, "
+                    "anomaly_sensitivity=EXCLUDED.anomaly_sensitivity, "
+                    "anomaly_min_samples=EXCLUDED.anomaly_min_samples",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -179,7 +186,10 @@ def db_save(state):
              getattr(s, "vmware_password", ""),
              getattr(s, "vmware_vm_id", ""),
              getattr(s, "vmware_vm_name", ""),
-             getattr(s, "vmware_metric", ""))
+             getattr(s, "vmware_metric", ""),
+             int(getattr(s, "anomaly_enabled", 0) or 0),
+             int(getattr(s, "anomaly_sensitivity", 2) or 2),
+             int(getattr(s, "anomaly_min_samples", 50) or 50))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -208,8 +218,9 @@ def db_save(state):
             "fail_after,recover_after,warn_ms,crit_ms,"
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
             "alerts_muted,host_override,snmp_unit,"
-            "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
+            "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -257,7 +268,10 @@ def _pg_load(state):
                 "COALESCE(vmware_password,'') AS vmware_password,"
                 "COALESCE(vmware_vm_id,'') AS vmware_vm_id,"
                 "COALESCE(vmware_vm_name,'') AS vmware_vm_name,"
-                "COALESCE(vmware_metric,'') AS vmware_metric "
+                "COALESCE(vmware_metric,'') AS vmware_metric,"
+                "COALESCE(anomaly_enabled,0) AS anomaly_enabled,"
+                "COALESCE(anomaly_sensitivity,2) AS anomaly_sensitivity,"
+                "COALESCE(anomaly_min_samples,50) AS anomaly_min_samples "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -320,6 +334,9 @@ def _pg_load(state):
         s.vmware_vm_id         = row[32] or ""
         s.vmware_vm_name       = row[33] or ""
         s.vmware_metric        = row[34] or ""
+        s.anomaly_enabled      = int(row[35] or 0)
+        s.anomaly_sensitivity  = int(row[36] or 2)
+        s.anomaly_min_samples  = int(row[37] or 50)
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -376,6 +393,8 @@ def _pg_load(state):
     except Exception as _e:
         log.error(f"DB restore runtime error: {_e}")
 
+    db_load_anomaly_baselines(state)
+
     for did in list(state.devices):
         state.start_device(did)
     log.info("Auto-started all sensors.")
@@ -405,7 +424,9 @@ def db_load(state):
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,alerts_muted,host_override,"
             "COALESCE(snmp_unit,''),"
             "COALESCE(vmware_user,''),COALESCE(vmware_password,''),"
-            "COALESCE(vmware_vm_id,''),COALESCE(vmware_vm_name,''),COALESCE(vmware_metric,'') "
+            "COALESCE(vmware_vm_id,''),COALESCE(vmware_vm_name,''),COALESCE(vmware_metric,''),"
+            "COALESCE(anomaly_enabled,0),COALESCE(anomaly_sensitivity,2),"
+            "COALESCE(anomaly_min_samples,50) "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -449,7 +470,8 @@ def db_load(state):
          fail_after, recover_after, warn_ms, crit_ms,
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
          alerts_muted, host_override, snmp_unit,
-         vmware_user, vmware_password, vmware_vm_id, vmware_vm_name, vmware_metric) in srows:
+         vmware_user, vmware_password, vmware_vm_id, vmware_vm_name, vmware_metric,
+         anomaly_enabled, anomaly_sensitivity, anomaly_min_samples) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -475,6 +497,9 @@ def db_load(state):
         s.vmware_vm_id         = vmware_vm_id or ""
         s.vmware_vm_name       = vmware_vm_name or ""
         s.vmware_metric        = vmware_metric or ""
+        s.anomaly_enabled      = int(anomaly_enabled or 0)
+        s.anomaly_sensitivity  = int(anomaly_sensitivity or 2)
+        s.anomaly_min_samples  = int(anomaly_min_samples or 50)
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
@@ -534,6 +559,8 @@ def db_load(state):
             try: _rcon.close()
             except Exception: pass
 
+    db_load_anomaly_baselines(state)
+
     for did in list(state.devices):
         state.start_device(did)
     log.info("Auto-started all sensors.")
@@ -581,3 +608,167 @@ def autosave_loop(state):
                 except Exception as e:
                     from core.logger import log
                     log.warning(f"Partition maintenance error: {e}")
+        # Anomaly baseline checkpoint — configurable cadence (default 1 h)
+        try:
+            _ckpt_every_min = max(1, int(
+                _settings.get("anomaly_checkpoint_interval_s", 3600)) // 60)
+        except Exception:
+            _ckpt_every_min = 60
+        if _iter % _ckpt_every_min == 0:
+            try:
+                db_checkpoint_anomaly_baselines(state)
+            except Exception as _ae:
+                from core.logger import log as _llog
+                _llog.warning(f"Anomaly checkpoint error: {_ae}")
+
+
+def db_load_anomaly_baselines(state):
+    """Restore EWMA baseline state from sensor_anomaly_baselines into
+    in-memory sensor attributes. Run after sensors are loaded."""
+    try:
+        if is_pg():
+            from db.pg_pool import pg_conn
+            with pg_conn("main") as con:
+                cur = con.cursor()
+                cur.execute(
+                    "SELECT did, sid, mean_ms, var_ms, sample_count, enabled_since "
+                    "FROM sensor_anomaly_baselines"
+                )
+                rows = cur.fetchall()
+                cur.close()
+            def _get(row, key, idx):
+                return row[key] if isinstance(row, dict) else row[idx]
+            for row in rows:
+                did = _get(row, "did", 0)
+                sid = _get(row, "sid", 1)
+                dev = state.devices.get(did)
+                if not dev:
+                    continue
+                s = dev.sensors.get(sid)
+                if not s:
+                    continue
+                s._anom_mean = _get(row, "mean_ms", 2)
+                s._anom_var = _get(row, "var_ms", 3) or 0.0
+                s._anom_count = int(_get(row, "sample_count", 4) or 0)
+                s._anom_enabled_since = _get(row, "enabled_since", 5)
+                s._anom_dirty = False
+        else:
+            con = None
+            try:
+                con = sqlite3.connect(DB_PATH, timeout=15)
+                rows = con.execute(
+                    "SELECT did, sid, mean_ms, var_ms, sample_count, enabled_since "
+                    "FROM sensor_anomaly_baselines"
+                ).fetchall()
+            finally:
+                if con:
+                    con.close()
+            for did, sid, mean_ms, var_ms, sample_count, enabled_since in rows:
+                dev = state.devices.get(did)
+                if not dev:
+                    continue
+                s = dev.sensors.get(sid)
+                if not s:
+                    continue
+                s._anom_mean = mean_ms
+                s._anom_var = var_ms or 0.0
+                s._anom_count = int(sample_count or 0)
+                s._anom_enabled_since = enabled_since
+                s._anom_dirty = False
+        log.info("Anomaly baselines restored from sensor_anomaly_baselines.")
+    except Exception as e:
+        log.warning(f"Anomaly baseline restore error: {e}")
+
+
+def db_checkpoint_anomaly_baselines(state):
+    """Persist dirty in-memory EWMA baselines to sensor_anomaly_baselines.
+    Safe to call at any cadence; bulk upsert with no lock held during I/O."""
+    rows = []
+    with state._lock:
+        for dev in state.devices.values():
+            for s in dev.sensors.values():
+                if (getattr(s, "anomaly_enabled", 0)
+                        and getattr(s, "_anom_dirty", False)
+                        and s._anom_mean is not None):
+                    rows.append((
+                        s.device_id, s.sensor_id,
+                        float(s._anom_mean),
+                        float(s._anom_var or 0.0),
+                        int(s._anom_count or 0),
+                        float(s._anom_enabled_since or time.time()),
+                        time.time(),
+                    ))
+                    s._anom_dirty = False
+    if not rows:
+        return 0
+    if is_pg():
+        try:
+            from db.pg_pool import pg_conn
+            import psycopg2.extras
+            with pg_conn("main") as con:
+                cur = con.cursor()
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO sensor_anomaly_baselines "
+                    "(did, sid, mean_ms, var_ms, sample_count, enabled_since, updated_at) "
+                    "VALUES %s "
+                    "ON CONFLICT (did, sid) DO UPDATE SET "
+                    "mean_ms=EXCLUDED.mean_ms, var_ms=EXCLUDED.var_ms, "
+                    "sample_count=EXCLUDED.sample_count, "
+                    "enabled_since=EXCLUDED.enabled_since, "
+                    "updated_at=EXCLUDED.updated_at",
+                    rows,
+                )
+                cur.close()
+        except Exception as e:
+            log.warning(f"Anomaly checkpoint (pg) error: {e}")
+            return 0
+    else:
+        con = None
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            con.executemany(
+                "INSERT OR REPLACE INTO sensor_anomaly_baselines "
+                "(did, sid, mean_ms, var_ms, sample_count, enabled_since, updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                rows,
+            )
+            con.commit()
+        except Exception as e:
+            log.warning(f"Anomaly checkpoint (sqlite) error: {e}")
+            return 0
+        finally:
+            if con:
+                con.close()
+    return len(rows)
+
+
+def db_reset_anomaly_baseline(did: str, sid: str) -> bool:
+    """Delete the checkpoint row for a single sensor. In-memory reset is
+    the caller's responsibility (use monitoring.anomaly.reset_baseline)."""
+    try:
+        if is_pg():
+            from db.pg_pool import pg_conn
+            with pg_conn("main") as con:
+                cur = con.cursor()
+                cur.execute(
+                    "DELETE FROM sensor_anomaly_baselines WHERE did=%s AND sid=%s",
+                    (did, sid),
+                )
+                cur.close()
+            return True
+        con = None
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            con.execute(
+                "DELETE FROM sensor_anomaly_baselines WHERE did=? AND sid=?",
+                (did, sid),
+            )
+            con.commit()
+        finally:
+            if con:
+                con.close()
+        return True
+    except Exception as e:
+        log.warning(f"Anomaly baseline delete error: {e}")
+        return False

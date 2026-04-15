@@ -146,6 +146,9 @@ def pg_create_main_schema(cur):
         ("sensors", "vmware_vm_id",            "TEXT DEFAULT ''"),
         ("sensors", "vmware_vm_name",          "TEXT DEFAULT ''"),
         ("sensors", "vmware_metric",           "TEXT DEFAULT ''"),
+        ("sensors", "anomaly_enabled",         "INTEGER DEFAULT 0"),
+        ("sensors", "anomaly_sensitivity",     "INTEGER DEFAULT 2"),
+        ("sensors", "anomaly_min_samples",     "INTEGER DEFAULT 50"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
@@ -164,6 +167,18 @@ def pg_create_main_schema(cur):
         CREATE TABLE IF NOT EXISTS app_settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )""")
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
+            did           TEXT NOT NULL,
+            sid           TEXT NOT NULL,
+            mean_ms       DOUBLE PRECISION,
+            var_ms        DOUBLE PRECISION,
+            sample_count  INTEGER DEFAULT 0,
+            enabled_since DOUBLE PRECISION,
+            updated_at    DOUBLE PRECISION,
+            PRIMARY KEY (did, sid)
         )""")
 
     cur.execute("""

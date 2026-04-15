@@ -115,6 +115,10 @@ def handle(h, method, path, body):
             "login_fail_max":        int(_settings.get("login_fail_max",        5)),
             "login_fail_window":     int(_settings.get("login_fail_window",     60)),
             "totp_remember_hours":   int(_settings.get("totp_remember_hours",   9)),
+            # Group F — anomaly detection (system-wide)
+            "anomaly_global_enabled":        int(_settings.get("anomaly_global_enabled", 1)),
+            "anomaly_cold_start_hours":      int(_settings.get("anomaly_cold_start_hours", 24)),
+            "anomaly_checkpoint_interval_s": int(_settings.get("anomaly_checkpoint_interval_s", 3600)),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -284,6 +288,8 @@ def handle(h, method, path, body):
             "snr_interval", "snr_timeout",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window", "totp_remember_hours",
+            "anomaly_global_enabled", "anomaly_cold_start_hours",
+            "anomaly_checkpoint_interval_s",
             "org_name", "latency_good_ms", "latency_warn_ms",
             "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):

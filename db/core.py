@@ -616,6 +616,30 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # Anomaly detection — per-sensor opt-in config
+        for _col, _def in [
+            ("anomaly_enabled",     "INTEGER DEFAULT 0"),
+            ("anomaly_sensitivity", "INTEGER DEFAULT 2"),
+            ("anomaly_min_samples", "INTEGER DEFAULT 50"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
+        # Anomaly detection — EWMA baseline checkpoints (restored on startup)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
+                did           TEXT NOT NULL,
+                sid           TEXT NOT NULL,
+                mean_ms       REAL,
+                var_ms        REAL,
+                sample_count  INTEGER DEFAULT 0,
+                enabled_since REAL,
+                updated_at    REAL,
+                PRIMARY KEY (did, sid)
+            )""")
+        con.commit()
         # ── Alert Profiles (PRTG-style state-trigger system) ──────────
         # One-time cleanup of legacy condition-rule tables (idempotent)
         for _t in ("alert_rules", "alert_rule_conditions",

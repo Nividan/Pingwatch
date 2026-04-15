@@ -294,6 +294,47 @@ function sensorFormHTML(dev, s=null) {
           Loading…
         </div>
       </div>` : ''}
+      ${isEdit && ['ping','tcp','http','dns','http_keyword','banner'].includes(curType) ? (() => {
+        const _en = !!s?.anomaly_enabled;
+        const _sn = parseInt(s?.anomaly_sensitivity||2);
+        const _ms = parseInt(s?.anomaly_min_samples||50);
+        const _mean = (s?.anomaly_mean_ms != null) ? Number(s.anomaly_mean_ms).toFixed(1) : null;
+        const _std  = (s?.anomaly_stddev_ms != null) ? Number(s.anomaly_stddev_ms).toFixed(1) : null;
+        const _cnt  = parseInt(s?.anomaly_sample_count||0);
+        const _baseLine = (_mean !== null && _cnt > 0)
+          ? `<div class="fh" style="margin-top:6px">Baseline: <strong>${_mean} ms ± ${_std} ms</strong> — learned from ${_cnt} samples</div>`
+          : `<div class="fh" style="margin-top:6px">Baseline: <em>not yet learned</em></div>`;
+        return `
+        <div class="fr" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+          <details ${_en?'open':''}>
+            <summary style="cursor:pointer;user-select:none;font-weight:500;padding:6px 0">
+              🧠 Anomaly Detection <span style="color:var(--text3);font-weight:400">(opt-in)</span>
+            </summary>
+            <div style="padding:10px;margin-top:6px;background:var(--bg2);border:1px solid var(--border);border-radius:4px">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+                <input type="checkbox" id="as-anom-en" ${_en?'checked':''}>
+                <span class="fl" style="margin:0">Enable learned-baseline detection</span>
+              </label>
+              <div class="fh" style="margin-left:24px;margin-top:3px">Fires a warning when current latency deviates significantly from the learned normal range. Static thresholds continue to work independently.</div>
+              <div class="fgrid" style="margin-top:10px">
+                <div class="fr"><label class="fl">Sensitivity</label>
+                  <select id="as-anom-sens" style="max-width:200px">
+                    <option value="1" ${_sn===1?'selected':''}>Strict — more alerts</option>
+                    <option value="2" ${_sn===2?'selected':''}>Balanced (default)</option>
+                    <option value="3" ${_sn===3?'selected':''}>Relaxed — quieter</option>
+                  </select>
+                </div>
+                <div class="fr"><label class="fl">Min samples</label>
+                  <input type="number" id="as-anom-min" value="${_ms}" min="5" max="10000" style="max-width:110px"/>
+                  <div class="fh" style="margin-top:3px">Bootstrap guard (default 50)</div>
+                </div>
+              </div>
+              ${_baseLine}
+              ${_cnt > 0 ? `<button type="button" class="btn-s" style="margin-top:8px;font-size:12px;padding:5px 12px" onclick="_anomResetBaseline('${esc(s.device_id)}','${esc(s.sensor_id)}')">Reset baseline</button>` : ''}
+            </div>
+          </details>
+        </div>`;
+      })() : ''}
   </div>
   <!-- Probe Timing -->
   <div class="snr-section">
@@ -1577,6 +1618,14 @@ function collectSensorForm(did){
           dns_query,dns_record_type,dns_server,http_expected_status,
           warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
+  const _anomEn=document.getElementById('as-anom-en');
+  if(_anomEn){
+    payload.anomaly_enabled=_anomEn.checked?1:0;
+    const _sv=parseInt(document.getElementById('as-anom-sens')?.value||'2');
+    payload.anomaly_sensitivity=(_sv>=1&&_sv<=3)?_sv:2;
+    const _mv=parseInt(document.getElementById('as-anom-min')?.value||'50');
+    payload.anomaly_min_samples=Math.max(5,Math.min(10000,isNaN(_mv)?50:_mv));
+  }
   if(type==='vmware'){
     payload.vmware_user=document.getElementById('as-vmu')?.value.trim()||'';
     payload.vmware_password=document.getElementById('as-vmpw')?.value||'';
@@ -1687,4 +1736,17 @@ async function addSensorDirect(did,name,type,host,port,url,interval,timeout,star
     if(previewEl) previewEl.innerHTML=sSnrPreview(did);
   }catch(e){}
   toast(`Sensor "${name}" added`,'ok');
+}
+
+async function _anomResetBaseline(did,sid){
+  if(!confirm('Reset the learned baseline for this sensor?\n\nNo anomaly alerts will fire until a new baseline is learned (bootstrap + cold-start window).')) return;
+  try{
+    const r=await api('POST',`/api/sensors/${did}/${sid}/anomaly/reset`,{});
+    if(r&&r.error){toast(r.error,'err');return;}
+    toast('Baseline reset','ok');
+    const s=S.sensors[`${did}/${sid}`];
+    if(s){
+      s.anomaly_mean_ms=null;s.anomaly_stddev_ms=null;s.anomaly_sample_count=0;
+    }
+  }catch(e){toast('Reset failed','err');}
 }
