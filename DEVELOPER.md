@@ -277,6 +277,17 @@ Pure-functional profile evaluator driven by the probe loop. Called from `Sensor.
 
 **Recovery path note:** `_fire()` uses `if recovery: ... else: db_log_event(...)` — the `else` guard is critical. Without it, `db_log_event(state="active")` would run immediately after `db_auto_resolve_event()`, re-creating the event and leaving a stale active alert visible in the Events tab.
 
+### `monitoring/anomaly.py`
+Opt-in per-sensor learned-baseline detector. Pure function — no I/O — so the probe hot path stays O(1). `evaluate_anomaly(sensor, current_ms)` updates the sensor's EWMA mean + variance (Welford-style, adaptive α: 0.10 → 0.02 → 0.01 as `_anom_count` grows) and returns `"ok"` or `"warn"` (never `"crit"`). Upper-tail z-test with variance floor `max(σ, 10 ms, 0.2·μ)` and 3-sample debounce; sensitivity knob maps to k ∈ {3, 4, 6}.
+
+Invoked from `core/state.py::_run_once()` **only when** the probe succeeded, `sensor.last_ms` is valid, the static threshold evaluation returned `"ok"`, and the sensor type is in `SUPPORTED_STYPES = {ping, tcp, http, dns, http_keyword, banner}`. This "static wins" precedence rule is the load-bearing invariant — anomaly can promote `ok → warn` but never overrides a static warn/crit, so alerts never double-fire.
+
+Baseline state lives on the `Sensor` object as `_anom_mean`, `_anom_var`, `_anom_count`, `_anom_enabled_since`, `_anom_consec_fails`, `_anom_dirty`. Runtime only — never persisted directly via `db_save()`. Hourly checkpoint via `db_checkpoint_anomaly_baselines(STATE)` writes the dirty rows into `sensor_anomaly_baselines` (dual-backend upsert); restore on startup via `db_load_anomaly_baselines(STATE)` called right after sensors are loaded. A restart therefore does not destroy learning.
+
+Cold-start suppression is enforced in two layers: (1) sample-count bootstrap via `sensor.anomaly_min_samples` (default 50), and (2) a time window via the global `anomaly_cold_start_hours` setting (default 24). The global kill switch `anomaly_global_enabled` short-circuits all firings without restart. Failed probes never update the baseline — a short outage does not inflate σ and mask the real follow-up anomaly.
+
+When anomaly causes the `_threshold_state` transition to `"warn"`, the sensor sets `_anom_caused_warn = True` for that probe; the flap-log emit branch in `_run_once()` reads the flag and writes `direction='anomaly_warn'` instead of `'threshold_warn'`. The Events tab (app.js normalization + events.js branches) maps `anomaly_warn` to `_direction='anomaly'` / `_thr_level='warn'` and renders the "🧠 Anomaly" pill / filter.
+
 ### `monitoring/alert_dispatchers.py`
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 

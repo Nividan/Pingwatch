@@ -1029,6 +1029,8 @@ function openDetail(did,sid,initialTab){
         <label><input type="checkbox" id="tog-band-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Min/Max</label>
         <label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>
         <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
+        ${s?.anomaly_enabled && ['ping','tcp','http','dns','http_keyword','banner'].includes(s.stype)
+          ? `<label title="Show learned baseline band (μ ± k·σ)"><input type="checkbox" id="tog-baseline-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> 🧠 Baseline</label>` : ''}
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto-Refresh</button>
         <button class="dm-ar-btn" id="fs-${did}-${sid}" data-did="${did}" data-sid="${sid}" onclick="dmToggleFullscreen('${did}','${sid}')" title="Full screen">⤢</button>
       </div>
@@ -1739,6 +1741,31 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.setLineDash([]);
     ctx.fillStyle = `rgba(${_dn},.85)`; ctx.textAlign = 'left';
     ctx.fillText(_isCounter ? 'crit '+_fmtRateThrLabel(_sen.crit_ms,snmpUnit) : _isVmware ? 'crit '+_fmtVmVal(_sen.crit_ms,_vmU2) : _sen?.stype==='tls' ? 'crit '+_sen.crit_ms+'d' : 'crit '+_sen.crit_ms+'ms', LEFT + 4, cy - 3);
+  }
+
+  // ── 8b. Anomaly baseline band (mean ± k·stddev) ───────────────
+  // Shown only for supported latency-style sensors with a learned baseline.
+  const _anomSupported = ['ping','tcp','http','dns','http_keyword','banner'];
+  if (_sen?.anomaly_enabled && _anomSupported.includes(_sen.stype)
+      && _sen.anomaly_mean_ms != null && _sen.anomaly_sample_count > 0
+      && document.getElementById(`tog-baseline-${did}-${sid}`)?.checked !== false) {
+    const _kByS = {1: 3.0, 2: 4.0, 3: 6.0};
+    const _kA   = _kByS[_sen.anomaly_sensitivity || 2] || 4.0;
+    const _µ    = Number(_sen.anomaly_mean_ms);
+    const _σraw = Number(_sen.anomaly_stddev_ms || 0);
+    const _σ    = Math.max(_σraw, 10, 0.2 * _µ);
+    const _hi   = Math.min(maxY, _µ + _kA * _σ);
+    const _lo   = Math.max(0, _µ - _kA * _σ);
+    if (_µ >= 0 && _µ <= maxY) {
+      const yHi = yOf(_hi), yLo = yOf(_lo), yMu = yOf(_µ);
+      ctx.fillStyle = `rgba(${_txt},.06)`;
+      ctx.fillRect(LEFT, yHi, (W - RIGHT) - LEFT, yLo - yHi);
+      ctx.strokeStyle = `rgba(${_txt},.45)`; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(LEFT, yMu); ctx.lineTo(W - RIGHT, yMu); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = `rgba(${_txt},.75)`; ctx.font = '11px Inter,sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText(`baseline ${_µ.toFixed(1)}ms`, LEFT + 4, yMu - 3);
+    }
   }
 
   // ── 9. Failed ticks (only for 1h — too dense at 6h+, downtime spans cover it) ──

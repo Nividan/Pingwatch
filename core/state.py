@@ -190,6 +190,19 @@ class Sensor:
         # Alert profile resolver cache (PRTG-style state-trigger system)
         self._resolved_profile_id  = None
         self._resolved_profile_ver = -1
+        # Anomaly detection (per-sensor opt-in learned baseline)
+        self.anomaly_enabled       = 0          # 0/1 persisted
+        self.anomaly_sensitivity   = 2          # 1 strict / 2 balanced / 3 relaxed
+        self.anomaly_min_samples   = 50         # bootstrap guard
+        self._anom_mean            = None       # EWMA mean (ms)
+        self._anom_var             = None       # EWMA variance
+        self._anom_count           = 0          # samples contributing to baseline
+        self._anom_enabled_since   = None       # epoch; for cold-start time window
+        self._anom_consec_fails    = 0          # debounce counter
+        self._anom_state           = "ok"       # "ok" | "warn"
+        self._anom_triggered_ts    = None       # epoch of current streak start
+        self._anom_dirty           = False      # needs DB checkpoint
+        self._anom_caused_warn     = False      # true when anomaly flipped _threshold_state for this probe
 
     @property
     def _valid_history(self):
@@ -282,6 +295,12 @@ class Sensor:
             "vmware_disk_path":      self.vmware_disk_path,
             "has_vmware_password":   bool(self.vmware_password),
             "threshold_state":       self._threshold_state,
+            "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
+            "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
+            "anomaly_min_samples":   int(getattr(self, "anomaly_min_samples", 50) or 50),
+            "anomaly_mean_ms":       self._anom_mean,
+            "anomaly_stddev_ms":     (self._anom_var ** 0.5) if self._anom_var else None,
+            "anomaly_sample_count":  int(self._anom_count or 0),
             "alive":          self.alive,
             "running":        self.running,
             "last_ms":        self.last_ms,
@@ -506,7 +525,10 @@ class MonitorState:
                         "snmp_unit",
                         "vmware_user", "vmware_password",
                         "vmware_vm_id", "vmware_vm_name", "vmware_metric",
-                        "vmware_disk_path"]
+                        "vmware_disk_path",
+                        "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
+            _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
+            _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
             for k, v in kwargs.items():
                 if k in editable and v is not None:
                     if k == 'host':
@@ -516,7 +538,28 @@ class MonitorState:
                             v = dev.host
                             s.host_override = False
                     setattr(s, k, v)
+            _anom_enabled_after = int(getattr(s, "anomaly_enabled", 0) or 0)
+            _anom_sens_after    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
+            # Reset baseline when user enables anomaly (off→on) or changes sensitivity —
+            # stale variance should not leak across configuration changes.
+            _needs_reset = False
+            if _anom_enabled_after and not _anom_enabled_before:
+                _needs_reset = True
+            elif _anom_enabled_after and (_anom_sens_after != _anom_sens_before):
+                _needs_reset = True
+            if _needs_reset:
+                from monitoring.anomaly import reset_baseline as _anom_reset
+                _anom_reset(s)
+                _reset_did, _reset_sid = did, sid
+            else:
+                _reset_did = _reset_sid = None
             dev.invalidate_status()
+        if _reset_did:
+            try:
+                from db import db_reset_anomaly_baseline
+                db_reset_anomaly_baseline(_reset_did, _reset_sid)
+            except Exception:
+                pass
         if was_running:
             self.start_sensor(did, sid)
         return True
@@ -770,6 +813,16 @@ class MonitorState:
             _new_thr = "crit"
         elif s.loss_warn_pct and s.loss_pct >= s.loss_warn_pct:
             if _new_thr != "crit": _new_thr = "warn"
+        # Anomaly detection — opt-in per-sensor learned-baseline check.
+        # Can only promote ok → warn; never fires crit. Static thresholds win.
+        s._anom_caused_warn = False
+        if (s.anomaly_enabled and result["ok"] and s.last_ms is not None
+                and _new_thr == "ok"):
+            from monitoring.anomaly import evaluate_anomaly, SUPPORTED_STYPES
+            if s.stype in SUPPORTED_STYPES:
+                if evaluate_anomaly(s, s.last_ms) == "warn":
+                    _new_thr = "warn"
+                    s._anom_caused_warn = True
         if _new_thr != s._threshold_state:
             # State CHANGED — reset counter, do full broadcast
             _prev_thr = s._threshold_state
@@ -811,7 +864,12 @@ class MonitorState:
                 else:
                     log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
                 _thr_flap = dict(_thr_evt_data)
-                _thr_flap["direction"] = "threshold_crit" if _new_thr == "crit" else "threshold_warn"
+                if _new_thr == "crit":
+                    _thr_flap["direction"] = "threshold_crit"
+                elif s._anom_caused_warn:
+                    _thr_flap["direction"] = "anomaly_warn"
+                else:
+                    _thr_flap["direction"] = "threshold_warn"
                 _thr_flap["detail"]    = _val_disp
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
                 # Escalation / de-escalation (warn↔crit) — auto-resolve the
