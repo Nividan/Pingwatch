@@ -245,15 +245,23 @@
   - CSP tightened in `server.py` — dropped `https://fonts.googleapis.com` from `style-src` and `https://fonts.gstatic.com` from `font-src`; now pure `'self'`
   - Air-gapped installation guide added to `README.md` (pre-downloaded wheels, self-signed TLS instead of ACME, internal SMTP relay, etc.)
 
-- Light / Dark theme toggle
+- Light / Dark theme toggle (Phase 1 — base UI)
   - Full GitHub-Light CSS variable palette via `:root[data-theme="light"]` override block in `style.css`; dark remains the default; `color-scheme` toggled so native controls (date pickers, scrollbars) follow the theme
   - Inline `<head>` bootstrap script reads `localStorage.pw_theme` and applies `data-theme` before CSS paints — prevents flash-of-unthemed-content on reload
   - Hybrid persistence — `localStorage` (`pw_theme`) for instant per-browser apply + new `users.theme_preference` column for authoritative cross-device sync; `/api/me` returns the server value on login and reconciles into localStorage (skipped server echo via `{sync:false}`)
-  - `frontend/theme.js` module — public API (`getTheme`, `setTheme`, `toggleTheme`, `getCssVar`); loaded first in the JS bundle so downstream modules can read theme-aware CSS variables
+  - `frontend/theme.js` module — public API (`getTheme`, `setTheme`, `toggleTheme`, `getCssVar`, `getCssRgb`); loaded first in the JS bundle so downstream modules can read theme-aware CSS variables
   - `PATCH /api/me/theme` endpoint (any role, validates `dark` / `light`) fired in the background by `setTheme()`
   - User menu "◐ Theme" item re-enabled — label flips between "☀ Switch to Light" and "🌙 Switch to Dark" based on current theme
   - Login-screen SVGs converted to `currentColor` so the logo follows the theme before `/api/me` returns
   - `themechange` `CustomEvent` dispatched on toggle + postMessage to the map iframe — hook point for canvas / iframe redraws in Phase 2
+- Light / Dark theme — Phase 2 (canvas, map iframe, full surface coverage)
+  - Canvas drawers (`bg.js` starfield, `dashboard.js` sparklines, `sensors.js` history chart + mini sparkline, `map.js` NTM animated backgrounds) maintain per-module RGB colour caches populated via `getCssRgb()` / direct palette objects and invalidated on the `themechange` event — all open history charts redraw immediately from `_histCache` on theme flip with no page reload
+  - Topology map iframe (`map.css`) — light palette at `:root[data-theme="light"]` plus a comprehensive `[data-theme="light"]` surface-override block that reskins header, side panel, inputs, modals, legend, zoom HUD, dashboard panel, incident cards, page tabs, export menu, context menu, and toasts; synchronous `<head>` bootstrap in `map.html` reads `localStorage.pw_theme` (shared same-origin with parent) so the iframe paints with the correct palette from the first frame
+  - NTM animated background (`_NTM_BG` palette in `map.js`) — hex grid, matrix streams, connection mesh, ring pulses, particles, scan line, corner HUD, and base fill all flip via `ntm_themechange` event; offscreen hex cache invalidated so the next frame rebuilds with the new stroke colour
+  - Semantic surface tokens added to `style.css` (`--card-bg`, `--card-bg-soft`, `--panel-bg`, `--panel-bg-strong`, `--panel-bg-glass`, `--modal-overlay`, `--surface-inset`, etc.) so device cards, modals, device-detail windows, toasts, and the login panel flip with the theme instead of holding bespoke dark rgbas
+  - IPAM table light-mode contrast — used-row tint raised from 4 % to 9 %, hover switched to an accent tint, free-row background pinned to `var(--bg)`, and status pill alphas bumped so populated vs. free rows remain clearly distinguishable on white
+  - History-modal KPI tiles (`.dm-kpi-item`) — hardcoded navy gradient flipped to `#ffffff → #eef2f6` with a softened hover shadow in light mode
+  - Login-screen `.lt-ping` wordmark — gradient converted from hardcoded sky-blues to `var(--accent)` / `var(--accent-hover)` so the brand text darkens for AA contrast on the white `.login-box`; `.login-box` itself now uses `--panel-bg-strong` + `--accent-glow`
 
 ## 🔴 High Priority
 
@@ -264,4 +272,3 @@
 - Compact mode
 - Accessible contrast mode
 - Spacing / alignment cleanup
-- Light-theme Phase 2 — canvas drawers (starfield, sparklines, sensor history chart) and the Topology Map iframe still use dark-mode colours; pending `getCssVar`-driven redraws triggered by the `themechange` event

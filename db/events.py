@@ -181,9 +181,17 @@ def db_log_flap(flap):
 
 
 def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
-    """Find the most recent unresolved flap for did+sid and mark it resolved.
+    """Resolve ALL unresolved flaps for did+sid matching the given directions.
 
-    Computes duration from original ts.  Returns dict {id, duration} or None.
+    Previously this resolved only the most recent entry (ORDER BY id DESC
+    LIMIT 1), which left stale entries behind when a sensor escalated
+    warn→crit (or crit→warn) without going through "ok" in between — the
+    earlier warn/crit entry stayed "active" forever since the next OK only
+    resolved the newest one. Now resolves every pending entry matching
+    directions so one OK clears the whole chain.
+
+    Duration is computed per-row from each entry's original ts.
+    Returns a list of {id, duration} dicts (empty if nothing matched).
     """
     import time as _time
     from datetime import datetime, timezone
@@ -193,6 +201,7 @@ def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
         s = s.replace("Z", "+00:00") if s.endswith("Z") else s
         return datetime.fromisoformat(s)
 
+    results = []
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -203,52 +212,52 @@ def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
                     f"WHERE did=%s AND sid=%s AND direction IN ({ph}) "
                     f"AND (resolved_at IS NULL OR resolved_at=0) "
                     f"AND ack_state != 'resolved' "
-                    f"ORDER BY id DESC LIMIT 1",
+                    f"ORDER BY id ASC",
                     (did, sid, *directions)
                 )
-                row = cur.fetchone()
-                if not row:
-                    return None
-                try:
-                    dur = max(0, (_parse_ts(resolved_ts) - _parse_ts(row["ts"])).total_seconds())
-                except Exception:
-                    dur = 0
-                cur.execute(
-                    "UPDATE flap_log SET resolved_at=%s, duration=%s, ack_state='resolved' WHERE id=%s",
-                    (now, dur, row["id"])
-                )
-                return {"id": row["id"], "duration": dur}
+                rows = cur.fetchall()
+                for row in rows:
+                    try:
+                        dur = max(0, (_parse_ts(resolved_ts) - _parse_ts(row["ts"])).total_seconds())
+                    except Exception:
+                        dur = 0
+                    cur.execute(
+                        "UPDATE flap_log SET resolved_at=%s, duration=%s, ack_state='resolved' WHERE id=%s",
+                        (now, dur, row["id"])
+                    )
+                    results.append({"id": row["id"], "duration": dur})
+            return results
         except Exception as e:
             log.error(f"db_auto_resolve_flap error: {e}")
-            return None
+            return results
     # SQLite
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         ph = ",".join(["?"] * len(directions))
-        row = con.execute(
+        rows = con.execute(
             f"SELECT id, ts FROM flap_log "
             f"WHERE did=? AND sid=? AND direction IN ({ph}) "
             f"AND (resolved_at IS NULL OR resolved_at=0) "
             f"AND ack_state != 'resolved' "
-            f"ORDER BY id DESC LIMIT 1",
+            f"ORDER BY id ASC",
             (did, sid, *directions)
-        ).fetchone()
-        if not row:
-            return None
-        try:
-            dur = max(0, (_parse_ts(resolved_ts) - _parse_ts(row[1])).total_seconds())
-        except Exception:
-            dur = 0
-        con.execute(
-            "UPDATE flap_log SET resolved_at=?, duration=?, ack_state='resolved' WHERE id=?",
-            (now, dur, row[0])
-        )
+        ).fetchall()
+        for row in rows:
+            try:
+                dur = max(0, (_parse_ts(resolved_ts) - _parse_ts(row[1])).total_seconds())
+            except Exception:
+                dur = 0
+            con.execute(
+                "UPDATE flap_log SET resolved_at=?, duration=?, ack_state='resolved' WHERE id=?",
+                (now, dur, row[0])
+            )
+            results.append({"id": row[0], "duration": dur})
         con.commit()
-        return {"id": row[0], "duration": dur}
+        return results
     except Exception as e:
         log.error(f"db_auto_resolve_flap error: {e}")
-        return None
+        return results
     finally:
         if con:
             con.close()

@@ -752,6 +752,19 @@ class MonitorState:
                 _thr_flap["direction"] = "threshold_crit" if _new_thr == "crit" else "threshold_warn"
                 _thr_flap["detail"]    = _val_disp
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
+                # Escalation / de-escalation (warn↔crit) — auto-resolve the
+                # PREVIOUS active threshold entry so only the current state
+                # stays "active". Without this, a warn→crit transition leaves
+                # the old warn row unresolved forever (OK → LIMIT 1 can't
+                # catch up). Only fires for transitions between warn/crit;
+                # ok→warn and ok→crit have nothing to resolve.
+                if _prev_thr in ("warn", "crit"):
+                    _esc_ts  = _ts
+                    _esc_did = did
+                    _esc_sid = sid
+                    _prev_dir = "threshold_crit" if _prev_thr == "crit" else "threshold_warn"
+                    _db_enqueue(lambda _d=_esc_did, _s=_esc_sid, _t=_esc_ts, _dir=_prev_dir:
+                                db_auto_resolve_flap(_d, _s, _t, directions=(_dir,)))
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
                 # Threshold recovered — broadcast and resolve existing event
                 s._threshold_recovery_pending = True
