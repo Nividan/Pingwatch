@@ -593,7 +593,7 @@ function _buildSettingsTab_sensors(sr) {
   return `<div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
         <div class="fl" style="margin-bottom:6px">Global Defaults</div>
-        <div class="fh" style="margin-bottom:10px">Fallback values applied to all new sensors — override per type below.</div>
+        <div class="fh" style="margin-bottom:10px">Applied to <b>new sensors only</b> — existing sensors keep their stored values. Override per type below.</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Interval (s)</label>
             <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
