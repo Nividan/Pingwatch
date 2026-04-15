@@ -173,35 +173,6 @@ function _buildSettingsTab_users(sr, ur) {
             <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled, max 720 h / 30 days)</div></div>
         </div>
       </div>
-      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">🧠 Anomaly Detection</div>
-        <div class="fr">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-            <input type="checkbox" id="st-anom-en" ${sr.anomaly_global_enabled!==0?'checked':''}>
-            <span class="fl" style="margin:0">Enable anomaly detection system-wide</span>
-          </label>
-          <div class="fh" style="margin-left:24px;margin-top:3px">Individual sensors must also opt in (Edit sensor → Anomaly Detection).</div>
-        </div>
-        <div class="fr" style="margin-top:8px">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-            <input type="checkbox" id="st-anom-auto" ${sr.anomaly_default_new_sensors?'checked':''}>
-            <span class="fl" style="margin:0">Auto-enable on newly created sensors</span>
-          </label>
-          <div class="fh" style="margin-left:24px;margin-top:3px">Only affects sensors created after this setting is saved. Existing sensors unchanged — use the button below to backfill.</div>
-        </div>
-        <div class="fgrid" style="margin-top:10px">
-          <div class="fr"><label class="fl">Cold-start suppression (h)</label>
-            <input type="number" id="st-anom-cold" value="${sr.anomaly_cold_start_hours??24}" min="0" max="168" style="max-width:100px"/>
-            <div class="fh">No anomaly alerts fire for this long after a sensor first enables detection. Prevents false positives during learning.</div></div>
-          <div class="fr"><label class="fl">Baseline checkpoint (s)</label>
-            <input type="number" id="st-anom-ckpt" value="${sr.anomaly_checkpoint_interval_s??3600}" min="60" max="86400" style="max-width:100px"/>
-            <div class="fh">How often to save learned baselines to disk. Default 3600 s (1 hour).</div></div>
-        </div>
-        <div style="margin-top:12px">
-          <button class="btn-s rbac-admin" onclick="_anomBulkEnable()" style="font-size:12px;padding:6px 14px">Enable on all existing supported sensors</button>
-          <div class="fh" style="margin-top:4px">Turns on anomaly detection for every ping / tcp / http / dns / http_keyword / banner sensor. Each gets a fresh cold-start window — no alert storm.</div>
-        </div>
-      </div>
     </div>`;
 }
 
@@ -626,6 +597,40 @@ function _buildSettingsTab_sensors(sr) {
         </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">🧠 Anomaly Detection</div>
+        <div class="fh" style="margin-bottom:12px">Learned-baseline detection for ping / tcp / http / dns / http_keyword / banner sensors. Fires a warning only (never crit); static thresholds remain the authoritative critical ladder.</div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Global (master switch)</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-anom-en" ${sr.anomaly_global_enabled!==0?'checked':''}>
+            <span class="fl" style="margin:0">Enable anomaly detection</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">When off, no sensor fires anomaly alerts regardless of its per-sensor setting.</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Cold-start suppression (h)</label>
+            <input type="number" id="st-anom-cold" value="${sr.anomaly_cold_start_hours??24}" min="0" max="168" style="max-width:100px"/>
+            <div class="fh">No alerts fire for this long after a sensor first enables detection.</div></div>
+          <div class="fr"><label class="fl">Baseline checkpoint (s)</label>
+            <input type="number" id="st-anom-ckpt" value="${sr.anomaly_checkpoint_interval_s??3600}" min="60" max="86400" style="max-width:100px"/>
+            <div class="fh">How often to save learned baselines to disk. Default 3600 s (1 h).</div></div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px">Defaults for new sensors</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-anom-auto" ${sr.anomaly_default_new_sensors?'checked':''}>
+            <span class="fl" style="margin:0">Auto-enable on newly created supported sensors</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">Only affects sensors created after this setting is saved. Existing sensors unchanged — use the action below.</div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px">Apply to existing sensors</div>
+        <button class="btn-s rbac-admin" onclick="_anomBulkEnable()" style="font-size:12px;padding:6px 14px">Enable on all supported sensors now</button>
+        <div class="fh" style="margin-top:4px">Turns the per-sensor toggle on for every ping / tcp / http / dns / http_keyword / banner sensor. Each gets a fresh cold-start window — no alert storm.</div>
+      </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
         <div class="fh" style="margin-bottom:10px">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
@@ -1732,6 +1737,10 @@ async function saveSensorTypeDefaults(){
   const snrRa  = parseInt(document.getElementById('st-snr-ra')?.value);
   const lGood  = parseInt(document.getElementById('st-lgood')?.value);
   const lWarn  = parseInt(document.getElementById('st-lwarn')?.value);
+  const anomEn   = document.getElementById('st-anom-en')?.checked;
+  const anomAuto = document.getElementById('st-anom-auto')?.checked;
+  const anomCold = parseInt(document.getElementById('st-anom-cold')?.value);
+  const anomCkpt = parseInt(document.getElementById('st-anom-ckpt')?.value);
   const globalDefaults = {};
   if(snrIv  >= 1) globalDefaults.snr_interval      = snrIv;
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
@@ -1739,6 +1748,12 @@ async function saveSensorTypeDefaults(){
   if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
   if(lGood  >= 1) globalDefaults.latency_good_ms   = lGood;
   if(lWarn  >= 1) globalDefaults.latency_warn_ms   = lWarn;
+  if(typeof anomEn   === 'boolean') globalDefaults.anomaly_global_enabled      = anomEn   ? 1 : 0;
+  if(typeof anomAuto === 'boolean') globalDefaults.anomaly_default_new_sensors = anomAuto ? 1 : 0;
+  if(!isNaN(anomCold) && anomCold >= 0 && anomCold <= 168)
+                                    globalDefaults.anomaly_cold_start_hours    = anomCold;
+  if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)
+                                    globalDefaults.anomaly_checkpoint_interval_s = anomCkpt;
   // Collect scan_ports from checkboxes + custom input
   const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
   const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();
@@ -1888,23 +1903,11 @@ async function saveSecuritySettings(){
   const failMax     = parseInt(document.getElementById('st-fail-max')?.value);
   const failWin     = parseInt(document.getElementById('st-fail-win')?.value);
   const totpRemem   = parseInt(document.getElementById('st-totp-remember')?.value);
-  const anomEn      = document.getElementById('st-anom-en')?.checked;
-  const anomAuto    = document.getElementById('st-anom-auto')?.checked;
-  const anomCold    = parseInt(document.getElementById('st-anom-cold')?.value);
-  const anomCkpt    = parseInt(document.getElementById('st-anom-ckpt')?.value);
   const body = {};
   if(failMax >= 1)         body.login_fail_max        = failMax;
   if(failWin >= 10)        body.login_fail_window     = failWin;
   if(!isNaN(totpRemem) && totpRemem >= 0 && totpRemem <= 720)
                            body.totp_remember_hours   = totpRemem;
-  if(typeof anomEn === 'boolean')
-                           body.anomaly_global_enabled = anomEn ? 1 : 0;
-  if(typeof anomAuto === 'boolean')
-                           body.anomaly_default_new_sensors = anomAuto ? 1 : 0;
-  if(!isNaN(anomCold) && anomCold >= 0 && anomCold <= 168)
-                           body.anomaly_cold_start_hours = anomCold;
-  if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)
-                           body.anomaly_checkpoint_interval_s = anomCkpt;
   const r = await api('PATCH', '/api/settings', body);
   if(!r.ok){ toast('Failed to save security settings','err'); return; }
   toast('Security settings saved','ok');

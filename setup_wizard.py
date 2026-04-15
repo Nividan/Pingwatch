@@ -19,6 +19,7 @@ Exit codes:
 
 import atexit
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -221,6 +222,20 @@ _state = {
     "pg_database":  "pingwatch",
     "pg_user":      "pingwatch",
     "pg_password":  "",
+    # SMTP (optional; populated by step_smtp)
+    "smtp_host":    "",
+    "smtp_port":    587,
+    "smtp_tls":     "starttls",
+    "smtp_user":    "",
+    "smtp_pass":    "",
+    "smtp_from":    "",
+    # Syslog forwarding (optional; populated by step_syslog)
+    "syslog_host":         "",
+    "syslog_port":         514,
+    "syslog_proto":        "udp",
+    "syslog_min_severity": "warning",
+    # Anomaly detection (optional; populated by step_anomaly)
+    "anomaly_default_new_sensors": 0,
 }
 
 # Track whether the DB was partially created (for Ctrl+C cleanup)
@@ -1580,11 +1595,167 @@ def step4_snmp_port():
     print()
 
 
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _valid_email(s: str) -> bool:
+    return bool(s and _EMAIL_RE.match(s.strip()))
+
+
+def _valid_host(s: str) -> bool:
+    """Accept hostname, FQDN, or IPv4/IPv6 literal. Very permissive."""
+    s = (s or "").strip()
+    if not s or len(s) > 253:
+        return False
+    return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9._:\-]*$", s))
+
+
+def step_smtp():
+    """Step 6 — Optional SMTP configuration for alert emails."""
+    _separator()
+    _tag("setup", f"{_C['bold']}Step 6 — Email Alerts (SMTP){_C['reset']}")
+    _separator()
+    _tag("info", "PingWatch sends alert emails through your SMTP server.")
+    _tag("info", "Alert recipients come from user accounts — this only configures the sender.")
+    _tag("info", "You can skip this and configure it later in Settings → Integrations.")
+    print()
+    if not _ask_yn("Configure email alerts now?", default=False):
+        _tag("info", "Skipped — email alerts disabled.")
+        print()
+        return
+    try:
+        host = _ask("SMTP host (e.g. smtp.gmail.com)", _state.get("smtp_host", ""))
+        if not host:
+            _tag("warn", "No host entered — skipping SMTP configuration.")
+            print()
+            return
+        if not _valid_host(host):
+            _tag("warn", f"'{host}' does not look like a valid hostname — saved anyway; "
+                         f"verify in Settings if alerts fail.")
+        _state["smtp_host"] = host.strip()
+
+        port_raw = _ask("SMTP port", str(_state.get("smtp_port", 587)))
+        try:
+            port = int(port_raw)
+            if not (1 <= port <= 65535):
+                raise ValueError
+            _state["smtp_port"] = port
+        except ValueError:
+            _tag("warn", f"Invalid port '{port_raw}' — using 587.")
+            _state["smtp_port"] = 587
+
+        tls_raw = _ask("Security [starttls/ssl/none]", _state.get("smtp_tls", "starttls")).lower()
+        if tls_raw not in ("starttls", "ssl", "none"):
+            _tag("warn", f"Invalid security mode '{tls_raw}' — using 'starttls'.")
+            tls_raw = "starttls"
+        _state["smtp_tls"] = tls_raw
+
+        user = _ask("SMTP username (leave blank if not required)", _state.get("smtp_user", ""))
+        _state["smtp_user"] = user.strip()
+
+        if user:
+            pw = _ask_password("SMTP password", "")
+            _state["smtp_pass"] = pw
+
+        from_addr = _ask("From address (e.g. pingwatch@example.com)", _state.get("smtp_from", user or ""))
+        if from_addr and not _valid_email(from_addr):
+            _tag("warn", f"'{from_addr}' is not a valid email — saved anyway; "
+                         f"fix in Settings → Integrations if mail bounces.")
+        _state["smtp_from"] = from_addr.strip()
+
+        _tag("ok", f"SMTP configured: {host}:{_state['smtp_port']} ({tls_raw})")
+    except (EOFError, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        _tag("warn", f"SMTP step encountered an error ({type(e).__name__}: {e}) — "
+                     f"continuing with whatever was entered.")
+    print()
+
+
+def step_syslog():
+    """Step 7 — Optional syslog forwarding."""
+    _separator()
+    _tag("setup", f"{_C['bold']}Step 7 — Syslog Forwarding{_C['reset']}")
+    _separator()
+    _tag("info", "Forward events to a remote syslog/SIEM server (optional).")
+    _tag("info", "Skip if you don't run a syslog collector.")
+    print()
+    if not _ask_yn("Enable syslog forwarding?", default=False):
+        _tag("info", "Skipped — syslog forwarding disabled.")
+        print()
+        return
+    try:
+        host = _ask("Syslog host (IP or FQDN)", _state.get("syslog_host", ""))
+        if not host:
+            _tag("warn", "No host entered — skipping syslog configuration.")
+            print()
+            return
+        if not _valid_host(host):
+            _tag("warn", f"'{host}' does not look like a valid hostname — saved anyway.")
+        _state["syslog_host"] = host.strip()
+
+        port_raw = _ask("Syslog port", str(_state.get("syslog_port", 514)))
+        try:
+            port = int(port_raw)
+            if not (1 <= port <= 65535):
+                raise ValueError
+            _state["syslog_port"] = port
+        except ValueError:
+            _tag("warn", f"Invalid port '{port_raw}' — using 514.")
+            _state["syslog_port"] = 514
+
+        proto = _ask("Protocol [udp/tcp]", _state.get("syslog_proto", "udp")).lower()
+        if proto not in ("udp", "tcp"):
+            _tag("warn", f"Invalid protocol '{proto}' — using 'udp'.")
+            proto = "udp"
+        _state["syslog_proto"] = proto
+
+        sev = _ask("Minimum severity [critical/warning/info]",
+                   _state.get("syslog_min_severity", "warning")).lower()
+        if sev not in ("critical", "warning", "info"):
+            _tag("warn", f"Invalid severity '{sev}' — using 'warning'.")
+            sev = "warning"
+        _state["syslog_min_severity"] = sev
+
+        _tag("ok", f"Syslog configured: {host}:{_state['syslog_port']}/{proto} ({sev}+)")
+    except (EOFError, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        _tag("warn", f"Syslog step encountered an error ({type(e).__name__}: {e}) — "
+                     f"continuing with whatever was entered.")
+    print()
+
+
+def step_anomaly():
+    """Step 8 — Optional anomaly detection default."""
+    _separator()
+    _tag("setup", f"{_C['bold']}Step 8 — Anomaly Detection{_C['reset']}")
+    _separator()
+    _tag("info", "Anomaly detection learns normal sensor behaviour and alerts on deviations.")
+    _tag("info", "You can enable it by default for new sensors — existing sensors unaffected.")
+    _tag("info", "Individual sensors can still opt in/out after creation.")
+    print()
+    try:
+        if _ask_yn("Enable anomaly detection by default for new sensors?", default=False):
+            _state["anomaly_default_new_sensors"] = 1
+            _tag("ok", "Anomaly detection will auto-enable on supported new sensors.")
+        else:
+            _state["anomaly_default_new_sensors"] = 0
+            _tag("info", "Skipped — sensors will not auto-enable anomaly detection.")
+    except (EOFError, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        _tag("warn", f"Anomaly step encountered an error ({type(e).__name__}: {e}) — "
+                     f"leaving disabled.")
+        _state["anomaly_default_new_sensors"] = 0
+    print()
+
+
 def step5_firewall():
     import platform as _plat, shutil as _sh
     _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 6 — Firewall Rules{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 9 — Firewall Rules{_C['reset']}")
     _separator()
     print()
 
@@ -1743,7 +1914,7 @@ def step6_shortcut():
     import platform as _plat
     _sys = _plat.system()
     _separator()
-    _tag("setup", f"{_C['bold']}Step 7 — Desktop Shortcut{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 10 — Desktop Shortcut{_C['reset']}")
     _separator()
     print()
 
@@ -1794,7 +1965,7 @@ def step6_shortcut():
 def step7_init_db():
     global _db_created
     _separator()
-    _tag("setup", f"{_C['bold']}Step 8 — Initialise Database & Save Settings{_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 11 — Initialise Database & Save Settings{_C['reset']}")
     _separator()
     print()
 
@@ -1830,6 +2001,24 @@ def step7_init_db():
         settings["tls_cert_pem"]    = _state["tls_cert_pem"]
         settings["tls_key_pem_enc"] = _state["tls_key_pem_enc"]
         settings["tls_cert_source"] = _state["tls_cert_source"]
+
+    # Optional settings from step_smtp / step_syslog / step_anomaly — only
+    # persist keys the user actually configured (empty host = skipped).
+    if _state.get("smtp_host"):
+        settings["smtp_host"] = _state["smtp_host"]
+        settings["smtp_port"] = str(_state.get("smtp_port", 587))
+        settings["smtp_tls"]  = _state.get("smtp_tls", "starttls")
+        settings["smtp_user"] = _state.get("smtp_user", "")
+        settings["smtp_from"] = _state.get("smtp_from", "")
+        if _state.get("smtp_pass"):
+            settings["smtp_pass"] = _state["smtp_pass"]
+    if _state.get("syslog_host"):
+        settings["syslog_host"]         = _state["syslog_host"]
+        settings["syslog_port"]         = str(_state.get("syslog_port", 514))
+        settings["syslog_proto"]        = _state.get("syslog_proto", "udp")
+        settings["syslog_min_severity"] = _state.get("syslog_min_severity", "warning")
+    if _state.get("anomaly_default_new_sensors"):
+        settings["anomaly_default_new_sensors"] = "1"
 
     try:
         db_save_settings(settings)
@@ -1907,7 +2096,7 @@ def step8_service():
     # ── Windows: Task Scheduler ───────────────────────────────────────────────
     if _plat.system() == "Windows":
         _separator()
-        _tag("setup", f"{_C['bold']}Step 9 — Windows Auto-Start (Task Scheduler){_C['reset']}")
+        _tag("setup", f"{_C['bold']}Step 12 — Windows Auto-Start (Task Scheduler){_C['reset']}")
         _separator()
         _tag("info", "Install PingWatch as a startup task so it starts automatically at boot.")
         print()
@@ -2014,7 +2203,7 @@ def step8_service():
         return
 
     _separator()
-    _tag("setup", f"{_C['bold']}Step 9 — System Service (systemd){_C['reset']}")
+    _tag("setup", f"{_C['bold']}Step 12 — System Service (systemd){_C['reset']}")
     _separator()
     _tag("info", "Install PingWatch as a systemd service so it starts automatically on boot.")
     print()
@@ -2165,8 +2354,24 @@ def main():
             _state["tls_cn"]       = existing.get("tls_cn",           "")
             _state["org_name"]     = existing.get("org_name",         "PingWatch")
             _state["http_redirect"] = bool(int(existing.get("http_redirect", 1)))
-        except Exception:
-            pass
+            # Optional sections — preserve prior values as defaults on re-run
+            _state["smtp_host"]    = existing.get("smtp_host", "")
+            try: _state["smtp_port"] = int(existing.get("smtp_port", 587))
+            except (TypeError, ValueError): _state["smtp_port"] = 587
+            _state["smtp_tls"]     = existing.get("smtp_tls",  "starttls")
+            _state["smtp_user"]    = existing.get("smtp_user", "")
+            _state["smtp_from"]    = existing.get("smtp_from", "")
+            _state["syslog_host"]  = existing.get("syslog_host", "")
+            try: _state["syslog_port"] = int(existing.get("syslog_port", 514))
+            except (TypeError, ValueError): _state["syslog_port"] = 514
+            _state["syslog_proto"] = existing.get("syslog_proto", "udp")
+            _state["syslog_min_severity"] = existing.get("syslog_min_severity", "warning")
+            try: _state["anomaly_default_new_sensors"] = int(existing.get("anomaly_default_new_sensors", 0) or 0)
+            except (TypeError, ValueError): _state["anomaly_default_new_sensors"] = 0
+        except Exception as _load_e:
+            # Not fatal — defaults from _state will apply, user can re-enter
+            _tag("warn", f"Could not load existing settings ({type(_load_e).__name__}: {_load_e}) "
+                         f"— using defaults.")
 
     # ── Banner ────────────────────────────────────────────────────────────────
     print()
@@ -2221,6 +2426,16 @@ def main():
         step2_http_port()
         step3_tls()
         step4_snmp_port()
+        # Optional settings — each step is self-contained; any failure is logged
+        # and the wizard continues so a typo in SMTP doesn't block install.
+        for _opt_step in (step_smtp, step_syslog, step_anomaly):
+            try:
+                _opt_step()
+            except (EOFError, KeyboardInterrupt):
+                raise
+            except Exception as _opt_e:
+                _tag("warn", f"Optional step '{_opt_step.__name__}' failed "
+                             f"({type(_opt_e).__name__}: {_opt_e}) — skipping.")
         step5_firewall()
         step6_shortcut()
         step7_init_db()
