@@ -615,10 +615,9 @@ def _inventory_backup_coverage() -> dict:
     bl = db_get_backup_list() or []
     now = time.time()
     stale_cutoff = now - 7 * 86400
-    recent = stale_list = never_list = []
     recent, stale_list, never_list = [], [], []
     for b in bl:
-        ts = b.get("last_ts") or 0
+        ts = _parse_ts(b.get("last_ts"))   # backup_runs.ts is ISO-8601 TEXT
         if not ts:
             never_list.append({"did": b.get("did"), "dname": b.get("dname", b.get("did", ""))})
         elif ts < stale_cutoff:
