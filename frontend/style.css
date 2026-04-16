@@ -2041,6 +2041,10 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .rpt-empty-title{font-size:14px;font-weight:600;color:var(--text);}
 .rpt-empty-hint{font-size:12px;color:var(--text2);max-width:460px;line-height:1.5;}
 .rpt-empty-actions{display:flex;gap:8px;margin-top:10px;}
+.rpt-hist-actions{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:10px;
+                  background:var(--bg3);border:1px solid var(--border);border-radius:6px;
+                  position:sticky;top:0;z-index:5;}
+.rpt-hist-cb{cursor:pointer;}
 .pill{display:inline-block;padding:2px 10px;border-radius:10px;font-size:10px;font-weight:600;}
 .pill.up    {background:rgba(63,185,80,.14);color:var(--up);}
 .pill.warn  {background:rgba(227,179,65,.14);color:#e3b341;}

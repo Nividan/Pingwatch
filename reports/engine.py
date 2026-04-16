@@ -8,6 +8,7 @@ Public entrypoints:
 
 import datetime
 import os
+import re
 import time
 
 from core.logger import log
@@ -43,8 +44,47 @@ def _get_env():
     env.filters["deltafmt"]   = _filter_deltafmt
     env.filters["trapname"]   = _filter_trapname
     env.filters["durfmt_flap"] = _filter_durfmt_flap
+    env.filters["cleandetail"] = _filter_cleandetail
     _env = env
     return env
+
+
+# Metric keywords that never produce a round-trip latency. When a flap detail
+# mentions one of these AND ends with a bare "ms" suffix, the "ms" is a relic
+# of older probe formatting (it stringified every value with 'ms' regardless
+# of unit). Stripping the suffix is purely cosmetic — the underlying value
+# stays intact, just read without a misleading unit.
+_NON_LATENCY_DETAIL_RE = re.compile(
+    r"\b(memory|uptime|consumed|swap used|"
+    r"disk (?:usage|read|write|used|kernel latency|device latency|"
+    r"read latency|write latency)|"
+    r"network (?:received|transmitted|usage)|"
+    r"power consumption|bytes?)\b",
+    re.I
+)
+_TRAILING_MS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*ms\s*$", re.I)
+
+
+def _filter_cleandetail(s, maxlen: int = 80):
+    """Render a flap detail string cleanly for the Incident Log.
+
+    Older probe builds wrote detail strings like "Memory Consumed: 8192.0ms"
+    — an MB value with an incorrect "ms" suffix. Those historical rows still
+    live in flap_log and can't be retroactively rewritten. This filter spots
+    details that mention a non-latency metric and trims the stale suffix at
+    render time so managers don't see "4194304.0ms" in a memory row.
+
+    Also applies a length cap (default 80 chars) so the Detail column stays
+    scannable.
+    """
+    if not s:
+        return ""
+    txt = str(s)
+    if _NON_LATENCY_DETAIL_RE.search(txt) and _TRAILING_MS_RE.search(txt):
+        txt = _TRAILING_MS_RE.sub(r"\1", txt).rstrip()
+    if maxlen and len(txt) > maxlen:
+        txt = txt[:maxlen]
+    return txt
 
 
 def _filter_durfmt_flap(duration, ongoing=False):

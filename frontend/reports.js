@@ -879,6 +879,9 @@ async function _rptRenderHistory(){
         : '';
       return `
         <tr>
+          <td style="width:28px;text-align:center">
+            <input type="checkbox" class="rpt-hist-cb" data-hid="${esc(h.id)}" onchange="_rptHistSelChanged()">
+          </td>
           <td class="muted small">${_fmtDate(h.generated_at)}</td>
           <td>
             <strong>${esc(h.template_name||'(deleted)')}</strong>
@@ -896,12 +899,81 @@ async function _rptRenderHistory(){
         </tr>`;
     }).join('');
     body.innerHTML = `
+      <div id="rptHistActions" class="rpt-hist-actions" style="display:none">
+        <span class="muted small" id="rptHistSelCount">0 selected</span>
+        <button class="rpt-btn rpt-btn-danger" onclick="_rptDeleteHistoryBulk()">Delete selected</button>
+        <button class="rpt-btn-sm" onclick="_rptHistClearSel()">Clear</button>
+      </div>
       <table class="rpt-table">
-        <thead><tr><th>Generated</th><th>Template</th><th>Kind</th><th>Period</th><th>Delivery</th><th>Size</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th style="width:28px;text-align:center">
+              <input type="checkbox" id="rptHistSelAll" onchange="_rptHistSelAll(this.checked)" title="Select all">
+            </th>
+            <th>Generated</th><th>Template</th><th>Kind</th><th>Period</th><th>Delivery</th><th>Size</th><th></th>
+          </tr>
+        </thead>
         <tbody>${trs}</tbody>
       </table>`;
   }catch(e){
     body.innerHTML = `<div class="error" style="padding:20px">Failed to load history</div>`;
+  }
+}
+
+
+/* ── History: multi-select helpers ─────────────────────────────── */
+
+function _rptHistSelAll(checked){
+  document.querySelectorAll('.rpt-hist-cb').forEach(cb=>{ cb.checked = !!checked; });
+  _rptHistSelChanged();
+}
+
+function _rptHistClearSel(){
+  const all = document.getElementById('rptHistSelAll');
+  if(all) all.checked = false;
+  document.querySelectorAll('.rpt-hist-cb').forEach(cb=>{ cb.checked = false; });
+  _rptHistSelChanged();
+}
+
+function _rptHistSelChanged(){
+  const cbs = document.querySelectorAll('.rpt-hist-cb');
+  const checked = Array.from(cbs).filter(cb=>cb.checked);
+  const n = checked.length;
+  const bar = document.getElementById('rptHistActions');
+  const cnt = document.getElementById('rptHistSelCount');
+  if(bar) bar.style.display = n ? 'flex' : 'none';
+  if(cnt) cnt.textContent = `${n} selected`;
+  // Sync the header "select all" tri-state indicator
+  const all = document.getElementById('rptHistSelAll');
+  if(all){
+    all.checked       = n > 0 && n === cbs.length;
+    all.indeterminate = n > 0 && n < cbs.length;
+  }
+}
+
+async function _rptDeleteHistoryBulk(){
+  const ids = Array.from(document.querySelectorAll('.rpt-hist-cb'))
+    .filter(cb=>cb.checked)
+    .map(cb=>cb.getAttribute('data-hid'))
+    .filter(Boolean);
+  if(!ids.length) return;
+  const ok = await _rptConfirm({
+    title: `Delete ${ids.length} report${ids.length===1?'':'s'}?`,
+    message: 'Removes the history entries and deletes their PDF/CSV files from the server. This cannot be undone.',
+    confirmLabel: `Delete ${ids.length}`,
+    danger: true,
+  });
+  if(!ok) return;
+  try{
+    const r = await api('POST', '/api/reports/history/bulk-delete', { ids });
+    _rptNotify({
+      title: 'Reports deleted',
+      message: `Deleted ${r.deleted||0}${r.missing?` · ${r.missing} already gone`:''}.`,
+      kind: 'success',
+    });
+    _rptRenderHistory();
+  }catch(e){
+    _rptNotify({title:'Bulk delete failed', message:(e.message||String(e)), kind:'error'});
   }
 }
 
