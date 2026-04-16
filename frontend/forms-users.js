@@ -83,21 +83,26 @@ async function _open2faModal(){
   _overlayClose(o,()=>closeM('m-2fa'));
   const enabled=!!me.totp_enabled;
 
+  // 24-hour, locale-independent: "2026-04-16 21:22"
   const _fmtDate=(ts)=>{
     if(!ts) return '—';
     const d=new Date(ts*1000);
-    return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+    const p=n=>String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} `+
+           `${p(d.getHours())}:${p(d.getMinutes())}`;
   };
 
   const _trustedSection=enabled ? (()=>{
     const devs=tdData.devices||[];
+    // white-space:nowrap on date / IP / "this device" cells stops awkward
+    // wrapping when the modal isn't wide enough for one-line rows.
     const devRows=devs.length ? devs.map(d=>`
       <tr>
-        <td>${esc(d.device_label||'Unknown')}</td>
-        <td style="color:var(--text2)">${esc(d.ip||'')}</td>
-        <td style="color:var(--text2)">${_fmtDate(d.last_used_at)}</td>
-        <td style="color:var(--text2)">${_fmtDate(d.expires_at)}</td>
-        <td>${d.current?'<span style="color:var(--accent);font-size:11px">this device</span>':''}</td>
+        <td style="white-space:nowrap">${esc(d.device_label||'Unknown')}</td>
+        <td style="color:var(--text2);white-space:nowrap">${esc(d.ip||'')}</td>
+        <td style="color:var(--text2);white-space:nowrap">${_fmtDate(d.last_used_at)}</td>
+        <td style="color:var(--text2);white-space:nowrap">${_fmtDate(d.expires_at)}</td>
+        <td style="white-space:nowrap">${d.current?'<span style="color:var(--accent);font-size:11px">this device</span>':''}</td>
         <td><button class="btn-xs btn-d" onclick="_2faRevokeDevice(${d.id})">Revoke</button></td>
       </tr>`).join('')
       : `<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:10px">No trusted devices</td></tr>`;
@@ -123,7 +128,7 @@ async function _open2faModal(){
   })() : '';
 
   o.innerHTML=`
-    <div class="mbox" style="max-width:560px">
+    <div class="mbox" style="max-width:640px">
       <div class="mhd">
         <div class="mttl">🔐 Two-Factor Authentication</div>
         <button class="mclose" onclick="closeM('m-2fa')">✕</button>
