@@ -94,7 +94,7 @@ function _rptBuildSectionsHtml(cfg){
 }
 
 function _rptSecPreset(name){
-  const wrap = document.getElementById('_rt_custom_wrap');
+  const wrap = document.getElementById('_rt_sections_wrap');
   if(!wrap) return;
   let pick;
   if(name === 'all')       pick = _RPT_SECTIONS.flatMap(g => g.items.map(i => i.id));
@@ -108,7 +108,7 @@ function _rptSecPreset(name){
 
 function _rptToggleCustom(){
   const sel  = document.getElementById('_rt_kind');
-  const wrap = document.getElementById('_rt_custom_wrap');
+  const wrap = document.getElementById('_rt_sections_wrap');
   const box  = document.querySelector('#rptTplModal .mbox');
   if(!sel || !wrap) return;
   const on = (sel.value === 'custom');
@@ -341,7 +341,7 @@ function _rptEditTemplate(tid, presetKind){
               <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom — pick your own sections</option>
             </select>
           </div>
-          <div class="fr" id="_rt_custom_wrap" style="${t.kind==='custom'?'':'display:none'}">
+          <div class="fr" id="_rt_sections_wrap" style="${t.kind==='custom'?'':'display:none'}">
             <label class="fl">Report sections</label>
             <div class="fh">Pick the blocks to include. Per-section drop-downs tune size / depth. Use a preset as a starting point and tweak.</div>
             ${_rptBuildSectionsHtml(cfg)}
@@ -456,7 +456,7 @@ async function _rptSaveTemplate(tid){
     },
   };
   if(payload.kind === 'custom'){
-    const wrap = document.getElementById('_rt_custom_wrap');
+    const wrap = document.getElementById('_rt_sections_wrap');
     const sections = wrap
       ? Array.from(wrap.querySelectorAll('input[type=checkbox][data-sec]:checked')).map(cb => cb.dataset.sec)
       : [];
