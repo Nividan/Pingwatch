@@ -152,8 +152,33 @@ def _attach_charts(ctx: dict) -> dict:
 
 # ── Public ────────────────────────────────────────────────────────────
 
-def render_html(kind: str, context: dict, embed_charts: bool = True) -> str:
-    """Render the report to a full HTML document (for preview or PDF input)."""
+def _read_css() -> str:
+    """Return the report stylesheet contents (cached)."""
+    global _CSS_CACHE
+    try:
+        if _CSS_CACHE is not None:
+            return _CSS_CACHE
+    except NameError:
+        pass
+    path = os.path.join(_TEMPLATES_DIR, "report.css")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            css = f.read()
+    except Exception:
+        css = ""
+    globals()["_CSS_CACHE"] = css
+    return css
+
+
+def render_html(kind: str, context: dict, embed_charts: bool = True,
+                inline_css: bool = True) -> str:
+    """Render the report to a full HTML document (for preview or PDF input).
+
+    When `inline_css` is True, the print stylesheet is injected into a <style>
+    block so the browser preview matches the PDF. For PDF rendering we pass
+    `inline_css=False` and hand the CSS to WeasyPrint via stylesheets=[...],
+    which handles @page rules correctly.
+    """
     ctx = dict(context)
     if embed_charts:
         ctx = _attach_charts(ctx)
@@ -166,7 +191,23 @@ def render_html(kind: str, context: dict, embed_charts: bool = True) -> str:
     except Exception:
         log.warning(f"reports.engine: template {tpl_name!r} not found, falling back to executive.html")
         template = env.get_template("executive.html")
-    return template.render(**ctx)
+    html = template.render(**ctx)
+
+    if inline_css:
+        css = _read_css()
+        # Constrain the cover page for browser preview — @page rules only fire in print.
+        preview_css = (
+            "\n/* preview-only overrides */\n"
+            ".cover{height:auto !important;min-height:60vh;padding:40mm 20mm !important;}\n"
+            ".cover-logo{max-width:120px !important;max-height:120px !important;}\n"
+            "body{padding:0 24px 40px 24px;max-width:900px;margin:0 auto;}\n"
+        )
+        style_block = f"<style>\n{css}\n{preview_css}\n</style>"
+        if "</head>" in html:
+            html = html.replace("</head>", style_block + "\n</head>", 1)
+        else:
+            html = style_block + html
+    return html
 
 
 def render_pdf(kind: str, context: dict) -> bytes:
@@ -180,7 +221,7 @@ def render_pdf(kind: str, context: dict) -> bytes:
         ) from e
 
     t0 = time.time()
-    html_str = render_html(kind, context, embed_charts=True)
+    html_str = render_html(kind, context, embed_charts=True, inline_css=False)
     css_path = os.path.join(_TEMPLATES_DIR, "report.css")
 
     # base_url = templates dir so relative references work (future: include images)
