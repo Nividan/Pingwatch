@@ -42,8 +42,32 @@ def _get_env():
     env.filters["severity_class"] = _filter_severity
     env.filters["deltafmt"]   = _filter_deltafmt
     env.filters["trapname"]   = _filter_trapname
+    env.filters["durfmt_flap"] = _filter_durfmt_flap
     _env = env
     return env
+
+
+def _filter_durfmt_flap(duration, ongoing=False):
+    """Render an incident duration honestly.
+
+    Unlike the plain durfmt, this one doesn't pretend 0 means "no time" —
+    which was confusing ("Duration: 0s" on a row that's actually still open
+    or resolved sub-second). Pass a row dict's .ongoing via the 2-arg form:
+      {{ row.duration_s | durfmt_flap(row.ongoing) }}
+    """
+    if ongoing:
+        return "open"
+    try:
+        d = float(duration) if duration is not None else None
+    except Exception:
+        return "—"
+    if d is None:
+        return "open"
+    if d <= 0:
+        return "<1s"
+    if d < 1:
+        return "<1s"
+    return _filter_durfmt(int(d))
 
 
 # Vendor prefixes commonly used in MIB trap symbols — split off and upper-cased

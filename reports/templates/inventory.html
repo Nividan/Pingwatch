@@ -27,6 +27,35 @@
   </div>
 </section>
 
+<!-- ── Device health scores ──────────────────────────────────────── -->
+{% if device_health %}
+<section class="section">
+  <h1>Device health scores</h1>
+  <p class="muted small">Composite 0–100 per device over the reporting period. Green ≥ 90 · Amber ≥ 70 · Red &lt; 70.</p>
+  <table class="data compact">
+    <thead>
+      <tr>
+        <th>Device</th><th>Host</th><th>Group</th>
+        <th>Uptime</th><th>Incidents</th><th>Status</th><th>Score</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in device_health %}
+      <tr>
+        <td>{{ d.dname }}</td>
+        <td class="mono">{{ d.host }}</td>
+        <td>{{ d.group }}</td>
+        <td class="{{ d.uptime_pct | statuspct }}">{{ d.uptime_pct | pctfmt(2) }}</td>
+        <td>{{ d.incidents }}</td>
+        <td class="{% if d.current == 'down' %}crit{% elif d.current == 'warn' %}warn{% else %}up{% endif %}">{{ d.current }}</td>
+        <td><span class="hs hs-{{ d.band }}">{{ d.score }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
 <!-- ── Backup coverage ───────────────────────────────────────────── -->
 <section class="section">
   <h1>Device configuration backups</h1>

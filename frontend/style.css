@@ -1146,6 +1146,8 @@ select{cursor:pointer;appearance:none;
 .rpt-sec-grid .chk-item:hover{background:var(--bg3)}
 .rpt-sec-grid .chk-item .chk-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rpt-sec-opt{margin-left:auto;width:auto !important;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:3px;font-size:11px;padding:2px 22px 2px 6px !important}
+.rpt-sec-bopt{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text2);cursor:pointer;user-select:none}
+.rpt-sec-bopt input[type=checkbox]{width:12px;height:12px;margin:0;accent-color:var(--accent)}
 .rpt-sec-actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
 
 /* Buttons */

@@ -23,10 +23,14 @@ const _RPT_SECTIONS = [
   ]},
   {label:'Incidents', items:[
     {id:'incident_summary',   label:'Incident summary + severity donut'},
+    {id:'major_incidents',    label:'Major outages (clustered)',
+      opt:{key:'major_min_devices', def:10, values:[[5,'≥ 5 devices'],[10,'≥ 10 devices'],[20,'≥ 20 devices']]}},
     {id:'incident_timeline',  label:'Incident timeline chart'},
     {id:'top_noisy_sensors',  label:'Noisiest sensors',
       opt:{key:'top_noisy_n', def:5, values:[[5,'Top 5'],[10,'Top 10'],[20,'Top 20']]}},
-    {id:'incident_log',       label:'Full incident log'},
+    {id:'incident_log',       label:'Incident log (outages)',
+      opt:{key:'show_individual_events', def:false, type:'bool', sublabel:'+ raw events'}},
+    {id:'sensor_config_issues', label:'Sensor configuration issues'},
     {id:'maint_windows',      label:'Maintenance windows'},
   ]},
   {label:'Performance', items:[
@@ -48,14 +52,23 @@ const _RPT_SECTIONS = [
     {id:'audit_log',          label:'Recent admin activity',
       opt:{key:'audit_limit', def:50, values:[[25,'Last 25'],[50,'Last 50'],[100,'Last 100']]}},
   ]},
+  {label:'Health', items:[
+    {id:'device_health',      label:'Device health scores',
+      opt:{key:'health_top_n', def:25, values:[[10,'Top 10'],[25,'Top 25'],[0,'All devices']]}},
+  ]},
 ];
 
-/* ── Presets that mirror the three fixed kinds ─────────────────── */
+/* ── Presets that mirror the three fixed kinds ───────────────────
+   Each preset lists the section IDs to tick. Option defaults come from
+   _RPT_SECTIONS[].opt.def, so presets only need to declare the section
+   set — knobs fall back to sensible defaults. */
 const _RPT_PRESETS = {
   exec: ['overall_uptime','availability_trend','incident_summary',
-         'top_worst_devices','top_noisy_sensors','incident_timeline','maint_windows'],
+         'top_worst_devices','major_incidents','top_noisy_sensors',
+         'incident_timeline','maint_windows','device_health'],
   tech: ['overall_uptime','availability_trend','per_device_uptime',
-         'latency_percentiles','snmp_traps','tls_expiring','incident_log','maint_windows'],
+         'latency_percentiles','snmp_traps','tls_expiring',
+         'major_incidents','incident_log','sensor_config_issues','maint_windows'],
   inv:  ['estate_overview','backup_coverage','ipam','licenses','tls_expiring',
          'device_inventory','audit_log'],
 };
@@ -67,7 +80,13 @@ function _rptBuildSectionsHtml(cfg){
     const items = g.items.map(it => {
       const checked = picked.has(it.id) ? 'checked' : '';
       let optHtml = '';
-      if(it.opt){
+      if(it.opt && it.opt.type === 'bool'){
+        const cur = (optsCfg[it.opt.key] === undefined) ? !!it.opt.def : !!optsCfg[it.opt.key];
+        optHtml = `<label class="rpt-sec-bopt" onclick="event.stopPropagation()">
+          <input type="checkbox" data-bopt="${esc(it.opt.key)}" ${cur?'checked':''}>
+          <span>${esc(it.opt.sublabel || '')}</span>
+        </label>`;
+      } else if(it.opt){
         const cur = optsCfg[it.opt.key] ?? it.opt.def;
         const opts = it.opt.values.map(([v,label])=>`<option value="${v}" ${Number(cur)===v?'selected':''}>${esc(label)}</option>`).join('');
         optHtml = `<select class="rpt-sec-opt" data-opt="${esc(it.opt.key)}" onclick="event.stopPropagation()">${opts}</select>`;
@@ -469,6 +488,9 @@ async function _rptSaveTemplate(tid){
       wrap.querySelectorAll('select.rpt-sec-opt[data-opt]').forEach(sel => {
         const n = parseInt(sel.value, 10);
         if(!isNaN(n)) options[sel.dataset.opt] = n;
+      });
+      wrap.querySelectorAll('input[type=checkbox][data-bopt]').forEach(cb => {
+        options[cb.dataset.bopt] = !!cb.checked;
       });
     }
     payload.config_json.sections = sections;
