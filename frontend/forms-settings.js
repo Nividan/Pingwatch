@@ -267,7 +267,17 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr" style="margin-top:10px">
             <label class="fl">Company Name</label>
             <input type="text" id="st-email-company" value="${esc(sr.email_company_name||'')}" placeholder="PingWatch" style="max-width:260px"/>
-            <div class="fh">Shown in email header and footer — leave blank for "PingWatch"</div>
+            <div class="fh">Shown in email header/footer AND on the cover page of generated reports.</div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Report Footer Text</label>
+            <input type="text" id="st-report-footer" value="${esc(sr.report_footer_text||'')}" placeholder="e.g. Confidential — internal use only"/>
+            <div class="fh">Free-form text shown in the footer section of every generated PDF report.</div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Report Brand Color</label>
+            <input type="color" id="st-report-color" value="${esc(sr.report_brand_color||'#0969da')}" style="width:60px;height:32px;padding:0;border:1px solid var(--border);border-radius:4px"/>
+            <div class="fh">Hex color used for report headings, title rules, and cover-page accents. Defaults to app accent.</div>
           </div>
         </div>
         <div style="margin-top:14px">
@@ -275,6 +285,7 @@ function _buildSettingsTab_integrations(sr) {
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text3)">
           SMTP credentials power email actions in <b>Alert Profiles</b>. Per-stage delay and repeat are configured per profile.
+          The same logo + company name is used on generated <b>Reports</b>.
         </div>
       </div>
 
@@ -1860,6 +1871,8 @@ async function saveSettings(){
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
     email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
     email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
+    report_footer_text: document.getElementById('st-report-footer')?.value.trim()||'',
+    report_brand_color: document.getElementById('st-report-color')?.value||'',
   };
   const logoData=document.getElementById('st-email-logo-data')?.value||'';
   if(logoData==='__remove__') smtp.email_logo_data='';

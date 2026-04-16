@@ -162,6 +162,29 @@ from db.licenses    import (
     db_license_summary,
 )
 
+# reports (templates, schedules, generated history)
+from db.reports     import (
+    db_list_report_templates,
+    db_get_report_template,
+    db_create_report_template,
+    db_update_report_template,
+    db_delete_report_template,
+    db_list_report_schedules,
+    db_get_report_schedule,
+    db_list_schedules_for_template,
+    db_create_report_schedule,
+    db_update_report_schedule,
+    db_set_schedule_enabled,
+    db_record_schedule_run,
+    db_delete_report_schedule,
+    db_list_report_history,
+    db_get_report_history,
+    db_add_report_history,
+    db_update_report_history_delivery,
+    db_delete_report_history,
+    db_prune_report_history,
+)
+
 # backups
 from db.backups     import (
     db_get_backup_list,
@@ -234,6 +257,16 @@ __all__ = [
     "db_log_event", "db_list_events", "db_count_active", "db_get_event",
     "db_ack_event", "db_resolve_event", "db_auto_resolve_event",
     "db_resolve_all_active", "db_has_acked_event", "db_has_active_event",
+    # reports
+    "db_list_report_templates", "db_get_report_template",
+    "db_create_report_template", "db_update_report_template", "db_delete_report_template",
+    "db_list_report_schedules", "db_get_report_schedule",
+    "db_list_schedules_for_template",
+    "db_create_report_schedule", "db_update_report_schedule",
+    "db_set_schedule_enabled", "db_record_schedule_run", "db_delete_report_schedule",
+    "db_list_report_history", "db_get_report_history",
+    "db_add_report_history", "db_update_report_history_delivery",
+    "db_delete_report_history", "db_prune_report_history",
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",

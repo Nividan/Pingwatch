@@ -104,6 +104,8 @@ def handle(h, method, path, body):
             "email_logo":      int(_settings.get("email_logo", 1) or 1),
             "email_logo_data": _settings.get("email_logo_data", ""),
             "email_company_name": _settings.get("email_company_name", ""),
+            "report_footer_text": _settings.get("report_footer_text", ""),
+            "report_brand_color": _settings.get("report_brand_color", ""),
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
             "snr_timeout":       int(_settings.get("snr_timeout",       4)),
@@ -288,6 +290,7 @@ def handle(h, method, path, body):
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
             "email_logo", "email_logo_data", "email_company_name",
+            "report_footer_text", "report_brand_color",
             "snr_interval", "snr_timeout", "snr_fail_after", "snr_recover_after",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
             "login_fail_max", "login_fail_window", "totp_remember_hours",

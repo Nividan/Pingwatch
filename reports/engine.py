@@ -1,0 +1,192 @@
+"""
+reports/engine.py — Render a report context to HTML / PDF via Jinja2 + WeasyPrint.
+
+Public entrypoints:
+  render_html(kind, context)  → str        (for in-browser preview)
+  render_pdf(kind, context)   → bytes      (for download + email attachment)
+"""
+
+import datetime
+import os
+import time
+
+from core.logger import log
+from reports import charts
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+
+# Cached Jinja2 environment — lazy init so module imports cheaply
+_env = None
+
+
+def _get_env():
+    global _env
+    if _env is not None:
+        return _env
+    try:
+        import jinja2
+    except ImportError as e:
+        raise RuntimeError("Jinja2 not installed — pip install Jinja2") from e
+
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(_TEMPLATES_DIR),
+        autoescape=jinja2.select_autoescape(["html"]),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    env.filters["datefmt"]    = _filter_datefmt
+    env.filters["durfmt"]     = _filter_durfmt
+    env.filters["msfmt"]      = _filter_msfmt
+    env.filters["pctfmt"]     = _filter_pctfmt
+    env.filters["statuspct"]  = _filter_statuspct
+    env.filters["severity_class"] = _filter_severity
+    _env = env
+    return env
+
+
+# ── Filters ───────────────────────────────────────────────────────────
+
+def _filter_datefmt(ts, fmt="%Y-%m-%d %H:%M"):
+    if not ts:
+        return "—"
+    try:
+        return datetime.datetime.fromtimestamp(float(ts)).strftime(fmt)
+    except Exception:
+        return "—"
+
+
+def _filter_durfmt(seconds):
+    """Human-friendly duration: 45s, 12m, 3h 20m, 2d 4h."""
+    if seconds is None:
+        return "—"
+    try:
+        s = int(seconds)
+    except Exception:
+        return "—"
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        h, m = divmod(s, 3600)
+        m = m // 60
+        return f"{h}h {m:02d}m"
+    d, r = divmod(s, 86400)
+    h = r // 3600
+    return f"{d}d {h}h"
+
+
+def _filter_msfmt(v):
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.1f} ms"
+    except Exception:
+        return "—"
+
+
+def _filter_pctfmt(v, places=2):
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.{places}f}%"
+    except Exception:
+        return "—"
+
+
+def _filter_statuspct(v):
+    """Map an availability % to a status class: up / warn / down."""
+    if v is None:
+        return "muted"
+    try:
+        p = float(v)
+    except Exception:
+        return "muted"
+    if p >= 99.9: return "up"
+    if p >= 99.0: return "warn"
+    return "down"
+
+
+def _filter_severity(direction):
+    d = (direction or "").lower()
+    if d in ("down", "threshold_crit"): return "crit"
+    if d in ("threshold_warn", "anomaly_warn"): return "warn"
+    if d in ("recovered", "threshold_ok"): return "ok"
+    return "muted"
+
+
+# ── Chart injection ───────────────────────────────────────────────────
+
+def _attach_charts(ctx: dict) -> dict:
+    """Generate chart data URIs and attach them under ctx['charts']."""
+    try:
+        from db.samples import db_load_availability
+        avail_hourly = db_load_availability(
+            max(60, int((ctx["period"]["end_ts"] - ctx["period"]["start_ts"]) / 60))
+        )
+    except Exception as e:
+        log.debug(f"reports.engine availability chart data fetch failed: {e}")
+        avail_hourly = []
+
+    c = {}
+    c["availability_trend"] = charts.availability_trend(avail_hourly)
+    c["severity_donut"]     = charts.severity_donut(ctx["incidents"]["severity"])
+    c["incident_timeline"]  = charts.incident_timeline(
+        ctx["incidents"]["flaps"],
+        ctx["period"]["start_ts"], ctx["period"]["end_ts"]
+    )
+    c["top_worst_bar"]      = charts.top_bar(
+        [{"name": r["dname"], "fails": r["fail"]} for r in ctx["incidents"]["worst_5"]],
+        "fails", "name", title="Worst 5 devices (failures)", color="#cf222e"
+    )
+    c["top_noisy_bar"]      = charts.top_bar(
+        [{"name": f"{r['dname']}·{r['sname']}", "count": r["count"]}
+         for r in ctx["incidents"]["noisy_5"]],
+        "count", "name", title="Top 5 noisiest sensors (incidents)", color="#9a6700"
+    )
+    if "latency" in ctx:
+        c["latency_bar"] = charts.latency_percentile_bar(ctx["latency"], 10)
+    ctx["charts"] = c
+    return ctx
+
+
+# ── Public ────────────────────────────────────────────────────────────
+
+def render_html(kind: str, context: dict, embed_charts: bool = True) -> str:
+    """Render the report to a full HTML document (for preview or PDF input)."""
+    ctx = dict(context)
+    if embed_charts:
+        ctx = _attach_charts(ctx)
+    ctx.setdefault("charts", {})   # templates reference charts.X unconditionally
+
+    env = _get_env()
+    tpl_name = f"{kind}.html"
+    try:
+        template = env.get_template(tpl_name)
+    except Exception:
+        log.warning(f"reports.engine: template {tpl_name!r} not found, falling back to executive.html")
+        template = env.get_template("executive.html")
+    return template.render(**ctx)
+
+
+def render_pdf(kind: str, context: dict) -> bytes:
+    """Render the report to PDF bytes via WeasyPrint."""
+    try:
+        from weasyprint import HTML, CSS
+    except ImportError as e:
+        raise RuntimeError(
+            "WeasyPrint not installed. Install: pip install weasyprint "
+            "(Linux also needs: apt install libpango-1.0-0 libpangoft2-1.0-0)"
+        ) from e
+
+    t0 = time.time()
+    html_str = render_html(kind, context, embed_charts=True)
+    css_path = os.path.join(_TEMPLATES_DIR, "report.css")
+
+    # base_url = templates dir so relative references work (future: include images)
+    pdf_bytes = HTML(string=html_str, base_url=_TEMPLATES_DIR).write_pdf(
+        stylesheets=[CSS(filename=css_path)] if os.path.isfile(css_path) else None
+    )
+    dt = int((time.time() - t0) * 1000)
+    log.info(f"reports.engine: rendered {kind} PDF ({len(pdf_bytes)} bytes, {dt} ms)")
+    return pdf_bytes

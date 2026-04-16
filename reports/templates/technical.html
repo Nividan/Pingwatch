@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ── Overall availability (short) ──────────────────────────────── -->
+<section class="section">
+  <h1>Overall availability</h1>
+  <div class="headline-tile tile-{{ overall.pct | statuspct }}">
+    <div class="headline-number">
+      {% if overall.pct is not none %}{{ overall.pct | pctfmt(3) }}{% else %}—{% endif %}
+    </div>
+    <div class="headline-caption">
+      {{ inventory.devices }} devices · {{ inventory.sensors }} sensors · {{ period.days }} days
+    </div>
+  </div>
+  {% if charts.availability_trend %}
+    <img class="chart" src="{{ charts.availability_trend }}" alt="Availability trend">
+  {% endif %}
+</section>
+
+<!-- ── Per-device uptime ─────────────────────────────────────────── -->
+<section class="section">
+  <h1>Per-device uptime</h1>
+  {% if availability %}
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Host</th><th>Group</th>
+          <th>Uptime</th><th>Samples</th><th>Fails</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in availability %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td>{{ d.group }}</td>
+          <td class="{{ d.pct | statuspct }}">{{ d.pct | pctfmt(2) }}</td>
+          <td>{{ d.total }}</td>
+          <td>{{ d.fail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No device-level data in this period.</p>
+  {% endif %}
+</section>
+
+<!-- ── Latency percentiles ───────────────────────────────────────── -->
+{% if latency %}
+<section class="section">
+  <h1>Latency percentiles (per sensor)</h1>
+  <table class="data compact">
+    <thead>
+      <tr>
+        <th>Device</th><th>Sensor</th><th>Type</th>
+        <th>Samples</th><th>p50</th><th>p95</th><th>p99</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in latency %}
+      <tr>
+        <td>{{ r.dname }}</td>
+        <td>{{ r.sname }}</td>
+        <td class="mono">{{ r.stype }}</td>
+        <td>{{ r.samples }}</td>
+        <td>{{ r.p50 | msfmt }}</td>
+        <td>{{ r.p95 | msfmt }}</td>
+        <td>{{ r.p99 | msfmt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if charts.latency_bar %}
+    <img class="chart" src="{{ charts.latency_bar }}" alt="Latency percentiles">
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Top SNMP traps ────────────────────────────────────────────── -->
+{% if top_traps %}
+<section class="section">
+  <h1>Top SNMP trap types</h1>
+  <table class="data">
+    <thead>
+      <tr><th>Trap</th><th>Vendor</th><th>Severity</th><th>Count</th></tr>
+    </thead>
+    <tbody>
+      {% for t in top_traps %}
+      <tr>
+        <td>{{ t.name }}</td>
+        <td>{{ t.vendor }}</td>
+        <td>{{ t.severity }}</td>
+        <td>{{ t.count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- ── TLS certs expiring ────────────────────────────────────────── -->
+{% if tls_expiring %}
+<section class="section">
+  <h1>TLS certificates expiring within 90 days</h1>
+  <table class="data">
+    <thead>
+      <tr><th>Device</th><th>Sensor</th><th>Host</th><th>Days left</th><th>Bucket</th></tr>
+    </thead>
+    <tbody>
+      {% for c in tls_expiring %}
+      <tr>
+        <td>{{ c.dname }}</td>
+        <td>{{ c.sname }}</td>
+        <td class="mono">{{ c.host }}</td>
+        <td class="{% if c.days <= 0 %}crit{% elif c.days <= 30 %}warn{% endif %}">{{ c.days }}</td>
+        <td>{{ c.bucket }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- ── Flap / incident list ──────────────────────────────────────── -->
+<section class="section">
+  <h1>Incident log</h1>
+  {% if incidents.flaps %}
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>When</th><th>Device</th><th>Sensor</th>
+          <th>Severity</th><th>Duration</th><th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in incidents.flaps %}
+        <tr>
+          <td class="mono">{{ f.ts | datefmt }}</td>
+          <td>{{ f.dname }}</td>
+          <td>{{ f.sname }}</td>
+          <td class="{{ f.direction | severity_class }}">{{ f.direction }}</td>
+          <td>{{ f.duration | durfmt }}</td>
+          <td class="muted small">{{ (f.detail or '')[:80] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No incidents in this period.</p>
+  {% endif %}
+</section>
+
+<!-- ── Maintenance ───────────────────────────────────────────────── -->
+{% if maint_windows %}
+<section class="section">
+  <h1>Maintenance windows</h1>
+  <table class="data">
+    <thead>
+      <tr><th>Name</th><th>Start</th><th>End</th><th>Duration (in window)</th></tr>
+    </thead>
+    <tbody>
+      {% for m in maint_windows %}
+      <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.start_ts | datefmt }}</td>
+        <td>{{ m.end_ts | datefmt }}</td>
+        <td>{{ m.duration_s | durfmt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% endblock %}
