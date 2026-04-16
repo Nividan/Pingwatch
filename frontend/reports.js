@@ -7,6 +7,115 @@
 let _rptTab = 'templates';   // 'templates' | 'schedules' | 'history'
 let _rptBooted = false;
 
+/* ── Custom-kind section catalogue ─────────────────────────────────
+   Picker data. Each group lists its sections; items may have an `opt`
+   block that renders a <select> inline with the checkbox for a per-
+   section knob (Top N, days-ahead, etc). Section IDs must match the
+   `{% if "id" in meta.sections %}` guards in reports/templates/custom.html.
+*/
+const _RPT_SECTIONS = [
+  {label:'Availability & Uptime', items:[
+    {id:'overall_uptime',     label:'Overall uptime headline'},
+    {id:'availability_trend', label:'Availability trend chart'},
+    {id:'per_device_uptime',  label:'Per-device uptime table'},
+    {id:'top_worst_devices',  label:'Worst-performing devices',
+      opt:{key:'top_worst_n', def:5, values:[[5,'Top 5'],[10,'Top 10'],[20,'Top 20']]}},
+  ]},
+  {label:'Incidents', items:[
+    {id:'incident_summary',   label:'Incident summary + severity donut'},
+    {id:'incident_timeline',  label:'Incident timeline chart'},
+    {id:'top_noisy_sensors',  label:'Noisiest sensors',
+      opt:{key:'top_noisy_n', def:5, values:[[5,'Top 5'],[10,'Top 10'],[20,'Top 20']]}},
+    {id:'incident_log',       label:'Full incident log'},
+    {id:'maint_windows',      label:'Maintenance windows'},
+  ]},
+  {label:'Performance', items:[
+    {id:'latency_percentiles', label:'Latency percentiles (p50/p95/p99)',
+      opt:{key:'latency_top_n', def:100, values:[[25,'Top 25'],[50,'Top 50'],[100,'Top 100']]}},
+    {id:'snmp_traps',         label:'Top SNMP trap types',
+      opt:{key:'top_traps_n', def:10, values:[[10,'Top 10'],[25,'Top 25'],[50,'Top 50']]}},
+  ]},
+  {label:'Inventory & Estate', items:[
+    {id:'estate_overview',    label:'Estate overview (devices, users)'},
+    {id:'device_inventory',   label:'Full device inventory'},
+    {id:'ipam',               label:'IPAM subnet utilisation'},
+  ]},
+  {label:'Compliance & Security', items:[
+    {id:'tls_expiring',       label:'TLS certificates expiring',
+      opt:{key:'tls_days_ahead', def:90, values:[[30,'≤ 30 days'],[60,'≤ 60 days'],[90,'≤ 90 days']]}},
+    {id:'licenses',           label:'Device license tracking'},
+    {id:'backup_coverage',    label:'Config backup coverage'},
+    {id:'audit_log',          label:'Recent admin activity',
+      opt:{key:'audit_limit', def:50, values:[[25,'Last 25'],[50,'Last 50'],[100,'Last 100']]}},
+  ]},
+];
+
+/* ── Presets that mirror the three fixed kinds ─────────────────── */
+const _RPT_PRESETS = {
+  exec: ['overall_uptime','availability_trend','incident_summary',
+         'top_worst_devices','top_noisy_sensors','incident_timeline','maint_windows'],
+  tech: ['overall_uptime','availability_trend','per_device_uptime',
+         'latency_percentiles','snmp_traps','tls_expiring','incident_log','maint_windows'],
+  inv:  ['estate_overview','backup_coverage','ipam','licenses','tls_expiring',
+         'device_inventory','audit_log'],
+};
+
+function _rptBuildSectionsHtml(cfg){
+  const picked  = new Set(cfg.sections && cfg.sections.length ? cfg.sections : _RPT_PRESETS.exec);
+  const optsCfg = cfg.options || {};
+  const groups  = _RPT_SECTIONS.map(g => {
+    const items = g.items.map(it => {
+      const checked = picked.has(it.id) ? 'checked' : '';
+      let optHtml = '';
+      if(it.opt){
+        const cur = optsCfg[it.opt.key] ?? it.opt.def;
+        const opts = it.opt.values.map(([v,label])=>`<option value="${v}" ${Number(cur)===v?'selected':''}>${esc(label)}</option>`).join('');
+        optHtml = `<select class="rpt-sec-opt" data-opt="${esc(it.opt.key)}" onclick="event.stopPropagation()">${opts}</select>`;
+      }
+      return `<label class="chk-item">
+        <input type="checkbox" data-sec="${esc(it.id)}" ${checked}>
+        <span class="chk-lbl">${esc(it.label)}</span>
+        ${optHtml}
+      </label>`;
+    }).join('');
+    return `<div class="rpt-sec-group">
+      <div class="rpt-sec-ghd">${esc(g.label)}</div>
+      <div class="rpt-sec-grid">${items}</div>
+    </div>`;
+  }).join('');
+  return `<div class="rpt-sections">${groups}</div>
+    <div class="rpt-sec-actions">
+      <button type="button" class="btn-s" onclick="_rptSecPreset('all')">Select all</button>
+      <button type="button" class="btn-s" onclick="_rptSecPreset('none')">Clear</button>
+      <button type="button" class="btn-s" onclick="_rptSecPreset('exec')">Executive preset</button>
+      <button type="button" class="btn-s" onclick="_rptSecPreset('tech')">Technical preset</button>
+      <button type="button" class="btn-s" onclick="_rptSecPreset('inv')">Inventory preset</button>
+    </div>`;
+}
+
+function _rptSecPreset(name){
+  const wrap = document.getElementById('_rt_custom_wrap');
+  if(!wrap) return;
+  let pick;
+  if(name === 'all')       pick = _RPT_SECTIONS.flatMap(g => g.items.map(i => i.id));
+  else if(name === 'none') pick = [];
+  else                     pick = _RPT_PRESETS[name] || [];
+  const set = new Set(pick);
+  wrap.querySelectorAll('input[type=checkbox][data-sec]').forEach(cb => {
+    cb.checked = set.has(cb.dataset.sec);
+  });
+}
+
+function _rptToggleCustom(){
+  const sel  = document.getElementById('_rt_kind');
+  const wrap = document.getElementById('_rt_custom_wrap');
+  const box  = document.querySelector('#rptTplModal .mbox');
+  if(!sel || !wrap) return;
+  const on = (sel.value === 'custom');
+  wrap.style.display = on ? '' : 'none';
+  if(box) box.style.maxWidth = on ? '780px' : '620px';
+}
+
 /* ── Modal helpers (replace native confirm/alert and show progress) ── */
 
 function _rptConfirm(opts){
@@ -214,8 +323,9 @@ function _rptEditTemplate(tid, presetKind){
     const o = document.createElement('div');
     o.className = 'mo'; o.id = 'rptTplModal';
     _overlayClose(o, ()=>closeM('rptTplModal'));
+    const _maxW = (t.kind === 'custom') ? '780px' : '620px';
     o.innerHTML = `
-      <div class="mbox" style="max-width:620px">
+      <div class="mbox" style="max-width:${_maxW}">
         <div class="mhd"><span>${tid?'Edit':'New'} Report Template</span></div>
         <div class="mbdy">
           <div class="fr">
@@ -224,12 +334,17 @@ function _rptEditTemplate(tid, presetKind){
           </div>
           <div class="fr">
             <label class="fl">Kind</label>
-            <select id="_rt_kind">
+            <select id="_rt_kind" onchange="_rptToggleCustom()">
               <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
               <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
               <option value="inventory" ${t.kind==='inventory'?'selected':''}>Inventory &amp; Compliance (devices, backups, IPAM, licenses)</option>
-              <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom</option>
+              <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom — pick your own sections</option>
             </select>
+          </div>
+          <div class="fr" id="_rt_custom_wrap" style="${t.kind==='custom'?'':'display:none'}">
+            <label class="fl">Report sections</label>
+            <div class="fh">Pick the blocks to include. Per-section drop-downs tune size / depth. Use a preset as a starting point and tweak.</div>
+            ${_rptBuildSectionsHtml(cfg)}
           </div>
           <div class="fr">
             <label class="fl">Description (optional)</label>
@@ -340,6 +455,25 @@ async function _rptSaveTemplate(tid){
       pdfa_mode:    document.getElementById('_rt_pdfa')?.value || '',
     },
   };
+  if(payload.kind === 'custom'){
+    const wrap = document.getElementById('_rt_custom_wrap');
+    const sections = wrap
+      ? Array.from(wrap.querySelectorAll('input[type=checkbox][data-sec]:checked')).map(cb => cb.dataset.sec)
+      : [];
+    if(!sections.length){
+      _rptNotify({title:'No sections picked', message:'Custom reports need at least one section ticked. Pick a preset or check individual blocks.', kind:'error'});
+      return;
+    }
+    const options = {};
+    if(wrap){
+      wrap.querySelectorAll('select.rpt-sec-opt[data-opt]').forEach(sel => {
+        const n = parseInt(sel.value, 10);
+        if(!isNaN(n)) options[sel.dataset.opt] = n;
+      });
+    }
+    payload.config_json.sections = sections;
+    payload.config_json.options  = options;
+  }
   if(!payload.name){ _rptNotify({title:'Missing field', message:'Name is required.', kind:'error'}); return; }
   try{
     if(tid){

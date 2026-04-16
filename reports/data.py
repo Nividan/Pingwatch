@@ -787,13 +787,33 @@ def build_report_context(kind: str,
     device_ids  = filters.get("device_ids") or None
     severity_min = (config.get("severity_min") or "all").lower()
 
-    availability = _availability_by_device(start_ts, end_ts, device_ids)
-    overall      = _overall_availability(availability)
-    flaps_raw    = _flaps_in_window(start_ts, end_ts)
+    # ── Custom-kind section gating ────────────────────────────────────
+    # For kind=custom, `config.sections` is a strict whitelist: only
+    # compute + include the blocks the user ticked. Other kinds keep
+    # their original, hard-wired behaviour.
+    sections  = set(config.get("sections") or [])
+    opts      = config.get("options") or {}
+    is_custom = (kind == "custom")
+    def want(name: str) -> bool:
+        return is_custom and (name in sections)
+
+    _AVAIL_SECS = {"overall_uptime", "availability_trend",
+                   "per_device_uptime", "top_worst_devices"}
+    _INC_SECS   = {"incident_summary", "incident_timeline",
+                   "top_noisy_sensors", "incident_log"}
+    need_avail = (not is_custom) or bool(sections & _AVAIL_SECS)
+    need_flaps = (not is_custom) or bool(sections & _INC_SECS)
+
+    top_worst_n  = int(opts.get("top_worst_n", 5))  if is_custom else 5
+    top_noisy_n  = int(opts.get("top_noisy_n", 5))  if is_custom else 5
+
+    availability = _availability_by_device(start_ts, end_ts, device_ids) if need_avail else []
+    overall      = _overall_availability(availability) if need_avail else {"up": 0, "total": 0, "pct": None}
+    flaps_raw    = _flaps_in_window(start_ts, end_ts) if need_flaps else []
     flaps        = _filter_flaps_by_severity(flaps_raw, severity_min)
     severity     = _severity_counts(flaps)
-    worst        = _top_worst_devices(availability, 5)
-    noisy        = _top_noisy_sensors(flaps, 5)
+    worst        = _top_worst_devices(availability, top_worst_n)
+    noisy        = _top_noisy_sensors(flaps, top_noisy_n)
     mtr          = _mttr_mtbf(flaps, window_s)
 
     # ── Company branding ─────────────────────────────────────────────
@@ -814,6 +834,7 @@ def build_report_context(kind: str,
         "generated_by": config.get("triggered_by", ""),
         "render_ms":    None,   # filled below
         "severity_min": severity_min,
+        "sections":     sorted(sections) if is_custom else [],
     }
 
     period_dict = {
@@ -839,26 +860,39 @@ def build_report_context(kind: str,
         },
     }
 
-    if kind == "technical" or "latency" in (config.get("sections") or []):
-        ctx["latency"] = _latency_percentiles(start_ts, end_ts)
-    if kind == "technical" or "traps" in (config.get("sections") or []):
-        ctx["top_traps"] = _top_traps(start_ts, end_ts, 10)
-    if kind == "technical" or kind == "inventory" or "tls" in (config.get("sections") or []):
-        ctx["tls_expiring"] = _tls_expiring(90)
+    if kind == "technical" or want("latency_percentiles"):
+        lat_limit = int(opts.get("latency_top_n", 100)) if is_custom else 100
+        ctx["latency"] = _latency_percentiles(start_ts, end_ts, limit=lat_limit)
+    if kind == "technical" or want("snmp_traps"):
+        trap_n = int(opts.get("top_traps_n", 10)) if is_custom else 10
+        ctx["top_traps"] = _top_traps(start_ts, end_ts, trap_n)
+    if kind == "technical" or kind == "inventory" or want("tls_expiring"):
+        tls_days = int(opts.get("tls_days_ahead", 90)) if is_custom else 90
+        ctx["tls_expiring"] = _tls_expiring(tls_days)
 
-    if kind == "inventory":
+    if kind == "inventory" or want("device_inventory"):
         ctx["inventory_devices"] = _inventory_devices()
+    if kind == "inventory" or want("backup_coverage"):
         ctx["backup_coverage"]   = _inventory_backup_coverage()
+    if kind == "inventory" or want("ipam"):
         ctx["ipam"]              = _inventory_ipam()
+    if kind == "inventory" or want("licenses"):
         ctx["licenses"]          = _inventory_licenses()
+    if kind == "inventory" or want("estate_overview"):
         ctx["users"]             = _inventory_users()
-        ctx["audit_recent"]      = _inventory_audit(50)
+    if kind == "inventory" or want("audit_log"):
+        audit_lim = int(opts.get("audit_limit", 50)) if is_custom else 50
+        ctx["audit_recent"]      = _inventory_audit(audit_lim)
 
-    ctx["maint_windows"] = _maint_windows(start_ts, end_ts)
+    if (not is_custom) or want("maint_windows") or want("incident_summary"):
+        ctx["maint_windows"] = _maint_windows(start_ts, end_ts)
+    else:
+        ctx["maint_windows"] = []
 
     # ── Compare-to-previous-period (Δ) ─────────────────────────────
     # Only compute for windowed report kinds where it actually means something.
-    if kind in ("executive", "technical") and config.get("compare", True):
+    _custom_wants_compare = is_custom and bool(sections & (_AVAIL_SECS | _INC_SECS))
+    if (kind in ("executive", "technical") or _custom_wants_compare) and config.get("compare", True):
         prev_end   = start_ts
         prev_start = start_ts - window_s
         try:
