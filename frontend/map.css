@@ -21,6 +21,12 @@
   --orange: #ff8c00;
   --panel: rgba(8,16,30,0.96);
   --panel-border: rgba(0,212,255,0.2);
+  /* Panel text tiers — used in dynamic innerHTML so CSS can't be a class */
+  --pt: rgba(226,232,240,0.9);       /* primary text   */
+  --pt-sub: rgba(255,255,255,0.5);   /* secondary text */
+  --pt-dim: rgba(255,255,255,0.4);   /* dim/hint text  */
+  --pt-dimmer: rgba(255,255,255,0.3);/* very dim text  */
+  --pt-accent: rgba(0,212,255,0.7);  /* accent-tinted  */
 }
 /* Light theme — muted blue palette over a near-white canvas.
    Status colors darken for AA contrast; grid fades to a cool gray. */
@@ -37,6 +43,12 @@
   --orange: #9a3412;
   --panel: rgba(255,255,255,0.96);
   --panel-border: rgba(9,105,218,0.25);
+  /* Panel text — readable on the white panel background */
+  --pt: #1f2328;
+  --pt-sub: rgba(31,35,40,0.65);
+  --pt-dim: rgba(31,35,40,0.5);
+  --pt-dimmer: rgba(31,35,40,0.4);
+  --pt-accent: rgba(9,105,218,0.75);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:var(--bg); font-family:'Exo 2',sans-serif; height:100vh; overflow:hidden; display:flex; flex-direction:column; }

@@ -630,7 +630,7 @@ function showPwNodePanel(did) {
       </div>
       <div class="field-group" style="margin-top:8px">
         <div class="field-label">POSITION</div>
-        <span style="color:rgba(255,255,255,0.4);font-size:10px;font-family:'Share Tech Mono',monospace">Drag to reposition</span>
+        <span style="color:var(--pt-dim);font-size:10px;font-family:'Share Tech Mono',monospace">Drag to reposition</span>
       </div>
     `;
     document.getElementById('panel-actions').innerHTML = '';
@@ -657,10 +657,10 @@ function showPwNodePanel(did) {
     const sc = s.alive === true ? '#00ff9d' : s.alive === false ? '#ff3333' : '#888';
     const ms = s.last_ms != null ? s.last_ms.toFixed(0) + 'ms' : '—';
     return `<tr>
-      <td style="padding:3px 6px;font-size:9px;color:rgba(255,255,255,0.7)">${escXml(s.name)}</td>
-      <td style="padding:3px 6px;font-size:9px;color:rgba(0,212,255,0.6)">${escXml(s.stype)}</td>
+      <td style="padding:3px 6px;font-size:9px;color:var(--pt)">${escXml(s.name)}</td>
+      <td style="padding:3px 6px;font-size:9px;color:var(--pt-accent)">${escXml(s.stype)}</td>
       <td style="padding:3px 6px;font-size:9px;color:${sc};font-weight:600">${s.alive === true ? 'UP' : s.alive === false ? 'DOWN' : '—'}</td>
-      <td style="padding:3px 6px;font-size:9px;color:rgba(255,255,255,0.4)">${ms}</td>
+      <td style="padding:3px 6px;font-size:9px;color:var(--pt-dim)">${ms}</td>
     </tr>`;
   }).join('');
   document.getElementById('panel-title').textContent = dev.name.toUpperCase();
@@ -677,26 +677,25 @@ function showPwNodePanel(did) {
     ${(dev.secondary_ips||[]).length ? `
     <div class="field-group">
       <div class="field-label">SECONDARY IPS</div>
-      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:var(--pt-accent);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
     </div>` : ''}
     <div class="field-group">
       <div class="field-label">GROUP</div>
-      <span style="color:rgba(255,255,255,0.5);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
+      <span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
     </div>
     <div class="field-group">
       <div class="field-label">DEVICE ICON</div>
-      <select style="background:#0d1a2e;color:#e2e8f0;border:1px solid rgba(0,212,255,0.3);border-radius:4px;padding:4px 6px;font-family:'Share Tech Mono',monospace;font-size:10px;width:100%;cursor:pointer"
-             onchange="setPwNodeType('${did}',this.value)">${_typeOpts}</select>
+      <select class="field-select" onchange="setPwNodeType('${did}',this.value)">${_typeOpts}</select>
     </div>
     ${sensors.length ? `
     <div class="dash-section" style="margin-top:10px">
       <div class="dash-section-title" style="margin-bottom:4px">SENSORS</div>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">NAME</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">TYPE</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">ST</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">MS</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">NAME</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">TYPE</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">ST</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">MS</th>
         </tr></thead>
         <tbody>${sRows}</tbody>
       </table>
@@ -709,7 +708,7 @@ function showPwNodePanel(did) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwOverrides[did]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwNodeColor('${did}')">Reset</button>`
-          : `<span style="color:rgba(255,255,255,0.3);font-size:10px;font-family:'Share Tech Mono',monospace">auto (status color)</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto (status color)</span>`}
       </div>
     </div>
   `;
@@ -2266,18 +2265,18 @@ function showNodePanel(node) {
   document.getElementById('panel-icon').textContent = '◉';
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group"><div class="field-label">TYPE</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(node.type)}</span></div>
-    <div class="field-group"><div class="field-label">POSITION</div><span style="color:rgba(255,255,255,0.5);font-family:Share Tech Mono,monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
+    <div class="field-group"><div class="field-label">POSITION</div><span style="color:var(--pt-sub);font-family:Share Tech Mono,monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
     ${p.ip ? `<div class="field-group"><div class="field-label">IP ADDRESS</div><span style="color:${escXml(p.ip_color||'var(--accent2)')};font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(p.ip)}</span></div>` : ''}
-    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'rgba(255,255,255,0.5)')};font-family:Share Tech Mono,monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
+    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'var(--pt-sub)')};font-family:Share Tech Mono,monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
     <div class="field-group"><div class="field-label">CONNECTED LINKS</div>
       ${links.filter(l=>l.source_id===node.id||l.target_id===node.id).map(l=>{
         const other = nodeMap[l.source_id===node.id ? l.target_id : l.source_id];
         const cfg = lcfg(l.link_type);
         return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
           <div style="width:16px;height:2px;background:${cfg.stroke};"></div>
-          <span style="font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(255,255,255,0.5);">${escXml(other?.name||'?')}</span>
+          <span style="font-family:Share Tech Mono,monospace;font-size:9px;color:var(--pt-sub);">${escXml(other?.name||'?')}</span>
         </div>`;
-      }).join('') || '<span style="color:rgba(255,255,255,0.25);font-family:Share Tech Mono,monospace;font-size:10px;">None</span>'}
+      }).join('') || '<span style="color:var(--pt-dim);font-family:Share Tech Mono,monospace;font-size:10px;">None</span>'}
     </div>
     <div class="field-group">
       <div class="field-label">NOTES</div>
@@ -2325,7 +2324,7 @@ function _tabMenu(e, pg) {
   document.getElementById('_tab_ctx_menu')?.remove();
   const menu = document.createElement('div');
   menu.id = '_tab_ctx_menu';
-  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:#1a2035;border:1px solid rgba(0,212,255,0.2);border-radius:6px;padding:4px 0;z-index:9999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,0.5);`;
+  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:var(--panel);border:1px solid var(--panel-border);border-radius:6px;padding:4px 0;z-index:9999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,0.5);`;
   const items = [
     { icon: '✏', label: 'Rename', action: () => renamePage(pg.id, pg.name), danger: false },
     ...(pages.length > 1 ? [{ icon: '🗑', label: 'Delete', action: () => deletePage(pg.id, pg.name), danger: true }] : []),
@@ -2353,10 +2352,10 @@ function _confirm(msg, onYes, yesLabel='Yes, Delete', danger=true) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   const btnColor = danger ? '#ff4444' : 'var(--accent,#00d4ff)';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:18px;">${msg}</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:18px;">${msg}</div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_cfm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_cfm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
       <button id="_cfm_yes" style="padding:7px 18px;border-radius:6px;border:none;background:${btnColor};color:#fff;cursor:pointer;font-weight:600;font-size:12px;">${yesLabel}</button>
     </div>
   </div>`;
@@ -3204,23 +3203,22 @@ function endLinkDraw(e) {
 function _pwLinkModal(src, tgt, onSave) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:16px;font-weight:600;letter-spacing:1px;">NEW LINK</div>
-    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:16px;font-weight:600;letter-spacing:1px;">NEW LINK</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
-      <select id="_pwlm_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_pwlm_type" class="field-select">
+        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
-      <input id="_pwlm_label" type="text" placeholder="e.g. VLAN10, WAN1…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_pwlm_label" type="text" placeholder="e.g. VLAN10, WAN1…" class="field-input"/>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_pwlm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
-      <button id="_pwlm_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINK</button>
+      <button id="_pwlm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_pwlm_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINK</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -3284,33 +3282,30 @@ function openBulkLinkModal() {
 
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
-      <input id="_blm_search" type="text" placeholder="Search devices…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;margin-bottom:4px;"/>
-      <select id="_blm_target" size="6"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px;font-size:11px;border-radius:4px;">
-        ${targets.map(t => `<option value="${t.did}" style="background:#0d1a2e;color:#e2e8f0;padding:2px 4px;">${escXml(t.name)}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
+      <input id="_blm_search" type="text" placeholder="Search devices…" class="field-input" style="margin-bottom:4px;"/>
+      <select id="_blm_target" size="6" class="field-select">
+        ${targets.map(t => `<option value="${t.did}">${escXml(t.name)}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
-      <select id="_blm_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm_type" class="field-select">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
-      <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…" class="field-input"/>
     </div>
-    <div id="_blm_status" style="font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
+    <div id="_blm_status" style="font-size:10px;color:var(--pt-dimmer);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
-      <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
+      <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -3371,23 +3366,22 @@ function bulkLinkSelectedTo(tgtDid) {
   const tgtName = _pwDevName(tgtDid);
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
-      <select id="_blm2_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm2_type" class="field-select">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
-      <input id="_blm2_label" type="text" placeholder="e.g. IPMI, Mgmt…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm2_label" type="text" placeholder="e.g. IPMI, Mgmt…" class="field-input"/>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_blm2_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
-      <button id="_blm2_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD ${selectedDids.length} LINKS</button>
+      <button id="_blm2_no" style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm2_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD ${selectedDids.length} LINKS</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -3670,7 +3664,7 @@ function showGroupPanel(g) {
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
     <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'Share Tech Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
-    <div class="field-group"><div class="field-label">SIZE</div><span style="color:rgba(255,255,255,0.5);font-family:'Share Tech Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
+    <div class="field-group"><div class="field-label">SIZE</div><span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
     ${isPwGroup ? `
     <div class="field-group" style="margin-top:12px">
       <div class="field-label">COLOR OVERRIDE</div>
@@ -3680,7 +3674,7 @@ function showGroupPanel(g) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwGroupOverrides[g.name]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGname}')">Reset</button>`
-          : `<span style="color:rgba(255,255,255,0.3);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
       </div>
     </div>` : ''}
   `;
@@ -3771,22 +3765,21 @@ function showPwLinkPanel(lkId) {
     <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.src_did))}</span></div>
     <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
     <div class="field-group"><div class="field-label">TYPE</div>
-      <select onchange="setPwLinkType('${lkId}',this.value)" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
+      <select onchange="setPwLinkType('${lkId}',this.value)" class="field-select">
+        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
     <div class="field-group"><div class="field-label">LABEL</div>
       <input type="text" value="${escXml(lk.label||'')}" placeholder="optional label"
-        onchange="setPwLinkLabel('${lkId}',this.value)"
-        style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;box-sizing:border-box;"/>
+        onchange="setPwLinkLabel('${lkId}',this.value)" class="field-input"/>
     </div>
     <div class="field-group"><div class="field-label">IN TRAFFIC</div>
-      <select id="pw-lk-si" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;">
+      <select id="pw-lk-si" class="field-select">
         ${_pwSensorOpts(lk, 'sensor_in')}
       </select>
     </div>
     <div class="field-group"><div class="field-label">OUT TRAFFIC</div>
-      <select id="pw-lk-so" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;">
+      <select id="pw-lk-so" class="field-select">
         ${_pwSensorOpts(lk, 'sensor_out')}
       </select>
     </div>
@@ -4129,7 +4122,7 @@ function showMultiPanel() {
       </div>`;
     }).join('');
     const moreRow = selDevs.length > 12
-      ? `<div style="font-size:9px;color:rgba(255,255,255,0.3);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
+      ? `<div style="font-size:9px;color:var(--pt-dimmer);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
       : '';
 
     const _typeOpts = [
@@ -4158,8 +4151,7 @@ function showMultiPanel() {
         <div class="panel-section-title">BULK SETTINGS</div>
         <div class="field-group">
           <div class="field-label">DEVICE ICON</div>
-          <select id="multi-icon-sel"
-            style="background:#0d1a2e;color:#e2e8f0;border:1px solid rgba(0,212,255,0.3);border-radius:4px;padding:4px 6px;font-family:'Share Tech Mono',monospace;font-size:10px;width:100%;cursor:pointer"
+          <select id="multi-icon-sel" class="field-select"
             onchange="setBulkPwNodeType(this.value)">${_typeOpts}</select>
         </div>
         <div class="field-group" style="margin-top:8px">
