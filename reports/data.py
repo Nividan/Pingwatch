@@ -475,7 +475,13 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
 # ── SNMP traps ─────────────────────────────────────────────────────────
 
 def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
-    """Top N SNMP trap types (by count) in the window. ts is ISO-8601 text."""
+    """Top N SNMP trap types (by count) in the window. ts is ISO-8601 text.
+
+    Groups on (trap_name, trap_oid). When trap_name is empty we fall back to the
+    OID; when both are empty the row is labelled 'Unidentified trap'. Empty
+    vendor renders as '—' rather than a blank cell. This keeps the report
+    presentable even when enrichment hasn't run yet.
+    """
     start_iso = _epoch_to_iso(start_ts)
     end_iso   = _epoch_to_iso(end_ts)
     rows = []
@@ -485,35 +491,42 @@ def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
             with pg_cursor("logs") as cur:
                 cur.execute(
                     "SELECT COALESCE(trap_name,'') AS name, "
+                    "COALESCE(trap_oid,'') AS oid, "
                     "COALESCE(vendor,'') AS vendor, COALESCE(severity,'') AS severity, "
                     "COUNT(*) AS c "
                     "FROM snmp_traps WHERE ts >= %s AND ts < %s "
-                    "GROUP BY name, vendor, severity "
+                    "GROUP BY name, oid, vendor, severity "
                     "ORDER BY c DESC LIMIT %s",
                     (start_iso, end_iso, n)
                 )
-                for r in cur.fetchall():
-                    rows.append({"name": r["name"] or "(unknown)",
-                                 "vendor": r["vendor"], "severity": r["severity"],
-                                 "count": int(r["c"])})
+                raw = [(r["name"], r["oid"], r["vendor"], r["severity"], int(r["c"]))
+                       for r in cur.fetchall()]
         else:
             con = None
             try:
                 con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
                 cur = con.execute(
-                    "SELECT COALESCE(trap_name,''), COALESCE(vendor,''), "
-                    "COALESCE(severity,''), COUNT(*) "
+                    "SELECT COALESCE(trap_name,''), COALESCE(trap_oid,''), "
+                    "COALESCE(vendor,''), COALESCE(severity,''), COUNT(*) "
                     "FROM snmp_traps WHERE ts>=? AND ts<? "
-                    "GROUP BY trap_name, vendor, severity "
-                    "ORDER BY 4 DESC LIMIT ?",
+                    "GROUP BY trap_name, trap_oid, vendor, severity "
+                    "ORDER BY 5 DESC LIMIT ?",
                     (start_iso, end_iso, n)
                 )
-                for r in cur.fetchall():
-                    rows.append({"name": r[0] or "(unknown)",
-                                 "vendor": r[1], "severity": r[2],
-                                 "count": int(r[3])})
+                raw = [(r[0], r[1], r[2], r[3], int(r[4])) for r in cur.fetchall()]
             finally:
                 if con: con.close()
+
+        for name, oid, vendor, severity, count in raw:
+            nm = (name or "").strip()
+            od = (oid or "").strip()
+            label = nm or od or "Unidentified trap"
+            rows.append({
+                "name":     label,
+                "vendor":   (vendor or "").strip() or "—",
+                "severity": (severity or "").strip() or "info",
+                "count":    count,
+            })
     except Exception as e:
         log.error(f"reports.data top_traps error: {e}")
     return rows
@@ -641,25 +654,28 @@ def _inventory_backup_coverage() -> dict:
         for dev in STATE.devices.values():
             name_by_did[dev.device_id] = dev.name
 
-    def _name(did):
-        return name_by_did.get(did) or did or ""
-
     now = time.time()
     stale_cutoff = now - 7 * 86400
     recent, stale_list, never_list = [], [], []
     for b in bl:
         did = b.get("did")
+        # Skip records for devices that no longer exist — they can't be acted
+        # on and showing raw IDs in a report looks unprofessional.
+        if did not in name_by_did:
+            continue
+        dname = name_by_did[did]
         ts = _parse_ts(b.get("last_ts"))   # backup_runs.ts is ISO-8601 TEXT
         if not ts:
-            never_list.append({"did": did, "dname": _name(did)})
+            never_list.append({"did": did, "dname": dname})
         elif ts < stale_cutoff:
-            stale_list.append({"did": did, "dname": _name(did),
+            stale_list.append({"did": did, "dname": dname,
                                "last_ts": ts,
                                "days": round((now - ts) / 86400, 1)})
         else:
             recent.append(b)
+    total = len(recent) + len(stale_list) + len(never_list)
     return {
-        "total":      len(bl),
+        "total":      total,
         "recent":     len(recent),
         "stale":      len(stale_list),
         "never":      len(never_list),
@@ -681,9 +697,15 @@ def _inventory_ipam() -> list:
             net = ipaddress.ip_network(s["cidr"], strict=False)
             total = max(1, net.num_addresses - (2 if net.prefixlen < 31 else 0))
             alloc = db_get_allocations(s["id"]) or {}
-            # db_get_allocations returns dict of ip -> info, filter to used
-            used = sum(1 for v in (alloc.values() if isinstance(alloc, dict) else alloc)
-                       if isinstance(v, dict) and v.get("status") == "used")
+            # Any row in ip_allocations for this subnet is a tracked/used IP —
+            # rows are only created when a device binds the IP or the user
+            # labels it. There is no separate 'status' column.
+            if isinstance(alloc, dict):
+                used = sum(1 for v in alloc.values()
+                           if isinstance(v, dict)
+                           and (v.get("name") or v.get("device_id") or v.get("dns_name")))
+            else:
+                used = 0
         except Exception:
             total, used = 0, 0
         out.append({
@@ -818,7 +840,7 @@ def build_report_context(kind: str,
 
     # ── Company branding ─────────────────────────────────────────────
     company = {
-        "name":   _cfg("company_name", "") or _cfg("report_company_name", "") or "PingWatch",
+        "name":   _cfg("org_name", "") or _cfg("company_name", "") or _cfg("report_company_name", "") or "PingWatch",
         "logo":   _cfg("email_logo_data", "") or _cfg("report_logo_data", ""),
         "color":  _cfg("report_brand_color", "") or _cfg("theme_accent", "") or "#0969da",
         "footer": _cfg("report_footer_text", ""),
