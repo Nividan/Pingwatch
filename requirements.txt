@@ -24,6 +24,8 @@ psycopg2-binary>=2.9.9
 # Linux (Debian/Ubuntu):
 #   sudo apt-get install python3-tk python3-dev iputils-ping snmp
 #   sudo apt-get install python3-xlib   # optional: pystray system tray on Linux
+#   sudo apt-get install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+#                        libgdk-pixbuf-2.0-0 libffi-dev   # required by weasyprint (Reports)
 #
 #   On Debian/Ubuntu 12+ (PEP 668 "externally managed"), pip refuses to install
 #   packages system-wide. Use one of:
