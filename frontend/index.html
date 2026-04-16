@@ -113,19 +113,19 @@
     <div class="tb-badges" id="tbBadges">
       <div class="tb-badge tb-badge-crit" id="badgeCrit" style="display:none"
            onclick="_openBadgeCrit()" title="Active critical/down events">
-        <span id="badgeCritCnt">0</span>
+        <span class="tb-badge-ico" aria-hidden="true">⛔</span><span id="badgeCritCnt">0</span>
       </div>
       <div class="tb-badge tb-badge-warn" id="badgeWarn" style="display:none"
            onclick="_openBadgeWarn()" title="Active warning events">
-        <span id="badgeWarnCnt">0</span>
+        <span class="tb-badge-ico" aria-hidden="true">⚠</span><span id="badgeWarnCnt">0</span>
       </div>
       <div class="tb-badge tb-badge-ack" id="badgeAck" style="display:none"
            onclick="_openBadgeAck()" title="Acknowledged events">
-        <span id="badgeAckCnt">0</span>
+        <span class="tb-badge-ico" aria-hidden="true">✓</span><span id="badgeAckCnt">0</span>
       </div>
       <div class="tb-badge tb-badge-muted" id="badgeMuted" style="display:none"
            onclick="_openBadgeMuted()" title="Muted or stopped sensors">
-        <span id="badgeMutedCnt">0</span>
+        <span class="tb-badge-ico" aria-hidden="true">🔕</span><span id="badgeMutedCnt">0</span>
       </div>
     </div>
     <div class="tb-log-badge" id="logBadge" style="display:none"

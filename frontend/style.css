@@ -147,12 +147,13 @@ body{
 .tb-db-dot{width:5px;height:5px;border-radius:50%;background:var(--up);box-shadow:0 0 6px var(--up)}
 .tb-badges{display:flex;align-items:center;gap:4px}
 .tb-badge{
-  display:flex;align-items:center;justify-content:center;
+  display:flex;align-items:center;justify-content:center;gap:4px;
   min-width:22px;height:22px;
   font-size:10px;font-weight:700;color:#fff;
-  padding:0 6px;border-radius:12px;
+  padding:0 7px;border-radius:12px;
   cursor:pointer;white-space:nowrap;transition:opacity .15s;
 }
+.tb-badge-ico{font-size:11px;line-height:1;display:inline-block;filter:saturate(0) brightness(2.4);}
 .tb-badge:hover{opacity:.8}
 .tb-badge-crit{background:var(--down)}
 .tb-badge-warn{background:var(--warn)}
