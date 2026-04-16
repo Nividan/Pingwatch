@@ -41,8 +41,82 @@ def _get_env():
     env.filters["statuspct"]  = _filter_statuspct
     env.filters["severity_class"] = _filter_severity
     env.filters["deltafmt"]   = _filter_deltafmt
+    env.filters["trapname"]   = _filter_trapname
     _env = env
     return env
+
+
+# Vendor prefixes commonly used in MIB trap symbols — split off and upper-cased
+# in the pretty label. Order matters (longest-first).
+_TRAP_VENDOR_PREFIXES = [
+    "cisco", "jnx", "fortinet", "fg", "fn", "apc", "hp", "juni", "dell", "ibm",
+]
+
+# Acronyms that should be ALL-CAPS in human-readable form. Anything not listed
+# here stays Title-Cased (CamelCase split → words).
+_TRAP_ACRONYMS = {
+    "cpu": "CPU", "vpn": "VPN", "ssl": "SSL", "tls": "TLS", "dns": "DNS",
+    "ip": "IP",   "tcp": "TCP", "udp": "UDP", "http": "HTTP", "https": "HTTPS",
+    "ssh": "SSH", "bgp": "BGP", "ospf": "OSPF", "mpls": "MPLS", "vlan": "VLAN",
+    "lan": "LAN", "wan": "WAN", "ha": "HA",  "qos": "QoS", "ups": "UPS",
+    "nat": "NAT", "ids": "IDS", "ips": "IPS", "ntp": "NTP", "snmp": "SNMP",
+    "faz": "FAZ", "fmg": "FMG", "fgt": "FGT", "api": "API", "psu": "PSU",
+    "url": "URL", "mac": "MAC", "id":  "ID",
+}
+
+
+def _filter_trapname(raw):
+    """Humanise a MIB trap symbol for display.
+
+    Examples:
+      fgTrapPerCpuHigh      → FG · Per CPU High
+      fgTrapSslVpnLogin     → FG · SSL VPN Login
+      fnTrapPowerSupply     → FN · Power Supply
+      fgTrapVpnTunUp        → FG · VPN Tun Up
+      coldStart             → Cold Start
+      1.3.6.1.2.1.47.2.0.1  → 1.3.6.1.2.1.47.2.0.1  (unchanged — looks like OID)
+
+    Non-destructive: the DB still stores the canonical MIB name. We only reshape
+    for presentation so reports read naturally.
+    """
+    import re as _re
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    # Looks like an OID (dots and digits) — leave it alone
+    if _re.fullmatch(r"[0-9.]+", s):
+        return s
+
+    vendor_tag = ""
+    body = s
+
+    # Peel off a lowercase vendor prefix like "fg", "fn", "cisco"
+    low = body.lower()
+    for pfx in _TRAP_VENDOR_PREFIXES:
+        if low.startswith(pfx) and len(body) > len(pfx) and body[len(pfx)].isupper():
+            vendor_tag = pfx.upper()
+            body = body[len(pfx):]
+            break
+
+    # Drop the redundant "Trap" segment right after the vendor prefix
+    if body.startswith("Trap") and len(body) > 4 and body[4].isupper():
+        body = body[4:]
+
+    # Split CamelCase / acronym runs:  "PerCpuHigh" → "Per Cpu High"
+    parts = _re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+", body)
+    if not parts:
+        parts = [body]
+
+    # Apply acronym casing; otherwise Title-case the fragment
+    nice = []
+    for p in parts:
+        lp = p.lower()
+        nice.append(_TRAP_ACRONYMS.get(lp, p[:1].upper() + p[1:].lower()))
+
+    pretty = " ".join(nice).strip()
+    if vendor_tag and pretty:
+        return f"{vendor_tag} · {pretty}"
+    return pretty or s
 
 
 # ── Filters ───────────────────────────────────────────────────────────
