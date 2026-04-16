@@ -162,14 +162,20 @@ def _attach_charts(ctx: dict) -> dict:
         ctx["incidents"]["flaps"],
         ctx["period"]["start_ts"], ctx["period"]["end_ts"]
     )
+    worst_rows = ctx["incidents"]["worst_5"]
+    noisy_rows = ctx["incidents"]["noisy_5"]
     c["top_worst_bar"]      = charts.top_bar(
-        [{"name": r["dname"], "fails": r["fail"]} for r in ctx["incidents"]["worst_5"]],
-        "fails", "name", title="Worst 5 devices (failures)", color="#cf222e"
+        [{"name": r["dname"], "fails": r["fail"]} for r in worst_rows],
+        "fails", "name",
+        title=f"Worst {len(worst_rows)} device{'s' if len(worst_rows) != 1 else ''} (failures)",
+        color="#cf222e"
     )
     c["top_noisy_bar"]      = charts.top_bar(
         [{"name": f"{r['dname']}·{r['sname']}", "count": r["count"]}
-         for r in ctx["incidents"]["noisy_5"]],
-        "count", "name", title="Top 5 noisiest sensors (incidents)", color="#9a6700"
+         for r in noisy_rows],
+        "count", "name",
+        title=f"Top {len(noisy_rows)} noisiest sensor{'s' if len(noisy_rows) != 1 else ''} (incidents)",
+        color="#9a6700"
     )
     if "latency" in ctx:
         c["latency_bar"] = charts.latency_percentile_bar(ctx["latency"], 10)
@@ -179,22 +185,27 @@ def _attach_charts(ctx: dict) -> dict:
 
 # ── Public ────────────────────────────────────────────────────────────
 
-def _read_css() -> str:
-    """Return the report stylesheet contents (cached)."""
+def _read_css(company_name: str = "") -> str:
+    """Return the report stylesheet contents with per-render substitutions applied.
+
+    The CSS uses __COMPANY_NAME__ as a placeholder in the @page footer string so
+    the footer reads '<Org> Report' rather than a hard-coded product name.
+    """
     global _CSS_CACHE
     try:
-        if _CSS_CACHE is not None:
-            return _CSS_CACHE
+        cached = _CSS_CACHE
     except NameError:
-        pass
-    path = os.path.join(_TEMPLATES_DIR, "report.css")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            css = f.read()
-    except Exception:
-        css = ""
-    globals()["_CSS_CACHE"] = css
-    return css
+        cached = None
+    if cached is None:
+        path = os.path.join(_TEMPLATES_DIR, "report.css")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cached = f.read()
+        except Exception:
+            cached = ""
+        globals()["_CSS_CACHE"] = cached
+    name = (company_name or "PingWatch").strip() or "PingWatch"
+    return cached.replace("__COMPANY_NAME__", name)
 
 
 def render_html(kind: str, context: dict, embed_charts: bool = True,
@@ -221,7 +232,7 @@ def render_html(kind: str, context: dict, embed_charts: bool = True,
     html = template.render(**ctx)
 
     if inline_css:
-        css = _read_css()
+        css = _read_css((ctx.get("company") or {}).get("name", ""))
         # Constrain the cover page for browser preview — @page rules only fire in print.
         preview_css = (
             "\n/* preview-only overrides */\n"
@@ -267,8 +278,9 @@ def render_pdf(kind: str, context: dict, pdfa_mode: str = "") -> bytes:
 
     t0 = time.time()
     html_str = render_html(kind, context, embed_charts=True, inline_css=False)
-    css_path = os.path.join(_TEMPLATES_DIR, "report.css")
-    stylesheets = [CSS(filename=css_path)] if os.path.isfile(css_path) else None
+    company_name = (context.get("company") or {}).get("name", "")
+    css_str = _read_css(company_name)
+    stylesheets = [CSS(string=css_str)] if css_str else None
 
     doc = HTML(string=html_str, base_url=_TEMPLATES_DIR)
 

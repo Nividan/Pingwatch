@@ -10,9 +10,9 @@
       <table class="kv">
         <tr><th>Devices</th><td>{{ inventory.devices }}</td></tr>
         <tr><th>Sensors</th><td>{{ inventory.sensors }}</td></tr>
-        <tr><th>Devices up</th><td class="up">{{ inventory.dev_up }}</td></tr>
-        <tr><th>Devices warn</th><td class="warn">{{ inventory.dev_warn }}</td></tr>
-        <tr><th>Devices down</th><td class="crit">{{ inventory.dev_down }}</td></tr>
+        <tr><th>Devices up</th><td class="{% if inventory.dev_up %}up{% endif %}">{{ inventory.dev_up }}</td></tr>
+        <tr><th>Devices warn</th><td class="{% if inventory.dev_warn %}warn{% endif %}">{{ inventory.dev_warn }}</td></tr>
+        <tr><th>Devices down</th><td class="{% if inventory.dev_down %}crit{% endif %}">{{ inventory.dev_down }}</td></tr>
       </table>
     </div>
     <div class="col">

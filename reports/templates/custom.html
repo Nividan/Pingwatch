@@ -308,7 +308,7 @@
         <tr>
           <td>{{ t.name }}</td>
           <td>{{ t.vendor }}</td>
-          <td>{{ t.severity }}</td>
+          <td class="sev-{{ t.severity | lower }}">{{ t.severity }}</td>
           <td>{{ t.count }}</td>
         </tr>
         {% endfor %}
@@ -356,24 +356,42 @@
       <div class="col">
         <table class="kv">
           <tr><th>Tracked licenses</th><td>{{ licenses.total }}</td></tr>
-          <tr><th>OK</th><td class="up">{{ licenses.ok }}</td></tr>
-          <tr><th>Warning</th><td class="warn">{{ licenses.warn }}</td></tr>
-          <tr><th>Critical</th><td class="crit">{{ licenses.crit }}</td></tr>
-          <tr><th>Expired</th><td class="crit">{{ licenses.expired }}</td></tr>
+          <tr><th>OK</th><td class="{% if licenses.ok %}up{% endif %}">{{ licenses.ok }}</td></tr>
+          <tr><th>Warning</th><td class="{% if licenses.warn %}warn{% endif %}">{{ licenses.warn }}</td></tr>
+          <tr><th>Critical</th><td class="{% if licenses.crit %}crit{% endif %}">{{ licenses.crit }}</td></tr>
+          <tr><th>Expired</th><td class="{% if licenses.expired %}crit{% endif %}">{{ licenses.expired }}</td></tr>
         </table>
       </div>
     </div>
-    {% if licenses.expiring_list %}
-      <h2 style="margin-top:14pt">Expiring within 90 days</h2>
+    {% set already_expired = licenses.expiring_list | selectattr('days', 'le', 0) | list %}
+    {% set upcoming = licenses.expiring_list | rejectattr('days', 'le', 0) | list %}
+    {% if already_expired %}
+      <h2 style="margin-top:14pt">Already expired</h2>
       <table class="data compact">
-        <thead><tr><th>Device</th><th>License</th><th>Expires</th><th>Days left</th></tr></thead>
+        <thead><tr><th>Device</th><th>License</th><th>Expired on</th><th>Expired</th></tr></thead>
         <tbody>
-          {% for l in licenses.expiring_list %}
+          {% for l in already_expired %}
           <tr>
             <td>{{ l.dname }}</td>
             <td>{{ l.name }}</td>
             <td class="mono">{{ l.expires }}</td>
-            <td class="{% if l.days <= 0 %}crit{% elif l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>
+            <td class="crit">{{ (-l.days) }} day{{ 's' if (-l.days) != 1 else '' }} ago</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+    {% if upcoming %}
+      <h2 style="margin-top:14pt">Expiring within 90 days</h2>
+      <table class="data compact">
+        <thead><tr><th>Device</th><th>License</th><th>Expires</th><th>Days left</th></tr></thead>
+        <tbody>
+          {% for l in upcoming %}
+          <tr>
+            <td>{{ l.dname }}</td>
+            <td>{{ l.name }}</td>
+            <td class="mono">{{ l.expires }}</td>
+            <td class="{% if l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -394,9 +412,9 @@
       <div class="col">
         <table class="kv">
           <tr><th>Devices configured for backup</th><td>{{ backup_coverage.total }}</td></tr>
-          <tr><th>Recent (&lt;7 days)</th><td class="up">{{ backup_coverage.recent }}</td></tr>
-          <tr><th>Stale (&gt;7 days)</th><td class="warn">{{ backup_coverage.stale }}</td></tr>
-          <tr><th>Never backed up</th><td class="crit">{{ backup_coverage.never }}</td></tr>
+          <tr><th>Recent (&lt;7 days)</th><td class="{% if backup_coverage.recent %}up{% endif %}">{{ backup_coverage.recent }}</td></tr>
+          <tr><th>Stale (&gt;7 days)</th><td class="{% if backup_coverage.stale %}warn{% endif %}">{{ backup_coverage.stale }}</td></tr>
+          <tr><th>Never backed up</th><td class="{% if backup_coverage.never %}crit{% endif %}">{{ backup_coverage.never }}</td></tr>
         </table>
       </div>
       <div class="col">
@@ -478,9 +496,9 @@
       <table class="kv">
         <tr><th>Devices</th><td>{{ inventory.devices }}</td></tr>
         <tr><th>Sensors</th><td>{{ inventory.sensors }}</td></tr>
-        <tr><th>Devices up</th><td class="up">{{ inventory.dev_up }}</td></tr>
-        <tr><th>Devices warn</th><td class="warn">{{ inventory.dev_warn }}</td></tr>
-        <tr><th>Devices down</th><td class="crit">{{ inventory.dev_down }}</td></tr>
+        <tr><th>Devices up</th><td class="{% if inventory.dev_up %}up{% endif %}">{{ inventory.dev_up }}</td></tr>
+        <tr><th>Devices warn</th><td class="{% if inventory.dev_warn %}warn{% endif %}">{{ inventory.dev_warn }}</td></tr>
+        <tr><th>Devices down</th><td class="{% if inventory.dev_down %}crit{% endif %}">{{ inventory.dev_down }}</td></tr>
       </table>
     </div>
     {% if users %}
