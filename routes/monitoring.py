@@ -263,6 +263,92 @@ def handle(h, method, path, body):
         h._json(200, {"interfaces": _ifaces})
         return True
 
+    # ── /api/snmp/reenrich POST (admin) ───────────────────────────
+    # Walks historical snmp_traps rows with empty trap_name and looks them up
+    # in trap_definitions (populated from MIBs at startup). Useful after adding
+    # new MIB files — existing rows aren't re-enriched at receive time.
+    if path == "/api/snmp/reenrich" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from db.trap_defs import db_lookup_trap
+        from db import db_log_audit
+        scanned = 0
+        updated = 0
+        try:
+            if is_pg():
+                from db.pg_pool import pg_cursor, pg_conn
+                with pg_cursor("logs") as cur:
+                    cur.execute(
+                        "SELECT id, trap_oid FROM snmp_traps "
+                        "WHERE (trap_name IS NULL OR trap_name='') "
+                        "AND trap_oid IS NOT NULL AND trap_oid <> ''"
+                    )
+                    rows = [(r["id"], r["trap_oid"]) for r in cur.fetchall()]
+                scanned = len(rows)
+                if rows:
+                    with pg_conn("logs") as con:
+                        cur = con.cursor()
+                        for rid, oid in rows:
+                            defn = db_lookup_trap(oid)
+                            if not defn or not defn.get("trap_name"):
+                                continue
+                            cur.execute(
+                                "UPDATE snmp_traps SET trap_name=%s, vendor=%s, "
+                                "severity=%s, category=%s, probable_cause=%s, "
+                                "recommended_action=%s WHERE id=%s",
+                                (
+                                    defn.get("trap_name", ""),
+                                    defn.get("vendor", "") or "Unknown",
+                                    defn.get("severity", "info") or "info",
+                                    defn.get("category", ""),
+                                    (defn.get("probable_cause", "") or "")[:500],
+                                    (defn.get("recommended_action", "") or "")[:500],
+                                    rid,
+                                )
+                            )
+                            updated += 1
+            else:
+                con = None
+                try:
+                    con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
+                    rows = con.execute(
+                        "SELECT id, trap_oid FROM snmp_traps "
+                        "WHERE (trap_name IS NULL OR trap_name='') "
+                        "AND trap_oid IS NOT NULL AND trap_oid <> ''"
+                    ).fetchall()
+                    scanned = len(rows)
+                    for rid, oid in rows:
+                        defn = db_lookup_trap(oid)
+                        if not defn or not defn.get("trap_name"):
+                            continue
+                        con.execute(
+                            "UPDATE snmp_traps SET trap_name=?, vendor=?, "
+                            "severity=?, category=?, probable_cause=?, "
+                            "recommended_action=? WHERE id=?",
+                            (
+                                defn.get("trap_name", ""),
+                                defn.get("vendor", "") or "Unknown",
+                                defn.get("severity", "info") or "info",
+                                defn.get("category", ""),
+                                (defn.get("probable_cause", "") or "")[:500],
+                                (defn.get("recommended_action", "") or "")[:500],
+                                rid,
+                            )
+                        )
+                        updated += 1
+                    con.commit()
+                finally:
+                    if con: con.close()
+        except Exception as e:
+            log.error(f"snmp reenrich error: {e}")
+            h._json(500, {"error": "re-enrichment failed — see server log"})
+            return True
+        db_log_audit(user, h.client_address[0], "snmp_reenrich", "",
+                     f"scanned={scanned} updated={updated}")
+        log.info(f"SNMP re-enrichment: scanned={scanned}, updated={updated} (by {user})")
+        h._json(200, {"scanned": scanned, "updated": updated})
+        return True
+
     # ── /api/flaps/<id>/ack POST ──────────────────────────────────
     if method == "POST" and path.startswith("/api/flaps/") and path.endswith("/ack"):
         user, _ = h._require("operator")
