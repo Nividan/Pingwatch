@@ -153,8 +153,44 @@ def _overall_availability(rows: list) -> dict:
 
 # ── Incidents (flaps) ──────────────────────────────────────────────────
 
+def _epoch_to_iso(ts: float) -> str:
+    """Convert a Unix epoch to 'YYYY-MM-DDTHH:MM:SSZ' — matches flap_log.ts format."""
+    return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_ts(v):
+    """Parse whatever flap_log.ts contains → Unix epoch float (or None)."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        s = str(v).strip()
+        if not s:
+            return None
+        # Numeric-string timestamp?
+        try:
+            return float(s)
+        except ValueError:
+            pass
+        # ISO 8601 with Z suffix
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.datetime.fromisoformat(s).timestamp()
+    except Exception:
+        return None
+
+
 def _flaps_in_window(start_ts: float, end_ts: float) -> list:
-    """Return all flap events (incidents) in the window, oldest first."""
+    """Return all flap events (incidents) in the window, oldest first.
+
+    flap_log.ts is stored as an ISO-8601 string ("YYYY-MM-DDTHH:MM:SSZ").
+    We compare as text (ISO-8601 sorts correctly) then convert to epoch for
+    downstream charts/filters.
+    """
+    start_iso = _epoch_to_iso(start_ts)
+    end_iso   = _epoch_to_iso(end_ts)
+
     rows = []
     if is_pg():
         from db.pg_pool import pg_cursor
@@ -164,12 +200,10 @@ def _flaps_in_window(start_ts: float, end_ts: float) -> list:
                     "SELECT ts,did,sid,dname,sname,host,stype,direction,detail,"
                     "COALESCE(duration,0) AS duration,"
                     "COALESCE(resolved_at,0) AS resolved_at "
-                    "FROM flap_log "
-                    "WHERE CAST(ts AS DOUBLE PRECISION) >= %s "
-                    "AND   CAST(ts AS DOUBLE PRECISION) <  %s "
+                    "FROM flap_log WHERE ts >= %s AND ts < %s "
                     "AND direction NOT IN ('recovered','threshold_ok') "
-                    "ORDER BY CAST(ts AS DOUBLE PRECISION) ASC",
-                    (start_ts, end_ts)
+                    "ORDER BY ts ASC",
+                    (start_iso, end_iso)
                 )
                 rows = [dict(r) for r in cur.fetchall()]
         except Exception as e:
@@ -184,7 +218,7 @@ def _flaps_in_window(start_ts: float, end_ts: float) -> list:
                 "FROM flap_log WHERE ts>=? AND ts<? "
                 "AND direction NOT IN ('recovered','threshold_ok') "
                 "ORDER BY ts ASC",
-                (start_ts, end_ts)
+                (start_iso, end_iso)
             )
             for r in cur.fetchall():
                 rows.append({
@@ -197,6 +231,10 @@ def _flaps_in_window(start_ts: float, end_ts: float) -> list:
             log.error(f"reports.data flaps SQLite error: {e}")
         finally:
             if con: con.close()
+
+    # Normalize ts back to epoch floats for downstream code (charts expect floats)
+    for r in rows:
+        r["ts"] = _parse_ts(r.get("ts")) or 0.0
     return rows
 
 
@@ -327,7 +365,9 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
 # ── SNMP traps ─────────────────────────────────────────────────────────
 
 def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
-    """Top N SNMP trap types (by count) in the window."""
+    """Top N SNMP trap types (by count) in the window. ts is ISO-8601 text."""
+    start_iso = _epoch_to_iso(start_ts)
+    end_iso   = _epoch_to_iso(end_ts)
     rows = []
     try:
         if is_pg():
@@ -337,12 +377,10 @@ def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
                     "SELECT COALESCE(trap_name,'') AS name, "
                     "COALESCE(vendor,'') AS vendor, COALESCE(severity,'') AS severity, "
                     "COUNT(*) AS c "
-                    "FROM snmp_traps "
-                    "WHERE CAST(ts AS DOUBLE PRECISION) >= %s "
-                    "AND   CAST(ts AS DOUBLE PRECISION) <  %s "
+                    "FROM snmp_traps WHERE ts >= %s AND ts < %s "
                     "GROUP BY name, vendor, severity "
                     "ORDER BY c DESC LIMIT %s",
-                    (start_ts, end_ts, n)
+                    (start_iso, end_iso, n)
                 )
                 for r in cur.fetchall():
                     rows.append({"name": r["name"] or "(unknown)",
@@ -358,7 +396,7 @@ def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
                     "FROM snmp_traps WHERE ts>=? AND ts<? "
                     "GROUP BY trap_name, vendor, severity "
                     "ORDER BY 4 DESC LIMIT ?",
-                    (start_ts, end_ts, n)
+                    (start_iso, end_iso, n)
                 )
                 for r in cur.fetchall():
                     rows.append({"name": r[0] or "(unknown)",
