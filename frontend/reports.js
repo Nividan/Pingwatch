@@ -325,9 +325,9 @@ function _rptEditTemplate(tid, presetKind){
     _overlayClose(o, ()=>closeM('rptTplModal'));
     const _maxW = (t.kind === 'custom') ? '780px' : '620px';
     o.innerHTML = `
-      <div class="mbox" style="max-width:${_maxW}">
+      <div class="mbox" style="max-width:${_maxW};max-height:90vh;display:flex;flex-direction:column">
         <div class="mhd"><span>${tid?'Edit':'New'} Report Template</span></div>
-        <div class="mbdy">
+        <div class="mbdy" style="overflow-y:auto;flex:1">
           <div class="fr">
             <label class="fl">Name</label>
             <input type="text" id="_rt_name" value="${esc(t.name)}" placeholder="e.g. Monthly Exec Summary">
