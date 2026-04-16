@@ -166,15 +166,6 @@ except Exception:
 " 2>/dev/null
 fi
 
-# ── Ensure writable data dirs exist ────────────────────────
-# These directories are populated at runtime by the backup engine and
-# the reports module. Create them here so a fresh checkout / first-run
-# doesn't hit "Permission denied" when the service user can't create
-# subdirs under backup/ (for example when the repo was pulled as root).
-mkdir -p "$PROJECT_ROOT/backup/configs"  \
-         "$PROJECT_ROOT/backup/database" \
-         "$PROJECT_ROOT/backup/reports"  2>/dev/null || true
-
 # ── Launch server ───────────────────────────────────────────
 cd "$PROJECT_ROOT"
 exec "$PYTHON" "$PROJECT_ROOT/server.py"
