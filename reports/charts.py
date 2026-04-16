@@ -74,7 +74,12 @@ def availability_trend(avail_hourly: list) -> str:
         ax.set_ylim(min(80, min(ys) - 1), 101)
         ax.set_ylabel("Availability %")
         ax.set_title("Hourly Availability", fontsize=10, loc="left", pad=8)
-        fig.autofmt_xdate(rotation=0)
+        # Same concise/bounded date ticks as the incident timeline — prevents
+        # "2026-03-29" and "2026-04-01" from colliding on the narrow x-axis.
+        import matplotlib.dates as _mdates
+        _loc = _mdates.AutoDateLocator(maxticks=7)
+        ax.xaxis.set_major_locator(_loc)
+        ax.xaxis.set_major_formatter(_mdates.ConciseDateFormatter(_loc))
         return _encode(fig)
     except Exception as e:
         log.error(f"reports.charts availability_trend error: {e}")
@@ -169,7 +174,14 @@ def incident_timeline(flaps: list, start_ts: float, end_ts: float) -> str:
         ax.set_xlim(datetime.datetime.fromtimestamp(start_ts),
                     datetime.datetime.fromtimestamp(end_ts))
         ax.set_title("Incident timeline", fontsize=10, loc="left", pad=8)
-        fig.autofmt_xdate(rotation=0)
+        # Cap tick density + switch to ConciseDateFormatter so labels don't
+        # collide. Default behaviour packs too many full YYYY-MM-DD labels
+        # into this narrow 8in × 1.5in strip — e.g. "2026-03-29" butting up
+        # against "2026-04-01" with no whitespace between them.
+        import matplotlib.dates as _mdates
+        _loc = _mdates.AutoDateLocator(maxticks=7)
+        ax.xaxis.set_major_locator(_loc)
+        ax.xaxis.set_major_formatter(_mdates.ConciseDateFormatter(_loc))
         return _encode(fig)
     except Exception as e:
         log.error(f"reports.charts incident_timeline error: {e}")
