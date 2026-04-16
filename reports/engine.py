@@ -40,6 +40,7 @@ def _get_env():
     env.filters["pctfmt"]     = _filter_pctfmt
     env.filters["statuspct"]  = _filter_statuspct
     env.filters["severity_class"] = _filter_severity
+    env.filters["deltafmt"]   = _filter_deltafmt
     _env = env
     return env
 
@@ -105,6 +106,32 @@ def _filter_statuspct(v):
     if p >= 99.9: return "up"
     if p >= 99.0: return "warn"
     return "down"
+
+
+def _filter_deltafmt(v, unit="", decimals=2, good="lower"):
+    """Render a delta value with arrow + sign. `good` is 'lower' or 'higher' —
+    governs color: 'lower' means a negative delta is good (e.g. incidents),
+    'higher' means a positive delta is good (e.g. uptime).
+    Returns Markup-safe HTML (span with color class).
+    """
+    if v is None:
+        return ""
+    try:
+        val = float(v)
+    except Exception:
+        return ""
+    if abs(val) < 1e-9:
+        return f'<span class="muted">no change</span>'
+    up = val > 0
+    positive_is_good = (good == "higher")
+    is_good = (up and positive_is_good) or (not up and not positive_is_good)
+    cls = "up" if is_good else "crit"
+    arrow = "↑" if up else "↓"
+    if decimals == 0:
+        txt = f"{int(abs(val))}"
+    else:
+        txt = f"{abs(val):.{decimals}f}"
+    return f'<span class="{cls}">{arrow} {txt}{unit}</span>'
 
 
 def _filter_severity(direction):

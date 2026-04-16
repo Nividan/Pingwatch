@@ -80,41 +80,55 @@ def resolve_period(period: str, anchor_ts: float = None) -> tuple:
 def _availability_by_device(start_ts: float, end_ts: float, device_ids: list = None) -> list:
     """
     Return [{did, dname, samples, up, pct, fail}] for each device in scope.
-    Derived from sensor_samples joined with in-memory STATE for device names.
+    Reads from the same tiered samples storage PingWatch uses for charts:
+      • ≤ 1 day  → raw  sensor_samples       (SUM(ok) / COUNT(*))
+      • ≤ 90 d   → 5-minute rollup            (SUM(ok_count) / SUM(ok_count+fail_count))
+      • > 90 d   → 1-hour  rollup             (same as 5m)
+    Raw samples have a short retention window (default 7 days), so querying
+    a month-long report needs the rollup tables to find any history at all.
     """
     from core.app_state import STATE
+    from db.samples    import _pick_table
 
-    # Aggregate per device_id from raw samples over the window
+    minutes = max(1, int((end_ts - start_ts) / 60))
+    table, _bucket = _pick_table(minutes)
+    is_rollup = table != "sensor_samples"
+
     results: dict = {}
+
+    if is_rollup:
+        # Rollup schema: ok_count + fail_count + sample_count
+        sql_pg     = (f"SELECT did, SUM(ok_count) AS up, "
+                      f"SUM(ok_count + fail_count) AS total "
+                      f"FROM {table} WHERE ts>=%s AND ts<%s GROUP BY did")
+        sql_sqlite = (f"SELECT did, SUM(ok_count), SUM(ok_count + fail_count) "
+                      f"FROM {table} WHERE ts>=? AND ts<? GROUP BY did")
+    else:
+        # Raw schema: one row per probe, ok = 0 or 1
+        sql_pg     = ("SELECT did, SUM(ok) AS up, COUNT(*) AS total "
+                      "FROM sensor_samples WHERE ts>=%s AND ts<%s GROUP BY did")
+        sql_sqlite = ("SELECT did, SUM(ok), COUNT(*) "
+                      "FROM sensor_samples WHERE ts>=? AND ts<? GROUP BY did")
+
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("logs") as cur:
-                cur.execute(
-                    "SELECT did, SUM(ok) AS up, COUNT(*) AS total "
-                    "FROM sensor_samples WHERE ts>=%s AND ts<%s "
-                    "GROUP BY did",
-                    (start_ts, end_ts)
-                )
+                cur.execute(sql_pg, (start_ts, end_ts))
                 for r in cur.fetchall():
                     results[r["did"]] = {"up": int(r["up"] or 0),
                                          "total": int(r["total"] or 0)}
         except Exception as e:
-            log.error(f"reports.data availability PG error: {e}")
+            log.error(f"reports.data availability PG error ({table}): {e}")
     else:
         con = None
         try:
             con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
-            rows = con.execute(
-                "SELECT did, SUM(ok), COUNT(*) "
-                "FROM sensor_samples WHERE ts>=? AND ts<? "
-                "GROUP BY did",
-                (start_ts, end_ts)
-            ).fetchall()
+            rows = con.execute(sql_sqlite, (start_ts, end_ts)).fetchall()
             for did, up, total in rows:
                 results[did] = {"up": int(up or 0), "total": int(total or 0)}
         except Exception as e:
-            log.error(f"reports.data availability SQLite error: {e}")
+            log.error(f"reports.data availability SQLite error ({table}): {e}")
         finally:
             if con: con.close()
 
@@ -293,14 +307,96 @@ def _mttr_mtbf(flaps: list, window_s: float) -> dict:
 
 def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> list:
     """
-    Per-sensor p50/p95/p99 over the window.
-    Computed in Python from a sampled row set — cheap at a few 100k rows,
-    expensive beyond. For reporting we cap the per-sensor sample.
+    Per-sensor latency stats over the window.
+
+    For windows ≤ 1 day we compute true percentiles from raw samples.
+    For longer windows we read from the rollup tables — which only store
+    avg_ms / min_ms / max_ms per 5-minute or 1-hour bucket — so the
+    "p95" / "p99" columns are best-effort from bucket maxima, and "p50"
+    from sample-weighted averages. We flag this in the sample count so
+    the template can distinguish (samples == number of BUCKETS, not probes).
     """
     from core.app_state import STATE
+    from db.samples    import _pick_table
 
-    # Collect ms arrays per (did,sid)
+    minutes = max(1, int((end_ts - start_ts) / 60))
+    table, _bucket = _pick_table(minutes)
+    is_rollup = table != "sensor_samples"
+
+    # did,sid → list of (ms, count) tuples (count = 1 for raw rows)
     buckets: dict = {}
+
+    if is_rollup:
+        # rollup: one bucket row per (did,sid,ts). Aggregate its avg_ms (weighted by sample_count) and max_ms separately.
+        sql_pg = (f"SELECT did, sid, "
+                  f"SUM(COALESCE(avg_ms,0) * COALESCE(sample_count,0)) AS wsum, "
+                  f"SUM(COALESCE(sample_count,0)) AS n, "
+                  f"MAX(COALESCE(max_ms,0)) AS mx, "
+                  f"MIN(COALESCE(min_ms, 999999)) AS mn "
+                  f"FROM {table} WHERE ts>=%s AND ts<%s "
+                  f"AND ok_count > 0 "
+                  f"GROUP BY did, sid")
+        sql_sqlite = (f"SELECT did, sid, "
+                      f"SUM(COALESCE(avg_ms,0) * COALESCE(sample_count,0)), "
+                      f"SUM(COALESCE(sample_count,0)), "
+                      f"MAX(COALESCE(max_ms,0)), "
+                      f"MIN(COALESCE(min_ms, 999999)) "
+                      f"FROM {table} WHERE ts>=? AND ts<? "
+                      f"AND ok_count > 0 "
+                      f"GROUP BY did, sid")
+        rows = []
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor("logs") as cur:
+                    cur.execute(sql_pg, (start_ts, end_ts))
+                    rows = [(r["did"], r["sid"],
+                             float(r["wsum"] or 0), int(r["n"] or 0),
+                             float(r["mx"] or 0), float(r["mn"] or 0))
+                            for r in cur.fetchall()]
+            except Exception as e:
+                log.error(f"reports.data latency PG error ({table}): {e}")
+        else:
+            con = None
+            try:
+                con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+                for r in con.execute(sql_sqlite, (start_ts, end_ts)).fetchall():
+                    rows.append((r[0], r[1], float(r[2] or 0),
+                                 int(r[3] or 0), float(r[4] or 0), float(r[5] or 0)))
+            except Exception as e:
+                log.error(f"reports.data latency SQLite error ({table}): {e}")
+            finally:
+                if con: con.close()
+
+        out = []
+        with STATE._lock:
+            for did, sid, wsum, n, mx, mn in rows:
+                if n <= 0:
+                    continue
+                dev = STATE.devices.get(did)
+                if not dev:
+                    continue
+                s = dev.sensors.get(sid)
+                if not s:
+                    continue
+                avg = round(wsum / n, 1)
+                # Rollups don't store true percentiles — approximate:
+                #   p50 ≈ weighted avg,  p95/p99 ≈ bucket max (upper bound)
+                out.append({
+                    "did": did, "sid": sid,
+                    "dname": dev.name, "sname": s.name, "stype": s.stype,
+                    "samples": n,
+                    "p50": avg,
+                    "p95": round(mx, 1),
+                    "p99": round(mx, 1),
+                    "min": round(mn, 1) if mn < 999999 else None,
+                    "max": round(mx, 1),
+                    "approx": True,
+                })
+        out.sort(key=lambda r: -(r.get("p95") or 0))
+        return out[:limit]
+
+    # Raw-table path: true percentiles
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -336,18 +432,13 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
         k = max(0, min(len(s) - 1, int(round(p / 100 * (len(s) - 1)))))
         return round(s[k], 1)
 
-    # Resolve names from STATE
     out = []
     with STATE._lock:
         for (did, sid), arr in buckets.items():
             dev = STATE.devices.get(did)
             if not dev:
                 continue
-            s = None
-            for _sid, _s in dev.sensors.items():
-                if _sid == sid:
-                    s = _s
-                    break
+            s = dev.sensors.get(sid)
             if not s:
                 continue
             out.append({
@@ -357,6 +448,7 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
                 "p50": pct(arr, 50),
                 "p95": pct(arr, 95),
                 "p99": pct(arr, 99),
+                "approx": False,
             })
     out.sort(key=lambda r: -(r["p95"] or 0))
     return out[:limit]
@@ -487,6 +579,145 @@ def _inventory_summary() -> dict:
             "dev_up": dev_up, "dev_warn": dev_warn, "dev_down": dev_down}
 
 
+# ── Inventory / compliance payload ─────────────────────────────────────
+
+def _inventory_devices() -> list:
+    """All devices with live status + sensor counts (from STATE)."""
+    from core.app_state import STATE
+    out = []
+    with STATE._lock:
+        for dev in STATE.devices.values():
+            sensors = list(dev.sensors.values())
+            up    = sum(1 for s in sensors if getattr(s, "alive", False))
+            down  = sum(1 for s in sensors if getattr(s, "alive", None) is False)
+            types = sorted({getattr(s, "stype", "") for s in sensors if getattr(s, "stype", None)})
+            out.append({
+                "did":          dev.device_id,
+                "dname":        dev.name,
+                "host":         getattr(dev, "host", ""),
+                "group":        getattr(dev, "group", ""),
+                "sensor_count": len(sensors),
+                "up":           up,
+                "down":         down,
+                "types":        types,
+            })
+    out.sort(key=lambda r: r["dname"].lower())
+    return out
+
+
+def _inventory_backup_coverage() -> dict:
+    """Backup coverage: X of Y devices have recent backups; which are stale/never."""
+    try:
+        from db.backups import db_get_backup_list
+    except Exception:
+        return {"total": 0, "recent": 0, "stale": 0, "never": 0, "stale_list": [], "never_list": []}
+
+    bl = db_get_backup_list() or []
+    now = time.time()
+    stale_cutoff = now - 7 * 86400
+    recent = stale_list = never_list = []
+    recent, stale_list, never_list = [], [], []
+    for b in bl:
+        ts = b.get("last_ts") or 0
+        if not ts:
+            never_list.append({"did": b.get("did"), "dname": b.get("dname", b.get("did", ""))})
+        elif ts < stale_cutoff:
+            stale_list.append({"did": b.get("did"),
+                               "dname": b.get("dname", b.get("did", "")),
+                               "last_ts": ts, "days": round((now - ts) / 86400, 1)})
+        else:
+            recent.append(b)
+    return {
+        "total":      len(bl),
+        "recent":     len(recent),
+        "stale":      len(stale_list),
+        "never":      len(never_list),
+        "stale_list": sorted(stale_list, key=lambda r: r["last_ts"]),
+        "never_list": sorted(never_list, key=lambda r: r["dname"].lower()),
+    }
+
+
+def _inventory_ipam() -> list:
+    """Subnet utilisation. Returns [{cidr, name, total, used, pct_used}]."""
+    try:
+        from db.ipam import db_list_subnets, db_get_allocations
+    except Exception:
+        return []
+    import ipaddress
+    out = []
+    for s in db_list_subnets() or []:
+        try:
+            net = ipaddress.ip_network(s["cidr"], strict=False)
+            total = max(1, net.num_addresses - (2 if net.prefixlen < 31 else 0))
+            alloc = db_get_allocations(s["id"]) or {}
+            # db_get_allocations returns dict of ip -> info, filter to used
+            used = sum(1 for v in (alloc.values() if isinstance(alloc, dict) else alloc)
+                       if isinstance(v, dict) and v.get("status") == "used")
+        except Exception:
+            total, used = 0, 0
+        out.append({
+            "cidr": s["cidr"], "name": s.get("name", ""),
+            "total": total, "used": used,
+            "pct_used": round(used / total * 100, 1) if total else None,
+        })
+    out.sort(key=lambda r: -(r["pct_used"] or 0))
+    return out
+
+
+def _inventory_licenses() -> dict:
+    """Summary of device licenses by state."""
+    try:
+        from db.licenses import db_get_all_licenses
+    except Exception:
+        return {"total": 0, "ok": 0, "warn": 0, "crit": 0, "expired": 0, "expiring_list": []}
+    items = db_get_all_licenses() or []
+    out = {"total": len(items), "ok": 0, "warn": 0, "crit": 0, "expired": 0, "expiring_list": []}
+    today = datetime.date.today()
+    for lic in items:
+        st = (lic.get("last_status") or "ok").lower()
+        if st in out: out[st] += 1
+        # Build a 90-day expiring watch list
+        try:
+            exp = datetime.date.fromisoformat(lic.get("expiry_date") or "")
+            days = (exp - today).days
+            if days <= 90:
+                out["expiring_list"].append({
+                    "did":     lic.get("did"),
+                    "name":    lic.get("license_name", ""),
+                    "expires": lic.get("expiry_date", ""),
+                    "days":    days,
+                })
+        except Exception:
+            pass
+    out["expiring_list"].sort(key=lambda r: r["days"])
+    return out
+
+
+def _inventory_audit(limit: int = 50) -> list:
+    """Recent audit entries — admin actions / logins."""
+    try:
+        from db.audit import db_get_audit
+    except Exception:
+        return []
+    return (db_get_audit(limit) or [])
+
+
+def _inventory_users() -> dict:
+    """User breakdown by role."""
+    try:
+        from db.users import db_list_users
+    except Exception:
+        return {"total": 0, "admin": 0, "operator": 0, "viewer": 0, "ldap": 0}
+    users = db_list_users() or []
+    out = {"total": len(users), "admin": 0, "operator": 0, "viewer": 0, "ldap": 0}
+    for u in users:
+        role = (u.get("role") or "viewer").lower()
+        if role in out: out[role] += 1
+        if (u.get("auth_type") or "").lower() == "ldap":
+            out["ldap"] += 1
+    return out
+
+
 # ── Public entrypoint ──────────────────────────────────────────────────
 
 def build_report_context(kind: str,
@@ -568,10 +799,51 @@ def build_report_context(kind: str,
         ctx["latency"] = _latency_percentiles(start_ts, end_ts)
     if kind == "technical" or "traps" in (config.get("sections") or []):
         ctx["top_traps"] = _top_traps(start_ts, end_ts, 10)
-    if kind == "technical" or "tls" in (config.get("sections") or []):
+    if kind == "technical" or kind == "inventory" or "tls" in (config.get("sections") or []):
         ctx["tls_expiring"] = _tls_expiring(90)
 
+    if kind == "inventory":
+        ctx["inventory_devices"] = _inventory_devices()
+        ctx["backup_coverage"]   = _inventory_backup_coverage()
+        ctx["ipam"]              = _inventory_ipam()
+        ctx["licenses"]          = _inventory_licenses()
+        ctx["users"]             = _inventory_users()
+        ctx["audit_recent"]      = _inventory_audit(50)
+
     ctx["maint_windows"] = _maint_windows(start_ts, end_ts)
+
+    # ── Compare-to-previous-period (Δ) ─────────────────────────────
+    # Only compute for windowed report kinds where it actually means something.
+    if kind in ("executive", "technical") and config.get("compare", True):
+        prev_end   = start_ts
+        prev_start = start_ts - window_s
+        try:
+            prev_avail    = _availability_by_device(prev_start, prev_end, device_ids)
+            prev_overall  = _overall_availability(prev_avail)
+            prev_flaps    = _flaps_in_window(prev_start, prev_end)
+            prev_sev      = _severity_counts(prev_flaps)
+            prev_mtr      = _mttr_mtbf(prev_flaps, window_s)
+            def _delta(now, before):
+                if now is None or before is None:
+                    return None
+                return round(now - before, 3)
+            ctx["previous"] = {
+                "label":    f"previous {round(window_s/86400,0):.0f} days",
+                "start_ts": prev_start, "end_ts": prev_end,
+                "overall":  prev_overall,
+                "severity": prev_sev,
+                "mttr":     prev_mtr,
+                "delta": {
+                    "uptime_pp":    _delta(overall.get("pct"),   prev_overall.get("pct")),
+                    "incidents":    _delta(severity.get("total"),prev_sev.get("total")),
+                    "crit":         _delta(severity.get("crit"), prev_sev.get("crit")),
+                    "warn":         _delta(severity.get("warn"), prev_sev.get("warn")),
+                    "mttr_s":       _delta(mtr.get("mttr_s"),    prev_mtr.get("mttr_s")),
+                },
+            }
+        except Exception as e:
+            log.debug(f"reports.data previous-period compute failed: {e}")
+            ctx["previous"] = None
 
     meta["render_ms"] = int((time.time() - t0) * 1000)
     return ctx
@@ -581,5 +853,6 @@ def _default_title(kind: str) -> str:
     return {
         "executive": "Network Monitoring Report — Executive Summary",
         "technical": "Network Monitoring Report — Technical / Operations",
+        "inventory": "Network Inventory & Compliance Report",
         "custom":    "Network Monitoring Report",
     }.get(kind, "Network Monitoring Report")

@@ -164,6 +164,7 @@ async function _rptRenderTemplates(){
           <div class="rpt-empty-actions">
             <button class="rpt-btn rpt-btn-primary" onclick="_rptEditTemplate(null,'executive')">+ Executive Summary</button>
             <button class="rpt-btn" onclick="_rptEditTemplate(null,'technical')">+ Technical / Ops</button>
+            <button class="rpt-btn" onclick="_rptEditTemplate(null,'inventory')">+ Inventory &amp; Compliance</button>
           </div>
         </div>`;
       return;
@@ -200,6 +201,16 @@ function _rptEditTemplate(tid, presetKind){
       try{ const r = await api('GET', '/api/reports/template/'+tid); t = r.template || t; }catch(_){}
     }
     const cfg = t.config_json || {};
+    const periodIsCustom = (cfg.period || '').startsWith('custom:');
+    let customStart = '', customEnd = '';
+    if(periodIsCustom){
+      const parts = cfg.period.split(':');
+      if(parts.length === 3){
+        const toIso = s => { try { return new Date(Number(s)*1000).toISOString().slice(0,16); } catch(_){ return ''; } };
+        customStart = toIso(parts[1]);
+        customEnd   = toIso(parts[2]);
+      }
+    }
     const o = document.createElement('div');
     o.className = 'mo'; o.id = 'rptTplModal';
     _overlayClose(o, ()=>closeM('rptTplModal'));
@@ -216,6 +227,7 @@ function _rptEditTemplate(tid, presetKind){
             <select id="_rt_kind">
               <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
               <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
+              <option value="inventory" ${t.kind==='inventory'?'selected':''}>Inventory &amp; Compliance (devices, backups, IPAM, licenses)</option>
               <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom</option>
             </select>
           </div>
@@ -225,7 +237,7 @@ function _rptEditTemplate(tid, presetKind){
           </div>
           <div class="fr">
             <label class="fl">Default Period</label>
-            <select id="_rt_period">
+            <select id="_rt_period" onchange="_rptTogglePeriod()">
               <option value="last_7d"       ${cfg.period==='last_7d'?'selected':''}>Last 7 days</option>
               <option value="last_30d"      ${cfg.period==='last_30d'?'selected':''}>Last 30 days</option>
               <option value="last_90d"      ${cfg.period==='last_90d'?'selected':''}>Last 90 days</option>
@@ -233,7 +245,22 @@ function _rptEditTemplate(tid, presetKind){
               <option value="last_quarter"  ${cfg.period==='last_quarter'?'selected':''}>Last quarter</option>
               <option value="last_year"     ${cfg.period==='last_year'?'selected':''}>Last 365 days</option>
               <option value="month_to_date" ${cfg.period==='month_to_date'?'selected':''}>Month to date</option>
+              <option value="custom"        ${periodIsCustom?'selected':''}>Custom range…</option>
             </select>
+          </div>
+          <div class="fr" id="_rt_custom_wrap" style="${periodIsCustom?'':'display:none'}">
+            <label class="fl">Custom range</label>
+            <div class="fgrid">
+              <div>
+                <div class="fh" style="margin-bottom:3px">Start</div>
+                <input type="datetime-local" id="_rt_custom_start" value="${esc(customStart)}">
+              </div>
+              <div>
+                <div class="fh" style="margin-bottom:3px">End</div>
+                <input type="datetime-local" id="_rt_custom_end" value="${esc(customEnd)}">
+              </div>
+            </div>
+            <div class="fh">Times use your browser's local timezone. Server converts to Unix epoch on save.</div>
           </div>
           <div class="fr">
             <label class="fl">Cover title</label>
@@ -253,13 +280,36 @@ function _rptEditTemplate(tid, presetKind){
   })();
 }
 
+function _rptTogglePeriod(){
+  const sel = document.getElementById('_rt_period');
+  const wrap = document.getElementById('_rt_custom_wrap');
+  if(!sel || !wrap) return;
+  wrap.style.display = (sel.value === 'custom') ? '' : 'none';
+}
+
 async function _rptSaveTemplate(tid){
+  let period = document.getElementById('_rt_period').value;
+  if(period === 'custom'){
+    const sRaw = document.getElementById('_rt_custom_start')?.value || '';
+    const eRaw = document.getElementById('_rt_custom_end')?.value   || '';
+    if(!sRaw || !eRaw){
+      _rptNotify({title:'Custom range incomplete', message:'Pick both a start and end date/time.', kind:'error'});
+      return;
+    }
+    const sTs = Math.floor(new Date(sRaw).getTime() / 1000);
+    const eTs = Math.floor(new Date(eRaw).getTime() / 1000);
+    if(!sTs || !eTs || eTs <= sTs){
+      _rptNotify({title:'Invalid range', message:'End must be after start.', kind:'error'});
+      return;
+    }
+    period = `custom:${sTs}:${eTs}`;
+  }
   const payload = {
     name:        document.getElementById('_rt_name').value.trim(),
     kind:        document.getElementById('_rt_kind').value,
     description: document.getElementById('_rt_desc').value.trim(),
     config_json: {
-      period:   document.getElementById('_rt_period').value,
+      period:   period,
       title:    document.getElementById('_rt_title').value.trim(),
       subtitle: document.getElementById('_rt_subtitle').value.trim(),
     },

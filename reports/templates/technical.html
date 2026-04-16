@@ -8,7 +8,12 @@
   {% if overall.pct is not none %}
     <div class="headline-tile tile-{{ overall.pct | statuspct }}">
       <div class="headline-number">{{ overall.pct | pctfmt(3) }}</div>
-      <div class="headline-caption">{{ inventory.devices }} devices · {{ inventory.sensors }} sensors · {{ period.days }} days</div>
+      <div class="headline-caption">
+        {{ inventory.devices }} devices · {{ inventory.sensors }} sensors · {{ period.days }} days
+        {% if previous and previous.delta.uptime_pp is not none %}
+          &nbsp;· vs. {{ previous.label }}: {{ previous.delta.uptime_pp | deltafmt(' pp', 2, 'higher') | safe }}
+        {% endif %}
+      </div>
     </div>
   {% else %}
     <div class="headline-tile tile-muted">
