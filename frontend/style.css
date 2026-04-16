@@ -1609,6 +1609,26 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 :root[data-theme="light"] .ipam-lic-ok   {background:rgba(26,127,55,.16);}
 :root[data-theme="light"] .ipam-lic-warn {background:rgba(154,103,0,.18);}
 :root[data-theme="light"] .ipam-lic-crit {background:rgba(207,34,46,.16);}
+
+/* ── Dashboard widget text contrast in light mode ── */
+:root[data-theme="light"] .dw-title       {color:var(--text);}
+:root[data-theme="light"] .dw-ss-lbl      {color:var(--text2);}
+:root[data-theme="light"] .dw-ss-val      {color:var(--text);}
+:root[data-theme="light"] .dw-sp-lbl      {color:var(--text2);}
+:root[data-theme="light"] .dw-sp-detail   {color:var(--text2);}
+:root[data-theme="light"] .dw-tl-name     {color:var(--text);}
+:root[data-theme="light"] .dw-ds-name     {color:var(--text);}
+:root[data-theme="light"] .dw-fe-name     {color:var(--text2);}
+:root[data-theme="light"] .dw-dd-name     {color:var(--text);}
+:root[data-theme="light"] .dw-fd-name     {color:var(--text);}
+:root[data-theme="light"] .dw-ec-lbl      {color:var(--text2);}
+:root[data-theme="light"] .dw-gauge-name  {color:var(--text2);}
+:root[data-theme="light"] .dw-log-info    {color:var(--text2);}
+:root[data-theme="light"] .dw-ll-msg      {color:var(--text2);}
+:root[data-theme="light"] .dw-body.dw-loading::after{color:var(--text2);}
+:root[data-theme="light"] .dw-empty       {color:var(--text2);}
+:root[data-theme="light"] .dw-ss-row      {border-bottom-color:var(--border);}
+
 .ipam-name-cell{cursor:pointer;min-width:180px;}
 .ipam-name-cell:hover{background:rgba(99,102,241,.08)!important;}
 .ipam-name-inp{background:var(--bg2);border:1px solid var(--accent);border-radius:3px;

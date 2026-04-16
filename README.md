@@ -66,6 +66,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
 - 🔭 Subnet Discovery — scan a CIDR range for unmonitored hosts; two modes (Full: ping + DNS + port scan + device-type guess; Ping only: fast scan for large networks); multi-select results table with MAC/vendor, open ports, multi-NIC duplicate detection, per-device sensor review, and one-click bulk add; **per-device group assignment** — set a default group for the entire batch or override individual rows; maximum scan size /16 (65 534 hosts) with tiered runtime warnings and cancellation support
 - 📋 Device License Tracking — attach software/hardware licenses to any device with expiry dates, configurable warn/critical thresholds (days before expiry), and free-text notes; automatic status check every 6 hours fires Warning/Critical events into the Events tab (deduplication via `last_status` — only fires on state change); recovery event auto-resolves the active alert when a license is renewed; license status badges (Valid / Expiring / Expired) in the Edit Device modal and IPAM table; License Overview dashboard widget shows KPI counts and a sorted table of upcoming expirations; real-time SSE updates on status change
+- 📊 Scheduled PDF/CSV Reports — three report kinds (Executive Summary, Technical/Operations, Inventory & Compliance); template + schedule + history management under a dedicated Reports tab; rendered via WeasyPrint (HTML+CSS → PDF) with inline Matplotlib charts; browser preview, Run Now, test-send; custom period picker (last 7d / 30d / 90d / last month / quarter / year / custom range); compare-to-previous-period deltas on uptime/incidents/MTTR; incident severity filter; optional CSV sidecar (UTF-8 BOM, multi-section, Excel-friendly); scheduled email delivery; deterministic 12-char Report ID + SHA-256 fingerprint; retention auto-prune; PDF/A-1b / 2b / 3b compliance mode for regulated industries
 
 ### Supported Sensor Types
 
@@ -95,6 +96,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - **System tray:** `pystray` + `Pillow` *(optional)*
 - **VMware:** `pyvmomi` *(optional — only needed when VMware sensors are enabled)*
 - **LDAP/AD:** `ldap3` *(optional — only needed when LDAP auth is enabled)*
+- **PDF reports:** `weasyprint` + `Jinja2` + `matplotlib` *(optional — only needed for the Reports module)*
 
 ---
 
@@ -324,6 +326,7 @@ Browser / Desktop GUI
         ├── vmware/               ← vSphere VM discovery + metric probing
         ├── backup/               ← SSH/Telnet backup engine + scheduler
         ├── snmp/                 ← Trap receiver, enricher, OID catalog
+        ├── reports/              ← PDF/CSV report engine, scheduler, email delivery
         └── db/                   ← Dual-backend persistence (SQLite / PostgreSQL)
 ```
 
