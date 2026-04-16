@@ -529,7 +529,7 @@ function _rptEditSchedule(sid){
     }
     let tpls = [], grps = [];
     try{
-      const [a,g] = await Promise.all([api('GET', '/api/reports/templates'), api('GET', '/api/user-groups').catch(_=>({groups:[]}))]);
+      const [a,g] = await Promise.all([api('GET', '/api/reports/templates'), api('GET', '/api/groups').catch(_=>({groups:[]}))]);
       tpls = a.templates || [];
       grps = g.groups || [];
     }catch(_){}

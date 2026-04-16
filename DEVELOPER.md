@@ -53,6 +53,16 @@ Browser / Desktop GUI
         ├── vmware/               ← VMware vSphere integration
         │   └── client.py         ← VM discovery, metric querying, session/metric caching
         │
+        ├── reports/              ← PDF/CSV report engine
+        │   ├── data.py           ← Data assembly (availability, incidents, latency, inventory)
+        │   ├── engine.py         ← Jinja2 + WeasyPrint HTML/PDF renderer; PDF/A-1b/2b/3b support
+        │   ├── charts.py         ← Matplotlib chart builders → base64 PNG data URIs
+        │   ├── runner.py         ← Orchestration: render → persist → email delivery
+        │   ├── scheduler.py      ← Cron-style scheduler + hourly retention prune
+        │   ├── delivery.py       ← SMTP delivery with PDF + CSV attachments
+        │   ├── csv_export.py     ← Multi-section CSV sidecar (UTF-8 BOM, Excel-safe)
+        │   └── templates/        ← Jinja2 HTML templates + print-first CSS
+        │
         ├── snmp/                 ← SNMP trap pipeline
         │   ├── receiver.py       ← UDP trap listener
         │   ├── enricher.py       ← Trap enrichment & OID lookup
@@ -123,6 +133,16 @@ pingwatch/
 ├── vmware/
 │   └── client.py           ← vSphere VM discovery, metric querying, session + metric caching (pyvmomi)
 │
+├── reports/
+│   ├── data.py             ← Data assembly: availability, incidents, latency, inventory; tiered table routing
+│   ├── engine.py           ← render_html() / render_pdf(); Jinja2 env with custom filters; PDF/A-1b/2b/3b via WeasyPrint
+│   ├── charts.py           ← Matplotlib Agg → base64 PNG: availability_trend, severity_donut, incident_timeline, top_bar, latency_percentile_bar
+│   ├── runner.py           ← render_from_template(), run_template_now(), run_schedule(); SHA-256 fingerprint + Report ID
+│   ├── scheduler.py        ← Daemon thread: daily/weekly/monthly/quarterly cadence, 90 s dedupe, hourly retention prune
+│   ├── delivery.py         ← send_report_email() with PDF + optional CSV attachments; recipient resolution
+│   ├── csv_export.py       ← build_csv_sidecar(): multi-section UTF-8 BOM CSV (metadata, availability, incidents, latency, traps, TLS, inventory)
+│   └── templates/          ← base.html, executive.html, technical.html, inventory.html, report.css (print-first @page layout)
+│
 ├── snmp/
 │   ├── receiver.py         ← UDP socket on SNMP port, injects traps into pipeline
 │   ├── enricher.py         ← OID resolution, vendor ID, category + severity annotation
@@ -150,7 +170,8 @@ pingwatch/
 │   ├── ipam.py             ← Subnet and IP allocation management
 │   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
 │   ├── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
-│   └── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
+│   ├── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
+│   └── reports.py          ← Report template/schedule/history CRUD; 18 functions (db_list/get/create/update/delete for templates, schedules, history; prune, record_run, set_enabled)
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
@@ -168,7 +189,8 @@ pingwatch/
 │   ├── ldap.py             ← LDAP/AD settings, test, group search, user group lookup
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
 │   ├── discovery.py        ← Subnet discovery scan + bulk device add
-│   └── licenses.py         ← Device license CRUD + expiration check trigger
+│   ├── licenses.py         ← Device license CRUD + expiration check trigger
+│   └── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -189,6 +211,7 @@ pingwatch/
     ├── forms-io.js         ← DB export/import form
     ├── forms-utils.js      ← Shared form helpers
     ├── forms-discovery.js  ← Subnet discovery wizard modal
+    ├── reports.js          ← Reports tab (Templates / Schedules / History sub-tabs); template editor modal; preview; Run Now; test-send; history download; PDF compliance select
     ├── ipam.js             ← IPAM tab
     ├── bg.js               ← Animated background canvas
     ├── map.html            ← Network Topology Manager shell
@@ -317,6 +340,26 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 - `vendor.py` — Vendor fingerprinting from enterprise OIDs
 - `seeds/` — Built-in trap definitions for generic, Cisco, Fortinet, Juniper, APC
 
+### `reports/`
+
+PDF/CSV report engine. All modules are optional at import time — missing WeasyPrint/Jinja2/Matplotlib produces a clear `RuntimeError` only when a report is actually rendered.
+
+**`reports/data.py`** — assembles `build_report_context(kind, period, filters, config)` into a flat dict consumed by Jinja2 templates. Helpers: `_pick_table(minutes)` routes availability and latency queries to the correct tiered table (`sensor_samples` / `sensor_samples_5m` / `sensor_samples_1h`) so a 1-year report finds data; `_epoch_to_iso()` / `_parse_ts()` bridge between Unix epoch (used in context) and ISO-8601 strings (stored in `flap_log.ts`); `_filter_flaps_by_severity()` applies the incident severity filter to both main and compare periods; `_inventory_*` helpers resolve device IDs to display names via `STATE.devices`.
+
+**`reports/engine.py`** — `render_html(kind, ctx, embed_charts, inline_css)` renders via a cached Jinja2 environment with custom filters (`datefmt`, `durfmt`, `msfmt`, `pctfmt`, `statuspct`, `severity_class`, `deltafmt`). `render_pdf(kind, ctx, pdfa_mode)` wraps WeasyPrint; when `pdfa_mode` is `"pdf/a-1b"` / `"pdf/a-2b"` / `"pdf/a-3b"` it passes `pdf_variant=` to `write_pdf()`; falls back to standard PDF on `TypeError` (WeasyPrint < 62) or any other exception and logs a warning — the report always goes out.
+
+**`reports/charts.py`** — Matplotlib `Agg` backend only (no display); each function returns a base64-encoded `data:image/png;base64,…` URI ready to embed in the HTML template.
+
+**`reports/runner.py`** — `render_from_template(template, period_override, triggered_by)` → `(pdf_bytes, ctx, ms)`. `run_template_now(template_id)` renders, saves PDF+CSV to `REPORTS_DIR`, inserts a history row, and returns the row dict (no email). `run_schedule(sch)` renders, saves, inserts a pending history row, resolves recipients, calls `send_report_email()`, then updates the delivery status. Both paths compute SHA-256 of the PDF bytes and a deterministic 12-char Report ID: `sha256(template_id | period_start | period_end | generated_at)[:12].upper()`.
+
+**`reports/scheduler.py`** — daemon thread; checks all enabled schedules every 60 s; fires schedules whose `next_run_ts` is due; 90-second dedupe guard prevents double-firing across restarts; supports daily / weekly (day-of-week bitmask) / monthly (day-of-month) / quarterly cadences. Also runs `db_prune_report_history()` hourly (removes history rows + PDF/CSV files on disk older than `report_retention_days`, default 365).
+
+**`reports/delivery.py`** — `send_report_email(recipients, subject, body, pdf_bytes, pdf_filename, csv_bytes, csv_filename)` builds a `multipart/mixed` MIME message, reuses the shared SMTP connection from `monitoring/smtp_alert.py`; returns `(ok, error_str)`.
+
+**`reports/csv_export.py`** — `build_csv_sidecar(ctx)` → `bytes`. Sections: metadata header → Availability by device → Incident summary → Worst/noisiest devices → Latency percentiles → SNMP traps → TLS certificates → Incident log → Device inventory. UTF-8 BOM prepended so Excel auto-detects the encoding.
+
+**Storage path** — `REPORTS_DIR` resolves to `$PW_REPORTS_DIR` → `$XDG_DATA_HOME/pingwatch/reports` → `~/.local/share/pingwatch/reports`. Lives outside the git checkout so `git pull` as root never makes it unwritable. `_ensure_dir()` in `runner.py` falls back to a per-user temp dir and logs a warning if the primary path is not writable.
+
 ---
 
 ## Route Modules
@@ -339,6 +382,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
 | `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
+| `reports.py` | `/api/reports/templates`, `/api/reports/template`, `/api/reports/template/{id}`, `/api/reports/schedules`, `/api/reports/schedule`, `/api/reports/schedule/{id}`, `/api/reports/history`, `/api/reports/history/{id}`, `/api/reports/history/{id}/download`, `/api/reports/history/{id}/csv`, `/api/reports/run`, `/api/reports/preview`, `/api/reports/test-send` |
 
 ---
 
@@ -374,6 +418,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `alert_profiles.py` | Alert profile CRUD, action template CRUD, stage state tracking (`alert_profile_state`) |
 | `alert_events.py` | Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count |
 | `licenses.py` | `device_licenses` table CRUD — `db_get_licenses(did)`, `db_get_all_licenses()`, `db_add_license()`, `db_update_license()`, `db_delete_license()`, `db_delete_device_licenses(did)`, `db_update_license_status()` (internal), `db_license_summary()` |
+| `reports.py` | `report_templates` / `report_schedules` / `report_history` table CRUD — `db_list/get/create/update/delete_report_template`, `db_*_report_schedule`, `db_list/get/add_report_history`, `db_update_report_history_delivery`, `db_prune_report_history`, `db_record_schedule_run`, `db_set_schedule_enabled` |
 
 ### `app_settings` table
 
@@ -398,6 +443,9 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `db_backup_days` | `"1,2,3,4,5,6,7"` | Days of week for weekly DB backup |
 | `db_backup_keep` | integer string | Number of DB backup snapshots to retain (default 7) |
 | `max_workers_executor` | integer string | Probe worker override (4–512). `"0"` or absent = auto (`max(64, min(512, sensor_count // 4))`). Live resize on device add/delete — no restart needed. |
+| `report_footer_text` | text | Custom text shown in the PDF report footer (e.g. "Confidential — Internal Use Only") |
+| `report_brand_color` | `"#rrggbb"` | Accent colour used in the report cover page and headings (defaults to `#2f81f7`) |
+| `report_retention_days` | integer string | How many days to keep report history rows + PDF/CSV files on disk (default `"365"`) |
 
 ---
 
@@ -424,6 +472,7 @@ The frontend is served as static files — no build step.
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
 | `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, Type column, multi-NIC ⚠ flags), per-device sensor review, bulk add; **per-device group assignment** — default group dropdown plus per-row group input with `_discGrpFocus`/`_discGrpBlur` datalist UX; `customGroups[ip]` overrides; accent border on overridden rows |
+| `reports.js` | Reports tab (Templates / Schedules / History sub-tabs). Template editor modal: kind, period (including custom `datetime-local` range picker), severity filter, recipients, CSV sidecar checkbox, PDF compliance select (Standard / PDF/A-1b / 2b / 3b); browser preview in a new tab; Run Now with spinner + elapsed counter; test-send modal with recipient input and inline status; history table with download buttons. Helper modals: `_rptConfirm()`, `_rptNotify()`, `_rptShowProgress()` replace browser alert/confirm/prompt. |
 | `alerting.js` | Alert profiles editor (PRTG-style escalation table with delay / repeat / action columns), reusable action template editor (email with user+group checkbox pickers, webhook, syslog, browser push), alert event history viewer, maintenance windows |
 | `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **sortable columns** (click headers, ▲/▼ arrows) on all 7 columns with IP-numeric, alpha, and date comparators; **filter dropdowns** on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None); sort + filter + text search compose together; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` |
@@ -543,6 +592,27 @@ The frontend is served as static files — no build step.
 | `GET` | `/api/licenses` | viewer | All licenses across all devices (for dashboard widget and IPAM map) |
 | `GET` | `/api/licenses/summary` | viewer | Counts by status `{ok, warn, crit, total}` |
 | `POST` | `/api/licenses/check` | admin | Trigger immediate expiration check |
+
+### Reports
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/reports/templates` | viewer | List all report templates |
+| `POST` | `/api/reports/template` | admin | Create template `{name, kind, config_json}` |
+| `GET` | `/api/reports/template/{id}` | viewer | Get template detail |
+| `PATCH` | `/api/reports/template/{id}` | admin | Update template |
+| `DELETE` | `/api/reports/template/{id}` | admin | Delete template |
+| `GET` | `/api/reports/schedules` | viewer | List all report schedules |
+| `POST` | `/api/reports/schedule` | admin | Create schedule |
+| `PATCH` | `/api/reports/schedule/{id}` | admin | Update schedule (incl. enable/disable) |
+| `DELETE` | `/api/reports/schedule/{id}` | admin | Delete schedule |
+| `GET` | `/api/reports/history` | viewer | Paginated report history; optional `template_id` filter |
+| `GET` | `/api/reports/history/{id}` | viewer | Single history record |
+| `GET` | `/api/reports/history/{id}/download` | viewer | Download the generated PDF |
+| `GET` | `/api/reports/history/{id}/csv` | viewer | Download the CSV sidecar (if generated) |
+| `POST` | `/api/reports/run` | operator | Ad-hoc Run Now `{template_id}` — renders, saves PDF, returns history row |
+| `POST` | `/api/reports/preview` | operator | Render HTML preview `{template_id}` — returns full HTML with inlined CSS (no PDF) |
+| `POST` | `/api/reports/test-send` | operator | Test email delivery `{template_id, recipients}` — renders and emails PDF without saving history |
 
 ### User Profiles
 
