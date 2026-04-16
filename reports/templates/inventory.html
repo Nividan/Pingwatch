@@ -125,7 +125,7 @@
       <tbody>
         {% for l in licenses.expiring_list %}
         <tr>
-          <td class="mono">{{ l.did }}</td>
+          <td>{{ l.dname }}</td>
           <td>{{ l.name }}</td>
           <td class="mono">{{ l.expires }}</td>
           <td class="{% if l.days <= 0 %}crit{% elif l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>

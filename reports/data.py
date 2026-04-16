@@ -252,15 +252,33 @@ def _flaps_in_window(start_ts: float, end_ts: float) -> list:
     return rows
 
 
+def _severity_of(direction: str) -> str:
+    """Map a flap direction string to a severity bucket: 'crit' | 'warn' | 'other'."""
+    d = (direction or "").lower()
+    if d in ("down", "threshold_crit"):             return "crit"
+    if d in ("threshold_warn", "anomaly_warn"):     return "warn"
+    return "other"
+
+
+def _filter_flaps_by_severity(flaps: list, severity_min: str) -> list:
+    """Drop flaps below the configured severity floor."""
+    floor = (severity_min or "all").lower()
+    if floor in ("all", "", "other"):
+        return flaps
+    if floor == "warn":
+        return [f for f in flaps if _severity_of(f.get("direction")) in ("crit", "warn")]
+    if floor == "crit":
+        return [f for f in flaps if _severity_of(f.get("direction")) == "crit"]
+    return flaps
+
+
 def _severity_counts(flaps: list) -> dict:
     """Group flaps by severity bucket."""
     out = {"crit": 0, "warn": 0, "ack": 0, "resolved": 0, "total": len(flaps)}
     for f in flaps:
-        d = (f.get("direction") or "").lower()
-        if d in ("down", "threshold_crit"):
-            out["crit"] += 1
-        elif d in ("threshold_warn", "anomaly_warn"):
-            out["warn"] += 1
+        sev = _severity_of(f.get("direction"))
+        if sev == "crit": out["crit"] += 1
+        elif sev == "warn": out["warn"] += 1
         if f.get("resolved_at"):
             out["resolved"] += 1
     return out
@@ -606,24 +624,38 @@ def _inventory_devices() -> list:
 
 
 def _inventory_backup_coverage() -> dict:
-    """Backup coverage: X of Y devices have recent backups; which are stale/never."""
+    """Backup coverage: X of Y devices have recent backups; which are stale/never.
+
+    db_get_backup_list() only returns the device id — the friendly name lives
+    in STATE.devices, so we resolve it there.
+    """
     try:
-        from db.backups import db_get_backup_list
+        from db.backups    import db_get_backup_list
+        from core.app_state import STATE
     except Exception:
         return {"total": 0, "recent": 0, "stale": 0, "never": 0, "stale_list": [], "never_list": []}
 
     bl = db_get_backup_list() or []
+    name_by_did: dict = {}
+    with STATE._lock:
+        for dev in STATE.devices.values():
+            name_by_did[dev.device_id] = dev.name
+
+    def _name(did):
+        return name_by_did.get(did) or did or ""
+
     now = time.time()
     stale_cutoff = now - 7 * 86400
     recent, stale_list, never_list = [], [], []
     for b in bl:
+        did = b.get("did")
         ts = _parse_ts(b.get("last_ts"))   # backup_runs.ts is ISO-8601 TEXT
         if not ts:
-            never_list.append({"did": b.get("did"), "dname": b.get("dname", b.get("did", ""))})
+            never_list.append({"did": did, "dname": _name(did)})
         elif ts < stale_cutoff:
-            stale_list.append({"did": b.get("did"),
-                               "dname": b.get("dname", b.get("did", "")),
-                               "last_ts": ts, "days": round((now - ts) / 86400, 1)})
+            stale_list.append({"did": did, "dname": _name(did),
+                               "last_ts": ts,
+                               "days": round((now - ts) / 86400, 1)})
         else:
             recent.append(b)
     return {
@@ -632,7 +664,7 @@ def _inventory_backup_coverage() -> dict:
         "stale":      len(stale_list),
         "never":      len(never_list),
         "stale_list": sorted(stale_list, key=lambda r: r["last_ts"]),
-        "never_list": sorted(never_list, key=lambda r: r["dname"].lower()),
+        "never_list": sorted(never_list, key=lambda r: (r["dname"] or "").lower()),
     }
 
 
@@ -664,12 +696,19 @@ def _inventory_ipam() -> list:
 
 
 def _inventory_licenses() -> dict:
-    """Summary of device licenses by state."""
+    """Summary of device licenses by state. Resolves friendly device names from STATE."""
     try:
-        from db.licenses import db_get_all_licenses
+        from db.licenses   import db_get_all_licenses
+        from core.app_state import STATE
     except Exception:
         return {"total": 0, "ok": 0, "warn": 0, "crit": 0, "expired": 0, "expiring_list": []}
+
     items = db_get_all_licenses() or []
+    name_by_did: dict = {}
+    with STATE._lock:
+        for dev in STATE.devices.values():
+            name_by_did[dev.device_id] = dev.name
+
     out = {"total": len(items), "ok": 0, "warn": 0, "crit": 0, "expired": 0, "expiring_list": []}
     today = datetime.date.today()
     for lic in items:
@@ -680,8 +719,10 @@ def _inventory_licenses() -> dict:
             exp = datetime.date.fromisoformat(lic.get("expiry_date") or "")
             days = (exp - today).days
             if days <= 90:
+                did = lic.get("did")
                 out["expiring_list"].append({
-                    "did":     lic.get("did"),
+                    "did":     did,
+                    "dname":   name_by_did.get(did) or did or "",
                     "name":    lic.get("license_name", ""),
                     "expires": lic.get("expiry_date", ""),
                     "days":    days,
@@ -743,10 +784,13 @@ def build_report_context(kind: str,
     start_ts, end_ts, period_label = resolve_period(period, anchor_ts)
     window_s = max(1, end_ts - start_ts)
 
-    device_ids = filters.get("device_ids") or None
+    device_ids  = filters.get("device_ids") or None
+    severity_min = (config.get("severity_min") or "all").lower()
+
     availability = _availability_by_device(start_ts, end_ts, device_ids)
     overall      = _overall_availability(availability)
-    flaps        = _flaps_in_window(start_ts, end_ts)
+    flaps_raw    = _flaps_in_window(start_ts, end_ts)
+    flaps        = _filter_flaps_by_severity(flaps_raw, severity_min)
     severity     = _severity_counts(flaps)
     worst        = _top_worst_devices(availability, 5)
     noisy        = _top_noisy_sensors(flaps, 5)
@@ -769,6 +813,7 @@ def build_report_context(kind: str,
         "generated_at": time.time(),
         "generated_by": config.get("triggered_by", ""),
         "render_ms":    None,   # filled below
+        "severity_min": severity_min,
     }
 
     period_dict = {
@@ -819,7 +864,8 @@ def build_report_context(kind: str,
         try:
             prev_avail    = _availability_by_device(prev_start, prev_end, device_ids)
             prev_overall  = _overall_availability(prev_avail)
-            prev_flaps    = _flaps_in_window(prev_start, prev_end)
+            prev_flaps    = _filter_flaps_by_severity(
+                                _flaps_in_window(prev_start, prev_end), severity_min)
             prev_sev      = _severity_counts(prev_flaps)
             prev_mtr      = _mttr_mtbf(prev_flaps, window_s)
             def _delta(now, before):

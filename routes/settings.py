@@ -86,6 +86,18 @@ def handle(h, method, path, body):
     if path == "/api/settings" and method == "GET":
         user, _ = h._require("viewer")
         if not user: return True
+        # Backend-aware "Database" line for the General → Server Info section.
+        # SQLite shows the file path; PostgreSQL shows database@host:port (matches the
+        # convention used by /api/settings/db, see ~L678 in this file).
+        from db.backend import is_pg, get_config
+        if is_pg():
+            _pgcfg = get_config()
+            _db_display = (
+                f"PostgreSQL: {_pgcfg.get('pg_database', 'pingwatch')} @ "
+                f"{_pgcfg.get('pg_host', 'localhost')}:{_pgcfg.get('pg_port', 5432)}"
+            )
+        else:
+            _db_display = str(DB_PATH)
         h._json(200, {
             "session_ttl":    _settings.get("session_ttl", 86400),
             "retention_days": _settings.get("retention_days", 7),
@@ -93,7 +105,7 @@ def handle(h, method, path, body):
             "http_port":      int(_settings.get("http_port", PORT)),
             "snmp_port":      app_state.effective_snmp_port,
             "bind":           _local_ip(),
-            "db_path":        str(DB_PATH),
+            "db_path":        _db_display,
             "smtp_host":       _settings.get("smtp_host", ""),
             "smtp_port":       _settings.get("smtp_port", 587),
             "smtp_tls":        _settings.get("smtp_tls",  "starttls"),
@@ -103,7 +115,6 @@ def handle(h, method, path, body):
             "smtp_pass_set":   bool(_settings.get("smtp_pass", "")),
             "email_logo":      int(_settings.get("email_logo", 1) or 1),
             "email_logo_data": _settings.get("email_logo_data", ""),
-            "email_company_name": _settings.get("email_company_name", ""),
             "report_footer_text":    _settings.get("report_footer_text", ""),
             "report_brand_color":    _settings.get("report_brand_color", ""),
             "report_retention_days": int(_settings.get("report_retention_days", 365) or 365),
@@ -290,7 +301,7 @@ def handle(h, method, path, body):
                 return True
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
-            "email_logo", "email_logo_data", "email_company_name",
+            "email_logo", "email_logo_data",
             "report_footer_text", "report_brand_color", "report_retention_days",
             "snr_interval", "snr_timeout", "snr_fail_after", "snr_recover_after",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",

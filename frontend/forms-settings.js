@@ -117,7 +117,29 @@ function _buildSettingsTab_general(sr) {
         <div class="fl" style="margin-bottom:10px">Appearance</div>
         <div class="fr"><label class="fl">Organisation Name</label>
           <input type="text" id="st-orgname" value="${esc(sr.org_name||'')}" placeholder="Network Monitor" style="max-width:260px"/>
-          <div class="fh">Shown in the top bar and browser tab title</div></div>
+          <div class="fh">Used in the top bar, browser tab title, alert email header/footer, and PDF report cover page.</div></div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Logo Image</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div id="st-logo-preview" style="width:120px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
+              ${sr.email_logo_data
+                ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:116px;max-height:44px;object-fit:contain"/>'
+                : '<span style="color:var(--text3);font-size:9px">Default</span>'}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label class="btn-s" style="cursor:pointer;display:inline-block;text-align:center">
+                Upload
+                <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/gif,image/svg+xml" style="display:none"
+                       onchange="_stLogoFileChange(this)"/>
+              </label>
+              <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
+                      onclick="_stLogoRemove()">Remove</button>
+            </div>
+            <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG &mdash; max 2 MB</span>
+          </div>
+          <div class="fh">Used on alert email header bars and PDF report cover pages. Toggle email visibility in Integrations &rarr; SMTP.</div>
+          <input type="hidden" id="st-email-logo-data" value=""/>
+        </div>
       </div>
       <div class="fr" style="margin-top:16px">
         <div class="fl" style="margin-bottom:10px">Server Info</div>
@@ -233,56 +255,15 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr"><label class="fl">To</label>
             <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
         </div>
-        <!-- Email Style -->
+        <!-- Email options -->
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Email Style</div>
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Email Options</div>
           <div class="fr" style="margin-top:0">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
               <input type="checkbox" id="st-email-logo" ${sr.email_logo!==0?'checked':''}>
               <span class="fl" style="margin:0">Show logo in alert emails</span>
             </label>
-            <div class="fh" style="margin-left:24px">Displayed in the email header bar</div>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Logo Image</label>
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <div id="st-logo-preview" style="width:120px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
-                ${sr.email_logo_data
-                  ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:116px;max-height:44px;object-fit:contain"/>'
-                  : '<span style="color:var(--text3);font-size:9px">Default</span>'}
-              </div>
-              <div style="display:flex;flex-direction:column;gap:4px">
-                <label class="btn-s" style="cursor:pointer;display:inline-block;text-align:center">
-                  Upload
-                  <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/gif,image/svg+xml" style="display:none"
-                         onchange="_stLogoFileChange(this)"/>
-                </label>
-                <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
-                        onclick="_stLogoRemove()">Remove</button>
-              </div>
-              <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG — max 2 MB</span>
-            </div>
-            <input type="hidden" id="st-email-logo-data" value=""/>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Company Name</label>
-            <input type="text" id="st-email-company" value="${esc(sr.email_company_name||'')}" placeholder="PingWatch" style="max-width:260px"/>
-            <div class="fh">Shown in email header/footer AND on the cover page of generated reports.</div>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Report Footer Text</label>
-            <input type="text" id="st-report-footer" value="${esc(sr.report_footer_text||'')}" placeholder="e.g. Confidential — internal use only"/>
-            <div class="fh">Free-form text shown in the footer section of every generated PDF report.</div>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Report Brand Color</label>
-            <input type="color" id="st-report-color" value="${esc(sr.report_brand_color||'#0969da')}" style="width:60px;height:32px;padding:0;border:1px solid var(--border);border-radius:4px"/>
-            <div class="fh">Hex color used for report headings, title rules, and cover-page accents. Defaults to app accent.</div>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Report Retention (days)</label>
-            <input type="number" id="st-report-retention" min="0" max="3650" value="${sr.report_retention_days||365}" style="max-width:120px"/>
-            <div class="fh">Auto-delete generated PDFs and history entries older than this many days. Set to 0 to keep everything forever.</div>
+            <div class="fh" style="margin-left:24px">Displays the logo image in the email header bar.</div>
           </div>
         </div>
         <div style="margin-top:14px">
@@ -290,7 +271,8 @@ function _buildSettingsTab_integrations(sr) {
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text3)">
           SMTP credentials power email actions in <b>Alert Profiles</b>. Per-stage delay and repeat are configured per profile.
-          The same logo + company name is used on generated <b>Reports</b>.
+          The display name and logo image used in emails come from <b>General &rarr; Appearance</b>.
+          Report styling is configured in the <b>Reports</b> tab.
         </div>
       </div>
 
@@ -586,6 +568,30 @@ function _buildSettingsTab_logs(sr) {
     </div>`;
 }
 
+function _buildSettingsTab_reports(sr) {
+  return `<div class="mbdy stab-fade" id="stab-reports" style="display:none;overflow-y:auto;flex:1">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Configure how generated PDF reports look and how long they're kept on disk.
+        The display name and logo image used on the cover page come from <b>General &rarr; Appearance</b>.
+      </div>
+      <div class="fr">
+        <label class="fl">Report Footer Text</label>
+        <input type="text" id="st-report-footer" value="${esc(sr.report_footer_text||'')}" placeholder="e.g. Confidential — internal use only"/>
+        <div class="fh">Free-form text shown in the footer section of every generated PDF report.</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Report Brand Color</label>
+        <input type="color" id="st-report-color" value="${esc(sr.report_brand_color||'#0969da')}" style="width:60px;height:32px;padding:0;border:1px solid var(--border);border-radius:4px"/>
+        <div class="fh">Hex color used for report headings, title rules, and cover-page accents. Defaults to app accent.</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Report Retention (days)</label>
+        <input type="number" id="st-report-retention" min="0" max="3650" value="${sr.report_retention_days||365}" style="max-width:120px"/>
+        <div class="fh">Auto-delete generated PDFs and history entries older than this many days. Set to 0 to keep everything forever.</div>
+      </div>
+    </div>`;
+}
+
 function _buildSettingsTab_sensors(sr) {
   const _scanActive = new Set(
     String(sr.scan_ports || 'ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443')
@@ -827,6 +833,7 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
       <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
       <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
+      <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">📄 Reports</button>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
@@ -839,6 +846,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_integrations(sr)}
     ${_buildSettingsTab_database(sr)}
     ${_buildSettingsTab_logs(sr)}
+    ${_buildSettingsTab_reports(sr)}
     ${_buildSettingsTab_sensors(sr)}
     ${_buildSettingsTab_networking(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
@@ -866,6 +874,10 @@ async function openSettings(initialTab){
     </div>
     <div class="mft" id="stab-footer-logs" style="display:none">
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
+    </div>
+    <div class="mft" id="stab-footer-reports" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveReportSettings()">Save Report Settings</button>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -895,7 +907,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','logs','sensors','networking','backup','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','logs','reports','sensors','networking','backup','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -1867,6 +1879,8 @@ async function saveSettings(){
   if(flapDb>=50)   body.max_flap_entries=flapDb;
   if(trapDb>=50)   body.max_trap_entries=trapDb;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
+  // Report fields live in their own tab (saveReportSettings) and the unified branding
+  // name is already collected as `org_name` above. Don't send them here.
   const smtp={
     smtp_host:       document.getElementById('st-smtp-host')?.value.trim()||'',
     smtp_port:       parseInt(document.getElementById('st-smtp-port')?.value)||587,
@@ -1875,10 +1889,6 @@ async function saveSettings(){
     smtp_from:       document.getElementById('st-smtp-from')?.value.trim()||'',
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
     email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
-    email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
-    report_footer_text:    document.getElementById('st-report-footer')?.value.trim()||'',
-    report_brand_color:    document.getElementById('st-report-color')?.value||'',
-    report_retention_days: Math.max(0, Math.min(3650, parseInt(document.getElementById('st-report-retention')?.value) || 365)),
   };
   const logoData=document.getElementById('st-email-logo-data')?.value||'';
   if(logoData==='__remove__') smtp.email_logo_data='';
@@ -2336,6 +2346,28 @@ async function saveSyslogSettings(){
     toast('Failed to save syslog settings','err');
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save'; }
+  }
+}
+
+async function saveReportSettings(){
+  const footer    = (document.getElementById('st-report-footer')?.value || '').trim();
+  const color     =  document.getElementById('st-report-color')?.value  || '';
+  const retention = parseInt(document.getElementById('st-report-retention')?.value);
+  const retClamp  = Math.max(0, Math.min(3650, isNaN(retention) ? 365 : retention));
+  const btn = document.querySelector('[onclick="saveReportSettings()"]');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      report_footer_text:    footer,
+      report_brand_color:    color,
+      report_retention_days: retClamp,
+    });
+    if(!r?.ok){ toast('Failed to save report settings','err'); return; }
+    toast('Report settings saved','ok');
+  } catch(e) {
+    toast('Failed to save report settings','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Save Report Settings'; }
   }
 }
 

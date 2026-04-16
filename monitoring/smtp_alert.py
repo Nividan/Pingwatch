@@ -413,7 +413,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
     sname      = _safe(ctx.get('sname',      ''))
     _c, emoji, _lbl = _status_style(event_type, severity)
     _logo    = str(_cfg('email_logo', '1')) == '1'
-    _company = _cfg('email_company_name', '') or 'PingWatch'
+    _company = _cfg('org_name', '') or 'PingWatch'
 
     if subject_tpl:
         subject = _fmt(subject_tpl)
@@ -486,7 +486,7 @@ def test_smtp(cfg):
         from_addr = cfg.get('from_addr', 'pingwatch@test')
         to_addr   = cfg.get('to_addr', from_addr)
         _logo = str(_cfg('email_logo', '1')) == '1'
-        _company = _cfg('email_company_name', '') or 'PingWatch'
+        _company = _cfg('org_name', '') or 'PingWatch'
         subject   = f'[{_company}] SMTP test \u2014 connection OK'
         body      = f'This is a test email from {_company} alert system.'
         _now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(

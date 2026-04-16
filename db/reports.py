@@ -248,6 +248,10 @@ def db_add_report_history(data: dict) -> str:
         float(data.get("period_end", 0)),
         data.get("pdf_path", ""),
         int(data.get("pdf_bytes", 0)),
+        data.get("pdf_sha256", ""),
+        data.get("csv_path", ""),
+        int(data.get("csv_bytes", 0)),
+        data.get("report_id", ""),
         data.get("delivery_status", ""),
         rcpt_str,
         int(data.get("render_ms", 0)),
@@ -259,9 +263,11 @@ def db_add_report_history(data: dict) -> str:
         """INSERT INTO report_history
            (id, template_id, template_name, schedule_id, kind,
             generated_at, period_start, period_end,
-            pdf_path, pdf_bytes, delivery_status, recipients_json,
+            pdf_path, pdf_bytes, pdf_sha256,
+            csv_path, csv_bytes, report_id,
+            delivery_status, recipients_json,
             render_ms, error, triggered_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         _vals,
     )
     return hid if ok else ""
