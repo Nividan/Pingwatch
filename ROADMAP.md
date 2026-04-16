@@ -303,14 +303,30 @@
   - Bulk enable on existing sensors — `POST /api/anomaly/bulk-enable` (admin) flips every supported sensor's `anomaly_enabled=1` and resets each baseline so the 24h cold-start ticks from the click, preventing an alert storm
   - `POST /api/sensors/{did}/{sid}/anomaly/reset` — wipe in-memory + DB baseline (operator role)
 
+- Reports module (scheduled PDF / CSV exports)
+  - Three report kinds: **Executive Summary**, **Technical / Operations**, **Inventory & Compliance**
+  - Templates + schedules + history (three sub-tabs under a top-level `📊 Reports` tab); audit-logged CRUD; role-gated (viewer browse, operator run, admin mutate)
+  - Rendered via WeasyPrint (HTML + CSS → PDF) and Matplotlib (charts → inline PNG data URIs); cover page + print-tuned stylesheet (`reports/templates/report.css`); per-section @page rules so headers don't dump body text into the footer
+  - Tiered samples awareness — `_availability_by_device` and `_latency_percentiles` auto-switch between `sensor_samples` / `sensor_samples_5m` / `sensor_samples_1h` via `_pick_table(minutes)` so a 1-year report actually finds data
+  - Browser preview (`POST /api/reports/preview` returns inlined-CSS HTML) + Run Now + Test Send (PDF attached)
+  - Custom-range periods (`custom:<start>:<end>` via a datetime-local picker) alongside last_7d / last_30d / last_90d / last_month / last_quarter / last_year / month_to_date
+  - Compare-to-previous-period deltas on uptime / incidents / critical / warn / MTTR — rendered as coloured ↑/↓ arrows with inverted semantics for "lower is good" metrics
+  - Incident severity filter (All / Warn+ / Crit-only) applied to both the main period and the previous-period compare set
+  - CSV sidecar (multi-section, UTF-8 BOM for Excel) — saved next to the PDF, attached to scheduled emails, downloadable from the History tab
+  - Report signing — deterministic 12-char Report ID + SHA-256 of the rendered PDF bytes; both persisted to `report_history` and surfaced in the History UI (tooltip on the ID pill shows the full hash)
+  - Retention auto-prune — `report_retention_days` setting (default 365); hourly sweep by the report scheduler removes expired history rows + PDF/CSV files on disk
+  - Storage path resolves to `$XDG_DATA_HOME/pingwatch/reports` / `~/.local/share/pingwatch/reports` (not inside the git checkout) so `git pull` as root can't break write access; `PW_REPORTS_DIR` env override; tempdir fallback with a probe-write check
+  - Cron-style scheduler thread: daily / weekly (day-of-week mask) / monthly (day-of-month) / quarterly cadences; 90 s dedupe; staggered firing
+  - PDF/A-1b / 2b / 3b compliance mode — per-template `pdfa_mode` config; graceful fallback if WeasyPrint < 62
+  - Branding reuses existing `email_logo_data` + `org_name`; per-report footer text + brand colour in Settings → Email
+
 ## 🔴 High Priority
 - **Auto-Discovery with Sensor Templates** — extend the Subnet Discovery wizard; named bundles ("Web Server" = ping + http:443 + tls, "Domain Controller" = ping + tcp:389 + dns) stored as JSON in `app_settings`; per-row template picker in the discovery result grid
-- **SLA / Uptime Reports (PDF Export)** — scheduled monthly/quarterly reports per device or group, emailed to a user group; sourced from `sensor_samples_5m`
 
 ## ⚙️ Medium Priority
-- Fix sensor tile alignment
 - **Parent-Child Dependency Suppression** — optional `parent_device_id` per device; when parent is `down`, children's dispatches marked `suppressed_by_parent` (event row still logged, no email/webhook); needs good UX for picking the parent tree (possibly leaning on NTM)
 - **Teams First-Class Integration** — new `teams` dispatcher with native adaptive-card formatting (colour, fields); generic webhook preserved for everything else
+  - Include scheduled-report delivery: post generated PDFs (and CSV sidecars when enabled) to a Teams channel via the same dispatcher — surfaced as a second delivery option on the report schedule editor alongside email
 - **Session Management Widget** — user can see + revoke their active sessions; consider as a dashboard widget and/or user-menu entry
 - **Probe types to add** — `smtp` (MAIL FROM round-trip), `ldap` (bind test), `postgres` / `mysql` (connection test)
 - **SAML / OIDC SSO** — unlocks enterprise buyers that LDAP alone can't cover

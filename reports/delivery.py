@@ -111,9 +111,12 @@ def send_report_email(recipients: list,
                       subject: str,
                       body: str,
                       pdf_bytes: bytes,
-                      pdf_filename: str = "report.pdf") -> tuple:
+                      pdf_filename: str = "report.pdf",
+                      csv_bytes: bytes = None,
+                      csv_filename: str = None) -> tuple:
     """
-    Send a report email with PDF attached. Returns (ok: bool, error: str).
+    Send a report email with PDF attached (and optionally a CSV sidecar).
+    Returns (ok: bool, error: str).
     """
     if not recipients:
         return False, "no recipients"
@@ -124,12 +127,23 @@ def send_report_email(recipients: list,
         msg["To"]      = ", ".join(_safe(r) for r in recipients)
         msg.attach(MIMEText(body, "plain"))
 
+        # PDF attachment
         att = MIMEBase("application", "pdf")
         att.set_payload(pdf_bytes)
         encoders.encode_base64(att)
         att.add_header("Content-Disposition",
                        f'attachment; filename="{_safe(pdf_filename)}"')
         msg.attach(att)
+
+        # Optional CSV sidecar
+        if csv_bytes:
+            cname = csv_filename or "report.csv"
+            cs = MIMEBase("text", "csv")
+            cs.set_payload(csv_bytes)
+            encoders.encode_base64(cs)
+            cs.add_header("Content-Disposition",
+                          f'attachment; filename="{_safe(cname)}"')
+            msg.attach(cs)
 
         srv, from_addr = _smtp_connect()
         try:
@@ -140,7 +154,8 @@ def send_report_email(recipients: list,
             except Exception: pass
 
         log.info(f"reports.delivery sent to {len(recipients)} recipient(s), "
-                 f"{len(pdf_bytes)} bytes")
+                 f"{len(pdf_bytes)} bytes"
+                 + (f" + {len(csv_bytes)} CSV bytes" if csv_bytes else ""))
         return True, ""
     except Exception as e:
         log.error(f"reports.delivery send failed: {e}")

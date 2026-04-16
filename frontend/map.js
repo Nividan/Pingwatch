@@ -1116,9 +1116,13 @@ const NODE_SIZE = {
 };
 function nsize(type, node) {
   if (type === 'info-box' && node) {
-    const lines = Array.isArray(node.properties?.lines) ? node.properties.lines : [];
-    const h = Math.max(80, 25 + lines.length * 14 + 10);
-    return { w: 210, h };
+    const p = node.properties || {};
+    const lines = Array.isArray(p.lines) ? p.lines : [];
+    const wOverride = (typeof p.w === 'number' && p.w >= 140) ? p.w : null;
+    const hOverride = (typeof p.h === 'number' && p.h >= 60)  ? p.h : null;
+    const w = wOverride || 240;
+    const h = hOverride || Math.max(80, 28 + lines.length * 18 + 14);
+    return { w, h };
   }
   if (!node) return NODE_SIZE[type] || { w: 160, h: 60 };
   const vH = _vlanH(node.properties);
@@ -1822,21 +1826,28 @@ function renderRemotePC(node, p, sf) {
 
 function renderInfoBox(node, p, sf) {
   const lines = Array.isArray(p.lines) ? p.lines : [];
-  const h = Math.max(80, 25 + lines.length * 14 + 10);
-
+  const sz = nsize('info-box', node);
+  const w = sz.w, h = sz.h;
+  // Title sits at top with a fatter font; lines flow at 18px row height.
+  const titleCharPx = 8.5;
+  const titleAvail  = Math.max(40, w - 18);
   return `<g ${sf}>
-    <rect x="0" y="0" width="210" height="${h}" rx="4"
+    <rect x="0" y="0" width="${w}" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
       stroke-width="1" stroke-dasharray="4,3"/>
-    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="16" fill="#ff6b6b" font-family="Orbitron" font-size="9" letter-spacing="1">${escXml(_truncName(node.name, 192, 6.5))}</text>
+    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="20" fill="#ff6b6b" font-family="Orbitron" font-size="12" letter-spacing="1">${escXml(_truncName(node.name, titleAvail, titleCharPx))}</text>
     ${lines.map((l,i) => {
       const color = (l && l.color) ? String(l.color) : 'rgba(255,255,255,0.6)';
       const text  = (l && l.text)  ? String(l.text)  : '';
+      const rowY  = 30 + i*18;
       return `
-        <rect x="6" y="${22 + i*14}" width="3" height="10" rx="1" fill="${escXml(color)}"/>
-        <text x="14" y="${30 + i*14}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="9">${escXml(text)}</text>
+        <rect x="6" y="${rowY}" width="3" height="13" rx="1" fill="${escXml(color)}"/>
+        <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="12">${escXml(text)}</text>
       `;
     }).join('')}
+    <rect data-info-resize="1" x="${w - 12}" y="${h - 12}" width="12" height="12" rx="2"
+      fill="rgba(255,107,107,0.7)" stroke="rgba(255,107,107,0.9)" stroke-width="0.7"
+      style="cursor:nwse-resize"/>
   </g>`;
 }
 
@@ -2097,6 +2108,7 @@ function renderIPMI(node, p, sf) {
 // ═══════════════════════════ DRAG ═══════════════════════════
 const svg = document.getElementById('topo-svg');
 let dragNode = null, dragSVGStart = null, dragNodeStart = null, rafDrag = null, _pwRenderPending = false;
+let dragInfoResize = null;  // {w0, h0} when resizing an info-box via its corner handle
 
 function getSVGPt(e) {
   const pt = svg.createSVGPoint();
@@ -2110,9 +2122,20 @@ function startDrag(e, node) {
   if (e.shiftKey) return;  // shift+drag = rubber-band, not single-node drag
   e.preventDefault();
   if (e.altKey) { startLinkDraw(e, node); return; }
+  // Detect info-box resize handle (rect with data-info-resize="1")
+  const isInfoResize = node.type === 'info-box'
+    && e.target && e.target.dataset && e.target.dataset.infoResize === '1';
   dragNode = node;
   dragSVGStart = getSVGPt(e);
   dragNodeStart = { x: node.x, y: node.y };
+  if (isInfoResize) {
+    const sz = nsize('info-box', node);
+    dragInfoResize = { w0: sz.w, h0: sz.h };
+    dragMultiStart = [];
+    svg.style.cursor = 'nwse-resize';
+    return;
+  }
+  dragInfoResize = null;
   if (multiSelect.has(node.id) && multiSelect.size > 1) {
     dragMultiStart = [...multiSelect].map(id => nodeMap[id]).filter(Boolean)
       .map(n => ({ node: n, x0: n.x, y0: n.y }));
@@ -2131,6 +2154,22 @@ function doDrag(e) {
     rafDrag = null;
     const dx = pt.x - dragSVGStart.x;
     const dy = pt.y - dragSVGStart.y;
+    if (dragInfoResize) {
+      // Resize the info-box: write w/h into properties and re-render the node SVG.
+      const newW = Math.max(140, dragInfoResize.w0 + dx);
+      const newH = Math.max(60,  dragInfoResize.h0 + dy);
+      const props = dragNode.properties || (dragNode.properties = {});
+      props.w = Math.round(newW);
+      props.h = Math.round(newH);
+      const g = document.getElementById('node-' + dragNode.id);
+      if (g) {
+        g.innerHTML = buildNode(dragNode, selectedEl?.type==='node' && selectedEl?.data.id===dragNode.id);
+        _applyNodeColorFilter(g, dragNode);
+      }
+      renderLinks();
+      resizeSVG();
+      return;
+    }
     if (dragMultiStart.length > 0) {
       dragMultiStart.forEach(({ node, x0, y0 }) => {
         node.x = x0 + dx;
@@ -2157,6 +2196,37 @@ async function endDrag() {
   if (linkDraw) return;
   if (rafDrag) { cancelAnimationFrame(rafDrag); rafDrag = null; }
   if (dragNode) {
+    if (dragInfoResize) {
+      const node = dragNode;
+      const props = { ...(node.properties || {}) };
+      const before = { w: dragInfoResize.w0, h: dragInfoResize.h0 };
+      const after  = { w: props.w, h: props.h };
+      dragInfoResize = null; dragNode = null; dragMultiStart = [];
+      svg.style.cursor = 'default';
+      // Skip persistence if nothing actually changed (click without drag)
+      if (before.w === after.w && before.h === after.h) return;
+      try {
+        await api('PUT', `/api/nodes/${node.id}`, {
+          name: node.name, type: node.type, x: node.x, y: node.y, properties: props
+        });
+        pushAction(
+          async () => {
+            const p2 = { ...props };
+            if (typeof before.w === 'number') p2.w = before.w; else delete p2.w;
+            if (typeof before.h === 'number') p2.h = before.h; else delete p2.h;
+            node.properties = p2;
+            await api('PUT',`/api/nodes/${node.id}`,{name:node.name,type:node.type,x:node.x,y:node.y,properties:p2});
+            await loadData();
+          },
+          async () => {
+            node.properties = props;
+            await api('PUT',`/api/nodes/${node.id}`,{name:node.name,type:node.type,x:node.x,y:node.y,properties:props});
+            await loadData();
+          }
+        );
+      } catch (err) { toast('⚠ Save failed: ' + err.message); }
+      return;
+    }
     if (isPingWatchPage && dragNode._pwDid) {
       pwOverrides[dragNode._pwDid] = { ...(pwOverrides[dragNode._pwDid] || {}), x: dragNode.x, y: dragNode.y };
       _pwSave('pw_node_overrides', pwOverrides);

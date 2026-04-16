@@ -237,8 +237,21 @@ def render_html(kind: str, context: dict, embed_charts: bool = True,
     return html
 
 
-def render_pdf(kind: str, context: dict) -> bytes:
-    """Render the report to PDF bytes via WeasyPrint."""
+_VALID_PDFA_VARIANTS = {"", "pdf/a-1b", "pdf/a-2b", "pdf/a-3b"}
+
+
+def render_pdf(kind: str, context: dict, pdfa_mode: str = "") -> bytes:
+    """Render the report to PDF bytes via WeasyPrint.
+
+    If `pdfa_mode` is one of 'pdf/a-1b' / 'pdf/a-2b' / 'pdf/a-3b', the output
+    claims the corresponding PDF/A conformance level. Needed by customers
+    under document-retention mandates (finance, gov, ISO 27001 auditors).
+    Requires WeasyPrint >= 62.
+
+    When the WeasyPrint version is too old or the variant render fails for
+    any reason, we fall back to a normal render and log a warning so the
+    report still goes out — better a regular PDF than nothing.
+    """
     try:
         from weasyprint import HTML, CSS
     except ImportError as e:
@@ -247,14 +260,38 @@ def render_pdf(kind: str, context: dict) -> bytes:
             "(Linux also needs: apt install libpango-1.0-0 libpangoft2-1.0-0)"
         ) from e
 
+    mode = (pdfa_mode or "").strip().lower()
+    if mode not in _VALID_PDFA_VARIANTS:
+        log.warning(f"reports.engine: ignoring unknown pdfa_mode {pdfa_mode!r}")
+        mode = ""
+
     t0 = time.time()
     html_str = render_html(kind, context, embed_charts=True, inline_css=False)
     css_path = os.path.join(_TEMPLATES_DIR, "report.css")
+    stylesheets = [CSS(filename=css_path)] if os.path.isfile(css_path) else None
 
-    # base_url = templates dir so relative references work (future: include images)
-    pdf_bytes = HTML(string=html_str, base_url=_TEMPLATES_DIR).write_pdf(
-        stylesheets=[CSS(filename=css_path)] if os.path.isfile(css_path) else None
-    )
+    doc = HTML(string=html_str, base_url=_TEMPLATES_DIR)
+
+    pdf_bytes = None
+    if mode:
+        try:
+            pdf_bytes = doc.write_pdf(stylesheets=stylesheets, pdf_variant=mode)
+        except TypeError:
+            # WeasyPrint < 62 doesn't know the kwarg — downgrade silently
+            log.warning(
+                f"reports.engine: WeasyPrint too old for pdf_variant={mode!r}; "
+                "falling back to standard PDF"
+            )
+        except Exception as e:
+            log.warning(f"reports.engine: PDF/A render failed ({mode}): {e}; "
+                        "falling back to standard PDF")
+
+    if pdf_bytes is None:
+        pdf_bytes = doc.write_pdf(stylesheets=stylesheets)
+        mode_label = ""
+    else:
+        mode_label = f" [{mode}]"
+
     dt = int((time.time() - t0) * 1000)
-    log.info(f"reports.engine: rendered {kind} PDF ({len(pdf_bytes)} bytes, {dt} ms)")
+    log.info(f"reports.engine: rendered {kind} PDF ({len(pdf_bytes)} bytes, {dt} ms){mode_label}")
     return pdf_bytes

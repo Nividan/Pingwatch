@@ -263,12 +263,35 @@ function _rptEditTemplate(tid, presetKind){
             <div class="fh">Times use your browser's local timezone. Server converts to Unix epoch on save.</div>
           </div>
           <div class="fr">
+            <label class="fl">Incident severity filter</label>
+            <select id="_rt_severity">
+              <option value="all"  ${(!cfg.severity_min || cfg.severity_min==='all')?'selected':''}>All incidents (default)</option>
+              <option value="warn" ${cfg.severity_min==='warn'?'selected':''}>Warning and above</option>
+              <option value="crit" ${cfg.severity_min==='crit'?'selected':''}>Critical / Down only</option>
+            </select>
+            <div class="fh">Trim out lower-severity noise. Executive reports usually want "Critical only"; technical/ops reports usually want "All".</div>
+          </div>
+          <div class="fr">
             <label class="fl">Cover title</label>
             <input type="text" id="_rt_title" value="${esc(cfg.title||'')}" placeholder="defaults to kind">
           </div>
           <div class="fr">
             <label class="fl">Subtitle (optional)</label>
             <input type="text" id="_rt_subtitle" value="${esc(cfg.subtitle||'')}">
+          </div>
+          <div class="fr" style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="_rt_csv" ${cfg.include_csv?'checked':''} style="width:auto">
+            <label for="_rt_csv" style="color:var(--text);font-size:13px;cursor:pointer">Include CSV sidecar (attaches an Excel-friendly .csv alongside the PDF)</label>
+          </div>
+          <div class="fr">
+            <label class="fl">PDF compliance level</label>
+            <select id="_rt_pdfa">
+              <option value=""          ${!cfg.pdfa_mode?'selected':''}>Standard PDF (default)</option>
+              <option value="pdf/a-1b"  ${cfg.pdfa_mode==='pdf/a-1b'?'selected':''}>PDF/A-1b — long-term archival</option>
+              <option value="pdf/a-2b"  ${cfg.pdfa_mode==='pdf/a-2b'?'selected':''}>PDF/A-2b — modern archival</option>
+              <option value="pdf/a-3b"  ${cfg.pdfa_mode==='pdf/a-3b'?'selected':''}>PDF/A-3b — archival + embedded data</option>
+            </select>
+            <div class="fh">Pick an archival level if your compliance policy requires it. Adds ~15% to file size. Needs WeasyPrint ≥ 62 on the server — falls back to standard PDF otherwise.</div>
           </div>
         </div>
         <div class="mft">
@@ -309,9 +332,12 @@ async function _rptSaveTemplate(tid){
     kind:        document.getElementById('_rt_kind').value,
     description: document.getElementById('_rt_desc').value.trim(),
     config_json: {
-      period:   period,
-      title:    document.getElementById('_rt_title').value.trim(),
-      subtitle: document.getElementById('_rt_subtitle').value.trim(),
+      period:       period,
+      title:        document.getElementById('_rt_title').value.trim(),
+      subtitle:     document.getElementById('_rt_subtitle').value.trim(),
+      severity_min: document.getElementById('_rt_severity')?.value || 'all',
+      include_csv:  !!document.getElementById('_rt_csv')?.checked,
+      pdfa_mode:    document.getElementById('_rt_pdfa')?.value || '',
     },
   };
   if(!payload.name){ _rptNotify({title:'Missing field', message:'Name is required.', kind:'error'}); return; }
@@ -688,18 +714,27 @@ async function _rptRenderHistory(){
       return;
     }
     const trs = rows.map(h=>{
-      const kb = Math.round((h.pdf_bytes||0)/1024);
+      const kb  = Math.round((h.pdf_bytes||0)/1024);
+      const ckb = Math.round((h.csv_bytes||0)/1024);
       const statusPill = _rptStatusPill(h.delivery_status);
+      const ridTitle = h.pdf_sha256 ? `SHA-256: ${h.pdf_sha256}` : '';
+      const ridBadge = h.report_id
+        ? `<span class="rpt-fingerprint" title="${esc(ridTitle)}">${esc(h.report_id)}</span>`
+        : '';
       return `
         <tr>
           <td class="muted small">${_fmtDate(h.generated_at)}</td>
-          <td><strong>${esc(h.template_name||'(deleted)')}</strong></td>
+          <td>
+            <strong>${esc(h.template_name||'(deleted)')}</strong>
+            ${ridBadge ? `<div style="margin-top:2px">${ridBadge}</div>` : ''}
+          </td>
           <td>${esc(h.kind||'')}</td>
           <td>${_fmtDate(h.period_start)} → ${_fmtDate(h.period_end)}</td>
           <td>${statusPill}</td>
-          <td class="muted small">${kb} KB · ${(h.render_ms||0)} ms</td>
+          <td class="muted small">${kb} KB · ${(h.render_ms||0)} ms${ckb?`<br>+${ckb} KB CSV`:''}</td>
           <td style="text-align:right;white-space:nowrap">
-            ${(h.pdf_path && h.pdf_bytes)?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/download" target="_blank">⬇ PDF</a>`:'<span class="muted small">no file</span>'}
+            ${(h.pdf_path && h.pdf_bytes)?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/download" target="_blank" title="Download PDF">⬇ PDF</a>`:'<span class="muted small">no file</span>'}
+            ${(h.csv_path && h.csv_bytes)?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/csv" target="_blank" title="Download CSV sidecar">⬇ CSV</a>`:''}
             <button class="rpt-btn-sm rpt-btn-danger" onclick="_rptDeleteHistory('${esc(h.id)}')">🗑</button>
           </td>
         </tr>`;

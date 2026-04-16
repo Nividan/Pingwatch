@@ -90,6 +90,28 @@ def db_init_pg():
         pg_create_main_schema(cur)
         pg_create_logs_schema(cur)
         pg_seed_defaults(cur)
+        # Migrate: collapse email_company_name into org_name (one-shot, self-disabling).
+        # Mirrors the SQLite block in db_init() — see that comment for rationale.
+        try:
+            cur.execute("SELECT value FROM main.app_settings WHERE key=%s", ("email_company_name",))
+            _ecn_row = cur.fetchone()
+            _ecn_val = (_ecn_row[0] if _ecn_row else "") or ""
+            if _ecn_val:
+                cur.execute("SELECT value FROM main.app_settings WHERE key=%s", ("org_name",))
+                _org_row = cur.fetchone()
+                _org_val = (_org_row[0] if _org_row else "") or ""
+                if not _org_val:
+                    cur.execute(
+                        "INSERT INTO main.app_settings (key, value) VALUES (%s, %s) "
+                        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                        ("org_name", _ecn_val),
+                    )
+                    log.info(f"Migrated email_company_name → org_name (value: {_ecn_val!r})")
+                else:
+                    log.info(f"Discarded email_company_name={_ecn_val!r}; org_name={_org_val!r} already set")
+            cur.execute("DELETE FROM main.app_settings WHERE key=%s", ("email_company_name",))
+        except Exception as _mig_err:
+            log.warning(f"email_company_name → org_name migration failed (non-fatal): {_mig_err}")
         cur.close()
     log.info("PG schema init complete")
 
@@ -368,6 +390,23 @@ def db_init():
         # Migrate: bump retention_days from old default 7 → 365 (only if user never changed it)
         con.execute("UPDATE app_settings SET value='365' WHERE key='retention_days' AND value='7'")
         con.commit()
+        # Migrate: collapse email_company_name into org_name (one-shot, self-disabling).
+        # Branding is a single concept — topbar / browser title / TLS CSR / email header / report cover
+        # all read the same name. The DELETE removes the source row so this block becomes a no-op
+        # on every subsequent boot.
+        try:
+            _ecn = con.execute("SELECT value FROM app_settings WHERE key='email_company_name'").fetchone()
+            if _ecn and _ecn[0]:
+                _org = con.execute("SELECT value FROM app_settings WHERE key='org_name'").fetchone()
+                if not _org or not _org[0]:
+                    con.execute("INSERT OR REPLACE INTO app_settings VALUES ('org_name', ?)", (_ecn[0],))
+                    log.info(f"Migrated email_company_name → org_name (value: {_ecn[0]!r})")
+                else:
+                    log.info(f"Discarded email_company_name={_ecn[0]!r}; org_name={_org[0]!r} already set")
+            con.execute("DELETE FROM app_settings WHERE key='email_company_name'")
+            con.commit()
+        except Exception as _mig_err:
+            log.warning(f"email_company_name → org_name migration failed (non-fatal): {_mig_err}")
         # Migrations — add columns when missing (safe to run on existing DBs)
         # users table
         try:
@@ -834,12 +873,28 @@ def db_init():
                 period_end       REAL DEFAULT 0,
                 pdf_path         TEXT DEFAULT '',
                 pdf_bytes        INTEGER DEFAULT 0,
+                pdf_sha256       TEXT DEFAULT '',
+                csv_path         TEXT DEFAULT '',
+                csv_bytes        INTEGER DEFAULT 0,
+                report_id        TEXT DEFAULT '',
                 delivery_status  TEXT DEFAULT '',
                 recipients_json  TEXT DEFAULT '[]',
                 render_ms        INTEGER DEFAULT 0,
                 error            TEXT DEFAULT '',
                 triggered_by     TEXT DEFAULT ''
             )""")
+        # Idempotent migrations for existing installs — add the new columns
+        # to report_history if it was created before they existed.
+        for _col, _def in [
+            ("pdf_sha256",  "TEXT DEFAULT ''"),
+            ("csv_path",    "TEXT DEFAULT ''"),
+            ("csv_bytes",   "INTEGER DEFAULT 0"),
+            ("report_id",   "TEXT DEFAULT ''"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE report_history ADD COLUMN {_col} {_def}")
+            except Exception:
+                pass
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_report_hist_gen "
             "ON report_history(generated_at DESC)"

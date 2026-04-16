@@ -581,12 +581,29 @@ def pg_create_main_schema(cur):
             period_end       DOUBLE PRECISION DEFAULT 0,
             pdf_path         TEXT DEFAULT '',
             pdf_bytes        INTEGER DEFAULT 0,
+            pdf_sha256       TEXT DEFAULT '',
+            csv_path         TEXT DEFAULT '',
+            csv_bytes        INTEGER DEFAULT 0,
+            report_id        TEXT DEFAULT '',
             delivery_status  TEXT DEFAULT '',
             recipients_json  TEXT DEFAULT '[]',
             render_ms        INTEGER DEFAULT 0,
             error            TEXT DEFAULT '',
             triggered_by     TEXT DEFAULT ''
         )""")
+    # Idempotent migrations — add columns to existing installs
+    for _col, _typedef in [
+        ("pdf_sha256", "TEXT DEFAULT ''"),
+        ("csv_path",   "TEXT DEFAULT ''"),
+        ("csv_bytes",  "INTEGER DEFAULT 0"),
+        ("report_id",  "TEXT DEFAULT ''"),
+    ]:
+        try:
+            cur.execute("SAVEPOINT _alter_rh")
+            cur.execute(f"ALTER TABLE report_history ADD COLUMN {_col} {_typedef}")
+            cur.execute("RELEASE SAVEPOINT _alter_rh")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT _alter_rh")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_report_hist_gen "
         "ON report_history(generated_at DESC)"

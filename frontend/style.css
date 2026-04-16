@@ -1999,6 +1999,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .rpt-kind-technical{background:rgba(248,81,73,.12);color:#e3b341;}
 .rpt-kind-inventory{background:rgba(63,185,80,.14);color:var(--up);}
 .rpt-kind-custom{background:var(--bg4);color:var(--text2);}
+.rpt-fingerprint{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10px;
+                 color:var(--text3);background:var(--bg);border:1px solid var(--border);
+                 padding:1px 6px;border-radius:3px;letter-spacing:.3px;cursor:help;}
 .rpt-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
            padding:60px 20px;text-align:center;gap:10px;}
 .rpt-empty-icon{font-size:40px;opacity:.6;}

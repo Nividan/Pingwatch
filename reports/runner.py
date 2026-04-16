@@ -7,6 +7,7 @@ Called from:
 """
 
 import datetime
+import hashlib
 import os
 import time
 
@@ -14,9 +15,25 @@ from core.config   import REPORTS_DIR
 from core.logger   import log
 from reports       import data as _data
 from reports       import engine as _engine
+from reports       import csv_export as _csv_export
 from reports.delivery import (
     _resolve_recipients, _render_subject_body, send_report_email,
 )
+
+
+def _build_report_id(tpl: dict, ctx: dict) -> str:
+    """Short, human-friendly deterministic ID for this report instance.
+
+    Derived from template id + period bounds + generated_at, so two PDFs
+    rendered from the same template for the same period at different times
+    get different IDs. 12 hex chars = 48 bits of entropy — plenty for
+    unique reference purposes.
+    """
+    seed = (
+        f"{tpl.get('id','')}|{ctx['period']['start_ts']}|"
+        f"{ctx['period']['end_ts']}|{ctx['meta']['generated_at']}"
+    )
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12].upper()
 
 
 def _safe_filename(stem: str) -> str:
@@ -85,12 +102,16 @@ def render_from_template(template: dict,
     kind   = template.get("kind") or "executive"
     period = period_override or cfg.get("period") or "last_month"
     filters = cfg.get("filters") or {}
+    pdfa_mode = str(cfg.get("pdfa_mode") or "").strip()
 
     t0 = time.time()
     ctx = _data.build_report_context(
         kind=kind, period=period, filters=filters, config=cfg,
     )
-    pdf = _engine.render_pdf(kind, ctx)
+    # Report ID must be set BEFORE render_pdf so the footer can print it.
+    ctx["meta"]["report_id"]  = _build_report_id(template, ctx)
+    ctx["meta"]["pdfa_mode"]  = pdfa_mode
+    pdf = _engine.render_pdf(kind, ctx, pdfa_mode=pdfa_mode)
     ms = int((time.time() - t0) * 1000)
     return pdf, ctx, ms
 
@@ -109,10 +130,22 @@ def run_template_now(template_id: str, triggered_by: str = "") -> dict:
     out_dir = _ensure_dir()
     pdf, ctx, ms = render_from_template(tpl, triggered_by=triggered_by)
 
+    cfg = tpl.get("config_json") or {}
+    if isinstance(cfg, str):
+        import json
+        try: cfg = json.loads(cfg)
+        except Exception: cfg = {}
+    want_csv = bool(cfg.get("include_csv", False))
+
     ts = time.time()
     stem = _safe_filename(f"{tpl['name']}_{datetime.datetime.fromtimestamp(ts).strftime('%Y%m%d_%H%M%S')}")
-    pdf_path = ""
+    pdf_path = csv_path = ""
+    csv_bytes_len = 0
     write_err = ""
+
+    pdf_sha256 = hashlib.sha256(pdf).hexdigest()
+    report_id  = ctx["meta"].get("report_id", "")
+
     if out_dir:
         pdf_path = os.path.join(out_dir, f"{stem}.pdf")
         try:
@@ -122,6 +155,16 @@ def run_template_now(template_id: str, triggered_by: str = "") -> dict:
             log.error(f"reports.runner write PDF failed at {pdf_path!r}: {e}")
             write_err = f"write failed: {e}"
             pdf_path = ""
+        if want_csv:
+            try:
+                csv_bytes = _csv_export.build_csv_sidecar(ctx)
+                csv_path = os.path.join(out_dir, f"{stem}.csv")
+                with open(csv_path, "wb") as f:
+                    f.write(csv_bytes)
+                csv_bytes_len = len(csv_bytes)
+            except Exception as e:
+                log.error(f"reports.runner write CSV failed: {e}")
+                csv_path = ""
     else:
         write_err = "no writable reports directory"
 
@@ -135,12 +178,18 @@ def run_template_now(template_id: str, triggered_by: str = "") -> dict:
         "period_end":    ctx["period"]["end_ts"],
         "pdf_path":      pdf_path,
         "pdf_bytes":     len(pdf),
+        "pdf_sha256":    pdf_sha256,
+        "csv_path":      csv_path,
+        "csv_bytes":     csv_bytes_len,
+        "report_id":     report_id,
         "delivery_status": "local_only" if pdf_path else "render_only",
         "render_ms":     ms,
         "error":         write_err,
         "triggered_by":  triggered_by,
     })
     return {"id": hid, "pdf_path": pdf_path, "pdf_bytes": len(pdf),
+            "csv_path": csv_path, "csv_bytes": csv_bytes_len,
+            "pdf_sha256": pdf_sha256, "report_id": report_id,
             "error": write_err}
 
 
@@ -181,11 +230,23 @@ def run_schedule(sch: dict) -> dict:
         })
         return {"ok": False, "error": "render failed"}
 
+    cfg = tpl.get("config_json") or {}
+    if isinstance(cfg, str):
+        import json
+        try: cfg = json.loads(cfg)
+        except Exception: cfg = {}
+    want_csv = bool(cfg.get("include_csv", False))
+
     ts = time.time()
     stem = _safe_filename(
         f"{tpl['name']}_{datetime.datetime.fromtimestamp(ts).strftime('%Y%m%d_%H%M%S')}"
     )
-    pdf_path = ""
+    pdf_sha256 = hashlib.sha256(pdf).hexdigest()
+    report_id  = ctx["meta"].get("report_id", "")
+    pdf_path = csv_path = ""
+    csv_bytes = b""
+    csv_bytes_len = 0
+
     if out_dir:
         pdf_path = os.path.join(out_dir, f"{stem}.pdf")
         try:
@@ -194,6 +255,17 @@ def run_schedule(sch: dict) -> dict:
         except Exception as e:
             log.error(f"reports.runner write PDF failed at {pdf_path!r}: {e}")
             pdf_path = ""
+        if want_csv:
+            try:
+                csv_bytes = _csv_export.build_csv_sidecar(ctx)
+                csv_path = os.path.join(out_dir, f"{stem}.csv")
+                with open(csv_path, "wb") as f:
+                    f.write(csv_bytes)
+                csv_bytes_len = len(csv_bytes)
+            except Exception as e:
+                log.error(f"reports.runner write CSV failed: {e}")
+                csv_path = ""
+                csv_bytes = b""
 
     recipients = _resolve_recipients(sch)
 
@@ -207,6 +279,10 @@ def run_schedule(sch: dict) -> dict:
         "period_end":    ctx["period"]["end_ts"],
         "pdf_path":      pdf_path,
         "pdf_bytes":     len(pdf),
+        "pdf_sha256":    pdf_sha256,
+        "csv_path":      csv_path,
+        "csv_bytes":     csv_bytes_len,
+        "report_id":     report_id,
         "delivery_status": "pending",
         "recipients_json": recipients,
         "render_ms":     ms,
@@ -219,7 +295,11 @@ def run_schedule(sch: dict) -> dict:
         return {"ok": True, "history_id": hid, "sent": 0}
 
     subject, body = _render_subject_body(sch, ctx, len(pdf))
-    ok, err = send_report_email(recipients, subject, body, pdf,
-                                pdf_filename=os.path.basename(pdf_path) or "report.pdf")
+    ok, err = send_report_email(
+        recipients, subject, body, pdf,
+        pdf_filename=os.path.basename(pdf_path) or "report.pdf",
+        csv_bytes=csv_bytes if csv_bytes else None,
+        csv_filename=os.path.basename(csv_path) if csv_path else None,
+    )
     db_update_report_history_delivery(hid, "sent" if ok else "failed", err)
     return {"ok": ok, "history_id": hid, "sent": len(recipients) if ok else 0, "error": err}

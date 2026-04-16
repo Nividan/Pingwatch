@@ -40,6 +40,7 @@ _RE_SCHEDULE_RUN  = re.compile(r"^/api/reports/schedule/([a-zA-Z0-9_\-]+)/run$")
 _RE_HISTORY       = re.compile(r"^/api/reports/history$")
 _RE_HISTORY_ID    = re.compile(r"^/api/reports/history/([a-zA-Z0-9_\-]+)$")
 _RE_HISTORY_DL    = re.compile(r"^/api/reports/history/([a-zA-Z0-9_\-]+)/download$")
+_RE_HISTORY_CSV   = re.compile(r"^/api/reports/history/([a-zA-Z0-9_\-]+)/csv$")
 _RE_RUN_NOW       = re.compile(r"^/api/reports/run$")
 _RE_PREVIEW       = re.compile(r"^/api/reports/preview$")
 _RE_TEST_SEND     = re.compile(r"^/api/reports/test-send$")
@@ -264,6 +265,33 @@ def handle(h, method, path, body):
             log.error(f"reports.history download error: {e}")
             h._json(500, {"error": "read failed"}); return True
 
+    m = _RE_HISTORY_CSV.match(path)
+    if m and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db import db_get_report_history
+        row = db_get_report_history(m.group(1))
+        if not row:
+            h._json(404, {"error": "not found"}); return True
+        csv_path = row.get("csv_path") or ""
+        if not csv_path or not os.path.isfile(csv_path):
+            h._json(404, {"error": "csv missing"}); return True
+        try:
+            with open(csv_path, "rb") as f:
+                data = f.read()
+            fname = os.path.basename(csv_path) or "report.csv"
+            h.send_response(200)
+            h.send_header("Content-Type", "text/csv; charset=utf-8")
+            h.send_header("Content-Length", str(len(data)))
+            h.send_header("Content-Disposition",
+                          f'attachment; filename="{fname}"')
+            h.end_headers()
+            h.wfile.write(data)
+            return True
+        except Exception as e:
+            log.error(f"reports.history csv download error: {e}")
+            h._json(500, {"error": "read failed"}); return True
+
     m = _RE_HISTORY_ID.match(path)
     if m and method == "DELETE":
         user, _ = h._require("admin")
@@ -272,11 +300,12 @@ def handle(h, method, path, body):
         row = db_get_report_history(m.group(1))
         if not row:
             h._json(404, {"error": "not found"}); return True
-        # Delete the PDF file too (best-effort)
-        pp = row.get("pdf_path") or ""
-        if pp and os.path.isfile(pp):
-            try: os.remove(pp)
-            except Exception as e: log.warning(f"reports.history pdf delete failed: {e}")
+        # Delete both PDF and CSV if present (best-effort)
+        for key in ("pdf_path", "csv_path"):
+            pp = row.get(key) or ""
+            if pp and os.path.isfile(pp):
+                try: os.remove(pp)
+                except Exception as e: log.warning(f"reports.history {key} delete failed: {e}")
         db_delete_report_history(m.group(1))
         db_log_audit(user, h.client_address[0], "report_history_delete", row.get("template_name", ""))
         h._json(200, {"ok": True})
