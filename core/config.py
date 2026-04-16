@@ -30,8 +30,34 @@ PG_POOL_MAX  = int(os.environ.get("PW_PG_POOL_MAX", "20"))
 FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
 CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
 DB_BACKUP_DIR    = os.path.join(_ROOT, "backup", "database")
-REPORTS_DIR      = os.path.join(_ROOT, "backup", "reports")
 CERTS_DIR        = os.path.join(_ROOT, "certs")
+
+
+def _default_reports_dir() -> str:
+    """
+    Pick a reports directory that the *service user* is guaranteed to own.
+
+    Order of preference:
+      1. PW_REPORTS_DIR env var            — ops override
+      2. XDG_DATA_HOME/pingwatch/reports   — XDG-standard user data dir
+      3. ~/.local/share/pingwatch/reports  — portable fallback
+
+    Storing inside $HOME (not the git checkout) means:
+      - `git pull` — even as root — never touches ownership of this path
+      - install/uninstall/re-pull don't break write access
+      - same location works identically for systemd-managed and foreground runs
+      - Windows gets %USERPROFILE%/.local/share/pingwatch/reports
+    """
+    env = os.environ.get("PW_REPORTS_DIR")
+    if env:
+        return env
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return os.path.join(xdg, "pingwatch", "reports")
+    return os.path.join(os.path.expanduser("~"), ".local", "share", "pingwatch", "reports")
+
+
+REPORTS_DIR      = _default_reports_dir()
 TLS_PORT_DEFAULT = 8443
 
 # Pre-compiled HTTP route patterns

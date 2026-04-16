@@ -5,15 +5,18 @@
 <!-- ── Headline availability tile ────────────────────────────────── -->
 <section class="section">
   <h1>Availability</h1>
-  <div class="headline-tile tile-{{ overall.pct | statuspct }}">
-    <div class="headline-number">
-      {% if overall.pct is not none %}{{ overall.pct | pctfmt(2) }}{% else %}—{% endif %}
+  {% if overall.pct is not none %}
+    <div class="headline-tile tile-{{ overall.pct | statuspct }}">
+      <div class="headline-number">{{ overall.pct | pctfmt(2) }}</div>
+      <div class="headline-caption">Overall uptime across {{ inventory.devices }} devices
+      ({{ inventory.sensors }} sensors) over {{ period.days }} days.</div>
     </div>
-    <div class="headline-caption">
-      Overall uptime across {{ inventory.devices }} devices
-      ({{ inventory.sensors }} sensors) over {{ period.days }} days.
+  {% else %}
+    <div class="headline-tile tile-muted">
+      <div class="headline-number muted">No data</div>
+      <div class="headline-caption">No probe samples were recorded for the selected period.</div>
     </div>
-  </div>
+  {% endif %}
   {% if charts.availability_trend %}
     <img class="chart" src="{{ charts.availability_trend }}" alt="Availability trend">
   {% endif %}
