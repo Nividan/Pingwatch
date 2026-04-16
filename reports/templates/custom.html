@@ -306,7 +306,7 @@
       <tbody>
         {% for t in top_traps %}
         <tr>
-          <td>{{ t.name }}</td>
+          <td>{{ t.name | trapname }}</td>
           <td>{{ t.vendor }}</td>
           <td class="sev-{{ t.severity | lower }}">{{ t.severity }}</td>
           <td>{{ t.count }}</td>

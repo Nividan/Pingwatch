@@ -177,11 +177,10 @@ table.data tr:nth-child(even) td { background: #fafbfc; }
   color: #1a7f37; font-weight: 600;
 }
 
-/* KV-table highlight: when a critical/expired count is non-zero,
-   the cell already carries the .crit class — give it a subtle red wash
-   so it draws the eye without looking like an advertisement banner. */
-table.kv td.crit { background: #fdf0f0; padding-left: 8pt; padding-right: 8pt; border-radius: 2pt; }
-table.kv td.warn { background: #fdf7e7; padding-left: 8pt; padding-right: 8pt; border-radius: 2pt; }
+/* Note: earlier versions added a pink/amber wash on KV cells with the crit/warn
+   class. Removed — it misaligned the column because .kv td has zero horizontal
+   padding by default, so the wash bled across the whole cell width. The bold
+   red / amber text from the base .crit / .warn rules is already clear signal. */
 
 /* ── Charts ────────────────────────────────────────────────────── */
 img.chart {
