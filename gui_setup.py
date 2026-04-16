@@ -246,8 +246,11 @@ class WizardController:
 
         root.title("PingWatch Setup")
         root.configure(bg=BG)
-        root.geometry("820x780")
-        root.minsize(760, 700)
+        # Wizard now has 8 steps and the Summary page lists DB + Network +
+        # Security + Alerts — a taller default keeps the progress bar visible
+        # during the final install step without forcing the user to resize.
+        root.geometry("900x900")
+        root.minsize(820, 800)
         root.resizable(True, True)
 
         # Window icon (title bar + taskbar)
