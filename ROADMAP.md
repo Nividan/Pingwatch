@@ -1,339 +1,55 @@
 # 🚀 PingWatch Roadmap
 
 ## ✅ Completed
-- Fix export PNG (NTM)
-- Create new log file for backup
-- Add backup settings (global schedule, retention)
-- Export backup configs to `/config-backup/`
-- Add SNMP device type + trap database
-- start.bat setup wizard
-- HTTPS support (auto-generate/import cert)
-- Syslog integration (RFC 5424, UDP/TCP, severity filter, test button)
-- Linux / macOS support (v0.7.1)
-  - Cross-platform setup wizard (apt/dnf/yum/brew, headless mode)
-  - `start.sh` launcher with `--install-service` / `--uninstall-service`
-  - systemd service with `CAP_NET_RAW` + `CAP_NET_BIND_SERVICE`
-  - Server restart & shutdown from web UI (Settings → General)
-- LDAP / Active Directory authentication
-  - Service-account bind + user search + user bind flow
-  - LDAPS, StartTLS, and plain LDAP support
-  - Encrypted bind password storage (Fernet)
-  - Domain user creation with role assignment
-  - Test Connection & Test User Auth from Settings UI
-  - Accepts `user`, `DOMAIN\user`, and `user@domain` login formats
-- LDAP Group Integration
-  - Import AD/LDAP groups into PingWatch (Settings → Groups → Import from LDAP) with per-group role assignment
-  - Auto-provision: unknown LDAP users in imported groups are created automatically on first login with the correct role, display name, and email
-  - Login-time sync: refreshes group, role, and display name from LDAP on every login
-  - Auto-disable: login rejected and account suspended when user is removed from all imported groups in AD
-  - Background sync thread — reconciles LDAP users against AD group membership on a configurable interval (default 60 min, 0 = disabled)
-  - Nested AD groups via `LDAP_MATCHING_RULE_IN_CHAIN` (optional toggle)
-  - Multi-group priority: user in multiple imported groups receives the highest role
-  - Test User Groups diagnostic — admin can look up a user's LDAP group memberships from the UI
-  - LDAP badge on imported groups; LDAP-managed group editor hides member checkboxes
-- IP Address Management (IPAM)
-  - Subnet management (CIDR) with host IP expansion
-  - Per-IP name/allocation tracking with inline editing
-  - Utilisation summary per subnet
-  - Auto-sync with monitored devices
-  - Reverse-DNS lookup column with background batch resolution
-  - Per-subnet Refresh DNS button with live polling (operator role)
-  - DNS hostname search support
-- Dual-database architecture
-  - Main DB (`pingwatch.db`) — config, devices, users, IPAM, SNMP reference
-  - Logs DB (`pingwatch_logs.db`) — sensor samples, flap log, SNMP traps, errors
-  - Independent write-queue threads per DB
-  - One-time safe migration from legacy single-DB
-  - Split export/import (Main DB, Logs DB, ZIP bundle with manifest)
-  - DB stats API with row counts per table
-  - Dual-DB UI in Settings → Database tab
-  - Scheduled backup covers both DBs; fixed backup `CANTOPEN` error
-- Network Topology Map (NTM) improvements
-  - Device name overflow fix — all node types truncate long names with ellipsis
-  - Backbone Switch: fixed phantom default VLAN badges when no VLANs configured
-  - Firewall / Switch / Backbone Switch: optional Primary / Secondary role badge
-  - Edit Link: fixed source and target device changes not being saved
-- User profile dropdown (top bar)
-  - Username, role badge, green status dot
-  - Settings shortcut, Change Password modal, Theme toggle, Sign Out
-  - Keyboard navigation, close on ESC / outside click
-  - Edit Profile shortcut (opens self-service name + email editor)
-- User profiles and groups
-  - `full_name` + `email` columns on every user account
-  - Self-service profile editor accessible from the user dropdown (any role)
-  - Admin can also set group assignment and role from Settings → Users
-  - `user_groups` table — named groups with description and member count
-  - Settings → Groups tab — create, edit, delete groups; assign members (one group per user)
-  - Users tab extended with Full Name / Email / Group columns and per-row Edit button
-- Advanced alerting rules engine
-  - Rules UI with name, severity, condition builder (AND/OR logic)
-  - Conditions: event type, sensor type, device group, threshold state, direction, packet loss %, severity
-  - Multiple actions per rule: email, webhook, syslog, browser push notification
-  - Email action targets user groups (resolved to member emails at dispatch) + optional extra raw addresses; backward-compatible with legacy `"to"` field
-  - Browser push notification action with configurable title, body template, and sound
-  - Collapsible action blocks in rule editor — pre-configured blocks start collapsed with a one-line summary
-  - Alert cooldown / deduplication (DB-persisted, survives restarts)
-  - Maintenance windows — suppresses alert dispatch for all/group/device scopes; recurring daily schedule supported
-  - Alert history tab with severity filter, acknowledge/resolve workflow
-  - Test-fire button per rule (dispatches all actions with synthetic context)
-- Hierarchical alert profiles (replaced condition-based rules engine)
-  - PRTG-style escalation stages: trigger state (Down / Warning / Recovered), per-stage delay (seconds), repeat interval (minutes), and reusable action template
-  - Cascade resolution: sensor → device → group → global; first match wins; result cached on the sensor object and invalidated on any profile change
-  - Reusable action templates ("Email admin", "Slack #ops") defined once and shared across many stages and profiles
-  - Action template editor with checkbox pickers for user and group recipients (no raw IDs)
-  - Recovery stage computes total downtime duration from session start and includes it in the notification
-  - Edit Group modal (`forms-group.js`) — group rename and per-group alert profile in one panel; ⚙️ button on group header + right-click "Edit Group"
-  - Per-device and per-sensor profile override with one-click "Reset to inherited"
-  - Maintenance window suppression and mute-flag gate preserved from previous engine
-  - `alert_profile_state` table persists stage fire history across restarts; `alert_events` updated with profile_id / stage_id / profile_name
-  - Resolved event duration fixed — stops counting once alert_events.resolved_at is set
-- Settings → Sensors tab redesigned as compact table with expandable rows
-- Settings → Logs tab: improved fonts, structured rows, log-level colour coding
-- Home button — PingWatch logo navigates to Dashboard tab
-- Add filter arrows (events tab)
-- Config backup evolved into lightweight NCM
-  - Config diff viewer — select 2 runs in history, line-level diff with green/red highlights
-  - Context-aware display — equal lines collapsed with ±3-line context, expandable
-  - Search inside config viewer — highlight matches, ↑/↓ navigation
-  - Global config search — search across all stored configs from the backups toolbar
-  - Rollback command preview — auto-generated from diff, copy to clipboard
-  - Backup Status dashboard widget — OK / Failed / Never run / Enabled KPI counts
-  - Cisco rollback now includes enclosing interface/context block, `end`, and `wr`
-- SNMP improvements
-  - Interface discovery — walks ifTable + ifXTable; auto-selects metric per interface; clicking a single checkbox+metric syncs the OID input field
-  - Counter32 / Counter64 traffic OIDs display live rate (B/s, KB/s, MB/s, GB/s) via delta calculation with wraparound handling
-  - Non-numeric SNMP values (e.g. device name from wrong OID) shown in orange as a misconfiguration hint
-  - Probe uses `-On` flag and stdout-only parsing for deterministic output regardless of MIB environment
-- Sensor host linking
-  - Sensors inherit device host by default (`host_override = False`)
-  - Setting a host manually marks it overridden; clearing it re-links to the device
-  - Device IP changes propagate automatically to all linked sensors
-- Device tile loading skeleton — shimmer animation replaces stale cached tiles while fresh data fetches in parallel
-- Alert tagging on sensor events table
-  - Severity badge, rule name, and state badge shown inline on each event row
-  - ACK and Resolve buttons appear directly on active-alert rows
-  - Tag refreshes on SSE `ack_event` without page reload
-- 10K sensor scalability
-  - Auto-scaling probe executor — formula `max(64, min(512, sensor_count // 4))`; live resize on device add/delete; manual override (4–512) in Settings → General; setting to 0/blank returns to auto
-  - Status filter pills (All / Down / Warn / Up / Pause) in device action bar with live SSE-updated counts; composes with text search
-  - Device list pagination — 50 devices/page by default; user-selectable 25/50/100 with `localStorage` persistence; filter and status changes reset to page 1
-  - Sensor tile drag-to-reorder — HTML5 drag inside device detail window; order saved to `localStorage` per device; device card top-3 preview respects custom order
-  - Fixed 3d history showing only ~14h — `_pick_table` boundary moved from 4320 → 1440 min so 3d routes to `sensor_samples_5m` (full 3-day coverage) instead of raw table (10k-row-capped)
-  - Fixed rollup backfill triggering on every restart — condition now checks `sensor_samples_5m` row count instead of stale `MIN(ts)` gap detection
-- VMware vSphere monitoring
-  - New sensor type: VMware — connects to vCenter/ESXi via pyvmomi (optional dependency)
-  - VM discovery — browse and bulk-select VMs with per-VM metric checkboxes grouped by category (CPU, Memory, Disk, Datastore, Network, System)
-  - 16 metrics: cpu_usage, cpu_ready, mem_active, mem_consumed, mem_consumed_pct, disk_read, disk_write, disk_usage, disk_used_pct, ds_read_lat, ds_write_lat, net_rx, net_tx, net_usage, uptime, power state
-  - Session caching with 25-minute TTL; metric caching with 20-second TTL (matches vSphere realtime interval) — avoids redundant QueryPerf when multiple sensors target the same VM
-  - Grouped VM display — collapsible VM groups with status dot, metric count, sparklines, and uptime bars per metric row
-  - Smart per-metric threshold defaults (cpu_usage→80/95%, ds_read_lat→20/50ms, etc.); RAM-aware thresholds for memory metrics
-  - Informational metrics (uptime, power state, disk_read, disk_write, disk_usage) — no warn/crit thresholds; skipped in threshold evaluation
-  - `mem_consumed_pct` uses `guestMemoryUsage` from VMware Tools (matches guest OS Task Manager), not vSphere host-level `mem.consumed.average`
-  - Formatted value display across all rendering paths — `Xd Xh Xm` for uptime, `%` for CPU/memory, `KBps`/`MBps` for disk/network, `ms` for latency
-  - VM group header actions: + Metric, 🔕 Mute / 🔔 Unmute (bulk toggle for all sensors in group), ✕ Remove
-  - Bulk add: `alerts_muted` field included in payload; per-metric threshold nulling for info metrics
-  - Metric chooser dropdown — grouped by category with headers, fixed clipping issue
-- Alert engine hardening
-  - Delayed DOWN emails skip sending if sensor was deleted or stopped during the delay window
-  - Rule-based alert engine verifies sensor/device still exists before dispatching (prevents ghost alerts after deletion)
-- Bulk resolve — "Resolve All" button on Events tab resolves all active alert events and flaps in one click with confirmation dialog; `POST /api/alert/events/resolve-all` endpoint
-- Sensor history KPI tiles time-range correlation
-  - Avg ms / Min ms / Max ms tiles now reflect the selected time window (12h / 3d / 7d / 30d / 90d)
-  - Tiles compute from the same sample data as the stats bar so values visibly change with time range
-  - Avail, Loss%, and Jitter remain computed from hourly summary aggregates (more accurate for those metrics)
-- Bug fixes
-  - Event detail panel "Open Device" and "Sensor History" buttons restored — navigate to device panel and open sensor history modal respectively
-  - Backup schedule dark mode styling fixed — frequency dropdown, days-of-week checkboxes, and time input render correctly in dark theme
-- Project structure reorganisation
-  - `start.sh` + `pingwatch.service` moved to `linux/`; `start.bat` + `pingwatch.pyw` moved to `windows/`
-  - All launchers use dynamic relative paths — work correctly from any working directory regardless of `cwd`
-- VMware sensor improvements
-  - Device-level status now correctly reflects VMware sensor threshold states — `crit` threshold → device Down (red), `warn` threshold → device Warn (orange); previously the device tile always showed Up/green even with active threshold violations
-  - `SmartConnect()` capped at 60 s via `socket.setdefaulttimeout()` — prevents vSphere authentication hanging indefinitely on first connect (was causing ~2-minute startup delay for new VMware sensors)
-- Dashboard widget loading shimmer — widgets show animated shimmer with "Loading…" overlay during initial data fetch; clears automatically on first SSE update
-- Sensor history time-range fade — smooth opacity transition with guaranteed minimum 250 ms display when switching between time ranges (1 h → 3 y)
-- Code quality & maintainability refactor
-  - `db/helpers.py` — unified dual-backend query layer (`db_query`, `db_query_one`, `db_execute`, `db_executemany`, `db_upsert`, `db_cursor`); eliminates per-module `if is_pg()` boilerplate across all DB modules
-  - `core/constants.py` — centralised probe and server constants (`PORT_MIN/MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE`, etc.)
-  - `core/validation.py` — server-side input validation helpers (`validate_port`, `validate_host`, `validate_interval`, `validate_timeout`, `validate_name`)
-  - `server.py` `Handler._error()` — safe error handler: full exception logged server-side, generic message returned to client (no internal detail leakage)
-  - `frontend/forms-utils.js` — `msColor()`, `statusClass()`, `_lsGet()`, `_lsSet()` promoted to canonical shared implementations; all other JS modules reference these instead of maintaining local copies
-  - `frontend/app.js` `TIMINGS` — frozen object of all SSE/UI timing constants; replaces scattered magic numbers
-  - `frontend/forms-settings.js` — `openSettings()` refactored from ~600-line monolith into 10 focused tab-builder functions (`_buildSettingsTab_*`)
-- `db/persistence.py` startup restore — reverted window-function approach (caused 50 s startup on PostgreSQL due to full-table scan bypassing the composite index) back to per-sensor indexed seeks + single batched `GROUP BY` stats query; startup time restored to ~4 s
 
-- Events tab Active / History split
-  - Inner tabs ("Active" / "History") inside Sensor Events panel — Active shows unresolved flaps + alert-linked traps; History shows resolved events
-  - Active tab badge shows live unresolved count; "Resolve All" hidden on History tab
-  - SNMP traps without a linked alert rule default to History (informational, not actionable)
-  - Tab selection persisted in `localStorage` (`pw_evt_inner_tab`)
-- Debug Mode checkbox auto-saves on toggle — no Save button required; reverts on API failure
-- Subnet Discovery — scan a CIDR for unmonitored hosts
-  - Full mode (ping + DNS + MAC/OUI lookup + port scan + device-type guess) and Ping-only mode (fast, for /18–/16 ranges)
-  - Reuses existing `scan_ports` setting as the single source of truth for port list
-  - Max scan size /16 (65 534 hosts) with tiered runtime warning banners; estimated runtime shown live
-  - Auto-switches to Ping-only when host count > 4 096, user can override
-  - Multi-NIC duplicate detection via hostname fingerprinting — flagged rows pre-unchecked, inline ⚠ note
-  - Per-device sensor review step — Ping always on, HTTP/TLS/SNMP/TCP toggles per detected port
-  - Bulk add endpoint (`POST /api/discovery/bulk-add`) — creates normal standalone devices + sensors, single `db_save()` persist
-  - Background scan with 1 s SSE-style polling and `DELETE` cancel support; in-memory state, auto-purged after 1 h
-  - Dedicated `ThreadPoolExecutor(64)` isolated from sensor probe pool to avoid starving existing probes during large scans
-  - Audit log entries for scan start and bulk add
+- HTTPS / TLS support — self-signed cert generation, import, auto-discovery
+- Syslog forwarding — RFC 5424, UDP/TCP, severity filter
+- Linux / macOS support — `start.sh`, systemd service, headless setup wizard
+- LDAP / Active Directory authentication — LDAPS/StartTLS, encrypted bind password, auto-provision
+- LDAP Group Integration — import AD groups, login-time sync, background sync, nested groups
+- IP Address Management (IPAM) — subnet tracking, reverse DNS, live ping-sweep integration
+- Dual-database architecture — SQLite (default) + PostgreSQL; split Main/Logs DBs; export/import
+- Network Topology Manager (NTM) — draw.io-style editor, live status overlay, PNG export
+- User profiles and groups — full name/email per user, self-service editor, group CRUD
+- User profile dropdown — role badge, theme toggle, Change Password, Edit Profile
+- Advanced alerting — hierarchical PRTG-style profiles; cascade resolution; reusable action templates; maintenance windows
+- Config backup (lightweight NCM) — SSH/Telnet, diff viewer, global search, vendor-aware rollback
+- SNMP improvements — interface discovery, Counter32/64 rate display, wrong-OID detection
+- VMware vSphere monitoring — 16 metrics, VM discovery, grouped display, smart thresholds
+- Device License Tracking — per-device licenses, expiry alerts, IPAM badge, dashboard widget
+- Multi-dashboard tabs — per-user named dashboards, right-click rename/delete, starter widgets
+- Subnet Discovery — CIDR scan, Full/Ping-only modes, per-device sensor review, bulk add
+- Anomaly detection — opt-in per sensor; EWMA learned baseline; cold-start suppression
+- Two-factor authentication (TOTP) — optional/enforceable per role, recovery codes, trusted devices
+- Light / Dark theme — full CSS variable palette, canvas/iframe sync, cross-device persistence
+- Reports module — scheduled PDF/CSV exports; Executive / Technical / Inventory kinds; WeasyPrint + Matplotlib; email delivery; PDF/A compliance mode
+- Air-gapped compatibility — self-hosted fonts, zero CDN dependencies, offline install guide
+- Professional SMTP alert emails — hero logo, status banner, breadcrumb path, stats grid
+- GUI setup wizard (Windows) — dark-themed tkinter, 6-step flow, background package installs
+- Performance & scalability — auto-scaling probe executor, SSE batching, startup restore fix
 
-- Subnet Discovery improvements
-  - Per-device group assignment — set a global default group for the batch, override individual rows independently; custom group border accent on overridden rows
-  - "Guess" column renamed to "Type" for clarity
-- NTM live map performance
-  - LED blink animation moved from JS `setInterval` to pure CSS `@keyframes` — compositor-handled, never blocks the main thread; removed `querySelectorAll` churn on every tick
-  - Packet-trace cooldown extended (4 → 6 s), max concurrent traces reduced (3 → 2)
-  - SSE threshold events gated by `_ntmVisible` — map receives no updates while hidden
-  - Link animation step counts halved across all link types — reduces GPU fill rate
-- Alert profile engine recovery bug fix — recovery path now uses `else:` guard so `db_log_event(state="active")` cannot fire immediately after `db_auto_resolve_event()`, eliminating stale active events after sensor recovery
-- TLS sensor threshold fixes
-  - Threshold comparison direction fixed — now alerts when days remaining drops **below** threshold (was inverted: `>=` → `<=`)
-  - Default thresholds corrected from 500/2000 (ms-style) to 30/7 (days)
-  - Add Sensor tab switching now updates threshold labels dynamically (TLS shows "Warn/Crit Days (cert expiry)")
-  - Chart threshold lines show "d" suffix for TLS sensors instead of "ms"
-  - Log messages include "days" unit for TLS threshold events
-- Device License Tracking
-  - `device_licenses` table — per-device license records with `id`, `did`, `license_name`, `expiry_date`, `note`, `warn_days` (default 30), `crit_days` (default 0), `last_status`, `created_at`, `updated_at`; `idx_dev_lic_did` index; SQLite + PostgreSQL schemas
-  - `monitoring/license_checker.py` — `check_license_expirations()` compares expiry dates against today; fires `license_warn` / `license_crit` events into `flap_log` (`stype='license'`) on state change; fires `license_ok` recovery and auto-resolves the active event when renewed; broadcasts `license_status` SSE event; deduplication via `last_status` (no duplicate events unless status changes)
-  - Runs every 6 hours via `autosave_loop` hook (`_iter % 360 == 0`) and immediately after any license add/update via the API
-  - REST API — `GET/POST /api/device/{did}/licenses`, `PATCH/DELETE /api/license/{id}`, `GET /api/licenses`, `GET /api/licenses/summary`, `POST /api/licenses/check` (admin)
-  - Events tab — `license_ok`/`license_warn`/`license_crit` severity mapping; "License" type filter option; 📋 icon
-  - Edit Device modal — collapsible Licenses section (same pattern as Secondary IPs): status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day threshold inputs, add/delete per license
-  - IPAM table — "Licenses" column shows worst license status badge per linked device (`_ipamLicenseMap`); refreshed in parallel with subnet load and on SSE `license_status` events
-  - License Overview dashboard widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted table of expiring/expired licenses (device, license name, expiry date, days remaining, status badge)
-  - SSE listener in `app.js` — `license_status` event refreshes IPAM license map and dashboard widget in real-time
-
-- Multi-dashboard tabs
-  - Per-user named dashboards (up to 10) with tab bar above widget grid
-  - Create / rename / delete dashboards via right-click context menu
-  - Tab switching preserves widgets; last-active tab remembered in localStorage
-  - New users auto-created a "Default" dashboard with 8 starter widgets (System Status, Server Perf, Event Summary, Internet Health, Network Avail, Device Status, Down Devices, Packet Loss)
-  - `dashboards` table replaces `dashboard_widgets`; idempotent migration on startup
-  - API: `GET/POST /api/dashboards`, `GET/PUT/PATCH/DELETE /api/dashboards/{id}`, `PUT /api/dashboards/reorder`
-- Professional SMTP alert email redesign
-  - Hero logo section (up to 2 MB, centered, company name below)
-  - Colored status banner with timestamp
-  - Sensor breadcrumb path (Group > Device > Sensor)
-  - Detail callout box with severity-tinted background
-  - Stats grid: Sensor Details, Performance, Thresholds, Statistics
-  - Subject line uses configured company name
-  - Test email renders full professional layout with mock sensor data
-- IPAM table sort and filter
-  - Clickable column headers for ascending/descending sort on all 7 columns
-  - Filter dropdowns on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None)
-  - Sort, filter, and text search compose together
-- GUI setup wizard (Windows)
-  - Dark-themed tkinter wizard (`gui_setup.py`) matching PingWatch's colour palette
-  - 6-step flow: Welcome, Packages, Database, Network, Security, Summary
-  - Background threads for pip installs and PostgreSQL connection tests
-  - Falls back to CLI `setup_wizard.py` when tkinter is unavailable
-  - `core/setup_logic.py` — shared non-UI logic extracted from setup_wizard.py
-  - `windows/launcher.pyw` — Python-based launcher replacing start.bat logic (admin elevation, first-run detection, port cleanup)
-  - `windows/start.bat` reduced to a 4-line shim
-
-- Maintenance window improvements
-  - Scope field replaced with device/group dropdown — no more typing raw IDs; device picker populated live from `S.devices`; group picker populated from unique group names
-  - One-time vs recurring time fields are now separate — datetime pickers hidden when "Recurring" is checked; recurring windows auto-set start/end timestamps to now → +10 years so `db_active_windows()` always includes them
-  - Maintenance window list shows device name instead of device ID for device-scoped windows
-- Stop All device sensors fix — stopped sensors are excluded from `Device.status` evaluation so a fully-stopped device shows gray (unknown) instead of red (down); `stop_device()` broadcasts an SSE `device_status` event immediately and auto-resolves open flap events
-- Air-gapped compatibility — zero external runtime dependencies
-  - Self-hosted Google Fonts — Exo 2, JetBrains Mono, Orbitron, Share Tech Mono downloaded as `.woff2` to `frontend/fonts/` (~179 KB); `@font-face` rules added to `style.css`, `map.css`, and inline `<style>` in `setup.html`; all three `<link href="https://fonts.googleapis.com/...">` tags removed from `index.html`, `setup.html`, `map.html`
-  - `map.js::_inlineFontsForExport()` rewritten to fetch local `/fonts/*.woff2` and base64-embed them into exported PNGs (no more external fetch + `AbortController` timeout); works fully offline
-  - CSP tightened in `server.py` — dropped `https://fonts.googleapis.com` from `style-src` and `https://fonts.gstatic.com` from `font-src`; now pure `'self'`
-  - Air-gapped installation guide added to `README.md` (pre-downloaded wheels, self-signed TLS instead of ACME, internal SMTP relay, etc.)
-
-- Light / Dark theme toggle (Phase 1 — base UI)
-  - Full GitHub-Light CSS variable palette via `:root[data-theme="light"]` override block in `style.css`; dark remains the default; `color-scheme` toggled so native controls (date pickers, scrollbars) follow the theme
-  - Inline `<head>` bootstrap script reads `localStorage.pw_theme` and applies `data-theme` before CSS paints — prevents flash-of-unthemed-content on reload
-  - Hybrid persistence — `localStorage` (`pw_theme`) for instant per-browser apply + new `users.theme_preference` column for authoritative cross-device sync; `/api/me` returns the server value on login and reconciles into localStorage (skipped server echo via `{sync:false}`)
-  - `frontend/theme.js` module — public API (`getTheme`, `setTheme`, `toggleTheme`, `getCssVar`, `getCssRgb`); loaded first in the JS bundle so downstream modules can read theme-aware CSS variables
-  - `PATCH /api/me/theme` endpoint (any role, validates `dark` / `light`) fired in the background by `setTheme()`
-  - User menu "◐ Theme" item re-enabled — label flips between "☀ Switch to Light" and "🌙 Switch to Dark" based on current theme
-  - Login-screen SVGs converted to `currentColor` so the logo follows the theme before `/api/me` returns
-  - `themechange` `CustomEvent` dispatched on toggle + postMessage to the map iframe — hook point for canvas / iframe redraws in Phase 2
-- Light / Dark theme — Phase 2 (canvas, map iframe, full surface coverage)
-  - Canvas drawers (`bg.js` starfield, `dashboard.js` sparklines, `sensors.js` history chart + mini sparkline, `map.js` NTM animated backgrounds) maintain per-module RGB colour caches populated via `getCssRgb()` / direct palette objects and invalidated on the `themechange` event — all open history charts redraw immediately from `_histCache` on theme flip with no page reload
-  - Topology map iframe (`map.css`) — light palette at `:root[data-theme="light"]` plus a comprehensive `[data-theme="light"]` surface-override block that reskins header, side panel, inputs, modals, legend, zoom HUD, dashboard panel, incident cards, page tabs, export menu, context menu, and toasts; synchronous `<head>` bootstrap in `map.html` reads `localStorage.pw_theme` (shared same-origin with parent) so the iframe paints with the correct palette from the first frame
-  - NTM animated background (`_NTM_BG` palette in `map.js`) — hex grid, matrix streams, connection mesh, ring pulses, particles, scan line, corner HUD, and base fill all flip via `ntm_themechange` event; offscreen hex cache invalidated so the next frame rebuilds with the new stroke colour
-  - Semantic surface tokens added to `style.css` (`--card-bg`, `--card-bg-soft`, `--panel-bg`, `--panel-bg-strong`, `--panel-bg-glass`, `--modal-overlay`, `--surface-inset`, etc.) so device cards, modals, device-detail windows, toasts, and the login panel flip with the theme instead of holding bespoke dark rgbas
-  - IPAM table light-mode contrast — used-row tint raised from 4 % to 9 %, hover switched to an accent tint, free-row background pinned to `var(--bg)`, and status pill alphas bumped so populated vs. free rows remain clearly distinguishable on white
-  - History-modal KPI tiles (`.dm-kpi-item`) — hardcoded navy gradient flipped to `#ffffff → #eef2f6` with a softened hover shadow in light mode
-  - Login-screen `.lt-ping` wordmark — gradient converted from hardcoded sky-blues to `var(--accent)` / `var(--accent-hover)` so the brand text darkens for AA contrast on the white `.login-box`; `.login-box` itself now uses `--panel-bg-strong` + `--accent-glow`
-
-- Two-factor authentication (TOTP)
-  - Optional per user; enforceable per role (viewer / operator / admin)
-  - Setup flow with QR code + manual secret; TOTP verify step at login
-  - Recovery codes — 8 single-use backup codes at enrolment; admin reset for lost devices (`/api/users/{u}/totp/reset`)
-  - Audit log entries for all 2FA events (enable, disable, login, recovery use, admin reset)
-
-- Remember this device (trusted-device tokens)
-  - `pw_trusted` HttpOnly SameSite=Strict cookie; raw token is SHA-256 hashed before DB storage — a DB read-only leak does not yield bypass tokens
-  - Default 9 hours (one workday); user-configurable up to 30 days; 0 = always prompt TOTP
-  - `trusted_devices` table with device label (parsed from User-Agent), IP, last used, expiry; server-side storage allows revocation
-  - Auto-revoke on: password change, 2FA disable, admin TOTP reset
-  - Trusted Devices management UI in 2FA settings — device label, IP, last used, expiry; per-device Revoke + Revoke All; current device flagged
-  - Background sweep of expired rows every 6 hours via `autosave_loop`
-
-- Performance & code quality improvements
-  - `dev.status` cached on the sensor object and invalidated on state change — 2–5× CPU reduction for large devices
-  - Scheduler heap tombstones for deleted sensors — stale entries no longer accumulate in the min-heap
-  - Per-subscriber SSE sender threads — slow browsers no longer block the probe loop
-  - `SELECT *` replaced with explicit column lists in `db/alert_events.py` and `db/alert_profiles.py`
-  - Hostname format regex validation in `monitoring/probes.py` before subprocess
-  - `_evtDetailTimer` scoped per modal in `frontend/events.js`
-  - `_broadcast` refactored to accept a list of `(event, data)` tuples per probe end
-  - Orchestration helpers extracted from route modules into dedicated helpers
-  - `db/helpers.py` unified dual-backend query layer (`db_query`, `db_execute`, `db_upsert`, `db_cursor`); new code uses these instead of inline `if is_pg()` branches
-
-- Anomaly detection (learned baselines) — opt-in per sensor
-  - Per-sensor EWMA mean + variance (Welford-style update); O(1) hot path, 3 floats per sensor — safe at 10k-sensor scale
-  - Upper-tail z-test with variance floor (`max(σ, 10 ms, 0.2·μ)`); sensitivity dropdown (Strict/Balanced/Relaxed → k=3/4/6); 3-sample debounce
-  - Can only promote `ok → warn` — never fires crit; static thresholds remain the authoritative source for critical alerts, no double alerts when both would fire
-  - Cold-start suppression: no alerts until `min_samples` reached AND `anomaly_cold_start_hours` elapsed (default 50 samples + 24 h)
-  - Global kill switch (`anomaly_global_enabled`) + per-sensor opt-in; failed probes never update the baseline
-  - Baseline checkpointed to `sensor_anomaly_baselines` hourly via `autosave_loop`; restored on startup so a restart doesn't reset learning
-  - Supported sensor types: `ping`, `tcp`, `http`, `dns`, `http_keyword`, `banner` (SNMP / TLS / VMware excluded in v1)
-  - `flap_log.direction='anomaly_warn'` distinguishes anomaly-caused warnings from static-threshold warnings in the Events tab (🧠 badge + filter pill)
-  - UI: collapsible "🧠 Anomaly Detection" section on the sensor edit modal (sensitivity + min samples + live baseline readout + Reset button); baseline band overlay on the sensor history chart
-  - Settings → Sensors tab → 🧠 Anomaly Detection: three-group layout (Global master switch + cold-start / checkpoint knobs; Defaults for new sensors; Apply to existing sensors)
-  - Auto-enable on new sensors — `anomaly_default_new_sensors` setting; sensor POST enables anomaly automatically on supported types (`ping`, `tcp`, `http`, `dns`, `http_keyword`, `banner`) when the admin opts in
-  - Bulk enable on existing sensors — `POST /api/anomaly/bulk-enable` (admin) flips every supported sensor's `anomaly_enabled=1` and resets each baseline so the 24h cold-start ticks from the click, preventing an alert storm
-  - `POST /api/sensors/{did}/{sid}/anomaly/reset` — wipe in-memory + DB baseline (operator role)
-
-- Reports module (scheduled PDF / CSV exports)
-  - Three report kinds: **Executive Summary**, **Technical / Operations**, **Inventory & Compliance**
-  - Templates + schedules + history (three sub-tabs under a top-level `📊 Reports` tab); audit-logged CRUD; role-gated (viewer browse, operator run, admin mutate)
-  - Rendered via WeasyPrint (HTML + CSS → PDF) and Matplotlib (charts → inline PNG data URIs); cover page + print-tuned stylesheet (`reports/templates/report.css`); per-section @page rules so headers don't dump body text into the footer
-  - Tiered samples awareness — `_availability_by_device` and `_latency_percentiles` auto-switch between `sensor_samples` / `sensor_samples_5m` / `sensor_samples_1h` via `_pick_table(minutes)` so a 1-year report actually finds data
-  - Browser preview (`POST /api/reports/preview` returns inlined-CSS HTML) + Run Now + Test Send (PDF attached)
-  - Custom-range periods (`custom:<start>:<end>` via a datetime-local picker) alongside last_7d / last_30d / last_90d / last_month / last_quarter / last_year / month_to_date
-  - Compare-to-previous-period deltas on uptime / incidents / critical / warn / MTTR — rendered as coloured ↑/↓ arrows with inverted semantics for "lower is good" metrics
-  - Incident severity filter (All / Warn+ / Crit-only) applied to both the main period and the previous-period compare set
-  - CSV sidecar (multi-section, UTF-8 BOM for Excel) — saved next to the PDF, attached to scheduled emails, downloadable from the History tab
-  - Report signing — deterministic 12-char Report ID + SHA-256 of the rendered PDF bytes; both persisted to `report_history` and surfaced in the History UI (tooltip on the ID pill shows the full hash)
-  - Retention auto-prune — `report_retention_days` setting (default 365); hourly sweep by the report scheduler removes expired history rows + PDF/CSV files on disk
-  - Storage path resolves to `$XDG_DATA_HOME/pingwatch/reports` / `~/.local/share/pingwatch/reports` (not inside the git checkout) so `git pull` as root can't break write access; `PW_REPORTS_DIR` env override; tempdir fallback with a probe-write check
-  - Cron-style scheduler thread: daily / weekly (day-of-week mask) / monthly (day-of-month) / quarterly cadences; 90 s dedupe; staggered firing
-  - PDF/A-1b / 2b / 3b compliance mode — per-template `pdfa_mode` config; graceful fallback if WeasyPrint < 62
-  - Branding reuses existing `email_logo_data` + `org_name`; per-report footer text + brand colour in Settings → Email
+---
 
 ## 🔴 High Priority
-- **Auto-Discovery with Sensor Templates** — extend the Subnet Discovery wizard; named bundles ("Web Server" = ping + http:443 + tls, "Domain Controller" = ping + tcp:389 + dns) stored as JSON in `app_settings`; per-row template picker in the discovery result grid
+
+- **Auto-Discovery with Sensor Templates** — named sensor bundles ("Web Server", "Domain Controller") stored in `app_settings`; per-row template picker in the discovery result grid
+
+---
 
 ## ⚙️ Medium Priority
-- **Parent-Child Dependency Suppression** — optional `parent_device_id` per device; when parent is `down`, children's dispatches marked `suppressed_by_parent` (event row still logged, no email/webhook); needs good UX for picking the parent tree (possibly leaning on NTM)
-- **Teams First-Class Integration** — new `teams` dispatcher with native adaptive-card formatting (colour, fields); generic webhook preserved for everything else
-  - Include scheduled-report delivery: post generated PDFs (and CSV sidecars when enabled) to a Teams channel via the same dispatcher — surfaced as a second delivery option on the report schedule editor alongside email
-- **Session Management Widget** — user can see + revoke their active sessions; consider as a dashboard widget and/or user-menu entry
+
+- **Parent-Child Dependency Suppression** — optional `parent_device_id`; suppress child alert dispatch when parent is down; NTM-integrated parent picker
+- **Teams First-Class Integration** — native adaptive-card dispatcher; include scheduled-report delivery (PDF + CSV sidecar) as a second delivery option on the schedule editor alongside email
+- **Session Management Widget** — view + revoke active sessions from a dashboard widget or user-menu entry
 - **Probe types to add** — `smtp` (MAIL FROM round-trip), `ldap` (bind test), `postgres` / `mysql` (connection test)
-- **SAML / OIDC SSO** — unlocks enterprise buyers that LDAP alone can't cover
-- **API Tokens** — PingWatch REST API tokens (same endpoints the UI uses, not direct DB); per-token scope (read-only / full); for scripts, CI, Terraform
-- **Further sample rollup (1 h / 1 d)** — extend existing 5-min rollup to hourly/daily buckets for multi-year retention at tiny storage cost; needs a design pass before committing
+- **SAML / OIDC SSO** — enterprise SSO alongside LDAP
+- **API Tokens** — scoped REST tokens (read-only / full) for scripts, CI, Terraform
+- **Further sample rollup** — hourly/daily buckets beyond the existing 5-min rollup for multi-year retention at minimal storage cost
+
+---
 
 ## 🎨 Low Priority
+
 - Compact mode
 - Accessible contrast mode
 - Spacing / alignment cleanup
@@ -341,5 +57,5 @@
 - **Keyboard shortcuts** — `g d` → devices, `g e` → events, `/` → focus search
 - **Favorites** — star a sensor; pinned at top of device card
 - **IPv6 dashboards** — IPAM UI currently assumes IPv4
-- **Distributed probes** — lightweight remote agent shipping results back
-- **HA / clustering** — active-passive with shared PG
+- **Distributed probes** — lightweight remote agent shipping results back to the central server
+- **HA / clustering** — active-passive with shared PostgreSQL
