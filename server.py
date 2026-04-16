@@ -726,6 +726,11 @@ def main():
     from backup.scheduler import start_scheduler
     start_scheduler()
     try:
+        from core.config import REPORTS_DIR as _REPORTS_DIR
+        os.makedirs(_REPORTS_DIR, exist_ok=True)
+    except Exception as _e:
+        log.warning(f"Could not pre-create reports dir {_REPORTS_DIR!r}: {_e}")
+    try:
         from reports.scheduler import start_scheduler as _start_reports_scheduler
         _start_reports_scheduler()
     except Exception as _e:
