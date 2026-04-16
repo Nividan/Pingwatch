@@ -1,0 +1,149 @@
+/* ── PingWatch Report — print-first stylesheet ─────────────────────── */
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 20mm 16mm;
+  @bottom-left   { content: "PingWatch Report"; font-family: sans-serif; font-size: 8pt; color: #6e7681; }
+  @bottom-center { content: counter(page) " / " counter(pages); font-family: sans-serif; font-size: 8pt; color: #6e7681; }
+  @bottom-right  { content: string(doc-title); font-family: sans-serif; font-size: 8pt; color: #6e7681; }
+}
+@page :first {
+  margin: 0;
+  @bottom-left   { content: ""; }
+  @bottom-center { content: ""; }
+  @bottom-right  { content: ""; }
+}
+
+/* First page uses its own layout */
+.cover {
+  page: first-page;
+  page-break-after: always;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20mm;
+  background: linear-gradient(180deg, #f5f8fc 0%, #ffffff 100%);
+  text-align: center;
+}
+.cover-logo        { max-width: 120px; max-height: 120px; margin-bottom: 18mm; }
+.cover-title       { font-size: 24pt; font-weight: 700; color: #1f2328; letter-spacing: -.01em; }
+.cover-subtitle    { font-size: 13pt; color: #57606a; margin-top: 6pt; font-weight: 400; }
+.cover-period      { font-size: 16pt; color: #0969da; margin-top: 14pt; font-weight: 600; }
+.cover-meta        { font-size: 9pt;  color: #57606a; margin-top: 10pt; }
+.cover-company     { position: fixed; bottom: 20mm; left: 0; right: 0; text-align: center;
+                     font-size: 10pt; color: #57606a; font-weight: 600; }
+
+/* Base body */
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 10pt;
+  color: #1f2328;
+  background: #ffffff;
+  string-set: doc-title content();  /* value replaced per section if needed */
+}
+h1, h2 {
+  color: #0969da;
+  font-weight: 600;
+  margin: 0 0 6pt 0;
+  letter-spacing: -.01em;
+}
+h1 { font-size: 14pt; border-bottom: 2px solid #0969da; padding-bottom: 3pt; }
+h2 { font-size: 12pt; }
+p  { margin: 4pt 0; }
+
+.section {
+  margin: 12pt 0 18pt 0;
+  page-break-inside: avoid;
+}
+.section + .section { margin-top: 14pt; }
+
+/* Headline tile */
+.headline-tile {
+  border-left: 6px solid #0969da;
+  background: #f6f8fa;
+  padding: 10pt 14pt;
+  margin: 4pt 0 10pt 0;
+  border-radius: 2pt;
+}
+.headline-tile.tile-up   { border-left-color: #1a7f37; background: #f1f9f3; }
+.headline-tile.tile-warn { border-left-color: #9a6700; background: #fdf7e7; }
+.headline-tile.tile-down { border-left-color: #cf222e; background: #fdf0f0; }
+.headline-number  { font-size: 22pt; font-weight: 700; line-height: 1.05; color: #1f2328; }
+.headline-caption { font-size: 9pt; color: #57606a; margin-top: 2pt; }
+
+/* Two-column side-by-side (used on exec summary) */
+.two-col { display: flex; gap: 18pt; align-items: flex-start; }
+.two-col .col { flex: 1; }
+
+/* Tables */
+table.kv {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+}
+table.kv th {
+  text-align: left;
+  color: #57606a;
+  font-weight: 500;
+  padding: 3pt 6pt 3pt 0;
+  width: 50%;
+  border-bottom: 1px solid #e4e7ec;
+}
+table.kv td {
+  text-align: right;
+  padding: 3pt 0;
+  border-bottom: 1px solid #e4e7ec;
+  font-weight: 600;
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+  margin-top: 4pt;
+}
+table.data.compact { font-size: 8.5pt; }
+table.data th {
+  text-align: left;
+  background: #f6f8fa;
+  color: #1f2328;
+  font-weight: 600;
+  padding: 4pt 6pt;
+  border-bottom: 1px solid #d0d7de;
+}
+table.data td {
+  padding: 3pt 6pt;
+  border-bottom: 1px solid #eaeef2;
+  vertical-align: top;
+}
+table.data tr:nth-child(even) td { background: #fafbfc; }
+
+/* Status colors for inline cells */
+.up   { color: #1a7f37; font-weight: 600; }
+.warn { color: #9a6700; font-weight: 600; }
+.crit { color: #cf222e; font-weight: 600; }
+.ok   { color: #1a7f37; font-weight: 600; }
+.muted{ color: #57606a; }
+.small{ font-size: 8pt; }
+.mono { font-family: "Consolas", "Monaco", "Menlo", monospace; font-size: 9pt; }
+
+/* Charts — full width, centred */
+img.chart {
+  display: block;
+  margin: 8pt auto 2pt auto;
+  max-width: 100%;
+  page-break-inside: avoid;
+}
+
+/* Appendix */
+.appendix {
+  margin-top: 14pt;
+  padding-top: 8pt;
+  border-top: 1px solid #d0d7de;
+  font-size: 8.5pt;
+  color: #57606a;
+  page-break-inside: avoid;
+}
+.appendix h2 { color: #57606a; font-size: 11pt; margin-bottom: 3pt; }

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ── Headline availability tile ────────────────────────────────── -->
+<section class="section">
+  <h1>Availability</h1>
+  <div class="headline-tile tile-{{ overall.pct | statuspct }}">
+    <div class="headline-number">
+      {% if overall.pct is not none %}{{ overall.pct | pctfmt(2) }}{% else %}—{% endif %}
+    </div>
+    <div class="headline-caption">
+      Overall uptime across {{ inventory.devices }} devices
+      ({{ inventory.sensors }} sensors) over {{ period.days }} days.
+    </div>
+  </div>
+  {% if charts.availability_trend %}
+    <img class="chart" src="{{ charts.availability_trend }}" alt="Availability trend">
+  {% endif %}
+</section>
+
+<!-- ── Severity breakdown ────────────────────────────────────────── -->
+<section class="section">
+  <h1>Incident Summary</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr><th>Total incidents</th><td>{{ incidents.severity.total }}</td></tr>
+        <tr><th>Critical / Down</th><td class="crit">{{ incidents.severity.crit }}</td></tr>
+        <tr><th>Warnings</th><td class="warn">{{ incidents.severity.warn }}</td></tr>
+        <tr><th>Auto-resolved</th><td>{{ incidents.severity.resolved }}</td></tr>
+        <tr><th>MTTR</th><td>{{ incidents.mttr.mttr_s | durfmt }}</td></tr>
+        <tr><th>MTBF</th><td>{{ incidents.mttr.mtbf_s | durfmt }}</td></tr>
+        <tr><th>Maintenance windows</th><td>{{ maint_windows | length }}</td></tr>
+      </table>
+    </div>
+    <div class="col">
+      {% if charts.severity_donut %}
+        <img class="chart" src="{{ charts.severity_donut }}" alt="Severity breakdown">
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<!-- ── Top 5 worst devices ───────────────────────────────────────── -->
+<section class="section">
+  <h1>Top 5 worst-performing devices</h1>
+  {% if incidents.worst_5 %}
+    <table class="data">
+      <thead><tr><th>Device</th><th>Host</th><th>Uptime</th><th>Samples</th><th>Failures</th></tr></thead>
+      <tbody>
+        {% for d in incidents.worst_5 %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td class="{{ d.pct | statuspct }}">{{ d.pct | pctfmt(2) }}</td>
+          <td>{{ d.total }}</td>
+          <td class="crit">{{ d.fail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.top_worst_bar %}
+      <img class="chart" src="{{ charts.top_worst_bar }}" alt="Worst devices">
+    {% endif %}
+  {% else %}
+    <p class="muted">No device-level failure data in this period.</p>
+  {% endif %}
+</section>
+
+<!-- ── Top 5 noisiest sensors ────────────────────────────────────── -->
+<section class="section">
+  <h1>Top 5 noisiest sensors</h1>
+  {% if incidents.noisy_5 %}
+    <table class="data">
+      <thead><tr><th>Device</th><th>Sensor</th><th>Type</th><th>Incidents</th></tr></thead>
+      <tbody>
+        {% for s in incidents.noisy_5 %}
+        <tr>
+          <td>{{ s.dname }}</td>
+          <td>{{ s.sname }}</td>
+          <td class="mono">{{ s.stype }}</td>
+          <td class="warn">{{ s.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.top_noisy_bar %}
+      <img class="chart" src="{{ charts.top_noisy_bar }}" alt="Noisy sensors">
+    {% endif %}
+  {% else %}
+    <p class="muted">No repeat-offender sensors in this period.</p>
+  {% endif %}
+</section>
+
+<!-- ── Incident timeline ─────────────────────────────────────────── -->
+{% if charts.incident_timeline %}
+<section class="section">
+  <h1>Incident timeline</h1>
+  <img class="chart" src="{{ charts.incident_timeline }}" alt="Incidents over time">
+</section>
+{% endif %}
+
+<!-- ── Maintenance summary ───────────────────────────────────────── -->
+{% if maint_windows %}
+<section class="section">
+  <h1>Maintenance windows</h1>
+  <table class="data">
+    <thead><tr><th>Name</th><th>Start</th><th>End</th><th>Duration (in window)</th></tr></thead>
+    <tbody>
+      {% for m in maint_windows %}
+      <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.start_ts | datefmt }}</td>
+        <td>{{ m.end_ts | datefmt }}</td>
+        <td>{{ m.duration_s | durfmt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% endblock %}

@@ -1224,11 +1224,13 @@ function switchMainTab(tab){
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
+  { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
+  const reportsView  =document.getElementById('reportsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -1236,6 +1238,7 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
+  if(reportsView) reportsView.style.display='none';
   document.getElementById('devActBar').style.display='none';
   // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
   if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
@@ -1281,6 +1284,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _ipamInit==='function') _ipamInit();
+  } else if(tab==='reports'){
+    if(reportsView) reportsView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _rptInit==='function') _rptInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';

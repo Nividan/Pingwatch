@@ -535,6 +535,67 @@ def pg_create_main_schema(cur):
         "ON trusted_devices(expires_at)"
     )
 
+    # ── Reports: templates, schedules, generated history ────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS report_templates (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_by  TEXT DEFAULT '',
+            created_at  DOUBLE PRECISION DEFAULT 0,
+            updated_at  DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS report_schedules (
+            id               TEXT PRIMARY KEY,
+            template_id      TEXT NOT NULL,
+            name             TEXT NOT NULL,
+            freq             TEXT NOT NULL DEFAULT 'monthly',
+            time_str         TEXT NOT NULL DEFAULT '03:00',
+            day_of_week      TEXT DEFAULT '1',
+            day_of_month     INTEGER DEFAULT 1,
+            period           TEXT NOT NULL DEFAULT 'last_month',
+            timezone         TEXT DEFAULT '',
+            recipient_group  INTEGER DEFAULT 0,
+            recipient_emails TEXT DEFAULT '[]',
+            subject_tpl      TEXT DEFAULT '',
+            body_tpl         TEXT DEFAULT '',
+            enabled          INTEGER DEFAULT 1,
+            last_run_ts      DOUBLE PRECISION DEFAULT 0,
+            next_run_ts      DOUBLE PRECISION DEFAULT 0,
+            created_by       TEXT DEFAULT '',
+            created_at       DOUBLE PRECISION DEFAULT 0,
+            updated_at       DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS report_history (
+            id               TEXT PRIMARY KEY,
+            template_id      TEXT,
+            template_name    TEXT DEFAULT '',
+            schedule_id      TEXT DEFAULT '',
+            kind             TEXT DEFAULT '',
+            generated_at     DOUBLE PRECISION NOT NULL,
+            period_start     DOUBLE PRECISION DEFAULT 0,
+            period_end       DOUBLE PRECISION DEFAULT 0,
+            pdf_path         TEXT DEFAULT '',
+            pdf_bytes        INTEGER DEFAULT 0,
+            delivery_status  TEXT DEFAULT '',
+            recipients_json  TEXT DEFAULT '[]',
+            render_ms        INTEGER DEFAULT 0,
+            error            TEXT DEFAULT '',
+            triggered_by     TEXT DEFAULT ''
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_hist_gen "
+        "ON report_history(generated_at DESC)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_hist_tpl "
+        "ON report_history(template_id)"
+    )
+
     # ── Topology map tables ──────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS topo_pages (
