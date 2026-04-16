@@ -8,6 +8,7 @@ Public entrypoint: build_report_context(kind, period, filters, config)
 """
 
 import datetime
+import re
 import sqlite3
 import time
 
@@ -319,6 +320,325 @@ def _mttr_mtbf(flaps: list, window_s: float) -> dict:
                 if (f.get("direction") or "") in ("down", "threshold_crit"))
     mtbf = (window_s / fails) if fails else None
     return {"mttr_s": mttr, "mtbf_s": mtbf, "resolved": len(durations), "fails": fails}
+
+
+# ── Config-issue classifier ───────────────────────────────────────────
+# Patterns that mean "this sensor is misconfigured", not "the target is down".
+# Rows matching any of these are routed out of the incident stream so managers
+# don't see debug messages in their report.
+_CONFIG_ISSUE_PATTERNS = [
+    (re.compile(r"^Unknown metric:", re.I),                 "unknown_metric", "Unknown VMware metric"),
+    (re.compile(r"^Metric .* not available",      re.I),    "missing_metric", "Metric not available on target"),
+    (re.compile(r"^SSL error.*try disabling Verify SSL", re.I), "ssl_verify", "SSL verify failed — toggle Verify SSL"),
+    (re.compile(r"CERTIFICATE_VERIFY_FAILED",     re.I),    "cert_verify",   "TLS certificate verification failed"),
+    (re.compile(r"^Invalid OID format",           re.I),    "bad_oid",       "Malformed SNMP OID"),
+]
+
+
+def _classify_config_issues(flaps: list) -> tuple:
+    """Split flaps into (real_incidents, config_issues_rollup).
+
+    A flap whose ``detail`` matches any of the config-issue patterns above is
+    removed from the incident stream — otherwise it inflates severity counts
+    and the noisy-sensors top-N with things the user can't fix by monitoring,
+    only by editing the sensor config.
+
+    Returns:
+      clean_flaps       — list[flap dict] — safe to feed to severity/noisy/log
+      config_issues     — list[{did, dname, sid, sname, stype, type, label,
+                                count, sample_detail, last_ts}] aggregated by
+                          (did, sid, type)
+    """
+    clean = []
+    agg = {}  # (did, sid, type) → rollup dict
+    for f in flaps:
+        det = (f.get("detail") or "").strip()
+        issue_type = issue_label = None
+        if det:
+            for pat, t, lbl in _CONFIG_ISSUE_PATTERNS:
+                if pat.search(det):
+                    issue_type, issue_label = t, lbl
+                    break
+        if not issue_type:
+            clean.append(f)
+            continue
+        key = (f.get("did"), f.get("sid"), issue_type)
+        a = agg.get(key)
+        if a is None:
+            a = {
+                "did":   f.get("did"),   "sid":   f.get("sid"),
+                "dname": f.get("dname", ""), "sname": f.get("sname", ""),
+                "stype": f.get("stype", ""),
+                "type":  issue_type, "label": issue_label,
+                "count": 0, "sample_detail": det[:120], "last_ts": f.get("ts") or 0,
+            }
+            agg[key] = a
+        a["count"] += 1
+        if (f.get("ts") or 0) > a["last_ts"]:
+            a["last_ts"] = f.get("ts") or 0
+    issues = sorted(agg.values(), key=lambda r: -r["count"])
+    return clean, issues
+
+
+# ── Outage clustering ─────────────────────────────────────────────────
+
+def _cluster_flaps_into_outages(flaps: list, idle_gap_s: float = 300.0) -> list:
+    """Collapse consecutive bad-state events for the same (did, sid) into
+    one outage row — the managerial view of ``incident_log``.
+
+    A new outage starts when the gap between the previous event's recovery
+    (``resolved_at`` — or ``ts`` if never resolved) and the next event's
+    ``ts`` exceeds ``idle_gap_s`` seconds. Default 5 minutes.
+    """
+    by_sensor: dict = {}
+    for f in flaps:
+        key = (f.get("did"), f.get("sid"))
+        if not key[0]:
+            continue
+        by_sensor.setdefault(key, []).append(f)
+
+    outages = []
+    for (did, sid), events in by_sensor.items():
+        events.sort(key=lambda r: r.get("ts") or 0)
+        cur = None
+        for f in events:
+            ts = f.get("ts") or 0
+            resolved = f.get("resolved_at") or 0
+            if cur is None:
+                cur = _new_outage_from(f)
+                continue
+            # The previous event's "end" is either its resolve time or — if it
+            # never resolved — its own ts. If we're within the idle gap, merge;
+            # otherwise start a new outage.
+            prev_end = cur["_running_end"] if cur["_running_end"] else cur["first_ts"]
+            if ts - prev_end <= idle_gap_s:
+                _merge_into_outage(cur, f)
+            else:
+                outages.append(_finalise_outage(cur))
+                cur = _new_outage_from(f)
+        if cur is not None:
+            outages.append(_finalise_outage(cur))
+
+    # Most recent first
+    outages.sort(key=lambda o: -o["first_ts"])
+    return outages
+
+
+def _new_outage_from(f: dict) -> dict:
+    ts = f.get("ts") or 0
+    resolved = f.get("resolved_at") or 0
+    det = (f.get("detail") or "").strip()
+    sev = _severity_of(f.get("direction"))
+    return {
+        "did":   f.get("did"),   "sid":   f.get("sid"),
+        "dname": f.get("dname", ""), "sname": f.get("sname", ""),
+        "stype": f.get("stype", ""), "host":  f.get("host", ""),
+        "first_ts":      ts,
+        "_running_end":  resolved,        # max resolved_at seen, 0 if still open
+        "event_count":   1,
+        "max_severity":  sev,
+        "sample_detail": det[:80],
+        "_any_open":     not resolved,
+    }
+
+
+def _merge_into_outage(cur: dict, f: dict):
+    resolved = f.get("resolved_at") or 0
+    if resolved > (cur["_running_end"] or 0):
+        cur["_running_end"] = resolved
+    cur["event_count"] += 1
+    if _severity_of(f.get("direction")) == "crit":
+        cur["max_severity"] = "crit"
+    if not cur["sample_detail"]:
+        cur["sample_detail"] = (f.get("detail") or "").strip()[:80]
+    if not resolved:
+        cur["_any_open"] = True
+
+
+def _finalise_outage(cur: dict) -> dict:
+    end = cur["_running_end"] or None
+    first = cur["first_ts"]
+    ongoing = cur["_any_open"] and not end
+    duration_s = None
+    if end and end >= first:
+        duration_s = end - first
+    return {
+        "did":             cur["did"],   "sid":   cur["sid"],
+        "dname":           cur["dname"], "sname": cur["sname"],
+        "stype":           cur["stype"], "host":  cur["host"],
+        "first_ts":        first,
+        "last_end":        end,
+        "duration_s":      duration_s,
+        "event_count":     cur["event_count"],
+        "max_severity":    cur["max_severity"],
+        "sample_detail":   cur["sample_detail"],
+        "ongoing":         ongoing,
+    }
+
+
+# ── Major incident detection ──────────────────────────────────────────
+
+def _detect_major_incidents(flaps: list, min_devices: int = 10,
+                            gap_minutes: int = 5) -> list:
+    """Cluster simultaneous device-DOWN events into single Major Incidents.
+
+    Only ``direction='down'`` rows count — threshold_crit is a value threshold,
+    not a real offline event. Adjacent 1-minute buckets (or buckets separated
+    by ≤ gap_minutes) are merged into one window; a window with ≥ min_devices
+    distinct devices going DOWN inside it becomes a Major Incident.
+
+    Pure stats. No root-cause inference. See plan for reasoning.
+    """
+    if min_devices < 1:
+        min_devices = 1
+    downs = [f for f in flaps if (f.get("direction") or "").lower() == "down"]
+    if not downs:
+        return []
+    downs.sort(key=lambda f: f.get("ts") or 0)
+
+    # Collect into minute buckets
+    buckets = {}  # minute (int) → list of flap dicts
+    for f in downs:
+        m = int((f.get("ts") or 0) // 60)
+        buckets.setdefault(m, []).append(f)
+
+    # Walk ordered minutes, merge any within gap_minutes of the previous minute
+    minutes = sorted(buckets.keys())
+    windows = []    # list of lists of flap dicts
+    cur = []
+    prev_m = None
+    for m in minutes:
+        if prev_m is None or (m - prev_m) <= gap_minutes:
+            cur.extend(buckets[m])
+        else:
+            windows.append(cur)
+            cur = list(buckets[m])
+        prev_m = m
+    if cur:
+        windows.append(cur)
+
+    majors = []
+    for w in windows:
+        distinct_devs = {f.get("did") for f in w if f.get("did")}
+        if len(distinct_devs) < min_devices:
+            continue
+        start_ts = min(f.get("ts") or 0 for f in w)
+        resolves = [f.get("resolved_at") or 0 for f in w]
+        unresolved = any(r == 0 for r in resolves)
+        end_ts = max(resolves) if any(resolves) else None
+        duration_s = None
+        if end_ts and end_ts >= start_ts and not unresolved:
+            duration_s = end_ts - start_ts
+        dnames = sorted({f.get("dname", "") or f.get("did") for f in w if f.get("did")})
+        groups = sorted({(f.get("group") or f.get("stype") or "") for f in w} - {""})
+        # group not stored on flap rows reliably — fall back empty
+        groups = sorted({g for g in groups if g})
+        sensors = {(f.get("did"), f.get("sid")) for f in w}
+        majors.append({
+            "start_ts":         start_ts,
+            "end_ts":           end_ts,
+            "duration_s":       duration_s,
+            "devices_affected": dnames,
+            "device_count":     len(distinct_devs),
+            "groups_affected":  groups,
+            "sensors_affected": len(sensors),
+            "ongoing":          unresolved,
+        })
+    majors.sort(key=lambda m: -m["start_ts"])
+    return majors
+
+
+# ── Device health score ───────────────────────────────────────────────
+
+def _health_band(score: float) -> str:
+    if score >= 90: return "good"
+    if score >= 70: return "warn"
+    return "bad"
+
+
+def _device_health_scores(availability: list, flaps: list, limit: int = 25) -> list:
+    """Per-device composite health score (0-100, higher = better).
+
+    Formula (start at 100, subtract, floor at 0):
+      downtime   : 50 × (1 − pct/100)       [0..50]
+      incidents  : min(20, count × 0.5)      [0..20]
+      currently DOWN : +20   (read from STATE)
+      currently WARN : +10   (read from STATE)
+
+    Returns rows sorted worst-to-best. limit ≤ 0 means "all".
+    """
+    try:
+        from core.app_state import STATE
+    except Exception:
+        STATE = None
+
+    # Incident counts by did (excluding config-issue rows — caller should
+    # already have filtered those before calling us, but be defensive).
+    inc_by_did = {}
+    for f in flaps:
+        d = f.get("did")
+        if not d: continue
+        inc_by_did[d] = inc_by_did.get(d, 0) + 1
+
+    # Current status by did from in-memory STATE
+    status_by_did = {}
+    if STATE is not None:
+        try:
+            with STATE._lock:
+                for dev in STATE.devices.values():
+                    # A device is DOWN if any running sensor is alive==False;
+                    # WARN if any sensor is in threshold_warn state.
+                    any_down = False
+                    any_warn = False
+                    for s in dev.sensors.values():
+                        if not getattr(s, "running", True):
+                            continue
+                        if getattr(s, "alive", True) is False:
+                            any_down = True
+                        ts_state = (getattr(s, "threshold_state", "") or "").lower()
+                        if ts_state in ("warn", "threshold_warn"):
+                            any_warn = True
+                    status_by_did[dev.device_id] = "down" if any_down else ("warn" if any_warn else "up")
+        except Exception as e:
+            log.debug(f"reports.data health score STATE read failed: {e}")
+
+    rows = []
+    for a in availability:
+        did = a["did"]
+        pct = a.get("pct")
+        uptime_pct = pct if pct is not None else 0.0
+        incidents = inc_by_did.get(did, 0)
+        status = status_by_did.get(did, "up")
+
+        score = 100.0
+        # Downtime penalty (only if we have uptime data)
+        if pct is not None:
+            score -= 50.0 * (1.0 - max(0.0, min(100.0, pct)) / 100.0)
+        # Incident load (cap at 20)
+        score -= min(20.0, incidents * 0.5)
+        # Current status penalty
+        if status == "down":
+            score -= 20
+        elif status == "warn":
+            score -= 10
+        score = max(0.0, round(score, 1))
+
+        rows.append({
+            "did":        did,
+            "dname":      a.get("dname", ""),
+            "host":       a.get("host", ""),
+            "group":      a.get("group", ""),
+            "uptime_pct": round(uptime_pct, 2),
+            "incidents":  incidents,
+            "current":    status,
+            "score":      score,
+            "band":       _health_band(score),
+        })
+
+    rows.sort(key=lambda r: r["score"])  # worst first
+    if limit and limit > 0:
+        rows = rows[:limit]
+    return rows
 
 
 # ── Latency percentiles ────────────────────────────────────────────────
@@ -832,9 +1152,12 @@ def build_report_context(kind: str,
         return is_custom and (name in sections)
 
     _AVAIL_SECS = {"overall_uptime", "availability_trend",
-                   "per_device_uptime", "top_worst_devices"}
+                   "per_device_uptime", "top_worst_devices",
+                   "device_health"}
     _INC_SECS   = {"incident_summary", "incident_timeline",
-                   "top_noisy_sensors", "incident_log"}
+                   "top_noisy_sensors", "incident_log",
+                   "major_incidents", "sensor_config_issues",
+                   "device_health"}
     need_avail = (not is_custom) or bool(sections & _AVAIL_SECS)
     need_flaps = (not is_custom) or bool(sections & _INC_SECS)
 
@@ -845,10 +1168,15 @@ def build_report_context(kind: str,
     overall      = _overall_availability(availability) if need_avail else {"up": 0, "total": 0, "pct": None}
     flaps_raw    = _flaps_in_window(start_ts, end_ts) if need_flaps else []
     flaps        = _filter_flaps_by_severity(flaps_raw, severity_min)
-    severity     = _severity_counts(flaps)
+    # Split out sensor-misconfig noise ("Unknown metric: on", SSL-verify errors,
+    # bad OIDs, etc.) so they don't inflate the incident summary or noisy-sensor
+    # rankings. config_issues goes into its own report section.
+    clean_flaps, config_issues = _classify_config_issues(flaps)
+    severity     = _severity_counts(clean_flaps)
     worst        = _top_worst_devices(availability, top_worst_n)
-    noisy        = _top_noisy_sensors(flaps, top_noisy_n)
-    mtr          = _mttr_mtbf(flaps, window_s)
+    noisy        = _top_noisy_sensors(clean_flaps, top_noisy_n)
+    mtr          = _mttr_mtbf(clean_flaps, window_s)
+    outages      = _cluster_flaps_into_outages(clean_flaps) if need_flaps else []
 
     # ── Company branding ─────────────────────────────────────────────
     company = {
@@ -869,6 +1197,7 @@ def build_report_context(kind: str,
         "render_ms":    None,   # filled below
         "severity_min": severity_min,
         "sections":     sorted(sections) if is_custom else [],
+        "show_individual_events": bool(opts.get("show_individual_events")) if is_custom else False,
     }
 
     period_dict = {
@@ -886,13 +1215,47 @@ def build_report_context(kind: str,
         "availability": availability,
         "overall":      overall,
         "incidents":    {
-            "flaps":    flaps,
+            "flaps":    clean_flaps,     # noise-filtered — feeds all incident tables
+            "flaps_raw": flaps,          # pre-classification, for engineers who want it
+            "outages":  outages,         # aggregated — one row per outage
             "severity": severity,
             "worst_5":  worst,
             "noisy_5":  noisy,
             "mttr":     mtr,
         },
     }
+
+    # ── Report Polish: new blocks ─────────────────────────────────────
+    # These blocks are available to ALL templates that want them — not just
+    # Custom. The fixed kinds (executive / technical / inventory) pull them
+    # automatically so improvements apply wherever the same data is shown.
+
+    # Major outages: cluster simultaneous device-DOWN events.
+    # Custom: threshold from options. Fixed kinds (exec/technical): default 10.
+    # Inventory kind doesn't care about incident stream — skip there.
+    if want("major_incidents") or kind in ("executive", "technical"):
+        major_min = int(opts.get("major_min_devices", 10)) if is_custom else 10
+        ctx["major_incidents"] = _detect_major_incidents(
+            clean_flaps, min_devices=major_min
+        )
+
+    # Sensor config issues — always expose. Templates that don't render it just
+    # ignore ctx["sensor_config_issues"]; templates that do get the data.
+    ctx["sensor_config_issues"] = config_issues
+
+    # Per-device health score — useful in exec (manager scorecard),
+    # technical (ops triage), and inventory (estate health). Always compute
+    # for non-custom kinds so every template can choose to render it.
+    if want("device_health") or kind in ("executive", "technical", "inventory"):
+        hs_top = int(opts.get("health_top_n", 25)) if is_custom else 25
+        ctx["device_health"] = _device_health_scores(
+            availability, clean_flaps, limit=hs_top
+        )
+
+    # Expose config_issue_count in meta so templates can surface a one-line
+    # callout ("N sensors have configuration issues") without rendering the
+    # full block.
+    meta["config_issue_count"] = len(config_issues)
 
     if kind == "technical" or want("latency_percentiles"):
         lat_limit = int(opts.get("latency_top_n", 100)) if is_custom else 100

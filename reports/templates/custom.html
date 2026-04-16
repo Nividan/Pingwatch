@@ -108,6 +108,39 @@
 </section>
 {% endif %}
 
+<!-- ── Device health scores ──────────────────────────────────────── -->
+{% if "device_health" in meta.sections %}
+<section class="section">
+  <h1>Device health scores</h1>
+  {% if device_health %}
+    <p class="muted small">Composite 0–100 per device. Penalties: downtime up to 50, incident load up to 20, currently DOWN −20 or WARN −10. Green ≥ 90 · Amber ≥ 70 · Red &lt; 70.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Host</th><th>Group</th>
+          <th>Uptime</th><th>Incidents</th><th>Status</th><th>Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in device_health %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td>{{ d.group }}</td>
+          <td class="{{ d.uptime_pct | statuspct }}">{{ d.uptime_pct | pctfmt(2) }}</td>
+          <td>{{ d.incidents }}</td>
+          <td class="{% if d.current == 'down' %}crit{% elif d.current == 'warn' %}warn{% else %}up{% endif %}">{{ d.current }}</td>
+          <td><span class="hs hs-{{ d.band }}">{{ d.score }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No availability data in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 <!-- ── Incident summary ──────────────────────────────────────────── -->
 {% if "incident_summary" in meta.sections %}
 <section class="section">
@@ -204,11 +237,74 @@
 </section>
 {% endif %}
 
-<!-- ── Full incident log ─────────────────────────────────────────── -->
+<!-- ── Major incidents (clustered) ───────────────────────────────── -->
+{% if "major_incidents" in meta.sections %}
+<section class="section">
+  <h1>Major incidents</h1>
+  {% if major_incidents %}
+    <p class="muted small">Auto-grouped: clusters of ≥10 distinct devices going DOWN within a 5-minute window are treated as one outage. Threshold is configurable per template.</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Started</th><th>Duration</th><th>Devices</th>
+          <th>Sensors</th><th>Groups</th><th>Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in major_incidents %}
+        <tr>
+          <td class="mono">{{ m.start_ts | datefmt }}</td>
+          <td class="{% if m.ongoing %}crit{% endif %}">{{ m.duration_s | durfmt_flap(m.ongoing) }}</td>
+          <td class="crit">{{ m.device_count }}</td>
+          <td>{{ m.sensors_affected }}</td>
+          <td class="muted small">{% if m.groups_affected %}{{ m.groups_affected | join(', ') }}{% else %}—{% endif %}</td>
+          <td class="muted small">{{ m.devices_affected[:6] | join(', ') }}{% if m.devices_affected | length > 6 %} &hellip; (+{{ m.devices_affected | length - 6 }} more){% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No major outages detected in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Incident log (outages, aggregated) ────────────────────────── -->
 {% if "incident_log" in meta.sections %}
 <section class="section">
   <h1>Incident log</h1>
-  {% if incidents.flaps %}
+  {% if incidents.outages %}
+    <p class="muted small">One row per outage — consecutive events for the same sensor (gap ≤ 5 min) are collapsed. Toggle "Show individual events" on the template to see raw flap rows below.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>When</th><th>Device</th><th>Sensor</th>
+          <th>Severity</th><th>Events</th><th>Duration</th><th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in incidents.outages %}
+        <tr>
+          <td class="mono">{{ o.first_ts | datefmt }}</td>
+          <td>{{ o.dname }}</td>
+          <td>{{ o.sname }}</td>
+          <td class="{{ o.max_severity }}">{{ o.max_severity }}</td>
+          <td>{{ o.event_count }}</td>
+          <td class="{% if o.ongoing %}crit{% endif %}">{{ o.duration_s | durfmt_flap(o.ongoing) }}</td>
+          <td class="muted small">{{ (o.sample_detail or '')[:80] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No incidents in this period.</p>
+  {% endif %}
+
+  {# Engineer detail: raw per-event log, only when opted in. Uses the pre-cluster
+     flap list so each probe transition is on its own row. #}
+  {% if meta.show_individual_events and incidents.flaps %}
+    <h2 style="margin-top:14pt">Individual events ({{ incidents.flaps | length }})</h2>
+    <p class="muted small">Raw probe transitions — one row per state change. Enabled by the "Show individual events" template option.</p>
     <table class="data compact">
       <thead>
         <tr>
@@ -223,14 +319,44 @@
           <td>{{ f.dname }}</td>
           <td>{{ f.sname }}</td>
           <td class="{{ f.direction | severity_class }}">{{ f.direction }}</td>
-          <td>{{ f.duration | durfmt }}</td>
+          <td>{{ f.duration | durfmt_flap(not f.resolved_at) }}</td>
           <td class="muted small">{{ (f.detail or '')[:80] }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Sensor configuration issues ───────────────────────────────── -->
+{% if "sensor_config_issues" in meta.sections %}
+<section class="section">
+  <h1>Sensor configuration issues</h1>
+  {% if sensor_config_issues %}
+    <p class="muted small">These rows were filtered out of the incident log because the message indicates a misconfigured sensor (VMware metric typo, TLS verification disabled needed, malformed OID, etc.), not a real outage. Fix the sensor definition to silence them.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Sensor</th><th>Type</th>
+          <th>Issue</th><th>Occurrences</th><th>Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in sensor_config_issues %}
+        <tr>
+          <td>{{ r.dname }}</td>
+          <td>{{ r.sname }}</td>
+          <td class="mono">{{ r.stype }}</td>
+          <td class="warn">{{ r.label }}</td>
+          <td>{{ r.count }}</td>
+          <td class="mono">{{ r.last_ts | datefmt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   {% else %}
-    <p class="muted">No incidents in this period.</p>
+    <p class="muted">No sensor configuration issues detected.</p>
   {% endif %}
 </section>
 {% endif %}

@@ -163,6 +163,20 @@ table.data tr:nth-child(even) td { background: #fafbfc; }
 .small{ font-size: 8pt; }
 .mono { font-family: "Consolas", "Monaco", "Menlo", monospace; font-size: 9pt; }
 
+/* Health-score chips — colour-coded pill for the device_health section */
+.hs {
+  display: inline-block;
+  min-width: 2.6em;
+  padding: 1pt 6pt;
+  border-radius: 10pt;
+  font-weight: 700;
+  font-size: 9pt;
+  text-align: center;
+}
+.hs-good { background: #e6f6ea; color: #1a7f37; border: 1px solid #b7e4c7; }
+.hs-warn { background: #fdf7e7; color: #9a6700; border: 1px solid #f1d97a; }
+.hs-bad  { background: #fdecec; color: #cf222e; border: 1px solid #f5b3b3; }
+
 /* Severity pills for SNMP-trap and incident rows */
 .sev-crit, .sev-critical, .sev-error, .sev-alert, .sev-emergency {
   color: #cf222e; font-weight: 700;
