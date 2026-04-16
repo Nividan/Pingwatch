@@ -45,10 +45,10 @@
   --panel-border: rgba(9,105,218,0.25);
   /* Panel text — readable on the white panel background */
   --pt: #1f2328;
-  --pt-sub: rgba(31,35,40,0.65);
-  --pt-dim: rgba(31,35,40,0.5);
-  --pt-dimmer: rgba(31,35,40,0.4);
-  --pt-accent: rgba(9,105,218,0.75);
+  --pt-sub: rgba(31,35,40,0.85);
+  --pt-dim: rgba(31,35,40,0.72);
+  --pt-dimmer: rgba(31,35,40,0.58);
+  --pt-accent: rgba(9,105,218,0.88);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:var(--bg); font-family:'Exo 2',sans-serif; height:100vh; overflow:hidden; display:flex; flex-direction:column; }

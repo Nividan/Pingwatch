@@ -336,7 +336,9 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
   codeField.value='';
   setTimeout(()=>codeField.focus(),50);
 
-  // "Remember this device" row — only shown if user's max > 0
+  // "Remember this device" row — duration is admin-controlled
+  // (Settings → Security → totp_remember_hours). The login screen only
+  // shows the configured value; users cannot change it.
   let rememberRow=document.getElementById('login-remember-row');
   if(rememberRow) rememberRow.remove();
   const maxHours=parseInt(rememberHoursMax||0,10);
@@ -344,12 +346,10 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
     rememberRow=document.createElement('div');
     rememberRow.id='login-remember-row';
     rememberRow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;color:var(--text2)';
-    const defaultHours=Math.min(9,maxHours);
+    const hoursTxt=maxHours===1?'1 hour':`${maxHours} hours`;
     rememberRow.innerHTML=
       `<input type="checkbox" id="login-remember-chk" style="cursor:pointer">`+
-      `<label for="login-remember-chk" style="cursor:pointer">Remember this device for</label>`+
-      `<input type="number" id="login-remember-hrs" min="1" max="${maxHours}" value="${defaultHours}"`+
-      ` style="width:52px;padding:2px 4px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:4px;text-align:center"> hours`;
+      `<label for="login-remember-chk" style="cursor:pointer">Remember this device for ${hoursTxt}</label>`;
     if(passField&&passField.parentNode){passField.parentNode.insertBefore(rememberRow, codeField.nextSibling);}
   }
 
@@ -361,11 +361,9 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
     if(!code){_showLoginErr('Enter your 2FA code'); return;}
     btn.disabled=true; btn.textContent='Verifying…';
     const remember=maxHours>0&&!!document.getElementById('login-remember-chk')?.checked;
-    const rememberHours=remember?Math.max(1,Math.min(maxHours,
-      parseInt(document.getElementById('login-remember-hrs')?.value||'9',10))):0;
     try{
       const r=await fetch('/api/login/totp',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({challenge_id:challengeId, code, remember, remember_hours:rememberHours})});
+        body:JSON.stringify({challenge_id:challengeId, code, remember})});
       const d=await r.json();
       if(!r.ok||d.error){
         _showLoginErr(d.error||'Verification failed');
