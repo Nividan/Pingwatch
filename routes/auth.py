@@ -483,14 +483,15 @@ def handle(h, method, path, body):
                            f"SameSite=Strict; Max-Age=2592000{_sec}")
 
         # ── Trusted device: remember this device? ─────────────────
-        remember       = bool(body.get("remember", False))
-        remember_hours = int(body.get("remember_hours", 9) or 9)
-        if remember and remember_hours > 0:
+        # Duration is admin-controlled — Settings → Security →
+        # totp_remember_hours. The login screen only exposes a
+        # checkbox; any client-supplied `remember_hours` is ignored.
+        remember = bool(body.get("remember", False))
+        if remember:
             from db.users import db_add_trusted_device
             from core.auth import parse_user_agent_label
-            _max_hours = int(_settings.get("totp_remember_hours", 9))
-            if _max_hours > 0:
-                remember_hours = max(1, min(remember_hours, _max_hours))
+            remember_hours = int(_settings.get("totp_remember_hours", 9))
+            if remember_hours > 0:
                 _raw_token = secrets.token_urlsafe(32)
                 _tok_hash  = hashlib.sha256(_raw_token.encode()).hexdigest()
                 _ua_label  = parse_user_agent_label(
