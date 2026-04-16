@@ -92,6 +92,9 @@ _PACKAGES = [
     ("ldap3",        "LDAP / Active Directory authentication",  False),
     ("pyotp",        "two-factor authentication (TOTP)",        False),
     ("qrcode",       "QR code rendering for 2FA enrolment",     False),
+    ("jinja2",       "report HTML template rendering",          False),
+    ("matplotlib",   "report charts (PNG rendering)",           False),
+    ("weasyprint",   "PDF report generation (HTML->PDF)",       False),
     ("tkinter",      "status window GUI",                       False),
 ]
 all_ok = True

@@ -418,6 +418,10 @@ def step1_packages():
                     "ldap3":        ("python3-ldap3",   None),
                     "psutil":       ("python3-psutil",  None),
                     "pyotp":        ("python3-pyotp",   None),
+                    "Jinja2":       ("python3-jinja2",  None),
+                    "matplotlib":   ("python3-matplotlib", None),
+                    "weasyprint":   ("python3-weasyprint",
+                                     "needs system libs: sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0"),
                 }
                 _apt_entry = _apt_map.get(pkg["name"])
 
@@ -448,6 +452,9 @@ def step1_packages():
                                 "python3-ldap3":        "python3-ldap3",
                                 "python3-psutil":       "python3-psutil",
                                 "python3-pyotp":        "python3-pyotp",
+                                "python3-jinja2":       "python3-jinja2",
+                                "python3-matplotlib":   "python3-matplotlib",
+                                "python3-weasyprint":   "python3-weasyprint",
                             }
                             _dnf_pkg = _dnf_map.get(_apt_pkg, _apt_pkg)
                             r = subprocess.run(

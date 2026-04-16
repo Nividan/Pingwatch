@@ -113,6 +113,30 @@ PACKAGES = [
         "desc":     "QR code image rendering for 2FA enrolment",
         "required": False,
     },
+    {
+        "import":   "jinja2",
+        "name":     "Jinja2",
+        "install":  "Jinja2>=3.1",
+        "pip":      True,
+        "desc":     "report HTML template rendering",
+        "required": False,
+    },
+    {
+        "import":   "matplotlib",
+        "name":     "matplotlib",
+        "install":  "matplotlib>=3.7",
+        "pip":      True,
+        "desc":     "report charts (rendered to PNG)",
+        "required": False,
+    },
+    {
+        "import":   "weasyprint",
+        "name":     "weasyprint",
+        "install":  "weasyprint>=62.0",
+        "pip":      True,
+        "desc":     "PDF report generation (HTML→PDF; Linux also needs libpango/libcairo)",
+        "required": False,
+    },
 ]
 
 
