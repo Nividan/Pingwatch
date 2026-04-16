@@ -323,9 +323,17 @@ def _mttr_mtbf(flaps: list, window_s: float) -> dict:
 
 # ── Latency percentiles ────────────────────────────────────────────────
 
+_LATENCY_STYPES = {"ping", "tcp", "http", "http_keyword", "dns", "tls", "banner", "snmp"}
+# VMware (and anything else that stores a metric value in the `ms` column
+# instead of a probe round-trip) is excluded — their numbers would look
+# insane in a latency section. See vmware/client.py vmware_probe() which
+# writes the metric value into result['ms'] for charting purposes.
+
+
 def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> list:
     """
-    Per-sensor latency stats over the window.
+    Per-sensor latency stats over the window, restricted to probe types whose
+    `ms` column is an actual round-trip time (see _LATENCY_STYPES).
 
     For windows ≤ 1 day we compute true percentiles from raw samples.
     For longer windows we read from the rollup tables — which only store
@@ -397,6 +405,8 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
                 s = dev.sensors.get(sid)
                 if not s:
                     continue
+                if s.stype not in _LATENCY_STYPES:
+                    continue
                 avg = round(wsum / n, 1)
                 # Rollups don't store true percentiles — approximate:
                 #   p50 ≈ weighted avg,  p95/p99 ≈ bucket max (upper bound)
@@ -458,6 +468,8 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
                 continue
             s = dev.sensors.get(sid)
             if not s:
+                continue
+            if s.stype not in _LATENCY_STYPES:
                 continue
             out.append({
                 "did": did, "sid": sid,

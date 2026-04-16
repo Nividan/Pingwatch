@@ -677,7 +677,26 @@ function _buildSettingsTab_sensors(sr) {
           <button class="btn-s" onclick="_scanPortsReset()">Reset to Defaults</button>
         </div>
       </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">SNMP Traps</div>
+        <div class="fh" style="margin-bottom:10px">Re-enrich historical traps using the current MIB data. Run this after dropping new <code>.mib</code> files into <code>snmp/mibs/</code> and restarting — existing trap rows aren't re-enriched at receive time, so OIDs keep showing as raw numbers until this is clicked.</div>
+        <button class="btn-s rbac-admin" onclick="_snmpReenrich()" style="font-size:12px;padding:6px 14px">Re-enrich historical traps</button>
+        <div class="fh" style="margin-top:4px">Scans every stored trap with an empty name, looks it up in <code>trap_definitions</code>, and backfills name / vendor / severity / category. Safe to re-run.</div>
+      </div>
     </div>`;
+}
+
+async function _snmpReenrich() {
+  if (!confirm('Re-enrich historical SNMP traps? Rows with an empty trap name will be updated in-place from the current MIB-derived definitions.')) return;
+  try {
+    const r = await api('POST', '/api/snmp/reenrich', {});
+    alert(`Done.\n\nScanned: ${r.scanned}\nUpdated: ${r.updated}` +
+          (r.scanned && !r.updated
+            ? '\n\nNo rows matched any known trap OID — check that MIB files are under snmp/mibs/ and the server was restarted after adding them.'
+            : ''));
+  } catch (e) {
+    alert('Re-enrichment failed: ' + (e.message || e));
+  }
 }
 
 function _buildSettingsTab_networking(sr, tr) {
