@@ -1495,7 +1495,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   from{opacity:0;transform:translateY(-6px);}
   to{opacity:1;transform:translateY(0);}
 }
-.usr-dd-header{padding:12px 14px 10px;display:flex;flex-direction:column;gap:4px;}
+.usr-dd-header{padding:12px 14px 10px;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;}
 .usr-dd-name{font-size:.92rem;font-weight:600;color:var(--text);}
 .usr-dd-badge{
   font-size:.7rem;font-weight:700;letter-spacing:.04em;
@@ -1505,8 +1505,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .usr-dd-badge--operator{background:#1a2a3a;color:#79b8ff;border:1px solid #2f81f7;}
 .usr-dd-badge--viewer{background:#2a2a1a;color:#e3b341;border:1px solid #9e6a03;}
 .usr-dd-sep{height:1px;background:var(--border);margin:3px 0;}
+.usr-dd-ico{display:inline-block;width:22px;text-align:center;margin-right:8px;flex:none;font-size:1em;}
 .usr-dd-item{
-  display:block;width:100%;text-align:left;
+  display:flex;align-items:center;width:100%;text-align:left;
   background:none;border:none;padding:8px 14px;
   color:var(--text);font:0.88rem/1.4 inherit;cursor:pointer;
   transition:background .1s;
