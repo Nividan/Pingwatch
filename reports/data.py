@@ -343,14 +343,19 @@ def _classify_config_issues(flaps: list) -> tuple:
     and the noisy-sensors top-N with things the user can't fix by monitoring,
     only by editing the sensor config.
 
+    Aggregation key is ``(did, issue_type)`` — when one misconfiguration (e.g.
+    a single wrong SSL setting on a vCenter connection) trips 30 sensors, we
+    want ONE row showing the root cause, not 30 near-duplicates. The returned
+    dict exposes ``sensor_count`` (distinct sids affected) alongside ``count``
+    (total occurrences across all affected sensors).
+
     Returns:
       clean_flaps       — list[flap dict] — safe to feed to severity/noisy/log
-      config_issues     — list[{did, dname, sid, sname, stype, type, label,
-                                count, sample_detail, last_ts}] aggregated by
-                          (did, sid, type)
+      config_issues     — list[{did, dname, stype, type, label, count,
+                                sensor_count, sample_detail, last_ts}]
     """
     clean = []
-    agg = {}  # (did, sid, type) → rollup dict
+    agg = {}  # (did, type) → rollup dict
     for f in flaps:
         det = (f.get("detail") or "").strip()
         issue_type = issue_label = None
@@ -362,21 +367,28 @@ def _classify_config_issues(flaps: list) -> tuple:
         if not issue_type:
             clean.append(f)
             continue
-        key = (f.get("did"), f.get("sid"), issue_type)
+        key = (f.get("did"), issue_type)
         a = agg.get(key)
         if a is None:
             a = {
-                "did":   f.get("did"),   "sid":   f.get("sid"),
-                "dname": f.get("dname", ""), "sname": f.get("sname", ""),
+                "did":   f.get("did"),
+                "dname": f.get("dname", ""),
                 "stype": f.get("stype", ""),
                 "type":  issue_type, "label": issue_label,
-                "count": 0, "sample_detail": det[:120], "last_ts": f.get("ts") or 0,
+                "count": 0, "_sids": set(),
+                "sample_detail": det[:120], "last_ts": f.get("ts") or 0,
             }
             agg[key] = a
         a["count"] += 1
+        if f.get("sid"):
+            a["_sids"].add(f.get("sid"))
         if (f.get("ts") or 0) > a["last_ts"]:
             a["last_ts"] = f.get("ts") or 0
-    issues = sorted(agg.values(), key=lambda r: -r["count"])
+    issues = []
+    for a in agg.values():
+        a["sensor_count"] = len(a.pop("_sids"))
+        issues.append(a)
+    issues.sort(key=lambda r: (-r["count"], -r["sensor_count"]))
     return clean, issues
 
 
@@ -517,6 +529,20 @@ def _detect_major_incidents(flaps: list, min_devices: int = 10,
     if cur:
         windows.append(cur)
 
+    # flap_log rows don't carry the device's GROUP — only STATE does. Resolve
+    # (did → group, dname) once for the whole detection pass.
+    try:
+        from core.app_state import STATE
+        dev_meta = {}
+        with STATE._lock:
+            for dev in STATE.devices.values():
+                dev_meta[dev.device_id] = (
+                    getattr(dev, "group", "") or "",
+                    getattr(dev, "name", "") or "",
+                )
+    except Exception:
+        dev_meta = {}
+
     majors = []
     for w in windows:
         distinct_devs = {f.get("did") for f in w if f.get("did")}
@@ -529,10 +555,13 @@ def _detect_major_incidents(flaps: list, min_devices: int = 10,
         duration_s = None
         if end_ts and end_ts >= start_ts and not unresolved:
             duration_s = end_ts - start_ts
-        dnames = sorted({f.get("dname", "") or f.get("did") for f in w if f.get("did")})
-        groups = sorted({(f.get("group") or f.get("stype") or "") for f in w} - {""})
-        # group not stored on flap rows reliably — fall back empty
-        groups = sorted({g for g in groups if g})
+        dnames = sorted({
+            (dev_meta.get(d, ("", ""))[1] or
+             next((f.get("dname") for f in w if f.get("did") == d and f.get("dname")), "") or
+             d)
+            for d in distinct_devs
+        })
+        groups = sorted({dev_meta.get(d, ("", ""))[0] for d in distinct_devs} - {""})
         sensors = {(f.get("did"), f.get("sid")) for f in w}
         majors.append({
             "start_ts":         start_ts,
@@ -543,9 +572,52 @@ def _detect_major_incidents(flaps: list, min_devices: int = 10,
             "groups_affected":  groups,
             "sensors_affected": len(sensors),
             "ongoing":          unresolved,
+            # Internal: did set, used by _suppress_outages_in_majors so the
+            # Incident Log can drop per-sensor outages already rolled up here.
+            "_dids_affected":   distinct_devs,
         })
     majors.sort(key=lambda m: -m["start_ts"])
     return majors
+
+
+def _suppress_outages_in_majors(outages: list, majors: list) -> list:
+    """Drop per-sensor outages already summarised by a Major Incident.
+
+    An outage whose first event falls inside a Major Incident's time window
+    AND whose device is one of the cluster's devices is redundant in the
+    Incident Log — the Major Incidents table already counts it. Outages that
+    start outside the window, or on devices unrelated to the cluster, are
+    kept. Ongoing majors extend to +∞ so trailing events are caught.
+    """
+    if not majors or not outages:
+        return outages
+    windows = []
+    for m in majors:
+        start = m.get("start_ts") or 0
+        if not start:
+            continue
+        end = m.get("end_ts") or 0
+        if not end and m.get("duration_s"):
+            end = start + m["duration_s"]
+        if m.get("ongoing") or not end:
+            end = float("inf")
+        dids = set(m.get("_dids_affected") or ())
+        if dids:
+            windows.append((start, end, dids))
+    if not windows:
+        return outages
+    kept = []
+    for o in outages:
+        ts = o.get("first_ts") or 0
+        did = o.get("did")
+        swallowed = False
+        for (ws, we, wdids) in windows:
+            if ws <= ts <= we and did in wdids:
+                swallowed = True
+                break
+        if not swallowed:
+            kept.append(o)
+    return kept
 
 
 # ── Device health score ───────────────────────────────────────────────
@@ -1176,7 +1248,15 @@ def build_report_context(kind: str,
     worst        = _top_worst_devices(availability, top_worst_n)
     noisy        = _top_noisy_sensors(clean_flaps, top_noisy_n)
     mtr          = _mttr_mtbf(clean_flaps, window_s)
-    outages      = _cluster_flaps_into_outages(clean_flaps) if need_flaps else []
+
+    # Detect Major Incidents early so we can (a) expose them to templates that
+    # want them, and (b) suppress redundant per-sensor outages from the main
+    # Incident Log. Threshold follows the user's option when Custom, else 10.
+    major_min_cfg = int(opts.get("major_min_devices", 10)) if is_custom else 10
+    majors = _detect_major_incidents(clean_flaps, min_devices=major_min_cfg) \
+             if need_flaps else []
+    outages = _cluster_flaps_into_outages(clean_flaps) if need_flaps else []
+    outages = _suppress_outages_in_majors(outages, majors)
 
     # ── Company branding ─────────────────────────────────────────────
     company = {
@@ -1231,13 +1311,11 @@ def build_report_context(kind: str,
     # automatically so improvements apply wherever the same data is shown.
 
     # Major outages: cluster simultaneous device-DOWN events.
-    # Custom: threshold from options. Fixed kinds (exec/technical): default 10.
-    # Inventory kind doesn't care about incident stream — skip there.
+    # Already computed above (used for outage suppression). Expose to the
+    # templates that want the section rendered. Inventory kind doesn't
+    # surface the incident stream, so skip there.
     if want("major_incidents") or kind in ("executive", "technical"):
-        major_min = int(opts.get("major_min_devices", 10)) if is_custom else 10
-        ctx["major_incidents"] = _detect_major_incidents(
-            clean_flaps, min_devices=major_min
-        )
+        ctx["major_incidents"] = majors
 
     # Sensor config issues — always expose. Templates that don't render it just
     # ignore ctx["sensor_config_issues"]; templates that do get the data.

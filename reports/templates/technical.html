@@ -208,7 +208,7 @@
           <td class="{{ o.max_severity }}">{{ o.max_severity }}</td>
           <td>{{ o.event_count }}</td>
           <td class="{% if o.ongoing %}crit{% endif %}">{{ o.duration_s | durfmt_flap(o.ongoing) }}</td>
-          <td class="muted small">{{ (o.sample_detail or '')[:80] }}</td>
+          <td class="muted small">{{ o.sample_detail | cleandetail }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -237,7 +237,7 @@
           <td>{{ f.sname }}</td>
           <td class="{{ f.direction | severity_class }}">{{ f.direction }}</td>
           <td>{{ f.duration | durfmt_flap(not f.resolved_at) }}</td>
-          <td class="muted small">{{ (f.detail or '')[:80] }}</td>
+          <td class="muted small">{{ f.detail | cleandetail }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -249,21 +249,21 @@
 {% if sensor_config_issues %}
 <section class="section">
   <h1>Sensor configuration issues</h1>
-  <p class="muted small">These rows were filtered out of the incident log above because the message indicates a misconfigured sensor (VMware metric typo, TLS verify toggle, malformed OID, etc.) rather than a real outage. Fix the sensor config to silence them.</p>
+  <p class="muted small">One row per (device, issue) — a single misconfiguration (e.g. an SSL toggle) often trips many sensors on the same device, so we roll them up and show how many sensors were affected. Fix the sensor config once to silence the whole group.</p>
   <table class="data compact">
     <thead>
       <tr>
-        <th>Device</th><th>Sensor</th><th>Type</th>
-        <th>Issue</th><th>Occurrences</th><th>Last seen</th>
+        <th>Device</th><th>Type</th><th>Issue</th>
+        <th>Sensors</th><th>Occurrences</th><th>Last seen</th>
       </tr>
     </thead>
     <tbody>
       {% for r in sensor_config_issues %}
       <tr>
         <td>{{ r.dname }}</td>
-        <td>{{ r.sname }}</td>
         <td class="mono">{{ r.stype }}</td>
         <td class="warn">{{ r.label }}</td>
+        <td>{{ r.sensor_count }}</td>
         <td>{{ r.count }}</td>
         <td class="mono">{{ r.last_ts | datefmt }}</td>
       </tr>

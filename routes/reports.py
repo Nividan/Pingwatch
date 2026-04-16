@@ -18,6 +18,7 @@ Endpoints:
   GET    /api/reports/history                        viewer  list history
   GET    /api/reports/history/{id}/download          viewer  download PDF
   DELETE /api/reports/history/{id}                   admin   delete history row + PDF
+  POST   /api/reports/history/bulk-delete            admin   delete many history rows + PDFs
 
   POST   /api/reports/run                            operator ad-hoc run template_id
   POST   /api/reports/preview                        operator render HTML preview
@@ -38,6 +39,7 @@ _RE_SCHEDULE      = re.compile(r"^/api/reports/schedule$")
 _RE_SCHEDULE_ID   = re.compile(r"^/api/reports/schedule/([a-zA-Z0-9_\-]+)$")
 _RE_SCHEDULE_RUN  = re.compile(r"^/api/reports/schedule/([a-zA-Z0-9_\-]+)/run$")
 _RE_HISTORY       = re.compile(r"^/api/reports/history$")
+_RE_HISTORY_BULK  = re.compile(r"^/api/reports/history/bulk-delete$")
 _RE_HISTORY_ID    = re.compile(r"^/api/reports/history/([a-zA-Z0-9_\-]+)$")
 _RE_HISTORY_DL    = re.compile(r"^/api/reports/history/([a-zA-Z0-9_\-]+)/download$")
 _RE_HISTORY_CSV   = re.compile(r"^/api/reports/history/([a-zA-Z0-9_\-]+)/csv$")
@@ -291,6 +293,44 @@ def handle(h, method, path, body):
         except Exception as e:
             log.error(f"reports.history csv download error: {e}")
             h._json(500, {"error": "read failed"}); return True
+
+    # Bulk delete must come BEFORE the single-id handler: the regex for an id
+    # accepts "bulk-delete" (letters + hyphen), but the method is different
+    # (POST here, DELETE there) so in practice the single handler's method
+    # check skips it. Ordering this first makes the intent obvious.
+    if _RE_HISTORY_BULK.match(path) and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from db import db_get_report_history, db_delete_report_history, db_log_audit
+        ids = body.get("ids") if isinstance(body, dict) else None
+        if not isinstance(ids, list) or not ids:
+            h._json(400, {"error": "ids must be a non-empty list"}); return True
+        # Cap the batch so a runaway client can't block the request thread
+        # with thousands of filesystem deletes in one call.
+        if len(ids) > 500:
+            h._json(400, {"error": "batch too large (max 500)"}); return True
+        deleted = 0
+        missing = 0
+        for hid in ids:
+            hid_s = str(hid or "").strip()
+            if not hid_s:
+                continue
+            row = db_get_report_history(hid_s)
+            if not row:
+                missing += 1
+                continue
+            for key in ("pdf_path", "csv_path"):
+                pp = row.get(key) or ""
+                if pp and os.path.isfile(pp):
+                    try: os.remove(pp)
+                    except Exception as e:
+                        log.warning(f"reports.history {key} delete failed: {e}")
+            db_delete_report_history(hid_s)
+            deleted += 1
+        db_log_audit(user, h.client_address[0], "report_history_bulk_delete",
+                     f"deleted={deleted} missing={missing}")
+        h._json(200, {"ok": True, "deleted": deleted, "missing": missing})
+        return True
 
     m = _RE_HISTORY_ID.match(path)
     if m and method == "DELETE":
