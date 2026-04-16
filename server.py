@@ -69,6 +69,41 @@ _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
 _HTML_CACHE     = None   # cached assembled index.html bytes
 _MAP_HTML_CACHE = None   # cached map.html bytes
 
+# Shown when the web UI is reached before first-run setup completes.
+# Setup is driven exclusively by the launcher scripts (start.bat / start.sh),
+# which pick GUI vs CLI wizard automatically based on environment.
+_SETUP_REQUIRED_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>PingWatch — Setup Required</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ html,body{margin:0;padding:0;background:#0d1117;color:#e6edf3;
+           font-family:'Segoe UI',-apple-system,sans-serif;height:100%;}
+ .wrap{max-width:620px;margin:12vh auto;padding:28px 32px;background:#161b22;
+       border:1px solid #30363d;border-radius:10px;}
+ h1{margin:0 0 6px;font-size:22px;}
+ h1 .dot{color:#23d18b;margin-right:6px;}
+ h1 .accent{color:#2f81f7;}
+ p{color:#8b949e;line-height:1.55;}
+ code{background:#0d1117;border:1px solid #30363d;border-radius:4px;
+      padding:2px 8px;color:#e6edf3;font-family:Consolas,Menlo,monospace;
+      font-size:13px;}
+ .row{margin:14px 0;}
+ .hint{color:#484f58;font-size:12px;margin-top:18px;}
+</style></head><body>
+<div class="wrap">
+ <h1><span class="dot">●</span>Ping<span class="accent">Watch</span> — Setup Required</h1>
+ <p>PingWatch hasn&rsquo;t been configured yet. Run the launcher on the server
+    to open the setup wizard:</p>
+ <div class="row"><b>Windows:</b> &nbsp;<code>windows\\start.bat</code></div>
+ <div class="row"><b>Linux / macOS:</b> &nbsp;<code>bash linux/start.sh</code></div>
+ <p>The launcher opens a graphical wizard on desktop systems and falls back
+    to a terminal wizard on headless servers.</p>
+ <p class="hint">Already configured? Check that <code>pingwatch.conf</code>
+    exists in the install directory.</p>
+</div></body></html>
+"""
+
 
 def _load_map_html() -> bytes:
     global _MAP_HTML_CACHE
@@ -259,31 +294,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = urlparse(self.path).path
 
         # ── Setup wizard intercept (first-run) ────────────────────
+        # Setup runs through the launcher (start.bat / start.sh), which picks
+        # the GUI wizard on desktops and the CLI wizard on headless systems.
+        # If the web UI is reached before setup completes, show a static
+        # "run the launcher" page — no browser-based wizard exists.
         if needs_setup():
-            if p == "/setup" or p == "/":
-                _setup_html = os.path.join(FRONTEND_DIR, "setup.html")
-                if os.path.isfile(_setup_html):
-                    with open(_setup_html, "rb") as _f:
-                        data = _f.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                else:
-                    self._json(503, {"error": "Setup wizard not found"})
-                return
-            if p.startswith("/api/setup/"):
-                from routes import setup as _setup_mod
-                if _setup_mod.handle(self, "GET", p, {}):
-                    return
-            # Serve static assets needed by setup page
-            ext = os.path.splitext(p)[1].lower()
-            if ext in _STATIC_TYPES:
-                pass  # fall through to static handler below
-            else:
-                self._json(503, {"error": "Setup required", "redirect": "/setup"})
-                return
+            data = _SETUP_REQUIRED_HTML.encode("utf-8")
+            self.send_response(503)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
         if p in ("/", "/index.html"):
@@ -347,13 +369,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = urlparse(self.path).path
 
         # ── Setup wizard intercept (first-run) ────────────────────
-        if needs_setup() and p.startswith("/api/setup/"):
-            body = self._body()
-            if body is None: return
-            from routes import setup as _setup_mod
-            if _setup_mod.handle(self, "POST", p, body):
-                return
-            self._json(404, {"error": "not found"})
+        # Setup runs via the launcher scripts; no browser wizard exists.
+        if needs_setup():
+            self._json(503, {"error": "Setup required — run start.bat / start.sh"})
             return
 
         # DB import reads its own oversized body before we call _body()

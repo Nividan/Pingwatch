@@ -27,6 +27,7 @@ from core.setup_logic import (
     detect_pg_server, generate_pg_password, test_pg_connection,
     pg_install_instructions,
     default_wizard_state, save_wizard_config, initialize_database,
+    valid_host, valid_email,
     win_firewall_check, win_firewall_add, get_firewall_rules,
     win_create_shortcut, win_task_exists, win_install_task,
 )
@@ -60,7 +61,8 @@ _MONO = "Consolas" if sys.platform == "win32" else \
         "Menlo" if sys.platform == "darwin" else "DejaVu Sans Mono"
 
 # ── Step names ──────────────────────────────────────────────────────────────
-_STEPS = ["Welcome", "Packages", "Database", "Network", "Security", "System", "Summary"]
+_STEPS = ["Welcome", "Packages", "Database", "Network", "Security",
+          "Alerts", "System", "Summary"]
 
 # ── Braille spinner frames (reused across pages) ────────────────────────────
 _SPIN_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -1162,7 +1164,268 @@ class SecurityPage(WizardPage):
         return True
 
 
-# ── 6. System (Firewall + Shortcut + Auto-Start) ───────────────────────────
+# ── 6. Alerts (SMTP + Syslog + Anomaly) ────────────────────────────────────
+
+class AlertsPage(WizardPage):
+    """Optional alert integrations — SMTP, remote syslog, anomaly default.
+
+    Every section is off by default.  Validation is permissive: bad values
+    are flagged in-place but never block Next — the wizard should never
+    fail on cosmetic input issues.
+    """
+
+    def __init__(self, parent, ctrl):
+        super().__init__(parent, ctrl)
+        _page_title(self, "Alerts & Integrations",
+                    "Optional — enable only what you need. All fields can be "
+                    "changed later in Settings → Integrations.")
+
+        # ── Scrollable body (content grows past window height) ───
+        self._canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
+        self._sb     = ttk.Scrollbar(self, orient="vertical",
+                                     command=self._canvas.yview)
+        body = tk.Frame(self._canvas, bg=BG)
+        body.bind("<Configure>",
+            lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        self._body_win = self._canvas.create_window((0, 0), window=body, anchor="nw")
+        self._canvas.configure(yscrollcommand=self._sb.set)
+        self._canvas.bind("<Configure>",
+            lambda e: self._canvas.itemconfig(self._body_win, width=e.width))
+        self._sb.pack(side="right", fill="y", pady=(0, 2))
+        self._canvas.pack(side="left", fill="both", expand=True, pady=(0, 2))
+
+        def _on_mousewheel(e):
+            self._canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        self._canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # ── SMTP section ─────────────────────────────────────────
+        self._smtp_on = tk.BooleanVar(value=bool(ctrl.state.get("smtp_enabled")))
+        smtp_card = tk.Frame(body, bg=BG2, highlightthickness=1,
+                             highlightbackground=BORDER, padx=14, pady=10)
+        smtp_card.pack(fill="x", pady=(4, 8))
+        tk.Checkbutton(smtp_card, text="Email Alerts (SMTP)",
+                       variable=self._smtp_on, command=self._toggle_smtp,
+                       bg=BG2, fg=TEXT, selectcolor=BG3,
+                       activebackground=BG2, activeforeground=TEXT,
+                       font=(_FNT, 11, "bold")).pack(anchor="w")
+        tk.Label(smtp_card, text="Send alert notifications by email. "
+                 "Recipients come from user accounts — this configures only the sender.",
+                 bg=BG2, fg=TEXT2, font=(_FNT, 9),
+                 wraplength=700, justify="left").pack(anchor="w",
+                                                       padx=(22, 0), pady=(0, 4))
+
+        self._smtp_fields = tk.Frame(smtp_card, bg=BG2)
+        self._smtp_entries = {}
+        for label_text, key, default, is_pw, width in [
+            ("SMTP Host",     "smtp_host", "",                   False, 0),
+            ("Port",          "smtp_port", "587",                False, 8),
+            ("Username",      "smtp_user", "",                   False, 0),
+            ("Password",      "smtp_pass", "",                   True,  0),
+            ("From Address",  "smtp_from", "",                   False, 0),
+        ]:
+            row = tk.Frame(self._smtp_fields, bg=BG2)
+            row.pack(fill="x", pady=2, padx=(22, 0))
+            tk.Label(row, text=label_text, bg=BG2, fg=TEXT2,
+                     font=(_FNT, 10), width=13, anchor="e").pack(side="left")
+            kw = {"show": "*"} if is_pw else {}
+            if width:
+                kw["width"] = width
+            e = _entry(row, **kw)
+            # Re-parent background to match card
+            e.configure(bg=BG3)
+            e.insert(0, str(ctrl.state.get(key, default)))
+            if width:
+                e.pack(side="left", padx=(6, 0))
+            else:
+                e.pack(side="left", fill="x", expand=True, padx=(6, 0))
+            self._smtp_entries[key] = e
+
+        tls_row = tk.Frame(self._smtp_fields, bg=BG2)
+        tls_row.pack(fill="x", pady=2, padx=(22, 0))
+        tk.Label(tls_row, text="Security", bg=BG2, fg=TEXT2,
+                 font=(_FNT, 10), width=13, anchor="e").pack(side="left")
+        self._smtp_tls = tk.StringVar(
+            value=str(ctrl.state.get("smtp_tls", "starttls")).lower())
+        for mode, txt in (("starttls", "STARTTLS"), ("ssl", "SSL/TLS"), ("none", "None")):
+            tk.Radiobutton(tls_row, text=txt,
+                           variable=self._smtp_tls, value=mode,
+                           bg=BG2, fg=TEXT2, selectcolor=BG3,
+                           activebackground=BG2, activeforeground=TEXT,
+                           font=(_FNT, 10)).pack(side="left", padx=(6, 0))
+
+        self._smtp_warn = tk.Label(smtp_card, text="", bg=BG2, fg=YELLOW,
+                                   font=(_FNT, 9), wraplength=700, justify="left")
+
+        # ── Syslog section ───────────────────────────────────────
+        self._sys_on = tk.BooleanVar(value=bool(ctrl.state.get("syslog_enabled")))
+        sys_card = tk.Frame(body, bg=BG2, highlightthickness=1,
+                            highlightbackground=BORDER, padx=14, pady=10)
+        sys_card.pack(fill="x", pady=8)
+        tk.Checkbutton(sys_card, text="Remote Syslog Forwarding",
+                       variable=self._sys_on, command=self._toggle_sys,
+                       bg=BG2, fg=TEXT, selectcolor=BG3,
+                       activebackground=BG2, activeforeground=TEXT,
+                       font=(_FNT, 11, "bold")).pack(anchor="w")
+        tk.Label(sys_card, text="Forward events to a remote syslog or SIEM server.",
+                 bg=BG2, fg=TEXT2, font=(_FNT, 9)).pack(anchor="w",
+                                                         padx=(22, 0), pady=(0, 4))
+
+        self._sys_fields = tk.Frame(sys_card, bg=BG2)
+        self._sys_entries = {}
+        for label_text, key, default, width in [
+            ("Host", "syslog_host", "",    0),
+            ("Port", "syslog_port", "514", 8),
+        ]:
+            row = tk.Frame(self._sys_fields, bg=BG2)
+            row.pack(fill="x", pady=2, padx=(22, 0))
+            tk.Label(row, text=label_text, bg=BG2, fg=TEXT2,
+                     font=(_FNT, 10), width=13, anchor="e").pack(side="left")
+            kw = {"width": width} if width else {}
+            e = _entry(row, **kw)
+            e.configure(bg=BG3)
+            e.insert(0, str(ctrl.state.get(key, default)))
+            if width:
+                e.pack(side="left", padx=(6, 0))
+            else:
+                e.pack(side="left", fill="x", expand=True, padx=(6, 0))
+            self._sys_entries[key] = e
+
+        proto_row = tk.Frame(self._sys_fields, bg=BG2)
+        proto_row.pack(fill="x", pady=2, padx=(22, 0))
+        tk.Label(proto_row, text="Protocol", bg=BG2, fg=TEXT2,
+                 font=(_FNT, 10), width=13, anchor="e").pack(side="left")
+        self._sys_proto = tk.StringVar(
+            value=str(ctrl.state.get("syslog_proto", "udp")).lower())
+        for mode, txt in (("udp", "UDP"), ("tcp", "TCP")):
+            tk.Radiobutton(proto_row, text=txt,
+                           variable=self._sys_proto, value=mode,
+                           bg=BG2, fg=TEXT2, selectcolor=BG3,
+                           activebackground=BG2, activeforeground=TEXT,
+                           font=(_FNT, 10)).pack(side="left", padx=(6, 0))
+
+        sev_row = tk.Frame(self._sys_fields, bg=BG2)
+        sev_row.pack(fill="x", pady=2, padx=(22, 0))
+        tk.Label(sev_row, text="Min Severity", bg=BG2, fg=TEXT2,
+                 font=(_FNT, 10), width=13, anchor="e").pack(side="left")
+        self._sys_sev = tk.StringVar(
+            value=str(ctrl.state.get("syslog_min_severity", "warning")).lower())
+        for mode, txt in (("critical", "Critical"), ("warning", "Warning"), ("info", "Info")):
+            tk.Radiobutton(sev_row, text=txt,
+                           variable=self._sys_sev, value=mode,
+                           bg=BG2, fg=TEXT2, selectcolor=BG3,
+                           activebackground=BG2, activeforeground=TEXT,
+                           font=(_FNT, 10)).pack(side="left", padx=(6, 0))
+
+        self._sys_warn = tk.Label(sys_card, text="", bg=BG2, fg=YELLOW,
+                                  font=(_FNT, 9), wraplength=700, justify="left")
+
+        # ── Anomaly detection ────────────────────────────────────
+        anom_card = tk.Frame(body, bg=BG2, highlightthickness=1,
+                             highlightbackground=BORDER, padx=14, pady=10)
+        anom_card.pack(fill="x", pady=(8, 4))
+        self._anom_on = tk.BooleanVar(
+            value=bool(ctrl.state.get("anomaly_default_new_sensors")))
+        tk.Checkbutton(anom_card,
+                       text="Enable Anomaly Detection on new sensors by default",
+                       variable=self._anom_on,
+                       bg=BG2, fg=TEXT, selectcolor=BG3,
+                       activebackground=BG2, activeforeground=TEXT,
+                       font=(_FNT, 11, "bold")).pack(anchor="w")
+        tk.Label(anom_card,
+                 text="Learns normal sensor behaviour and flags deviations. "
+                      "Existing sensors are not affected — individual sensors "
+                      "can still opt in or out after creation.",
+                 bg=BG2, fg=TEXT2, font=(_FNT, 9),
+                 wraplength=700, justify="left").pack(anchor="w",
+                                                       padx=(22, 0), pady=(0, 2))
+
+    # ── Section visibility toggles ───────────────────────────────
+    def _toggle_smtp(self):
+        if self._smtp_on.get():
+            self._smtp_fields.pack(fill="x", pady=(4, 0))
+        else:
+            self._smtp_fields.pack_forget()
+            self._smtp_warn.pack_forget()
+
+    def _toggle_sys(self):
+        if self._sys_on.get():
+            self._sys_fields.pack(fill="x", pady=(4, 0))
+        else:
+            self._sys_fields.pack_forget()
+            self._sys_warn.pack_forget()
+
+    def on_enter(self):
+        self._toggle_smtp()
+        self._toggle_sys()
+
+    def on_leave(self):
+        st = self.ctrl.state
+
+        # ── SMTP ──
+        st["smtp_enabled"] = bool(self._smtp_on.get())
+        if st["smtp_enabled"]:
+            st["smtp_host"] = self._smtp_entries["smtp_host"].get().strip()
+            try:
+                p = int(self._smtp_entries["smtp_port"].get())
+                st["smtp_port"] = p if 1 <= p <= 65535 else 587
+            except ValueError:
+                st["smtp_port"] = 587
+            st["smtp_tls"]  = self._smtp_tls.get()
+            st["smtp_user"] = self._smtp_entries["smtp_user"].get().strip()
+            st["smtp_pass"] = self._smtp_entries["smtp_pass"].get()
+            st["smtp_from"] = self._smtp_entries["smtp_from"].get().strip()
+
+        # ── Syslog ──
+        st["syslog_enabled"] = bool(self._sys_on.get())
+        if st["syslog_enabled"]:
+            st["syslog_host"] = self._sys_entries["syslog_host"].get().strip()
+            try:
+                p = int(self._sys_entries["syslog_port"].get())
+                st["syslog_port"] = p if 1 <= p <= 65535 else 514
+            except ValueError:
+                st["syslog_port"] = 514
+            st["syslog_proto"]        = self._sys_proto.get()
+            st["syslog_min_severity"] = self._sys_sev.get()
+
+        # ── Anomaly ──
+        st["anomaly_default_new_sensors"] = bool(self._anom_on.get())
+
+    def validate(self) -> bool:
+        """Never block Next — just warn on questionable input.
+
+        The philosophy across all three wizards is: save whatever the user
+        entered, log warnings, let them fix it later in Settings. This keeps
+        first-run setup from stalling on cosmetic validation failures.
+        """
+        warns = []
+
+        # SMTP warnings
+        self._smtp_warn.pack_forget()
+        if self._smtp_on.get():
+            host = self._smtp_entries["smtp_host"].get().strip()
+            if host and not valid_host(host):
+                warns.append(f"SMTP host '{host}' looks unusual — saved anyway.")
+            frm = self._smtp_entries["smtp_from"].get().strip()
+            if frm and not valid_email(frm):
+                warns.append(f"From address '{frm}' is not a valid email — "
+                             f"saved anyway.")
+            if warns:
+                self._smtp_warn.config(text="  ".join(warns))
+                self._smtp_warn.pack(anchor="w", padx=(22, 0), pady=(4, 0))
+
+        # Syslog warnings
+        self._sys_warn.pack_forget()
+        if self._sys_on.get():
+            host = self._sys_entries["syslog_host"].get().strip()
+            if host and not valid_host(host):
+                self._sys_warn.config(
+                    text=f"Syslog host '{host}' looks unusual — saved anyway.")
+                self._sys_warn.pack(anchor="w", padx=(22, 0), pady=(4, 0))
+
+        return True
+
+
+# ── 7. System (Firewall + Shortcut + Auto-Start) ───────────────────────────
 
 class SystemPage(WizardPage):
     def __init__(self, parent, ctrl):
@@ -1394,6 +1657,28 @@ class SummaryPage(WizardPage):
         self._add_section("SECURITY")
         self._add_row(0, "Admin User", st.get("admin_user", "admin"))
 
+        # ── Alerts (only show sections the user enabled) ──
+        alerts_rows = []
+        if st.get("smtp_enabled") and st.get("smtp_host"):
+            alerts_rows.append(("Email (SMTP)",
+                f"{st.get('smtp_host')}:{st.get('smtp_port', 587)} "
+                f"({st.get('smtp_tls', 'starttls')})"))
+        else:
+            alerts_rows.append(("Email (SMTP)", "Not configured"))
+        if st.get("syslog_enabled") and st.get("syslog_host"):
+            alerts_rows.append(("Syslog",
+                f"{st.get('syslog_host')}:{st.get('syslog_port', 514)} "
+                f"/{st.get('syslog_proto', 'udp')} "
+                f"({st.get('syslog_min_severity', 'warning')}+)"))
+        else:
+            alerts_rows.append(("Syslog", "Not configured"))
+        alerts_rows.append(("Anomaly Default",
+            "On for new sensors" if st.get("anomaly_default_new_sensors")
+            else "Off"))
+        self._add_section("ALERTS")
+        for i, (l, v) in enumerate(alerts_rows):
+            self._add_row(i, l, v)
+
     def do_finish(self):
         """Called by Finish button — runs DB init in background."""
         self.ctrl.set_busy(True)
@@ -1455,6 +1740,7 @@ def run_wizard() -> bool:
     ctrl.add_page(DatabasePage)
     ctrl.add_page(NetworkPage)
     ctrl.add_page(SecurityPage)
+    ctrl.add_page(AlertsPage)
     ctrl.add_page(SystemPage)
     ctrl.add_page(SummaryPage)
     ctrl.show_page(0)
