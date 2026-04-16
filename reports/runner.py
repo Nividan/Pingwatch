@@ -29,11 +29,37 @@ def _safe_filename(stem: str) -> str:
     return "".join(keep)[:80] or "report"
 
 
-def _ensure_dir():
+def _ensure_dir() -> str:
+    """Ensure REPORTS_DIR exists and is writable. Returns the usable path, or ''.
+
+    Tries the primary location; on failure falls back to a per-user temp dir so
+    runs don't silently lose their artifact on a read-only checkout.
+    """
+    candidates = [REPORTS_DIR]
     try:
-        os.makedirs(REPORTS_DIR, exist_ok=True)
-    except Exception as e:
-        log.error(f"reports.runner: cannot create {REPORTS_DIR}: {e}")
+        import tempfile
+        candidates.append(os.path.join(tempfile.gettempdir(), "pingwatch_reports"))
+    except Exception:
+        pass
+
+    last_err = None
+    for d in candidates:
+        try:
+            os.makedirs(d, exist_ok=True)
+            # Probe write permission with a temp file
+            probe = os.path.join(d, ".write_probe")
+            with open(probe, "wb") as f:
+                f.write(b"x")
+            os.remove(probe)
+            if d != REPORTS_DIR:
+                log.warning(f"reports.runner: using fallback dir {d!r} "
+                            f"(primary {REPORTS_DIR!r} is not writable)")
+            return d
+        except Exception as e:
+            last_err = e
+            continue
+    log.error(f"reports.runner: no writable reports dir; last error: {last_err}")
+    return ""
 
 
 def render_from_template(template: dict,
@@ -80,18 +106,24 @@ def run_template_now(template_id: str, triggered_by: str = "") -> dict:
     if not tpl:
         raise ValueError(f"template {template_id!r} not found")
 
-    _ensure_dir()
+    out_dir = _ensure_dir()
     pdf, ctx, ms = render_from_template(tpl, triggered_by=triggered_by)
 
     ts = time.time()
     stem = _safe_filename(f"{tpl['name']}_{datetime.datetime.fromtimestamp(ts).strftime('%Y%m%d_%H%M%S')}")
-    pdf_path = os.path.join(REPORTS_DIR, f"{stem}.pdf")
-    try:
-        with open(pdf_path, "wb") as f:
-            f.write(pdf)
-    except Exception as e:
-        log.error(f"reports.runner write PDF failed: {e}")
-        pdf_path = ""
+    pdf_path = ""
+    write_err = ""
+    if out_dir:
+        pdf_path = os.path.join(out_dir, f"{stem}.pdf")
+        try:
+            with open(pdf_path, "wb") as f:
+                f.write(pdf)
+        except Exception as e:
+            log.error(f"reports.runner write PDF failed at {pdf_path!r}: {e}")
+            write_err = f"write failed: {e}"
+            pdf_path = ""
+    else:
+        write_err = "no writable reports directory"
 
     hid = db_add_report_history({
         "template_id":   tpl["id"],
@@ -103,11 +135,13 @@ def run_template_now(template_id: str, triggered_by: str = "") -> dict:
         "period_end":    ctx["period"]["end_ts"],
         "pdf_path":      pdf_path,
         "pdf_bytes":     len(pdf),
-        "delivery_status": "local_only",
+        "delivery_status": "local_only" if pdf_path else "render_only",
         "render_ms":     ms,
+        "error":         write_err,
         "triggered_by":  triggered_by,
     })
-    return {"id": hid, "pdf_path": pdf_path, "pdf_bytes": len(pdf)}
+    return {"id": hid, "pdf_path": pdf_path, "pdf_bytes": len(pdf),
+            "error": write_err}
 
 
 def run_schedule(sch: dict) -> dict:
@@ -125,7 +159,7 @@ def run_schedule(sch: dict) -> dict:
         log.warning(f"reports.runner: schedule {sch.get('id')} references missing template")
         return {"ok": False, "error": "template not found"}
 
-    _ensure_dir()
+    out_dir = _ensure_dir()
 
     try:
         pdf, ctx, ms = render_from_template(
@@ -151,13 +185,15 @@ def run_schedule(sch: dict) -> dict:
     stem = _safe_filename(
         f"{tpl['name']}_{datetime.datetime.fromtimestamp(ts).strftime('%Y%m%d_%H%M%S')}"
     )
-    pdf_path = os.path.join(REPORTS_DIR, f"{stem}.pdf")
-    try:
-        with open(pdf_path, "wb") as f:
-            f.write(pdf)
-    except Exception as e:
-        log.error(f"reports.runner write PDF failed: {e}")
-        pdf_path = ""
+    pdf_path = ""
+    if out_dir:
+        pdf_path = os.path.join(out_dir, f"{stem}.pdf")
+        try:
+            with open(pdf_path, "wb") as f:
+                f.write(pdf)
+        except Exception as e:
+            log.error(f"reports.runner write PDF failed at {pdf_path!r}: {e}")
+            pdf_path = ""
 
     recipients = _resolve_recipients(sch)
 

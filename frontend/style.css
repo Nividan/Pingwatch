@@ -2010,6 +2010,10 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .pill.crit  {background:rgba(248,81,73,.14);color:var(--down);}
 .pill.accent{background:rgba(9,105,218,.14);color:var(--accent);}
 .pill.muted {background:var(--bg3);color:var(--text2);}
+.rpt-spinner{width:36px;height:36px;border-radius:50%;flex:none;
+             border:3px solid var(--border);border-top-color:var(--accent);
+             animation:rptSpin .8s linear infinite;}
+@keyframes rptSpin{to{transform:rotate(360deg)}}
 .bk-table{width:100%;border-collapse:collapse;font-size:12px;}
 .bk-table th{background:var(--bg3);color:var(--text2);padding:8px 12px;text-align:left;
              border-bottom:2px solid var(--border2);position:sticky;top:0;z-index:1;white-space:nowrap;}

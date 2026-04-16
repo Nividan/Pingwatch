@@ -7,6 +7,106 @@
 let _rptTab = 'templates';   // 'templates' | 'schedules' | 'history'
 let _rptBooted = false;
 
+/* ── Modal helpers (replace native confirm/alert and show progress) ── */
+
+function _rptConfirm(opts){
+  // opts: {title, message, confirmLabel, danger, onConfirm}
+  return new Promise(resolve=>{
+    closeM('rptConfirmModal');
+    const o = document.createElement('div');
+    o.className = 'mo'; o.id = 'rptConfirmModal';
+    _overlayClose(o, ()=>{ closeM('rptConfirmModal'); resolve(false); });
+    const danger = !!opts.danger;
+    o.innerHTML = `
+      <div class="mbox" style="max-width:440px">
+        <div class="mhd"><span>${esc(opts.title||'Confirm')}</span></div>
+        <div class="mbdy">
+          <div style="font-size:13px;color:var(--text);line-height:1.5">${esc(opts.message||'')}</div>
+        </div>
+        <div class="mft">
+          <button class="btn-s" id="_rcm_no">Cancel</button>
+          <button class="btn-p" id="_rcm_yes" style="${danger?'background:var(--down);border-color:var(--down)':''}">${esc(opts.confirmLabel||'OK')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(o);
+    const done = v => { closeM('rptConfirmModal'); resolve(v); };
+    document.getElementById('_rcm_no').onclick  = ()=>done(false);
+    document.getElementById('_rcm_yes').onclick = ()=>done(true);
+    setTimeout(()=>document.getElementById('_rcm_yes')?.focus(), 50);
+  });
+}
+
+function _rptNotify(opts){
+  // opts: {title, message, kind: 'info'|'success'|'error'}
+  closeM('rptNotifyModal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'rptNotifyModal';
+  _overlayClose(o, ()=>closeM('rptNotifyModal'));
+  const kind = opts.kind || 'info';
+  const ico = kind==='success' ? '✓' : kind==='error' ? '✕' : 'ℹ';
+  const color = kind==='success' ? 'var(--up)' : kind==='error' ? 'var(--down)' : 'var(--accent)';
+  o.innerHTML = `
+    <div class="mbox" style="max-width:440px">
+      <div class="mhd"><span>${esc(opts.title||'Notice')}</span></div>
+      <div class="mbdy">
+        <div style="display:flex;gap:14px;align-items:flex-start">
+          <div style="font-size:24px;color:${color};flex:none;line-height:1">${ico}</div>
+          <div style="font-size:13px;color:var(--text);line-height:1.5">${esc(opts.message||'')}</div>
+        </div>
+      </div>
+      <div class="mft">
+        ${opts.secondary ? `<button class="btn-s" id="_rn_sec">${esc(opts.secondary.label)}</button>` : ''}
+        <button class="btn-p" id="_rn_ok">OK</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  document.getElementById('_rn_ok').onclick = ()=>closeM('rptNotifyModal');
+  if(opts.secondary){
+    document.getElementById('_rn_sec').onclick = ()=>{
+      closeM('rptNotifyModal');
+      try{ opts.secondary.onClick && opts.secondary.onClick(); }catch(_){}
+    };
+  }
+  setTimeout(()=>document.getElementById('_rn_ok')?.focus(), 50);
+}
+
+let _rptProgressInterval = null;
+function _rptShowProgress(title, message){
+  closeM('rptProgressModal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'rptProgressModal';
+  // No overlay close — user must wait
+  o.innerHTML = `
+    <div class="mbox" style="max-width:420px">
+      <div class="mhd"><span>${esc(title||'Working…')}</span></div>
+      <div class="mbdy">
+        <div style="display:flex;gap:16px;align-items:center">
+          <div class="rpt-spinner" aria-hidden="true"></div>
+          <div style="flex:1">
+            <div id="_rpt_prog_msg" style="font-size:13px;color:var(--text);line-height:1.5">${esc(message||'Please wait.')}</div>
+            <div id="_rpt_prog_elapsed" style="font-size:11px;color:var(--text3);margin-top:6px;font-family:'JetBrains Mono',monospace">0s</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  const started = Date.now();
+  _rptProgressInterval = setInterval(()=>{
+    const el = document.getElementById('_rpt_prog_elapsed');
+    if(!el){ clearInterval(_rptProgressInterval); return; }
+    const s = Math.floor((Date.now()-started)/1000);
+    el.textContent = s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s`;
+  }, 500);
+}
+function _rptHideProgress(){
+  if(_rptProgressInterval){ clearInterval(_rptProgressInterval); _rptProgressInterval = null; }
+  closeM('rptProgressModal');
+}
+function _rptSetProgressMessage(msg){
+  const el = document.getElementById('_rpt_prog_msg');
+  if(el) el.textContent = msg;
+}
+
 function _rptInit(){
   const root = document.getElementById('reportsView');
   if(!root) return;
@@ -164,7 +264,7 @@ async function _rptSaveTemplate(tid){
       subtitle: document.getElementById('_rt_subtitle').value.trim(),
     },
   };
-  if(!payload.name){ alert('Name required'); return; }
+  if(!payload.name){ _rptNotify({title:'Missing field', message:'Name is required.', kind:'error'}); return; }
   try{
     if(tid){
       await api('PATCH', '/api/reports/template/'+tid, payload);
@@ -174,31 +274,28 @@ async function _rptSaveTemplate(tid){
     closeM('rptTplModal');
     _rptRenderTemplates();
   }catch(e){
-    alert('Save failed: '+(e.message||e));
+    _rptNotify({title:'Save failed', message:(e.message||String(e)), kind:'error'});
   }
 }
 
 async function _rptDeleteTemplate(tid, name){
-  if(!confirm('Delete template "'+name+'"?\n\nAll schedules referencing it will also be deleted.')) return;
+  const ok = await _rptConfirm({
+    title:   'Delete template?',
+    message: `Template "${name}" and all its schedules will be permanently removed. This cannot be undone.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if(!ok) return;
   try{
     await api('DELETE', '/api/reports/template/'+tid);
     _rptRenderTemplates();
-  }catch(e){ alert('Delete failed'); }
+  }catch(e){ _rptNotify({title:'Delete failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
 function _rptPreview(tid){
   // Open a blank tab first (sync — avoids popup blocker), then navigate to POST-backed endpoint via a form
   const w = window.open('about:blank', '_blank');
-  if(!w){ alert('Popup blocked — allow popups for preview'); return; }
-  const f = w.document.createElement('form');
-  f.method = 'POST';
-  f.action = '/api/reports/preview';
-  const h = w.document.createElement('input');
-  h.type = 'hidden'; h.name = 'template_id'; h.value = tid;
-  f.appendChild(h);
-  w.document.body.appendChild(f);
-  // The server expects JSON; fall back to a fetch + document.write so preview works
-  // (form POST multipart to a JSON endpoint won't match)
+  if(!w){ _rptNotify({title:'Popup blocked', message:'Allow popups for this site to preview reports in a new tab.', kind:'error'}); return; }
   w.document.write('<div style="font-family:sans-serif;padding:40px;color:#555">Rendering preview…</div>');
   fetch('/api/reports/preview', {
     method: 'POST',
@@ -212,12 +309,31 @@ function _rptPreview(tid){
 }
 
 async function _rptRunNow(tid){
-  if(!confirm('Render this report now? A PDF will be saved to the server and appear in History.')) return;
+  const ok = await _rptConfirm({
+    title:   'Run report now?',
+    message: 'The report will render with current data and be saved to the server. You can download the PDF from the History tab when it is ready.',
+    confirmLabel: 'Run Now',
+  });
+  if(!ok) return;
+  _rptShowProgress('Generating report…', 'Collecting data, rendering charts, and producing the PDF. Large reports with many devices can take a minute or two.');
   try{
     const r = await api('POST', '/api/reports/run', {template_id: tid});
-    alert('Report generated ('+Math.round((r.pdf_bytes||0)/1024)+' KB). Check the History tab.');
+    _rptHideProgress();
+    const kb = Math.round((r.pdf_bytes||0)/1024);
+    const hasFile = !!(r.pdf_path && r.pdf_bytes);
+    _rptNotify({
+      title:   hasFile ? 'Report ready' : 'Report rendered',
+      message: hasFile
+        ? `PDF saved (${kb} KB). Open the History tab to download it.`
+        : `Rendered ${kb} KB but the server could not save it to disk (check file permissions on backup/reports/). The entry still appears in History.`,
+      kind:    hasFile ? 'success' : 'error',
+      secondary: { label: 'Go to History', onClick: ()=>{ _rptSwitch('history'); } },
+    });
     if(_rptTab==='history') _rptRenderHistory();
-  }catch(e){ alert('Run failed'); }
+  }catch(e){
+    _rptHideProgress();
+    _rptNotify({title:'Run failed', message:(e.message||String(e)), kind:'error'});
+  }
 }
 
 function _rptTestSend(tid){
@@ -458,28 +574,50 @@ async function _rptSaveSchedule(sid){
     body_tpl:          document.getElementById('_rs_body').value,
     enabled:           document.getElementById('_rs_en').checked,
   };
-  if(!payload.name){ alert('Name required'); return; }
-  if(!payload.template_id){ alert('Pick a template'); return; }
+  if(!payload.name){      _rptNotify({title:'Missing field', message:'Name is required.',       kind:'error'}); return; }
+  if(!payload.template_id){_rptNotify({title:'Missing field', message:'Pick a template first.', kind:'error'}); return; }
   try{
     if(sid) await api('PATCH', '/api/reports/schedule/'+sid, payload);
     else    await api('POST',  '/api/reports/schedule',      payload);
     closeM('rptSchModal');
     _rptRenderSchedules();
-  }catch(e){ alert('Save failed: '+(e.message||e)); }
+  }catch(e){ _rptNotify({title:'Save failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
 async function _rptDeleteSchedule(sid, name){
-  if(!confirm('Delete schedule "'+name+'"?')) return;
+  const ok = await _rptConfirm({
+    title:'Delete schedule?',
+    message:`Schedule "${name}" will stop firing. Existing history rows are kept.`,
+    confirmLabel:'Delete', danger:true,
+  });
+  if(!ok) return;
   try{ await api('DELETE', '/api/reports/schedule/'+sid); _rptRenderSchedules(); }
-  catch(e){ alert('Delete failed'); }
+  catch(e){ _rptNotify({title:'Delete failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
 async function _rptRunSchedule(sid, name){
-  if(!confirm('Run schedule "'+name+'" now? (Generates PDF and emails recipients.)')) return;
+  const ok = await _rptConfirm({
+    title:'Run schedule now?',
+    message:`Schedule "${name}" will render its report and email all configured recipients immediately.`,
+    confirmLabel:'Run & Send',
+  });
+  if(!ok) return;
+  _rptShowProgress('Running schedule…', 'Rendering report and delivering to recipients.');
   try{
     const r = await api('POST', '/api/reports/schedule/'+sid+'/run');
-    alert((r.ok?'Sent to ':'Saved but not sent: ')+(r.sent||0)+' recipient(s). Check History.');
-  }catch(e){ alert('Run failed'); }
+    _rptHideProgress();
+    _rptNotify({
+      title: r.ok ? 'Schedule sent' : 'Saved but not sent',
+      message: r.ok
+        ? `Emailed ${r.sent||0} recipient(s). An entry has been added to History.`
+        : `Report was generated but not delivered: ${r.error||'no recipients configured'}.`,
+      kind: r.ok ? 'success' : 'error',
+      secondary: { label:'Go to History', onClick: ()=>_rptSwitch('history') },
+    });
+  }catch(e){
+    _rptHideProgress();
+    _rptNotify({title:'Run failed', message:(e.message||String(e)), kind:'error'});
+  }
 }
 
 /* ── History ───────────────────────────────────────────────────── */
@@ -531,14 +669,20 @@ function _rptStatusPill(s){
   if(s==='failed') return '<span class="pill crit">failed</span>';
   if(s==='skipped') return '<span class="pill warn">skipped</span>';
   if(s==='local_only') return '<span class="pill accent">local</span>';
+  if(s==='render_only') return '<span class="pill warn" title="Rendered but could not save to disk">render only</span>';
   if(s==='pending') return '<span class="pill muted">pending</span>';
   return `<span class="muted small">${esc(s||'')}</span>`;
 }
 
 async function _rptDeleteHistory(hid){
-  if(!confirm('Delete this report entry and its PDF?')) return;
+  const ok = await _rptConfirm({
+    title:'Delete report?',
+    message:'This removes the history entry and deletes the PDF file from the server.',
+    confirmLabel:'Delete', danger:true,
+  });
+  if(!ok) return;
   try{ await api('DELETE', '/api/reports/history/'+hid); _rptRenderHistory(); }
-  catch(e){ alert('Delete failed'); }
+  catch(e){ _rptNotify({title:'Delete failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
 function _fmtDate(ts){
