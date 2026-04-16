@@ -164,9 +164,11 @@ def _flaps_in_window(start_ts: float, end_ts: float) -> list:
                     "SELECT ts,did,sid,dname,sname,host,stype,direction,detail,"
                     "COALESCE(duration,0) AS duration,"
                     "COALESCE(resolved_at,0) AS resolved_at "
-                    "FROM flap_log WHERE ts>=%s AND ts<%s "
+                    "FROM flap_log "
+                    "WHERE CAST(ts AS DOUBLE PRECISION) >= %s "
+                    "AND   CAST(ts AS DOUBLE PRECISION) <  %s "
                     "AND direction NOT IN ('recovered','threshold_ok') "
-                    "ORDER BY ts ASC",
+                    "ORDER BY CAST(ts AS DOUBLE PRECISION) ASC",
                     (start_ts, end_ts)
                 )
                 rows = [dict(r) for r in cur.fetchall()]
@@ -335,7 +337,9 @@ def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
                     "SELECT COALESCE(trap_name,'') AS name, "
                     "COALESCE(vendor,'') AS vendor, COALESCE(severity,'') AS severity, "
                     "COUNT(*) AS c "
-                    "FROM snmp_traps WHERE ts>=%s AND ts<%s "
+                    "FROM snmp_traps "
+                    "WHERE CAST(ts AS DOUBLE PRECISION) >= %s "
+                    "AND   CAST(ts AS DOUBLE PRECISION) <  %s "
                     "GROUP BY name, vendor, severity "
                     "ORDER BY c DESC LIMIT %s",
                     (start_ts, end_ts, n)

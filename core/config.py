@@ -30,7 +30,7 @@ PG_POOL_MAX  = int(os.environ.get("PW_PG_POOL_MAX", "20"))
 FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
 CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
 DB_BACKUP_DIR    = os.path.join(_ROOT, "backup", "database")
-REPORTS_DIR      = os.path.join(_ROOT, "reports", "generated")
+REPORTS_DIR      = os.path.join(_ROOT, "backup", "reports")
 CERTS_DIR        = os.path.join(_ROOT, "certs")
 TLS_PORT_DEFAULT = 8443
 

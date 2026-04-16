@@ -220,13 +220,51 @@ async function _rptRunNow(tid){
   }catch(e){ alert('Run failed'); }
 }
 
-async function _rptTestSend(tid){
-  const to = prompt('Send a test copy to which email address?\n\n(Uses SMTP configured in Settings → Email.)');
-  if(!to || !to.trim()) return;
+function _rptTestSend(tid){
+  closeM('rptTestModal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'rptTestModal';
+  _overlayClose(o, ()=>closeM('rptTestModal'));
+  o.innerHTML = `
+    <div class="mbox" style="max-width:440px">
+      <div class="mhd"><span>Send Test Report</span></div>
+      <div class="mbdy">
+        <div class="fr">
+          <label class="fl">Recipient email address</label>
+          <input type="email" id="_rt_test_to" placeholder="you@example.com" autocomplete="email">
+          <div class="fh">The report will render with current data and be sent via the SMTP server configured in Settings → Email.</div>
+        </div>
+        <div id="_rt_test_status" style="font-size:12px;color:var(--text3);min-height:16px"></div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('rptTestModal')">Cancel</button>
+        <button class="btn-p" id="_rt_test_send" onclick="_rptDoTestSend('${esc(tid)}')">Send Test</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  setTimeout(()=>{ const i=document.getElementById('_rt_test_to'); if(i) i.focus(); }, 50);
+}
+
+async function _rptDoTestSend(tid){
+  const to = (document.getElementById('_rt_test_to')?.value || '').trim();
+  const status = document.getElementById('_rt_test_status');
+  const btn = document.getElementById('_rt_test_send');
+  if(!to){ status.textContent = 'Please enter an email address.'; status.style.color='var(--down)'; return; }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)){
+    status.textContent = 'That does not look like a valid email address.'; status.style.color='var(--down)'; return;
+  }
+  btn.disabled = true; status.style.color='var(--text3)';
+  status.textContent = 'Rendering and sending…';
   try{
-    await api('POST', '/api/reports/test-send', {template_id: tid, to: to.trim()});
-    alert('Test email sent to '+to.trim());
-  }catch(e){ alert('Test send failed: '+(e.message||e)); }
+    const r = await api('POST', '/api/reports/test-send', {template_id: tid, to});
+    status.style.color = 'var(--up)';
+    status.textContent = 'Sent — check your inbox ('+Math.round((r.bytes||0)/1024)+' KB attached).';
+    setTimeout(()=>closeM('rptTestModal'), 1400);
+  }catch(e){
+    status.style.color = 'var(--down)';
+    status.textContent = 'Failed: '+(e.message||e);
+    btn.disabled = false;
+  }
 }
 
 /* ── Schedules ─────────────────────────────────────────────────── */
@@ -473,7 +511,7 @@ async function _rptRenderHistory(){
           <td>${statusPill}</td>
           <td class="muted small">${kb} KB · ${(h.render_ms||0)} ms</td>
           <td style="text-align:right;white-space:nowrap">
-            ${h.pdf_path?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/download" target="_blank">⬇ PDF</a>`:''}
+            ${(h.pdf_path && h.pdf_bytes)?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/download" target="_blank">⬇ PDF</a>`:'<span class="muted small">no file</span>'}
             <button class="rpt-btn-sm rpt-btn-danger" onclick="_rptDeleteHistory('${esc(h.id)}')">🗑</button>
           </td>
         </tr>`;
