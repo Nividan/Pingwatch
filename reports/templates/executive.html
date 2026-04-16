@@ -9,7 +9,11 @@
     <div class="headline-tile tile-{{ overall.pct | statuspct }}">
       <div class="headline-number">{{ overall.pct | pctfmt(2) }}</div>
       <div class="headline-caption">Overall uptime across {{ inventory.devices }} devices
-      ({{ inventory.sensors }} sensors) over {{ period.days }} days.</div>
+      ({{ inventory.sensors }} sensors) over {{ period.days }} days.
+      {% if previous and previous.delta.uptime_pp is not none %}
+        &nbsp;· vs. {{ previous.label }}: {{ previous.delta.uptime_pp | deltafmt(' pp', 2, 'higher') | safe }}
+      {% endif %}
+      </div>
     </div>
   {% else %}
     <div class="headline-tile tile-muted">
@@ -28,11 +32,43 @@
   <div class="two-col">
     <div class="col">
       <table class="kv">
-        <tr><th>Total incidents</th><td>{{ incidents.severity.total }}</td></tr>
-        <tr><th>Critical / Down</th><td class="crit">{{ incidents.severity.crit }}</td></tr>
-        <tr><th>Warnings</th><td class="warn">{{ incidents.severity.warn }}</td></tr>
+        <tr>
+          <th>Total incidents</th>
+          <td>
+            {{ incidents.severity.total }}
+            {% if previous and previous.delta.incidents is not none %}
+              <span class="small">&nbsp;{{ previous.delta.incidents | deltafmt('', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Critical / Down</th>
+          <td class="crit">
+            {{ incidents.severity.crit }}
+            {% if previous and previous.delta.crit is not none %}
+              <span class="small">&nbsp;{{ previous.delta.crit | deltafmt('', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Warnings</th>
+          <td class="warn">
+            {{ incidents.severity.warn }}
+            {% if previous and previous.delta.warn is not none %}
+              <span class="small">&nbsp;{{ previous.delta.warn | deltafmt('', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
         <tr><th>Auto-resolved</th><td>{{ incidents.severity.resolved }}</td></tr>
-        <tr><th>MTTR</th><td>{{ incidents.mttr.mttr_s | durfmt }}</td></tr>
+        <tr>
+          <th>MTTR</th>
+          <td>
+            {{ incidents.mttr.mttr_s | durfmt }}
+            {% if previous and previous.delta.mttr_s is not none %}
+              <span class="small">&nbsp;{{ previous.delta.mttr_s | deltafmt(' s', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
         <tr><th>MTBF</th><td>{{ incidents.mttr.mtbf_s | durfmt }}</td></tr>
         <tr><th>Maintenance windows</th><td>{{ maint_windows | length }}</td></tr>
       </table>

@@ -3974,7 +3974,10 @@ async function exportPNG() {
   const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml' }));
 
   const img = new Image();
-  img.crossOrigin = 'anonymous';
+  // No crossOrigin — the SVG blob is same-origin and fonts are already
+  // inlined as data: URLs above. Setting crossOrigin='anonymous' on a
+  // blob: URL triggers a CORS check that fails in Firefox (blobs have
+  // no Access-Control-Allow-Origin header), causing onerror to fire.
   img.onload = () => {
     try {
       const canvas = document.createElement('canvas');

@@ -57,17 +57,62 @@ def _matches_schedule(sch: dict, now_dt: datetime.datetime) -> bool:
     return False
 
 
+def _prune_history_once() -> int:
+    """Delete history entries (and their PDFs) older than retention policy.
+
+    Controlled by setting 'report_retention_days' (int, default 365).
+    Set to 0 to disable pruning entirely.
+    Returns the number of rows deleted.
+    """
+    import os
+    from core.settings import get as _cfg
+    from db import db_list_report_history, db_delete_report_history
+    try:
+        days = int(_cfg("report_retention_days", 365) or 365)
+    except Exception:
+        days = 365
+    if days <= 0:
+        return 0
+    cutoff = time.time() - days * 86400
+    # Fetch a generous batch — the scheduler runs hourly, keeping churn bounded.
+    rows = db_list_report_history(2000) or []
+    n = 0
+    for r in rows:
+        gen = r.get("generated_at") or 0
+        if gen >= cutoff:
+            continue
+        pdf_path = r.get("pdf_path") or ""
+        if pdf_path and os.path.isfile(pdf_path):
+            try: os.remove(pdf_path)
+            except Exception as e: log.debug(f"report prune: remove {pdf_path} failed: {e}")
+        if db_delete_report_history(r["id"]):
+            n += 1
+    if n:
+        log.info(f"Report retention: pruned {n} history row(s) older than {days} days")
+    return n
+
+
 def _scheduler_loop():
     from db import db_list_report_schedules, db_record_schedule_run
     from reports.runner import run_schedule
 
     log.info("Report scheduler started")
-    last_fired: dict = {}    # schedule_id -> datetime of last fire (for 90 s dedupe)
+    last_fired: dict = {}       # schedule_id -> datetime of last fire (for 90 s dedupe)
+    last_prune_ts = 0.0
 
     while True:
         try:
             time.sleep(30)
             now = datetime.datetime.now()
+
+            # Retention sweep once per hour — cheap, bounded query
+            if time.time() - last_prune_ts >= 3600:
+                try:
+                    _prune_history_once()
+                except Exception as e:
+                    log.warning(f"Report prune failed: {e}")
+                last_prune_ts = time.time()
+
             schedules = db_list_report_schedules() or []
             for sch in schedules:
                 if not sch.get("enabled"):

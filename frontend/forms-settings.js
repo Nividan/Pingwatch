@@ -279,6 +279,11 @@ function _buildSettingsTab_integrations(sr) {
             <input type="color" id="st-report-color" value="${esc(sr.report_brand_color||'#0969da')}" style="width:60px;height:32px;padding:0;border:1px solid var(--border);border-radius:4px"/>
             <div class="fh">Hex color used for report headings, title rules, and cover-page accents. Defaults to app accent.</div>
           </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">Report Retention (days)</label>
+            <input type="number" id="st-report-retention" min="0" max="3650" value="${sr.report_retention_days||365}" style="max-width:120px"/>
+            <div class="fh">Auto-delete generated PDFs and history entries older than this many days. Set to 0 to keep everything forever.</div>
+          </div>
         </div>
         <div style="margin-top:14px">
           <span id="smtp-test-result" style="font-size:12px;color:var(--text3)"></span>
@@ -1871,8 +1876,9 @@ async function saveSettings(){
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
     email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
     email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
-    report_footer_text: document.getElementById('st-report-footer')?.value.trim()||'',
-    report_brand_color: document.getElementById('st-report-color')?.value||'',
+    report_footer_text:    document.getElementById('st-report-footer')?.value.trim()||'',
+    report_brand_color:    document.getElementById('st-report-color')?.value||'',
+    report_retention_days: Math.max(0, Math.min(3650, parseInt(document.getElementById('st-report-retention')?.value) || 365)),
   };
   const logoData=document.getElementById('st-email-logo-data')?.value||'';
   if(logoData==='__remove__') smtp.email_logo_data='';

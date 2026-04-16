@@ -1997,6 +1997,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
           text-transform:uppercase;letter-spacing:.3px;}
 .rpt-kind-executive{background:rgba(9,105,218,.14);color:var(--accent);}
 .rpt-kind-technical{background:rgba(248,81,73,.12);color:#e3b341;}
+.rpt-kind-inventory{background:rgba(63,185,80,.14);color:var(--up);}
 .rpt-kind-custom{background:var(--bg4);color:var(--text2);}
 .rpt-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
            padding:60px 20px;text-align:center;gap:10px;}
