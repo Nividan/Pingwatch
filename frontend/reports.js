@@ -53,7 +53,7 @@ async function _rptRenderTemplates(){
   const body = document.getElementById('rptBody');
   body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
   try{
-    const r = await api('/api/reports/templates');
+    const r = await api('GET', '/api/reports/templates');
     const tpls = r.templates || [];
     if(!tpls.length){
       body.innerHTML = `
@@ -97,7 +97,7 @@ function _rptEditTemplate(tid, presetKind){
   (async()=>{
     let t = {name:'', kind: presetKind||'executive', description:'', config_json:{period:'last_month'}};
     if(tid){
-      try{ const r = await api('/api/reports/template/'+tid); t = r.template || t; }catch(_){}
+      try{ const r = await api('GET', '/api/reports/template/'+tid); t = r.template || t; }catch(_){}
     }
     const cfg = t.config_json || {};
     const o = document.createElement('div');
@@ -105,36 +105,48 @@ function _rptEditTemplate(tid, presetKind){
     _overlayClose(o, ()=>closeM('rptTplModal'));
     o.innerHTML = `
       <div class="mbox" style="max-width:620px">
-        <div class="mhd">${tid?'Edit':'New'} Report Template</div>
+        <div class="mhd"><span>${tid?'Edit':'New'} Report Template</span></div>
         <div class="mbdy">
-          <label class="lbl">Name</label>
-          <input id="_rt_name" class="fi" value="${esc(t.name)}" placeholder="e.g. Monthly Exec Summary">
-          <label class="lbl" style="margin-top:10px">Kind</label>
-          <select id="_rt_kind" class="fi">
-            <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
-            <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
-            <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom</option>
-          </select>
-          <label class="lbl" style="margin-top:10px">Description <span class="muted small">(optional)</span></label>
-          <input id="_rt_desc" class="fi" value="${esc(t.description||'')}">
-          <label class="lbl" style="margin-top:10px">Default Period</label>
-          <select id="_rt_period" class="fi">
-            <option value="last_7d"       ${cfg.period==='last_7d'?'selected':''}>Last 7 days</option>
-            <option value="last_30d"      ${cfg.period==='last_30d'?'selected':''}>Last 30 days</option>
-            <option value="last_90d"      ${cfg.period==='last_90d'?'selected':''}>Last 90 days</option>
-            <option value="last_month"    ${(cfg.period==='last_month'||!cfg.period)?'selected':''}>Last calendar month</option>
-            <option value="last_quarter"  ${cfg.period==='last_quarter'?'selected':''}>Last quarter</option>
-            <option value="last_year"     ${cfg.period==='last_year'?'selected':''}>Last 365 days</option>
-            <option value="month_to_date" ${cfg.period==='month_to_date'?'selected':''}>Month to date</option>
-          </select>
-          <label class="lbl" style="margin-top:10px">Cover title <span class="muted small">(optional, defaults to kind)</span></label>
-          <input id="_rt_title" class="fi" value="${esc(cfg.title||'')}">
-          <label class="lbl" style="margin-top:10px">Subtitle <span class="muted small">(optional)</span></label>
-          <input id="_rt_subtitle" class="fi" value="${esc(cfg.subtitle||'')}">
+          <div class="fr">
+            <label class="fl">Name</label>
+            <input type="text" id="_rt_name" value="${esc(t.name)}" placeholder="e.g. Monthly Exec Summary">
+          </div>
+          <div class="fr">
+            <label class="fl">Kind</label>
+            <select id="_rt_kind">
+              <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
+              <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
+              <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom</option>
+            </select>
+          </div>
+          <div class="fr">
+            <label class="fl">Description (optional)</label>
+            <input type="text" id="_rt_desc" value="${esc(t.description||'')}">
+          </div>
+          <div class="fr">
+            <label class="fl">Default Period</label>
+            <select id="_rt_period">
+              <option value="last_7d"       ${cfg.period==='last_7d'?'selected':''}>Last 7 days</option>
+              <option value="last_30d"      ${cfg.period==='last_30d'?'selected':''}>Last 30 days</option>
+              <option value="last_90d"      ${cfg.period==='last_90d'?'selected':''}>Last 90 days</option>
+              <option value="last_month"    ${(cfg.period==='last_month'||!cfg.period)?'selected':''}>Last calendar month</option>
+              <option value="last_quarter"  ${cfg.period==='last_quarter'?'selected':''}>Last quarter</option>
+              <option value="last_year"     ${cfg.period==='last_year'?'selected':''}>Last 365 days</option>
+              <option value="month_to_date" ${cfg.period==='month_to_date'?'selected':''}>Month to date</option>
+            </select>
+          </div>
+          <div class="fr">
+            <label class="fl">Cover title</label>
+            <input type="text" id="_rt_title" value="${esc(cfg.title||'')}" placeholder="defaults to kind">
+          </div>
+          <div class="fr">
+            <label class="fl">Subtitle (optional)</label>
+            <input type="text" id="_rt_subtitle" value="${esc(cfg.subtitle||'')}">
+          </div>
         </div>
         <div class="mft">
-          <button class="btn" onclick="closeM('rptTplModal')">Cancel</button>
-          <button class="btn btn-primary" onclick="_rptSaveTemplate('${esc(tid||'')}')">${tid?'Save':'Create'}</button>
+          <button class="btn-s" onclick="closeM('rptTplModal')">Cancel</button>
+          <button class="btn-p" onclick="_rptSaveTemplate('${esc(tid||'')}')">${tid?'Save':'Create'}</button>
         </div>
       </div>`;
     document.body.appendChild(o);
@@ -155,9 +167,9 @@ async function _rptSaveTemplate(tid){
   if(!payload.name){ alert('Name required'); return; }
   try{
     if(tid){
-      await api('/api/reports/template/'+tid, {method:'PATCH', body: payload});
+      await api('PATCH', '/api/reports/template/'+tid, payload);
     }else{
-      await api('/api/reports/template',      {method:'POST',  body: payload});
+      await api('POST',  '/api/reports/template',      payload);
     }
     closeM('rptTplModal');
     _rptRenderTemplates();
@@ -169,7 +181,7 @@ async function _rptSaveTemplate(tid){
 async function _rptDeleteTemplate(tid, name){
   if(!confirm('Delete template "'+name+'"?\n\nAll schedules referencing it will also be deleted.')) return;
   try{
-    await api('/api/reports/template/'+tid, {method:'DELETE'});
+    await api('DELETE', '/api/reports/template/'+tid);
     _rptRenderTemplates();
   }catch(e){ alert('Delete failed'); }
 }
@@ -202,7 +214,7 @@ function _rptPreview(tid){
 async function _rptRunNow(tid){
   if(!confirm('Render this report now? A PDF will be saved to the server and appear in History.')) return;
   try{
-    const r = await api('/api/reports/run', {method:'POST', body:{template_id: tid}});
+    const r = await api('POST', '/api/reports/run', {template_id: tid});
     alert('Report generated ('+Math.round((r.pdf_bytes||0)/1024)+' KB). Check the History tab.');
     if(_rptTab==='history') _rptRenderHistory();
   }catch(e){ alert('Run failed'); }
@@ -212,7 +224,7 @@ async function _rptTestSend(tid){
   const to = prompt('Send a test copy to which email address?\n\n(Uses SMTP configured in Settings → Email.)');
   if(!to || !to.trim()) return;
   try{
-    await api('/api/reports/test-send', {method:'POST', body:{template_id: tid, to: to.trim()}});
+    await api('POST', '/api/reports/test-send', {template_id: tid, to: to.trim()});
     alert('Test email sent to '+to.trim());
   }catch(e){ alert('Test send failed: '+(e.message||e)); }
 }
@@ -223,7 +235,7 @@ async function _rptRenderSchedules(){
   const body = document.getElementById('rptBody');
   body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
   try{
-    const [a,b] = await Promise.all([api('/api/reports/schedules'), api('/api/reports/templates')]);
+    const [a,b] = await Promise.all([api('GET', '/api/reports/schedules'), api('GET', '/api/reports/templates')]);
     const schs = a.schedules || [];
     const tpls = b.templates || [];
     const tplById = {}; tpls.forEach(t=>tplById[t.id]=t);
@@ -283,11 +295,11 @@ function _rptEditSchedule(sid){
              recipient_group:0, recipient_emails:[], enabled:true,
              subject_tpl:'', body_tpl:''};
     if(sid){
-      try{ const r = await api('/api/reports/schedule/'+sid); s = r.schedule || s; }catch(_){}
+      try{ const r = await api('GET', '/api/reports/schedule/'+sid); s = r.schedule || s; }catch(_){}
     }
     let tpls = [], grps = [];
     try{
-      const [a,g] = await Promise.all([api('/api/reports/templates'), api('/api/user-groups').catch(_=>({groups:[]}))]);
+      const [a,g] = await Promise.all([api('GET', '/api/reports/templates'), api('GET', '/api/user-groups').catch(_=>({groups:[]}))]);
       tpls = a.templates || [];
       grps = g.groups || [];
     }catch(_){}
@@ -297,67 +309,84 @@ function _rptEditSchedule(sid){
     _overlayClose(o, ()=>closeM('rptSchModal'));
     o.innerHTML = `
       <div class="mbox" style="max-width:620px">
-        <div class="mhd">${sid?'Edit':'New'} Schedule</div>
+        <div class="mhd"><span>${sid?'Edit':'New'} Schedule</span></div>
         <div class="mbdy">
-          <label class="lbl">Name</label>
-          <input id="_rs_name" class="fi" value="${esc(s.name)}" placeholder="e.g. Monthly to Managers">
-          <label class="lbl" style="margin-top:10px">Template</label>
-          <select id="_rs_tpl" class="fi">
-            ${tpls.map(t=>`<option value="${esc(t.id)}" ${t.id===s.template_id?'selected':''}>${esc(t.name)} · ${esc(t.kind)}</option>`).join('')}
-          </select>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            <div>
-              <label class="lbl">Frequency</label>
-              <select id="_rs_freq" class="fi" onchange="_rptToggleFreq()">
+          <div class="fr">
+            <label class="fl">Name</label>
+            <input type="text" id="_rs_name" value="${esc(s.name)}" placeholder="e.g. Monthly to Managers">
+          </div>
+          <div class="fr">
+            <label class="fl">Template</label>
+            <select id="_rs_tpl">
+              ${tpls.map(t=>`<option value="${esc(t.id)}" ${t.id===s.template_id?'selected':''}>${esc(t.name)} · ${esc(t.kind)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fgrid">
+            <div class="fr">
+              <label class="fl">Frequency</label>
+              <select id="_rs_freq" onchange="_rptToggleFreq()">
                 <option value="daily"     ${s.freq==='daily'?'selected':''}>Daily</option>
                 <option value="weekly"    ${s.freq==='weekly'?'selected':''}>Weekly</option>
                 <option value="monthly"   ${(s.freq==='monthly'||!s.freq)?'selected':''}>Monthly</option>
                 <option value="quarterly" ${s.freq==='quarterly'?'selected':''}>Quarterly</option>
               </select>
             </div>
-            <div>
-              <label class="lbl">Run at (HH:MM, server TZ)</label>
-              <input id="_rs_time" class="fi" value="${esc(s.time_str||'03:00')}">
+            <div class="fr">
+              <label class="fl">Run at (HH:MM, server TZ)</label>
+              <input type="text" id="_rs_time" value="${esc(s.time_str||'03:00')}">
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            <div id="_rs_dow_wrap">
-              <label class="lbl">Day(s) of week <span class="muted small">(1=Mon, 7=Sun, comma-sep)</span></label>
-              <input id="_rs_dow" class="fi" value="${esc(s.day_of_week||'1')}">
+          <div class="fgrid">
+            <div class="fr" id="_rs_dow_wrap">
+              <label class="fl">Days of week (1=Mon … 7=Sun)</label>
+              <input type="text" id="_rs_dow" value="${esc(s.day_of_week||'1')}" placeholder="1,2,3,4,5">
             </div>
-            <div id="_rs_dom_wrap">
-              <label class="lbl">Day of month</label>
-              <input id="_rs_dom" type="number" min="1" max="28" class="fi" value="${s.day_of_month||1}">
+            <div class="fr" id="_rs_dom_wrap">
+              <label class="fl">Day of month</label>
+              <input type="number" min="1" max="28" id="_rs_dom" value="${s.day_of_month||1}">
             </div>
           </div>
-          <label class="lbl" style="margin-top:10px">Reporting period</label>
-          <select id="_rs_period" class="fi">
-            <option value="last_7d"       ${s.period==='last_7d'?'selected':''}>Last 7 days</option>
-            <option value="last_30d"      ${s.period==='last_30d'?'selected':''}>Last 30 days</option>
-            <option value="last_90d"      ${s.period==='last_90d'?'selected':''}>Last 90 days</option>
-            <option value="last_month"    ${(s.period==='last_month'||!s.period)?'selected':''}>Last calendar month</option>
-            <option value="last_quarter"  ${s.period==='last_quarter'?'selected':''}>Last quarter</option>
-            <option value="last_year"     ${s.period==='last_year'?'selected':''}>Last 365 days</option>
-            <option value="month_to_date" ${s.period==='month_to_date'?'selected':''}>Month to date</option>
-          </select>
-          <label class="lbl" style="margin-top:10px">Recipient user group <span class="muted small">(optional)</span></label>
-          <select id="_rs_grp" class="fi">
-            <option value="0">— none —</option>
-            ${grps.map(g=>`<option value="${g.id}" ${g.id===s.recipient_group?'selected':''}>${esc(g.name)}</option>`).join('')}
-          </select>
-          <label class="lbl" style="margin-top:10px">Extra email recipients <span class="muted small">(comma-separated)</span></label>
-          <input id="_rs_rcpt" class="fi" value="${esc(rcptList)}" placeholder="alice@example.com, bob@example.com">
-          <label class="lbl" style="margin-top:10px">Email subject <span class="muted small">(placeholders: {company}, {period}, {title}, {crit}, {warn}, {uptime})</span></label>
-          <input id="_rs_subj" class="fi" value="${esc(s.subject_tpl||'[{company}] {title} — {period}')}">
-          <label class="lbl" style="margin-top:10px">Email body <span class="muted small">(plain text, placeholders OK)</span></label>
-          <textarea id="_rs_body" class="fi" style="height:80px">${esc(s.body_tpl||'')}</textarea>
-          <label class="lbl" style="margin-top:10px;display:flex;gap:8px;align-items:center">
-            <input type="checkbox" id="_rs_en" ${s.enabled?'checked':''}> Enabled
-          </label>
+          <div class="fr">
+            <label class="fl">Reporting period</label>
+            <select id="_rs_period">
+              <option value="last_7d"       ${s.period==='last_7d'?'selected':''}>Last 7 days</option>
+              <option value="last_30d"      ${s.period==='last_30d'?'selected':''}>Last 30 days</option>
+              <option value="last_90d"      ${s.period==='last_90d'?'selected':''}>Last 90 days</option>
+              <option value="last_month"    ${(s.period==='last_month'||!s.period)?'selected':''}>Last calendar month</option>
+              <option value="last_quarter"  ${s.period==='last_quarter'?'selected':''}>Last quarter</option>
+              <option value="last_year"     ${s.period==='last_year'?'selected':''}>Last 365 days</option>
+              <option value="month_to_date" ${s.period==='month_to_date'?'selected':''}>Month to date</option>
+            </select>
+          </div>
+          <div class="fr">
+            <label class="fl">Recipient user group (optional)</label>
+            <select id="_rs_grp">
+              <option value="0">— none —</option>
+              ${grps.map(g=>`<option value="${g.id}" ${g.id===s.recipient_group?'selected':''}>${esc(g.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fr">
+            <label class="fl">Extra email recipients (comma-separated)</label>
+            <input type="text" id="_rs_rcpt" value="${esc(rcptList)}" placeholder="alice@example.com, bob@example.com">
+          </div>
+          <div class="fr">
+            <label class="fl">Email subject</label>
+            <input type="text" id="_rs_subj" value="${esc(s.subject_tpl||'[{company}] {title} — {period}')}">
+            <div class="fh">Placeholders: {company}, {period}, {title}, {crit}, {warn}, {uptime}, {pdf_kb}</div>
+          </div>
+          <div class="fr">
+            <label class="fl">Email body</label>
+            <textarea id="_rs_body" style="height:80px">${esc(s.body_tpl||'')}</textarea>
+            <div class="fh">Plain text. Placeholders OK. Leave blank for auto-generated body.</div>
+          </div>
+          <div class="fr" style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="_rs_en" ${s.enabled?'checked':''} style="width:auto">
+            <label for="_rs_en" style="color:var(--text);font-size:13px;cursor:pointer">Enabled</label>
+          </div>
         </div>
         <div class="mft">
-          <button class="btn" onclick="closeM('rptSchModal')">Cancel</button>
-          <button class="btn btn-primary" onclick="_rptSaveSchedule('${esc(sid||'')}')">${sid?'Save':'Create'}</button>
+          <button class="btn-s" onclick="closeM('rptSchModal')">Cancel</button>
+          <button class="btn-p" onclick="_rptSaveSchedule('${esc(sid||'')}')">${sid?'Save':'Create'}</button>
         </div>
       </div>`;
     document.body.appendChild(o);
@@ -394,8 +423,8 @@ async function _rptSaveSchedule(sid){
   if(!payload.name){ alert('Name required'); return; }
   if(!payload.template_id){ alert('Pick a template'); return; }
   try{
-    if(sid) await api('/api/reports/schedule/'+sid, {method:'PATCH', body: payload});
-    else    await api('/api/reports/schedule',      {method:'POST',  body: payload});
+    if(sid) await api('PATCH', '/api/reports/schedule/'+sid, payload);
+    else    await api('POST',  '/api/reports/schedule',      payload);
     closeM('rptSchModal');
     _rptRenderSchedules();
   }catch(e){ alert('Save failed: '+(e.message||e)); }
@@ -403,14 +432,14 @@ async function _rptSaveSchedule(sid){
 
 async function _rptDeleteSchedule(sid, name){
   if(!confirm('Delete schedule "'+name+'"?')) return;
-  try{ await api('/api/reports/schedule/'+sid, {method:'DELETE'}); _rptRenderSchedules(); }
+  try{ await api('DELETE', '/api/reports/schedule/'+sid); _rptRenderSchedules(); }
   catch(e){ alert('Delete failed'); }
 }
 
 async function _rptRunSchedule(sid, name){
   if(!confirm('Run schedule "'+name+'" now? (Generates PDF and emails recipients.)')) return;
   try{
-    const r = await api('/api/reports/schedule/'+sid+'/run', {method:'POST'});
+    const r = await api('POST', '/api/reports/schedule/'+sid+'/run');
     alert((r.ok?'Sent to ':'Saved but not sent: ')+(r.sent||0)+' recipient(s). Check History.');
   }catch(e){ alert('Run failed'); }
 }
@@ -421,7 +450,7 @@ async function _rptRenderHistory(){
   const body = document.getElementById('rptBody');
   body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
   try{
-    const r = await api('/api/reports/history');
+    const r = await api('GET', '/api/reports/history');
     const rows = r.history || [];
     if(!rows.length){
       body.innerHTML = `
@@ -470,7 +499,7 @@ function _rptStatusPill(s){
 
 async function _rptDeleteHistory(hid){
   if(!confirm('Delete this report entry and its PDF?')) return;
-  try{ await api('/api/reports/history/'+hid, {method:'DELETE'}); _rptRenderHistory(); }
+  try{ await api('DELETE', '/api/reports/history/'+hid); _rptRenderHistory(); }
   catch(e){ alert('Delete failed'); }
 }
 
