@@ -123,10 +123,10 @@
     if (!btn) return;
     // Label shows the theme you'll switch TO, with an icon for the target.
     if (theme === 'dark') {
-      btn.textContent = '☀ Switch to Light';
+      btn.innerHTML = '<span class="usr-dd-ico">☀</span>Switch to Light';
       btn.setAttribute('aria-label', 'Switch to light theme');
     } else {
-      btn.textContent = '🌙 Switch to Dark';
+      btn.innerHTML = '<span class="usr-dd-ico">🌙</span>Switch to Dark';
       btn.setAttribute('aria-label', 'Switch to dark theme');
     }
   }
