@@ -206,11 +206,17 @@ def _enforce_db_retention(log):
 
 
 def _record_result(ts: str, result: str):
-    """Persist last backup time and result to app_settings (best-effort)."""
+    """Persist last backup time and result to app_settings (best-effort).
+
+    Only overwrites db_backup_last_ts when ts is non-empty — this preserves the
+    scheduler's catch-up marker on error paths (empty ts means "don't touch").
+    """
     try:
         from core.settings import load as _sl
         from db import _db_enqueue, db_save_settings
-        data = {'db_backup_last_ts': ts, 'db_backup_last_result': result}
+        data = {'db_backup_last_result': result}
+        if ts:
+            data['db_backup_last_ts'] = ts
         _sl(data)
         _db_enqueue(lambda d=data: db_save_settings(d))
     except Exception:
