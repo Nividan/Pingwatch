@@ -635,21 +635,29 @@ def ldap_sync_groups() -> dict:
     return stats
 
 
+_ldap_sync_stop = __import__('threading').Event()
+
+
+def stop_ldap_sync() -> None:
+    """Stop the LDAP sync loop (called at shutdown before pg_close_pool)."""
+    _ldap_sync_stop.set()
+
+
 def ldap_sync_loop():
-    """Background thread: runs ldap_sync_groups() on the configured interval."""
-    import time
+    """Background thread: runs ldap_sync_groups() on the configured interval.
+    Exits promptly when _ldap_sync_stop is set so shutdown doesn't race pool close."""
     _ldap_dbg("LDAP sync loop: thread started")
-    while True:
+    while not _ldap_sync_stop.is_set():
         try:
             cfg = _get_cfg()
             interval = cfg.get('sync_interval', 60)
             if not cfg['enabled'] or interval <= 0:
-                time.sleep(60)
+                if _ldap_sync_stop.wait(60): break
                 continue
             _ldap_dbg(f"LDAP sync loop: sleeping {interval} minutes until next sync")
-            time.sleep(interval * 60)
+            if _ldap_sync_stop.wait(interval * 60): break
             _ldap_dbg("LDAP sync loop: waking up — starting sync")
             ldap_sync_groups()
         except Exception as e:
             log.error(f"LDAP sync loop error: {e}")
-            time.sleep(300)
+            if _ldap_sync_stop.wait(300): break
