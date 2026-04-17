@@ -39,6 +39,7 @@ let _ntmVisible = true;
 // immediately when coming back from a paused state.
 let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
+  if (e.origin !== window.location.origin) return;
   if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
   if (e.data?.type === 'ntm_resume') {
     _ntmVisible = true;

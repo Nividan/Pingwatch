@@ -9,7 +9,8 @@ from db.backend     import is_pg, needs_setup
 
 # core — write queues + schema
 from db.core        import db_init, db_seed_users, db_seed_alert_profiles, \
-                           _db_enqueue, _logs_enqueue, logs_db_init
+                           _db_enqueue, _logs_enqueue, logs_db_init, \
+                           shutdown_writers
 
 # persistence — device/sensor save/load + autosave
 from db.persistence import (
@@ -27,6 +28,7 @@ from db.samples     import (
     db_load_availability,
     db_clean_samples,
     db_rollup_backfill,
+    db_sample_buffer_stats,
 )
 
 # events — flap log, SNMP trap log, sensor error log
@@ -206,7 +208,7 @@ __all__ = [
     "is_pg", "needs_setup",
     # core
     "db_init", "db_seed_users", "db_seed_alert_profiles", "_db_enqueue",
-    "_logs_enqueue", "logs_db_init",
+    "_logs_enqueue", "logs_db_init", "shutdown_writers",
     # persistence
     "db_load", "db_save", "autosave_loop",
     "db_load_anomaly_baselines", "db_checkpoint_anomaly_baselines",
@@ -214,7 +216,7 @@ __all__ = [
     # samples
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
-    "db_rollup_backfill",
+    "db_rollup_backfill", "db_sample_buffer_stats",
     # events
     "db_log_flap", "db_load_flaps", "db_auto_resolve_flap", "db_ack_flap", "db_ack_flaps_by_sensor", "db_resolve_flap", "db_resolve_flaps_by_sensor", "db_resolve_all_flaps", "db_count_active_flaps", "db_count_active_flaps_by_severity",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",

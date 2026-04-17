@@ -519,7 +519,13 @@ def handle(h, method, path, body):
             if len(kwargs["banner_regex"]) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
             try:
-                re.compile(kwargs["banner_regex"])
+                _bpat = re.compile(kwargs["banner_regex"])
+                _sm_r = [None]
+                def _sm(_p=_bpat): _sm_r[0] = bool(_p.search("a" * 100))
+                _smt = threading.Thread(target=_sm, daemon=True)
+                _smt.start(); _smt.join(1.0)
+                if _smt.is_alive():
+                    h._json(400, {"error": "banner_regex is too complex"}); return True
             except re.error as _re_err:
                 h._json(400, {"error": f"Invalid banner_regex: {_re_err}"}); return True
         ok = STATE.update_sensor(did, sid, **kwargs)
@@ -633,7 +639,13 @@ def handle(h, method, path, body):
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
             try:
-                re.compile(bnr)
+                _bpat = re.compile(bnr)
+                _sm_r = [None]
+                def _sm(_p=_bpat): _sm_r[0] = bool(_p.search("a" * 100))
+                _smt = threading.Thread(target=_sm, daemon=True)
+                _smt.start(); _smt.join(1.0)
+                if _smt.is_alive():
+                    h._json(400, {"error": "banner_regex is too complex"}); return True
             except re.error as _re_err:
                 h._json(400, {"error": f"Invalid banner_regex: {_re_err}"}); return True
         if stype == "http" and url and not h._valid_url(url):

@@ -48,8 +48,38 @@ def _logs_writer_loop():
         log.critical(f"Logs DB writer thread crashed — writes will queue forever: {e}")
 
 
-threading.Thread(target=_db_writer_loop,   daemon=True, name="db-main-writer").start()
-threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer").start()
+_db_writer_thread   = threading.Thread(target=_db_writer_loop,   daemon=True, name="db-main-writer")
+_logs_writer_thread = threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer")
+_db_writer_thread.start()
+_logs_writer_thread.start()
+
+
+def shutdown_writers(timeout: float = 10.0) -> dict:
+    """Drain both SQLite writer queues and stop the writer threads.
+
+    Sends the sentinel ``None`` each loop already checks for, then joins
+    with ``timeout/2`` per thread. PG mode is a cheap no-op — the queues
+    are never fed (calls execute inline) so join() returns immediately.
+
+    Returns a summary dict the caller can log: pending-queue sizes at the
+    moment of the sentinel, and whether each thread actually exited within
+    the timeout. A False ``*_joined`` value means the DB is wedged and some
+    writes were dropped — surface it in ops logs instead of silently
+    proceeding.
+    """
+    half = max(0.1, timeout / 2)
+    _DB_QUEUE.put(None)
+    _LOGS_QUEUE.put(None)
+    main_pending = _DB_QUEUE.qsize()
+    logs_pending = _LOGS_QUEUE.qsize()
+    _db_writer_thread.join(timeout=half)
+    _logs_writer_thread.join(timeout=half)
+    return {
+        "main_pending": main_pending,
+        "logs_pending": logs_pending,
+        "main_joined":  not _db_writer_thread.is_alive(),
+        "logs_joined":  not _logs_writer_thread.is_alive(),
+    }
 
 
 def _db_enqueue(fn):

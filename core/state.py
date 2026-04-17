@@ -429,10 +429,11 @@ def _send_webhook(url: str, payload: dict):
 
 class MonitorState:
     def __init__(self):
-        self._lock     = threading.RLock()
-        self.devices   = {}
-        self._did_ctr  = 0
-        self._sse      = []
+        self._lock            = threading.RLock()
+        self.devices          = {}
+        self._did_ctr         = 0
+        self._sse             = []
+        self._sse_registered  = {}   # Queue → monotonic timestamp of subscribe()
         self._executor  = concurrent.futures.ThreadPoolExecutor(
             max_workers=64, thread_name_prefix='pw-sensor'
         )
@@ -958,13 +959,18 @@ class MonitorState:
     def subscribe(self):
         q = queue.Queue(maxsize=300)
         with self._lock:
+            if len(self._sse) >= 200:
+                oldest = self._sse.pop(0)
+                self._sse_registered.pop(oldest, None)
             self._sse.append(q)
+            self._sse_registered[q] = time.monotonic()
         return q
 
     def unsubscribe(self, q):
         with self._lock:
             try: self._sse.remove(q)
             except ValueError: pass
+            self._sse_registered.pop(q, None)
 
     # Event types that are forwarded to remote syslog.
     _SYSLOG_EVENTS = ('flap_down', 'flap_recovered', 'snmp_trap',
@@ -981,6 +987,23 @@ class MonitorState:
         self._bcast_started = True
         t = threading.Thread(target=self._broadcaster_loop, daemon=True, name='pw-sse-fanout')
         t.start()
+        sw = threading.Thread(target=self._sse_sweeper, daemon=True, name='pw-sse-sweep')
+        sw.start()
+
+    def _sse_sweeper(self):
+        """Periodic cleanup of abandoned SSE subscriber queues (silent disconnects)."""
+        while True:
+            time.sleep(60)
+            cutoff = time.monotonic() - 300  # 5-min TTL for queues that haven't been drained
+            with self._lock:
+                stale = [q for q, ts in list(self._sse_registered.items())
+                         if ts < cutoff and q.qsize() > 50]
+                for q in stale:
+                    try: self._sse.remove(q)
+                    except ValueError: pass
+                    self._sse_registered.pop(q, None)
+            if stale:
+                log_sensors.info("SSE sweeper: removed %d stale subscriber(s)", len(stale))
 
     def _broadcaster_loop(self):
         while True:
@@ -1029,6 +1052,7 @@ class MonitorState:
                 for d in dead:
                     try: self._sse.remove(d)
                     except ValueError: pass
+                    self._sse_registered.pop(d, None)
         # Forward alert-category events to remote syslog (best-effort, non-blocking)
         for ev, dt in events:
             if ev in self._SYSLOG_EVENTS:

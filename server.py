@@ -34,6 +34,7 @@ from db              import (
     _db_enqueue, autosave_loop,
     db_init, logs_db_init, db_load, db_seed_users,
     db_load_settings, db_save,
+    db_flush_samples, shutdown_writers,
 )
 from db.backend      import is_pg, needs_setup
 
@@ -794,6 +795,15 @@ def main():
             _headless_stop.set()
 
     signal.signal(signal.SIGINT, lambda *_: _quit())
+    # SIGTERM = systemctl stop on Linux. Without this handler, Python's
+    # default terminator kills the process instantly and daemon threads
+    # (writer queues, sample-flush loop) are dropped mid-write. On Windows
+    # SIGTERM isn't deliverable via the console but the symbol still exists;
+    # guard against any surprise on older / embedded Python builds.
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: _quit())
+    except (AttributeError, ValueError):
+        pass
 
     if _use_tray:
         def _open(*_):
@@ -827,6 +837,28 @@ def main():
     STATE._executor.shutdown(wait=False)
     db_save(STATE)
     log.info("Configuration saved.")
+    # Flush the in-memory sample buffer BEFORE draining the writer queues —
+    # flush enqueues one final batch-insert that the drain then writes. The
+    # reverse order would discard the last buffer.
+    try:
+        db_flush_samples()
+    except Exception as e:
+        log.error(f"db_flush_samples at shutdown failed: {e}")
+    try:
+        summary = shutdown_writers(timeout=10.0)
+        log.info(
+            f"DB writers stopped: main_joined={summary['main_joined']} "
+            f"(pending={summary['main_pending']}), "
+            f"logs_joined={summary['logs_joined']} "
+            f"(pending={summary['logs_pending']})"
+        )
+        if not summary["main_joined"] or not summary["logs_joined"]:
+            log.warning(
+                "One or more DB writer threads did not exit within timeout — "
+                "some pending writes may have been dropped"
+            )
+    except Exception as e:
+        log.error(f"shutdown_writers failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()
