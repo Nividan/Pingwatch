@@ -49,6 +49,32 @@ _LOG_LINE_RE = re.compile(
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _read_body_spooled(h, n: int, max_mem: int = 32 * 1024 * 1024) -> bytes:
+    """Read exactly n bytes from h.rfile via a SpooledTemporaryFile.
+
+    Bodies under max_mem stay in RAM; larger ones spill to disk. This keeps
+    the receive path's peak heap footprint small during a multi-GB upload
+    (the alternative `h.rfile.read(n)` allocates the full payload at once).
+    The caller still receives a bytes object at the end — passing the spool
+    through to handlers would avoid the final materialization, but that's
+    more invasive than this hardening pass.
+    """
+    spool = tempfile.SpooledTemporaryFile(max_size=max_mem, mode='w+b')
+    try:
+        remaining = n
+        _CHUNK = 1024 * 1024
+        while remaining > 0:
+            chunk = h.rfile.read(min(_CHUNK, remaining))
+            if not chunk:
+                break
+            spool.write(chunk)
+            remaining -= len(chunk)
+        spool.seek(0)
+        return spool.read()
+    finally:
+        spool.close()
+
+
 def _sqlite_backup_bytes(src_path) -> bytes:
     """Return a WAL-safe binary snapshot of a SQLite database."""
     import sqlite3 as _sq3
@@ -465,7 +491,7 @@ def handle(h, method, path, body):
             h._json(400, {"error": "No data provided"}); return True
         content_type = h.headers.get("Content-Type", "")
         if "application/octet-stream" in content_type:
-            raw_bytes = h.rfile.read(n)
+            raw_bytes = _read_body_spooled(h, n)
         else:
             try:
                 body_imp = _json_mod.loads(h.rfile.read(n))
@@ -502,7 +528,7 @@ def handle(h, method, path, body):
 
         if "application/octet-stream" in content_type:
             log.info(f"DB import: reading {n:,} raw bytes from client")
-            raw_bytes = h.rfile.read(n)
+            raw_bytes = _read_body_spooled(h, n)
         else:
             # Legacy JSON/base64 path
             try:
