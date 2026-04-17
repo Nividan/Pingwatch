@@ -4,6 +4,22 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## Reports polish — aggregation, honest durations, manager-ready sections
+
+- **Custom report kind** — grouped section-picker modal (Availability / Incidents / Health / Inventory / Other) with `exec` / `tech` / `inv` presets; per-section options (top-N, booleans, thresholds); saved in the template's `config.sections` + `config.options` and round-tripped through the editor
+- **Aggregated incident log** — `_cluster_flaps_into_outages(flaps, idle_gap_s=300, currently_bad=...)` collapses consecutive bad-state events for the same `(did, sid)` into one outage row; 365-day reports drop from ~500 rows to a scannable handful; raw per-event table rendered below when the template opts in (`show_individual_events`)
+- **Major Incidents** — `_detect_major_incidents(flaps, min_devices=10, gap_minutes=5, currently_bad=...)` buckets DOWN events by minute, merges adjacent windows, and emits one row per cluster (≥ N distinct devices); pure stats only — no root-cause inference; exposes `_dids_affected` for suppression and `groups_affected` resolved via live `STATE.devices` (no stype leak)
+- **Suppress redundant outages** — `_suppress_outages_in_majors(outages, majors)` drops per-sensor outages whose first event falls inside a Major Incident window for the same device, so a 60-device cluster no longer emits 130+ duplicate per-sensor rows
+- **Sensor configuration issues** — `_classify_config_issues(flaps)` pattern-matches detail strings (`Unknown metric:`, `SSL error — try disabling Verify SSL`, `Metric … not available`, `CERTIFICATE_VERIFY_FAILED`, `Invalid OID format`) and routes them out of the incident stream into their own section; rolled up by `(did, issue_type)` with a `sensor_count` column so one root cause renders as one row
+- **Device health scores** — `_device_health_scores(availability, flaps, limit)` computes a composite 0–100 per device: downtime up to 50, incident load up to 20, currently DOWN −20 / WARN −10; banded green ≥ 90 / amber ≥ 70 / red < 70; rendered as coloured pill chips (`.hs-good` / `.hs-warn` / `.hs-bad`) sorted worst-first
+- **Honest "open" flag** — `_currently_bad_sensor_keys()` reads live STATE once per report; outages and raw flaps only mark `ongoing=True` when the sensor is still unhealthy now. Historical rows where `resolved_at=0` simply because older builds didn't stamp resolutions no longer claim to be open; they render as `—` (unknown duration)
+- **`durfmt_flap` filter** — renders durations honestly: `"open"` only when `ongoing=True`, `"<1s"` for sub-second resolves, `durfmt(int(d))` for known durations, `"—"` for unknown-and-not-ongoing
+- **`cleandetail` filter** — strips a stale trailing `"ms"` suffix from non-latency flap details (e.g. `"Memory Consumed: 8192.0ms"` → `"Memory Consumed: 8192.0"`) when the string mentions a non-latency keyword; historical probe builds wrote every value with `"ms"` regardless of unit and those rows can't be retroactively rewritten, so the cleanup happens at render time
+- **All polish features apply across templates** — Executive gets Major Incidents + Device Health + a config-issue one-line callout; Technical gets all blocks including the raw-event drill-down; Inventory gets Device Health; Custom gates each block behind `meta.sections`
+- **Report History multi-select + bulk delete** — checkboxes per row, tri-state "select all" in the header, sticky action bar showing selection count with Delete-selected + Clear buttons; new `POST /api/reports/history/bulk-delete` endpoint (`{ids:[…]}`, admin-only, capped at 500 per call, returns `{deleted, missing}`); single audit entry per batch
+
+---
+
 ## Reports module (scheduled PDF / CSV exports)
 
 - Three report kinds: **Executive Summary**, **Technical / Operations**, **Inventory & Compliance**

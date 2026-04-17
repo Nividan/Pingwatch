@@ -90,10 +90,19 @@ def _filter_cleandetail(s, maxlen: int = 80):
 def _filter_durfmt_flap(duration, ongoing=False):
     """Render an incident duration honestly.
 
-    Unlike the plain durfmt, this one doesn't pretend 0 means "no time" —
-    which was confusing ("Duration: 0s" on a row that's actually still open
-    or resolved sub-second). Pass a row dict's .ongoing via the 2-arg form:
-      {{ row.duration_s | durfmt_flap(row.ongoing) }}
+    Three cases to distinguish:
+      1. ongoing=True           → "open"  (the sensor is STILL unhealthy now)
+      2. duration known         → formatted via durfmt (respecting <1s)
+      3. duration missing + not ongoing → "—"  (resolution wasn't recorded;
+                                                we can't claim a duration,
+                                                but also can't claim it's open)
+
+    The third case matters: historical flap_log rows often have
+    ``resolved_at=0`` simply because older probe builds recorded resolutions
+    lazily. Showing "open" there was misleading — users saw dozens of
+    two-week-old rows claiming to still be open while the Active Events panel
+    correctly showed one event. Pass ``ongoing`` from a caller that has
+    cross-checked live sensor state.
     """
     if ongoing:
         return "open"
@@ -102,9 +111,7 @@ def _filter_durfmt_flap(duration, ongoing=False):
     except Exception:
         return "—"
     if d is None:
-        return "open"
-    if d <= 0:
-        return "<1s"
+        return "—"
     if d < 1:
         return "<1s"
     return _filter_durfmt(int(d))

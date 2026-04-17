@@ -23,6 +23,7 @@
 - Two-factor authentication (TOTP) — optional/enforceable per role, recovery codes, trusted devices
 - Light / Dark theme — full CSS variable palette, canvas/iframe sync, cross-device persistence
 - Reports module — scheduled PDF/CSV exports; Executive / Technical / Inventory kinds; WeasyPrint + Matplotlib; email delivery; PDF/A compliance mode
+- Reports polish — Custom kind with grouped section picker + presets; aggregated incident log (one row per outage); Major Incidents clustering (≥N devices DOWN in a 5-min window); Device Health Scores (0–100, banded); Sensor Configuration Issues rolled up per (device, issue); honest duration rendering (live cross-check of STATE, no more false "open"); History tab multi-select bulk delete
 - Air-gapped compatibility — self-hosted fonts, zero CDN dependencies, offline install guide
 - Professional SMTP alert emails — hero logo, status banner, breadcrumb path, stats grid
 - GUI setup wizard (Windows) — dark-themed tkinter, 6-step flow, background package installs
