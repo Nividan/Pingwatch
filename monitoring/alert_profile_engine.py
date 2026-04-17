@@ -181,6 +181,12 @@ def _build_ctx(dev, sensor, current_state: str, trigger_state: str,
         "min_ms":        sensor.min_ms,
         "max_ms":        sensor.max_ms,
         "alive":         sensor.alive,
+        # Value-oriented sensor fields consumed by the email template's
+        # type-specific renderers (TLS days, SNMP value/unit/OID, port).
+        "last_value":    getattr(sensor, "last_value", None),
+        "snmp_unit":     getattr(sensor, "snmp_unit", ""),
+        "snmp_oid":      getattr(sensor, "snmp_oid", ""),
+        "port":          getattr(sensor, "port", None),
     }
     if duration_s is not None:
         ctx["duration_s"] = int(duration_s)
