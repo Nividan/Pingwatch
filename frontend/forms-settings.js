@@ -535,12 +535,21 @@ function _buildSettingsTab_logs(sr) {
       </div>
       <div class="log-filter-bar">
         <select id="logFTime" onchange="_onLogFilterChange()">
-          <option value="all" selected>All time</option>
+          <option value="all">All time</option>
           <option value="5m">Last 5 min</option>
           <option value="15m">Last 15 min</option>
           <option value="1h">Last 1 hour</option>
+          <option value="3h">Last 3 hours</option>
+          <option value="6h" selected>Last 6 hours</option>
+          <option value="12h">Last 12 hours</option>
           <option value="24h">Last 24 hours</option>
+          <option value="custom">Custom range\u2026</option>
         </select>
+        <div id="logFCustomWrap" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+          <input type="datetime-local" id="logFCustomFrom" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
+          <span style="font-size:11px;color:var(--text3)">to</span>
+          <input type="datetime-local" id="logFCustomTo" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
+        </div>
         <select id="logFLevel" onchange="_onLogFilterChange()">
           <option value="">All Levels</option>
           <option value="DEBUG">DEBUG</option>
@@ -1411,7 +1420,7 @@ async function submitInstallSigned(){
 }
 
 let _activeLogTab = 'app';
-let _logFilter = { timeRange: 'all', level: '', search: '' };
+let _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
 let _logLiveMode = false;
 let _logLiveTimer = null;
 let _logLastTs = '';
@@ -1452,20 +1461,34 @@ function _onLogFilterChange() {
   _logFilter.timeRange = document.getElementById('logFTime')?.value || 'all';
   _logFilter.level     = document.getElementById('logFLevel')?.value || '';
   _logFilter.search    = document.getElementById('logFSearch')?.value || '';
+
+  const customWrap = document.getElementById('logFCustomWrap');
+  if (customWrap) customWrap.style.display = _logFilter.timeRange === 'custom' ? 'flex' : 'none';
+
+  if (_logFilter.timeRange === 'custom') {
+    _logFilter.customFrom = document.getElementById('logFCustomFrom')?.value || '';
+    _logFilter.customTo   = document.getElementById('logFCustomTo')?.value   || '';
+  } else {
+    _logFilter.customFrom = '';
+    _logFilter.customTo   = '';
+  }
+
   _logLastTs = '';
   clearTimeout(_logSearchDebounce);
   _logSearchDebounce = setTimeout(_loadLogTab, 300);
 }
 
 function _clearLogFilters() {
-  _logFilter = { timeRange: 'all', level: '', search: '' };
+  _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
   _logLastTs = '';
-  ['logFTime','logFLevel','logFSearch'].forEach(id => {
+  ['logFTime','logFLevel','logFSearch','logFCustomFrom','logFCustomTo'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? 'all' : '';
+    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? '6h' : '';
     else el.value = '';
   });
+  const customWrap = document.getElementById('logFCustomWrap');
+  if (customWrap) customWrap.style.display = 'none';
   _loadLogTab();
 }
 
@@ -1505,21 +1528,22 @@ async function _loadLogTab() {
   const level = parsed.level || _logFilter.level;
   if (level) params.set('level', level);
 
+  const _dtLocal = d => d.getFullYear() + '-' +
+    String(d.getMonth()+1).padStart(2,'0') + '-' +
+    String(d.getDate()).padStart(2,'0') + ' ' +
+    String(d.getHours()).padStart(2,'0') + ':' +
+    String(d.getMinutes()).padStart(2,'0') + ':' +
+    String(d.getSeconds()).padStart(2,'0');
+
   if (_logLiveMode && _logLastTs) {
     params.set('after', _logLastTs);
+  } else if (_logFilter.timeRange === 'custom') {
+    if (_logFilter.customFrom) params.set('after',  _logFilter.customFrom.replace('T', ' '));
+    if (_logFilter.customTo)   params.set('before', _logFilter.customTo.replace('T', ' '));
   } else if (_logFilter.timeRange !== 'all') {
-    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '24h': 86400 };
+    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '3h': 3*3600, '6h': 6*3600, '12h': 12*3600, '24h': 86400 };
     const sec = offsets[_logFilter.timeRange];
-    if (sec) {
-      const d = new Date(Date.now() - sec * 1000);
-      const after = d.getFullYear() + '-' +
-        String(d.getMonth()+1).padStart(2,'0') + '-' +
-        String(d.getDate()).padStart(2,'0') + ' ' +
-        String(d.getHours()).padStart(2,'0') + ':' +
-        String(d.getMinutes()).padStart(2,'0') + ':' +
-        String(d.getSeconds()).padStart(2,'0');
-      params.set('after', after);
-    }
+    if (sec) params.set('after', _dtLocal(new Date(Date.now() - sec * 1000)));
   }
   if (parsed.search) params.set('search', parsed.search);
   const qs = params.toString();
