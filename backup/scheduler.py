@@ -13,29 +13,20 @@ import time
 from core.logger import log_backup as log
 
 
+_LAST_TS_FMT = '%Y-%m-%d_%H-%M-%S'
+
+
 def _should_fire(last_fired, freq: str, time_str: str, days_str: str) -> bool:
     """
-    Return True if:
-    - Current HH:MM matches time_str
-    - For weekly: current weekday is in days_str
-    - We haven't fired within the last 90 seconds (prevents double-fire)
+    Catch-up semantics: fire if today's scheduled slot has passed and we haven't
+    fired since that slot. This survives restarts, thread stalls, and missed
+    minute windows — any poll after the slot on a scheduled day triggers once.
     """
     now = datetime.datetime.now()
     try:
         h, m = map(int, time_str.split(':'))
     except Exception:
         log.warning(f"Backup scheduler: invalid time_str {time_str!r}")
-        return False
-
-    if now.hour != h or now.minute != m:
-        return False
-
-    # Time window matched — log so we know the scheduler reached this point
-    log.debug(f"Backup scheduler: time matched {time_str!r}, checking other conditions")
-
-    # Avoid double-fire within the same minute
-    if last_fired and (now - last_fired).total_seconds() < 90:
-        log.debug("Backup scheduler: suppressed (fired within last 90 s)")
         return False
 
     if freq == 'weekly':
@@ -47,10 +38,41 @@ def _should_fire(last_fired, freq: str, time_str: str, days_str: str) -> bool:
             return False
         today = now.weekday() + 1  # weekday() returns 0=Mon; we use 1=Mon…7=Sun
         if today not in days:
-            log.debug(f"Backup scheduler: today={today} not in scheduled days={days}")
             return False
 
-    return True
+    slot = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now < slot:
+        return False
+
+    # Fire if we haven't fired since today's scheduled slot
+    if last_fired is None or last_fired < slot:
+        return True
+
+    return False
+
+
+def _load_last_ts(key: str):
+    """Load a persisted '%Y-%m-%d_%H-%M-%S' timestamp from settings; None if absent/invalid."""
+    try:
+        from core.settings import get as _cfg
+        ts = str(_cfg(key, '') or '')
+        if not ts:
+            return None
+        return datetime.datetime.strptime(ts, _LAST_TS_FMT)
+    except Exception:
+        return None
+
+
+def _save_last_ts(key: str, dt: datetime.datetime) -> None:
+    """Persist a last-fired timestamp to settings (best-effort, non-blocking)."""
+    try:
+        from core.settings import load as _sl
+        from db import _db_enqueue, db_save_settings
+        data = {key: dt.strftime(_LAST_TS_FMT)}
+        _sl(data)
+        _db_enqueue(lambda d=data: db_save_settings(d))
+    except Exception as e:
+        log.debug(f"Backup scheduler: could not persist {key}: {e}")
 
 
 _stop = threading.Event()
@@ -61,9 +83,13 @@ def _scheduler_loop():
     from db.backups import db_get_backup_list
     from .engine import do_backup
 
-    log.info("Backup scheduler started")
-    last_fired    = None
-    last_db_fired = None
+    # Restore last-fired timestamps so catch-up survives restarts
+    last_fired    = _load_last_ts('backup_sched_last_ts')
+    last_db_fired = _load_last_ts('db_backup_last_ts')
+    log.info(
+        f"Backup scheduler started — last_fired={last_fired.strftime(_LAST_TS_FMT) if last_fired else 'never'}, "
+        f"last_db_fired={last_db_fired.strftime(_LAST_TS_FMT) if last_db_fired else 'never'}"
+    )
     _poll = 0  # poll counter — used to emit a periodic heartbeat
 
     while not _stop.is_set():
@@ -100,6 +126,7 @@ def _scheduler_loop():
             # ── Fire device config backups ────────────────────────────────
             if enabled and _should_fire(last_fired, freq, time_str, days_str):
                 last_fired = datetime.datetime.now()
+                _save_last_ts('backup_sched_last_ts', last_fired)
 
                 devices = db_get_backup_list()
                 scheduled = [d for d in devices
@@ -131,6 +158,7 @@ def _scheduler_loop():
             # ── Fire database backup ──────────────────────────────────────
             if db_en and _should_fire(last_db_fired, db_freq, db_time, db_days):
                 last_db_fired = datetime.datetime.now()
+                _save_last_ts('db_backup_last_ts', last_db_fired)
                 log.info("Backup scheduler: firing database backup")
                 from .db_backup import do_db_backup
                 threading.Thread(target=do_db_backup, daemon=True, name='sched-db-bk').start()
