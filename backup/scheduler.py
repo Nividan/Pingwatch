@@ -53,6 +53,9 @@ def _should_fire(last_fired, freq: str, time_str: str, days_str: str) -> bool:
     return True
 
 
+_stop = threading.Event()
+
+
 def _scheduler_loop():
     from core.settings import get as _cfg
     from db.backups import db_get_backup_list
@@ -63,9 +66,13 @@ def _scheduler_loop():
     last_db_fired = None
     _poll = 0  # poll counter — used to emit a periodic heartbeat
 
-    while True:
+    while not _stop.is_set():
         try:
-            time.sleep(30)   # check every 30 seconds
+            # Interruptible sleep so shutdown short-circuits within seconds
+            # instead of letting the loop wake up after pg_close_pool() and
+            # spam 'NoneType has no attribute getconn' errors.
+            if _stop.wait(30):
+                break
             _poll += 1
 
             # ── Device config backup ──────────────────────────────────────
@@ -109,6 +116,8 @@ def _scheduler_loop():
                             log.error(f"Scheduled backup crashed for device {device_id!r}: {e}", exc_info=True)
 
                     for dev in scheduled:
+                        if _stop.is_set():
+                            break
                         t = threading.Thread(
                             target=_run_backup,
                             args=(dev['did'],),
@@ -116,7 +125,8 @@ def _scheduler_loop():
                             name=f"sched-bk-{dev['did']}",
                         )
                         t.start()
-                        time.sleep(1)   # 1-second stagger to avoid connection storms
+                        if _stop.wait(1):   # 1-second stagger, interruptible
+                            break
 
             # ── Fire database backup ──────────────────────────────────────
             if db_en and _should_fire(last_db_fired, db_freq, db_time, db_days):
@@ -127,9 +137,15 @@ def _scheduler_loop():
 
         except Exception as e:
             log.error(f"Backup scheduler error: {e}")
+    log.info("Backup scheduler stopped")
 
 
 def start_scheduler():
     """Start the background scheduler thread. Call once from server.py at startup."""
     t = threading.Thread(target=_scheduler_loop, daemon=True, name='backup-scheduler')
     t.start()
+
+
+def stop_scheduler() -> None:
+    """Signal the backup scheduler loop to exit (call at shutdown before pg_close_pool)."""
+    _stop.set()

@@ -862,15 +862,26 @@ def main():
     # otherwise they race pg_close_pool() and spam 'NoneType has no
     # attribute getconn' errors until the process actually exits.
     try:
-        from db.samples import stop_sample_flush
+        from db.samples import stop_sample_flush, stop_rollup_worker
         stop_sample_flush()
+        stop_rollup_worker()
     except Exception as e:
-        log.warning(f"stop_sample_flush failed: {e}")
+        log.warning(f"stop sample/rollup workers failed: {e}")
     try:
         from core.ldap_auth import stop_ldap_sync
         stop_ldap_sync()
     except Exception as e:
         log.warning(f"stop_ldap_sync failed: {e}")
+    try:
+        from reports.scheduler import stop_scheduler as stop_report_scheduler
+        stop_report_scheduler()
+    except Exception as e:
+        log.warning(f"stop report scheduler failed: {e}")
+    try:
+        from backup.scheduler import stop_scheduler as stop_backup_scheduler
+        stop_backup_scheduler()
+    except Exception as e:
+        log.warning(f"stop backup scheduler failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()
