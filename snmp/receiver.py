@@ -15,6 +15,16 @@ from db import _db_enqueue, db_log_trap
 from core.logger import log_sensors as log
 
 
+# Cap on varbinds parsed from a single trap. Well above any legitimate trap;
+# prevents a malicious sender from pinning a CPU by flooding one packet with
+# thousands of varbinds.
+_MAX_VARBINDS = 64
+# Only the first N varbinds feed into the human-readable detail string — the
+# join runs before the [:300] slice, so unbounded iteration could still build
+# a megabyte-sized intermediate before truncation.
+_MAX_DETAIL_VARBINDS = 20
+
+
 # ── BER / ASN.1 helpers ──────────────────────────────────────────────────────
 
 def _tlv(data, pos):
@@ -111,7 +121,11 @@ def parse_trap(data):
 
         # Each varbind is SEQUENCE { OID, value }
         vp = 0
+        _hit_cap = False
         while vp < len(vbl_b):
+            if len(varbinds) >= _MAX_VARBINDS:
+                _hit_cap = True
+                break
             try:
                 _, vb_b, vp = _tlv(vbl_b, vp)
                 vp2 = 0
@@ -120,6 +134,8 @@ def parse_trap(data):
                 varbinds.append({'oid': _decode_oid(oid_b), 'value': _decode_val(vtag, val_b)})
             except Exception:
                 break
+        if _hit_cap:
+            log.warning(f"SNMP trap varbind cap reached ({_MAX_VARBINDS}); truncating")
 
         # snmpTrapOID.0 is the 2nd varbind (index 1) in v2c traps
         trap_oid = ''
@@ -132,7 +148,7 @@ def parse_trap(data):
         skip = 2 if pdu_tag == 0xA7 else 0
         detail = '; '.join(
             f"{v['oid'].split('.')[-3]}.{v['oid'].split('.')[-2]}.{v['oid'].split('.')[-1]}={v['value']}"
-            for v in varbinds[skip:]
+            for v in varbinds[skip:skip + _MAX_DETAIL_VARBINDS]
         )
         if not detail and varbinds:
             detail = varbinds[0].get('value', '')

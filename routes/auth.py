@@ -344,6 +344,14 @@ def handle(h, method, path, body):
             # (exclude current ip — its entry was just rebuilt and may be empty)
             for _old_ip in [k for k, v in _FAIL_LOG.items() if not v and k != ip]:
                 del _FAIL_LOG[_old_ip]
+            # Hard cap to survive a distributed brute-force where every IP still
+            # has an active (non-empty) window and the above prune removes nothing.
+            if len(_FAIL_LOG) > 5000:
+                items = sorted(_FAIL_LOG.items(),
+                               key=lambda kv: max(kv[1]) if kv[1] else 0,
+                               reverse=True)
+                _FAIL_LOG.clear()
+                _FAIL_LOG.update(dict(items[:5000]))
             if len(_FAIL_LOG[ip]) >= _fail_max:
                 log.warning(f"Login rate-limited: {ip} ({_fail_max} attempts in {_fail_window}s)")
                 h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})

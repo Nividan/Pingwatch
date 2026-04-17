@@ -65,7 +65,7 @@ def _create_session(clean: str, role: str):
             log.error(f"Session save error: {e}")
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE username=?", (clean,))
                 con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
@@ -179,7 +179,7 @@ def auth_login(username: str, password: str):
             return None
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 row = con.execute(
                     "SELECT pw_hash, role, auth_type, group_id FROM users WHERE username=?",
@@ -316,7 +316,7 @@ def auth_logout(token: str):
             pass
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
                 con.commit()
@@ -343,7 +343,7 @@ def auth_revoke_user_sessions(username: str):
             log.error(f"Session revoke error: {e}")
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE username=?", (username,))
                 con.commit()
@@ -367,7 +367,7 @@ def auth_verify_current(username: str, password: str) -> bool:
             return False
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 row = con.execute("SELECT pw_hash FROM users WHERE username=?", (username,)).fetchone()
             finally:
@@ -425,7 +425,7 @@ def auth_check(token: str):
     else:
         try:
             h = _hash_token(token)
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 row = con.execute(
                     "SELECT s.username, s.expires, u.role "
