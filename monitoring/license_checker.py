@@ -222,6 +222,8 @@ def _evaluate_license_stages(lic: dict, status_since: float,
                   "%Y-%m-%dT%H:%M:%SZ"),
         "severity":   _SEV.get(trigger_states[0], "info"),
         "event_type": _ETYPE.get(trigger_states[0], "license"),
+        "expiry_date": lic.get("expiry_date", ""),
+        "days_left":   days_left,
     }
 
     # Maintenance window check
@@ -376,6 +378,8 @@ def _fire_recovery(lic: dict, old_status: str, did: str, sid: str,
         "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
                   "%Y-%m-%dT%H:%M:%SZ"),
         "severity": "recovery", "event_type": "license_ok",
+        "expiry_date": lic.get("expiry_date", ""),
+        "days_left":   days_left,
     }
 
     suppressed, mw_name = check_maintenance(ctx)

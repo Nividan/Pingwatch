@@ -298,15 +298,6 @@ function _buildSettingsTab_integrations(sr) {
           </select>
           <div class="fh">UDP is standard for syslog; use TCP for reliable delivery</div>
         </div>
-        <div class="fr" style="margin-top:14px">
-          <label class="fl">Minimum Severity</label>
-          <select id="st-sl-minsev" style="max-width:160px">
-            <option value="critical" ${(sr.syslog_min_severity||'warning')==='critical'?'selected':''}>Critical only</option>
-            <option value="warning"  ${(sr.syslog_min_severity||'warning')==='warning'?'selected':''}>Warning and above</option>
-            <option value="info"     ${(sr.syslog_min_severity||'warning')==='info'?'selected':''}>All events</option>
-          </select>
-          <div class="fh">Events below this severity are not forwarded</div>
-        </div>
         <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
           Messages are sent in <strong style="color:var(--text2)">RFC 5424</strong> format with facility LOCAL0.
           Forwarding is non-blocking — syslog errors will not affect monitoring.
@@ -2341,7 +2332,6 @@ async function saveSyslogSettings(){
   const host     = (document.getElementById('st-sl-host')?.value   || '').trim();
   const port     = parseInt(document.getElementById('st-sl-port')?.value) || 514;
   const proto    = document.getElementById('st-sl-proto')?.value   || 'udp';
-  const minSev   = document.getElementById('st-sl-minsev')?.value  || 'warning';
   const appLogs  = document.getElementById('st-sl-applogs')?.checked ? 1 : 0;
   const logLevel = document.getElementById('st-sl-loglevel')?.value || 'info';
   const logSources = ['app','audit','backup'].filter(s => document.getElementById(`st-sl-src-${s}`)?.checked);
@@ -2353,7 +2343,6 @@ async function saveSyslogSettings(){
       syslog_host:            host,
       syslog_port:            port,
       syslog_proto:           proto,
-      syslog_min_severity:    minSev,
       syslog_app_logs:        appLogs,
       syslog_app_log_level:   logLevel,
       syslog_app_log_sources: logSources,
