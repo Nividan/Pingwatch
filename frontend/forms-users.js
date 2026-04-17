@@ -68,6 +68,171 @@ async function _openProfileModal(){
   setTimeout(()=>document.getElementById('myp-name')?.focus(),50);
 }
 
+// ── Two-Factor Authentication (TOTP) ─────────────────────────────
+async function _open2faModal(){
+  // Fetch current TOTP state + trusted devices in parallel
+  let me={username:'',totp_enabled:0};
+  let tdData={devices:[]};
+  try{
+    const [meR, tdR]=await Promise.all([api('GET','/api/me'), api('GET','/api/me/trusted-devices')]);
+    Object.assign(me, meR);
+    if(tdR&&!tdR.error) Object.assign(tdData, tdR);
+  }catch(_){}
+  closeM('m-2fa');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-2fa';
+  _overlayClose(o,()=>closeM('m-2fa'));
+  const enabled=!!me.totp_enabled;
+
+  // 24-hour, locale-independent: "2026-04-16 21:22"
+  const _fmtDate=(ts)=>{
+    if(!ts) return '—';
+    const d=new Date(ts*1000);
+    const p=n=>String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} `+
+           `${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+
+  const _trustedSection=enabled ? (()=>{
+    const devs=tdData.devices||[];
+    // white-space:nowrap on date / IP / "this device" cells stops awkward
+    // wrapping when the modal isn't wide enough for one-line rows.
+    const devRows=devs.length ? devs.map(d=>`
+      <tr>
+        <td style="white-space:nowrap">${esc(d.device_label||'Unknown')}</td>
+        <td style="color:var(--text2);white-space:nowrap">${esc(d.ip||'')}</td>
+        <td style="color:var(--text2);white-space:nowrap">${_fmtDate(d.last_used_at)}</td>
+        <td style="color:var(--text2);white-space:nowrap">${_fmtDate(d.expires_at)}</td>
+        <td style="white-space:nowrap">${d.current?'<span style="color:var(--accent);font-size:11px">this device</span>':''}</td>
+        <td><button class="btn-xs btn-d" onclick="_2faRevokeDevice(${d.id})">Revoke</button></td>
+      </tr>`).join('')
+      : `<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:10px">No trusted devices</td></tr>`;
+    return `
+      <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <b>Trusted Devices</b>
+          ${devs.length?`<button class="btn-xs btn-d" onclick="_2faRevokeAllDevices()">Revoke all</button>`:''}
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;font-size:12px;border-collapse:collapse">
+            <thead><tr style="color:var(--text2)">
+              <th style="text-align:left;padding:4px 6px">Browser</th>
+              <th style="text-align:left;padding:4px 6px">IP</th>
+              <th style="text-align:left;padding:4px 6px">Last used</th>
+              <th style="text-align:left;padding:4px 6px">Expires</th>
+              <th></th><th></th>
+            </tr></thead>
+            <tbody>${devRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  })() : '';
+
+  o.innerHTML=`
+    <div class="mbox" style="max-width:640px">
+      <div class="mhd">
+        <div class="mttl">🔐 Two-Factor Authentication</div>
+        <button class="mclose" onclick="closeM('m-2fa')">✕</button>
+      </div>
+      <div class="mbdy" id="tfa-body">
+        ${enabled
+          ? `<div style="margin-bottom:14px">2FA is <b style="color:#4caf50">ENABLED</b> on your account.</div>
+             <div class="fr"><label class="fl">Current password</label>
+               <input type="password" id="tfa-pass" autocomplete="current-password"/></div>
+             <div class="fr"><label class="fl">Current 2FA code</label>
+               <input type="text" id="tfa-code" maxlength="6" autocomplete="one-time-code"
+                      style="font-family:monospace;letter-spacing:2px;text-align:center"/></div>
+             ${_trustedSection}`
+          : `<div style="margin-bottom:14px">2FA is currently <b>disabled</b>. Click below to enrol.</div>`
+        }
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('m-2fa')">Cancel</button>
+        ${enabled
+          ? `<button class="btn-p" onclick="_2faDisable()">Disable 2FA</button>`
+          : `<button class="btn-p" onclick="_2faStartSetup()">Enable 2FA</button>`}
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+async function _2faStartSetup(){
+  let r;
+  try{ r=await api('POST','/api/me/totp/setup',{}); }catch(e){ toast('Setup failed','err'); return; }
+  if(r.error){ toast(r.error,'err'); return; }
+  const body=document.getElementById('tfa-body');
+  if(!body) return;
+  const qrBlock=r.qr_img
+    ? `<div style="display:flex;justify-content:center;margin-bottom:14px">
+         <img src="${esc(r.qr_img)}" alt="2FA QR code" width="220" height="220"
+              style="background:#fff;padding:10px;border-radius:6px;border:1px solid var(--border)"/>
+       </div>
+       <div style="margin-bottom:8px;font-size:12px;color:var(--text2);text-align:center">Scan this QR code with your authenticator app, or enter the setup key manually:</div>`
+    : `<div style="margin-bottom:12px">Add this account to your authenticator app (Google Authenticator, Authy, 1Password, etc.):</div>
+       <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;font-family:monospace;font-size:12px;word-break:break-all;user-select:all">${esc(r.provisioning_uri)}</div>
+       <div style="margin-bottom:8px;font-size:12px;color:var(--text2)">Or enter this secret manually:</div>`;
+  body.innerHTML=`
+    ${qrBlock}
+    <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:14px;letter-spacing:1px;user-select:all;text-align:center">${esc(r.secret)}</div>
+    <div class="fr"><label class="fl">Enter 6-digit code from your app</label>
+      <input type="text" id="tfa-verify-code" maxlength="6" autocomplete="one-time-code"
+             style="font-family:monospace;letter-spacing:3px;text-align:center;font-size:18px"/></div>`;
+  const ft=document.querySelector('#m-2fa .mft');
+  if(ft){ ft.innerHTML=`<button class="btn-s" onclick="closeM('m-2fa')">Cancel</button>
+                       <button class="btn-p" onclick="_2faVerifyEnrol()">Verify & Enable</button>`; }
+  setTimeout(()=>document.getElementById('tfa-verify-code')?.focus(),50);
+}
+
+async function _2faVerifyEnrol(){
+  const code=(document.getElementById('tfa-verify-code')?.value||'').trim();
+  if(!code){ toast('Enter the code','err'); return; }
+  let r;
+  try{ r=await api('POST','/api/me/totp/verify',{code}); }catch(e){ toast('Verification failed','err'); return; }
+  if(r.error){ toast(r.error,'err'); return; }
+  const body=document.getElementById('tfa-body');
+  if(!body) return;
+  body.innerHTML=`
+    <div style="margin-bottom:12px;color:#4caf50;font-weight:600">✓ 2FA enabled successfully.</div>
+    <div style="margin-bottom:10px">Save these recovery codes somewhere safe. Each can be used once if you lose access to your authenticator app:</div>
+    <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:10px;font-family:monospace;font-size:14px;line-height:1.8;letter-spacing:1px;user-select:all;column-count:2;column-gap:20px">
+      ${(r.recovery_codes||[]).map(c=>esc(c)).join('<br/>')}
+    </div>
+    <div style="font-size:12px;color:var(--text2)">Each code works only once. Store them in a password manager.</div>`;
+  const ft=document.querySelector('#m-2fa .mft');
+  if(ft){ ft.innerHTML=`<button class="btn-p" onclick="closeM('m-2fa')">I've saved them</button>`; }
+}
+
+async function _2faDisable(){
+  const password=document.getElementById('tfa-pass')?.value||'';
+  const code=(document.getElementById('tfa-code')?.value||'').trim();
+  if(!password||!code){ toast('Password and code required','err'); return; }
+  let r;
+  try{ r=await api('POST','/api/me/totp/disable',{password,code}); }catch(e){ toast('Disable failed','err'); return; }
+  if(r.error){ toast(r.error,'err'); return; }
+  toast('2FA disabled','ok');
+  closeM('m-2fa');
+}
+
+async function _2faRevokeDevice(id){
+  if(!confirm('Revoke this trusted device? You will need to enter your 2FA code next time you log in from it.')) return;
+  try{
+    const r=await api('DELETE',`/api/me/trusted-devices/${id}`);
+    if(r.error){ toast(r.error,'err'); return; }
+    toast('Device revoked','ok');
+    _open2faModal();  // refresh
+  }catch(e){ toast('Revoke failed','err'); }
+}
+
+async function _2faRevokeAllDevices(){
+  if(!confirm('Revoke ALL trusted devices? You will need to enter your 2FA code next time you log in.')) return;
+  try{
+    const r=await api('DELETE','/api/me/trusted-devices');
+    if(r.error){ toast(r.error,'err'); return; }
+    toast(`Revoked ${r.revoked||0} device(s)`,'ok');
+    _open2faModal();  // refresh
+  }catch(e){ toast('Revoke failed','err'); }
+}
+
+
 async function _submitProfileModal(username, isAdmin){
   const full_name=(document.getElementById('myp-name')?.value||'').trim();
   const email=(document.getElementById('myp-email')?.value||'').trim();

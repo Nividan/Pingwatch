@@ -222,14 +222,32 @@ def _html_section_hdr(title: str) -> str:
     )
 
 
-def _html_stats_grid(ctx: dict) -> str:
-    """Render the full monitoring stats grid with section headers."""
-    if not ctx:
-        return ''
-    html = ''
-    ri = 0   # row index for alternating colors
+def _days_status(days_left, state: str = '') -> tuple:
+    """Map (days_left, state) to (status_label, days_row_label, days_value_str).
 
-    # — Sensor Details —
+    Used by both license and TLS renderers since they share an expiry-based
+    semantic. `state` is the threshold state ('ok' | 'warn' | 'crit').
+    """
+    try:
+        d = int(days_left)
+    except (TypeError, ValueError):
+        return ('Unknown', 'Days', '\u2014')
+    sv = (state or '').lower()
+    if sv == 'ok':
+        return ('Active', 'Days Remaining', f'{d} days')
+    if d < 0:
+        return ('EXPIRED', 'Days Since Expiry', f'{-d} days')
+    if sv == 'crit':
+        return ('Expires soon (critical)', 'Days Remaining', f'{d} days')
+    if sv == 'warn':
+        return ('Expires soon', 'Days Remaining', f'{d} days')
+    return ('Valid', 'Days Remaining', f'{d} days')
+
+
+def _render_latency_body(ctx: dict) -> str:
+    """HTML rows for latency-first sensors (ping/tcp/http/dns/http_keyword/banner)."""
+    html = ''
+    ri = 0
     html += _html_section_hdr('Sensor Details')
     for lbl, val in [
         ('Host',     _safe(ctx.get('host', '')) or '\u2014'),
@@ -239,7 +257,6 @@ def _html_stats_grid(ctx: dict) -> str:
     ]:
         html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
 
-    # — Performance —
     html += _html_section_hdr('Performance')
     ms = ctx.get('ms')
     perf = [
@@ -252,7 +269,6 @@ def _html_stats_grid(ctx: dict) -> str:
     for lbl, val in perf:
         html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
 
-    # — Thresholds (only if any are configured) —
     thr = []
     if ctx.get('warn_ms'):
         thr.append(('Warn Latency', f"&gt; {ctx['warn_ms']} ms"))
@@ -267,7 +283,6 @@ def _html_stats_grid(ctx: dict) -> str:
         for lbl, val in thr:
             html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
 
-    # — Statistics (only if probes have run) —
     stat = []
     if ctx.get('uptime_pct') is not None:
         stat.append(('Uptime', f"{ctx['uptime_pct']}%"))
@@ -281,11 +296,141 @@ def _html_stats_grid(ctx: dict) -> str:
         html += _html_section_hdr('Statistics')
         for lbl, val in stat:
             html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+    return html
 
+
+def _render_license_body(ctx: dict) -> str:
+    """HTML rows for license sensors — expiry-centric, no latency."""
+    html = ''
+    ri = 0
+    html += _html_section_hdr('Sensor Details')
+    for lbl, val in [
+        ('Device',  _safe(ctx.get('dname', '')) or '\u2014'),
+        ('License', _safe(ctx.get('sname', '')) or '\u2014'),
+        ('Host',    _safe(ctx.get('host',  '')) or '\u2014'),
+        ('Group',   _safe(ctx.get('grp',   '')) or '\u2014'),
+    ]:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    status, days_lbl, days_val = _days_status(ctx.get('days_left'), ctx.get('state'))
+    html += _html_section_hdr('License Status')
+    for lbl, val in [
+        ('Status',      status),
+        ('Expiry Date', _safe(ctx.get('expiry_date', '')) or '\u2014'),
+        (days_lbl,      days_val),
+    ]:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+    return html
+
+
+def _render_tls_body(ctx: dict) -> str:
+    """HTML rows for TLS certificate sensors — expiry + handshake latency."""
+    html = ''
+    ri = 0
+    host = _safe(ctx.get('host', ''))
+    port = ctx.get('port')
+    endpoint = f"{host}:{port}" if (host and port) else (host or '\u2014')
+    html += _html_section_hdr('Sensor Details')
+    for lbl, val in [
+        ('Device',   _safe(ctx.get('dname', '')) or '\u2014'),
+        ('Endpoint', endpoint),
+        ('Type',     'TLS Certificate'),
+        ('Group',    _safe(ctx.get('grp', '')) or '\u2014'),
+    ]:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    # TLS ctx carries the remaining-days count in `last_value` (set by probe_tls).
+    try:
+        days_left = int(ctx.get('last_value') or 0)
+    except (TypeError, ValueError):
+        days_left = 0
+    status, days_lbl, days_val = _days_status(days_left, ctx.get('state'))
+    ms = ctx.get('ms')
+    html += _html_section_hdr('Certificate')
+    for lbl, val in [
+        ('Status',  status),
+        (days_lbl,  days_val),
+        ('Latency', f'{ms:.1f} ms' if ms is not None else '\u2014'),
+    ]:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    # For TLS the warn_ms/crit_ms fields hold day-thresholds (misnomer in
+    # the schema; sensor engine treats them as days).
+    thr = []
+    if ctx.get('warn_ms'):
+        thr.append(('Warn', f"&lt; {ctx['warn_ms']} days"))
+    if ctx.get('crit_ms'):
+        thr.append(('Crit', f"&lt; {ctx['crit_ms']} days"))
+    if thr:
+        html += _html_section_hdr('Thresholds')
+        for lbl, val in thr:
+            html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+    return html
+
+
+def _render_snmp_body(ctx: dict) -> str:
+    """HTML rows for SNMP sensors — value + OID, no loss/uptime."""
+    html = ''
+    ri = 0
+    unit = _safe(ctx.get('snmp_unit', ''))
+    oid  = _safe(ctx.get('snmp_oid', ''))
+    rows = [
+        ('Device', _safe(ctx.get('dname', '')) or '\u2014'),
+        ('Sensor', _safe(ctx.get('sname', '')) or '\u2014'),
+        ('Host',   _safe(ctx.get('host',  '')) or '\u2014'),
+    ]
+    if oid:
+        rows.append(('OID', oid))
+    if unit:
+        rows.append(('Unit', unit))
+    rows.append(('Group', _safe(ctx.get('grp', '')) or '\u2014'))
+    html += _html_section_hdr('Sensor Details')
+    for lbl, val in rows:
+        html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
+
+    val = _safe(ctx.get('last_value', '')) or '\u2014'
+    ms = ctx.get('ms')
+    html += _html_section_hdr('Reading')
+    for lbl, value in [
+        ('Current Value', val),
+        ('Latency',       f'{ms:.1f} ms' if ms is not None else '\u2014'),
+    ]:
+        html += _html_stat_row(lbl, value, ri % 2 == 0); ri += 1
+
+    # For SNMP warn_ms/crit_ms are value thresholds (field names are a misnomer).
+    thr = []
+    u_suffix = f' {unit}' if unit else ''
+    if ctx.get('warn_ms'):
+        thr.append(('Warn', f"&gt; {ctx['warn_ms']}{u_suffix}"))
+    if ctx.get('crit_ms'):
+        thr.append(('Crit', f"&gt; {ctx['crit_ms']}{u_suffix}"))
+    if thr:
+        html += _html_section_hdr('Thresholds')
+        for lbl, value in thr:
+            html += _html_stat_row(lbl, value, ri % 2 == 0); ri += 1
+    return html
+
+
+_STATS_RENDERERS = {
+    'license': _render_license_body,
+    'tls':     _render_tls_body,
+    'snmp':    _render_snmp_body,
+}
+
+
+def _html_stats_grid(ctx: dict) -> str:
+    """Render the monitoring stats grid. Dispatches to a type-specific renderer
+    so value-first sensors (license/TLS/SNMP) don't get a misleading latency
+    Performance section."""
+    if not ctx:
+        return ''
+    renderer = _STATS_RENDERERS.get((ctx.get('stype') or '').lower(),
+                                    _render_latency_body)
+    inner = renderer(ctx)
     return (
         f'<tr><td style="padding:8px 24px 16px">'
         f'<table width="100%" cellpadding="0" cellspacing="0">'
-        f'{html}</table></td></tr>'
+        f'{inner}</table></td></tr>'
     )
 
 
@@ -316,6 +461,103 @@ def _html_footer(company: str) -> str:
         f'<span style="font-size:11px;color:#aaa">'
         f'{_co} &nbsp;&middot;&nbsp; Alert Engine</span></td></tr>'
     )
+
+
+def _render_latency_text(ctx: dict) -> list:
+    """Plain-text rows for latency-first sensors."""
+    rows = [
+        ('Event',    _safe(ctx.get('event_type', ''))),
+        ('Device',   _safe(ctx.get('dname', ''))),
+        ('Sensor',   f"{_safe(ctx.get('sname', ''))} ({_safe(ctx.get('stype', ''))})"),
+        ('Host',     _safe(ctx.get('host', ''))),
+        ('Severity', _safe(ctx.get('severity', ''))),
+        ('Time',     _fmt_ts(ctx.get('ts', ''))),
+    ]
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        rows.append(('Duration', dur))
+    if ctx.get('interval'):
+        rows.append(('Interval', f"{ctx['interval']}s"))
+    ms = ctx.get('ms')
+    if ms is not None:
+        rows.append(('Latency', f"{ms:.1f} ms"))
+    if ctx.get('uptime_pct') is not None:
+        rows.append(('Uptime', f"{ctx['uptime_pct']}%"))
+    rows.append(('Detail', _safe(ctx.get('detail', ''))))
+    return rows
+
+
+def _render_license_text(ctx: dict) -> list:
+    status, days_lbl, days_val = _days_status(ctx.get('days_left'), ctx.get('state'))
+    return [
+        ('Event',       _safe(ctx.get('event_type', ''))),
+        ('Device',      _safe(ctx.get('dname', ''))),
+        ('License',     _safe(ctx.get('sname', ''))),
+        ('Host',        _safe(ctx.get('host', ''))),
+        ('Severity',    _safe(ctx.get('severity', ''))),
+        ('Time',        _fmt_ts(ctx.get('ts', ''))),
+        ('Status',      status),
+        ('Expiry Date', _safe(ctx.get('expiry_date', ''))),
+        (days_lbl,      days_val),
+        ('Detail',      _safe(ctx.get('detail', ''))),
+    ]
+
+
+def _render_tls_text(ctx: dict) -> list:
+    try:
+        days_left = int(ctx.get('last_value') or 0)
+    except (TypeError, ValueError):
+        days_left = 0
+    status, days_lbl, days_val = _days_status(days_left, ctx.get('state'))
+    host = _safe(ctx.get('host', ''))
+    port = ctx.get('port')
+    endpoint = f"{host}:{port}" if (host and port) else host
+    rows = [
+        ('Event',    _safe(ctx.get('event_type', ''))),
+        ('Device',   _safe(ctx.get('dname', ''))),
+        ('Endpoint', endpoint),
+        ('Severity', _safe(ctx.get('severity', ''))),
+        ('Time',     _fmt_ts(ctx.get('ts', ''))),
+        ('Status',   status),
+        (days_lbl,   days_val),
+    ]
+    ms = ctx.get('ms')
+    if ms is not None:
+        rows.append(('Latency', f"{ms:.1f} ms"))
+    rows.append(('Detail', _safe(ctx.get('detail', ''))))
+    return rows
+
+
+def _render_snmp_text(ctx: dict) -> list:
+    unit = _safe(ctx.get('snmp_unit', ''))
+    rows = [
+        ('Event',     _safe(ctx.get('event_type', ''))),
+        ('Device',    _safe(ctx.get('dname', ''))),
+        ('Sensor',    _safe(ctx.get('sname', ''))),
+        ('Host',      _safe(ctx.get('host', ''))),
+        ('Severity',  _safe(ctx.get('severity', ''))),
+        ('Time',      _fmt_ts(ctx.get('ts', ''))),
+    ]
+    oid = _safe(ctx.get('snmp_oid', ''))
+    if oid:
+        rows.append(('OID', oid))
+    if unit:
+        rows.append(('Unit', unit))
+    val = _safe(ctx.get('last_value', ''))
+    if val:
+        rows.append(('Current Value', val))
+    ms = ctx.get('ms')
+    if ms is not None:
+        rows.append(('Latency', f"{ms:.1f} ms"))
+    rows.append(('Detail', _safe(ctx.get('detail', ''))))
+    return rows
+
+
+_TEXT_RENDERERS = {
+    'license': _render_license_text,
+    'tls':     _render_tls_text,
+    'snmp':    _render_snmp_text,
+}
 
 
 def _build_alert_html(rows: list, event_type: str, severity: str,
@@ -413,7 +655,7 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
     sname      = _safe(ctx.get('sname',      ''))
     _c, emoji, _lbl = _status_style(event_type, severity)
     _logo    = str(_cfg('email_logo', '1')) == '1'
-    _company = _cfg('email_company_name', '') or 'PingWatch'
+    _company = _cfg('org_name', '') or 'PingWatch'
 
     if subject_tpl:
         subject = _fmt(subject_tpl)
@@ -424,27 +666,12 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
         body = _fmt(body_tpl)
         html = None
     else:
-        # Plain-text fallback body
-        rows = [
-            ('Event',    event_type),
-            ('Device',   dname),
-            ('Sensor',   f"{sname} ({_safe(ctx.get('stype', ''))})"),
-            ('Host',     _safe(ctx.get('host',   ''))),
-            ('Severity', severity),
-            ('Time',     _fmt_ts(ctx.get('ts', ''))),
-        ]
-        _dur = _fmt_duration(ctx.get('duration_s'))
-        if _dur:
-            rows.append(('Duration', _dur))
-        if ctx.get('interval'):
-            rows.append(('Interval', f"{ctx['interval']}s"))
-        ms = ctx.get('ms')
-        if ms is not None:
-            rows.append(('Latency', f"{ms:.1f} ms"))
-        if ctx.get('uptime_pct') is not None:
-            rows.append(('Uptime', f"{ctx['uptime_pct']}%"))
-        rows.append(('Detail', _safe(ctx.get('detail', ''))))
-        body = '\n'.join(f"{lbl:<12}: {val}" for lbl, val in rows)
+        # Plain-text fallback body — dispatched by stype so license/tls/snmp
+        # don't emit the latency-shaped fields.
+        _text_renderer = _TEXT_RENDERERS.get((ctx.get('stype') or '').lower(),
+                                             _render_latency_text)
+        rows = _text_renderer(ctx)
+        body = '\n'.join(f"{lbl:<16}: {val}" for lbl, val in rows)
         html = _build_alert_html(rows, event_type, severity, dname, sname,
                                  logo=_logo, company=_company, ctx=ctx)
 
@@ -486,7 +713,7 @@ def test_smtp(cfg):
         from_addr = cfg.get('from_addr', 'pingwatch@test')
         to_addr   = cfg.get('to_addr', from_addr)
         _logo = str(_cfg('email_logo', '1')) == '1'
-        _company = _cfg('email_company_name', '') or 'PingWatch'
+        _company = _cfg('org_name', '') or 'PingWatch'
         subject   = f'[{_company}] SMTP test \u2014 connection OK'
         body      = f'This is a test email from {_company} alert system.'
         _now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(

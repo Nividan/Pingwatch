@@ -55,6 +55,11 @@ def _get_syslog_status() -> dict:
     return get_syslog_status()
 
 
+def _get_ldap_status() -> dict:
+    from core.ldap_auth import get_ldap_status
+    return get_ldap_status()
+
+
 def _get_effective_workers() -> int:
     """Return the number of probe workers currently in use."""
     try:
@@ -86,6 +91,18 @@ def handle(h, method, path, body):
     if path == "/api/settings" and method == "GET":
         user, _ = h._require("viewer")
         if not user: return True
+        # Backend-aware "Database" line for the General → Server Info section.
+        # SQLite shows the file path; PostgreSQL shows database@host:port (matches the
+        # convention used by /api/settings/db, see ~L678 in this file).
+        from db.backend import is_pg, get_config
+        if is_pg():
+            _pgcfg = get_config()
+            _db_display = (
+                f"PostgreSQL: {_pgcfg.get('pg_database', 'pingwatch')} @ "
+                f"{_pgcfg.get('pg_host', 'localhost')}:{_pgcfg.get('pg_port', 5432)}"
+            )
+        else:
+            _db_display = str(DB_PATH)
         h._json(200, {
             "session_ttl":    _settings.get("session_ttl", 86400),
             "retention_days": _settings.get("retention_days", 7),
@@ -93,7 +110,7 @@ def handle(h, method, path, body):
             "http_port":      int(_settings.get("http_port", PORT)),
             "snmp_port":      app_state.effective_snmp_port,
             "bind":           _local_ip(),
-            "db_path":        str(DB_PATH),
+            "db_path":        _db_display,
             "smtp_host":       _settings.get("smtp_host", ""),
             "smtp_port":       _settings.get("smtp_port", 587),
             "smtp_tls":        _settings.get("smtp_tls",  "starttls"),
@@ -103,17 +120,27 @@ def handle(h, method, path, body):
             "smtp_pass_set":   bool(_settings.get("smtp_pass", "")),
             "email_logo":      int(_settings.get("email_logo", 1) or 1),
             "email_logo_data": _settings.get("email_logo_data", ""),
-            "email_company_name": _settings.get("email_company_name", ""),
+            "report_footer_text":    _settings.get("report_footer_text", ""),
+            "report_brand_color":    _settings.get("report_brand_color", ""),
+            "report_retention_days": int(_settings.get("report_retention_days", 365) or 365),
             # Group A — sensor defaults
             "snr_interval":      int(_settings.get("snr_interval",      5)),
             "snr_timeout":       int(_settings.get("snr_timeout",       4)),
+            "snr_fail_after":    int(_settings.get("snr_fail_after",    2)),
+            "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
             # Group B — event & history limits
             "max_flaps_display": int(_settings.get("max_flaps_display", 20)),
             "max_flap_entries":  int(_settings.get("max_flap_entries",  500)),
             "max_trap_entries":  int(_settings.get("max_trap_entries",  500)),
             # Group C — security
-            "login_fail_max":    int(_settings.get("login_fail_max",    5)),
-            "login_fail_window": int(_settings.get("login_fail_window", 60)),
+            "login_fail_max":        int(_settings.get("login_fail_max",        5)),
+            "login_fail_window":     int(_settings.get("login_fail_window",     60)),
+            "totp_remember_hours":   int(_settings.get("totp_remember_hours",   9)),
+            # Group F — anomaly detection (system-wide)
+            "anomaly_global_enabled":        int(_settings.get("anomaly_global_enabled", 1)),
+            "anomaly_cold_start_hours":      int(_settings.get("anomaly_cold_start_hours", 24)),
+            "anomaly_checkpoint_interval_s": int(_settings.get("anomaly_checkpoint_interval_s", 3600)),
+            "anomaly_default_new_sensors":   int(_settings.get("anomaly_default_new_sensors", 0)),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -153,6 +180,7 @@ def handle(h, method, path, body):
             # Integration runtime status (in-memory, resets on restart)
             "smtp_status":   _get_smtp_status(),
             "syslog_status": _get_syslog_status(),
+            "ldap_status":   _get_ldap_status(),
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
@@ -279,10 +307,13 @@ def handle(h, method, path, body):
                 return True
         for _k in (
             "smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_from", "smtp_to",
-            "email_logo", "email_logo_data", "email_company_name",
-            "snr_interval", "snr_timeout",
+            "email_logo", "email_logo_data",
+            "report_footer_text", "report_brand_color", "report_retention_days",
+            "snr_interval", "snr_timeout", "snr_fail_after", "snr_recover_after",
             "max_flaps_display", "max_flap_entries", "max_trap_entries",
-            "login_fail_max", "login_fail_window",
+            "login_fail_max", "login_fail_window", "totp_remember_hours",
+            "anomaly_global_enabled", "anomaly_cold_start_hours",
+            "anomaly_checkpoint_interval_s", "anomaly_default_new_sensors",
             "org_name", "latency_good_ms", "latency_warn_ms",
             "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):
@@ -745,6 +776,37 @@ def handle(h, method, path, body):
         except Exception as e:
             log.error(f"Migration failed: {e}")
             h._json(500, {"ok": False, "error": "Migration failed — check server logs"})
+        return True
+
+    # ── /api/anomaly/bulk-enable POST — enable anomaly on all supported sensors ──
+    if path == "/api/anomaly/bulk-enable" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from monitoring.anomaly import SUPPORTED_STYPES, reset_baseline
+        from db import db_save, db_reset_anomaly_baseline
+        STATE = app_state.STATE
+        enabled = 0
+        skipped = 0
+        reset_targets = []
+        with STATE._lock:
+            for dev in STATE.devices.values():
+                for s in dev.sensors.values():
+                    if s.stype not in SUPPORTED_STYPES:
+                        skipped += 1
+                        continue
+                    if s.anomaly_enabled:
+                        skipped += 1
+                        continue
+                    s.anomaly_enabled = 1
+                    reset_baseline(s)
+                    reset_targets.append((dev.device_id, s.sensor_id))
+                    enabled += 1
+        for _d, _s in reset_targets:
+            _db_enqueue(lambda _d=_d, _s=_s: db_reset_anomaly_baseline(_d, _s))
+        _db_enqueue(lambda: db_save(STATE))
+        db_log_audit(user, h.client_address[0], 'anomaly_bulk_enable',
+                     '', f"enabled={enabled} skipped={skipped}")
+        h._json(200, {"ok": True, "enabled": enabled, "skipped": skipped})
         return True
 
     return False

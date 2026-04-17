@@ -36,12 +36,15 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
 - 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays and repeat intervals; cascade resolution (sensor → device → group → global) so one global profile covers everything while individual scopes can override; reusable action templates (email, webhook, syslog, browser push); maintenance window suppression
+- 🧠 Learned-baseline anomaly detection (opt-in per sensor) — EWMA-based upper-tail detection for latency deviations beyond static thresholds; fires `warn` only, never overrides crit; admin controls in Settings → Sensors (master switch, auto-enable, bulk enable)
 - 🏷 Alert tagging on sensor events — severity badge, profile name, and state shown inline; ACK / Resolve without leaving the Events tab; Events tab split into **Active** (unresolved, badge count) and **History** (resolved) inner tabs — SNMP traps without an alert rule go to History automatically
 - 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
 - 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
+- 🎨 Light / Dark theme toggle — switch from the user menu; preference persisted per user and synced across browsers/devices (`users.theme_preference` column + `localStorage` cache); instant switch with no page reload or flash-of-unthemed-content
 - 🌐 Web-based dashboard with live latency sparklines, customizable widgets, and multi-dashboard tabs — create named dashboards (e.g. "NOC", "Server Room") per user; tab bar with right-click rename/delete; new users get a pre-populated default layout
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
+- 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; QR enrolment, recovery codes, admin reset; revocable "Remember this device" trusted-device tokens
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
 - 📤 Database export and import (individual DBs or full ZIP bundle)
 - 🖥 Native desktop status window with optional system-tray icon
@@ -58,11 +61,12 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
 - 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
 - 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
-- 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
+- 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi; 16 metrics across CPU, memory, disk, datastore, network, system; grouped display with smart thresholds and bulk add
 - ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
 - 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
-- 🔭 Subnet Discovery — scan a CIDR range for unmonitored hosts; two modes (Full: ping + DNS + port scan + device-type guess; Ping only: fast scan for large networks); multi-select results table with MAC/vendor, open ports, multi-NIC duplicate detection, per-device sensor review, and one-click bulk add; **per-device group assignment** — set a default group for the entire batch or override individual rows; maximum scan size /16 (65 534 hosts) with tiered runtime warnings and cancellation support
-- 📋 Device License Tracking — attach software/hardware licenses to any device with expiry dates, configurable warn/critical thresholds (days before expiry), and free-text notes; automatic status check every 6 hours fires Warning/Critical events into the Events tab (deduplication via `last_status` — only fires on state change); recovery event auto-resolves the active alert when a license is renewed; license status badges (Valid / Expiring / Expired) in the Edit Device modal and IPAM table; License Overview dashboard widget shows KPI counts and a sorted table of upcoming expirations; real-time SSE updates on status change
+- 🔭 Subnet Discovery — scan a CIDR range (up to /16) for unmonitored hosts; Full (ping + DNS + port scan + device-type guess) and Ping-only modes; multi-NIC duplicate detection, per-device sensor review, per-row group assignment, one-click bulk add
+- 📋 Device License Tracking — attach software/hardware licenses to devices with expiry dates and configurable warn/critical thresholds; 6-hourly status check fires Warning/Critical events with auto-resolve on renewal; status badges in the Edit Device modal and IPAM table; License Overview dashboard widget
+- 📊 Scheduled PDF/CSV Reports — Executive / Technical / Inventory / Custom kinds rendered via WeasyPrint + Matplotlib; period picker with compare-to-previous deltas; CSV sidecar; aggregated incident log, Major Incidents clustering, Device Health Scores; deterministic Report ID + SHA-256 fingerprint; PDF/A-1b/2b/3b compliance mode; scheduled email delivery; History tab with bulk delete. See [DEVELOPER.md](DEVELOPER.md#reports) for architecture
 
 ### Supported Sensor Types
 
@@ -92,6 +96,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - **System tray:** `pystray` + `Pillow` *(optional)*
 - **VMware:** `pyvmomi` *(optional — only needed when VMware sensors are enabled)*
 - **LDAP/AD:** `ldap3` *(optional — only needed when LDAP auth is enabled)*
+- **PDF reports:** `weasyprint` + `Jinja2` + `matplotlib` *(optional — only needed for the Reports module)*
 
 ---
 
@@ -128,6 +133,41 @@ journalctl -u pingwatch -f                     # live logs
 sudo bash linux/start.sh --uninstall-service
 ```
 
+### Air-Gapped Installation
+
+PingWatch has **zero external runtime dependencies** — no CDN fonts, no telemetry, no update checks. It runs fully offline once installed. The only step that needs internet is fetching Python packages, which you do once on a connected machine and transfer to the air-gapped target.
+
+**On an internet-connected machine:**
+
+1. Install the matching Python version (3.8+) and clone/download the repo.
+2. Pre-download all Python dependencies as wheels:
+   ```bash
+   pip download -r requirements.txt -d ./wheels
+   ```
+3. Copy the entire `Pingwatch/` folder (including `./wheels/`) to the air-gapped host (USB, approved file share, etc.).
+
+**On the air-gapped host:**
+
+1. Install Python 3.8+ from an offline installer (Windows `.exe` / Linux `.deb` / `.rpm`).
+2. Install PostgreSQL (optional — skip for SQLite) and `net-snmp` (optional — skip if no SNMP sensors) from your organization's internal package mirror or offline installer.
+3. Install the pre-downloaded wheels:
+   ```bash
+   pip install --no-index --find-links ./wheels -r requirements.txt
+   ```
+4. Launch PingWatch normally (`windows\start.bat` or `sudo bash linux/start.sh`). The first-run wizard will detect that all packages are present and skip the download step.
+
+**Configuration notes for air-gapped environments:**
+
+| Feature | How to configure |
+|---------|-----------------|
+| **TLS certificate** | Use the built-in self-signed generator (Settings → Networking → HTTPS / TLS) or import your internal PKI certificate. Do **not** use ACME / Let's Encrypt — it requires internet. |
+| **Email alerts** | Point SMTP to your internal mail relay, or skip email and use webhook / syslog / browser push instead. |
+| **Webhook alerts** | Target internal URLs only. The built-in SSRF guard rejects public/external IPs. |
+| **DNS probes** | Point at your internal DNS servers. |
+| **Device backups** | SSH/Telnet to internal devices — already LAN-only. |
+
+All monitoring features (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner, VMware), the dashboard, topology map, IPAM, alerting, and backup engine work identically online and offline.
+
 ---
 
 ## Usage
@@ -159,7 +199,7 @@ Default ports: HTTP `7070`, HTTPS `8443`, SNMP trap `1162` (all configurable).
 
 ## Syslog Forwarding
 
-Forward events to any RFC 5424 syslog server via UDP or TCP. Configure in **Settings → Syslog**: host, port, protocol, and minimum severity (`critical` / `warning` / `down` / `recovered` / `info`). Non-blocking daemon queue — monitor threads are never stalled. Changes take effect immediately without restart.
+Forward events to any RFC 5424 syslog server over UDP or TCP. Configure host, port, and protocol in **Settings → Syslog**; application log forwarding has its own minimum-level filter. Non-blocking daemon queue — monitor threads are never stalled; changes apply without restart.
 
 ---
 
@@ -265,6 +305,10 @@ Click any device row in the Backups tab to open the Config Viewer:
 <img width="500" height="492" alt="IPAM" src="https://github.com/user-attachments/assets/42864325-72b5-4e7b-80ea-16637beb0d5f" />
 <img width="800" height="364" alt="IPAM Subnets" src="https://github.com/user-attachments/assets/2397d53a-8891-4a96-a5f3-865dcb859f6c" />
 
+### Setup GUI Wizard
+<img width="816" height="806" alt="image" src="https://github.com/user-attachments/assets/ef9d9527-9944-467e-8757-4382761aff80" />
+
+
 ---
 
 ## Architecture
@@ -282,6 +326,7 @@ Browser / Desktop GUI
         ├── vmware/               ← vSphere VM discovery + metric probing
         ├── backup/               ← SSH/Telnet backup engine + scheduler
         ├── snmp/                 ← Trap receiver, enricher, OID catalog
+        ├── reports/              ← PDF/CSV report engine, scheduler, email delivery
         └── db/                   ← Dual-backend persistence (SQLite / PostgreSQL)
 ```
 

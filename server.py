@@ -34,6 +34,7 @@ from db              import (
     _db_enqueue, autosave_loop,
     db_init, logs_db_init, db_load, db_seed_users,
     db_load_settings, db_save,
+    db_flush_samples, shutdown_writers,
 )
 from db.backend      import is_pg, needs_setup
 
@@ -56,17 +57,53 @@ _STATIC_TYPES = {
 
 # ── JS files inlined into index.html ─────────────────────────────
 _JS_FILES = [
+    "theme.js",
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
     "forms-discovery.js",
-    "dashboard.js", "events.js", "backups.js", "ipam.js", "alerting.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "alerting.js", "app.js",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
 
 _HTML_CACHE     = None   # cached assembled index.html bytes
 _MAP_HTML_CACHE = None   # cached map.html bytes
+
+# Shown when the web UI is reached before first-run setup completes.
+# Setup is driven exclusively by the launcher scripts (start.bat / start.sh),
+# which pick GUI vs CLI wizard automatically based on environment.
+_SETUP_REQUIRED_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>PingWatch — Setup Required</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ html,body{margin:0;padding:0;background:#0d1117;color:#e6edf3;
+           font-family:'Segoe UI',-apple-system,sans-serif;height:100%;}
+ .wrap{max-width:620px;margin:12vh auto;padding:28px 32px;background:#161b22;
+       border:1px solid #30363d;border-radius:10px;}
+ h1{margin:0 0 6px;font-size:22px;}
+ h1 .dot{color:#23d18b;margin-right:6px;}
+ h1 .accent{color:#2f81f7;}
+ p{color:#8b949e;line-height:1.55;}
+ code{background:#0d1117;border:1px solid #30363d;border-radius:4px;
+      padding:2px 8px;color:#e6edf3;font-family:Consolas,Menlo,monospace;
+      font-size:13px;}
+ .row{margin:14px 0;}
+ .hint{color:#484f58;font-size:12px;margin-top:18px;}
+</style></head><body>
+<div class="wrap">
+ <h1><span class="dot">●</span>Ping<span class="accent">Watch</span> — Setup Required</h1>
+ <p>PingWatch hasn&rsquo;t been configured yet. Run the launcher on the server
+    to open the setup wizard:</p>
+ <div class="row"><b>Windows:</b> &nbsp;<code>windows\\start.bat</code></div>
+ <div class="row"><b>Linux / macOS:</b> &nbsp;<code>bash linux/start.sh</code></div>
+ <p>The launcher opens a graphical wizard on desktop systems and falls back
+    to a terminal wizard on headless servers.</p>
+ <p class="hint">Already configured? Check that <code>pingwatch.conf</code>
+    exists in the install directory.</p>
+</div></body></html>
+"""
 
 
 def _load_map_html() -> bytes:
@@ -154,6 +191,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_with_cookies(self, code, data, cookies):
+        """Send JSON response with multiple Set-Cookie headers."""
+        body = json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        for c in cookies:
+            self.send_header("Set-Cookie", c)
+        self._sec_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
     import re as _re
     _HOST_RE = _re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(:\d+)?$')
 
@@ -177,8 +226,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
             "img-src 'self' data: blob:; "   # blob: needed for canvas/PNG export
             "worker-src blob:;"              # blob: needed for canvas toBlob()
         )
@@ -246,31 +295,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = urlparse(self.path).path
 
         # ── Setup wizard intercept (first-run) ────────────────────
+        # Setup runs through the launcher (start.bat / start.sh), which picks
+        # the GUI wizard on desktops and the CLI wizard on headless systems.
+        # If the web UI is reached before setup completes, show a static
+        # "run the launcher" page — no browser-based wizard exists.
         if needs_setup():
-            if p == "/setup" or p == "/":
-                _setup_html = os.path.join(FRONTEND_DIR, "setup.html")
-                if os.path.isfile(_setup_html):
-                    with open(_setup_html, "rb") as _f:
-                        data = _f.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                else:
-                    self._json(503, {"error": "Setup wizard not found"})
-                return
-            if p.startswith("/api/setup/"):
-                from routes import setup as _setup_mod
-                if _setup_mod.handle(self, "GET", p, {}):
-                    return
-            # Serve static assets needed by setup page
-            ext = os.path.splitext(p)[1].lower()
-            if ext in _STATIC_TYPES:
-                pass  # fall through to static handler below
-            else:
-                self._json(503, {"error": "Setup required", "redirect": "/setup"})
-                return
+            data = _SETUP_REQUIRED_HTML.encode("utf-8")
+            self.send_response(503)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         # ── Main dashboard HTML (inlined CSS + JS) ────────────────
         if p in ("/", "/index.html"):
@@ -321,8 +357,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -334,13 +370,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = urlparse(self.path).path
 
         # ── Setup wizard intercept (first-run) ────────────────────
-        if needs_setup() and p.startswith("/api/setup/"):
-            body = self._body()
-            if body is None: return
-            from routes import setup as _setup_mod
-            if _setup_mod.handle(self, "POST", p, body):
-                return
-            self._json(404, {"error": "not found"})
+        # Setup runs via the launcher scripts; no browser wizard exists.
+        if needs_setup():
+            self._json(503, {"error": "Setup required — run start.bat / start.sh"})
             return
 
         # DB import reads its own oversized body before we call _body()
@@ -351,8 +383,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod):
+        from routes import ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -360,12 +392,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -396,8 +428,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -517,7 +549,6 @@ def main():
             log.error("Refusing to start — fix PostgreSQL configuration and restart.")
             sys.exit(1)
         pg_init_pool()
-        log.info(f"PostgreSQL pool ready: {_cfg['pg_host']}:{_cfg['pg_port']}/{_cfg['pg_database']}")
 
     db_init()
     logs_db_init()
@@ -694,6 +725,16 @@ def main():
     log.info(f"SNMP trap receiver started on port {app_state.effective_snmp_port}")
     from backup.scheduler import start_scheduler
     start_scheduler()
+    try:
+        from core.config import REPORTS_DIR as _REPORTS_DIR
+        os.makedirs(_REPORTS_DIR, exist_ok=True)
+    except Exception as _e:
+        log.warning(f"Could not pre-create reports dir {_REPORTS_DIR!r}: {_e}")
+    try:
+        from reports.scheduler import start_scheduler as _start_reports_scheduler
+        _start_reports_scheduler()
+    except Exception as _e:
+        log.warning(f"Report scheduler not started: {_e}")
     from monitoring.syslog_client import _attach_app_log_handlers
     _attach_app_log_handlers()
     from core.ldap_auth import ldap_sync_loop
@@ -703,6 +744,22 @@ def main():
     _scheme = "https" if app_state.tls_active else "http"
     _local_url = f"{_scheme}://127.0.0.1:{app_state.effective_port}"
     log.info(f"PingWatch ready -> {_local_url}")
+
+    # Optional-dep warnings — make missing modules visible at startup instead of
+    # failing later inside a request handler.
+    try:
+        from core.auth import totp_available
+        if not totp_available():
+            log.warning("Optional dependency 'pyotp' not installed — 2FA endpoints will return 503. "
+                        "Install with: pip install pyotp")
+    except Exception:
+        pass
+
+    try:
+        import qrcode  # noqa: F401
+    except Exception:
+        log.warning("Optional dependency 'qrcode' not installed — 2FA enrolment will show the "
+                    "provisioning URI only (no scannable QR image). Install with: pip install qrcode")
 
     # ── GUI ────────────────────────────────────────────────────────
     from core.logger import log_buffer
@@ -737,6 +794,15 @@ def main():
             _headless_stop.set()
 
     signal.signal(signal.SIGINT, lambda *_: _quit())
+    # SIGTERM = systemctl stop on Linux. Without this handler, Python's
+    # default terminator kills the process instantly and daemon threads
+    # (writer queues, sample-flush loop) are dropped mid-write. On Windows
+    # SIGTERM isn't deliverable via the console but the symbol still exists;
+    # guard against any surprise on older / embedded Python builds.
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: _quit())
+    except (AttributeError, ValueError):
+        pass
 
     if _use_tray:
         def _open(*_):
@@ -770,6 +836,41 @@ def main():
     STATE._executor.shutdown(wait=False)
     db_save(STATE)
     log.info("Configuration saved.")
+    # Flush the in-memory sample buffer BEFORE draining the writer queues —
+    # flush enqueues one final batch-insert that the drain then writes. The
+    # reverse order would discard the last buffer.
+    try:
+        db_flush_samples()
+    except Exception as e:
+        log.error(f"db_flush_samples at shutdown failed: {e}")
+    try:
+        summary = shutdown_writers(timeout=10.0)
+        log.info(
+            f"DB writers stopped: main_joined={summary['main_joined']} "
+            f"(pending={summary['main_pending']}), "
+            f"logs_joined={summary['logs_joined']} "
+            f"(pending={summary['logs_pending']})"
+        )
+        if not summary["main_joined"] or not summary["logs_joined"]:
+            log.warning(
+                "One or more DB writer threads did not exit within timeout — "
+                "some pending writes may have been dropped"
+            )
+    except Exception as e:
+        log.error(f"shutdown_writers failed: {e}")
+    # Stop periodic background threads before tearing down the pool,
+    # otherwise they race pg_close_pool() and spam 'NoneType has no
+    # attribute getconn' errors until the process actually exits.
+    try:
+        from db.samples import stop_sample_flush
+        stop_sample_flush()
+    except Exception as e:
+        log.warning(f"stop_sample_flush failed: {e}")
+    try:
+        from core.ldap_auth import stop_ldap_sync
+        stop_ldap_sync()
+    except Exception as e:
+        log.warning(f"stop_ldap_sync failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()

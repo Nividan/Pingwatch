@@ -39,6 +39,7 @@ let _ntmVisible = true;
 // immediately when coming back from a paused state.
 let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
+  if (e.origin !== window.location.origin) return;
   if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
   if (e.data?.type === 'ntm_resume') {
     _ntmVisible = true;
@@ -55,7 +56,78 @@ window.addEventListener('message', e => {
       }
     }
   }
+  // Parent-driven theme sync — flips the iframe to match the main app.
+  if (e.data?.type === 'theme') {
+    const t = e.data.value === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('pw_theme', t); } catch(_) {}
+    _ntmRefreshBgPalette();
+    window.dispatchEvent(new CustomEvent('ntm_themechange', { detail: t }));
+  }
 });
+// Initial theme — read localStorage (same-origin, shared with parent) so the
+// iframe renders with the right palette even before the parent posts a message.
+try {
+  const _t0 = localStorage.getItem('pw_theme');
+  if (_t0 === 'light' || _t0 === 'dark') {
+    document.documentElement.setAttribute('data-theme', _t0);
+  }
+} catch(_) {}
+
+// ── Canvas-BG palettes ────────────────────────────────────────────────────
+// Canvas draws don't inherit CSS vars — they need explicit rgba strings at
+// draw time. We keep two palettes and flip `_NTM_BG` on theme change.
+// Light palette mirrors --accent (#0969da) / --up (#1a7f37) / --purple.
+const _NTM_BG_PALETTES = {
+  dark: {
+    baseFill:     'rgba(4,8,20,0.62)',
+    hexStroke:    'rgba(0,212,255,1)',
+    stream:       [0,212,255],
+    streamHot:    [180,255,255],
+    particleC:    [0,212,255],
+    particleG:    [0,255,157],
+    particleP:    [168,85,247],
+    connections:  'rgba(0,212,255,0.08)',
+    scanSoft:     'rgba(0,212,255,0.03)',
+    scanLine:     'rgba(0,212,255,0.07)',
+    corners:      'rgba(0,212,255,0.55)',
+    cornersDim:   'rgba(0,212,255,0.25)',
+    crosshair:    'rgba(0,212,255,0.1)',
+    ringC:        [0,212,255],
+    ringG:        [0,255,157],
+    ringP:        [168,85,247],
+    dashConn:     'rgba(0,212,255,0.12)',
+    dashScanSoft: 'rgba(0,212,255,0.04)',
+    dashScanLine: 'rgba(0,212,255,0.10)',
+  },
+  light: {
+    baseFill:     'rgba(240,244,248,0.78)',
+    hexStroke:    'rgba(9,105,218,1)',
+    stream:       [9,105,218],
+    streamHot:    [9,105,218],
+    particleC:    [9,105,218],
+    particleG:    [26,127,55],
+    particleP:    [124,58,237],
+    connections:  'rgba(9,105,218,0.14)',
+    scanSoft:     'rgba(9,105,218,0.05)',
+    scanLine:     'rgba(9,105,218,0.14)',
+    corners:      'rgba(9,105,218,0.7)',
+    cornersDim:   'rgba(9,105,218,0.3)',
+    crosshair:    'rgba(9,105,218,0.16)',
+    ringC:        [9,105,218],
+    ringG:        [26,127,55],
+    ringP:        [124,58,237],
+    dashConn:     'rgba(9,105,218,0.18)',
+    dashScanSoft: 'rgba(9,105,218,0.06)',
+    dashScanLine: 'rgba(9,105,218,0.16)',
+  },
+};
+let _NTM_BG = _NTM_BG_PALETTES.dark;
+function _ntmRefreshBgPalette() {
+  const t = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  _NTM_BG = _NTM_BG_PALETTES[t];
+}
+_ntmRefreshBgPalette();
 // Also pause when this document's own visibility changes (e.g. OS switch)
 let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
@@ -559,7 +631,7 @@ function showPwNodePanel(did) {
       </div>
       <div class="field-group" style="margin-top:8px">
         <div class="field-label">POSITION</div>
-        <span style="color:rgba(255,255,255,0.4);font-size:10px;font-family:'Share Tech Mono',monospace">Drag to reposition</span>
+        <span style="color:var(--pt-dim);font-size:10px;font-family:'Share Tech Mono',monospace">Drag to reposition</span>
       </div>
     `;
     document.getElementById('panel-actions').innerHTML = '';
@@ -586,10 +658,10 @@ function showPwNodePanel(did) {
     const sc = s.alive === true ? '#00ff9d' : s.alive === false ? '#ff3333' : '#888';
     const ms = s.last_ms != null ? s.last_ms.toFixed(0) + 'ms' : '—';
     return `<tr>
-      <td style="padding:3px 6px;font-size:9px;color:rgba(255,255,255,0.7)">${escXml(s.name)}</td>
-      <td style="padding:3px 6px;font-size:9px;color:rgba(0,212,255,0.6)">${escXml(s.stype)}</td>
+      <td style="padding:3px 6px;font-size:9px;color:var(--pt)">${escXml(s.name)}</td>
+      <td style="padding:3px 6px;font-size:9px;color:var(--pt-accent)">${escXml(s.stype)}</td>
       <td style="padding:3px 6px;font-size:9px;color:${sc};font-weight:600">${s.alive === true ? 'UP' : s.alive === false ? 'DOWN' : '—'}</td>
-      <td style="padding:3px 6px;font-size:9px;color:rgba(255,255,255,0.4)">${ms}</td>
+      <td style="padding:3px 6px;font-size:9px;color:var(--pt-dim)">${ms}</td>
     </tr>`;
   }).join('');
   document.getElementById('panel-title').textContent = dev.name.toUpperCase();
@@ -606,26 +678,25 @@ function showPwNodePanel(did) {
     ${(dev.secondary_ips||[]).length ? `
     <div class="field-group">
       <div class="field-label">SECONDARY IPS</div>
-      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:var(--pt-accent);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
     </div>` : ''}
     <div class="field-group">
       <div class="field-label">GROUP</div>
-      <span style="color:rgba(255,255,255,0.5);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
+      <span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
     </div>
     <div class="field-group">
       <div class="field-label">DEVICE ICON</div>
-      <select style="background:#0d1a2e;color:#e2e8f0;border:1px solid rgba(0,212,255,0.3);border-radius:4px;padding:4px 6px;font-family:'Share Tech Mono',monospace;font-size:10px;width:100%;cursor:pointer"
-             onchange="setPwNodeType('${did}',this.value)">${_typeOpts}</select>
+      <select class="field-select" onchange="setPwNodeType('${did}',this.value)">${_typeOpts}</select>
     </div>
     ${sensors.length ? `
     <div class="dash-section" style="margin-top:10px">
       <div class="dash-section-title" style="margin-bottom:4px">SENSORS</div>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">NAME</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">TYPE</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">ST</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(0,212,255,0.4);text-align:left;font-weight:400">MS</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">NAME</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">TYPE</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">ST</th>
+          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">MS</th>
         </tr></thead>
         <tbody>${sRows}</tbody>
       </table>
@@ -638,7 +709,7 @@ function showPwNodePanel(did) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwOverrides[did]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwNodeColor('${did}')">Reset</button>`
-          : `<span style="color:rgba(255,255,255,0.3);font-size:10px;font-family:'Share Tech Mono',monospace">auto (status color)</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto (status color)</span>`}
       </div>
     </div>
   `;
@@ -1046,9 +1117,13 @@ const NODE_SIZE = {
 };
 function nsize(type, node) {
   if (type === 'info-box' && node) {
-    const lines = Array.isArray(node.properties?.lines) ? node.properties.lines : [];
-    const h = Math.max(80, 25 + lines.length * 14 + 10);
-    return { w: 210, h };
+    const p = node.properties || {};
+    const lines = Array.isArray(p.lines) ? p.lines : [];
+    const wOverride = (typeof p.w === 'number' && p.w >= 140) ? p.w : null;
+    const hOverride = (typeof p.h === 'number' && p.h >= 60)  ? p.h : null;
+    const w = wOverride || 240;
+    const h = hOverride || Math.max(80, 28 + lines.length * 18 + 14);
+    return { w, h };
   }
   if (!node) return NODE_SIZE[type] || { w: 160, h: 60 };
   const vH = _vlanH(node.properties);
@@ -1752,21 +1827,28 @@ function renderRemotePC(node, p, sf) {
 
 function renderInfoBox(node, p, sf) {
   const lines = Array.isArray(p.lines) ? p.lines : [];
-  const h = Math.max(80, 25 + lines.length * 14 + 10);
-
+  const sz = nsize('info-box', node);
+  const w = sz.w, h = sz.h;
+  // Title sits at top with a fatter font; lines flow at 18px row height.
+  const titleCharPx = 8.5;
+  const titleAvail  = Math.max(40, w - 18);
   return `<g ${sf}>
-    <rect x="0" y="0" width="210" height="${h}" rx="4"
+    <rect x="0" y="0" width="${w}" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
       stroke-width="1" stroke-dasharray="4,3"/>
-    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="16" fill="#ff6b6b" font-family="Orbitron" font-size="9" letter-spacing="1">${escXml(_truncName(node.name, 192, 6.5))}</text>
+    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="20" fill="#ff6b6b" font-family="Orbitron" font-size="12" letter-spacing="1">${escXml(_truncName(node.name, titleAvail, titleCharPx))}</text>
     ${lines.map((l,i) => {
       const color = (l && l.color) ? String(l.color) : 'rgba(255,255,255,0.6)';
       const text  = (l && l.text)  ? String(l.text)  : '';
+      const rowY  = 30 + i*18;
       return `
-        <rect x="6" y="${22 + i*14}" width="3" height="10" rx="1" fill="${escXml(color)}"/>
-        <text x="14" y="${30 + i*14}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="9">${escXml(text)}</text>
+        <rect x="6" y="${rowY}" width="3" height="13" rx="1" fill="${escXml(color)}"/>
+        <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="12">${escXml(text)}</text>
       `;
     }).join('')}
+    <rect data-info-resize="1" x="${w - 12}" y="${h - 12}" width="12" height="12" rx="2"
+      fill="rgba(255,107,107,0.7)" stroke="rgba(255,107,107,0.9)" stroke-width="0.7"
+      style="cursor:nwse-resize"/>
   </g>`;
 }
 
@@ -2027,6 +2109,7 @@ function renderIPMI(node, p, sf) {
 // ═══════════════════════════ DRAG ═══════════════════════════
 const svg = document.getElementById('topo-svg');
 let dragNode = null, dragSVGStart = null, dragNodeStart = null, rafDrag = null, _pwRenderPending = false;
+let dragInfoResize = null;  // {w0, h0} when resizing an info-box via its corner handle
 
 function getSVGPt(e) {
   const pt = svg.createSVGPoint();
@@ -2040,9 +2123,20 @@ function startDrag(e, node) {
   if (e.shiftKey) return;  // shift+drag = rubber-band, not single-node drag
   e.preventDefault();
   if (e.altKey) { startLinkDraw(e, node); return; }
+  // Detect info-box resize handle (rect with data-info-resize="1")
+  const isInfoResize = node.type === 'info-box'
+    && e.target && e.target.dataset && e.target.dataset.infoResize === '1';
   dragNode = node;
   dragSVGStart = getSVGPt(e);
   dragNodeStart = { x: node.x, y: node.y };
+  if (isInfoResize) {
+    const sz = nsize('info-box', node);
+    dragInfoResize = { w0: sz.w, h0: sz.h };
+    dragMultiStart = [];
+    svg.style.cursor = 'nwse-resize';
+    return;
+  }
+  dragInfoResize = null;
   if (multiSelect.has(node.id) && multiSelect.size > 1) {
     dragMultiStart = [...multiSelect].map(id => nodeMap[id]).filter(Boolean)
       .map(n => ({ node: n, x0: n.x, y0: n.y }));
@@ -2061,6 +2155,22 @@ function doDrag(e) {
     rafDrag = null;
     const dx = pt.x - dragSVGStart.x;
     const dy = pt.y - dragSVGStart.y;
+    if (dragInfoResize) {
+      // Resize the info-box: write w/h into properties and re-render the node SVG.
+      const newW = Math.max(140, dragInfoResize.w0 + dx);
+      const newH = Math.max(60,  dragInfoResize.h0 + dy);
+      const props = dragNode.properties || (dragNode.properties = {});
+      props.w = Math.round(newW);
+      props.h = Math.round(newH);
+      const g = document.getElementById('node-' + dragNode.id);
+      if (g) {
+        g.innerHTML = buildNode(dragNode, selectedEl?.type==='node' && selectedEl?.data.id===dragNode.id);
+        _applyNodeColorFilter(g, dragNode);
+      }
+      renderLinks();
+      resizeSVG();
+      return;
+    }
     if (dragMultiStart.length > 0) {
       dragMultiStart.forEach(({ node, x0, y0 }) => {
         node.x = x0 + dx;
@@ -2087,6 +2197,37 @@ async function endDrag() {
   if (linkDraw) return;
   if (rafDrag) { cancelAnimationFrame(rafDrag); rafDrag = null; }
   if (dragNode) {
+    if (dragInfoResize) {
+      const node = dragNode;
+      const props = { ...(node.properties || {}) };
+      const before = { w: dragInfoResize.w0, h: dragInfoResize.h0 };
+      const after  = { w: props.w, h: props.h };
+      dragInfoResize = null; dragNode = null; dragMultiStart = [];
+      svg.style.cursor = 'default';
+      // Skip persistence if nothing actually changed (click without drag)
+      if (before.w === after.w && before.h === after.h) return;
+      try {
+        await api('PUT', `/api/nodes/${node.id}`, {
+          name: node.name, type: node.type, x: node.x, y: node.y, properties: props
+        });
+        pushAction(
+          async () => {
+            const p2 = { ...props };
+            if (typeof before.w === 'number') p2.w = before.w; else delete p2.w;
+            if (typeof before.h === 'number') p2.h = before.h; else delete p2.h;
+            node.properties = p2;
+            await api('PUT',`/api/nodes/${node.id}`,{name:node.name,type:node.type,x:node.x,y:node.y,properties:p2});
+            await loadData();
+          },
+          async () => {
+            node.properties = props;
+            await api('PUT',`/api/nodes/${node.id}`,{name:node.name,type:node.type,x:node.x,y:node.y,properties:props});
+            await loadData();
+          }
+        );
+      } catch (err) { toast('⚠ Save failed: ' + err.message); }
+      return;
+    }
     if (isPingWatchPage && dragNode._pwDid) {
       pwOverrides[dragNode._pwDid] = { ...(pwOverrides[dragNode._pwDid] || {}), x: dragNode.x, y: dragNode.y };
       _pwSave('pw_node_overrides', pwOverrides);
@@ -2195,18 +2336,18 @@ function showNodePanel(node) {
   document.getElementById('panel-icon').textContent = '◉';
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group"><div class="field-label">TYPE</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(node.type)}</span></div>
-    <div class="field-group"><div class="field-label">POSITION</div><span style="color:rgba(255,255,255,0.5);font-family:Share Tech Mono,monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
+    <div class="field-group"><div class="field-label">POSITION</div><span style="color:var(--pt-sub);font-family:Share Tech Mono,monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
     ${p.ip ? `<div class="field-group"><div class="field-label">IP ADDRESS</div><span style="color:${escXml(p.ip_color||'var(--accent2)')};font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(p.ip)}</span></div>` : ''}
-    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'rgba(255,255,255,0.5)')};font-family:Share Tech Mono,monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
+    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'var(--pt-sub)')};font-family:Share Tech Mono,monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
     <div class="field-group"><div class="field-label">CONNECTED LINKS</div>
       ${links.filter(l=>l.source_id===node.id||l.target_id===node.id).map(l=>{
         const other = nodeMap[l.source_id===node.id ? l.target_id : l.source_id];
         const cfg = lcfg(l.link_type);
         return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
           <div style="width:16px;height:2px;background:${cfg.stroke};"></div>
-          <span style="font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(255,255,255,0.5);">${escXml(other?.name||'?')}</span>
+          <span style="font-family:Share Tech Mono,monospace;font-size:9px;color:var(--pt-sub);">${escXml(other?.name||'?')}</span>
         </div>`;
-      }).join('') || '<span style="color:rgba(255,255,255,0.25);font-family:Share Tech Mono,monospace;font-size:10px;">None</span>'}
+      }).join('') || '<span style="color:var(--pt-dim);font-family:Share Tech Mono,monospace;font-size:10px;">None</span>'}
     </div>
     <div class="field-group">
       <div class="field-label">NOTES</div>
@@ -2254,7 +2395,7 @@ function _tabMenu(e, pg) {
   document.getElementById('_tab_ctx_menu')?.remove();
   const menu = document.createElement('div');
   menu.id = '_tab_ctx_menu';
-  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:#1a2035;border:1px solid rgba(0,212,255,0.2);border-radius:6px;padding:4px 0;z-index:9999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,0.5);`;
+  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:var(--panel);border:1px solid var(--panel-border);border-radius:6px;padding:4px 0;z-index:9999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,0.5);`;
   const items = [
     { icon: '✏', label: 'Rename', action: () => renamePage(pg.id, pg.name), danger: false },
     ...(pages.length > 1 ? [{ icon: '🗑', label: 'Delete', action: () => deletePage(pg.id, pg.name), danger: true }] : []),
@@ -2282,10 +2423,10 @@ function _confirm(msg, onYes, yesLabel='Yes, Delete', danger=true) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   const btnColor = danger ? '#ff4444' : 'var(--accent,#00d4ff)';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:18px;">${msg}</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:18px;">${msg}</div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_cfm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_cfm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
       <button id="_cfm_yes" style="padding:7px 18px;border-radius:6px;border:none;background:${btnColor};color:#fff;cursor:pointer;font-weight:600;font-size:12px;">${yesLabel}</button>
     </div>
   </div>`;
@@ -3133,23 +3274,22 @@ function endLinkDraw(e) {
 function _pwLinkModal(src, tgt, onSave) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:16px;font-weight:600;letter-spacing:1px;">NEW LINK</div>
-    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:16px;font-weight:600;letter-spacing:1px;">NEW LINK</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
-      <select id="_pwlm_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_pwlm_type" class="field-select">
+        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
-      <input id="_pwlm_label" type="text" placeholder="e.g. VLAN10, WAN1…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_pwlm_label" type="text" placeholder="e.g. VLAN10, WAN1…" class="field-input"/>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_pwlm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
-      <button id="_pwlm_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINK</button>
+      <button id="_pwlm_no"  style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_pwlm_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINK</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -3213,33 +3353,30 @@ function openBulkLinkModal() {
 
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
-      <input id="_blm_search" type="text" placeholder="Search devices…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;margin-bottom:4px;"/>
-      <select id="_blm_target" size="6"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px;font-size:11px;border-radius:4px;">
-        ${targets.map(t => `<option value="${t.did}" style="background:#0d1a2e;color:#e2e8f0;padding:2px 4px;">${escXml(t.name)}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
+      <input id="_blm_search" type="text" placeholder="Search devices…" class="field-input" style="margin-bottom:4px;"/>
+      <select id="_blm_target" size="6" class="field-select">
+        ${targets.map(t => `<option value="${t.did}">${escXml(t.name)}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
-      <select id="_blm_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm_type" class="field-select">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
-      <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…" class="field-input"/>
     </div>
-    <div id="_blm_status" style="font-size:10px;color:rgba(255,255,255,0.3);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
+    <div id="_blm_status" style="font-size:10px;color:var(--pt-dimmer);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
-      <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
+      <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -3300,23 +3437,22 @@ function bulkLinkSelectedTo(tgtDid) {
   const tgtName = _pwDevName(tgtDid);
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:#1a2035;border:1px solid #2a3448;border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
-    <div style="font-size:13px;color:#c0cce0;margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:rgba(0,212,255,0.7);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
     <div style="margin-bottom:12px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
-      <select id="_blm2_type" style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;">${t}</option>`).join('')}
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
+      <select id="_blm2_type" class="field-select">
+        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
-      <input id="_blm2_label" type="text" placeholder="e.g. IPMI, Mgmt…"
-        style="width:100%;background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:6px 8px;font-size:12px;border-radius:4px;box-sizing:border-box;"/>
+      <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
+      <input id="_blm2_label" type="text" placeholder="e.g. IPMI, Mgmt…" class="field-input"/>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="_blm2_no" style="padding:7px 18px;border-radius:6px;border:1px solid #2a3448;background:transparent;color:#8899aa;cursor:pointer;font-size:12px;">Cancel</button>
-      <button id="_blm2_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent,#00d4ff);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD ${selectedDids.length} LINKS</button>
+      <button id="_blm2_no" style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
+      <button id="_blm2_yes" style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD ${selectedDids.length} LINKS</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -3599,7 +3735,7 @@ function showGroupPanel(g) {
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
     <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'Share Tech Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
-    <div class="field-group"><div class="field-label">SIZE</div><span style="color:rgba(255,255,255,0.5);font-family:'Share Tech Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
+    <div class="field-group"><div class="field-label">SIZE</div><span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
     ${isPwGroup ? `
     <div class="field-group" style="margin-top:12px">
       <div class="field-label">COLOR OVERRIDE</div>
@@ -3609,7 +3745,7 @@ function showGroupPanel(g) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwGroupOverrides[g.name]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGname}')">Reset</button>`
-          : `<span style="color:rgba(255,255,255,0.3);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
       </div>
     </div>` : ''}
   `;
@@ -3700,22 +3836,21 @@ function showPwLinkPanel(lkId) {
     <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.src_did))}</span></div>
     <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
     <div class="field-group"><div class="field-label">TYPE</div>
-      <select onchange="setPwLinkType('${lkId}',this.value)" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}" style="background:#0d1a2e;color:#e2e8f0;"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
+      <select onchange="setPwLinkType('${lkId}',this.value)" class="field-select">
+        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
     <div class="field-group"><div class="field-label">LABEL</div>
       <input type="text" value="${escXml(lk.label||'')}" placeholder="optional label"
-        onchange="setPwLinkLabel('${lkId}',this.value)"
-        style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;box-sizing:border-box;"/>
+        onchange="setPwLinkLabel('${lkId}',this.value)" class="field-input"/>
     </div>
     <div class="field-group"><div class="field-label">IN TRAFFIC</div>
-      <select id="pw-lk-si" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;">
+      <select id="pw-lk-si" class="field-select">
         ${_pwSensorOpts(lk, 'sensor_in')}
       </select>
     </div>
     <div class="field-group"><div class="field-label">OUT TRAFFIC</div>
-      <select id="pw-lk-so" style="background:#0d1a2e;border:1px solid rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 8px;font-size:11px;border-radius:3px;width:100%;">
+      <select id="pw-lk-so" class="field-select">
         ${_pwSensorOpts(lk, 'sensor_out')}
       </select>
     </div>
@@ -3863,27 +3998,31 @@ function exportSVG() {
 }
 
 async function _inlineFontsForExport() {
-  // Fetch Google Fonts CSS then inline each font as base64.
-  // 4-second hard timeout per request — if Google Fonts is unreachable
-  // (firewall / no internet) we skip font inlining rather than hanging forever.
-  function _ft(url) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
-    return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+  // Inline self-hosted fonts into the exported SVG/PNG so labels render
+  // correctly when the file is opened outside the app. Fetched from /fonts/
+  // — no external CDN dependency, works fully offline.
+  const FONTS = [
+    { family: 'Orbitron',        weight: 400, file: 'orbitron-v35-latin-regular.woff2'        },
+    { family: 'Orbitron',        weight: 700, file: 'orbitron-v35-latin-700.woff2'            },
+    { family: 'Orbitron',        weight: 900, file: 'orbitron-v35-latin-900.woff2'            },
+    { family: 'Share Tech Mono', weight: 400, file: 'share-tech-mono-v16-latin-regular.woff2' },
+  ];
+  const parts = [];
+  for (const f of FONTS) {
+    try {
+      const blob = await fetch('/fonts/' + f.file).then(r => r.blob());
+      const b64 = await new Promise(res => {
+        const rd = new FileReader();
+        rd.onload = () => res(rd.result);
+        rd.readAsDataURL(blob);
+      });
+      parts.push(
+        `@font-face{font-family:'${f.family}';font-style:normal;` +
+        `font-weight:${f.weight};src:url(${b64}) format('woff2');}`
+      );
+    } catch {}
   }
-  const GFONTS = 'https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap';
-  try {
-    let css = await _ft(GFONTS).then(r => r.text());
-    const fontUrls = [...css.matchAll(/url\((https:\/\/[^)]+)\)/g)].map(m => m[1]);
-    for (const fu of fontUrls) {
-      try {
-        const blob = await _ft(fu).then(r => r.blob());
-        const b64 = await new Promise(res => { const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(blob); });
-        css = css.replaceAll(fu, b64);
-      } catch {}
-    }
-    return css;
-  } catch { return ''; }
+  return parts.join('\n');
 }
 
 async function exportPNG() {
@@ -3906,7 +4045,10 @@ async function exportPNG() {
   const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml' }));
 
   const img = new Image();
-  img.crossOrigin = 'anonymous';
+  // No crossOrigin — the SVG blob is same-origin and fonts are already
+  // inlined as data: URLs above. Setting crossOrigin='anonymous' on a
+  // blob: URL triggers a CORS check that fails in Firefox (blobs have
+  // no Access-Control-Allow-Origin header), causing onerror to fire.
   img.onload = () => {
     try {
       const canvas = document.createElement('canvas');
@@ -4054,7 +4196,7 @@ function showMultiPanel() {
       </div>`;
     }).join('');
     const moreRow = selDevs.length > 12
-      ? `<div style="font-size:9px;color:rgba(255,255,255,0.3);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
+      ? `<div style="font-size:9px;color:var(--pt-dimmer);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
       : '';
 
     const _typeOpts = [
@@ -4083,8 +4225,7 @@ function showMultiPanel() {
         <div class="panel-section-title">BULK SETTINGS</div>
         <div class="field-group">
           <div class="field-label">DEVICE ICON</div>
-          <select id="multi-icon-sel"
-            style="background:#0d1a2e;color:#e2e8f0;border:1px solid rgba(0,212,255,0.3);border-radius:4px;padding:4px 6px;font-family:'Share Tech Mono',monospace;font-size:10px;width:100%;cursor:pointer"
+          <select id="multi-icon-sel" class="field-select"
             onchange="setBulkPwNodeType(this.value)">${_typeOpts}</select>
         </div>
         <div class="field-group" style="margin-top:8px">
@@ -4266,7 +4407,7 @@ function initDashBg() {
     // Connections — single batched path (1 stroke call instead of N)
     const MD2 = 90 * 90;
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(0,212,255,0.12)';
+    ctx.strokeStyle = _NTM_BG.dashConn;
     ctx.lineWidth = 0.6;
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
@@ -4280,19 +4421,20 @@ function initDashBg() {
     ctx.stroke();
 
     // Particles
+    const pc = _NTM_BG.particleC;
     pts.forEach(p => {
       const glow = 0.45 + 0.4 * Math.sin(t * 1.6 + p.ph);
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(0,212,255,${glow.toFixed(2)})`;
+      ctx.fillStyle = `rgba(${pc[0]},${pc[1]},${pc[2]},${glow.toFixed(2)})`;
       ctx.fill();
     });
 
     // Scan bar — simple fillRect, no gradient allocation
     scanY = (scanY + 0.4) % H;
-    ctx.fillStyle = 'rgba(0,212,255,0.04)';
+    ctx.fillStyle = _NTM_BG.dashScanSoft;
     ctx.fillRect(0, scanY - 18, W, 22);
-    ctx.fillStyle = 'rgba(0,212,255,0.10)';
+    ctx.fillStyle = _NTM_BG.dashScanLine;
     ctx.fillRect(0, scanY, W, 1);
   }
 
@@ -4411,6 +4553,7 @@ function initMainBg() {
   const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ';
 
   // ── Offscreen hex grid cache ──────────────────────────────────────────────
+  // Stroke color is baked in; theme changes invalidate via the listener below.
   let hexCache = null, hexCacheW = 0, hexCacheH = 0;
   function buildHexCache(W, H) {
     if (hexCacheW === W && hexCacheH === H) return; // already up to date
@@ -4418,7 +4561,7 @@ function initMainBg() {
     hexCache = new OffscreenCanvas(W, H);
     const hx = hexCache.getContext('2d');
     const R = 38;
-    hx.strokeStyle = 'rgba(0,212,255,1)'; // will be tinted via globalAlpha
+    hx.strokeStyle = _NTM_BG.hexStroke; // will be tinted via globalAlpha
     hx.lineWidth = 0.5;
     const rw = R * Math.sqrt(3), rh = R * 1.5;
     const cols2 = Math.ceil(W / rw) + 2, rows2 = Math.ceil(H / rh) + 2;
@@ -4483,11 +4626,13 @@ function initMainBg() {
 
   // Spawn a ring pulse at a random position
   function spawnRing() {
+    const r = Math.random();
+    const rgb = r < 0.2 ? _NTM_BG.ringG : r < 0.4 ? _NTM_BG.ringP : _NTM_BG.ringC;
     rings.push({
       x: 80 + Math.random() * (canvas.width - 160),
       y: 80 + Math.random() * (canvas.height - 160),
       r: 0, maxR: 60 + Math.random() * 90,
-      col: Math.random() < 0.2 ? 'rgba(0,255,157,' : Math.random() < 0.2 ? 'rgba(168,85,247,' : 'rgba(0,212,255,',
+      col: `rgba(${rgb[0]},${rgb[1]},${rgb[2]},`,
     });
   }
 
@@ -4501,15 +4646,15 @@ function initMainBg() {
       [0, H,  1, -1],
       [W, H, -1, -1],
     ].forEach(([cx, cy, dx, dy]) => {
-      ctx.strokeStyle = 'rgba(0,212,255,0.55)';
+      ctx.strokeStyle = _NTM_BG.corners;
       ctx.beginPath(); ctx.moveTo(cx + dx*sz, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy*sz); ctx.stroke();
       // inner tick
-      ctx.strokeStyle = 'rgba(0,212,255,0.25)';
+      ctx.strokeStyle = _NTM_BG.cornersDim;
       ctx.beginPath(); ctx.moveTo(cx + dx*8, cy + dy*3); ctx.lineTo(cx + dx*3, cy + dy*3); ctx.lineTo(cx + dx*3, cy + dy*8); ctx.stroke();
     });
     // center crosshair
     const mx = W / 2, my = H / 2, cs = 14;
-    ctx.strokeStyle = 'rgba(0,212,255,0.1)';
+    ctx.strokeStyle = _NTM_BG.crosshair;
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(mx - cs, my); ctx.lineTo(mx + cs, my); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(mx, my - cs); ctx.lineTo(mx, my + cs); ctx.stroke();
@@ -4524,8 +4669,9 @@ function initMainBg() {
 
     const W = canvas.width, H = canvas.height;
     const t = Date.now() * 0.001;
+    const BG = _NTM_BG; // snapshot once per frame for minor perf
 
-    ctx.fillStyle = 'rgba(4,8,20,0.62)';
+    ctx.fillStyle = BG.baseFill;
     ctx.fillRect(0, 0, W, H);
 
     // Hex grid (cached offscreen canvas, just drawImage + globalAlpha pulse)
@@ -4533,6 +4679,7 @@ function initMainBg() {
 
     // Data streams
     ctx.font = '10px Share Tech Mono';
+    const sC = BG.stream, sH = BG.streamHot;
     streams.forEach(s => {
       s.y += s.speed;
       s.tick++;
@@ -4542,7 +4689,9 @@ function initMainBg() {
         const fy = s.y - i * 14;
         if (fy < -14 || fy > H + 14) continue;
         const fade = (1 - i / s.len) * s.opacity;
-        ctx.fillStyle = i === 0 ? `rgba(180,255,255,${(s.opacity * 3).toFixed(3)})` : `rgba(0,212,255,${fade.toFixed(3)})`;
+        ctx.fillStyle = i === 0
+          ? `rgba(${sH[0]},${sH[1]},${sH[2]},${(s.opacity * 3).toFixed(3)})`
+          : `rgba(${sC[0]},${sC[1]},${sC[2]},${fade.toFixed(3)})`;
         ctx.fillText(s.chars[i % s.chars.length], s.x - 5, fy);
       }
     });
@@ -4553,7 +4702,7 @@ function initMainBg() {
     // Connections — single batched path (1 stroke call instead of N)
     const MD2 = 110 * 110;
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(0,212,255,0.08)';
+    ctx.strokeStyle = BG.connections;
     ctx.lineWidth = 0.6;
     for (let i = 0; i < pts.length; i++) {
       for (let j = i + 1; j < pts.length; j++) {
@@ -4566,11 +4715,13 @@ function initMainBg() {
     }
     ctx.stroke();
 
+    const pC = BG.particleC, pG = BG.particleG, pP = BG.particleP;
     pts.forEach(p => {
       const pulse = 0.35 + 0.5 * Math.sin(t * 1.5 + p.ph);
       const a = pulse.toFixed(2);
+      const rgb = p.col === 'g' ? pG : p.col === 'p' ? pP : pC;
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = p.col === 'g' ? `rgba(0,255,157,${a})` : p.col === 'p' ? `rgba(168,85,247,${a})` : `rgba(0,212,255,${a})`;
+      ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
       ctx.fill();
     });
 
@@ -4590,9 +4741,9 @@ function initMainBg() {
 
     // Scan line — simple fillRect, no gradient allocation per frame
     scanY = (scanY + 0.55) % H;
-    ctx.fillStyle = 'rgba(0,212,255,0.03)';
+    ctx.fillStyle = BG.scanSoft;
     ctx.fillRect(0, scanY - 35, W, 39);
-    ctx.fillStyle = 'rgba(0,212,255,0.07)';
+    ctx.fillStyle = BG.scanLine;
     ctx.fillRect(0, scanY, W, 1);
 
     // Corner HUD
@@ -4600,6 +4751,12 @@ function initMainBg() {
   }
 
   function startMainBg() { if (!_bgRafId) _bgRafId = requestAnimationFrame(frame); }
+
+  // Theme flip — invalidate hex cache so it rebuilds with the new stroke color
+  window.addEventListener('ntm_themechange', () => {
+    hexCacheW = hexCacheH = 0;
+    if (!_bgRafId) startMainBg();
+  });
 
   resize();
   startMainBg();

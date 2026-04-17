@@ -20,30 +20,66 @@ _LOGS_QUEUE: queue.Queue = queue.Queue()
 
 def _db_writer_loop():
     """Drain _DB_QUEUE and execute each callable sequentially."""
-    while True:
-        fn = _DB_QUEUE.get()
-        if fn is None:   # sentinel for clean shutdown (not yet used)
-            break
-        try:
-            fn()
-        except Exception as e:
-            log.error(f"DB writer error: {e}")
+    try:
+        while True:
+            fn = _DB_QUEUE.get()
+            if fn is None:   # sentinel for clean shutdown (not yet used)
+                break
+            try:
+                fn()
+            except Exception as e:
+                log.error(f"DB writer error: {e}")
+    except Exception as e:
+        log.critical(f"DB writer thread crashed — writes will queue forever: {e}")
 
 
 def _logs_writer_loop():
     """Drain _LOGS_QUEUE and execute each callable sequentially."""
-    while True:
-        fn = _LOGS_QUEUE.get()
-        if fn is None:   # sentinel for clean shutdown (not yet used)
-            break
-        try:
-            fn()
-        except Exception as e:
-            log.error(f"Logs DB writer error: {e}")
+    try:
+        while True:
+            fn = _LOGS_QUEUE.get()
+            if fn is None:   # sentinel for clean shutdown (not yet used)
+                break
+            try:
+                fn()
+            except Exception as e:
+                log.error(f"Logs DB writer error: {e}")
+    except Exception as e:
+        log.critical(f"Logs DB writer thread crashed — writes will queue forever: {e}")
 
 
-threading.Thread(target=_db_writer_loop,   daemon=True, name="db-main-writer").start()
-threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer").start()
+_db_writer_thread   = threading.Thread(target=_db_writer_loop,   daemon=True, name="db-main-writer")
+_logs_writer_thread = threading.Thread(target=_logs_writer_loop, daemon=True, name="db-logs-writer")
+_db_writer_thread.start()
+_logs_writer_thread.start()
+
+
+def shutdown_writers(timeout: float = 10.0) -> dict:
+    """Drain both SQLite writer queues and stop the writer threads.
+
+    Sends the sentinel ``None`` each loop already checks for, then joins
+    with ``timeout/2`` per thread. PG mode is a cheap no-op — the queues
+    are never fed (calls execute inline) so join() returns immediately.
+
+    Returns a summary dict the caller can log: pending-queue sizes at the
+    moment of the sentinel, and whether each thread actually exited within
+    the timeout. A False ``*_joined`` value means the DB is wedged and some
+    writes were dropped — surface it in ops logs instead of silently
+    proceeding.
+    """
+    half = max(0.1, timeout / 2)
+    _DB_QUEUE.put(None)
+    _LOGS_QUEUE.put(None)
+    main_pending = _DB_QUEUE.qsize()
+    logs_pending = _LOGS_QUEUE.qsize()
+    _db_writer_thread.join(timeout=half)
+    _logs_writer_thread.join(timeout=half)
+    return {
+        "main_pending": main_pending,
+        "logs_pending": logs_pending,
+        "main_joined":  not _db_writer_thread.is_alive(),
+        "logs_joined":  not _logs_writer_thread.is_alive(),
+    }
 
 
 def _db_enqueue(fn):
@@ -84,6 +120,28 @@ def db_init_pg():
         pg_create_main_schema(cur)
         pg_create_logs_schema(cur)
         pg_seed_defaults(cur)
+        # Migrate: collapse email_company_name into org_name (one-shot, self-disabling).
+        # Mirrors the SQLite block in db_init() — see that comment for rationale.
+        try:
+            cur.execute("SELECT value FROM main.app_settings WHERE key=%s", ("email_company_name",))
+            _ecn_row = cur.fetchone()
+            _ecn_val = (_ecn_row[0] if _ecn_row else "") or ""
+            if _ecn_val:
+                cur.execute("SELECT value FROM main.app_settings WHERE key=%s", ("org_name",))
+                _org_row = cur.fetchone()
+                _org_val = (_org_row[0] if _org_row else "") or ""
+                if not _org_val:
+                    cur.execute(
+                        "INSERT INTO main.app_settings (key, value) VALUES (%s, %s) "
+                        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                        ("org_name", _ecn_val),
+                    )
+                    log.info(f"Migrated email_company_name → org_name (value: {_ecn_val!r})")
+                else:
+                    log.info(f"Discarded email_company_name={_ecn_val!r}; org_name={_org_val!r} already set")
+            cur.execute("DELETE FROM main.app_settings WHERE key=%s", ("email_company_name",))
+        except Exception as _mig_err:
+            log.warning(f"email_company_name → org_name migration failed (non-fatal): {_mig_err}")
         cur.close()
     log.info("PG schema init complete")
 
@@ -297,7 +355,7 @@ def db_init():
             ("retention_days",     "365"),
             ("snr_interval",       "5"),
             ("snr_timeout",        "4"),
-            ("snr_fail_after",     "1"),
+            ("snr_fail_after",     "2"),
             ("snr_recover_after",  "1"),
             ("max_flaps_display",  "20"),
             ("max_flap_entries",   "500"),
@@ -362,6 +420,23 @@ def db_init():
         # Migrate: bump retention_days from old default 7 → 365 (only if user never changed it)
         con.execute("UPDATE app_settings SET value='365' WHERE key='retention_days' AND value='7'")
         con.commit()
+        # Migrate: collapse email_company_name into org_name (one-shot, self-disabling).
+        # Branding is a single concept — topbar / browser title / TLS CSR / email header / report cover
+        # all read the same name. The DELETE removes the source row so this block becomes a no-op
+        # on every subsequent boot.
+        try:
+            _ecn = con.execute("SELECT value FROM app_settings WHERE key='email_company_name'").fetchone()
+            if _ecn and _ecn[0]:
+                _org = con.execute("SELECT value FROM app_settings WHERE key='org_name'").fetchone()
+                if not _org or not _org[0]:
+                    con.execute("INSERT OR REPLACE INTO app_settings VALUES ('org_name', ?)", (_ecn[0],))
+                    log.info(f"Migrated email_company_name → org_name (value: {_ecn[0]!r})")
+                else:
+                    log.info(f"Discarded email_company_name={_ecn[0]!r}; org_name={_org[0]!r} already set")
+            con.execute("DELETE FROM app_settings WHERE key='email_company_name'")
+            con.commit()
+        except Exception as _mig_err:
+            log.warning(f"email_company_name → org_name migration failed (non-fatal): {_mig_err}")
         # Migrations — add columns when missing (safe to run on existing DBs)
         # users table
         try:
@@ -396,7 +471,7 @@ def db_init():
                 pass
         # New sensor columns (debounce, thresholds, new probe fields)
         for col_def in [
-            "fail_after    INTEGER DEFAULT 1",
+            "fail_after    INTEGER DEFAULT 2",
             "recover_after INTEGER DEFAULT 1",
             "warn_ms       INTEGER",
             "crit_ms       INTEGER",
@@ -594,17 +669,46 @@ def db_init():
             con.commit()
         except Exception:
             pass
-        # Migration: user profiles + groups (v0.8+)
+        # Migration: user profiles + groups (v0.8+) and TOTP 2FA (v0.9.2+)
         for _col, _def in [
-            ("full_name", "TEXT DEFAULT ''"),
-            ("email",     "TEXT DEFAULT ''"),
-            ("group_id",  "INTEGER DEFAULT NULL"),
+            ("full_name",           "TEXT DEFAULT ''"),
+            ("email",               "TEXT DEFAULT ''"),
+            ("group_id",            "INTEGER DEFAULT NULL"),
+            ("theme_preference",    "TEXT DEFAULT 'dark'"),
+            ("totp_secret",         "TEXT DEFAULT ''"),
+            ("totp_enabled",        "INTEGER DEFAULT 0"),
+            ("totp_recovery",       "TEXT DEFAULT ''"),
+            ("totp_remember_hours", "INTEGER DEFAULT 9"),
         ]:
             try:
                 con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")
                 con.commit()
             except Exception:
                 pass
+        # Anomaly detection — per-sensor opt-in config
+        for _col, _def in [
+            ("anomaly_enabled",     "INTEGER DEFAULT 0"),
+            ("anomaly_sensitivity", "INTEGER DEFAULT 2"),
+            ("anomaly_min_samples", "INTEGER DEFAULT 50"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {_col} {_def}")
+                con.commit()
+            except Exception:
+                pass
+        # Anomaly detection — EWMA baseline checkpoints (restored on startup)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
+                did           TEXT NOT NULL,
+                sid           TEXT NOT NULL,
+                mean_ms       REAL,
+                var_ms        REAL,
+                sample_count  INTEGER DEFAULT 0,
+                enabled_since REAL,
+                updated_at    REAL,
+                PRIMARY KEY (did, sid)
+            )""")
+        con.commit()
         # ── Alert Profiles (PRTG-style state-trigger system) ──────────
         # One-time cleanup of legacy condition-rule tables (idempotent)
         for _t in ("alert_rules", "alert_rule_conditions",
@@ -731,6 +835,103 @@ def db_init():
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_dev_lic_did ON device_licenses(did)"
+        )
+        # ── Trusted devices (Remember 2FA) ────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS trusted_devices (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                username     TEXT    NOT NULL,
+                token_hash   TEXT    NOT NULL UNIQUE,
+                device_label TEXT    DEFAULT '',
+                created_at   REAL    DEFAULT 0,
+                expires_at   REAL    DEFAULT 0,
+                last_used_at REAL    DEFAULT 0,
+                ip           TEXT    DEFAULT '',
+                user_agent   TEXT    DEFAULT ''
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trusted_dev_user "
+            "ON trusted_devices(username)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trusted_dev_exp "
+            "ON trusted_devices(expires_at)"
+        )
+        # ── Reports: templates, schedules, generated history ─────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS report_templates (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                config_json TEXT NOT NULL DEFAULT '{}',
+                created_by  TEXT DEFAULT '',
+                created_at  REAL DEFAULT 0,
+                updated_at  REAL DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS report_schedules (
+                id               TEXT PRIMARY KEY,
+                template_id      TEXT NOT NULL,
+                name             TEXT NOT NULL,
+                freq             TEXT NOT NULL DEFAULT 'monthly',
+                time_str         TEXT NOT NULL DEFAULT '03:00',
+                day_of_week      TEXT DEFAULT '1',
+                day_of_month     INTEGER DEFAULT 1,
+                period           TEXT NOT NULL DEFAULT 'last_month',
+                timezone         TEXT DEFAULT '',
+                recipient_group  INTEGER DEFAULT 0,
+                recipient_emails TEXT DEFAULT '[]',
+                subject_tpl      TEXT DEFAULT '',
+                body_tpl         TEXT DEFAULT '',
+                enabled          INTEGER DEFAULT 1,
+                last_run_ts      REAL DEFAULT 0,
+                next_run_ts      REAL DEFAULT 0,
+                created_by       TEXT DEFAULT '',
+                created_at       REAL DEFAULT 0,
+                updated_at       REAL DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS report_history (
+                id               TEXT PRIMARY KEY,
+                template_id      TEXT,
+                template_name    TEXT DEFAULT '',
+                schedule_id      TEXT DEFAULT '',
+                kind             TEXT DEFAULT '',
+                generated_at     REAL NOT NULL,
+                period_start     REAL DEFAULT 0,
+                period_end       REAL DEFAULT 0,
+                pdf_path         TEXT DEFAULT '',
+                pdf_bytes        INTEGER DEFAULT 0,
+                pdf_sha256       TEXT DEFAULT '',
+                csv_path         TEXT DEFAULT '',
+                csv_bytes        INTEGER DEFAULT 0,
+                report_id        TEXT DEFAULT '',
+                delivery_status  TEXT DEFAULT '',
+                recipients_json  TEXT DEFAULT '[]',
+                render_ms        INTEGER DEFAULT 0,
+                error            TEXT DEFAULT '',
+                triggered_by     TEXT DEFAULT ''
+            )""")
+        # Idempotent migrations for existing installs — add the new columns
+        # to report_history if it was created before they existed.
+        for _col, _def in [
+            ("pdf_sha256",  "TEXT DEFAULT ''"),
+            ("csv_path",    "TEXT DEFAULT ''"),
+            ("csv_bytes",   "INTEGER DEFAULT 0"),
+            ("report_id",   "TEXT DEFAULT ''"),
+        ]:
+            try:
+                con.execute(f"ALTER TABLE report_history ADD COLUMN {_col} {_def}")
+            except Exception:
+                pass
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_hist_gen "
+            "ON report_history(generated_at DESC)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_hist_tpl "
+            "ON report_history(template_id)"
         )
         con.commit()
         # Migration: LDAP group mapping columns (v0.9+)

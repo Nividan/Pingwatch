@@ -65,11 +65,14 @@ def db_cursor(schema: str = "main"):
     else:
         con = sqlite3.connect(_path_for(schema), timeout=15)
         con.row_factory = sqlite3.Row  # Enable dict-like row access
+        cur = None
         try:
             cur = con.cursor()
             yield cur
             con.commit()
         finally:
+            if cur:
+                cur.close()
             con.close()
 
 

@@ -6,15 +6,27 @@ import re
 import ssl
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
 
 from core.config import SYS
 from core.logger import log_sensors
+from core.validation import _HOST_RE
+
+
+def _validate_host_quick(host) -> bool:
+    """Fast non-raising hostname check for the probe hot path.
+
+    Rejects obviously-malformed strings before spawning a subprocess.
+    """
+    return isinstance(host, str) and bool(host) and bool(_HOST_RE.match(host.strip()))
 
 
 def probe_ping(host, timeout=4):
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
     cmd = (["ping", "-n", "2", "-w", str(timeout * 1000), host] if SYS == "Windows"
            else ["ping", "-c", "2", "-W", str(timeout), host])
     try:
@@ -41,6 +53,8 @@ def probe_ping(host, timeout=4):
 
 
 def probe_tcp(host, port, timeout=5):
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
     t0 = time.time()
     try:
         s = socket.create_connection((host, int(port)), timeout=timeout)
@@ -454,10 +468,19 @@ def probe_banner(host, port, banner_regex="", timeout=5):
         s.close(); s = None
         ms = round((time.time() - t0) * 1000, 1)
         if banner_regex:
-            try:
-                ok = bool(re.search(banner_regex, banner))
-            except re.error as exc:
-                return {"ok": False, "ms": ms, "detail": f"Invalid banner regex: {exc}"}
+            _result = [False]
+            _exc    = [None]
+            def _do_match(_r=banner_regex, _b=banner):
+                try:   _result[0] = bool(re.search(_r, _b))
+                except re.error as _e: _exc[0] = _e
+            _mt = threading.Thread(target=_do_match, daemon=True)
+            _mt.start()
+            _mt.join(timeout=2.0)
+            if _mt.is_alive():
+                return {"ok": False, "ms": ms, "detail": "Banner regex timed out"}
+            if _exc[0]:
+                return {"ok": False, "ms": ms, "detail": f"Invalid banner regex: {_exc[0]}"}
+            ok = _result[0]
             status = "matched" if ok else "no match"
             detail = f"Banner {status}: {banner[:60]!r} ({ms}ms)"
         else:

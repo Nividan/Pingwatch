@@ -20,6 +20,15 @@ from core.logger import log
 from db.backend  import is_pg
 from db.helpers  import db_query, db_query_one, db_execute, db_cursor
 
+# Column lists — kept in sync with CREATE TABLE statements in db/core.py and
+# db/pg_schema.py. Decouples query code from schema column order.
+_AP_COLS = "id, name, scope_type, scope_value, enabled, created_at, updated_at"
+_APS_COLS = (
+    "id, profile_id, trigger_state, delay_s, repeat_min, action_ids, sort_order"
+)
+_AAT_COLS = "id, name, atype, config, created_at"
+_APSTATE_COLS = "sig, first_fire_ts, last_fire_ts, fire_count, active_session"
+
 
 # ── Row → dict converters ────────────────────────────────────────
 
@@ -87,7 +96,7 @@ def db_list_profiles() -> list:
     """Return every profile with its stages, in scope-then-name order."""
     rows = db_query(
         "main",
-        "SELECT * FROM alert_profiles ORDER BY scope_type, scope_value, name"
+        f"SELECT {_AP_COLS} FROM alert_profiles ORDER BY scope_type, scope_value, name"
     )
     profiles = [_profile_row(r) for r in rows]
     if not profiles:
@@ -97,14 +106,14 @@ def db_list_profiles() -> list:
         with db_cursor("main") as cur:
             if is_pg():
                 cur.execute(
-                    "SELECT * FROM alert_profile_stages WHERE profile_id = ANY(%s) "
+                    f"SELECT {_APS_COLS} FROM alert_profile_stages WHERE profile_id = ANY(%s) "
                     "ORDER BY profile_id, sort_order, id",
                     (ids,)
                 )
             else:
                 ph = ",".join("?" * len(ids))
                 cur.execute(
-                    f"SELECT * FROM alert_profile_stages WHERE profile_id IN ({ph}) "
+                    f"SELECT {_APS_COLS} FROM alert_profile_stages WHERE profile_id IN ({ph}) "
                     f"ORDER BY profile_id, sort_order, id",
                     ids
                 )
@@ -119,13 +128,13 @@ def db_list_profiles() -> list:
 
 
 def db_get_profile(profile_id: int) -> dict | None:
-    row = db_query_one("main", "SELECT * FROM alert_profiles WHERE id=?", (profile_id,))
+    row = db_query_one("main", f"SELECT {_AP_COLS} FROM alert_profiles WHERE id=?", (profile_id,))
     if not row:
         return None
     p = _profile_row(row)
     stages = db_query(
         "main",
-        "SELECT * FROM alert_profile_stages WHERE profile_id=? "
+        f"SELECT {_APS_COLS} FROM alert_profile_stages WHERE profile_id=? "
         "ORDER BY sort_order, id",
         (profile_id,)
     )
@@ -138,12 +147,12 @@ def db_get_profile_for_scope(scope_type: str, scope_value: str = "") -> dict | N
     if scope_type == "global":
         row = db_query_one(
             "main",
-            "SELECT * FROM alert_profiles WHERE scope_type='global' LIMIT 1"
+            f"SELECT {_AP_COLS} FROM alert_profiles WHERE scope_type='global' LIMIT 1"
         )
     else:
         row = db_query_one(
             "main",
-            "SELECT * FROM alert_profiles WHERE scope_type=? AND scope_value=?",
+            f"SELECT {_AP_COLS} FROM alert_profiles WHERE scope_type=? AND scope_value=?",
             (scope_type, scope_value or "")
         )
     if not row:
@@ -245,12 +254,12 @@ def _write_stages(cur, profile_id: int, stages: list, pg: bool):
 # ── Action template CRUD ─────────────────────────────────────────
 
 def db_list_action_templates() -> list:
-    rows = db_query("main", "SELECT * FROM alert_action_templates ORDER BY name")
+    rows = db_query("main", f"SELECT {_AAT_COLS} FROM alert_action_templates ORDER BY name")
     return [_template_row(r) for r in rows]
 
 
 def db_get_action_template(tpl_id: int) -> dict | None:
-    row = db_query_one("main", "SELECT * FROM alert_action_templates WHERE id=?", (tpl_id,))
+    row = db_query_one("main", f"SELECT {_AAT_COLS} FROM alert_action_templates WHERE id=?", (tpl_id,))
     return _template_row(row) if row else None
 
 
@@ -316,7 +325,7 @@ def _sig(stage_id: int, did: str, sid: str) -> str:
 def db_get_stage_state(stage_id: int, did: str, sid: str) -> dict | None:
     row = db_query_one(
         "main",
-        "SELECT * FROM alert_profile_state WHERE sig=?",
+        f"SELECT {_APSTATE_COLS} FROM alert_profile_state WHERE sig=?",
         (_sig(stage_id, did, sid),)
     )
     if not row:

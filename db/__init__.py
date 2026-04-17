@@ -9,10 +9,15 @@ from db.backend     import is_pg, needs_setup
 
 # core — write queues + schema
 from db.core        import db_init, db_seed_users, db_seed_alert_profiles, \
-                           _db_enqueue, _logs_enqueue, logs_db_init
+                           _db_enqueue, _logs_enqueue, logs_db_init, \
+                           shutdown_writers
 
 # persistence — device/sensor save/load + autosave
-from db.persistence import db_load, db_save, autosave_loop
+from db.persistence import (
+    db_load, db_save, autosave_loop,
+    db_load_anomaly_baselines, db_checkpoint_anomaly_baselines,
+    db_reset_anomaly_baseline,
+)
 
 # samples — buffered probe writes + history queries
 from db.samples     import (
@@ -23,6 +28,7 @@ from db.samples     import (
     db_load_availability,
     db_clean_samples,
     db_rollup_backfill,
+    db_sample_buffer_stats,
 )
 
 # events — flap log, SNMP trap log, sensor error log
@@ -65,6 +71,21 @@ from db.users       import (
     db_reorder_dashboards,
     db_update_profile,
     db_update_own_profile,
+    db_update_theme,
+    # TOTP helpers
+    db_get_totp,
+    db_set_totp,
+    db_clear_totp,
+    # Trusted devices (Remember 2FA)
+    db_get_remember_hours,
+    db_set_remember_hours,
+    db_add_trusted_device,
+    db_lookup_trusted_device,
+    db_touch_trusted_device,
+    db_list_trusted_devices,
+    db_revoke_trusted_device,
+    db_revoke_trusted_devices,
+    db_sweep_expired_trusted_devices,
 )
 
 # groups
@@ -143,6 +164,29 @@ from db.licenses    import (
     db_license_summary,
 )
 
+# reports (templates, schedules, generated history)
+from db.reports     import (
+    db_list_report_templates,
+    db_get_report_template,
+    db_create_report_template,
+    db_update_report_template,
+    db_delete_report_template,
+    db_list_report_schedules,
+    db_get_report_schedule,
+    db_list_schedules_for_template,
+    db_create_report_schedule,
+    db_update_report_schedule,
+    db_set_schedule_enabled,
+    db_record_schedule_run,
+    db_delete_report_schedule,
+    db_list_report_history,
+    db_get_report_history,
+    db_add_report_history,
+    db_update_report_history_delivery,
+    db_delete_report_history,
+    db_prune_report_history,
+)
+
 # backups
 from db.backups     import (
     db_get_backup_list,
@@ -164,13 +208,15 @@ __all__ = [
     "is_pg", "needs_setup",
     # core
     "db_init", "db_seed_users", "db_seed_alert_profiles", "_db_enqueue",
-    "_logs_enqueue", "logs_db_init",
+    "_logs_enqueue", "logs_db_init", "shutdown_writers",
     # persistence
     "db_load", "db_save", "autosave_loop",
+    "db_load_anomaly_baselines", "db_checkpoint_anomaly_baselines",
+    "db_reset_anomaly_baseline",
     # samples
     "db_buffer_sample", "db_flush_samples",
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
-    "db_rollup_backfill",
+    "db_rollup_backfill", "db_sample_buffer_stats",
     # events
     "db_log_flap", "db_load_flaps", "db_auto_resolve_flap", "db_ack_flap", "db_ack_flaps_by_sensor", "db_resolve_flap", "db_resolve_flaps_by_sensor", "db_resolve_all_flaps", "db_count_active_flaps", "db_count_active_flaps_by_severity",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",
@@ -184,6 +230,13 @@ __all__ = [
     "db_rename_dashboard", "db_delete_dashboard", "db_save_dashboard",
     "db_reorder_dashboards",
     "db_update_profile", "db_update_own_profile",
+    # TOTP helpers
+    "db_get_totp", "db_set_totp", "db_clear_totp",
+    # Trusted devices
+    "db_get_remember_hours", "db_set_remember_hours",
+    "db_add_trusted_device", "db_lookup_trusted_device", "db_touch_trusted_device",
+    "db_list_trusted_devices", "db_revoke_trusted_device",
+    "db_revoke_trusted_devices", "db_sweep_expired_trusted_devices",
     # groups
     "db_list_groups", "db_create_group", "db_update_group", "db_delete_group",
     "db_update_group_members", "db_resolve_group_emails", "db_get_ldap_mapped_groups",
@@ -206,6 +259,16 @@ __all__ = [
     "db_log_event", "db_list_events", "db_count_active", "db_get_event",
     "db_ack_event", "db_resolve_event", "db_auto_resolve_event",
     "db_resolve_all_active", "db_has_acked_event", "db_has_active_event",
+    # reports
+    "db_list_report_templates", "db_get_report_template",
+    "db_create_report_template", "db_update_report_template", "db_delete_report_template",
+    "db_list_report_schedules", "db_get_report_schedule",
+    "db_list_schedules_for_template",
+    "db_create_report_schedule", "db_update_report_schedule",
+    "db_set_schedule_enabled", "db_record_schedule_run", "db_delete_report_schedule",
+    "db_list_report_history", "db_get_report_history",
+    "db_add_report_history", "db_update_report_history_delivery",
+    "db_delete_report_history", "db_prune_report_history",
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",

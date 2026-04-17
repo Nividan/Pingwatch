@@ -65,7 +65,7 @@ def _create_session(clean: str, role: str):
             log.error(f"Session save error: {e}")
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE username=?", (clean,))
                 con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
@@ -179,7 +179,7 @@ def auth_login(username: str, password: str):
             return None
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 row = con.execute(
                     "SELECT pw_hash, role, auth_type, group_id FROM users WHERE username=?",
@@ -316,7 +316,7 @@ def auth_logout(token: str):
             pass
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE token=?", (_hash_token(token),))
                 con.commit()
@@ -343,7 +343,7 @@ def auth_revoke_user_sessions(username: str):
             log.error(f"Session revoke error: {e}")
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE username=?", (username,))
                 con.commit()
@@ -367,7 +367,7 @@ def auth_verify_current(username: str, password: str) -> bool:
             return False
     else:
         try:
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 row = con.execute("SELECT pw_hash FROM users WHERE username=?", (username,)).fetchone()
             finally:
@@ -425,7 +425,7 @@ def auth_check(token: str):
     else:
         try:
             h = _hash_token(token)
-            con = sqlite3.connect(DB_PATH)
+            con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 row = con.execute(
                     "SELECT s.username, s.expires, u.role "
@@ -455,3 +455,167 @@ def auth_check_role(token: str):
     if not s or s["expires"] < time.time():
         return None
     return s.get("role", "viewer")
+
+
+# ── TOTP (RFC 6238 — Google Authenticator compatible) ────────────
+
+# Pending TOTP challenges keyed by short-lived id. Issued on POST /api/login when
+# the user has TOTP enabled; consumed by POST /api/login/totp.
+_TOTP_CHALLENGES: dict = {}        # cid -> {username, role, expires}
+_TOTP_CHALLENGE_LOCK         = threading.Lock()
+_TOTP_CHALLENGE_TTL_SEC      = 300   # 5 minutes
+
+
+def totp_available() -> bool:
+    """Return True if the optional pyotp dependency is importable."""
+    try:
+        import pyotp  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def totp_generate_secret() -> str:
+    import pyotp
+    return pyotp.random_base32()
+
+
+def totp_provisioning_uri(username: str, secret: str, issuer: str = "PingWatch") -> str:
+    import pyotp
+    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
+
+
+def totp_qr_data_url(uri: str) -> str:
+    """Render ``uri`` as a QR code SVG, return a base64 data URL (``data:image/svg+xml;base64,...``).
+
+    SVG is used (not PNG) so the ``qrcode`` lib works without Pillow — qrcode 8.x
+    no longer pulls Pillow as a transitive dep. Returns an empty string if the
+    optional ``qrcode`` dep is not installed.
+    """
+    try:
+        import io, base64
+        import qrcode
+        import qrcode.image.svg
+        # SvgPathImage merges all modules into one <path>, avoiding subpixel gaps
+        # that SvgImage (one <rect> per module) produces when the browser downscales.
+        # border=4 is the QR-spec quiet zone — some scanners (e.g. Ente Auth) require it.
+        img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=4)
+        buf = io.BytesIO()
+        img.save(buf)
+        return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as e:
+        log.warning(f"totp_qr: failed to render QR code ({type(e).__name__}: {e})")
+        return ""
+
+
+def totp_verify(secret: str, code: str) -> bool:
+    if not secret or not code:
+        return False
+    try:
+        import pyotp
+        return pyotp.TOTP(secret).verify(str(code).strip(), valid_window=1)
+    except Exception:
+        return False
+
+
+def totp_generate_recovery_codes(n: int = 10) -> tuple:
+    """Return (plaintext_list, hashed_list_json_string).
+
+    Plaintext is shown to the user once (download/print). The hashed list is
+    persisted; consumption removes the hash from the JSON array.
+    """
+    import json
+    plain  = ["-".join(secrets.token_hex(2) for _ in range(2)) for _ in range(n)]  # e.g. abcd-1234
+    hashed = [hashlib.sha256(c.encode()).hexdigest() for c in plain]
+    return plain, json.dumps(hashed)
+
+
+def totp_consume_recovery(stored_json: str, code: str) -> tuple:
+    """If `code` matches one of the hashed codes in `stored_json`, return
+    (True, new_json_with_code_removed). Otherwise return (False, stored_json)."""
+    import json
+    if not stored_json or not code:
+        return False, stored_json
+    try:
+        hashed_list = json.loads(stored_json)
+    except Exception:
+        return False, stored_json
+    code_hash = hashlib.sha256(str(code).strip().encode()).hexdigest()
+    if code_hash in hashed_list:
+        hashed_list.remove(code_hash)
+        return True, json.dumps(hashed_list)
+    return False, stored_json
+
+
+def totp_create_challenge(username: str, role: str) -> str:
+    """Issue a short-lived challenge id for the second-factor step."""
+    cid = secrets.token_urlsafe(24)
+    with _TOTP_CHALLENGE_LOCK:
+        # Opportunistic GC of expired entries
+        now = time.time()
+        for k in [k for k, v in _TOTP_CHALLENGES.items() if v["expires"] < now]:
+            _TOTP_CHALLENGES.pop(k, None)
+        _TOTP_CHALLENGES[cid] = {
+            "username": username,
+            "role":     role,
+            "expires":  now + _TOTP_CHALLENGE_TTL_SEC,
+        }
+    return cid
+
+
+def totp_resolve_challenge(cid: str) -> dict:
+    """Return {username, role} for a valid challenge, or None. Does NOT consume."""
+    with _TOTP_CHALLENGE_LOCK:
+        entry = _TOTP_CHALLENGES.get(cid)
+        if not entry or entry["expires"] < time.time():
+            return None
+        return {"username": entry["username"], "role": entry["role"]}
+
+
+def totp_consume_challenge(cid: str) -> None:
+    with _TOTP_CHALLENGE_LOCK:
+        _TOTP_CHALLENGES.pop(cid, None)
+
+
+def parse_user_agent_label(ua: str) -> str:
+    """Derive a short human-readable label from a User-Agent string.
+
+    Examples:
+      "Mozilla/5.0 (Windows NT 10.0; Win64) ... Chrome/120.0 ..."  → "Chrome on Windows"
+      "Mozilla/5.0 (Macintosh; ...) ... Safari/537.36"             → "Safari on macOS"
+      "Mozilla/5.0 (X11; Linux ...) ... Firefox/121.0"             → "Firefox on Linux"
+    No external library — simple substring checks are good enough.
+    """
+    if not ua:
+        return "Unknown browser"
+    ua_l = ua.lower()
+
+    # Browser
+    if "edg/" in ua_l or "edge/" in ua_l:
+        browser = "Edge"
+    elif "opr/" in ua_l or "opera" in ua_l:
+        browser = "Opera"
+    elif "chrome/" in ua_l or "chromium/" in ua_l:
+        browser = "Chrome"
+    elif "firefox/" in ua_l:
+        browser = "Firefox"
+    elif "safari/" in ua_l:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+
+    # OS
+    if "windows" in ua_l:
+        os_name = "Windows"
+    elif "macintosh" in ua_l or "mac os" in ua_l:
+        os_name = "macOS"
+    elif "iphone" in ua_l or "ipad" in ua_l:
+        os_name = "iOS"
+    elif "android" in ua_l:
+        os_name = "Android"
+    elif "linux" in ua_l:
+        os_name = "Linux"
+    else:
+        os_name = "Unknown OS"
+
+    return f"{browser} on {os_name}"

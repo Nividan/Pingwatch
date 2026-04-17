@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ── Inventory headline ─────────────────────────────────────────── -->
+<section class="section">
+  <h1>Estate overview</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr><th>Devices</th><td>{{ inventory.devices }}</td></tr>
+        <tr><th>Sensors</th><td>{{ inventory.sensors }}</td></tr>
+        <tr><th>Devices up</th><td class="{% if inventory.dev_up %}up{% endif %}">{{ inventory.dev_up }}</td></tr>
+        <tr><th>Devices warn</th><td class="{% if inventory.dev_warn %}warn{% endif %}">{{ inventory.dev_warn }}</td></tr>
+        <tr><th>Devices down</th><td class="{% if inventory.dev_down %}crit{% endif %}">{{ inventory.dev_down }}</td></tr>
+      </table>
+    </div>
+    <div class="col">
+      <table class="kv">
+        <tr><th>Users</th><td>{{ users.total }}</td></tr>
+        <tr><th>Admins</th><td>{{ users.admin }}</td></tr>
+        <tr><th>Operators</th><td>{{ users.operator }}</td></tr>
+        <tr><th>Viewers</th><td>{{ users.viewer }}</td></tr>
+        <tr><th>LDAP-sourced</th><td>{{ users.ldap }}</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── Device health scores ──────────────────────────────────────── -->
+{% if device_health %}
+<section class="section">
+  <h1>Device health scores</h1>
+  <p class="muted small">Composite 0–100 per device over the reporting period. Green ≥ 90 · Amber ≥ 70 · Red &lt; 70.</p>
+  <table class="data compact">
+    <thead>
+      <tr>
+        <th>Device</th><th>Host</th><th>Group</th>
+        <th>Uptime</th><th>Incidents</th><th>Status</th><th>Score</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in device_health %}
+      <tr>
+        <td>{{ d.dname }}</td>
+        <td class="mono">{{ d.host }}</td>
+        <td>{{ d.group }}</td>
+        <td class="{{ d.uptime_pct | statuspct }}">{{ d.uptime_pct | pctfmt(2) }}</td>
+        <td>{{ d.incidents }}</td>
+        <td class="{% if d.current == 'down' %}crit{% elif d.current == 'warn' %}warn{% else %}up{% endif %}">{{ d.current }}</td>
+        <td><span class="hs hs-{{ d.band }}">{{ d.score }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- ── Backup coverage ───────────────────────────────────────────── -->
+<section class="section">
+  <h1>Device configuration backups</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr><th>Devices configured for backup</th><td>{{ backup_coverage.total }}</td></tr>
+        <tr><th>Recent (&lt;7 days)</th><td class="up">{{ backup_coverage.recent }}</td></tr>
+        <tr><th>Stale (&gt;7 days)</th><td class="warn">{{ backup_coverage.stale }}</td></tr>
+        <tr><th>Never backed up</th><td class="crit">{{ backup_coverage.never }}</td></tr>
+      </table>
+    </div>
+    <div class="col">
+      {% if backup_coverage.total %}
+        <div class="headline-number" style="font-size:30pt">
+          {{ (backup_coverage.recent / backup_coverage.total * 100) | round(0) | int }}%
+        </div>
+        <div class="muted small">of devices have a current backup</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if backup_coverage.stale_list %}
+    <h2 style="margin-top:14pt">Stale backups</h2>
+    <table class="data compact">
+      <thead><tr><th>Device</th><th>Last backup</th><th>Age</th></tr></thead>
+      <tbody>
+        {% for b in backup_coverage.stale_list[:20] %}
+        <tr>
+          <td>{{ b.dname }}</td>
+          <td class="mono">{{ b.last_ts | datefmt('%Y-%m-%d %H:%M') }}</td>
+          <td class="warn">{{ b.days }} days</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  {% if backup_coverage.never_list %}
+    <h2 style="margin-top:14pt">Never backed up</h2>
+    <table class="data compact">
+      <thead><tr><th>Device</th></tr></thead>
+      <tbody>
+        {% for b in backup_coverage.never_list[:20] %}
+        <tr><td>{{ b.dname }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+
+<!-- ── IPAM utilisation ──────────────────────────────────────────── -->
+{% if ipam %}
+<section class="section">
+  <h1>IP address utilisation</h1>
+  <table class="data compact">
+    <thead>
+      <tr><th>Subnet (CIDR)</th><th>Name</th><th>Capacity</th><th>Used</th><th>Utilisation</th></tr>
+    </thead>
+    <tbody>
+      {% for s in ipam %}
+      <tr>
+        <td class="mono">{{ s.cidr }}</td>
+        <td>{{ s.name }}</td>
+        <td>{{ s.total }}</td>
+        <td>{{ s.used }}</td>
+        <td class="{% if s.pct_used and s.pct_used > 85 %}warn{% elif s.pct_used and s.pct_used > 95 %}crit{% endif %}">
+          {% if s.pct_used is not none %}{{ s.pct_used }}%{% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- ── License expiry ────────────────────────────────────────────── -->
+{% if licenses and licenses.total %}
+<section class="section">
+  <h1>License status</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr><th>Tracked licenses</th><td>{{ licenses.total }}</td></tr>
+        <tr><th>OK</th><td class="up">{{ licenses.ok }}</td></tr>
+        <tr><th>Warning</th><td class="warn">{{ licenses.warn }}</td></tr>
+        <tr><th>Critical</th><td class="crit">{{ licenses.crit }}</td></tr>
+        <tr><th>Expired</th><td class="crit">{{ licenses.expired }}</td></tr>
+      </table>
+    </div>
+  </div>
+  {% if licenses.expiring_list %}
+    <h2 style="margin-top:14pt">Expiring within 90 days</h2>
+    <table class="data compact">
+      <thead><tr><th>Device</th><th>License</th><th>Expires</th><th>Days left</th></tr></thead>
+      <tbody>
+        {% for l in licenses.expiring_list %}
+        <tr>
+          <td>{{ l.dname }}</td>
+          <td>{{ l.name }}</td>
+          <td class="mono">{{ l.expires }}</td>
+          <td class="{% if l.days <= 0 %}crit{% elif l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── TLS certificates ──────────────────────────────────────────── -->
+{% if tls_expiring %}
+<section class="section">
+  <h1>TLS certificates expiring within 90 days</h1>
+  <table class="data compact">
+    <thead>
+      <tr><th>Device</th><th>Sensor</th><th>Host</th><th>Days left</th></tr>
+    </thead>
+    <tbody>
+      {% for c in tls_expiring %}
+      <tr>
+        <td>{{ c.dname }}</td>
+        <td>{{ c.sname }}</td>
+        <td class="mono">{{ c.host }}</td>
+        <td class="{% if c.days <= 0 %}crit{% elif c.days <= 30 %}warn{% endif %}">{{ c.days }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- ── Device inventory ──────────────────────────────────────────── -->
+<section class="section">
+  <h1>Device inventory ({{ inventory_devices | length }})</h1>
+  <table class="data compact">
+    <thead>
+      <tr>
+        <th>Device</th><th>Host</th><th>Group</th>
+        <th>Sensors</th><th>Up</th><th>Down</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in inventory_devices %}
+      <tr>
+        <td>{{ d.dname }}</td>
+        <td class="mono">{{ d.host }}</td>
+        <td>{{ d.group }}</td>
+        <td>{{ d.sensor_count }}</td>
+        <td class="up">{{ d.up }}</td>
+        <td class="{% if d.down %}crit{% endif %}">{{ d.down }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- ── Recent admin activity ─────────────────────────────────────── -->
+{% if audit_recent %}
+<section class="section">
+  <h1>Recent administrative activity</h1>
+  <table class="data compact">
+    <thead><tr><th>When</th><th>User</th><th>Action</th><th>Target</th></tr></thead>
+    <tbody>
+      {% for a in audit_recent[:30] %}
+      <tr>
+        <td class="mono">{{ a.ts | datefmt('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ a.actor }}</td>
+        <td class="mono">{{ a.action }}</td>
+        <td class="muted small">{{ a.target or a.detail or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% endblock %}
