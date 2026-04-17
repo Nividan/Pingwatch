@@ -394,14 +394,52 @@ def _classify_config_issues(flaps: list) -> tuple:
 
 # ── Outage clustering ─────────────────────────────────────────────────
 
-def _cluster_flaps_into_outages(flaps: list, idle_gap_s: float = 300.0) -> list:
+def _currently_bad_sensor_keys() -> set:
+    """Return {(did, sid)} for sensors that are CURRENTLY in a bad state.
+
+    "Bad" = ``alive is False`` OR ``threshold_state`` in {warn, crit}. Used to
+    distinguish a truly-still-open incident from a historical flap_log row
+    that simply never had ``resolved_at`` written (older builds recorded
+    resolutions lazily, so many resolved rows carry 0). Without this cross-
+    check, every such row would render as "open" — misleading the reader.
+    """
+    bad = set()
+    try:
+        from core.app_state import STATE
+    except Exception:
+        return bad
+    try:
+        with STATE._lock:
+            for dev in STATE.devices.values():
+                for sid, s in dev.sensors.items():
+                    if not getattr(s, "running", True):
+                        continue
+                    alive = getattr(s, "alive", True)
+                    thr = (getattr(s, "threshold_state", "") or "").lower()
+                    if alive is False or thr in ("warn", "crit", "threshold_warn", "threshold_crit"):
+                        bad.add((dev.device_id, sid))
+    except Exception as e:
+        log.debug(f"reports.data _currently_bad_sensor_keys failed: {e}")
+    return bad
+
+
+def _cluster_flaps_into_outages(flaps: list, idle_gap_s: float = 300.0,
+                                currently_bad: set = None) -> list:
     """Collapse consecutive bad-state events for the same (did, sid) into
     one outage row — the managerial view of ``incident_log``.
 
     A new outage starts when the gap between the previous event's recovery
     (``resolved_at`` — or ``ts`` if never resolved) and the next event's
     ``ts`` exceeds ``idle_gap_s`` seconds. Default 5 minutes.
+
+    ``currently_bad`` is a set of (did, sid) tuples from STATE whose sensors
+    are presently unhealthy. Only outages for keys in this set may be flagged
+    ``ongoing=True`` — historical rows with a missing ``resolved_at`` are
+    reported with an unknown duration rather than a misleading "open".
     """
+    if currently_bad is None:
+        currently_bad = _currently_bad_sensor_keys()
+
     by_sensor: dict = {}
     for f in flaps:
         key = (f.get("did"), f.get("sid"))
@@ -411,6 +449,7 @@ def _cluster_flaps_into_outages(flaps: list, idle_gap_s: float = 300.0) -> list:
 
     outages = []
     for (did, sid), events in by_sensor.items():
+        is_live_bad = (did, sid) in currently_bad
         events.sort(key=lambda r: r.get("ts") or 0)
         cur = None
         for f in events:
@@ -426,10 +465,10 @@ def _cluster_flaps_into_outages(flaps: list, idle_gap_s: float = 300.0) -> list:
             if ts - prev_end <= idle_gap_s:
                 _merge_into_outage(cur, f)
             else:
-                outages.append(_finalise_outage(cur))
+                outages.append(_finalise_outage(cur, is_live_bad))
                 cur = _new_outage_from(f)
         if cur is not None:
-            outages.append(_finalise_outage(cur))
+            outages.append(_finalise_outage(cur, is_live_bad))
 
     # Most recent first
     outages.sort(key=lambda o: -o["first_ts"])
@@ -467,10 +506,13 @@ def _merge_into_outage(cur: dict, f: dict):
         cur["_any_open"] = True
 
 
-def _finalise_outage(cur: dict) -> dict:
+def _finalise_outage(cur: dict, is_live_bad: bool = False) -> dict:
     end = cur["_running_end"] or None
     first = cur["first_ts"]
-    ongoing = cur["_any_open"] and not end
+    # ONLY flag ongoing when the sensor is still unhealthy right now. Without
+    # that cross-check, every historical flap with a missing resolved_at would
+    # claim to be open — which is exactly the bug the UI surfaced.
+    ongoing = bool(cur["_any_open"] and not end and is_live_bad)
     duration_s = None
     if end and end >= first:
         duration_s = end - first
@@ -491,7 +533,8 @@ def _finalise_outage(cur: dict) -> dict:
 # ── Major incident detection ──────────────────────────────────────────
 
 def _detect_major_incidents(flaps: list, min_devices: int = 10,
-                            gap_minutes: int = 5) -> list:
+                            gap_minutes: int = 5,
+                            currently_bad: set = None) -> list:
     """Cluster simultaneous device-DOWN events into single Major Incidents.
 
     Only ``direction='down'`` rows count — threshold_crit is a value threshold,
@@ -503,6 +546,8 @@ def _detect_major_incidents(flaps: list, min_devices: int = 10,
     """
     if min_devices < 1:
         min_devices = 1
+    if currently_bad is None:
+        currently_bad = _currently_bad_sensor_keys()
     downs = [f for f in flaps if (f.get("direction") or "").lower() == "down"]
     if not downs:
         return []
@@ -550,7 +595,13 @@ def _detect_major_incidents(flaps: list, min_devices: int = 10,
             continue
         start_ts = min(f.get("ts") or 0 for f in w)
         resolves = [f.get("resolved_at") or 0 for f in w]
-        unresolved = any(r == 0 for r in resolves)
+        # A cluster counts as "ongoing" only if SOME event in it has no
+        # resolve stamp AND at least one of that cluster's sensors is still
+        # unhealthy right now. Two-week-old flaps that were never resolve-
+        # stamped are not ongoing — they're just unrecorded.
+        unstamped_keys = {(f.get("did"), f.get("sid"))
+                          for f in w if not (f.get("resolved_at") or 0)}
+        unresolved = bool(unstamped_keys & currently_bad)
         end_ts = max(resolves) if any(resolves) else None
         duration_s = None
         if end_ts and end_ts >= start_ts and not unresolved:
@@ -1249,13 +1300,30 @@ def build_report_context(kind: str,
     noisy        = _top_noisy_sensors(clean_flaps, top_noisy_n)
     mtr          = _mttr_mtbf(clean_flaps, window_s)
 
+    # Compute the "live bad" set once — reused by outage clustering AND by
+    # the raw-event list to decide whether a row with resolved_at=0 is truly
+    # ongoing or just a historical row that was never resolve-stamped.
+    currently_bad = _currently_bad_sensor_keys() if need_flaps else set()
+
+    # Annotate raw flaps with the real open/closed state the template should
+    # display. A row is only "open" when resolved_at=0 AND the sensor is
+    # unhealthy right now; otherwise the duration is simply unknown.
+    for f in clean_flaps:
+        resolved = f.get("resolved_at") or 0
+        f["is_open"] = bool(not resolved and (f.get("did"), f.get("sid")) in currently_bad)
+    for f in flaps:
+        resolved = f.get("resolved_at") or 0
+        f["is_open"] = bool(not resolved and (f.get("did"), f.get("sid")) in currently_bad)
+
     # Detect Major Incidents early so we can (a) expose them to templates that
     # want them, and (b) suppress redundant per-sensor outages from the main
     # Incident Log. Threshold follows the user's option when Custom, else 10.
     major_min_cfg = int(opts.get("major_min_devices", 10)) if is_custom else 10
-    majors = _detect_major_incidents(clean_flaps, min_devices=major_min_cfg) \
-             if need_flaps else []
-    outages = _cluster_flaps_into_outages(clean_flaps) if need_flaps else []
+    majors = (_detect_major_incidents(clean_flaps, min_devices=major_min_cfg,
+                                      currently_bad=currently_bad)
+              if need_flaps else [])
+    outages = (_cluster_flaps_into_outages(clean_flaps, currently_bad=currently_bad)
+               if need_flaps else [])
     outages = _suppress_outages_in_majors(outages, majors)
 
     # ── Company branding ─────────────────────────────────────────────

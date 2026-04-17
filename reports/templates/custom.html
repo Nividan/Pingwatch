@@ -319,7 +319,7 @@
           <td>{{ f.dname }}</td>
           <td>{{ f.sname }}</td>
           <td class="{{ f.direction | severity_class }}">{{ f.direction }}</td>
-          <td>{{ f.duration | durfmt_flap(not f.resolved_at) }}</td>
+          <td>{{ f.duration | durfmt_flap(f.is_open) }}</td>
           <td class="muted small">{{ f.detail | cleandetail }}</td>
         </tr>
         {% endfor %}
