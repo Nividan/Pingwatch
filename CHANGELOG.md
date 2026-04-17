@@ -4,6 +4,16 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## Settings UI & observability improvements
+
+- **LDAP/AD status badge** — Integrations tab now shows a live status dot for LDAP/AD alongside the existing SMTP and Syslog dots; `core/ldap_auth.py` tracks the last success/failure timestamp via `_record_ok()` / `_record_err()` hooks wired into `ldap_test_connection`, `ldap_authenticate`, and `ldap_sync_groups`; `get_ldap_status()` returns `ok` / `error` / `configured` / `unconfigured`; `GET /api/settings` now includes `ldap_status` alongside `smtp_status` and `syslog_status`
+- **Log time-range filter expanded** — added 3 h, 6 h, and 12 h presets; default changed from "All time" to "6 h"; `_logFilter` initialised with `timeRange: '6h'`; `_clearLogFilters()` resets to 6 h
+- **Custom log date range** — new "Custom range…" option in the log time filter reveals inline `datetime-local` pickers (From / To); sends `after=` / `before=` query params to the log API (T → space conversion for backend compatibility); `_logFilter.customFrom` / `_logFilter.customTo` managed by `_onLogFilterChange()`
+- **Syslog settings cleanup** — removed the redundant "Minimum Severity" dropdown from the "Alert Event Forwarding" section; "Application Log Forwarding" retains its "Minimum Level" filter
+- **Startup log deduplication** — removed a redundant `"PostgreSQL pool ready"` log line from `server.py` that duplicated the message already emitted by `db/pg_pool.py::pg_init_pool()` (which includes `min=`/`max=` pool size detail)
+
+---
+
 ## Reports polish — aggregation, honest durations, manager-ready sections
 
 - **Custom report kind** — grouped section-picker modal (Availability / Incidents / Health / Inventory / Other) with `exec` / `tech` / `inv` presets; per-section options (top-N, booleans, thresholds); saved in the template's `config.sections` + `config.options` and round-tripped through the editor

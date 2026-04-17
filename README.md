@@ -36,7 +36,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
 - 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays and repeat intervals; cascade resolution (sensor → device → group → global) so one global profile covers everything while individual scopes can override; reusable action templates (email, webhook, syslog, browser push); maintenance window suppression
-- 🧠 Learned-baseline anomaly detection (opt-in per sensor) — EWMA mean + variance per sensor detects latency deviations beyond static thresholds; upper-tail only with variance floor, 3-sample debounce, and 24 h cold-start suppression to keep alert fatigue low; baseline is checkpointed hourly and restored on restart; fires `warn` only (never `crit`) so static thresholds remain the authoritative critical ladder. Admin controls under Settings → Sensors: master switch, auto-enable on new sensors, and a one-click "Enable on all supported sensors" backfill
+- 🧠 Learned-baseline anomaly detection (opt-in per sensor) — EWMA-based upper-tail detection for latency deviations beyond static thresholds; fires `warn` only, never overrides crit; admin controls in Settings → Sensors (master switch, auto-enable, bulk enable)
 - 🏷 Alert tagging on sensor events — severity badge, profile name, and state shown inline; ACK / Resolve without leaving the Events tab; Events tab split into **Active** (unresolved, badge count) and **History** (resolved) inner tabs — SNMP traps without an alert rule go to History automatically
 - 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
 - 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
@@ -44,7 +44,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🌐 Web-based dashboard with live latency sparklines, customizable widgets, and multi-dashboard tabs — create named dashboards (e.g. "NOC", "Server Room") per user; tab bar with right-click rename/delete; new users get a pre-populated default layout
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
-- 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; authenticator-app QR enrolment, recovery codes, admin device reset; "Remember this device" trusted-device tokens (server-side, revocable, configurable up to 30 days)
+- 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; QR enrolment, recovery codes, admin reset; revocable "Remember this device" trusted-device tokens
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
 - 📤 Database export and import (individual DBs or full ZIP bundle)
 - 🖥 Native desktop status window with optional system-tray icon
@@ -61,12 +61,12 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
 - 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
 - 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
-- 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi, 16 metrics across CPU, memory, disk, datastore, network, and system; grouped VM display with collapsible rows, per-metric smart thresholds, bulk add, and group-level mute toggle
+- 🖥 VMware vSphere monitoring — discover VMs from vCenter/ESXi; 16 metrics across CPU, memory, disk, datastore, network, system; grouped display with smart thresholds and bulk add
 - ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
 - 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
-- 🔭 Subnet Discovery — scan a CIDR range for unmonitored hosts; two modes (Full: ping + DNS + port scan + device-type guess; Ping only: fast scan for large networks); multi-select results table with MAC/vendor, open ports, multi-NIC duplicate detection, per-device sensor review, and one-click bulk add; **per-device group assignment** — set a default group for the entire batch or override individual rows; maximum scan size /16 (65 534 hosts) with tiered runtime warnings and cancellation support
-- 📋 Device License Tracking — attach software/hardware licenses to any device with expiry dates, configurable warn/critical thresholds (days before expiry), and free-text notes; automatic status check every 6 hours fires Warning/Critical events into the Events tab (deduplication via `last_status` — only fires on state change); recovery event auto-resolves the active alert when a license is renewed; license status badges (Valid / Expiring / Expired) in the Edit Device modal and IPAM table; License Overview dashboard widget shows KPI counts and a sorted table of upcoming expirations; real-time SSE updates on status change
-- 📊 Scheduled PDF/CSV Reports — three fixed kinds (Executive Summary, Technical/Operations, Inventory & Compliance) plus a **Custom** kind with a grouped section picker and presets; template + schedule + history management under a dedicated Reports tab; rendered via WeasyPrint (HTML+CSS → PDF) with inline Matplotlib charts; browser preview, Run Now, test-send; custom period picker (last 7d / 30d / 90d / last month / quarter / year / custom range); compare-to-previous-period deltas on uptime/incidents/MTTR; incident severity filter; optional CSV sidecar (UTF-8 BOM, multi-section, Excel-friendly); scheduled email delivery; deterministic 12-char Report ID + SHA-256 fingerprint; retention auto-prune; PDF/A-1b / 2b / 3b compliance mode for regulated industries. **Manager-ready content**: aggregated incident log (one row per outage instead of per raw event) with optional raw-event drill-down; **Major Incidents** auto-grouped when ≥N devices go DOWN inside a 5-minute window (configurable threshold); **Device Health Scores** (composite 0–100 with green/amber/red bands); **Sensor configuration issues** surfaced separately from real outages and rolled up per (device, issue) so one root cause = one row; honest durations ("open" only when the sensor is still unhealthy right now, never for historical rows missing a resolve timestamp); **multi-select bulk delete** in the History tab
+- 🔭 Subnet Discovery — scan a CIDR range (up to /16) for unmonitored hosts; Full (ping + DNS + port scan + device-type guess) and Ping-only modes; multi-NIC duplicate detection, per-device sensor review, per-row group assignment, one-click bulk add
+- 📋 Device License Tracking — attach software/hardware licenses to devices with expiry dates and configurable warn/critical thresholds; 6-hourly status check fires Warning/Critical events with auto-resolve on renewal; status badges in the Edit Device modal and IPAM table; License Overview dashboard widget
+- 📊 Scheduled PDF/CSV Reports — Executive / Technical / Inventory / Custom kinds rendered via WeasyPrint + Matplotlib; period picker with compare-to-previous deltas; CSV sidecar; aggregated incident log, Major Incidents clustering, Device Health Scores; deterministic Report ID + SHA-256 fingerprint; PDF/A-1b/2b/3b compliance mode; scheduled email delivery; History tab with bulk delete. See [DEVELOPER.md](DEVELOPER.md#reports) for architecture
 
 ### Supported Sensor Types
 
@@ -199,7 +199,7 @@ Default ports: HTTP `7070`, HTTPS `8443`, SNMP trap `1162` (all configurable).
 
 ## Syslog Forwarding
 
-Forward events to any RFC 5424 syslog server via UDP or TCP. Configure in **Settings → Syslog**: host, port, protocol, and minimum severity (`critical` / `warning` / `down` / `recovered` / `info`). Non-blocking daemon queue — monitor threads are never stalled. Changes take effect immediately without restart.
+Forward events to any RFC 5424 syslog server over UDP or TCP. Configure host, port, and protocol in **Settings → Syslog**; application log forwarding has its own minimum-level filter. Non-blocking daemon queue — monitor threads are never stalled; changes apply without restart.
 
 ---
 
