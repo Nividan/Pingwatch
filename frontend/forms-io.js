@@ -4,11 +4,14 @@ async function _exportFile(apiPath, defaultName, btnEl, btnLabel){
   try{
     const r=await fetch(apiPath);
     if(!r.ok){toast('Export failed: '+r.status,'err');return;}
+    const cd=r.headers.get('Content-Disposition')||'';
+    const m=cd.match(/filename\*?=(?:UTF-8'')?"?([^"";]+)"?/i);
+    const serverName=m?decodeURIComponent(m[1]):'';
     const blob=await r.blob();
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
     a.href=url;
-    a.download=defaultName;
+    a.download=serverName||defaultName;
     a.click();
     URL.revokeObjectURL(url);
     toast('Downloaded','ok');
