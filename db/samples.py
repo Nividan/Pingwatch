@@ -138,10 +138,17 @@ def db_flush_samples():
     _do_insert_samples(rows)
 
 
+_flush_stop = threading.Event()
+
+
 def _sample_flush_loop():
-    """Every 5 s drain the buffer and enqueue a write (serialised with VACUUM)."""
-    while True:
-        time.sleep(5)
+    """Every 5 s drain the buffer and enqueue a write (serialised with VACUUM).
+    Exits promptly when _flush_stop is set so shutdown doesn't race the pool close."""
+    while not _flush_stop.is_set():
+        # Wait() returns True when the event fires — lets shutdown short-circuit
+        # the 5s interval instead of sleeping through it.
+        if _flush_stop.wait(5):
+            break
         with _SAMPLE_BUF_LOCK:
             if not _SAMPLE_BUF:
                 continue
@@ -151,7 +158,13 @@ def _sample_flush_loop():
         _logs_enqueue(lambda r=rows: _do_insert_samples(r))
 
 
-threading.Thread(target=_sample_flush_loop, daemon=True).start()
+def stop_sample_flush() -> None:
+    """Stop the periodic flush loop (called at shutdown before pg_close_pool)."""
+    _flush_stop.set()
+
+
+_flush_thread = threading.Thread(target=_sample_flush_loop, daemon=True, name="sample-flush")
+_flush_thread.start()
 
 
 # ── Rollup worker (v0.8.0) ───────────────────────────────────────
