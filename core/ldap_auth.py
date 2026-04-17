@@ -10,10 +10,45 @@ ssl setting values:
   2 = StartTLS (upgrade plain connection after connect, port 389)
 """
 
+import time as _time_mod
+
 import core.settings as _settings
 from core.logger import log
 
 _SSL_LABELS = {0: 'none', 1: 'LDAPS', 2: 'StartTLS'}
+
+# ── In-memory connection status (mirrors smtp_alert / syslog_client pattern) ──
+_last_ok_ts: float = 0.0
+_last_err: dict = {'ts': 0.0, 'msg': ''}
+
+
+def _record_ok() -> None:
+    global _last_ok_ts
+    _last_ok_ts = _time_mod.time()
+
+
+def _record_err(msg: str) -> None:
+    global _last_err
+    _last_err = {'ts': _time_mod.time(), 'msg': str(msg)[:200]}
+
+
+def get_ldap_status() -> dict:
+    """Return connection status dict for the Settings API."""
+    cfg = _get_cfg()
+    if not cfg.get('server'):
+        state = 'unconfigured'
+    elif _last_err['ts'] and (not _last_ok_ts or _last_err['ts'] > _last_ok_ts):
+        state = 'error'
+    elif _last_ok_ts:
+        state = 'ok'
+    else:
+        state = 'configured'
+    return {
+        'state':        state,
+        'last_ok_ts':   _last_ok_ts or None,
+        'last_err_ts':  _last_err['ts'] or None,
+        'last_err_msg': _last_err['msg'],
+    }
 
 
 def _ldap_dbg(msg: str) -> None:
@@ -149,10 +184,12 @@ def ldap_test_connection(cfg: dict | None = None) -> tuple:
         conn.unbind()
         log.info(f"LDAP test_connection: OK — {cfg['server']}:{cfg['port']} "
                  f"ssl={ssl_label}")
+        _record_ok()
         return True, "Connection successful"
     except Exception as e:
         log.warning(f"LDAP test_connection: FAILED — {cfg['server']}:{cfg['port']} "
                     f"ssl={ssl_label}: {e}")
+        _record_err(str(e))
         return False, str(e)
 
 
@@ -302,6 +339,7 @@ def ldap_authenticate(username: str, password: str):
                       f"email={attrs.get('email', '')!r} memberOf={len(member_of)} groups")
             for dn in member_of:
                 _ldap_dbg(f"LDAP authenticate:   memberOf: {dn}")
+            _record_ok()
             return {
                 "ok":           True,
                 "display_name": attrs.get("display_name", ""),
@@ -311,6 +349,7 @@ def ldap_authenticate(username: str, password: str):
             }
         else:
             log.info(f"LDAP authenticate: FAILED for {username!r} — {msg}")
+            _record_err(msg)
             return None
     except Exception as e:
         log.error(f"LDAP authenticate: unexpected error for {username!r}: {e}")
@@ -619,6 +658,11 @@ def ldap_sync_groups() -> dict:
             log.error(f"LDAP sync: unexpected error for {username!r}: {e}")
             stats["errors"] += 1
 
+    if stats.get('errors') and not stats.get('updated') and not stats.get('disabled'):
+        _record_err(f"Sync errors: {stats['errors']} user(s) failed")
+    else:
+        _record_ok()
+
     if stats.get('errors'):
         log.error(f"LDAP sync complete with errors: {stats}")
     elif stats.get('updated') or stats.get('disabled'):
@@ -635,21 +679,29 @@ def ldap_sync_groups() -> dict:
     return stats
 
 
+_ldap_sync_stop = __import__('threading').Event()
+
+
+def stop_ldap_sync() -> None:
+    """Stop the LDAP sync loop (called at shutdown before pg_close_pool)."""
+    _ldap_sync_stop.set()
+
+
 def ldap_sync_loop():
-    """Background thread: runs ldap_sync_groups() on the configured interval."""
-    import time
+    """Background thread: runs ldap_sync_groups() on the configured interval.
+    Exits promptly when _ldap_sync_stop is set so shutdown doesn't race pool close."""
     _ldap_dbg("LDAP sync loop: thread started")
-    while True:
+    while not _ldap_sync_stop.is_set():
         try:
             cfg = _get_cfg()
             interval = cfg.get('sync_interval', 60)
             if not cfg['enabled'] or interval <= 0:
-                time.sleep(60)
+                if _ldap_sync_stop.wait(60): break
                 continue
             _ldap_dbg(f"LDAP sync loop: sleeping {interval} minutes until next sync")
-            time.sleep(interval * 60)
+            if _ldap_sync_stop.wait(interval * 60): break
             _ldap_dbg("LDAP sync loop: waking up — starting sync")
             ldap_sync_groups()
         except Exception as e:
             log.error(f"LDAP sync loop error: {e}")
-            time.sleep(300)
+            if _ldap_sync_stop.wait(300): break

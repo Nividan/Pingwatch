@@ -387,6 +387,7 @@ function _edSipRemove(idx){
 
 // ── License helpers ─────────────────────────────────────────────────
 let _edLicenses = [];
+let _edLicEditing = null;  // id of license currently being edited inline, or null
 
 function _edLicStatusBadge(lic){
   const today = new Date(); today.setHours(0,0,0,0);
@@ -400,6 +401,7 @@ function _edLicStatusBadge(lic){
 }
 
 async function _edLicLoad(did){
+  _edLicEditing = null;  // clear any stale edit state from previous modal opens
   try{
     const r = await api('GET', `/api/device/${did}/licenses`);
     _edLicenses = (r && r.licenses) || [];
@@ -421,8 +423,28 @@ function _edLicRender(did){
     el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No licenses</div>';
     return;
   }
-  el.innerHTML = _edLicenses.map(lic =>
-    `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+  el.innerHTML = _edLicenses.map(lic => {
+    if(_edLicEditing === lic.id){
+      // Inline edit mode — name + note are read-only display; date/warn/crit are editable
+      return `<div style="display:flex;flex-direction:column;gap:6px;padding:8px 6px;margin:4px 0;border:1px solid var(--accent);border-radius:6px;background:var(--bg3)">
+        <div style="font-size:12px;font-weight:500;color:var(--text)">
+          ${esc(lic.license_name)}${lic.note ? `<span style="font-size:10px;color:var(--text3);font-weight:400"> — ${esc(lic.note)}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input type="date" id="ed-lic-edit-date-${lic.id}" value="${esc(lic.expiry_date)}" class="lic-date-inp" style="font-size:12px"/>
+          <span style="font-size:10px;color:var(--text3)">warn</span>
+          <input type="number" id="ed-lic-edit-warn-${lic.id}" value="${lic.warn_days}" min="0" max="365" style="width:52px;font-size:11px"/>
+          <span style="font-size:10px;color:var(--text3)">crit</span>
+          <input type="number" id="ed-lic-edit-crit-${lic.id}" value="${lic.crit_days}" min="0" max="365" style="width:52px;font-size:11px"/>
+          <div style="margin-left:auto;display:flex;gap:4px">
+            <button class="btn-s" style="padding:1px 8px;font-size:11px" onclick="_edLicEditCancel('${esc(did)}')">Cancel</button>
+            <button class="btn-p" style="padding:1px 8px;font-size:11px" onclick="_edLicEditSave(${lic.id},'${esc(did)}')">Save</button>
+          </div>
+        </div>
+      </div>`;
+    }
+    // View mode
+    return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;font-weight:500;color:var(--text)">${esc(lic.license_name)}</div>
         <div style="font-size:10px;color:var(--text3);display:flex;gap:8px;align-items:center;margin-top:2px">
@@ -432,9 +454,10 @@ function _edLicRender(did){
           <span style="opacity:0.5">w:${lic.warn_days}d c:${lic.crit_days}d</span>
         </div>
       </div>
-      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edLicDel(${lic.id},'${esc(did)}')">✕</button>
-    </div>`
-  ).join('');
+      <button class="btn-s" style="padding:1px 6px;font-size:11px" title="Edit expiry / warn / crit days" onclick="_edLicEdit(${lic.id},'${esc(did)}')">✎</button>
+      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" title="Delete license" onclick="_edLicDel(${lic.id},'${esc(did)}')">✕</button>
+    </div>`;
+  }).join('');
 }
 
 async function _edLicAdd(did){
@@ -461,7 +484,47 @@ async function _edLicDel(licId, did){
   try{
     await api('DELETE', `/api/license/${licId}`);
     _edLicenses = _edLicenses.filter(l => l.id !== licId);
+    if(_edLicEditing === licId) _edLicEditing = null;
     _edLicRender(did);
     toast('License removed','ok');
   }catch(e){ toast('Failed to delete license','err'); }
+}
+
+function _edLicEdit(licId, did){
+  _edLicEditing = licId;
+  _edLicRender(did);
+  // Auto-focus the date field
+  setTimeout(() => document.getElementById('ed-lic-edit-date-'+licId)?.focus(), 30);
+}
+
+function _edLicEditCancel(did){
+  _edLicEditing = null;
+  _edLicRender(did);
+}
+
+async function _edLicEditSave(licId, did){
+  const lic = _edLicenses.find(l => l.id === licId);
+  if(!lic){ _edLicEditing = null; _edLicRender(did); return; }
+  const date = (document.getElementById('ed-lic-edit-date-'+licId)?.value || '').trim();
+  if(!date){ toast('Date is required','err'); return; }
+  const warn = parseInt(document.getElementById('ed-lic-edit-warn-'+licId)?.value);
+  const crit = parseInt(document.getElementById('ed-lic-edit-crit-'+licId)?.value);
+  const warnDays = isNaN(warn) ? 30 : Math.max(0, Math.min(365, warn));
+  const critDays = isNaN(crit) ? 0  : Math.max(0, Math.min(365, crit));
+  try{
+    await api('PATCH', `/api/license/${licId}`, {
+      license_name: lic.license_name,   // unchanged — required by API
+      expiry_date:  date,
+      note:         lic.note || '',     // unchanged — preserved on round-trip
+      warn_days:    warnDays,
+      crit_days:    critDays,
+    });
+    // Update in-memory copy and exit edit mode
+    lic.expiry_date = date;
+    lic.warn_days   = warnDays;
+    lic.crit_days   = critDays;
+    _edLicEditing = null;
+    _edLicRender(did);
+    toast('License updated','ok');
+  }catch(e){ toast('Failed to update license','err'); }
 }

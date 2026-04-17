@@ -464,9 +464,17 @@ function _dwRenderAll() {
     const reg = _DW_REG[w.type];
     if (reg) reg.render(w.id, w.cfg);
   });
-  // Show shimmer loading overlay until first real data arrives
-  if (!Object.keys(S.sensors).length && !Object.keys(S.devices).length) {
+  // Show shimmer loading overlay until first real data arrives.
+  // Only add the class if data hasn't already been marked as arrived AND
+  // the state is genuinely empty — this prevents a stuck shimmer when
+  // _dwClearLoading() fires before _dwRenderAll() completes (race between
+  // loadAll's /api/devices and _dwInit's /api/dashboards).
+  const _stateEmpty = !Object.keys(S.sensors).length && !Object.keys(S.devices).length;
+  if (!_dwDataArrived && _stateEmpty) {
+    console.debug('[pw:dw] render: state empty, adding shimmer');
     grid.querySelectorAll('.dw-body').forEach(el => el.classList.add('dw-loading'));
+  } else if (_dwDataArrived) {
+    console.debug('[pw:dw] render: data already arrived, skipping shimmer');
   }
   _dwStartTick();
 }
@@ -913,10 +921,17 @@ function _dwReset() {
 // ── Loading shimmer clear (called when first real data arrives) ───
 let _dwDataArrived = false;
 function _dwClearLoading() {
+  // Always remove the class — idempotent, handles races where the shimmer is
+  // added AFTER an earlier _dwClearLoading call (e.g. _dwRenderAll runs late).
+  const removed = document.querySelectorAll('.dw-body.dw-loading');
+  if (removed.length) {
+    console.debug(`[pw:dw] clearLoading: removing shimmer from ${removed.length} widget(s)`);
+    removed.forEach(el => el.classList.remove('dw-loading'));
+  }
   if (_dwDataArrived) return;
   _dwDataArrived = true;
-  document.querySelectorAll('.dw-body.dw-loading').forEach(el => el.classList.remove('dw-loading'));
-  // Refresh all widgets with real data
+  console.debug('[pw:dw] clearLoading: first data arrival — refreshing all widgets');
+  // Refresh all widgets with real data (only on first call)
   _dwLoad().forEach(w => {
     const reg = _DW_REG[w.type];
     if (reg) reg.refresh(w.id, w.cfg);
@@ -1021,10 +1036,19 @@ async function _dwDrawNetAvailChart(wid) {
   canvas.width = canvas.offsetWidth || 340;
   const W = canvas.width, H = canvas.height || 80;
   const ctx = canvas.getContext('2d');
+  // Theme-aware colors — read fresh each paint so we pick up toggles
+  const _gv = (n, d) => (window.getCssVar ? getCssVar(n) : '') || d;
+  const _gr = (n, d) => (window.getCssRgb ? getCssRgb(n) : null) || d;
+  const bg     = _gv('--bg',    '#0d1117');
+  const text3  = _gv('--text3', '#484f58');
+  const text2  = _gr('--text2', [139,148,158]);
+  const upRgb   = _gr('--up',   [35,209,139]);
+  const warnRgb = _gr('--warn', [240,165,0]);
+  const downRgb = _gr('--down', [248,81,73]);
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
   if (!availability.length) {
-    ctx.fillStyle = '#484f58'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = text3; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('No historical data yet', W / 2, H / 2);
     return;
   }
@@ -1034,13 +1058,14 @@ async function _dwDrawNetAvailChart(wid) {
   const xOf = ts  => 4 + ((ts - winStart) / (1440 * 60)) * plotW;
   const yOf = pct => TOP + plotH - (Math.min(100, Math.max(0, pct)) / 100) * plotH;
   const avgPct = availability.reduce((s, b) => s + b.pct, 0) / availability.length;
-  const lineColor = avgPct >= 90 ? '#23d18b' : avgPct >= 70 ? '#f0a500' : '#f85149';
-  const fillAlpha = avgPct >= 90 ? 'rgba(35,209,139,.18)' : avgPct >= 70 ? 'rgba(240,165,0,.18)' : 'rgba(248,81,73,.18)';
+  const lineRgb = avgPct >= 90 ? upRgb : avgPct >= 70 ? warnRgb : downRgb;
+  const lineColor = `rgb(${lineRgb.join(',')})`;
+  const fillAlpha = `rgba(${lineRgb.join(',')},.18)`;
   const pts = availability.map(b => ({ x: xOf(b.ts + 1800), y: yOf(b.pct) }));
   if (pts.length < 2) return;
   // Filled area
   const g = ctx.createLinearGradient(0, TOP, 0, H - BOT);
-  g.addColorStop(0, fillAlpha); g.addColorStop(1, 'rgba(0,0,0,0)');
+  g.addColorStop(0, fillAlpha); g.addColorStop(1, `rgba(${lineRgb.join(',')},0)`);
   ctx.beginPath();
   ctx.moveTo(pts[0].x, H - BOT);
   pts.forEach(p => ctx.lineTo(p.x, p.y));
@@ -1052,7 +1077,7 @@ async function _dwDrawNetAvailChart(wid) {
   ctx.strokeStyle = lineColor; ctx.lineWidth = 1.5; ctx.stroke();
   // X-axis time labels every 6h
   const startHour = Math.ceil(winStart / 3600) * 3600;
-  ctx.fillStyle = 'rgba(139,148,158,.6)'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillStyle = `rgba(${text2.join(',')},.6)`; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
   for (let ts = startHour; ts <= now; ts += 6 * 3600) {
     const x = xOf(ts);
     if (x < 14 || x > W - 14) continue;
@@ -1100,7 +1125,7 @@ function _dwRefreshFlapEvents(wid, cfg) {
     else if (dir === 'trap')  { dotColor = '#8e44ad';  label = 'TRAP'; }
     else if (dir === 'threshold') {
       const isCrit = d._thr_level === 'crit';
-      dotColor = isCrit ? '#e74c3c' : '#f39c12';
+      dotColor = isCrit ? 'var(--down)' : 'var(--warn)';
       label = isCrit ? 'CRIT' : 'WARN';
     }
     const _dtRaw = new Date(d.ts || '');
@@ -1335,7 +1360,7 @@ function _dwRefreshPacketLoss(wid, cfg) {
   const rows = lossy.map(s => {
     const dev   = S.devices[s.device_id];
     const barW  = Math.min(100, Math.round(s.loss_pct / maxLoss * 100));
-    const color = s.loss_pct >= 20 ? 'var(--down)' : s.loss_pct >= 5 ? 'var(--warn)' : '#f0a500';
+    const color = s.loss_pct >= 20 ? 'var(--down)' : s.loss_pct >= 5 ? 'var(--warn)' : 'var(--warn)';
     return `<div class="dw-tl-row">
       <span class="dw-tl-name">${esc(dev?.name || s.device_id)}</span>
       <div class="dw-tl-bar-wrap"><div class="dw-tl-bar" style="width:${barW}%;background:${color}"></div></div>
@@ -1627,12 +1652,12 @@ async function _dwLicenseOverviewRefresh(wid) {
     }).join('');
     _dwSwap(el, `
       <div class="dw-ncm-grid">
-        <div class="dw-ncm-kpi" style="border-color:rgba(248,81,73,.3)">
-          <span class="dw-ncm-n" style="color:#f85149">${sum.crit || 0}</span>
+        <div class="dw-ncm-kpi" style="border-color:var(--down-border)">
+          <span class="dw-ncm-n" style="color:var(--down)">${sum.crit || 0}</span>
           <span class="dw-ncm-l">Expired</span>
         </div>
-        <div class="dw-ncm-kpi" style="border-color:rgba(240,165,0,.3)">
-          <span class="dw-ncm-n" style="color:#e3b341">${sum.warn || 0}</span>
+        <div class="dw-ncm-kpi" style="border-color:var(--warn-border)">
+          <span class="dw-ncm-n" style="color:var(--warn)">${sum.warn || 0}</span>
           <span class="dw-ncm-l">Expiring</span>
         </div>
         <div class="dw-ncm-kpi dw-ncm-ok">

@@ -1,0 +1,218 @@
+/* ── PingWatch Report — print-first stylesheet ─────────────────────── */
+
+/* Named page for the cover */
+@page cover {
+  size: A4;
+  margin: 0;
+  @bottom-left   { content: ""; }
+  @bottom-center { content: ""; }
+  @bottom-right  { content: ""; }
+}
+
+/* Every non-cover page */
+@page {
+  size: A4;
+  margin: 20mm 18mm 22mm 18mm;
+  @bottom-left {
+    content: "__COMPANY_NAME__ Report";
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 8pt; color: #6e7681;
+  }
+  @bottom-center {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 8pt; color: #6e7681;
+  }
+  @bottom-right {
+    content: string(sect);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 8pt; color: #6e7681;
+  }
+}
+
+/* ── Base body ──────────────────────────────────────────────────── */
+html, body {
+  margin: 0;
+  padding: 0;
+}
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.45;
+  color: #1f2328;
+  background: #ffffff;
+}
+
+/* ── Cover page ─────────────────────────────────────────────────── */
+.cover {
+  page: cover;
+  page-break-after: always;
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 22mm;
+  background: linear-gradient(180deg, #f5f8fc 0%, #ffffff 100%);
+  text-align: center;
+  box-sizing: border-box;
+}
+.cover-logo    { max-width: 96px; max-height: 96px; margin: 0 auto 20mm auto; display: block; }
+.cover-title   { font-size: 22pt; font-weight: 700; color: #1f2328; letter-spacing: -.01em; line-height: 1.25; max-width: 140mm; margin: 0 auto; }
+.cover-subtitle{ font-size: 12pt; color: #57606a; margin-top: 8pt; font-weight: 400; }
+.cover-period  { font-size: 15pt; color: #0969da; margin-top: 16pt; font-weight: 600; letter-spacing: .02em; }
+.cover-meta    { font-size: 9pt;  color: #57606a; margin-top: 8pt; }
+.cover-company { position: absolute; bottom: 22mm; left: 0; right: 0; text-align: center;
+                 font-size: 10pt; color: #57606a; font-weight: 600; letter-spacing: .04em; }
+
+/* ── Section headings ───────────────────────────────────────────── */
+h1, h2 { font-weight: 600; letter-spacing: -.01em; color: #0969da; margin: 0 0 8pt 0; }
+h1 {
+  font-size: 13pt;
+  padding: 0 0 4pt 0;
+  border-bottom: 1.5pt solid #0969da;
+  /* Propagate the section name to the @bottom-right footer */
+  string-set: sect content(text);
+  page-break-after: avoid;
+}
+h2 { font-size: 11pt; page-break-after: avoid; }
+p  { margin: 4pt 0; orphans: 2; widows: 2; }
+
+.section {
+  margin: 14pt 0 18pt 0;
+  page-break-inside: avoid;
+}
+.section:first-of-type { margin-top: 0; }
+
+/* ── Headline tile ──────────────────────────────────────────────── */
+.headline-tile {
+  border-left: 5pt solid #0969da;
+  background: #f6f8fa;
+  padding: 10pt 14pt;
+  margin: 4pt 0 10pt 0;
+  border-radius: 2pt;
+  page-break-inside: avoid;
+}
+.headline-tile.tile-up    { border-left-color: #1a7f37; background: #f1f9f3; }
+.headline-tile.tile-warn  { border-left-color: #9a6700; background: #fdf7e7; }
+.headline-tile.tile-down  { border-left-color: #cf222e; background: #fdf0f0; }
+.headline-tile.tile-muted { border-left-color: #8c959f; background: #f6f8fa; }
+.headline-number  { font-size: 22pt; font-weight: 700; line-height: 1.05; color: #1f2328; }
+.headline-caption { font-size: 9pt; color: #57606a; margin-top: 3pt; line-height: 1.4; }
+
+/* ── Two-column grid ───────────────────────────────────────────── */
+.two-col { display: flex; gap: 18pt; align-items: center; margin-top: 4pt; }
+.two-col .col { flex: 1; min-width: 0; }
+.two-col .col:last-child { text-align: center; }
+
+/* ── Tables ────────────────────────────────────────────────────── */
+table.kv {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+  margin: 0;
+}
+table.kv th {
+  text-align: left;
+  color: #57606a;
+  font-weight: 500;
+  padding: 5pt 8pt 5pt 0;
+  width: 55%;
+  border-bottom: 1px solid #e4e7ec;
+}
+table.kv td {
+  text-align: right;
+  padding: 5pt 0;
+  border-bottom: 1px solid #e4e7ec;
+  font-weight: 600;
+  color: #1f2328;
+}
+table.kv tr:last-child th,
+table.kv tr:last-child td { border-bottom: 0; }
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+  margin-top: 6pt;
+}
+table.data.compact { font-size: 8.5pt; }
+table.data th {
+  text-align: left;
+  background: #f6f8fa;
+  color: #1f2328;
+  font-weight: 600;
+  padding: 5pt 8pt;
+  border-bottom: 1.5pt solid #d0d7de;
+}
+table.data td {
+  padding: 4pt 8pt;
+  border-bottom: 1px solid #eaeef2;
+  vertical-align: top;
+  color: #1f2328;
+}
+table.data tr:nth-child(even) td { background: #fafbfc; }
+
+/* ── Status / inline cells ─────────────────────────────────────── */
+.up   { color: #1a7f37; font-weight: 600; }
+.warn { color: #9a6700; font-weight: 600; }
+.crit { color: #cf222e; font-weight: 700; }
+.ok   { color: #1a7f37; font-weight: 600; }
+.muted{ color: #57606a; }
+.small{ font-size: 8pt; }
+.mono { font-family: "Consolas", "Monaco", "Menlo", monospace; font-size: 9pt; }
+
+/* Health-score chips — colour-coded pill for the device_health section */
+.hs {
+  display: inline-block;
+  min-width: 2.6em;
+  padding: 1pt 6pt;
+  border-radius: 10pt;
+  font-weight: 700;
+  font-size: 9pt;
+  text-align: center;
+}
+.hs-good { background: #e6f6ea; color: #1a7f37; border: 1px solid #b7e4c7; }
+.hs-warn { background: #fdf7e7; color: #9a6700; border: 1px solid #f1d97a; }
+.hs-bad  { background: #fdecec; color: #cf222e; border: 1px solid #f5b3b3; }
+
+/* Severity pills for SNMP-trap and incident rows */
+.sev-crit, .sev-critical, .sev-error, .sev-alert, .sev-emergency {
+  color: #cf222e; font-weight: 700;
+}
+.sev-warn, .sev-warning, .sev-notice {
+  color: #9a6700; font-weight: 600;
+}
+.sev-info, .sev-informational, .sev-debug {
+  color: #57606a; font-weight: 500;
+}
+.sev-ok, .sev-cleared, .sev-resolved {
+  color: #1a7f37; font-weight: 600;
+}
+
+/* Note: earlier versions added a pink/amber wash on KV cells with the crit/warn
+   class. Removed — it misaligned the column because .kv td has zero horizontal
+   padding by default, so the wash bled across the whole cell width. The bold
+   red / amber text from the base .crit / .warn rules is already clear signal. */
+
+/* ── Charts ────────────────────────────────────────────────────── */
+img.chart {
+  display: block;
+  margin: 10pt auto 4pt auto;
+  max-width: 100%;
+  height: auto;
+  page-break-inside: avoid;
+}
+
+/* ── Appendix ──────────────────────────────────────────────────── */
+.appendix {
+  margin-top: 20pt;
+  padding-top: 10pt;
+  border-top: 1px solid #d0d7de;
+  font-size: 8.5pt;
+  color: #57606a;
+  page-break-inside: avoid;
+}
+.appendix h2 { color: #57606a; font-size: 10pt; margin-bottom: 4pt; border: 0; }
+.appendix p  { margin: 3pt 0; line-height: 1.5; }

@@ -288,9 +288,20 @@ async function submitLogin(){
     clearTimeout(tmo);
     const d=await r.json();
     if(!r.ok||d.error){showLogin(d.error||'Login failed.');btn.textContent='Sign In';return;}
+    // 2FA gate: server says password OK but second factor required
+    if(d.totp_required){
+      btn.textContent='Sign In';
+      _show2faPrompt(d.challenge_id, user, d.remember_hours_max||0);
+      return;
+    }
     _loggedOut=false;
     S.role=d.role||'viewer';
     if(d.session_ttl)_sessionTtl=d.session_ttl;
+    // Fetch full profile (incl. theme_preference) — /api/login doesn't return it
+    try{
+      const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+      if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});
+    }catch(e){}
     hideLogin();
     try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
     onAuthenticated(d.username);
@@ -299,6 +310,95 @@ async function submitLogin(){
     showLogin(msg);btn.textContent='Sign In';
   }finally{clearTimeout(slowHint);}
 }
+// ── Two-factor authentication prompt ─────────────────────────────
+function _show2faPrompt(challengeId, username, rememberHoursMax){
+  // Replace login form with TOTP input. Reuses login-screen container.
+  const screen=document.getElementById('login-screen');
+  if(!screen) return;
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=''; err.style.display='none';}
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){userField.disabled=true;}
+  if(passField){passField.style.display='none';}
+  let codeField=document.getElementById('login-totp');
+  if(!codeField){
+    codeField=document.createElement('input');
+    codeField.type='text';
+    codeField.id='login-totp';
+    codeField.placeholder='6-digit code or recovery code';
+    codeField.autocomplete='one-time-code';
+    codeField.maxLength=20;
+    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(codeField, passField.nextSibling);}
+  }
+  codeField.style.display='block';
+  codeField.value='';
+  setTimeout(()=>codeField.focus(),50);
+
+  // "Remember this device" row — duration is admin-controlled
+  // (Settings → Security → totp_remember_hours). The login screen only
+  // shows the configured value; users cannot change it.
+  let rememberRow=document.getElementById('login-remember-row');
+  if(rememberRow) rememberRow.remove();
+  const maxHours=parseInt(rememberHoursMax||0,10);
+  if(maxHours>0){
+    rememberRow=document.createElement('div');
+    rememberRow.id='login-remember-row';
+    rememberRow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;color:var(--text2)';
+    const hoursTxt=maxHours===1?'1 hour':`${maxHours} hours`;
+    rememberRow.innerHTML=
+      `<input type="checkbox" id="login-remember-chk" style="cursor:pointer">`+
+      `<label for="login-remember-chk" style="cursor:pointer">Remember this device for ${hoursTxt}</label>`;
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(rememberRow, codeField.nextSibling);}
+  }
+
+  const btn=document.getElementById('login-btn');
+  if(btn){btn.textContent='Verify'; btn.disabled=false;}
+  // Override button click handler temporarily
+  const submit=async()=>{
+    const code=(codeField.value||'').trim();
+    if(!code){_showLoginErr('Enter your 2FA code'); return;}
+    btn.disabled=true; btn.textContent='Verifying…';
+    const remember=maxHours>0&&!!document.getElementById('login-remember-chk')?.checked;
+    try{
+      const r=await fetch('/api/login/totp',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({challenge_id:challengeId, code, remember})});
+      const d=await r.json();
+      if(!r.ok||d.error){
+        _showLoginErr(d.error||'Verification failed');
+        btn.disabled=false; btn.textContent='Verify';
+        return;
+      }
+      _loggedOut=false;
+      S.role=d.role||'viewer';
+      if(d.session_ttl)_sessionTtl=d.session_ttl;
+      try{
+        const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+        if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});
+      }catch(e){}
+      hideLogin();
+      try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
+      onAuthenticated(d.username);
+      // Reset login UI for next time
+      if(userField){userField.disabled=false;}
+      if(passField){passField.style.display='block';}
+      if(codeField){codeField.style.display='none';}
+      const rr=document.getElementById('login-remember-row');
+      if(rr) rr.remove();
+    }catch(e){
+      _showLoginErr('Server error. Try again.');
+      btn.disabled=false; btn.textContent='Verify';
+    }
+  };
+  btn.onclick=submit;
+  codeField.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault(); submit();} };
+}
+function _showLoginErr(msg){
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=msg; err.style.display='block';}
+}
+
 async function doLogout(){
   _loggedOut=true;
   _stopIdleCheck();
@@ -336,7 +436,80 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowDown'){e.preventDefault();items[(idx+1)%items.length]?.focus();}
   if(e.key==='ArrowUp'){e.preventDefault();items[(idx-1+items.length)%items.length]?.focus();}
 });
-function onAuthenticated(username){
+// Poll /api/ready until the server has finished db_load(). Returns quickly
+// (~1 request, no splash) in the normal case where the server is already up.
+// Shows a themed splash overlay when the server is mid-restart so the user
+// sees a deliberate "starting up" screen instead of stuck shimmer widgets.
+async function _waitForServerReady(){
+  const splash = document.getElementById('pw-splash');
+  const msg    = document.getElementById('pw-splash-msg');
+  let shown    = false;
+  let firstErrLogged = false;
+  let pollCount = 0;
+  let lastErr   = null;
+  const T0      = Date.now();
+  const MAX_MS  = 60000;
+  const POLL    = 500;
+  const SHOW_AFTER_MS = 300;   // don't flash splash on fast restarts
+  const SLOW_AFTER_MS = 10000;
+
+  while(Date.now() - T0 < MAX_MS){
+    pollCount++;
+    try{
+      const r = await fetch('/api/ready', { cache:'no-store' });
+      if(r.ok){
+        const j = await r.json();
+        if(j.ready){
+          const elapsed = Date.now() - T0;
+          if(shown){
+            console.info(`[pw:ready] server ready after ${elapsed}ms (${pollCount} polls)`);
+            splash.classList.add('fade-out');
+            setTimeout(()=>{ splash.style.display='none'; splash.classList.remove('fade-out'); }, 400);
+          }
+          return true;
+        }
+      } else {
+        lastErr = `HTTP ${r.status}`;
+        if(!firstErrLogged){
+          console.warn(`[pw:ready] /api/ready returned ${r.status} — still polling`);
+          firstErrLogged = true;
+        }
+      }
+    } catch(err){
+      lastErr = (err && err.message) ? err.message : String(err);
+      if(!firstErrLogged){
+        console.warn('[pw:ready] /api/ready fetch failed — server probably still starting:', lastErr);
+        firstErrLogged = true;
+      }
+    }
+
+    // Show splash only after a short delay so brief restarts don't flash it
+    if(!shown && Date.now() - T0 > SHOW_AFTER_MS){
+      console.info('[pw:ready] server not yet ready — showing splash');
+      if(splash) splash.style.display = 'flex';
+      shown = true;
+    }
+    // Escalate message at 10s so the user knows we're still trying
+    if(shown && msg && !msg.dataset.slow && Date.now() - T0 > SLOW_AFTER_MS){
+      msg.textContent = 'Still starting up — this is taking longer than usual…';
+      msg.dataset.slow = '1';
+      console.warn(`[pw:ready] server taking >10s to become ready (last error: ${lastErr || 'none'})`);
+    }
+    await new Promise(res => setTimeout(res, POLL));
+  }
+
+  console.error(`[pw:ready] TIMEOUT after ${MAX_MS}ms — server never became ready. Last error: ${lastErr || 'none'}. Proceeding anyway; UI may be broken.`);
+  if(shown && msg){
+    msg.textContent = 'Server did not become ready. Check server logs.';
+    // Leave the error visible briefly, then dismiss so the user can still try
+    setTimeout(()=>{ if(splash) splash.style.display='none'; }, 3000);
+  } else if(splash){
+    splash.style.display = 'none';
+  }
+  return false;
+}
+
+async function onAuthenticated(username){
   // ── Clean slate: purge stale data from previous session / server restart ──
   for(const k in S.devices)  delete S.devices[k];
   for(const k in S.sensors)  delete S.sensors[k];
@@ -363,6 +536,9 @@ function onAuthenticated(username){
     db.className='usr-dd-badge usr-dd-badge--'+role.toLowerCase();
   }
   applyRbac();
+  // Gate the first data fetch on server readiness — prevents "widgets stuck
+  // loading" when the user logs in between HTTP-bind and db_load() finishing.
+  await _waitForServerReady();
   loadAll();
   connectSSE();
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
@@ -602,7 +778,7 @@ async function checkAuth(){
   document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
-    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; onAuthenticated(d.username);}
+    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}
     else{showLogin();}
   }catch(e){showLogin();}
 }
@@ -1023,6 +1199,7 @@ async function _refreshFlapList(){
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='anomaly_warn'){f._direction='anomaly';f._thr_level='warn';}
       else f._direction=f.direction||'down';
       byKey[_flapKey(f)]=f;
     });
@@ -1047,11 +1224,13 @@ function switchMainTab(tab){
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
+  { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
+  const reportsView  =document.getElementById('reportsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -1059,7 +1238,10 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
+  if(reportsView) reportsView.style.display='none';
   document.getElementById('devActBar').style.display='none';
+  // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
+  if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
   const _mf=document.getElementById('map-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
   const _isMap = tab === 'map';
@@ -1102,6 +1284,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _ipamInit==='function') _ipamInit();
+  } else if(tab==='reports'){
+    if(reportsView) reportsView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _rptInit==='function') _rptInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
@@ -1142,6 +1330,7 @@ async function _refreshEvents(){
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='anomaly_warn'){f._direction='anomaly';f._thr_level='warn';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });
@@ -1206,8 +1395,10 @@ async function loadAll(){
     window._lGood = _sr.latency_good_ms || 100;
     window._lWarn = _sr.latency_warn_ms || 300;
     window._snrDef = {
-      interval:     _sr.snr_interval     || 5,
-      timeout:      _sr.snr_timeout      || 4,
+      interval:      _sr.snr_interval      || 5,
+      timeout:       _sr.snr_timeout       || 4,
+      fail_after:    _sr.snr_fail_after    || 2,
+      recover_after: _sr.snr_recover_after || 1,
     };
     window._snrTypeDefaults = _sr.snr_type_defaults || {};
     const orgName = (_sr.org_name || '').trim();
@@ -1232,6 +1423,7 @@ async function loadAll(){
       if(f.direction==='recovered'||f.direction==='threshold_ok') return;
       if(f.direction==='threshold_crit'){f._direction='threshold';f._thr_level='crit';}
       else if(f.direction==='threshold_warn'){f._direction='threshold';f._thr_level='warn';}
+      else if(f.direction==='anomaly_warn'){f._direction='anomaly';f._thr_level='warn';}
       else f._direction=f.direction||'down';
       const k=_flapKey(f); if(!_FLAP_SEEN.has(k)){_FLAP_SEEN.add(k);FLAPS.push(f);}
     });

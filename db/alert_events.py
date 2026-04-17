@@ -14,6 +14,14 @@ from core.config import DB_PATH
 from core.logger import log
 from db.backend  import is_pg
 
+# Column list for alert_events — keep in sync with CREATE TABLE in
+# db/core.py and db/pg_schema.py. Decouples query code from schema order.
+_AE_COLS = (
+    "id, profile_id, stage_id, profile_name, did, sid, dname, sname, "
+    "severity, event_type, state, triggered_at, resolved_at, ack_by, "
+    "ack_at, detail, repeat_count"
+)
+
 
 def _con():
     con = sqlite3.connect(DB_PATH, timeout=10)
@@ -165,13 +173,13 @@ def db_list_events(state: str = None, limit: int = 200, offset: int = 0) -> list
             with pg_cursor("main") as cur:
                 if state and state != 'all':
                     cur.execute(
-                        "SELECT * FROM alert_events WHERE state=%s "
+                        f"SELECT {_AE_COLS} FROM alert_events WHERE state=%s "
                         "ORDER BY triggered_at DESC LIMIT %s OFFSET %s",
                         (state, limit, offset)
                     )
                 else:
                     cur.execute(
-                        "SELECT * FROM alert_events "
+                        f"SELECT {_AE_COLS} FROM alert_events "
                         "ORDER BY triggered_at DESC LIMIT %s OFFSET %s",
                         (limit, offset)
                     )
@@ -184,13 +192,13 @@ def db_list_events(state: str = None, limit: int = 200, offset: int = 0) -> list
     try:
         if state and state != 'all':
             rows = con.execute(
-                "SELECT * FROM alert_events WHERE state=? "
+                f"SELECT {_AE_COLS} FROM alert_events WHERE state=? "
                 "ORDER BY triggered_at DESC LIMIT ? OFFSET ?",
                 (state, limit, offset)
             ).fetchall()
         else:
             rows = con.execute(
-                "SELECT * FROM alert_events "
+                f"SELECT {_AE_COLS} FROM alert_events "
                 "ORDER BY triggered_at DESC LIMIT ? OFFSET ?",
                 (limit, offset)
             ).fetchall()
@@ -232,7 +240,7 @@ def db_get_event(event_id: int) -> dict:
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("main") as cur:
-                cur.execute("SELECT * FROM alert_events WHERE id=%s", (event_id,))
+                cur.execute(f"SELECT {_AE_COLS} FROM alert_events WHERE id=%s", (event_id,))
                 row = cur.fetchone()
             return dict(row) if row else None
         except Exception as e:
@@ -242,7 +250,7 @@ def db_get_event(event_id: int) -> dict:
     con = _con()
     try:
         row = con.execute(
-            "SELECT * FROM alert_events WHERE id=?", (event_id,)
+            f"SELECT {_AE_COLS} FROM alert_events WHERE id=?", (event_id,)
         ).fetchone()
         return _row(row)
     except Exception as e:

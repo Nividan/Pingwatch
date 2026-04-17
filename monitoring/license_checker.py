@@ -159,7 +159,7 @@ def _evaluate_license_stages(lic: dict, status_since: float,
         db_get_profile_for_scope, db_get_action_template,
         db_get_stage_state, db_record_stage_fire,
     )
-    from db.alert_events import db_log_event
+    from db.alert_events import db_log_event, db_has_acked_event
     from monitoring.alert_dispatchers import dispatch, check_maintenance
 
     did = lic["did"]
@@ -222,6 +222,8 @@ def _evaluate_license_stages(lic: dict, status_since: float,
                   "%Y-%m-%dT%H:%M:%SZ"),
         "severity":   _SEV.get(trigger_states[0], "info"),
         "event_type": _ETYPE.get(trigger_states[0], "license"),
+        "expiry_date": lic.get("expiry_date", ""),
+        "days_left":   days_left,
     }
 
     # Maintenance window check
@@ -265,6 +267,17 @@ def _evaluate_license_stages(lic: dict, status_since: float,
         if not should_fire:
             continue
 
+        # ── ACK gate ──
+        # If the user has already ACK'd an event for this license, stay silent.
+        # We still record the stage fire below so repeat timers advance correctly;
+        # only the outbound dispatch (email/webhook/syslog) is suppressed.
+        gated_by_ack = False
+        try:
+            if db_has_acked_event(profile["id"], did, sid):
+                gated_by_ack = True
+        except Exception as e:
+            log.warning(f"license_checker: ack-gate check error: {e}")
+
         # ── Dispatch ──
         log.info(
             f"license_checker: dispatching profile={profile['name']!r} "
@@ -272,16 +285,18 @@ def _evaluate_license_stages(lic: dict, status_since: float,
             f"license={lic['license_name']!r} device={dname}"
             f"{' [first-alert]' if just_transitioned and not first_stage_dispatched else ''}"
             f"{' [repeat]' if state and state.get('active_session') == session else ''}"
+            f"{' [ack-silenced]' if gated_by_ack else ''}"
         )
-        for aid in action_ids:
-            tpl = db_get_action_template(aid)
-            if not tpl:
-                log.warning(f"license_checker: missing template {aid}")
-                continue
-            try:
-                dispatch(tpl["atype"], tpl["config"], ctx)
-            except Exception as e:
-                log.error(f"license_checker: dispatch error (aid={aid}): {e}")
+        if not gated_by_ack:
+            for aid in action_ids:
+                tpl = db_get_action_template(aid)
+                if not tpl:
+                    log.warning(f"license_checker: missing template {aid}")
+                    continue
+                try:
+                    dispatch(tpl["atype"], tpl["config"], ctx)
+                except Exception as e:
+                    log.error(f"license_checker: dispatch error (aid={aid}): {e}")
 
         # Record fire + log alert event
         db_record_stage_fire(stage["id"], did, sid, session)
@@ -363,6 +378,8 @@ def _fire_recovery(lic: dict, old_status: str, did: str, sid: str,
         "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
                   "%Y-%m-%dT%H:%M:%SZ"),
         "severity": "recovery", "event_type": "license_ok",
+        "expiry_date": lic.get("expiry_date", ""),
+        "days_left":   days_left,
     }
 
     suppressed, mw_name = check_maintenance(ctx)

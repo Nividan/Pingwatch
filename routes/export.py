@@ -38,6 +38,7 @@ from core.config import (
 )
 from db          import db_log_audit, db_get_audit
 from core.logger import log, LOG_FILES
+from core        import app_state
 
 _LOG_LINE_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+'
@@ -47,6 +48,32 @@ _LOG_LINE_RE = re.compile(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _read_body_spooled(h, n: int, max_mem: int = 32 * 1024 * 1024) -> bytes:
+    """Read exactly n bytes from h.rfile via a SpooledTemporaryFile.
+
+    Bodies under max_mem stay in RAM; larger ones spill to disk. This keeps
+    the receive path's peak heap footprint small during a multi-GB upload
+    (the alternative `h.rfile.read(n)` allocates the full payload at once).
+    The caller still receives a bytes object at the end — passing the spool
+    through to handlers would avoid the final materialization, but that's
+    more invasive than this hardening pass.
+    """
+    spool = tempfile.SpooledTemporaryFile(max_size=max_mem, mode='w+b')
+    try:
+        remaining = n
+        _CHUNK = 1024 * 1024
+        while remaining > 0:
+            chunk = h.rfile.read(min(_CHUNK, remaining))
+            if not chunk:
+                break
+            spool.write(chunk)
+            remaining -= len(chunk)
+        spool.seek(0)
+        return spool.read()
+    finally:
+        spool.close()
+
 
 def _sqlite_backup_bytes(src_path) -> bytes:
     """Return a WAL-safe binary snapshot of a SQLite database."""
@@ -72,12 +99,13 @@ def _sqlite_backup_bytes(src_path) -> bytes:
 def _pg_dump_bytes(schema: str) -> bytes:
     """Run pg_dump for one schema and return the SQL dump as bytes."""
     import subprocess as _sp
-    from db.backend import get_config
+    from db.backend import get_config, pg_env as _pg_env
     cfg = get_config()
     fd, tmp = tempfile.mkstemp(suffix=".sql")
     os.close(fd)
+    pgpass = None
     try:
-        env = {**os.environ, 'PGPASSWORD': cfg.get('pg_password', '')}
+        env, pgpass = _pg_env(cfg)
         cmd = [
             'pg_dump',
             '-h', cfg['pg_host'],
@@ -94,6 +122,11 @@ def _pg_dump_bytes(schema: str) -> bytes:
         with open(tmp, "rb") as fh:
             return fh.read()
     finally:
+        if pgpass:
+            try:
+                os.unlink(pgpass)
+            except OSError:
+                pass
         try:
             os.unlink(tmp)
         except OSError:
@@ -261,7 +294,8 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
         h._json(400, {"error": "No PostgreSQL dumps found in bundle (expected pingwatch_main.sql / pingwatch_logs.sql)"}); return True
 
     cfg = get_config()
-    env = {**os.environ, "PGPASSWORD": cfg.get("pg_password", "")}
+    from db.backend import pg_env as _pg_env
+    env, pgpass = _pg_env(cfg)
     base_cmd = [
         "psql",
         "-h", cfg["pg_host"],
@@ -293,13 +327,13 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
             log.info("DB import (PG): logs schema restored")
     except Exception as e:
         log.error(f"DB import (PG): restore failed — {e}")
-        for t in (tmp_main, tmp_logs):
+        for t in (tmp_main, tmp_logs, pgpass):
             if t:
                 try: os.unlink(t)
                 except OSError: pass
         h._json(500, {"error": "PostgreSQL restore failed — check server logs"}); return True
 
-    for t in (tmp_main, tmp_logs):
+    for t in (tmp_main, tmp_logs, pgpass):
         if t:
             try: os.unlink(t)
             except OSError: pass
@@ -326,16 +360,18 @@ def handle(h, method, path, body):
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_main")
+        _ver = app_state.APP_VERSION
+        _ts  = time.strftime("%Y%m%d-%H%M%S")
         if is_pg():
             try:
                 data  = _pg_dump_bytes('main')
-                fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".sql"
+                fname = f"pingwatch-main-v{_ver}-{_ts}.sql"
             except Exception as e:
                 log.error(f"DB export (PG main): {e}")
                 h._json(500, {"error": "Database export failed — check server logs"}); return True
         else:
             data  = _sqlite_backup_bytes(DB_PATH)
-            fname = "pingwatch-main-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
+            fname = f"pingwatch-main-v{_ver}-{_ts}.db"
         _send_db(h, data, fname)
         return True
 
@@ -345,10 +381,12 @@ def handle(h, method, path, body):
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_logs")
+        _ver = app_state.APP_VERSION
+        _ts  = time.strftime("%Y%m%d-%H%M%S")
         if is_pg():
             try:
                 data  = _pg_dump_bytes('logs')
-                fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".sql"
+                fname = f"pingwatch-logs-v{_ver}-{_ts}.sql"
             except Exception as e:
                 log.error(f"DB export (PG logs): {e}")
                 h._json(500, {"error": "Database export failed — check server logs"}); return True
@@ -356,7 +394,7 @@ def handle(h, method, path, body):
             if not os.path.exists(LOGS_DB_PATH):
                 h._json(404, {"error": "Logs DB does not exist yet"}); return True
             data  = _sqlite_backup_bytes(LOGS_DB_PATH)
-            fname = "pingwatch-logs-" + time.strftime("%Y%m%d-%H%M%S") + ".db"
+            fname = f"pingwatch-logs-v{_ver}-{_ts}.db"
         _send_db(h, data, fname)
         return True
 
@@ -376,11 +414,12 @@ def handle(h, method, path, body):
                 log.error(f"DB export bundle (PG): {e}")
                 h._json(500, {"error": "Database export failed — check server logs"}); return True
             manifest = {
-                "version":    1,
-                "backend":    "postgresql",
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "has_main":   True,
-                "has_logs":   bool(logs_data),
+                "version":     1,
+                "app_version": app_state.APP_VERSION,
+                "backend":     "postgresql",
+                "created_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "has_main":    True,
+                "has_logs":    bool(logs_data),
             }
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -413,13 +452,14 @@ def handle(h, method, path, body):
                     sv_logs = 1
 
             manifest = {
-                "version":      1,
-                "backend":      "sqlite",
-                "created_at":   time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "schema_main":  sv_main,
-                "schema_logs":  sv_logs,
-                "has_main":     True,
-                "has_logs":     bool(logs_data),
+                "version":     1,
+                "app_version": app_state.APP_VERSION,
+                "backend":     "sqlite",
+                "created_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "schema_main": sv_main,
+                "schema_logs": sv_logs,
+                "has_main":    True,
+                "has_logs":    bool(logs_data),
             }
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -429,7 +469,7 @@ def handle(h, method, path, body):
                 zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
 
         zip_bytes = buf.getvalue()
-        fname = f"pingwatch-bundle-{ts}.zip"
+        fname = f"pingwatch-bundle-v{app_state.APP_VERSION}-{ts}.zip"
         h.send_response(200)
         h.send_header("Content-Type", "application/zip")
         h.send_header("Content-Disposition", f'attachment; filename="{fname}"')
@@ -451,7 +491,7 @@ def handle(h, method, path, body):
             h._json(400, {"error": "No data provided"}); return True
         content_type = h.headers.get("Content-Type", "")
         if "application/octet-stream" in content_type:
-            raw_bytes = h.rfile.read(n)
+            raw_bytes = _read_body_spooled(h, n)
         else:
             try:
                 body_imp = _json_mod.loads(h.rfile.read(n))
@@ -488,7 +528,7 @@ def handle(h, method, path, body):
 
         if "application/octet-stream" in content_type:
             log.info(f"DB import: reading {n:,} raw bytes from client")
-            raw_bytes = h.rfile.read(n)
+            raw_bytes = _read_body_spooled(h, n)
         else:
             # Legacy JSON/base64 path
             try:

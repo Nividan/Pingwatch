@@ -21,12 +21,14 @@ class _SensorScheduler:
     Thread cost: exactly 1, regardless of sensor count.
     """
     def __init__(self, executor, run_fn):
-        self._heap     = []          # (run_at, seq, did, sid)
-        self._seq      = 0
-        self._lock     = threading.RLock()
-        self._wake     = threading.Event()
-        self._executor = executor
-        self._run_fn   = run_fn
+        self._heap       = []        # (run_at, seq, did, sid)
+        self._seq        = 0
+        self._lock       = threading.RLock()
+        self._wake       = threading.Event()
+        self._executor   = executor
+        self._run_fn     = run_fn
+        self._tombstones = set()     # {(did, sid)} — skip these when popped
+        self._live_count = 0         # updated by schedule() + cancel(); used for prune threshold
         t = threading.Thread(target=self._loop, daemon=True, name='pw-sched')
         t.start()
 
@@ -35,7 +37,25 @@ class _SensorScheduler:
         with self._lock:
             self._seq += 1
             heapq.heappush(self._heap, (time.monotonic() + delay, self._seq, did, sid))
+            # Clear any tombstone — sensor has been re-scheduled (add-back case)
+            self._tombstones.discard((did, sid))
         self._wake.set()
+
+    def cancel(self, did, sid):
+        """Mark (did, sid) entries in the heap as stale. They'll be skipped when popped."""
+        with self._lock:
+            self._tombstones.add((did, sid))
+
+    def _prune(self, live_count: int):
+        """Rebuild the heap without stale/tombstoned entries. Called by _loop when
+        the heap has grown to more than 2x the live sensor count, to reclaim memory
+        from long-interval sensors whose tombstones have been sitting in the heap."""
+        with self._lock:
+            if not self._tombstones:
+                return
+            self._heap = [e for e in self._heap if (e[2], e[3]) not in self._tombstones]
+            heapq.heapify(self._heap)
+            self._tombstones.clear()
 
     def _loop(self):
         while True:
@@ -43,9 +63,18 @@ class _SensorScheduler:
                 now = time.monotonic()
                 while self._heap and self._heap[0][0] <= now:
                     _, _, did, sid = heapq.heappop(self._heap)
+                    if (did, sid) in self._tombstones:
+                        continue   # sensor was deleted/stopped — skip
                     self._executor.submit(self._run_fn, did, sid)
                     now = time.monotonic()
                 sleep_for = (self._heap[0][0] - now) if self._heap else 60.0
+                heap_size = len(self._heap)
+                tomb_size = len(self._tombstones)
+            # Prune outside the inner hot path when heap has drifted; the scheduler
+            # owner passes live_count via cancel() accounting, but a heuristic
+            # threshold on tombstone count keeps this simple and safe.
+            if tomb_size > 100 and heap_size > 2 * max(tomb_size, 1):
+                self._prune(heap_size - tomb_size)
             self._wake.wait(timeout=min(sleep_for, 1.0))
             self._wake.clear()
 
@@ -110,10 +139,11 @@ class Sensor:
         self.dns_record_type       = "A"
         self.dns_server            = ""
         self.http_expected_status  = 0
-        # Debounce — now handled by alert rules (trigger_count / recover_count).
-        # Hardcoded to 1 so sensor fires events immediately on first state change.
-        self.fail_after    = 1
-        self.recover_after = 1
+        # Debounce — requires N consecutive failures before flap event fires.
+        # Default 2 avoids noise from transient single-probe drops (common with ICMP).
+        # Alert rules add a second debounce layer (trigger_count / duration).
+        self.fail_after    = int(fail_after or 2)
+        self.recover_after = int(recover_after or 1)
         # Thresholds
         self.warn_ms       = warn_ms
         self.crit_ms       = crit_ms
@@ -161,6 +191,19 @@ class Sensor:
         # Alert profile resolver cache (PRTG-style state-trigger system)
         self._resolved_profile_id  = None
         self._resolved_profile_ver = -1
+        # Anomaly detection (per-sensor opt-in learned baseline)
+        self.anomaly_enabled       = 0          # 0/1 persisted
+        self.anomaly_sensitivity   = 2          # 1 strict / 2 balanced / 3 relaxed
+        self.anomaly_min_samples   = 50         # bootstrap guard
+        self._anom_mean            = None       # EWMA mean (ms)
+        self._anom_var             = None       # EWMA variance
+        self._anom_count           = 0          # samples contributing to baseline
+        self._anom_enabled_since   = None       # epoch; for cold-start time window
+        self._anom_consec_fails    = 0          # debounce counter
+        self._anom_state           = "ok"       # "ok" | "warn"
+        self._anom_triggered_ts    = None       # epoch of current streak start
+        self._anom_dirty           = False      # needs DB checkpoint
+        self._anom_caused_warn     = False      # true when anomaly flipped _threshold_state for this probe
 
     @property
     def _valid_history(self):
@@ -253,6 +296,12 @@ class Sensor:
             "vmware_disk_path":      self.vmware_disk_path,
             "has_vmware_password":   bool(self.vmware_password),
             "threshold_state":       self._threshold_state,
+            "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
+            "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
+            "anomaly_min_samples":   int(getattr(self, "anomaly_min_samples", 50) or 50),
+            "anomaly_mean_ms":       self._anom_mean,
+            "anomaly_stddev_ms":     (self._anom_var ** 0.5) if self._anom_var else None,
+            "anomaly_sample_count":  int(self._anom_count or 0),
             "alive":          self.alive,
             "running":        self.running,
             "last_ms":        self.last_ms,
@@ -285,20 +334,37 @@ class Device:
         self.snmp_version_default    = ""
         self.vmware_user_default     = ""
         self.vmware_password_default = ""
+        # Cached status string; invalidated (set to None) whenever a sensor's
+        # alive / _threshold_state / running / alerts_muted changes, or when
+        # a sensor is added/removed. Recomputed on next read.
+        self._cached_status = None
 
     def next_sid(self):
         self._sid_ctr += 1
         return f"s{self._sid_ctr}"
 
+    def invalidate_status(self):
+        """Clear cached status so the next read recomputes from live sensor state."""
+        self._cached_status = None
+
     @property
     def status(self):
+        if self._cached_status is not None:
+            return self._cached_status
         active = [s for s in self.sensors.values() if not s.alerts_muted and s.running]
         vals = [s.alive for s in active]
-        if not vals or all(v is None for v in vals): return "unknown"
-        if any(v is False for v in vals): return "down"
-        if any(s._threshold_state == "crit" for s in active): return "down"
-        if any(s._threshold_state == "warn" for s in active): return "warn"
-        return "up"
+        if not vals or all(v is None for v in vals):
+            result = "unknown"
+        elif any(v is False for v in vals):
+            result = "down"
+        elif any(s._threshold_state == "crit" for s in active):
+            result = "down"
+        elif any(s._threshold_state == "warn" for s in active):
+            result = "warn"
+        else:
+            result = "up"
+        self._cached_status = result
+        return result
 
     def to_dict(self):
         return {
@@ -363,10 +429,11 @@ def _send_webhook(url: str, payload: dict):
 
 class MonitorState:
     def __init__(self):
-        self._lock     = threading.RLock()
-        self.devices   = {}
-        self._did_ctr  = 0
-        self._sse      = []
+        self._lock            = threading.RLock()
+        self.devices          = {}
+        self._did_ctr         = 0
+        self._sse             = []
+        self._sse_registered  = {}   # Queue → monotonic timestamp of subscribe()
         self._executor  = concurrent.futures.ThreadPoolExecutor(
             max_workers=64, thread_name_prefix='pw-sensor'
         )
@@ -389,8 +456,12 @@ class MonitorState:
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return False
+            sids = list(dev.sensors.keys())
             for s in dev.sensors.values(): s.running = False
+            dev.invalidate_status()
             del self.devices[did]
+        for sid in sids:
+            self._scheduler.cancel(did, sid)
         return True
 
     def get_device(self, did):
@@ -401,7 +472,7 @@ class MonitorState:
                    port=None, url=None, interval=5, timeout=4,
                    verify_ssl=True, snmp_community="public",
                    snmp_oid="1.3.6.1.2.1.1.1.0", snmp_version="2c",
-                   fail_after=1, recover_after=1,
+                   fail_after=2, recover_after=1,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
                    vmware_user="", vmware_password="",
@@ -437,6 +508,7 @@ class MonitorState:
             if not s: return False
             was_running = s.running
             s.running = False
+            dev.invalidate_status()
             s._stopped.clear()
         s._stopped.wait(timeout=3.0)   # wait for _run_once to exit (≤0.5s normally)
         if not s._stopped.is_set():
@@ -455,7 +527,10 @@ class MonitorState:
                         "snmp_unit",
                         "vmware_user", "vmware_password",
                         "vmware_vm_id", "vmware_vm_name", "vmware_metric",
-                        "vmware_disk_path"]
+                        "vmware_disk_path",
+                        "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
+            _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
+            _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
             for k, v in kwargs.items():
                 if k in editable and v is not None:
                     if k == 'host':
@@ -465,6 +540,28 @@ class MonitorState:
                             v = dev.host
                             s.host_override = False
                     setattr(s, k, v)
+            _anom_enabled_after = int(getattr(s, "anomaly_enabled", 0) or 0)
+            _anom_sens_after    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
+            # Reset baseline when user enables anomaly (off→on) or changes sensitivity —
+            # stale variance should not leak across configuration changes.
+            _needs_reset = False
+            if _anom_enabled_after and not _anom_enabled_before:
+                _needs_reset = True
+            elif _anom_enabled_after and (_anom_sens_after != _anom_sens_before):
+                _needs_reset = True
+            if _needs_reset:
+                from monitoring.anomaly import reset_baseline as _anom_reset
+                _anom_reset(s)
+                _reset_did, _reset_sid = did, sid
+            else:
+                _reset_did = _reset_sid = None
+            dev.invalidate_status()
+        if _reset_did:
+            try:
+                from db import db_reset_anomaly_baseline
+                db_reset_anomaly_baseline(_reset_did, _reset_sid)
+            except Exception:
+                pass
         if was_running:
             self.start_sensor(did, sid)
         return True
@@ -476,7 +573,9 @@ class MonitorState:
             s = dev.sensors.get(sid)
             if not s: return False
             s.running = False
+            dev.invalidate_status()
             del dev.sensors[sid]
+        self._scheduler.cancel(did, sid)
         return True
 
     def start_sensor(self, did, sid):
@@ -486,6 +585,7 @@ class MonitorState:
             s = dev.sensors.get(sid)
         if not s or s.running: return
         s.running = True
+        dev.invalidate_status()
         s._stopped.clear()
         self._executor.submit(self._run_once, did, sid)
 
@@ -496,6 +596,8 @@ class MonitorState:
                 s = dev.sensors.get(sid)
                 if s:
                     s.running = False
+                    dev.invalidate_status()
+        self._scheduler.cancel(did, sid)
                     # Scheduler entry will be ignored — _run_once checks s.running at entry
 
     def start_device(self, did):
@@ -518,9 +620,9 @@ class MonitorState:
             dev = self.devices.get(did)
             sensor_dicts = [s.to_dict() for s in dev.sensors.values()] if dev else []
             new_status = dev.status if dev else "unknown"
-        for sd in sensor_dicts:
-            self._broadcast("sensor", sd)
-        self._broadcast("device_status", {"did": did, "status": new_status})
+        batch = [("sensor", sd) for sd in sensor_dicts]
+        batch.append(("device_status", {"did": did, "status": new_status}))
+        self._broadcast_batch(batch)
         # Auto-resolve active flap events — device is intentionally stopped
         for sid in sids:
             _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
@@ -567,6 +669,8 @@ class MonitorState:
         _log_msg = result.get("detail", "")   # default; overridden in ok branch for SNMP
         if result["ok"]:
             s.success    += 1
+            if s.alive is not True:
+                dev.invalidate_status()
             s.alive       = True
             s.last_ms     = result["ms"]
             s.last_detail = result["detail"]
@@ -639,6 +743,8 @@ class MonitorState:
                 if s._consec_ok >= 60:
                     s._recovery_pending = False
         else:
+            if s.alive is not False:
+                dev.invalidate_status()
             s.alive       = False
             s.last_ms     = None
             s.last_detail = result["detail"]
@@ -709,10 +815,21 @@ class MonitorState:
             _new_thr = "crit"
         elif s.loss_warn_pct and s.loss_pct >= s.loss_warn_pct:
             if _new_thr != "crit": _new_thr = "warn"
+        # Anomaly detection — opt-in per-sensor learned-baseline check.
+        # Can only promote ok → warn; never fires crit. Static thresholds win.
+        s._anom_caused_warn = False
+        if (s.anomaly_enabled and result["ok"] and s.last_ms is not None
+                and _new_thr == "ok"):
+            from monitoring.anomaly import evaluate_anomaly, SUPPORTED_STYPES
+            if s.stype in SUPPORTED_STYPES:
+                if evaluate_anomaly(s, s.last_ms) == "warn":
+                    _new_thr = "warn"
+                    s._anom_caused_warn = True
         if _new_thr != s._threshold_state:
             # State CHANGED — reset counter, do full broadcast
             _prev_thr = s._threshold_state
             s._threshold_state = _new_thr
+            dev.invalidate_status()
             s._consec_threshold = 1
             if _new_thr != "ok" and not _muted:
                 s._threshold_recovery_pending = False
@@ -749,9 +866,27 @@ class MonitorState:
                 else:
                     log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
                 _thr_flap = dict(_thr_evt_data)
-                _thr_flap["direction"] = "threshold_crit" if _new_thr == "crit" else "threshold_warn"
+                if _new_thr == "crit":
+                    _thr_flap["direction"] = "threshold_crit"
+                elif s._anom_caused_warn:
+                    _thr_flap["direction"] = "anomaly_warn"
+                else:
+                    _thr_flap["direction"] = "threshold_warn"
                 _thr_flap["detail"]    = _val_disp
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
+                # Escalation / de-escalation (warn↔crit) — auto-resolve the
+                # PREVIOUS active threshold entry so only the current state
+                # stays "active". Without this, a warn→crit transition leaves
+                # the old warn row unresolved forever (OK → LIMIT 1 can't
+                # catch up). Only fires for transitions between warn/crit;
+                # ok→warn and ok→crit have nothing to resolve.
+                if _prev_thr in ("warn", "crit"):
+                    _esc_ts  = _ts
+                    _esc_did = did
+                    _esc_sid = sid
+                    _prev_dir = "threshold_crit" if _prev_thr == "crit" else "threshold_warn"
+                    _db_enqueue(lambda _d=_esc_did, _s=_esc_sid, _t=_esc_ts, _dir=_prev_dir:
+                                db_auto_resolve_flap(_d, _s, _t, directions=(_dir,)))
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
                 # Threshold recovered — broadcast and resolve existing event
                 s._threshold_recovery_pending = True
@@ -805,11 +940,13 @@ class MonitorState:
                 log_sensors.warning(f"alert_profile_engine error: {_ape}")
 
         s.thr_history.append(s._threshold_state)
+        _probe_end_batch = []
         if result["ok"]:
             _log_type = "err" if s._threshold_state == "crit" else ("warn" if s._threshold_state == "warn" else "ok")
-            self._broadcast("log", {"did": did, "sid": sid, "msg": _log_msg, "type": _log_type})
-        self._broadcast("sensor", s.to_dict())
-        self._broadcast("device_status", {"did": did, "status": dev.status})
+            _probe_end_batch.append(("log", {"did": did, "sid": sid, "msg": _log_msg, "type": _log_type}))
+        _probe_end_batch.append(("sensor", s.to_dict()))
+        _probe_end_batch.append(("device_status", {"did": did, "status": dev.status}))
+        self._broadcast_batch(_probe_end_batch)
 
         # Release thread immediately — scheduler fires next probe after interval
         if s.running:
@@ -822,34 +959,108 @@ class MonitorState:
     def subscribe(self):
         q = queue.Queue(maxsize=300)
         with self._lock:
+            if len(self._sse) >= 200:
+                oldest = self._sse.pop(0)
+                self._sse_registered.pop(oldest, None)
             self._sse.append(q)
+            self._sse_registered[q] = time.monotonic()
         return q
 
     def unsubscribe(self, q):
         with self._lock:
             try: self._sse.remove(q)
             except ValueError: pass
+            self._sse_registered.pop(q, None)
+
+    # Event types that are forwarded to remote syslog.
+    _SYSLOG_EVENTS = ('flap_down', 'flap_recovered', 'snmp_trap',
+                      'threshold_critical', 'threshold_warning', 'threshold_ok')
+
+    def _start_broadcaster(self):
+        """Start the dedicated broadcaster thread that decouples probe workers
+        from SSE fan-out. Probe workers push events onto `_bcast_queue`; this
+        thread pulls and serialises fan-out to every subscriber.
+        """
+        if getattr(self, "_bcast_started", False):
+            return
+        self._bcast_queue = queue.Queue(maxsize=10000)
+        self._bcast_started = True
+        t = threading.Thread(target=self._broadcaster_loop, daemon=True, name='pw-sse-fanout')
+        t.start()
+        sw = threading.Thread(target=self._sse_sweeper, daemon=True, name='pw-sse-sweep')
+        sw.start()
+
+    def _sse_sweeper(self):
+        """Periodic cleanup of abandoned SSE subscriber queues (silent disconnects)."""
+        while True:
+            time.sleep(60)
+            cutoff = time.monotonic() - 300  # 5-min TTL for queues that haven't been drained
+            with self._lock:
+                stale = [q for q, ts in list(self._sse_registered.items())
+                         if ts < cutoff and q.qsize() > 50]
+                for q in stale:
+                    try: self._sse.remove(q)
+                    except ValueError: pass
+                    self._sse_registered.pop(q, None)
+            if stale:
+                log_sensors.info("SSE sweeper: removed %d stale subscriber(s)", len(stale))
+
+    def _broadcaster_loop(self):
+        while True:
+            events = self._bcast_queue.get()
+            if events is None:
+                break
+            try:
+                self._fanout(events)
+            except Exception as e:
+                log_sensors.warning("broadcaster loop error: %s", e)
 
     def _broadcast(self, event, data):
-        msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
+        self._broadcast_batch([(event, data)])
+
+    def _broadcast_batch(self, events):
+        """Enqueue a list of (event, data) tuples onto the broadcaster queue.
+
+        Probe workers return immediately — fan-out happens on a dedicated thread.
+        Callers on the probe hot path pass multiple events per cycle; batching
+        avoids N queue puts and N subscribers-lock acquisitions.
+        """
+        if not events:
+            return
+        self._start_broadcaster()
+        try:
+            self._bcast_queue.put_nowait(events)
+        except queue.Full:
+            # Broadcaster is saturated (10k pending batches). Fan out inline as a
+            # fallback so events aren't silently dropped.
+            self._fanout(events)
+
+    def _fanout(self, events):
+        """Actual subscriber fan-out. Runs on the broadcaster thread."""
+        msgs = [f"event: {ev}\ndata: {json.dumps(dt)}\n\n" for ev, dt in events]
         with self._lock:
             subscribers = list(self._sse)
         dead = []
         for q in subscribers:
-            try: q.put_nowait(msg)
-            except queue.Full: dead.append(q)
+            try:
+                for msg in msgs:
+                    q.put_nowait(msg)
+            except queue.Full:
+                dead.append(q)
         if dead:
             with self._lock:
                 for d in dead:
                     try: self._sse.remove(d)
                     except ValueError: pass
-        if event in ('flap_down', 'flap_recovered', 'snmp_trap',
-                     'threshold_critical', 'threshold_warning', 'threshold_ok'):
-            try:
-                from monitoring.syslog_client import syslog_send
-                syslog_send(event, data)
-            except Exception:
-                pass
+                    self._sse_registered.pop(d, None)
+        # Forward alert-category events to remote syslog (best-effort, non-blocking)
+        for ev, dt in events:
+            if ev in self._SYSLOG_EVENTS:
+                try:
+                    from monitoring.syslog_client import syslog_send
+                    syslog_send(ev, dt)
+                except Exception:
+                    pass
 
     def all_devices(self):
         with self._lock:

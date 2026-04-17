@@ -53,6 +53,16 @@ Browser / Desktop GUI
         ├── vmware/               ← VMware vSphere integration
         │   └── client.py         ← VM discovery, metric querying, session/metric caching
         │
+        ├── reports/              ← PDF/CSV report engine
+        │   ├── data.py           ← Data assembly (availability, incidents, latency, inventory)
+        │   ├── engine.py         ← Jinja2 + WeasyPrint HTML/PDF renderer; PDF/A-1b/2b/3b support
+        │   ├── charts.py         ← Matplotlib chart builders → base64 PNG data URIs
+        │   ├── runner.py         ← Orchestration: render → persist → email delivery
+        │   ├── scheduler.py      ← Cron-style scheduler + hourly retention prune
+        │   ├── delivery.py       ← SMTP delivery with PDF + CSV attachments
+        │   ├── csv_export.py     ← Multi-section CSV sidecar (UTF-8 BOM, Excel-safe)
+        │   └── templates/        ← Jinja2 HTML templates + print-first CSS
+        │
         ├── snmp/                 ← SNMP trap pipeline
         │   ├── receiver.py       ← UDP trap listener
         │   ├── enricher.py       ← Trap enrichment & OID lookup
@@ -100,8 +110,7 @@ pingwatch/
 │   ├── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
 │   ├── app_state.py        ← Shared globals: STATE, effective ports, TLS flag, tray ref
 │   ├── state.py            ← In-memory Device/Sensor objects, probe threads, SSE broadcast
-│   ├── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
-│   └── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
+│   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
 │
 ├── monitoring/
 │   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
@@ -122,6 +131,16 @@ pingwatch/
 │
 ├── vmware/
 │   └── client.py           ← vSphere VM discovery, metric querying, session + metric caching (pyvmomi)
+│
+├── reports/
+│   ├── data.py             ← Data assembly: availability, incidents, latency, inventory; tiered table routing
+│   ├── engine.py           ← render_html() / render_pdf(); Jinja2 env with custom filters; PDF/A-1b/2b/3b via WeasyPrint
+│   ├── charts.py           ← Matplotlib Agg → base64 PNG: availability_trend, severity_donut, incident_timeline, top_bar, latency_percentile_bar
+│   ├── runner.py           ← render_from_template(), run_template_now(), run_schedule(); SHA-256 fingerprint + Report ID
+│   ├── scheduler.py        ← Daemon thread: daily/weekly/monthly/quarterly cadence, 90 s dedupe, hourly retention prune
+│   ├── delivery.py         ← send_report_email() with PDF + optional CSV attachments; recipient resolution
+│   ├── csv_export.py       ← build_csv_sidecar(): multi-section UTF-8 BOM CSV (metadata, availability, incidents, latency, traps, TLS, inventory)
+│   └── templates/          ← base.html, executive.html, technical.html, inventory.html, report.css (print-first @page layout)
 │
 ├── snmp/
 │   ├── receiver.py         ← UDP socket on SNMP port, injects traps into pipeline
@@ -150,7 +169,8 @@ pingwatch/
 │   ├── ipam.py             ← Subnet and IP allocation management
 │   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
 │   ├── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
-│   └── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
+│   ├── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
+│   └── reports.py          ← Report template/schedule/history CRUD; 18 functions (db_list/get/create/update/delete for templates, schedules, history; prune, record_run, set_enabled)
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
@@ -168,7 +188,8 @@ pingwatch/
 │   ├── ldap.py             ← LDAP/AD settings, test, group search, user group lookup
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
 │   ├── discovery.py        ← Subnet discovery scan + bulk device add
-│   └── licenses.py         ← Device license CRUD + expiration check trigger
+│   ├── licenses.py         ← Device license CRUD + expiration check trigger
+│   └── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -189,11 +210,13 @@ pingwatch/
     ├── forms-io.js         ← DB export/import form
     ├── forms-utils.js      ← Shared form helpers
     ├── forms-discovery.js  ← Subnet discovery wizard modal
+    ├── reports.js          ← Reports tab (Templates / Schedules / History sub-tabs); template editor modal with grouped section picker + presets for the Custom kind; preview; Run Now; test-send; history download; History multi-select + bulk delete (sticky action bar, tri-state "select all"); PDF compliance select
     ├── ipam.js             ← IPAM tab
     ├── bg.js               ← Animated background canvas
     ├── map.html            ← Network Topology Manager shell
     ├── map.css             ← NTM styles
-    └── map.js              ← NTM canvas engine
+    ├── map.js              ← NTM canvas engine
+    └── fonts/              ← Self-hosted woff2 files — Exo 2, JetBrains Mono, Orbitron, Share Tech Mono (no CDN dependency; air-gapped safe)
 ```
 
 ---
@@ -204,6 +227,8 @@ pingwatch/
 HTTP(S) dispatcher and application entry point. Serves static files, delegates every API route to a `routes/` module, and starts all background threads (probe engine, autosave, backup scheduler, SNMP receiver, syslog, LDAP sync). Wraps the HTTP listener with `ssl.SSLContext` when HTTPS is enabled; optionally runs a second lightweight HTTP server for HTTP→HTTPS redirect. At startup, auto-scales the probe `ThreadPoolExecutor` using `max(64, min(512, sensor_count // 4))`; a non-zero `max_workers_executor` setting overrides this.
 
 `Handler._error(code, public_msg, exc=None, context="")` — centralised error responder: logs the full exception (type + message) server-side with optional context label, then returns `{"error": public_msg}` to the client. No internal detail is ever leaked to the response.
+
+`Handler._send_with_cookies(code, data, cookies)` — sends a JSON response with multiple `Set-Cookie` headers; `cookies` is a list of pre-formatted cookie strings. Used by login and 2FA endpoints that must set both the `session` and `pw_trusted` cookies atomically in a single response.
 
 ### `setup_wizard.py`
 Cross-platform first-run CLI wizard. Checks required packages, handles HTTP/HTTPS port selection (with Apache2/nginx conflict detection on Linux), TLS certificate setup (including HTTP→HTTPS redirect toggle), SNMP port configuration, firewall rules, desktop shortcut creation, and optional systemd service install (Linux only). Stops any running PingWatch service before modifying the database to prevent WAL conflicts. Fixes file ownership when run via `sudo`. Flags: `--setup` (re-run wizard), `--check` (package check only). Logic delegated to `core/setup_logic.py`.
@@ -231,6 +256,8 @@ Server-side input validation helpers used by route handlers before persisting us
 ### `core/auth.py`
 Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
 
+`parse_user_agent_label(ua)` — pure-string parser that converts a User-Agent header into a human-readable device label (e.g. `"Chrome on Windows"`, `"Firefox on Linux"`). No library dependency. Used when inserting a new trusted-device record so the Trusted Devices list shows a meaningful name instead of the raw UA string.
+
 `auth_login()` handles two LDAP paths: (1) **existing LDAP users** — after successful bind, `_ldap_login_sync()` refreshes group/role/display_name from LDAP and rejects login if the user is no longer in any imported group; (2) **unknown users** — if `ldap_enabled` and `ldap_auto_provision` are set, the user is authenticated against LDAP, matched to an imported group, and created automatically via `db_add_ldap_user()`. A race-condition guard retries the normal login path if a concurrent INSERT wins the race.
 
 ### `core/ldap_auth.py`
@@ -245,6 +272,7 @@ Key functions:
 - `_match_user_to_groups(member_of, user_dn, mapped_groups, cfg)` — finds the best-matching imported group for a user (direct DN match first, then nested fallback); picks the group with the highest role rank (admin > operator > viewer).
 - `ldap_sync_groups()` — iterates all LDAP users in the DB, checks current AD group membership, updates or disables accounts as needed; returns `{"updated": N, "disabled": N, "errors": N}`.
 - `ldap_sync_loop()` — daemon thread that runs `ldap_sync_groups()` on the `ldap_sync_interval` schedule; started by `server.py` on startup.
+- `get_ldap_status()` — returns `{state, last_ok_ts, last_err_ts, last_err_msg}` for the Integrations status badge. State is `ok` (last activity was a success), `error` (last activity was a failure and occurred after the last success), `configured` (config present but no activity yet), or `unconfigured` (no server configured). Updated automatically by `_record_ok()` / `_record_err()` hooks wired into `ldap_test_connection`, `ldap_authenticate`, and `ldap_sync_groups`.
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
@@ -271,6 +299,19 @@ Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to 
 Pure-functional profile evaluator driven by the probe loop. Called from `Sensor._run_once()` after each probe cycle. `resolve_profile_for_sensor()` walks the cascade (sensor → device → group → global), returns the first matching profile, and caches the result on the sensor object (`_resolved_profile_id` / `_resolved_profile_ver`); invalidated by bumping `STATE._profile_cache_ver` whenever any profile changes. `evaluate_and_fire()` checks each stage's trigger state, delay, and repeat interval against the sensor's `_down_since_ts` / `_threshold_triggered_ts` fields. Recovery stages fire once when the sensor returns to OK (provided a state-stage previously fired in the same session) and compute total downtime duration from the `active_session` stored in `alert_profile_state`. Post-recovery, all stage rows for that sensor are cleared and the active alert event is auto-resolved.
 
 **Recovery path note:** `_fire()` uses `if recovery: ... else: db_log_event(...)` — the `else` guard is critical. Without it, `db_log_event(state="active")` would run immediately after `db_auto_resolve_event()`, re-creating the event and leaving a stale active alert visible in the Events tab.
+
+### `monitoring/anomaly.py`
+Opt-in per-sensor learned-baseline detector. Pure function — no I/O — so the probe hot path stays O(1). `evaluate_anomaly(sensor, current_ms)` updates the sensor's EWMA mean + variance (Welford-style, adaptive α: 0.10 → 0.02 → 0.01 as `_anom_count` grows) and returns `"ok"` or `"warn"` (never `"crit"`). Upper-tail z-test with variance floor `max(σ, 10 ms, 0.2·μ)` and 3-sample debounce; sensitivity knob maps to k ∈ {3, 4, 6}.
+
+Invoked from `core/state.py::_run_once()` **only when** the probe succeeded, `sensor.last_ms` is valid, the static threshold evaluation returned `"ok"`, and the sensor type is in `SUPPORTED_STYPES = {ping, tcp, http, dns, http_keyword, banner}`. This "static wins" precedence rule is the load-bearing invariant — anomaly can promote `ok → warn` but never overrides a static warn/crit, so alerts never double-fire.
+
+Baseline state lives on the `Sensor` object as `_anom_mean`, `_anom_var`, `_anom_count`, `_anom_enabled_since`, `_anom_consec_fails`, `_anom_dirty`. Runtime only — never persisted directly via `db_save()`. Hourly checkpoint via `db_checkpoint_anomaly_baselines(STATE)` writes the dirty rows into `sensor_anomaly_baselines` (dual-backend upsert); restore on startup via `db_load_anomaly_baselines(STATE)` called right after sensors are loaded. A restart therefore does not destroy learning.
+
+Cold-start suppression is enforced in two layers: (1) sample-count bootstrap via `sensor.anomaly_min_samples` (default 50), and (2) a time window via the global `anomaly_cold_start_hours` setting (default 24). The global kill switch `anomaly_global_enabled` short-circuits all firings without restart. Failed probes never update the baseline — a short outage does not inflate σ and mask the real follow-up anomaly.
+
+When anomaly causes the `_threshold_state` transition to `"warn"`, the sensor sets `_anom_caused_warn = True` for that probe; the flap-log emit branch in `_run_once()` reads the flag and writes `direction='anomaly_warn'` instead of `'threshold_warn'`. The Events tab (app.js normalization + events.js branches) maps `anomaly_warn` to `_direction='anomaly'` / `_thr_level='warn'` and renders the "🧠 Anomaly" pill / filter.
+
+**Mass-enable paths.** Two admin-scoped entry points bypass sensor-by-sensor clicking: (1) `anomaly_default_new_sensors` setting — when on, the sensor POST path in `routes/devices.py` sets `anomaly_enabled=1` on newly created sensors whose `stype` is in `SUPPORTED_STYPES`; (2) `POST /api/anomaly/bulk-enable` in `routes/settings.py` walks `STATE.devices.*.sensors.*`, flips `anomaly_enabled=1` on every off-and-supported sensor, and calls `reset_baseline()` on each so the cold-start clock ticks from the click — no alert storm possible because the full 24 h suppression window applies uniformly. Audit entry `anomaly_bulk_enable` records `enabled=N skipped=M`.
 
 ### `monitoring/alert_dispatchers.py`
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
@@ -299,17 +340,37 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 - `vendor.py` — Vendor fingerprinting from enterprise OIDs
 - `seeds/` — Built-in trap definitions for generic, Cisco, Fortinet, Juniper, APC
 
+### `reports/`
+
+PDF/CSV report engine. All modules are optional at import time — missing WeasyPrint/Jinja2/Matplotlib produces a clear `RuntimeError` only when a report is actually rendered.
+
+**`reports/data.py`** — assembles `build_report_context(kind, period, filters, config)` into a flat dict consumed by Jinja2 templates. Helpers: `_pick_table(minutes)` routes availability and latency queries to the correct tiered table (`sensor_samples` / `sensor_samples_5m` / `sensor_samples_1h`) so a 1-year report finds data; `_epoch_to_iso()` / `_parse_ts()` bridge between Unix epoch (used in context) and ISO-8601 strings (stored in `flap_log.ts`); `_filter_flaps_by_severity()` applies the incident severity filter to both main and compare periods; `_inventory_*` helpers resolve device IDs to display names via `STATE.devices`. Polish helpers: `_classify_config_issues(flaps)` splits sensor-misconfig noise (Unknown metric / SSL verify / bad OID) out of the incident stream and rolls up by `(did, issue_type)` with a `sensor_count` column; `_cluster_flaps_into_outages(flaps, currently_bad=...)` collapses consecutive bad-state events for the same `(did, sid)` into one outage row (5-min idle gap) and only flags `ongoing=True` when the sensor is still unhealthy in live STATE; `_detect_major_incidents(flaps, min_devices, gap_minutes, currently_bad=...)` clusters simultaneous device-DOWN events into one row (pure stats — no root-cause guessing); `_suppress_outages_in_majors(outages, majors)` drops per-sensor outages that fall inside a Major Incident window for the same device, so the Incident Log doesn't duplicate what Major Incidents already summarises; `_device_health_scores(availability, flaps, limit)` computes a composite 0–100 score per device (downtime up to 50, incident load up to 20, currently DOWN −20 or WARN −10, band ≥90/≥70/<70); `_currently_bad_sensor_keys()` reads live STATE once per report and returns `{(did, sid)}` for sensors that are alive=False or threshold warn/crit — reused by clustering, major-incident detection, and raw-flap `is_open` tagging so historical rows with a missing `resolved_at` never render as "open".
+
+**`reports/engine.py`** — `render_html(kind, ctx, embed_charts, inline_css)` renders via a cached Jinja2 environment with custom filters (`datefmt`, `durfmt`, `msfmt`, `pctfmt`, `statuspct`, `severity_class`, `deltafmt`, `trapname`, `durfmt_flap`, `cleandetail`). `durfmt_flap(duration, ongoing)` renders incident durations honestly — `"open"` only when `ongoing=True`, `"<1s"` for sub-second resolves, the usual `durfmt` for known values, and `"—"` when the duration is unknown AND the sensor isn't currently bad (historical rows that never got a resolve stamp). `cleandetail(s, maxlen=80)` strips a stale trailing `"ms"` suffix from non-latency flap details (e.g. `"Memory Consumed: 8192.0ms"` → `"Memory Consumed: 8192.0"`) — older probe builds wrote every value with `"ms"` regardless of unit; the filter applies only when the detail mentions a non-latency metric keyword (memory, uptime, disk usage/read/write/…-latency, network rx/tx, power consumption, bytes) so real ping/TCP latency strings are left untouched. `render_pdf(kind, ctx, pdfa_mode)` wraps WeasyPrint; when `pdfa_mode` is `"pdf/a-1b"` / `"pdf/a-2b"` / `"pdf/a-3b"` it passes `pdf_variant=` to `write_pdf()`; falls back to standard PDF on `TypeError` (WeasyPrint < 62) or any other exception and logs a warning — the report always goes out.
+
+**`reports/charts.py`** — Matplotlib `Agg` backend only (no display); each function returns a base64-encoded `data:image/png;base64,…` URI ready to embed in the HTML template.
+
+**`reports/runner.py`** — `render_from_template(template, period_override, triggered_by)` → `(pdf_bytes, ctx, ms)`. `run_template_now(template_id)` renders, saves PDF+CSV to `REPORTS_DIR`, inserts a history row, and returns the row dict (no email). `run_schedule(sch)` renders, saves, inserts a pending history row, resolves recipients, calls `send_report_email()`, then updates the delivery status. Both paths compute SHA-256 of the PDF bytes and a deterministic 12-char Report ID: `sha256(template_id | period_start | period_end | generated_at)[:12].upper()`.
+
+**`reports/scheduler.py`** — daemon thread; checks all enabled schedules every 60 s; fires schedules whose `next_run_ts` is due; 90-second dedupe guard prevents double-firing across restarts; supports daily / weekly (day-of-week bitmask) / monthly (day-of-month) / quarterly cadences. Also runs `db_prune_report_history()` hourly (removes history rows + PDF/CSV files on disk older than `report_retention_days`, default 365).
+
+**`reports/delivery.py`** — `send_report_email(recipients, subject, body, pdf_bytes, pdf_filename, csv_bytes, csv_filename)` builds a `multipart/mixed` MIME message, reuses the shared SMTP connection from `monitoring/smtp_alert.py`; returns `(ok, error_str)`.
+
+**`reports/csv_export.py`** — `build_csv_sidecar(ctx)` → `bytes`. Sections: metadata header → Availability by device → Incident summary → Worst/noisiest devices → Latency percentiles → SNMP traps → TLS certificates → Incident log → Device inventory. UTF-8 BOM prepended so Excel auto-detects the encoding.
+
+**Storage path** — `REPORTS_DIR` resolves to `$PW_REPORTS_DIR` → `$XDG_DATA_HOME/pingwatch/reports` → `~/.local/share/pingwatch/reports`. Lives outside the git checkout so `git pull` as root never makes it unwritable. `_ensure_dir()` in `runner.py` falls back to a per-user temp dir and logs a warning if the primary path is not writable.
+
 ---
 
 ## Route Modules
 
 | Module | Endpoints |
 |--------|-----------|
-| `auth.py` | `/api/login`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/users/{u}/profile` |
+| `auth.py` | `/api/login`, `/api/login/totp`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile`, `/api/me/totp/setup`, `/api/me/totp/verify`, `/api/me/totp/disable`, `/api/me/totp/remember-hours`, `/api/me/trusted-devices`, `/api/me/trusted-devices/{id}`, `/api/users/{u}/totp/reset` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
-| `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/device/{did}/scan` |
+| `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats`, `/api/anomaly/bulk-enable` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit` |
@@ -321,6 +382,7 @@ VMware vSphere integration via pyvmomi (optional, lazy-imported). Provides VM di
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
 | `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
+| `reports.py` | `/api/reports/templates`, `/api/reports/template`, `/api/reports/template/{id}`, `/api/reports/schedules`, `/api/reports/schedule`, `/api/reports/schedule/{id}`, `/api/reports/history`, `/api/reports/history/{id}`, `/api/reports/history/{id}/download`, `/api/reports/history/{id}/csv`, `/api/reports/history/bulk-delete`, `/api/reports/run`, `/api/reports/preview`, `/api/reports/test-send` |
 
 ---
 
@@ -347,7 +409,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder) |
+| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`, `theme_preference`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder); TOTP helpers (`db_get_totp`, `db_set_totp`, `db_clear_totp`); trusted-device helpers (`db_add_trusted_device`, `db_lookup_trusted_device`, `db_touch_trusted_device`, `db_list_trusted_devices`, `db_revoke_trusted_device`, `db_revoke_trusted_devices`, `db_sweep_expired_trusted_devices`, `db_get_remember_hours`, `db_set_remember_hours`) |
 | `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
@@ -356,6 +418,7 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `alert_profiles.py` | Alert profile CRUD, action template CRUD, stage state tracking (`alert_profile_state`) |
 | `alert_events.py` | Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count |
 | `licenses.py` | `device_licenses` table CRUD — `db_get_licenses(did)`, `db_get_all_licenses()`, `db_add_license()`, `db_update_license()`, `db_delete_license()`, `db_delete_device_licenses(did)`, `db_update_license_status()` (internal), `db_license_summary()` |
+| `reports.py` | `report_templates` / `report_schedules` / `report_history` table CRUD — `db_list/get/create/update/delete_report_template`, `db_*_report_schedule`, `db_list/get/add_report_history`, `db_update_report_history_delivery`, `db_prune_report_history`, `db_record_schedule_run`, `db_set_schedule_enabled` |
 
 ### `app_settings` table
 
@@ -380,6 +443,9 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `db_backup_days` | `"1,2,3,4,5,6,7"` | Days of week for weekly DB backup |
 | `db_backup_keep` | integer string | Number of DB backup snapshots to retain (default 7) |
 | `max_workers_executor` | integer string | Probe worker override (4–512). `"0"` or absent = auto (`max(64, min(512, sensor_count // 4))`). Live resize on device add/delete — no restart needed. |
+| `report_footer_text` | text | Custom text shown in the PDF report footer (e.g. "Confidential — Internal Use Only") |
+| `report_brand_color` | `"#rrggbb"` | Accent colour used in the report cover page and headings (defaults to `#2f81f7`) |
+| `report_retention_days` | integer string | How many days to keep report history rows + PDF/CSV files on disk (default `"365"`) |
 
 ---
 
@@ -391,25 +457,28 @@ The frontend is served as static files — no build step.
 |------|---------|
 | `index.html` | Main dashboard shell — loads all JS/CSS |
 | `style.css` | Application-wide styles and CSS variables |
-| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.) |
-| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table |
+| `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.); reconciles `theme_preference` from `/api/me` into `setTheme(..., {sync:false})` after login |
+| `theme.js` | Theme manager — public API `getTheme()` / `setTheme(t, opts)` / `toggleTheme()` / `getCssVar(name)` / `getCssRgb(name)`. `setTheme` writes `<html data-theme>`, persists `localStorage.pw_theme`, postMessages the map iframe, dispatches a `themechange` `CustomEvent`, refreshes the user-menu button label, and fires `PATCH /api/me/theme` in the background (skipped when `opts.sync===false` to avoid echo when mirroring the server value). `getCssRgb()` parses `#rgb` / `#rrggbb` / `rgb()` / `rgba()` values into `[r,g,b]` tuples — used by canvas modules that need `rgba(${rgb.join(',')},${alpha})` template literals. An inline bootstrap script in `<head>` applies the attribute synchronously before CSS paints — prevents FOUC. Loaded first in the JS bundle so downstream modules can call `getCssVar()` / `getCssRgb()` during init. |
+| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
-| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates |
+| `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates. History chart + sparkline canvases maintain a module-level `_SCC` RGB cache (`accent` / `up` / `warn` / `down` / `text` / `bg` / `bg2`) populated via `getCssRgb()` and invalidated on the `themechange` event; the listener iterates `_histCache` and calls `dmHistRedraw(did, sid)` on every open chart so all visible history modals repaint immediately after a theme toggle |
 | `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal; **Licenses section** — collapsible `<details>` with status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day inputs, add/delete per license; `_edLicLoad()`, `_edLicRender()`, `_edLicAdd()`, `_edLicDel()`, `_edLicStatusBadge()` |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Logs tab: Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()` (immediate `PATCH /api/settings`; reverts on failure). Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Integrations tab: SMTP / Syslog / LDAP sub-tabs each carry a live status dot (`ibadge-{id}`) and status bar updated by `_renderIntegStatus()`; LDAP dot reflects `ldap_status` from `GET /api/settings` (ok/error/configured/unconfigured). Logs tab: time-range filter offers 5 m / 15 m / 1 h / 3 h / 6 h (default) / 12 h / 24 h presets plus a **Custom range** option that reveals inline datetime-local pickers (From / To); `_logFilter.customFrom` / `_logFilter.customTo` are sent as `after=` / `before=` params to the log API. Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()`. Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal including Group Integration section (auto-provision, nested groups, group base DN, group filter, sync interval) and Test User Groups sub-dialog |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
 | `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, Type column, multi-NIC ⚠ flags), per-device sensor review, bulk add; **per-device group assignment** — default group dropdown plus per-row group input with `_discGrpFocus`/`_discGrpBlur` datalist UX; `customGroups[ip]` overrides; accent border on overridden rows |
+| `reports.js` | Reports tab (Templates / Schedules / History sub-tabs). Template editor modal: kind, period (including custom `datetime-local` range picker), severity filter, recipients, CSV sidecar checkbox, PDF compliance select (Standard / PDF/A-1b / 2b / 3b); browser preview in a new tab; Run Now with spinner + elapsed counter; test-send modal with recipient input and inline status; history table with download buttons. Helper modals: `_rptConfirm()`, `_rptNotify()`, `_rptShowProgress()` replace browser alert/confirm/prompt. |
 | `alerting.js` | Alert profiles editor (PRTG-style escalation table with delay / repeat / action columns), reusable action template editor (email with user+group checkbox pickers, webhook, syslog, browser push), alert event history viewer, maintenance windows |
 | `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **sortable columns** (click headers, ▲/▼ arrows) on all 7 columns with IP-numeric, alpha, and date comparators; **filter dropdowns** on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None); sort + filter + text search compose together; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` |
-| `bg.js` | Animated background canvas (aurora + radar) |
-| `map.js` | NTM canvas engine — drag-and-drop topology editor |
+| `bg.js` | Animated background canvas (aurora + radar). Theme-aware: RGB colour cache populated via `getCssRgb()` from `--accent` / `--up` / `--text2`, refreshed by a `themechange` listener — the next RAF frame picks up the new palette without a page reload |
+| `map.js` | NTM canvas engine — drag-and-drop topology editor. Iframe theme sync: parent postMessage (`{type:'theme', value}`) + localStorage bootstrap (same-origin with parent) set `<html data-theme>` on arrival/load. Animated background palettes — two frozen objects (`_NTM_BG_PALETTES.dark` / `.light`) feeding an active `_NTM_BG` reference; `_ntmRefreshBgPalette()` swaps it and dispatches `ntm_themechange`. `initMainBg` (hex grid, matrix streams, particles, ring pulses, scan line, corner HUD, base fill) and `initDashBg` (side-panel particles + connections + scan bar) read `_NTM_BG` every frame; the `ntm_themechange` listener zeroes `hexCacheW/H` so the offscreen hex cache rebuilds with the new stroke colour on the next frame |
+| `fonts/` | Self-hosted `.woff2` font files (Exo 2, JetBrains Mono, Orbitron, Share Tech Mono). Referenced by `@font-face` rules in `style.css` + `map.css` + inline `<style>` in `setup.html`. No external CDN — PingWatch has zero network dependencies at runtime (air-gapped safe). CSP reflects this: `style-src 'self' 'unsafe-inline'; font-src 'self';` in `server.py`. For PNG topology exports, `map.js::_inlineFontsForExport()` base64-embeds the Orbitron + Share Tech Mono woff2 files so exported images render correctly outside the app. |
 
 ---
 
@@ -439,9 +508,11 @@ The frontend is served as static files — no build step.
 | `DELETE` | `/api/devices/{did}` | Delete device |
 | `GET` | `/api/sensors/{did}` | List sensors for a device |
 | `POST` | `/api/sensors/{did}` | Add a sensor |
-| `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor |
+| `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor (accepts `anomaly_enabled`, `anomaly_sensitivity`, `anomaly_min_samples`) |
 | `DELETE` | `/api/sensors/{did}/{sid}` | Delete a sensor |
+| `POST` | `/api/sensors/{did}/{sid}/anomaly/reset` | Wipe the learned anomaly baseline (in-memory + DB row); operator role |
 | `POST` | `/api/device/{did}/scan` | Trigger port scan (async) |
+| `POST` | `/api/anomaly/bulk-enable` | Enable anomaly detection on every supported sensor that's currently off; resets each baseline to a fresh cold-start window; admin role |
 
 ### Settings
 
@@ -522,13 +593,56 @@ The frontend is served as static files — no build step.
 | `GET` | `/api/licenses/summary` | viewer | Counts by status `{ok, warn, crit, total}` |
 | `POST` | `/api/licenses/check` | admin | Trigger immediate expiration check |
 
+### Reports
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/reports/templates` | viewer | List all report templates |
+| `POST` | `/api/reports/template` | admin | Create template `{name, kind, config_json}` |
+| `GET` | `/api/reports/template/{id}` | viewer | Get template detail |
+| `PATCH` | `/api/reports/template/{id}` | admin | Update template |
+| `DELETE` | `/api/reports/template/{id}` | admin | Delete template |
+| `GET` | `/api/reports/schedules` | viewer | List all report schedules |
+| `POST` | `/api/reports/schedule` | admin | Create schedule |
+| `PATCH` | `/api/reports/schedule/{id}` | admin | Update schedule (incl. enable/disable) |
+| `DELETE` | `/api/reports/schedule/{id}` | admin | Delete schedule |
+| `GET` | `/api/reports/history` | viewer | Paginated report history; optional `template_id` filter |
+| `GET` | `/api/reports/history/{id}` | viewer | Single history record |
+| `GET` | `/api/reports/history/{id}/download` | viewer | Download the generated PDF |
+| `GET` | `/api/reports/history/{id}/csv` | viewer | Download the CSV sidecar (if generated) |
+| `DELETE` | `/api/reports/history/{id}` | admin | Delete one history row + its PDF/CSV files |
+| `POST` | `/api/reports/history/bulk-delete` | admin | Delete many history rows `{ids:[…]}` — capped at 500 per call; returns `{deleted, missing}` |
+| `POST` | `/api/reports/run` | operator | Ad-hoc Run Now `{template_id}` — renders, saves PDF, returns history row |
+| `POST` | `/api/reports/preview` | operator | Render HTML preview `{template_id}` — returns full HTML with inlined CSS (no PDF) |
+| `POST` | `/api/reports/test-send` | operator | Test email delivery `{template_id, recipients}` — renders and emails PDF without saving history |
+
 ### User Profiles
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/me` | any | Own username, role, full_name, email |
-| `PATCH` | `/api/me/profile` | any | Update own full_name and email |
+| `GET` | `/api/me` | any | Own username, role, full_name, email, theme_preference |
+| `PATCH` | `/api/me/profile` | any | Update own full_name and email (also accepts optional `theme_preference`) |
+| `PATCH` | `/api/me/theme` | any | Update own theme preference `{theme: "dark"\|"light"}` — fired in the background by `setTheme()` |
 | `PATCH` | `/api/users/{u}/profile` | admin or self | Update profile; admin can also set group_id and role |
+
+### Two-Factor Authentication
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/me/totp/setup` | any | Generate TOTP secret + QR code URI `{secret, qr_uri}`. Idempotent — safe to call multiple times before verification. |
+| `POST` | `/api/me/totp/verify` | any | Confirm enrolment `{code, secret}`. Activates 2FA and returns 8 single-use recovery codes. |
+| `POST` | `/api/me/totp/disable` | any | Disable 2FA for self `{password}`. Revokes all trusted devices for the user. |
+| `POST` | `/api/users/{u}/totp/reset` | admin | Admin: disable 2FA for `{u}` and revoke all their trusted devices. |
+| `POST` | `/api/login/totp` | — | Complete a TOTP challenge `{challenge_id, code, remember?, remember_hours?}`. On success sets `session` cookie; optionally sets `pw_trusted` cookie when `remember=true`. |
+
+### Trusted Devices
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/me/trusted-devices` | viewer | List own trusted devices — label, IP, last used, expiry; includes `remember_hours` preference; current device flagged with `current: true` |
+| `DELETE` | `/api/me/trusted-devices` | viewer | Revoke all own trusted devices and clear the `pw_trusted` cookie |
+| `DELETE` | `/api/me/trusted-devices/{id}` | viewer | Revoke one trusted device; clears `pw_trusted` cookie if the request matches the current device |
+| `PATCH` | `/api/me/totp/remember-hours` | viewer | Set personal default remember duration `{hours: 9}` (0–720; 0 = always prompt TOTP) |
 
 ### User Groups
 

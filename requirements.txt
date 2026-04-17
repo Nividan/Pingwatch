@@ -5,6 +5,13 @@ paramiko>=3.0.0
 cryptography>=41.0.0
 ldap3>=2.9
 psutil>=5.9.0
+pyotp>=2.9.0   # TOTP (RFC 6238) — two-factor authentication
+qrcode>=7.4.0  # QR code image rendering for 2FA enrolment
+
+# Reports module — HTML→PDF rendering and chart generation
+weasyprint>=62.0      # HTML+CSS → PDF (needs Pango/Cairo system libs — see notes)
+Jinja2>=3.1           # HTML template rendering for report body + email
+matplotlib>=3.7       # Charts (rendered to PNG, embedded as data URIs)
 
 # Optional: PostgreSQL backend (required only if using PostgreSQL instead of SQLite)
 psycopg2-binary>=2.9.9
@@ -17,6 +24,8 @@ psycopg2-binary>=2.9.9
 # Linux (Debian/Ubuntu):
 #   sudo apt-get install python3-tk python3-dev iputils-ping snmp
 #   sudo apt-get install python3-xlib   # optional: pystray system tray on Linux
+#   sudo apt-get install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+#                        libgdk-pixbuf-2.0-0 libffi-dev   # required by weasyprint (Reports)
 #
 #   On Debian/Ubuntu 12+ (PEP 668 "externally managed"), pip refuses to install
 #   packages system-wide. Use one of:

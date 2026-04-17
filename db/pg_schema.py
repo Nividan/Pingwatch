@@ -21,15 +21,59 @@ def pg_create_main_schema(cur):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            username  TEXT PRIMARY KEY,
-            pw_hash   TEXT NOT NULL,
-            role      TEXT DEFAULT 'admin',
-            auth_type TEXT DEFAULT 'local',
-            domain    TEXT DEFAULT '',
-            full_name TEXT DEFAULT '',
-            email     TEXT DEFAULT '',
-            group_id  INTEGER DEFAULT NULL
+            username            TEXT PRIMARY KEY,
+            pw_hash             TEXT NOT NULL,
+            role                TEXT DEFAULT 'admin',
+            auth_type           TEXT DEFAULT 'local',
+            domain              TEXT DEFAULT '',
+            full_name           TEXT DEFAULT '',
+            email               TEXT DEFAULT '',
+            group_id            INTEGER DEFAULT NULL,
+            theme_preference    TEXT DEFAULT 'dark',
+            totp_secret         TEXT DEFAULT '',
+            totp_enabled        INTEGER DEFAULT 0,
+            totp_recovery       TEXT DEFAULT '',
+            totp_remember_hours INTEGER DEFAULT 9
         )""")
+    # Migration: add theme_preference for existing installs
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema='main' AND table_name='users'
+                  AND column_name='theme_preference'
+            ) THEN
+                ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'dark';
+            END IF;
+        END $$
+    """)
+    # Migration: add TOTP columns for existing installs (2FA)
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_secret') THEN
+                ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT '';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_enabled') THEN
+                ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_recovery') THEN
+                ALTER TABLE users ADD COLUMN totp_recovery TEXT DEFAULT '';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='totp_remember_hours') THEN
+                ALTER TABLE users ADD COLUMN totp_remember_hours INTEGER DEFAULT 9;
+            END IF;
+        END $$
+    """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
@@ -74,7 +118,7 @@ def pg_create_main_schema(cur):
             dns_record_type      TEXT DEFAULT 'A',
             dns_server           TEXT DEFAULT '',
             http_expected_status INTEGER DEFAULT 0,
-            fail_after           INTEGER DEFAULT 1,
+            fail_after           INTEGER DEFAULT 2,
             recover_after        INTEGER DEFAULT 1,
             warn_ms              INTEGER,
             crit_ms              INTEGER,
@@ -102,6 +146,9 @@ def pg_create_main_schema(cur):
         ("sensors", "vmware_vm_id",            "TEXT DEFAULT ''"),
         ("sensors", "vmware_vm_name",          "TEXT DEFAULT ''"),
         ("sensors", "vmware_metric",           "TEXT DEFAULT ''"),
+        ("sensors", "anomaly_enabled",         "INTEGER DEFAULT 0"),
+        ("sensors", "anomaly_sensitivity",     "INTEGER DEFAULT 2"),
+        ("sensors", "anomaly_min_samples",     "INTEGER DEFAULT 50"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
@@ -120,6 +167,18 @@ def pg_create_main_schema(cur):
         CREATE TABLE IF NOT EXISTS app_settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )""")
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
+            did           TEXT NOT NULL,
+            sid           TEXT NOT NULL,
+            mean_ms       DOUBLE PRECISION,
+            var_ms        DOUBLE PRECISION,
+            sample_count  INTEGER DEFAULT 0,
+            enabled_since DOUBLE PRECISION,
+            updated_at    DOUBLE PRECISION,
+            PRIMARY KEY (did, sid)
         )""")
 
     cur.execute("""
@@ -454,6 +513,106 @@ def pg_create_main_schema(cur):
         "CREATE INDEX IF NOT EXISTS idx_dev_lic_did ON device_licenses(did)"
     )
 
+    # ── Trusted devices (Remember 2FA) ───────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS trusted_devices (
+            id           SERIAL PRIMARY KEY,
+            username     TEXT    NOT NULL,
+            token_hash   TEXT    NOT NULL UNIQUE,
+            device_label TEXT    DEFAULT '',
+            created_at   DOUBLE PRECISION DEFAULT 0,
+            expires_at   DOUBLE PRECISION DEFAULT 0,
+            last_used_at DOUBLE PRECISION DEFAULT 0,
+            ip           TEXT    DEFAULT '',
+            user_agent   TEXT    DEFAULT ''
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trusted_dev_user "
+        "ON trusted_devices(username)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trusted_dev_exp "
+        "ON trusted_devices(expires_at)"
+    )
+
+    # ── Reports: templates, schedules, generated history ────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS report_templates (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_by  TEXT DEFAULT '',
+            created_at  DOUBLE PRECISION DEFAULT 0,
+            updated_at  DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS report_schedules (
+            id               TEXT PRIMARY KEY,
+            template_id      TEXT NOT NULL,
+            name             TEXT NOT NULL,
+            freq             TEXT NOT NULL DEFAULT 'monthly',
+            time_str         TEXT NOT NULL DEFAULT '03:00',
+            day_of_week      TEXT DEFAULT '1',
+            day_of_month     INTEGER DEFAULT 1,
+            period           TEXT NOT NULL DEFAULT 'last_month',
+            timezone         TEXT DEFAULT '',
+            recipient_group  INTEGER DEFAULT 0,
+            recipient_emails TEXT DEFAULT '[]',
+            subject_tpl      TEXT DEFAULT '',
+            body_tpl         TEXT DEFAULT '',
+            enabled          INTEGER DEFAULT 1,
+            last_run_ts      DOUBLE PRECISION DEFAULT 0,
+            next_run_ts      DOUBLE PRECISION DEFAULT 0,
+            created_by       TEXT DEFAULT '',
+            created_at       DOUBLE PRECISION DEFAULT 0,
+            updated_at       DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS report_history (
+            id               TEXT PRIMARY KEY,
+            template_id      TEXT,
+            template_name    TEXT DEFAULT '',
+            schedule_id      TEXT DEFAULT '',
+            kind             TEXT DEFAULT '',
+            generated_at     DOUBLE PRECISION NOT NULL,
+            period_start     DOUBLE PRECISION DEFAULT 0,
+            period_end       DOUBLE PRECISION DEFAULT 0,
+            pdf_path         TEXT DEFAULT '',
+            pdf_bytes        INTEGER DEFAULT 0,
+            pdf_sha256       TEXT DEFAULT '',
+            csv_path         TEXT DEFAULT '',
+            csv_bytes        INTEGER DEFAULT 0,
+            report_id        TEXT DEFAULT '',
+            delivery_status  TEXT DEFAULT '',
+            recipients_json  TEXT DEFAULT '[]',
+            render_ms        INTEGER DEFAULT 0,
+            error            TEXT DEFAULT '',
+            triggered_by     TEXT DEFAULT ''
+        )""")
+    # Idempotent migrations — add columns to existing installs
+    for _col, _typedef in [
+        ("pdf_sha256", "TEXT DEFAULT ''"),
+        ("csv_path",   "TEXT DEFAULT ''"),
+        ("csv_bytes",  "INTEGER DEFAULT 0"),
+        ("report_id",  "TEXT DEFAULT ''"),
+    ]:
+        try:
+            cur.execute("SAVEPOINT _alter_rh")
+            cur.execute(f"ALTER TABLE report_history ADD COLUMN {_col} {_typedef}")
+            cur.execute("RELEASE SAVEPOINT _alter_rh")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT _alter_rh")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_hist_gen "
+        "ON report_history(generated_at DESC)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_hist_tpl "
+        "ON report_history(template_id)"
+    )
+
     # ── Topology map tables ──────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS topo_pages (
@@ -689,7 +848,7 @@ def pg_seed_defaults(cur):
         ("retention_days",     "365"),
         ("snr_interval",       "5"),
         ("snr_timeout",        "4"),
-        ("snr_fail_after",     "1"),
+        ("snr_fail_after",     "2"),
         ("snr_recover_after",  "1"),
         ("max_flaps_display",  "20"),
         ("max_flap_entries",   "500"),

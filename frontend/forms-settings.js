@@ -117,17 +117,29 @@ function _buildSettingsTab_general(sr) {
         <div class="fl" style="margin-bottom:10px">Appearance</div>
         <div class="fr"><label class="fl">Organisation Name</label>
           <input type="text" id="st-orgname" value="${esc(sr.org_name||'')}" placeholder="Network Monitor" style="max-width:260px"/>
-          <div class="fh">Shown in the top bar and browser tab title</div></div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Latency Colour Thresholds</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
-            <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
-          <div class="fr"><label class="fl" style="color:var(--warn)">Warn (yellow) &lt; (ms)</label>
-            <input type="number" id="st-lwarn" value="${sr.latency_warn_ms||300}" min="1" max="10000" style="max-width:100px"/></div>
+          <div class="fh">Used in the top bar, browser tab title, alert email header/footer, and PDF report cover page.</div></div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Logo Image</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div id="st-logo-preview" style="width:120px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
+              ${sr.email_logo_data
+                ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:116px;max-height:44px;object-fit:contain"/>'
+                : '<span style="color:var(--text3);font-size:9px">Default</span>'}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label class="btn-s" style="cursor:pointer;display:inline-block;text-align:center">
+                Upload
+                <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/gif,image/svg+xml" style="display:none"
+                       onchange="_stLogoFileChange(this)"/>
+              </label>
+              <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
+                      onclick="_stLogoRemove()">Remove</button>
+            </div>
+            <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG &mdash; max 2 MB</span>
+          </div>
+          <div class="fh">Used on alert email header bars and PDF report cover pages. Toggle email visibility in Integrations &rarr; SMTP.</div>
+          <input type="hidden" id="st-email-logo-data" value=""/>
         </div>
-        <div class="fh">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
       </div>
       <div class="fr" style="margin-top:16px">
         <div class="fl" style="margin-bottom:10px">Server Info</div>
@@ -177,8 +189,22 @@ function _buildSettingsTab_users(sr, ur) {
             <input type="number" id="st-fail-win" value="${sr.login_fail_window||60}" min="10" max="3600" style="max-width:100px"/>
             <div class="fh">Window to count failed attempts</div></div>
         </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">2FA remember duration (h)</label>
+            <input type="number" id="st-totp-remember" value="${sr.totp_remember_hours??9}" min="0" max="720" style="max-width:100px"/>
+            <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled, max 720 h / 30 days)</div></div>
+        </div>
       </div>
     </div>`;
+}
+
+async function _anomBulkEnable(){
+  if(!confirm('Enable anomaly detection on all supported sensors (ping, tcp, http, dns, http_keyword, banner)?\n\nEach gets a fresh cold-start window — no alerts fire for the first 24 hours.')) return;
+  try{
+    const r=await api('POST','/api/anomaly/bulk-enable',{});
+    if(r&&r.error){toast(r.error,'err');return;}
+    toast(`Enabled on ${r.enabled} sensor(s); skipped ${r.skipped}`,'ok');
+  }catch(e){toast('Bulk enable failed','err');}
 }
 
 function _buildSettingsTab_groups() {
@@ -198,7 +224,7 @@ function _buildSettingsTab_integrations(sr) {
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
-        <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD</button>
+        <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD <span id="ibadge-ldap" style="font-size:13px"></span></button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -229,41 +255,15 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr"><label class="fl">To</label>
             <input type="text" id="st-smtp-to"   value="${sr.smtp_to||''}"   placeholder="alerts@yourdomain.com"/></div>
         </div>
-        <!-- Email Style -->
+        <!-- Email options -->
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Email Style</div>
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Email Options</div>
           <div class="fr" style="margin-top:0">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
               <input type="checkbox" id="st-email-logo" ${sr.email_logo!==0?'checked':''}>
               <span class="fl" style="margin:0">Show logo in alert emails</span>
             </label>
-            <div class="fh" style="margin-left:24px">Displayed in the email header bar</div>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Logo Image</label>
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <div id="st-logo-preview" style="width:120px;height:48px;border-radius:6px;background:#141b24;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);overflow:hidden">
-                ${sr.email_logo_data
-                  ? '<img src="'+esc(sr.email_logo_data)+'" style="max-width:116px;max-height:44px;object-fit:contain"/>'
-                  : '<span style="color:var(--text3);font-size:9px">Default</span>'}
-              </div>
-              <div style="display:flex;flex-direction:column;gap:4px">
-                <label class="btn-s" style="cursor:pointer;display:inline-block;text-align:center">
-                  Upload
-                  <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/gif,image/svg+xml" style="display:none"
-                         onchange="_stLogoFileChange(this)"/>
-                </label>
-                <button class="btn-s" id="st-logo-remove" style="${sr.email_logo_data?'':'display:none'}"
-                        onclick="_stLogoRemove()">Remove</button>
-              </div>
-              <span style="font-size:10px;color:var(--text3)">PNG, JPEG, or SVG — max 2 MB</span>
-            </div>
-            <input type="hidden" id="st-email-logo-data" value=""/>
-          </div>
-          <div class="fr" style="margin-top:10px">
-            <label class="fl">Company Name</label>
-            <input type="text" id="st-email-company" value="${esc(sr.email_company_name||'')}" placeholder="PingWatch" style="max-width:260px"/>
-            <div class="fh">Shown in email header and footer — leave blank for "PingWatch"</div>
+            <div class="fh" style="margin-left:24px">Displays the logo image in the email header bar.</div>
           </div>
         </div>
         <div style="margin-top:14px">
@@ -271,6 +271,8 @@ function _buildSettingsTab_integrations(sr) {
         </div>
         <div style="margin-top:12px;font-size:11px;color:var(--text3)">
           SMTP credentials power email actions in <b>Alert Profiles</b>. Per-stage delay and repeat are configured per profile.
+          The display name and logo image used in emails come from <b>General &rarr; Appearance</b>.
+          Report styling is configured in the <b>Reports</b> tab.
         </div>
       </div>
 
@@ -295,15 +297,6 @@ function _buildSettingsTab_integrations(sr) {
             <option value="tcp" ${(sr.syslog_proto||'udp')==='tcp'?'selected':''}>TCP</option>
           </select>
           <div class="fh">UDP is standard for syslog; use TCP for reliable delivery</div>
-        </div>
-        <div class="fr" style="margin-top:14px">
-          <label class="fl">Minimum Severity</label>
-          <select id="st-sl-minsev" style="max-width:160px">
-            <option value="critical" ${(sr.syslog_min_severity||'warning')==='critical'?'selected':''}>Critical only</option>
-            <option value="warning"  ${(sr.syslog_min_severity||'warning')==='warning'?'selected':''}>Warning and above</option>
-            <option value="info"     ${(sr.syslog_min_severity||'warning')==='info'?'selected':''}>All events</option>
-          </select>
-          <div class="fh">Events below this severity are not forwarded</div>
         </div>
         <div style="margin-top:16px;padding:10px 12px;background:var(--bg3);border-radius:6px;font-size:12px;color:var(--text3);line-height:1.5">
           Messages are sent in <strong style="color:var(--text2)">RFC 5424</strong> format with facility LOCAL0.
@@ -347,6 +340,7 @@ function _buildSettingsTab_integrations(sr) {
 
       <!-- ── LDAP sub-panel ── -->
       <div id="ipanel-ldap" style="display:none">
+        <div id="ldap-status-bar"></div>
 
         <!-- Enable toggle -->
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
@@ -541,12 +535,21 @@ function _buildSettingsTab_logs(sr) {
       </div>
       <div class="log-filter-bar">
         <select id="logFTime" onchange="_onLogFilterChange()">
-          <option value="all" selected>All time</option>
+          <option value="all">All time</option>
           <option value="5m">Last 5 min</option>
           <option value="15m">Last 15 min</option>
           <option value="1h">Last 1 hour</option>
+          <option value="3h">Last 3 hours</option>
+          <option value="6h" selected>Last 6 hours</option>
+          <option value="12h">Last 12 hours</option>
           <option value="24h">Last 24 hours</option>
+          <option value="custom">Custom range\u2026</option>
         </select>
+        <div id="logFCustomWrap" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+          <input type="datetime-local" id="logFCustomFrom" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
+          <span style="font-size:11px;color:var(--text3)">to</span>
+          <input type="datetime-local" id="logFCustomTo" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
+        </div>
         <select id="logFLevel" onchange="_onLogFilterChange()">
           <option value="">All Levels</option>
           <option value="DEBUG">DEBUG</option>
@@ -566,6 +569,30 @@ function _buildSettingsTab_logs(sr) {
     </div>`;
 }
 
+function _buildSettingsTab_reports(sr) {
+  return `<div class="mbdy stab-fade" id="stab-reports" style="display:none;overflow-y:auto;flex:1">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Configure how generated PDF reports look and how long they're kept on disk.
+        The display name and logo image used on the cover page come from <b>General &rarr; Appearance</b>.
+      </div>
+      <div class="fr">
+        <label class="fl">Report Footer Text</label>
+        <input type="text" id="st-report-footer" value="${esc(sr.report_footer_text||'')}" placeholder="e.g. Confidential — internal use only"/>
+        <div class="fh">Free-form text shown in the footer section of every generated PDF report.</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Report Brand Color</label>
+        <input type="color" id="st-report-color" value="${esc(sr.report_brand_color||'#0969da')}" style="width:60px;height:32px;padding:0;border:1px solid var(--border);border-radius:4px"/>
+        <div class="fh">Hex color used for report headings, title rules, and cover-page accents. Defaults to app accent.</div>
+      </div>
+      <div class="fr" style="margin-top:14px">
+        <label class="fl">Report Retention (days)</label>
+        <input type="number" id="st-report-retention" min="0" max="3650" value="${sr.report_retention_days||365}" style="max-width:120px"/>
+        <div class="fh">Auto-delete generated PDFs and history entries older than this many days. Set to 0 to keep everything forever.</div>
+      </div>
+    </div>`;
+}
+
 function _buildSettingsTab_sensors(sr) {
   const _scanActive = new Set(
     String(sr.scan_ports || 'ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443')
@@ -580,15 +607,63 @@ function _buildSettingsTab_sensors(sr) {
   return `<div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
         <div class="fl" style="margin-bottom:6px">Global Defaults</div>
-        <div class="fh" style="margin-bottom:10px">Fallback values applied to all new sensors — override per type below.</div>
+        <div class="fh" style="margin-bottom:10px">Applied to <b>new sensors only</b> — existing sensors keep their stored values. Override per type below.</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Interval (s)</label>
             <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
           <div class="fr"><label class="fl">Timeout (s)</label>
             <input type="number" id="st-snr-tmo" value="${sr.snr_timeout||4}" min="1" max="60" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Fail after <span class="fh" style="font-weight:400">(consecutive fails before DOWN)</span></label>
+            <input type="number" id="st-snr-fa" value="${sr.snr_fail_after||2}" min="1" max="20" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl">Recover after <span class="fh" style="font-weight:400">(consecutive OKs before UP)</span></label>
+            <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="20" style="max-width:100px"/></div>
         </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">🧠 Anomaly Detection</div>
+        <div class="fh" style="margin-bottom:12px">Learned-baseline detection for ping / tcp / http / dns / http_keyword / banner sensors. Fires a warning only (never crit); static thresholds remain the authoritative critical ladder.</div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Global (master switch)</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-anom-en" ${sr.anomaly_global_enabled!==0?'checked':''}>
+            <span class="fl" style="margin:0">Enable anomaly detection</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">When off, no sensor fires anomaly alerts regardless of its per-sensor setting.</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Cold-start suppression (h)</label>
+            <input type="number" id="st-anom-cold" value="${sr.anomaly_cold_start_hours??24}" min="0" max="168" style="max-width:100px"/>
+            <div class="fh">No alerts fire for this long after a sensor first enables detection.</div></div>
+          <div class="fr"><label class="fl">Baseline checkpoint (s)</label>
+            <input type="number" id="st-anom-ckpt" value="${sr.anomaly_checkpoint_interval_s??3600}" min="60" max="86400" style="max-width:100px"/>
+            <div class="fh">How often to save learned baselines to disk. Default 3600 s (1 h).</div></div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px">Defaults for new sensors</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-anom-auto" ${sr.anomaly_default_new_sensors?'checked':''}>
+            <span class="fl" style="margin:0">Auto-enable on newly created supported sensors</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">Only affects sensors created after this setting is saved. Existing sensors unchanged — use the action below.</div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px">Apply to existing sensors</div>
+        <button class="btn-s rbac-admin" onclick="_anomBulkEnable()" style="font-size:12px;padding:6px 14px">Enable on all supported sensors now</button>
+        <div class="fh" style="margin-top:4px">Turns the per-sensor toggle on for every ping / tcp / http / dns / http_keyword / banner sensor. Each gets a fresh cold-start window — no alert storm.</div>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
+        <div class="fh" style="margin-bottom:10px">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
+            <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
+          <div class="fr"><label class="fl" style="color:var(--warn)">Warn (yellow) &lt; (ms)</label>
+            <input type="number" id="st-lwarn" value="${sr.latency_warn_ms||300}" min="1" max="10000" style="max-width:100px"/></div>
+        </div>
+      </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Port Scanner</div>
         <div class="fh" style="margin-bottom:10px">Choose which ports are probed when you click "Scan" on a device. Custom ports use a TCP probe.</div>
@@ -603,7 +678,26 @@ function _buildSettingsTab_sensors(sr) {
           <button class="btn-s" onclick="_scanPortsReset()">Reset to Defaults</button>
         </div>
       </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">SNMP Traps</div>
+        <div class="fh" style="margin-bottom:10px">Re-enrich historical traps using the current MIB data. Run this after dropping new <code>.mib</code> files into <code>snmp/mibs/</code> and restarting — existing trap rows aren't re-enriched at receive time, so OIDs keep showing as raw numbers until this is clicked.</div>
+        <button class="btn-s rbac-admin" onclick="_snmpReenrich()" style="font-size:12px;padding:6px 14px">Re-enrich historical traps</button>
+        <div class="fh" style="margin-top:4px">Scans every stored trap with an empty name, looks it up in <code>trap_definitions</code>, and backfills name / vendor / severity / category. Safe to re-run.</div>
+      </div>
     </div>`;
+}
+
+async function _snmpReenrich() {
+  if (!confirm('Re-enrich historical SNMP traps? Rows with an empty trap name will be updated in-place from the current MIB-derived definitions.')) return;
+  try {
+    const r = await api('POST', '/api/snmp/reenrich', {});
+    alert(`Done.\n\nScanned: ${r.scanned}\nUpdated: ${r.updated}` +
+          (r.scanned && !r.updated
+            ? '\n\nNo rows matched any known trap OID — check that MIB files are under snmp/mibs/ and the server was restarted after adding them.'
+            : ''));
+  } catch (e) {
+    alert('Re-enrichment failed: ' + (e.message || e));
+  }
 }
 
 function _buildSettingsTab_networking(sr, tr) {
@@ -759,6 +853,7 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
       <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
       <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
+      <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">📄 Reports</button>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
@@ -771,6 +866,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_integrations(sr)}
     ${_buildSettingsTab_database(sr)}
     ${_buildSettingsTab_logs(sr)}
+    ${_buildSettingsTab_reports(sr)}
     ${_buildSettingsTab_sensors(sr)}
     ${_buildSettingsTab_networking(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
@@ -798,6 +894,10 @@ async function openSettings(initialTab){
     </div>
     <div class="mft" id="stab-footer-logs" style="display:none">
       <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
+    </div>
+    <div class="mft" id="stab-footer-reports" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveReportSettings()">Save Report Settings</button>
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -827,7 +927,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','logs','sensors','networking','backup','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','logs','reports','sensors','networking','backup','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -1320,7 +1420,7 @@ async function submitInstallSigned(){
 }
 
 let _activeLogTab = 'app';
-let _logFilter = { timeRange: 'all', level: '', search: '' };
+let _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
 let _logLiveMode = false;
 let _logLiveTimer = null;
 let _logLastTs = '';
@@ -1361,20 +1461,34 @@ function _onLogFilterChange() {
   _logFilter.timeRange = document.getElementById('logFTime')?.value || 'all';
   _logFilter.level     = document.getElementById('logFLevel')?.value || '';
   _logFilter.search    = document.getElementById('logFSearch')?.value || '';
+
+  const customWrap = document.getElementById('logFCustomWrap');
+  if (customWrap) customWrap.style.display = _logFilter.timeRange === 'custom' ? 'flex' : 'none';
+
+  if (_logFilter.timeRange === 'custom') {
+    _logFilter.customFrom = document.getElementById('logFCustomFrom')?.value || '';
+    _logFilter.customTo   = document.getElementById('logFCustomTo')?.value   || '';
+  } else {
+    _logFilter.customFrom = '';
+    _logFilter.customTo   = '';
+  }
+
   _logLastTs = '';
   clearTimeout(_logSearchDebounce);
   _logSearchDebounce = setTimeout(_loadLogTab, 300);
 }
 
 function _clearLogFilters() {
-  _logFilter = { timeRange: 'all', level: '', search: '' };
+  _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
   _logLastTs = '';
-  ['logFTime','logFLevel','logFSearch'].forEach(id => {
+  ['logFTime','logFLevel','logFSearch','logFCustomFrom','logFCustomTo'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? 'all' : '';
+    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? '6h' : '';
     else el.value = '';
   });
+  const customWrap = document.getElementById('logFCustomWrap');
+  if (customWrap) customWrap.style.display = 'none';
   _loadLogTab();
 }
 
@@ -1414,21 +1528,22 @@ async function _loadLogTab() {
   const level = parsed.level || _logFilter.level;
   if (level) params.set('level', level);
 
+  const _dtLocal = d => d.getFullYear() + '-' +
+    String(d.getMonth()+1).padStart(2,'0') + '-' +
+    String(d.getDate()).padStart(2,'0') + ' ' +
+    String(d.getHours()).padStart(2,'0') + ':' +
+    String(d.getMinutes()).padStart(2,'0') + ':' +
+    String(d.getSeconds()).padStart(2,'0');
+
   if (_logLiveMode && _logLastTs) {
     params.set('after', _logLastTs);
+  } else if (_logFilter.timeRange === 'custom') {
+    if (_logFilter.customFrom) params.set('after',  _logFilter.customFrom.replace('T', ' '));
+    if (_logFilter.customTo)   params.set('before', _logFilter.customTo.replace('T', ' '));
   } else if (_logFilter.timeRange !== 'all') {
-    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '24h': 86400 };
+    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '3h': 3*3600, '6h': 6*3600, '12h': 12*3600, '24h': 86400 };
     const sec = offsets[_logFilter.timeRange];
-    if (sec) {
-      const d = new Date(Date.now() - sec * 1000);
-      const after = d.getFullYear() + '-' +
-        String(d.getMonth()+1).padStart(2,'0') + '-' +
-        String(d.getDate()).padStart(2,'0') + ' ' +
-        String(d.getHours()).padStart(2,'0') + ':' +
-        String(d.getMinutes()).padStart(2,'0') + ':' +
-        String(d.getSeconds()).padStart(2,'0');
-      params.set('after', after);
-    }
+    if (sec) params.set('after', _dtLocal(new Date(Date.now() - sec * 1000)));
   }
   if (parsed.search) params.set('search', parsed.search);
   const qs = params.toString();
@@ -1681,9 +1796,27 @@ async function saveSensorTypeDefaults(){
   });
   const snrIv  = parseInt(document.getElementById('st-snr-iv')?.value);
   const snrTmo = parseInt(document.getElementById('st-snr-tmo')?.value);
+  const snrFa  = parseInt(document.getElementById('st-snr-fa')?.value);
+  const snrRa  = parseInt(document.getElementById('st-snr-ra')?.value);
+  const lGood  = parseInt(document.getElementById('st-lgood')?.value);
+  const lWarn  = parseInt(document.getElementById('st-lwarn')?.value);
+  const anomEn   = document.getElementById('st-anom-en')?.checked;
+  const anomAuto = document.getElementById('st-anom-auto')?.checked;
+  const anomCold = parseInt(document.getElementById('st-anom-cold')?.value);
+  const anomCkpt = parseInt(document.getElementById('st-anom-ckpt')?.value);
   const globalDefaults = {};
-  if(snrIv  >= 1) globalDefaults.snr_interval     = snrIv;
+  if(snrIv  >= 1) globalDefaults.snr_interval      = snrIv;
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
+  if(snrFa  >= 1) globalDefaults.snr_fail_after    = snrFa;
+  if(snrRa  >= 1) globalDefaults.snr_recover_after = snrRa;
+  if(lGood  >= 1) globalDefaults.latency_good_ms   = lGood;
+  if(lWarn  >= 1) globalDefaults.latency_warn_ms   = lWarn;
+  if(typeof anomEn   === 'boolean') globalDefaults.anomaly_global_enabled      = anomEn   ? 1 : 0;
+  if(typeof anomAuto === 'boolean') globalDefaults.anomaly_default_new_sensors = anomAuto ? 1 : 0;
+  if(!isNaN(anomCold) && anomCold >= 0 && anomCold <= 168)
+                                    globalDefaults.anomaly_cold_start_hours    = anomCold;
+  if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)
+                                    globalDefaults.anomaly_checkpoint_interval_s = anomCkpt;
   // Collect scan_ports from checkboxes + custom input
   const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
   const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();
@@ -1694,8 +1827,12 @@ async function saveSensorTypeDefaults(){
   if(!r.ok){ toast('Save failed','err'); return; }
   window._snrTypeDefaults = result;
   window._snrDef = window._snrDef || {};
-  if(globalDefaults.snr_interval)     window._snrDef.interval     = globalDefaults.snr_interval;
-  if(globalDefaults.snr_timeout)      window._snrDef.timeout      = globalDefaults.snr_timeout;
+  if(globalDefaults.snr_interval)      window._snrDef.interval      = globalDefaults.snr_interval;
+  if(globalDefaults.snr_timeout)       window._snrDef.timeout       = globalDefaults.snr_timeout;
+  if(globalDefaults.snr_fail_after)    window._snrDef.fail_after    = globalDefaults.snr_fail_after;
+  if(globalDefaults.snr_recover_after) window._snrDef.recover_after = globalDefaults.snr_recover_after;
+  if(globalDefaults.latency_good_ms)   window._lGood                = globalDefaults.latency_good_ms;
+  if(globalDefaults.latency_warn_ms)   window._lWarn                = globalDefaults.latency_warn_ms;
   toast('Sensor defaults saved','ok');
 }
 
@@ -1707,10 +1844,16 @@ function renderUserTable(users){
       ?`<span class="usr-badge-ldap">🌐 Domain</span>`
       :`<span class="usr-badge-local">🔑 Local</span>`;
     const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
+    const totpBtn=u.totp_enabled
+      ?`<button onclick="adminReset2FA('${esc(u.username)}')" title="Disable this user's two-factor authentication (e.g. lost phone)">🔐 Reset 2FA</button>`
+      :'';
+    const totpBadge=u.totp_enabled
+      ?`<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:3px;background:#2a3a2a;color:#4caf50;margin-left:4px" title="Two-factor authentication enabled">2FA</span>`
+      :'';
     const uq=encodeURIComponent(u.username);
     return `
     <tr>
-      <td><strong>${esc(u.username)}</strong></td>
+      <td><strong>${esc(u.username)}</strong>${totpBadge}</td>
       <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.full_name||'')}">${esc(u.full_name||'—')}</td>
       <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.email||'')}">${esc(u.email||'—')}</td>
       <td>${esc(u.group_name||'—')}</td>
@@ -1719,6 +1862,7 @@ function renderUserTable(users){
       <td><div class="usr-act">
         <button onclick="_openUserProfileModal('${esc(u.username)}')">✏ Edit</button>
         ${resetBtn}
+        ${totpBtn}
         <button class="del" onclick="deleteUser('${esc(u.username)}')">🗑 Delete</button>
       </div></td>
     </tr>`;
@@ -1727,6 +1871,24 @@ function renderUserTable(users){
     <thead><tr><th>Username</th><th>Full Name</th><th>Email</th><th>Group</th><th>Role</th><th>Auth</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+async function adminReset2FA(username){
+  if(!confirm(`Disable two-factor authentication for "${username}"?\n\nThe user will be able to log in with just their password.\nThey can re-enrol from their profile menu afterward.`)) return;
+  let r;
+  try{
+    r=await api('POST',`/api/users/${encodeURIComponent(username)}/totp/reset`,{});
+  }catch(e){ toast('Reset failed','err'); return; }
+  if(r&&r.error){ toast(r.error,'err'); return; }
+  toast(`2FA disabled for ${username}`,'ok');
+  // Refresh user table
+  const wrap=document.getElementById('userTableWrap');
+  if(wrap){
+    try{
+      const ur=await api('GET','/api/users');
+      wrap.innerHTML=renderUserTable(ur.users||[]);
+    }catch(e){}
+  }
 }
 
 async function saveSettings(){
@@ -1752,10 +1914,8 @@ async function saveSettings(){
   if(flapDb>=50)   body.max_flap_entries=flapDb;
   if(trapDb>=50)   body.max_trap_entries=trapDb;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
-  const lGood=parseInt(document.getElementById('st-lgood')?.value);
-  const lWarn=parseInt(document.getElementById('st-lwarn')?.value);
-  if(lGood>=1) body.latency_good_ms=lGood;
-  if(lWarn>=1) body.latency_warn_ms=lWarn;
+  // Report fields live in their own tab (saveReportSettings) and the unified branding
+  // name is already collected as `org_name` above. Don't send them here.
   const smtp={
     smtp_host:       document.getElementById('st-smtp-host')?.value.trim()||'',
     smtp_port:       parseInt(document.getElementById('st-smtp-port')?.value)||587,
@@ -1764,7 +1924,6 @@ async function saveSettings(){
     smtp_from:       document.getElementById('st-smtp-from')?.value.trim()||'',
     smtp_to:         document.getElementById('st-smtp-to')?.value.trim()||'',
     email_logo:      document.getElementById('st-email-logo')?.checked?1:0,
-    email_company_name: document.getElementById('st-email-company')?.value.trim()||'',
   };
   const logoData=document.getElementById('st-email-logo-data')?.value||'';
   if(logoData==='__remove__') smtp.email_logo_data='';
@@ -1789,8 +1948,6 @@ async function saveSettings(){
     if(typeof _sessionTtl!=='undefined') _sessionTtl=body.session_ttl;
   }
   if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
-  if(body.latency_good_ms)   window._lGood=body.latency_good_ms;
-  if(body.latency_warn_ms)   window._lWarn=body.latency_warn_ms;
   if('org_name' in body){
     window._snrDef=window._snrDef||{};
     const el=document.getElementById('tbVer');
@@ -1807,11 +1964,14 @@ async function _saveDebugMode(cb) {
 }
 
 async function saveSecuritySettings(){
-  const failMax = parseInt(document.getElementById('st-fail-max')?.value);
-  const failWin = parseInt(document.getElementById('st-fail-win')?.value);
+  const failMax     = parseInt(document.getElementById('st-fail-max')?.value);
+  const failWin     = parseInt(document.getElementById('st-fail-win')?.value);
+  const totpRemem   = parseInt(document.getElementById('st-totp-remember')?.value);
   const body = {};
-  if(failMax >= 1)  body.login_fail_max    = failMax;
-  if(failWin >= 10) body.login_fail_window = failWin;
+  if(failMax >= 1)         body.login_fail_max        = failMax;
+  if(failWin >= 10)        body.login_fail_window     = failWin;
+  if(!isNaN(totpRemem) && totpRemem >= 0 && totpRemem <= 720)
+                           body.totp_remember_hours   = totpRemem;
   const r = await api('PATCH', '/api/settings', body);
   if(!r.ok){ toast('Failed to save security settings','err'); return; }
   toast('Security settings saved','ok');
@@ -2098,14 +2258,15 @@ function _renderIntegStatus(id, status) {
   const icon    = icons[status.state]  || '🔴';
   const label   = labels[status.state] || status.state;
   const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
-  const noun    = id === 'smtp' ? 'email' : 'syslog';
+  const lastLabels = {smtp: 'Last email sent', syslog: 'Last message sent', ldap: 'Last auth/sync'};
+  const lastLabel  = lastLabels[id] || 'Last';
   const errHtml = (status.state === 'error' && status.last_err_msg)
     ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(status.last_err_msg)}</div>` : '';
   el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
     <span style="font-size:16px;line-height:1.3">${icon}</span>
     <div>
       <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
-      <span style="font-size:11px;color:var(--text3);margin-left:10px">Last ${noun} sent: ${lastOk}</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:10px">${lastLabel}: ${lastOk}</span>
       ${errHtml}
     </div>
   </div>`;
@@ -2133,6 +2294,7 @@ async function _loadIntegrationsStatus() {
     const r = await api('GET', '/api/settings');
     if (r.smtp_status)   _renderIntegStatus('smtp',   r.smtp_status);
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
+    if (r.ldap_status)   _renderIntegStatus('ldap',   r.ldap_status);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
   const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
@@ -2197,7 +2359,6 @@ async function saveSyslogSettings(){
   const host     = (document.getElementById('st-sl-host')?.value   || '').trim();
   const port     = parseInt(document.getElementById('st-sl-port')?.value) || 514;
   const proto    = document.getElementById('st-sl-proto')?.value   || 'udp';
-  const minSev   = document.getElementById('st-sl-minsev')?.value  || 'warning';
   const appLogs  = document.getElementById('st-sl-applogs')?.checked ? 1 : 0;
   const logLevel = document.getElementById('st-sl-loglevel')?.value || 'info';
   const logSources = ['app','audit','backup'].filter(s => document.getElementById(`st-sl-src-${s}`)?.checked);
@@ -2209,7 +2370,6 @@ async function saveSyslogSettings(){
       syslog_host:            host,
       syslog_port:            port,
       syslog_proto:           proto,
-      syslog_min_severity:    minSev,
       syslog_app_logs:        appLogs,
       syslog_app_log_level:   logLevel,
       syslog_app_log_sources: logSources,
@@ -2221,6 +2381,28 @@ async function saveSyslogSettings(){
     toast('Failed to save syslog settings','err');
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save'; }
+  }
+}
+
+async function saveReportSettings(){
+  const footer    = (document.getElementById('st-report-footer')?.value || '').trim();
+  const color     =  document.getElementById('st-report-color')?.value  || '';
+  const retention = parseInt(document.getElementById('st-report-retention')?.value);
+  const retClamp  = Math.max(0, Math.min(3650, isNaN(retention) ? 365 : retention));
+  const btn = document.querySelector('[onclick="saveReportSettings()"]');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      report_footer_text:    footer,
+      report_brand_color:    color,
+      report_retention_days: retClamp,
+    });
+    if(!r?.ok){ toast('Failed to save report settings','err'); return; }
+    toast('Report settings saved','ok');
+  } catch(e) {
+    toast('Failed to save report settings','err');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='Save Report Settings'; }
   }
 }
 

@@ -1,4 +1,15 @@
+/* ── Self-hosted fonts (air-gapped safe — no external CDN) ── */
+@font-face{font-family:'Exo 2';font-style:normal;font-weight:300;font-display:swap;src:url('/fonts/exo-2-v26-latin-300.woff2') format('woff2')}
+@font-face{font-family:'Exo 2';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/exo-2-v26-latin-regular.woff2') format('woff2')}
+@font-face{font-family:'Exo 2';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/exo-2-v26-latin-600.woff2') format('woff2')}
+@font-face{font-family:'Exo 2';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/exo-2-v26-latin-700.woff2') format('woff2')}
+@font-face{font-family:'Orbitron';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/orbitron-v35-latin-regular.woff2') format('woff2')}
+@font-face{font-family:'Orbitron';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/orbitron-v35-latin-700.woff2') format('woff2')}
+@font-face{font-family:'Orbitron';font-style:normal;font-weight:900;font-display:swap;src:url('/fonts/orbitron-v35-latin-900.woff2') format('woff2')}
+@font-face{font-family:'Share Tech Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/share-tech-mono-v16-latin-regular.woff2') format('woff2')}
+
 :root {
+  color-scheme: dark;
   --bg: #060a0f;
   --grid: rgba(0,200,255,0.04);
   --accent: #00d4ff;
@@ -10,6 +21,34 @@
   --orange: #ff8c00;
   --panel: rgba(8,16,30,0.96);
   --panel-border: rgba(0,212,255,0.2);
+  /* Panel text tiers — used in dynamic innerHTML so CSS can't be a class */
+  --pt: rgba(226,232,240,0.9);       /* primary text   */
+  --pt-sub: rgba(255,255,255,0.5);   /* secondary text */
+  --pt-dim: rgba(255,255,255,0.4);   /* dim/hint text  */
+  --pt-dimmer: rgba(255,255,255,0.3);/* very dim text  */
+  --pt-accent: rgba(0,212,255,0.7);  /* accent-tinted  */
+}
+/* Light theme — muted blue palette over a near-white canvas.
+   Status colors darken for AA contrast; grid fades to a cool gray. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0f4f8;
+  --grid: rgba(9,105,218,0.05);
+  --accent: #0969da;
+  --accent2: #1a7f37;
+  --warn: #9a6700;
+  --danger: #cf222e;
+  --gold: #9a6700;
+  --purple: #7c3aed;
+  --orange: #9a3412;
+  --panel: rgba(255,255,255,0.96);
+  --panel-border: rgba(9,105,218,0.25);
+  /* Panel text — readable on the white panel background */
+  --pt: #1f2328;
+  --pt-sub: rgba(31,35,40,0.85);
+  --pt-dim: rgba(31,35,40,0.72);
+  --pt-dimmer: rgba(31,35,40,0.58);
+  --pt-accent: rgba(9,105,218,0.88);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:var(--bg); font-family:'Exo 2',sans-serif; height:100vh; overflow:hidden; display:flex; flex-direction:column; }
@@ -441,3 +480,204 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
   letter-spacing:1px; color:rgba(0,212,255,0.7); cursor:pointer;
 }
 .export-item:hover { background:rgba(0,212,255,0.08); color:var(--accent); }
+
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT THEME — surface / input / text overrides
+   The base styles use hardcoded cyan-on-dark rgbas that bypass the
+   CSS variables. This block re-skins every affected element for
+   light mode so the scifi aesthetic remains but on a pale canvas.
+   Keep the accent blue — it reads well on both palettes.
+   ═══════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] body::before {
+  background-image:
+    linear-gradient(rgba(9,105,218,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(9,105,218,0.07) 1px, transparent 1px);
+}
+[data-theme="light"] header {
+  background: rgba(255,255,255,0.92);
+  border-bottom-color: rgba(9,105,218,0.25);
+}
+[data-theme="light"] header h1 { color: var(--accent); }
+[data-theme="light"] #hdrReveal {
+  background: rgba(9,105,218,0.08);
+  border-color: rgba(9,105,218,0.25);
+  color: rgba(9,105,218,0.7);
+}
+[data-theme="light"] #hdrReveal:hover { background: rgba(9,105,218,0.15); }
+[data-theme="light"] #fs-controls button {
+  background: rgba(255,255,255,0.85);
+  border-color: rgba(9,105,218,0.3);
+  color: rgba(9,105,218,0.75);
+}
+[data-theme="light"] #fs-controls button:hover {
+  background: rgba(9,105,218,0.08);
+}
+[data-theme="light"] .btn-primary { background: rgba(9,105,218,0.08); }
+[data-theme="light"] .btn-primary:hover {
+  background: rgba(9,105,218,0.18);
+  box-shadow: 0 0 10px rgba(9,105,218,0.2);
+}
+[data-theme="light"] .btn-green  { background: rgba(26,127,55,0.08); }
+[data-theme="light"] .btn-danger { background: rgba(207,34,46,0.08); }
+[data-theme="light"] .btn-gold   { background: rgba(154,103,0,0.08); }
+[data-theme="light"] .btn-purple { background: rgba(124,58,237,0.08); }
+
+/* ── Side panel + inputs ────────────────────────────────── */
+[data-theme="light"] .panel-body::-webkit-scrollbar-thumb {
+  background: rgba(9,105,218,0.25);
+}
+[data-theme="light"] .field-label { color: rgba(9,105,218,0.75); }
+[data-theme="light"] .field-input,
+[data-theme="light"] .field-select,
+[data-theme="light"] .search-input,
+[data-theme="light"] .info-text {
+  background: rgba(255,255,255,0.9);
+  border-color: rgba(9,105,218,0.25);
+  color: #1f2328;
+}
+[data-theme="light"] .field-select option { background: #ffffff; color: #1f2328; }
+[data-theme="light"] .search-input::placeholder { color: rgba(9,105,218,0.45); }
+[data-theme="light"] .field-color,
+[data-theme="light"] .info-color {
+  background: rgba(255,255,255,0.9);
+  border-color: rgba(9,105,218,0.25);
+}
+[data-theme="light"] .node-notes-ta {
+  background: rgba(255,255,255,0.85);
+  border-color: rgba(9,105,218,0.22);
+  color: rgba(31,35,40,0.85);
+}
+[data-theme="light"] .node-notes-ta:focus { color: #1f2328; }
+[data-theme="light"] .node-notes-ta::placeholder { color: rgba(31,35,40,0.35); }
+
+/* ── Icon-button ────────────────────────────────────────── */
+[data-theme="light"] .icon-btn {
+  background: rgba(9,105,218,0.05);
+  border-color: rgba(9,105,218,0.2);
+  color: rgba(31,35,40,0.75);
+}
+[data-theme="light"] .icon-btn:hover { background: rgba(9,105,218,0.12); }
+[data-theme="light"] .mini-hint { color: rgba(31,35,40,0.5); }
+[data-theme="light"] #info-editor { border-top-color: rgba(9,105,218,0.2); }
+
+/* ── Modal ──────────────────────────────────────────────── */
+[data-theme="light"] .modal-overlay { background: rgba(5,8,14,0.25); }
+[data-theme="light"] .modal {
+  background: rgba(255,255,255,0.98);
+  box-shadow: 0 0 40px rgba(9,105,218,0.12), 0 12px 40px rgba(5,8,14,0.15);
+}
+[data-theme="light"] .modal-close { color: rgba(31,35,40,0.55); }
+[data-theme="light"] .modal-close:hover { color: #1f2328; }
+
+/* ── Scrollbar + toast ──────────────────────────────────── */
+[data-theme="light"] #canvas-wrap::-webkit-scrollbar-thumb {
+  background: rgba(9,105,218,0.2);
+}
+[data-theme="light"] #toast {
+  background: rgba(255,255,255,0.95);
+  border-color: rgba(9,105,218,0.35);
+}
+
+/* ── Context menu ───────────────────────────────────────── */
+[data-theme="light"] #ctx-menu {
+  background: rgba(255,255,255,0.98);
+  box-shadow: 0 8px 24px rgba(5,8,14,0.18);
+}
+[data-theme="light"] .ctx-item:hover { background: rgba(9,105,218,0.08); }
+[data-theme="light"] .ctx-sep { background: rgba(9,105,218,0.2); }
+[data-theme="light"] .ctx-item.ctx-muted { color: rgba(31,35,40,0.55); }
+
+/* ── Legend ─────────────────────────────────────────────── */
+[data-theme="light"] #legend {
+  background: rgba(255,255,255,0.92);
+  border-color: rgba(9,105,218,0.25);
+}
+[data-theme="light"] .leg-item { color: rgba(31,35,40,0.65); }
+
+/* ── Zoom / fit controls ────────────────────────────────── */
+[data-theme="light"] #zoom-hud,
+[data-theme="light"] #fit-btn {
+  background: rgba(255,255,255,0.9);
+  border-color: rgba(9,105,218,0.25);
+  color: rgba(9,105,218,0.75);
+}
+
+/* ── Dashboard panel ────────────────────────────────────── */
+[data-theme="light"] .dash-stat-card {
+  background: rgba(9,105,218,0.05);
+  border-color: rgba(9,105,218,0.18);
+}
+[data-theme="light"] .dash-stat-label { color: rgba(31,35,40,0.55); }
+[data-theme="light"] .dash-section-title {
+  color: rgba(9,105,218,0.7);
+  border-bottom-color: rgba(9,105,218,0.15);
+}
+[data-theme="light"] .dash-bar-label { color: rgba(31,35,40,0.6); }
+[data-theme="light"] .dash-bar-track { background: rgba(31,35,40,0.08); }
+[data-theme="light"] .dash-bar-count { color: rgba(31,35,40,0.5); }
+
+/* ── Incident cards ─────────────────────────────────────── */
+[data-theme="light"] .inc-name { color: #1f2328; }
+[data-theme="light"] .inc-meta { color: rgba(31,35,40,0.6); }
+[data-theme="light"] .inc-sensors { color: rgba(207,34,46,0.85); }
+[data-theme="light"] .inc-card-down {
+  background: rgba(207,34,46,0.08); border-color: #cf222e;
+}
+[data-theme="light"] .inc-card-down .inc-hdr-txt { color: #cf222e; }
+[data-theme="light"] .inc-card-crit {
+  background: rgba(124,58,237,0.08); border-color: #7c3aed;
+}
+[data-theme="light"] .inc-card-crit .inc-hdr-txt { color: #7c3aed; }
+[data-theme="light"] .inc-card-warn {
+  background: rgba(154,103,0,0.08); border-color: #9a6700;
+}
+[data-theme="light"] .inc-card-warn .inc-hdr-txt { color: #9a6700; }
+[data-theme="light"] .inc-val { color: #7c3aed; }
+[data-theme="light"] .inc-val-warn { color: #9a6700; }
+[data-theme="light"] .inc-all-clear-icon {
+  color: #1a7f37; text-shadow: 0 0 10px rgba(26,127,55,0.4);
+}
+[data-theme="light"] .inc-all-clear-txt { color: rgba(26,127,55,0.8); }
+
+/* ── Header stat pills ──────────────────────────────────── */
+[data-theme="light"] .h-stat-pill { background: rgba(255,255,255,0.85); }
+
+/* ── Page tab bar ───────────────────────────────────────── */
+[data-theme="light"] #page-bar {
+  background: rgba(255,255,255,0.92);
+  border-bottom-color: rgba(9,105,218,0.2);
+}
+[data-theme="light"] #page-bar::-webkit-scrollbar-thumb {
+  background: rgba(9,105,218,0.3);
+}
+[data-theme="light"] .page-tab {
+  color: rgba(9,105,218,0.55);
+  border-right-color: rgba(9,105,218,0.12);
+}
+[data-theme="light"] .page-tab:hover {
+  color: var(--accent);
+  background: rgba(9,105,218,0.08);
+}
+[data-theme="light"] .page-tab.active { background: rgba(9,105,218,0.12); }
+[data-theme="light"] #page-add-btn,
+[data-theme="light"] #page-panel-btn,
+[data-theme="light"] #page-fs-btn {
+  border-color: rgba(9,105,218,0.3);
+  color: rgba(9,105,218,0.7);
+}
+[data-theme="light"] #page-add-btn:hover,
+[data-theme="light"] #page-panel-btn:hover,
+[data-theme="light"] #page-fs-btn:hover { background: rgba(9,105,218,0.08); }
+
+/* ── Export dropdown ────────────────────────────────────── */
+[data-theme="light"] .export-menu {
+  background: #ffffff;
+  border-color: rgba(9,105,218,0.25);
+  box-shadow: 0 8px 24px rgba(5,8,14,0.15);
+}
+[data-theme="light"] .export-item { color: rgba(9,105,218,0.85); }
+[data-theme="light"] .export-item:hover { background: rgba(9,105,218,0.08); }
+
+/* Link hover outline on light background — dark outline, not white */
+[data-theme="light"] .link-g:hover .link-hit { stroke: rgba(9,105,218,0.25); }

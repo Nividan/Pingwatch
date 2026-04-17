@@ -1,0 +1,700 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if not meta.sections %}
+  <section class="section">
+    <p class="muted">This custom template has no sections selected — edit the template to pick at least one block.</p>
+  </section>
+{% endif %}
+
+{% if meta.intro %}
+  <section class="section">
+    <p>{{ meta.intro }}</p>
+  </section>
+{% endif %}
+
+<!-- ── Overall uptime headline ───────────────────────────────────── -->
+{% if "overall_uptime" in meta.sections %}
+<section class="section">
+  <h1>Overall availability</h1>
+  {% if overall.pct is not none %}
+    <div class="headline-tile tile-{{ overall.pct | statuspct }}">
+      <div class="headline-number">{{ overall.pct | pctfmt(2) }}</div>
+      <div class="headline-caption">Overall uptime across {{ inventory.devices }} devices
+      ({{ inventory.sensors }} sensors) over {{ period.days }} days.
+      {% if previous and previous.delta.uptime_pp is not none %}
+        &nbsp;· vs. {{ previous.label }}: {{ previous.delta.uptime_pp | deltafmt(' pp', 2, 'higher') | safe }}
+      {% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div class="headline-tile tile-muted">
+      <div class="headline-number muted">No data</div>
+      <div class="headline-caption">No probe samples were recorded for the selected period.</div>
+    </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Availability trend chart ──────────────────────────────────── -->
+{% if "availability_trend" in meta.sections %}
+<section class="section">
+  <h1>Availability trend</h1>
+  {% if charts.availability_trend %}
+    <img class="chart" src="{{ charts.availability_trend }}" alt="Availability trend">
+  {% else %}
+    <p class="muted">No trend data for this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Per-device uptime ─────────────────────────────────────────── -->
+{% if "per_device_uptime" in meta.sections %}
+<section class="section">
+  <h1>Per-device uptime</h1>
+  {% if availability %}
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Host</th><th>Group</th>
+          <th>Uptime</th><th>Samples</th><th>Fails</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in availability %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td>{{ d.group }}</td>
+          <td class="{{ d.pct | statuspct }}">{{ d.pct | pctfmt(2) }}</td>
+          <td>{{ d.total }}</td>
+          <td>{{ d.fail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No device-level data in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Worst-performing devices ──────────────────────────────────── -->
+{% if "top_worst_devices" in meta.sections %}
+<section class="section">
+  <h1>Worst-performing devices</h1>
+  {% if incidents.worst_5 %}
+    <table class="data">
+      <thead><tr><th>Device</th><th>Host</th><th>Uptime</th><th>Samples</th><th>Failures</th></tr></thead>
+      <tbody>
+        {% for d in incidents.worst_5 %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td class="{{ d.pct | statuspct }}">{{ d.pct | pctfmt(2) }}</td>
+          <td>{{ d.total }}</td>
+          <td class="crit">{{ d.fail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.top_worst_bar %}
+      <img class="chart" src="{{ charts.top_worst_bar }}" alt="Worst devices">
+    {% endif %}
+  {% else %}
+    <p class="muted">No device-level failure data in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Device health scores ──────────────────────────────────────── -->
+{% if "device_health" in meta.sections %}
+<section class="section">
+  <h1>Device health scores</h1>
+  {% if device_health %}
+    <p class="muted small">Composite 0–100 per device. Penalties: downtime up to 50, incident load up to 20, currently DOWN −20 or WARN −10. Green ≥ 90 · Amber ≥ 70 · Red &lt; 70.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Host</th><th>Group</th>
+          <th>Uptime</th><th>Incidents</th><th>Status</th><th>Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in device_health %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td>{{ d.group }}</td>
+          <td class="{{ d.uptime_pct | statuspct }}">{{ d.uptime_pct | pctfmt(2) }}</td>
+          <td>{{ d.incidents }}</td>
+          <td class="{% if d.current == 'down' %}crit{% elif d.current == 'warn' %}warn{% else %}up{% endif %}">{{ d.current }}</td>
+          <td><span class="hs hs-{{ d.band }}">{{ d.score }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No availability data in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Incident summary ──────────────────────────────────────────── -->
+{% if "incident_summary" in meta.sections %}
+<section class="section">
+  <h1>Incident summary</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr>
+          <th>Total incidents</th>
+          <td>
+            {{ incidents.severity.total }}
+            {% if previous and previous.delta.incidents is not none %}
+              <span class="small">&nbsp;{{ previous.delta.incidents | deltafmt('', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Critical / Down</th>
+          <td class="crit">
+            {{ incidents.severity.crit }}
+            {% if previous and previous.delta.crit is not none %}
+              <span class="small">&nbsp;{{ previous.delta.crit | deltafmt('', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Warnings</th>
+          <td class="warn">
+            {{ incidents.severity.warn }}
+            {% if previous and previous.delta.warn is not none %}
+              <span class="small">&nbsp;{{ previous.delta.warn | deltafmt('', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr><th>Auto-resolved</th><td>{{ incidents.severity.resolved }}</td></tr>
+        <tr>
+          <th>MTTR</th>
+          <td>
+            {{ incidents.mttr.mttr_s | durfmt }}
+            {% if previous and previous.delta.mttr_s is not none %}
+              <span class="small">&nbsp;{{ previous.delta.mttr_s | deltafmt(' s', 0, 'lower') | safe }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr><th>MTBF</th><td>{{ incidents.mttr.mtbf_s | durfmt }}</td></tr>
+        <tr><th>Maintenance windows</th><td>{{ maint_windows | length }}</td></tr>
+      </table>
+    </div>
+    <div class="col">
+      {% if charts.severity_donut %}
+        <img class="chart" src="{{ charts.severity_donut }}" alt="Severity breakdown">
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<!-- ── Incident timeline ─────────────────────────────────────────── -->
+{% if "incident_timeline" in meta.sections %}
+<section class="section">
+  <h1>Incident timeline</h1>
+  {% if charts.incident_timeline %}
+    <img class="chart" src="{{ charts.incident_timeline }}" alt="Incidents over time">
+  {% else %}
+    <p class="muted">No incidents recorded in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Noisiest sensors ──────────────────────────────────────────── -->
+{% if "top_noisy_sensors" in meta.sections %}
+<section class="section">
+  <h1>Noisiest sensors</h1>
+  {% if incidents.noisy_5 %}
+    <table class="data">
+      <thead><tr><th>Device</th><th>Sensor</th><th>Type</th><th>Incidents</th></tr></thead>
+      <tbody>
+        {% for s in incidents.noisy_5 %}
+        <tr>
+          <td>{{ s.dname }}</td>
+          <td>{{ s.sname }}</td>
+          <td class="mono">{{ s.stype }}</td>
+          <td class="warn">{{ s.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.top_noisy_bar %}
+      <img class="chart" src="{{ charts.top_noisy_bar }}" alt="Noisy sensors">
+    {% endif %}
+  {% else %}
+    <p class="muted">No repeat-offender sensors in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Major incidents (clustered) ───────────────────────────────── -->
+{% if "major_incidents" in meta.sections %}
+<section class="section">
+  <h1>Major incidents</h1>
+  {% if major_incidents %}
+    <p class="muted small">Auto-grouped: clusters of ≥10 distinct devices going DOWN within a 5-minute window are treated as one outage. Threshold is configurable per template.</p>
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Started</th><th>Duration</th><th>Devices</th>
+          <th>Sensors</th><th>Groups</th><th>Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in major_incidents %}
+        <tr>
+          <td class="mono">{{ m.start_ts | datefmt }}</td>
+          <td class="{% if m.ongoing %}crit{% endif %}">{{ m.duration_s | durfmt_flap(m.ongoing) }}</td>
+          <td class="crit">{{ m.device_count }}</td>
+          <td>{{ m.sensors_affected }}</td>
+          <td class="muted small">{% if m.groups_affected %}{{ m.groups_affected | join(', ') }}{% else %}—{% endif %}</td>
+          <td class="muted small">{{ m.devices_affected[:6] | join(', ') }}{% if m.devices_affected | length > 6 %} &hellip; (+{{ m.devices_affected | length - 6 }} more){% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No major outages detected in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Incident log (outages, aggregated) ────────────────────────── -->
+{% if "incident_log" in meta.sections %}
+<section class="section">
+  <h1>Incident log</h1>
+  {% if incidents.outages %}
+    <p class="muted small">One row per outage — consecutive events for the same sensor (gap ≤ 5 min) are collapsed. Toggle "Show individual events" on the template to see raw flap rows below.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>When</th><th>Device</th><th>Sensor</th>
+          <th>Severity</th><th>Events</th><th>Duration</th><th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in incidents.outages %}
+        <tr>
+          <td class="mono">{{ o.first_ts | datefmt }}</td>
+          <td>{{ o.dname }}</td>
+          <td>{{ o.sname }}</td>
+          <td class="{{ o.max_severity }}">{{ o.max_severity }}</td>
+          <td>{{ o.event_count }}</td>
+          <td class="{% if o.ongoing %}crit{% endif %}">{{ o.duration_s | durfmt_flap(o.ongoing) }}</td>
+          <td class="muted small">{{ o.sample_detail | cleandetail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No incidents in this period.</p>
+  {% endif %}
+
+  {# Engineer detail: raw per-event log, only when opted in. Uses the pre-cluster
+     flap list so each probe transition is on its own row. #}
+  {% if meta.show_individual_events and incidents.flaps %}
+    <h2 style="margin-top:14pt">Individual events ({{ incidents.flaps | length }})</h2>
+    <p class="muted small">Raw probe transitions — one row per state change. Enabled by the "Show individual events" template option.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>When</th><th>Device</th><th>Sensor</th>
+          <th>Severity</th><th>Duration</th><th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in incidents.flaps %}
+        <tr>
+          <td class="mono">{{ f.ts | datefmt }}</td>
+          <td>{{ f.dname }}</td>
+          <td>{{ f.sname }}</td>
+          <td class="{{ f.direction | severity_class }}">{{ f.direction }}</td>
+          <td>{{ f.duration | durfmt_flap(f.is_open) }}</td>
+          <td class="muted small">{{ f.detail | cleandetail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Sensor configuration issues ───────────────────────────────── -->
+{% if "sensor_config_issues" in meta.sections %}
+<section class="section">
+  <h1>Sensor configuration issues</h1>
+  {% if sensor_config_issues %}
+    <p class="muted small">One row per (device, issue) — a single misconfiguration (e.g. an SSL toggle) often trips many sensors, and rolling them up shows the root cause instead of duplicates. Fix the sensor definition to silence the whole group.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Type</th><th>Issue</th>
+          <th>Sensors</th><th>Occurrences</th><th>Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in sensor_config_issues %}
+        <tr>
+          <td>{{ r.dname }}</td>
+          <td class="mono">{{ r.stype }}</td>
+          <td class="warn">{{ r.label }}</td>
+          <td>{{ r.sensor_count }}</td>
+          <td>{{ r.count }}</td>
+          <td class="mono">{{ r.last_ts | datefmt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No sensor configuration issues detected.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Maintenance windows ───────────────────────────────────────── -->
+{% if "maint_windows" in meta.sections %}
+<section class="section">
+  <h1>Maintenance windows</h1>
+  {% if maint_windows %}
+    <table class="data">
+      <thead><tr><th>Name</th><th>Start</th><th>End</th><th>Duration (in window)</th></tr></thead>
+      <tbody>
+        {% for m in maint_windows %}
+        <tr>
+          <td>{{ m.name }}</td>
+          <td>{{ m.start_ts | datefmt }}</td>
+          <td>{{ m.end_ts | datefmt }}</td>
+          <td>{{ m.duration_s | durfmt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No maintenance windows scheduled in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Latency percentiles ───────────────────────────────────────── -->
+{% if "latency_percentiles" in meta.sections %}
+<section class="section">
+  <h1>Latency percentiles (per sensor)</h1>
+  {% if latency %}
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Sensor</th><th>Type</th>
+          <th>Samples</th><th>p50</th><th>p95</th><th>p99</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in latency %}
+        <tr>
+          <td>{{ r.dname }}</td>
+          <td>{{ r.sname }}</td>
+          <td class="mono">{{ r.stype }}</td>
+          <td>{{ r.samples }}</td>
+          <td>{{ r.p50 | msfmt }}</td>
+          <td>{{ r.p95 | msfmt }}</td>
+          <td>{{ r.p99 | msfmt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.latency_bar %}
+      <img class="chart" src="{{ charts.latency_bar }}" alt="Latency percentiles">
+    {% endif %}
+  {% else %}
+    <p class="muted">No latency-bearing probes recorded in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── SNMP traps ────────────────────────────────────────────────── -->
+{% if "snmp_traps" in meta.sections %}
+<section class="section">
+  <h1>Top SNMP trap types</h1>
+  {% if top_traps %}
+    <table class="data">
+      <thead>
+        <tr><th>Trap</th><th>Vendor</th><th>Severity</th><th>Count</th></tr>
+      </thead>
+      <tbody>
+        {% for t in top_traps %}
+        <tr>
+          <td>{{ t.name | trapname }}</td>
+          <td>{{ t.vendor }}</td>
+          <td class="sev-{{ t.severity | lower }}">{{ t.severity }}</td>
+          <td>{{ t.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No SNMP traps recorded in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── TLS certificates expiring ─────────────────────────────────── -->
+{% if "tls_expiring" in meta.sections %}
+<section class="section">
+  <h1>TLS certificates expiring</h1>
+  {% if tls_expiring %}
+    <table class="data compact">
+      <thead>
+        <tr><th>Device</th><th>Sensor</th><th>Host</th><th>Days left</th><th>Bucket</th></tr>
+      </thead>
+      <tbody>
+        {% for c in tls_expiring %}
+        <tr>
+          <td>{{ c.dname }}</td>
+          <td>{{ c.sname }}</td>
+          <td class="mono">{{ c.host }}</td>
+          <td class="{% if c.days <= 0 %}crit{% elif c.days <= 30 %}warn{% endif %}">{{ c.days }}</td>
+          <td>{{ c.bucket }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No TLS certificates are approaching expiry.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── License tracking ──────────────────────────────────────────── -->
+{% if "licenses" in meta.sections %}
+<section class="section">
+  <h1>License status</h1>
+  {% if licenses and licenses.total %}
+    <div class="two-col">
+      <div class="col">
+        <table class="kv">
+          <tr><th>Tracked licenses</th><td>{{ licenses.total }}</td></tr>
+          <tr><th>OK</th><td class="{% if licenses.ok %}up{% endif %}">{{ licenses.ok }}</td></tr>
+          <tr><th>Warning</th><td class="{% if licenses.warn %}warn{% endif %}">{{ licenses.warn }}</td></tr>
+          <tr><th>Critical</th><td class="{% if licenses.crit %}crit{% endif %}">{{ licenses.crit }}</td></tr>
+          <tr><th>Expired</th><td class="{% if licenses.expired %}crit{% endif %}">{{ licenses.expired }}</td></tr>
+        </table>
+      </div>
+    </div>
+    {% set already_expired = licenses.expiring_list | selectattr('days', 'le', 0) | list %}
+    {% set upcoming = licenses.expiring_list | rejectattr('days', 'le', 0) | list %}
+    {% if already_expired %}
+      <h2 style="margin-top:14pt">Already expired</h2>
+      <table class="data compact">
+        <thead><tr><th>Device</th><th>License</th><th>Expired on</th><th>Expired</th></tr></thead>
+        <tbody>
+          {% for l in already_expired %}
+          <tr>
+            <td>{{ l.dname }}</td>
+            <td>{{ l.name }}</td>
+            <td class="mono">{{ l.expires }}</td>
+            <td class="crit">{{ (-l.days) }} day{{ 's' if (-l.days) != 1 else '' }} ago</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+    {% if upcoming %}
+      <h2 style="margin-top:14pt">Expiring within 90 days</h2>
+      <table class="data compact">
+        <thead><tr><th>Device</th><th>License</th><th>Expires</th><th>Days left</th></tr></thead>
+        <tbody>
+          {% for l in upcoming %}
+          <tr>
+            <td>{{ l.dname }}</td>
+            <td>{{ l.name }}</td>
+            <td class="mono">{{ l.expires }}</td>
+            <td class="{% if l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% else %}
+    <p class="muted">No device licenses are being tracked.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Backup coverage ───────────────────────────────────────────── -->
+{% if "backup_coverage" in meta.sections %}
+<section class="section">
+  <h1>Device configuration backups</h1>
+  {% if backup_coverage and backup_coverage.total %}
+    <div class="two-col">
+      <div class="col">
+        <table class="kv">
+          <tr><th>Devices configured for backup</th><td>{{ backup_coverage.total }}</td></tr>
+          <tr><th>Recent (&lt;7 days)</th><td class="{% if backup_coverage.recent %}up{% endif %}">{{ backup_coverage.recent }}</td></tr>
+          <tr><th>Stale (&gt;7 days)</th><td class="{% if backup_coverage.stale %}warn{% endif %}">{{ backup_coverage.stale }}</td></tr>
+          <tr><th>Never backed up</th><td class="{% if backup_coverage.never %}crit{% endif %}">{{ backup_coverage.never }}</td></tr>
+        </table>
+      </div>
+      <div class="col">
+        <div class="headline-number" style="font-size:30pt">
+          {{ (backup_coverage.recent / backup_coverage.total * 100) | round(0) | int }}%
+        </div>
+        <div class="muted small">of devices have a current backup</div>
+      </div>
+    </div>
+
+    {% if backup_coverage.stale_list %}
+      <h2 style="margin-top:14pt">Stale backups</h2>
+      <table class="data compact">
+        <thead><tr><th>Device</th><th>Last backup</th><th>Age</th></tr></thead>
+        <tbody>
+          {% for b in backup_coverage.stale_list[:20] %}
+          <tr>
+            <td>{{ b.dname }}</td>
+            <td class="mono">{{ b.last_ts | datefmt('%Y-%m-%d %H:%M') }}</td>
+            <td class="warn">{{ b.days }} days</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% if backup_coverage.never_list %}
+      <h2 style="margin-top:14pt">Never backed up</h2>
+      <table class="data compact">
+        <thead><tr><th>Device</th></tr></thead>
+        <tbody>
+          {% for b in backup_coverage.never_list[:20] %}
+          <tr><td>{{ b.dname }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% else %}
+    <p class="muted">No devices are configured for configuration backup.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── IPAM utilisation ──────────────────────────────────────────── -->
+{% if "ipam" in meta.sections %}
+<section class="section">
+  <h1>IP address utilisation</h1>
+  {% if ipam %}
+    <table class="data compact">
+      <thead>
+        <tr><th>Subnet (CIDR)</th><th>Name</th><th>Capacity</th><th>Used</th><th>Utilisation</th></tr>
+      </thead>
+      <tbody>
+        {% for s in ipam %}
+        <tr>
+          <td class="mono">{{ s.cidr }}</td>
+          <td>{{ s.name }}</td>
+          <td>{{ s.total }}</td>
+          <td>{{ s.used }}</td>
+          <td class="{% if s.pct_used and s.pct_used > 85 %}warn{% elif s.pct_used and s.pct_used > 95 %}crit{% endif %}">
+            {% if s.pct_used is not none %}{{ s.pct_used }}%{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No IPAM subnets are configured.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Estate overview ───────────────────────────────────────────── -->
+{% if "estate_overview" in meta.sections %}
+<section class="section">
+  <h1>Estate overview</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr><th>Devices</th><td>{{ inventory.devices }}</td></tr>
+        <tr><th>Sensors</th><td>{{ inventory.sensors }}</td></tr>
+        <tr><th>Devices up</th><td class="{% if inventory.dev_up %}up{% endif %}">{{ inventory.dev_up }}</td></tr>
+        <tr><th>Devices warn</th><td class="{% if inventory.dev_warn %}warn{% endif %}">{{ inventory.dev_warn }}</td></tr>
+        <tr><th>Devices down</th><td class="{% if inventory.dev_down %}crit{% endif %}">{{ inventory.dev_down }}</td></tr>
+      </table>
+    </div>
+    {% if users %}
+    <div class="col">
+      <table class="kv">
+        <tr><th>Users</th><td>{{ users.total }}</td></tr>
+        <tr><th>Admins</th><td>{{ users.admin }}</td></tr>
+        <tr><th>Operators</th><td>{{ users.operator }}</td></tr>
+        <tr><th>Viewers</th><td>{{ users.viewer }}</td></tr>
+        <tr><th>LDAP-sourced</th><td>{{ users.ldap }}</td></tr>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<!-- ── Device inventory ──────────────────────────────────────────── -->
+{% if "device_inventory" in meta.sections %}
+<section class="section">
+  <h1>Device inventory{% if inventory_devices %} ({{ inventory_devices | length }}){% endif %}</h1>
+  {% if inventory_devices %}
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Host</th><th>Group</th>
+          <th>Sensors</th><th>Up</th><th>Down</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in inventory_devices %}
+        <tr>
+          <td>{{ d.dname }}</td>
+          <td class="mono">{{ d.host }}</td>
+          <td>{{ d.group }}</td>
+          <td>{{ d.sensor_count }}</td>
+          <td class="up">{{ d.up }}</td>
+          <td class="{% if d.down %}crit{% endif %}">{{ d.down }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No devices configured.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── Recent admin activity ─────────────────────────────────────── -->
+{% if "audit_log" in meta.sections %}
+<section class="section">
+  <h1>Recent administrative activity</h1>
+  {% if audit_recent %}
+    <table class="data compact">
+      <thead><tr><th>When</th><th>User</th><th>Action</th><th>Target</th></tr></thead>
+      <tbody>
+        {% for a in audit_recent %}
+        <tr>
+          <td class="mono">{{ a.ts | datefmt('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ a.actor }}</td>
+          <td class="mono">{{ a.action }}</td>
+          <td class="muted small">{{ a.target or a.detail or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No recent administrative activity recorded.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% endblock %}

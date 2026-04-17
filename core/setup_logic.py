@@ -6,9 +6,27 @@ Pure-functional helpers with no UI coupling.  Both ``setup_wizard.py``
 """
 
 import os
+import re
 import socket
 import subprocess
 import sys
+
+# ── Shared validation helpers ───────────────────────────────────────────────
+# Used by both wizards for optional SMTP / Syslog fields. Validation is
+# permissive: bad input is logged and saved anyway, so the wizard never
+# blocks on cosmetic issues.
+
+_HOST_RE  = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,252}$")
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def valid_host(s: str) -> bool:
+    s = (s or "").strip()
+    return bool(s and len(s) <= 253 and _HOST_RE.match(s))
+
+
+def valid_email(s: str) -> bool:
+    return bool(s and _EMAIL_RE.match(str(s).strip()))
 
 # ── Package definitions ─────────────────────────────────────────────────────
 
@@ -77,6 +95,46 @@ PACKAGES = [
         "install":  "pyvmomi>=8.0.0",
         "pip":      True,
         "desc":     "VMware vCenter / ESXi VM metrics",
+        "required": False,
+    },
+    {
+        "import":   "pyotp",
+        "name":     "pyotp",
+        "install":  "pyotp>=2.9.0",
+        "pip":      True,
+        "desc":     "two-factor authentication (TOTP)",
+        "required": False,
+    },
+    {
+        "import":   "qrcode",
+        "name":     "qrcode",
+        "install":  "qrcode>=7.4.0",
+        "pip":      True,
+        "desc":     "QR code image rendering for 2FA enrolment",
+        "required": False,
+    },
+    {
+        "import":   "jinja2",
+        "name":     "Jinja2",
+        "install":  "Jinja2>=3.1",
+        "pip":      True,
+        "desc":     "report HTML template rendering",
+        "required": False,
+    },
+    {
+        "import":   "matplotlib",
+        "name":     "matplotlib",
+        "install":  "matplotlib>=3.7",
+        "pip":      True,
+        "desc":     "report charts (rendered to PNG)",
+        "required": False,
+    },
+    {
+        "import":   "weasyprint",
+        "name":     "weasyprint",
+        "install":  "weasyprint>=62.0",
+        "pip":      True,
+        "desc":     "PDF report generation (HTML→PDF; Linux also needs libpango/libcairo)",
         "required": False,
     },
 ]
@@ -484,7 +542,79 @@ def default_wizard_state() -> dict:
         "pg_password":     "",
         "admin_user":      "admin",
         "admin_pass":      "",
+        # Optional — populated by the Alerts page / step_smtp / step_syslog /
+        # step_anomaly.  Absent keys mean "user skipped."
+        "smtp_enabled":               False,
+        "smtp_host":                  "",
+        "smtp_port":                  587,
+        "smtp_tls":                   "starttls",
+        "smtp_user":                  "",
+        "smtp_pass":                  "",
+        "smtp_from":                  "",
+        "syslog_enabled":             False,
+        "syslog_host":                "",
+        "syslog_port":                514,
+        "syslog_proto":               "udp",
+        "syslog_min_severity":        "warning",
+        "anomaly_default_new_sensors": False,
     }
+
+
+def collect_optional_settings(state: dict) -> dict:
+    """Extract optional SMTP / Syslog / Anomaly fields from wizard state.
+
+    Validation is permissive — invalid-looking values are left in place so
+    the user can correct them in Settings later.  Only writes keys the user
+    actually enabled; skipped sections produce no DB rows.
+    """
+    out = {}
+
+    # Organisation name — always save if non-empty (length-capped)
+    org = state.get("org_name")
+    if isinstance(org, str) and org.strip():
+        out["org_name"] = org.strip()[:120]
+
+    # SMTP — only persist if the user enabled it AND provided a host
+    if state.get("smtp_enabled") and isinstance(state.get("smtp_host"), str) \
+            and state["smtp_host"].strip():
+        host = state["smtp_host"].strip()
+        out["smtp_host"] = host
+        try:
+            p = int(state.get("smtp_port", 587))
+            out["smtp_port"] = str(p if 1 <= p <= 65535 else 587)
+        except (TypeError, ValueError):
+            out["smtp_port"] = "587"
+        tls = str(state.get("smtp_tls", "starttls")).strip().lower()
+        out["smtp_tls"] = tls if tls in ("starttls", "ssl", "none") else "starttls"
+        user = state.get("smtp_user")
+        if isinstance(user, str):
+            out["smtp_user"] = user.strip()[:256]
+        pw = state.get("smtp_pass")
+        if isinstance(pw, str) and pw:
+            out["smtp_pass"] = pw
+        frm = state.get("smtp_from")
+        if isinstance(frm, str) and frm.strip():
+            out["smtp_from"] = frm.strip()[:256]
+
+    # Syslog — only persist if enabled + host set
+    if state.get("syslog_enabled") and isinstance(state.get("syslog_host"), str) \
+            and state["syslog_host"].strip():
+        out["syslog_host"] = state["syslog_host"].strip()
+        try:
+            p = int(state.get("syslog_port", 514))
+            out["syslog_port"] = str(p if 1 <= p <= 65535 else 514)
+        except (TypeError, ValueError):
+            out["syslog_port"] = "514"
+        proto = str(state.get("syslog_proto", "udp")).strip().lower()
+        out["syslog_proto"] = proto if proto in ("udp", "tcp") else "udp"
+        sev = str(state.get("syslog_min_severity", "warning")).strip().lower()
+        out["syslog_min_severity"] = sev if sev in ("critical", "warning", "info") else "warning"
+
+    # Anomaly default — always persist (0 or 1)
+    anom = state.get("anomaly_default_new_sensors")
+    out["anomaly_default_new_sensors"] = "1" if anom else "0"
+
+    return out
 
 
 def save_wizard_config(state: dict):
@@ -536,6 +666,8 @@ def initialize_database(state: dict, progress_cb=None) -> "tuple[bool, str]":
                 if isinstance(val, bool):
                     val = "1" if val else "0"
                 settings[k] = str(val)
+        # Merge in optional SMTP / Syslog / Anomaly entries
+        settings.update(collect_optional_settings(state))
         db_save_settings(settings)
 
         if progress_cb:
