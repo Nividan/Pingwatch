@@ -110,8 +110,7 @@ pingwatch/
 │   ├── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
 │   ├── app_state.py        ← Shared globals: STATE, effective ports, TLS flag, tray ref
 │   ├── state.py            ← In-memory Device/Sensor objects, probe threads, SSE broadcast
-│   ├── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
-│   └── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
+│   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
 │
 ├── monitoring/
 │   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
@@ -273,6 +272,7 @@ Key functions:
 - `_match_user_to_groups(member_of, user_dn, mapped_groups, cfg)` — finds the best-matching imported group for a user (direct DN match first, then nested fallback); picks the group with the highest role rank (admin > operator > viewer).
 - `ldap_sync_groups()` — iterates all LDAP users in the DB, checks current AD group membership, updates or disables accounts as needed; returns `{"updated": N, "disabled": N, "errors": N}`.
 - `ldap_sync_loop()` — daemon thread that runs `ldap_sync_groups()` on the `ldap_sync_interval` schedule; started by `server.py` on startup.
+- `get_ldap_status()` — returns `{state, last_ok_ts, last_err_ts, last_err_msg}` for the Integrations status badge. State is `ok` (last activity was a success), `error` (last activity was a failure and occurred after the last success), `configured` (config present but no activity yet), or `unconfigured` (no server configured). Updated automatically by `_record_ok()` / `_record_err()` hooks wired into `ldap_test_connection`, `ldap_authenticate`, and `ldap_sync_groups`.
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
@@ -466,7 +466,7 @@ The frontend is served as static files — no build step.
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal; **Licenses section** — collapsible `<details>` with status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day inputs, add/delete per license; `_edLicLoad()`, `_edLicRender()`, `_edLicAdd()`, `_edLicDel()`, `_edLicStatusBadge()` |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Logs tab: Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()` (immediate `PATCH /api/settings`; reverts on failure). Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Integrations tab: SMTP / Syslog / LDAP sub-tabs each carry a live status dot (`ibadge-{id}`) and status bar updated by `_renderIntegStatus()`; LDAP dot reflects `ldap_status` from `GET /api/settings` (ok/error/configured/unconfigured). Logs tab: time-range filter offers 5 m / 15 m / 1 h / 3 h / 6 h (default) / 12 h / 24 h presets plus a **Custom range** option that reveals inline datetime-local pickers (From / To); `_logFilter.customFrom` / `_logFilter.customTo` are sent as `after=` / `before=` params to the log API. Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()`. Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
 | `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
 | `forms-ldap.js` | LDAP/AD settings modal including Group Integration section (auto-provision, nested groups, group base DN, group filter, sync interval) and Test User Groups sub-dialog |
 | `forms-io.js` | DB export/import modal |
