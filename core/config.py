@@ -58,6 +58,32 @@ def _default_reports_dir() -> str:
 
 
 REPORTS_DIR      = _default_reports_dir()
+
+
+def _default_secrets_dir() -> str:
+    """
+    Directory for files that must NOT live in the DB: Fernet key, future
+    credentials, etc. Same resolution order as _default_reports_dir() so
+    there is one file-layout convention, not two.
+
+      1. PW_SECRETS_DIR env var            — ops override
+      2. XDG_DATA_HOME/pingwatch/secrets   — XDG-standard user data dir
+      3. ~/.local/share/pingwatch/secrets  — portable fallback
+
+    Lives outside the git checkout for the same reasons REPORTS_DIR does:
+    `git pull` as root never touches ownership; install/uninstall doesn't
+    break access; systemd and foreground runs agree on a path.
+    """
+    env = os.environ.get("PW_SECRETS_DIR")
+    if env:
+        return env
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return os.path.join(xdg, "pingwatch", "secrets")
+    return os.path.join(os.path.expanduser("~"), ".local", "share", "pingwatch", "secrets")
+
+
+SECRETS_DIR      = _default_secrets_dir()
 TLS_PORT_DEFAULT = 8443
 
 # Pre-compiled HTTP route patterns

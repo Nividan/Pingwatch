@@ -13,16 +13,103 @@ import re
 import sqlite3
 from pathlib import Path
 
-from core.config import DB_PATH
+from core.config import DB_PATH, SECRETS_DIR
 from core.logger import log
 from db.backend  import is_pg
 
 # ── Fernet encryption ────────────────────────────────────────────────
 _fernet_instance = None
 
+_BACKUP_KEY_FILE = os.path.join(SECRETS_DIR, "backup_enc.key")
+
+
+def _read_key_from_db() -> bytes | None:
+    """Legacy path — read the key from app_settings (used only for migration)."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute("SELECT value FROM app_settings WHERE key='backup_enc_key'")
+                row = cur.fetchone()
+            return row["value"].encode() if row else None
+        except Exception as e:
+            log.warning(f"backup key DB read failed (PG): {e}")
+            return None
+    con = None
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=15)
+        try:
+            row = con.execute(
+                "SELECT value FROM app_settings WHERE key='backup_enc_key'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            row = None   # app_settings table not yet created (first-run edge case)
+        return row[0].encode() if row else None
+    finally:
+        if con: con.close()
+
+
+def _delete_key_from_db() -> None:
+    """Drop the legacy app_settings.backup_enc_key row after migration."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute("DELETE FROM app_settings WHERE key='backup_enc_key'")
+        except Exception as e:
+            log.warning(f"backup key DB delete failed (PG): {e}")
+        return
+    con = None
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=15)
+        con.execute("DELETE FROM app_settings WHERE key='backup_enc_key'")
+        con.commit()
+    except Exception as e:
+        log.warning(f"backup key DB delete failed (SQLite): {e}")
+    finally:
+        if con: con.close()
+
+
+def _write_key_file(key: bytes) -> None:
+    """Persist the Fernet key to SECRETS_DIR/backup_enc.key with 0600 perms.
+
+    The parent dir is created with 0700. On Windows chmod is best-effort
+    (Windows uses ACLs, not POSIX bits) — we rely on the fact that
+    SECRETS_DIR is under the user profile, same trust model as REPORTS_DIR.
+    """
+    os.makedirs(SECRETS_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(SECRETS_DIR, 0o700)
+    except Exception:
+        pass   # best-effort on Windows
+    # O_EXCL so we never silently clobber an existing key file.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    fd = os.open(_BACKUP_KEY_FILE, flags, 0o600)
+    try:
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(_BACKUP_KEY_FILE, 0o600)
+    except Exception:
+        pass
+
 
 def _get_fernet():
-    """Lazy-init Fernet cipher; key is stored in app_settings."""
+    """Resolve the backup-credential Fernet key.
+
+    Precedence (first hit wins):
+      1. ``PW_BACKUP_ENC_KEY`` env var (raw Fernet key).
+      2. Key file at SECRETS_DIR/backup_enc.key (chmod 0600).
+      3. One-shot migration: if a legacy ``app_settings.backup_enc_key``
+         row exists, copy it to the key file and DELETE the row — so the
+         key no longer lives beside its ciphertext in DB dumps.
+      4. Generate a fresh key and write it to the key file.
+
+    The key is cached in ``_fernet_instance`` for the life of the process.
+    """
     global _fernet_instance
     if _fernet_instance is not None:
         return _fernet_instance
@@ -32,45 +119,62 @@ def _get_fernet():
         log.error("cryptography package not installed — run: pip install cryptography")
         raise
 
-    if is_pg():
-        from db.pg_pool import pg_cursor
-        with pg_cursor('main') as cur:
-            cur.execute("SELECT value FROM app_settings WHERE key='backup_enc_key'")
-            row = cur.fetchone()
-        if row:
-            key = row["value"].encode()
-        else:
-            key = Fernet.generate_key()
-            with pg_cursor('main') as cur:
-                cur.execute(
-                    "INSERT INTO app_settings(key,value) VALUES('backup_enc_key',%s) "
-                    "ON CONFLICT(key) DO NOTHING",
-                    (key.decode(),)
-                )
-            log.info("Backup encryption key generated and stored in app_settings")
-        _fernet_instance = Fernet(key)
-        return _fernet_instance
+    key: bytes | None = None
 
-    con = sqlite3.connect(DB_PATH, timeout=15)
-    try:
+    # 1. Env var
+    env_key = os.environ.get("PW_BACKUP_ENC_KEY", "").strip()
+    if env_key:
+        key = env_key.encode()
+        log.info("Backup encryption key loaded from PW_BACKUP_ENC_KEY env var")
+
+    # 2. Key file
+    if key is None and os.path.isfile(_BACKUP_KEY_FILE):
         try:
-            row = con.execute(
-                "SELECT value FROM app_settings WHERE key='backup_enc_key'"
-            ).fetchone()
-        except sqlite3.OperationalError:
-            row = None   # app_settings table not yet created (first-run edge case)
-        if row:
-            key = row[0].encode()
-        else:
-            key = Fernet.generate_key()
-            con.execute(
-                "INSERT OR IGNORE INTO app_settings(key,value) VALUES('backup_enc_key',?)",
-                (key.decode(),)
+            with open(_BACKUP_KEY_FILE, "rb") as f:
+                key = f.read().strip()
+            log.info(f"Backup encryption key loaded from {_BACKUP_KEY_FILE}")
+        except Exception as e:
+            log.error(f"Failed to read backup key file: {e}")
+            raise
+
+    # 3. Legacy migration from app_settings
+    if key is None:
+        legacy = _read_key_from_db()
+        if legacy:
+            key = legacy
+            try:
+                _write_key_file(key)
+                _delete_key_from_db()
+                log.info(
+                    f"Migrated backup encryption key from app_settings to "
+                    f"{_BACKUP_KEY_FILE} and removed DB row"
+                )
+            except FileExistsError:
+                # Race: another worker wrote the file between our checks.
+                # Trust the on-disk key; don't delete the DB row this time.
+                log.warning("Key file appeared during migration; re-reading")
+                with open(_BACKUP_KEY_FILE, "rb") as f:
+                    key = f.read().strip()
+            except Exception as e:
+                log.error(
+                    f"Key migration failed, leaving DB row in place: {e}"
+                )
+                # Fall through — we still have the key in hand, so decrypts
+                # keep working this boot. Next boot will retry the migration.
+
+    # 4. Generate fresh
+    if key is None:
+        key = Fernet.generate_key()
+        try:
+            _write_key_file(key)
+            log.info(f"Generated fresh backup encryption key at {_BACKUP_KEY_FILE}")
+        except Exception as e:
+            log.critical(
+                f"Could not persist backup encryption key to {_BACKUP_KEY_FILE}: "
+                f"{e} — encrypted credentials saved this boot will be "
+                f"unrecoverable on restart"
             )
-            con.commit()
-            log.info("Backup encryption key generated and stored in app_settings")
-    finally:
-        con.close()
+            raise
 
     _fernet_instance = Fernet(key)
     return _fernet_instance

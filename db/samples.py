@@ -22,25 +22,72 @@ _SAMPLE_BUF_LOCK     = threading.Lock()
 _SAMPLE_BUF_MAX      = 50_000   # hard cap — drop oldest if writer stalls
 _sample_overflow_logged = 0.0   # rate-limit the overflow warning
 
+# Observability: count drops so operators can see probe data loss in
+# /api/stats/sample-buffer instead of grepping logs.
+_sample_drops_total   = 0       # monotonic since process start
+_sample_drops_window: list = []  # timestamps of recent drops (trimmed to 5 min)
+# Pre-drop "heads up" warning — fires once when the buffer first crosses
+# 80% of capacity, rearms when it falls back under 50%.
+_SAMPLE_BUF_WARN_HI   = int(_SAMPLE_BUF_MAX * 0.8)
+_SAMPLE_BUF_WARN_LO   = int(_SAMPLE_BUF_MAX * 0.5)
+_sample_highwater_armed = True  # True when we're allowed to fire the next warning
+
 
 def db_buffer_sample(did, sid, ok, ms, value, ts):
     """Append one probe result to the in-memory buffer (thread-safe, no I/O).
 
     If the buffer exceeds _SAMPLE_BUF_MAX (writer stalled), the oldest row
-    is dropped to prevent unbounded memory growth.
+    is dropped to prevent unbounded memory growth. Drops bump counters read
+    by ``db_sample_buffer_stats()`` so operators get a client-visible signal
+    instead of only a rate-limited log line.
     """
-    global _sample_overflow_logged
+    global _sample_overflow_logged, _sample_drops_total, _sample_highwater_armed
     with _SAMPLE_BUF_LOCK:
-        if len(_SAMPLE_BUF) >= _SAMPLE_BUF_MAX:
+        buf_len = len(_SAMPLE_BUF)
+        if buf_len >= _SAMPLE_BUF_MAX:
             _SAMPLE_BUF.pop(0)   # drop oldest
+            _sample_drops_total += 1
             now = time.time()
+            _sample_drops_window.append(now)
             if now - _sample_overflow_logged > 60:
                 log.warning(
                     "Sample buffer full (%d rows) — oldest row dropped. "
-                    "DB writer may be stalled.", _SAMPLE_BUF_MAX
+                    "DB writer may be stalled. Total drops this boot: %d",
+                    _SAMPLE_BUF_MAX, _sample_drops_total
                 )
                 _sample_overflow_logged = now
+        elif buf_len >= _SAMPLE_BUF_WARN_HI and _sample_highwater_armed:
+            log.warning(
+                "Sample buffer at %d/%d (80%% capacity) — DB writer may be "
+                "falling behind. Drops will start if it doesn't catch up.",
+                buf_len, _SAMPLE_BUF_MAX
+            )
+            _sample_highwater_armed = False
+        elif buf_len <= _SAMPLE_BUF_WARN_LO and not _sample_highwater_armed:
+            # Rearm once the buffer drains below 50% so we can warn again
+            # if pressure recurs later in the same boot.
+            _sample_highwater_armed = True
         _SAMPLE_BUF.append((ts, did, sid, int(ok), ms, value))
+
+
+def db_sample_buffer_stats() -> dict:
+    """Snapshot of sample-buffer health for /api/stats/sample-buffer.
+
+    ``total_dropped`` is monotonic since process start. ``dropped_last_5min``
+    is computed from a bounded window list that's trimmed on each read —
+    cheap (O(dropped-in-5-min)) because there is no background sweeper.
+    """
+    cutoff = time.time() - 300
+    with _SAMPLE_BUF_LOCK:
+        # Trim expired window entries in-place so the list stays bounded.
+        while _sample_drops_window and _sample_drops_window[0] < cutoff:
+            _sample_drops_window.pop(0)
+        return {
+            "buf_len":           len(_SAMPLE_BUF),
+            "buf_cap":           _SAMPLE_BUF_MAX,
+            "total_dropped":     _sample_drops_total,
+            "dropped_last_5min": len(_sample_drops_window),
+        }
 
 
 def _do_insert_samples(rows):

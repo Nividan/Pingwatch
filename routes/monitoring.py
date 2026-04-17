@@ -13,7 +13,8 @@ import time
 
 import core.app_state as app_state
 from core.config import DB_PATH, LOGS_DB_PATH
-from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap
+from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap, \
+               db_sample_buffer_stats
 from db.backend import is_pg
 from core.logger import log
 
@@ -75,6 +76,16 @@ def handle(h, method, path, body):
         user, _ = h._require("viewer")
         if not user: return True
         h._json(200, {"flaps": db_load_flaps()})
+        return True
+
+    # ── /api/stats/sample-buffer GET ──────────────────────────────
+    # Operator-visible health signal for the probe-sample buffer. When the
+    # writer queue stalls, the oldest buffered row is dropped; this endpoint
+    # makes those drops observable without grep'ing logs.
+    if path == "/api/stats/sample-buffer" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        h._json(200, db_sample_buffer_stats())
         return True
 
     # ── /api/traps GET ────────────────────────────────────────────

@@ -31,7 +31,7 @@ from core.config import DB_PATH
 # persisted; on subsequent connects a mismatch is treated as a hard error.
 
 _KNOWN_HOSTS_PATH = os.path.join(os.path.dirname(DB_PATH), "ssh_known_hosts.txt")
-_kh_lock = threading.Lock()
+_kh_lock = threading.RLock()   # RLock so _verify_host_key can hold it across the load-check-save sequence
 
 
 def _load_known_hosts() -> dict:
@@ -70,17 +70,18 @@ def _verify_host_key(transport: 'paramiko.Transport', host: str, port: int) -> s
     fingerprint = hashlib.sha256(remote_key.asbytes()).hexdigest()
     hostport = f"{host}:{port}"
 
-    known = _load_known_hosts()
-    if hostport not in known:
-        # First time seeing this host — trust and record
-        _save_known_host(hostport, key_type, fingerprint)
-        log.info(
-            f"SSH backup: trusting new host key for {hostport} "
-            f"({key_type} SHA256:{fingerprint[:16]}…) — saved to known_hosts"
-        )
-        return None
+    with _kh_lock:
+        known = _load_known_hosts()
+        if hostport not in known:
+            # First time seeing this host — trust and record (atomic: no TOCTOU window)
+            _save_known_host(hostport, key_type, fingerprint)
+            log.info(
+                f"SSH backup: trusting new host key for {hostport} "
+                f"({key_type} SHA256:{fingerprint[:16]}…) — saved to known_hosts"
+            )
+            return None
+        stored_type, stored_fp = known[hostport]
 
-    stored_type, stored_fp = known[hostport]
     if stored_fp != fingerprint or stored_type != key_type:
         return (
             f"HOST KEY MISMATCH for {hostport}: expected {stored_type} "
