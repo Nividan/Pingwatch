@@ -549,7 +549,6 @@ def main():
             log.error("Refusing to start — fix PostgreSQL configuration and restart.")
             sys.exit(1)
         pg_init_pool()
-        log.info(f"PostgreSQL pool ready: {_cfg['pg_host']}:{_cfg['pg_port']}/{_cfg['pg_database']}")
 
     db_init()
     logs_db_init()
