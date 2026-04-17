@@ -55,6 +55,11 @@ def _get_syslog_status() -> dict:
     return get_syslog_status()
 
 
+def _get_ldap_status() -> dict:
+    from core.ldap_auth import get_ldap_status
+    return get_ldap_status()
+
+
 def _get_effective_workers() -> int:
     """Return the number of probe workers currently in use."""
     try:
@@ -175,6 +180,7 @@ def handle(h, method, path, body):
             # Integration runtime status (in-memory, resets on restart)
             "smtp_status":   _get_smtp_status(),
             "syslog_status": _get_syslog_status(),
+            "ldap_status":   _get_ldap_status(),
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),

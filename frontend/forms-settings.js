@@ -224,7 +224,7 @@ function _buildSettingsTab_integrations(sr) {
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
-        <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD</button>
+        <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD <span id="ibadge-ldap" style="font-size:13px"></span></button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -340,6 +340,7 @@ function _buildSettingsTab_integrations(sr) {
 
       <!-- ── LDAP sub-panel ── -->
       <div id="ipanel-ldap" style="display:none">
+        <div id="ldap-status-bar"></div>
 
         <!-- Enable toggle -->
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
@@ -2233,14 +2234,15 @@ function _renderIntegStatus(id, status) {
   const icon    = icons[status.state]  || '🔴';
   const label   = labels[status.state] || status.state;
   const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
-  const noun    = id === 'smtp' ? 'email' : 'syslog';
+  const lastLabels = {smtp: 'Last email sent', syslog: 'Last message sent', ldap: 'Last auth/sync'};
+  const lastLabel  = lastLabels[id] || 'Last';
   const errHtml = (status.state === 'error' && status.last_err_msg)
     ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(status.last_err_msg)}</div>` : '';
   el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
     <span style="font-size:16px;line-height:1.3">${icon}</span>
     <div>
       <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
-      <span style="font-size:11px;color:var(--text3);margin-left:10px">Last ${noun} sent: ${lastOk}</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:10px">${lastLabel}: ${lastOk}</span>
       ${errHtml}
     </div>
   </div>`;
@@ -2268,6 +2270,7 @@ async function _loadIntegrationsStatus() {
     const r = await api('GET', '/api/settings');
     if (r.smtp_status)   _renderIntegStatus('smtp',   r.smtp_status);
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
+    if (r.ldap_status)   _renderIntegStatus('ldap',   r.ldap_status);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
   const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
