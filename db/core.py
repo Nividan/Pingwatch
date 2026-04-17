@@ -68,10 +68,13 @@ def shutdown_writers(timeout: float = 10.0) -> dict:
     proceeding.
     """
     half = max(0.1, timeout / 2)
-    _DB_QUEUE.put(None)
-    _LOGS_QUEUE.put(None)
+    # Capture pending counts BEFORE enqueuing the sentinel — otherwise the
+    # sentinel itself inflates the count by 1, producing the misleading
+    # 'pending=1' on otherwise-idle queues.
     main_pending = _DB_QUEUE.qsize()
     logs_pending = _LOGS_QUEUE.qsize()
+    _DB_QUEUE.put(None)
+    _LOGS_QUEUE.put(None)
     _db_writer_thread.join(timeout=half)
     _logs_writer_thread.join(timeout=half)
     return {

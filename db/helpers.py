@@ -87,6 +87,12 @@ def db_query(schema: str, query: str, params: tuple = ()) -> list:
             cur.execute(_ph(query), params)
             return cur.fetchall()
     except Exception as e:
+        # Quiet path for the post-shutdown race: a background thread that
+        # didn't notice its stop signal in time hits a closed pool. Log at
+        # DEBUG so we don't spam ERROR for an expected shutdown condition.
+        if type(e).__name__ == "PoolClosedError":
+            log.debug(f"db_query skipped (pool closed): {query[:60]}…")
+            return []
         log.error(f"db_query failed [{query[:60]}…]: {type(e).__name__}: {e}")
         return []
 

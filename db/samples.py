@@ -402,16 +402,32 @@ def db_rollup_backfill():
         log.error(f"Rollup backfill error: {e}")
 
 
+_rollup_stop = threading.Event()
+
+
 def _rollup_loop():
-    """Background daemon: aggregate raw → 5min every 5 min, 5min → 1h every ~30 min."""
-    time.sleep(30)  # startup delay
+    """Background daemon: aggregate raw → 5min every 5 min, 5min → 1h every ~30 min.
+
+    Exits promptly when ``_rollup_stop`` is set so shutdown doesn't race
+    ``pg_close_pool()``.  Both sleeps below are interruptible — without the
+    Event-based wait, a stop signal mid-cycle would still take up to 5 min
+    to take effect, and any DB call after the pool closed would crash with
+    ``'NoneType' object has no attribute 'getconn'``.
+    """
+    if _rollup_stop.wait(30):  # startup delay (interruptible)
+        return
     _iter = 0
-    while True:
+    while not _rollup_stop.is_set():
         try:
             _rollup_5m()
         except Exception as e:
             _emsg = str(e)
-            if "no such table" not in _emsg and "does not exist" not in _emsg:
+            # Quiet known-benign cases: empty schema (startup race) and pool
+            # closed (shutdown race — stop signal was set but this iteration
+            # was already in flight).
+            if ("no such table" not in _emsg
+                    and "does not exist" not in _emsg
+                    and "pool is closed" not in _emsg):
                 log.error(f"Rollup 5m error: {e}")
         _iter += 1
         if _iter % 6 == 0:  # every ~30 min
@@ -419,9 +435,17 @@ def _rollup_loop():
                 _rollup_1h()
             except Exception as e:
                 _emsg = str(e)
-                if "no such table" not in _emsg and "does not exist" not in _emsg:
+                if ("no such table" not in _emsg
+                        and "does not exist" not in _emsg
+                        and "pool is closed" not in _emsg):
                     log.error(f"Rollup 1h error: {e}")
-        time.sleep(300)
+        if _rollup_stop.wait(300):
+            return
+
+
+def stop_rollup_worker() -> None:
+    """Stop the rollup background loop (call at shutdown before pg_close_pool)."""
+    _rollup_stop.set()
 
 
 threading.Thread(target=_rollup_loop, daemon=True, name="rollup-worker").start()
