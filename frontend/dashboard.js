@@ -1025,6 +1025,15 @@ function _dwRefreshNetAvail(wid) {
   _dwDrawNetAvailChart(wid); // fire-and-forget
 }
 
+// On theme change, bust the canvas throttle and redraw immediately so colors
+// update without waiting 30s for the next scheduled refresh.
+window.addEventListener('themechange', () => {
+  _dwRefreshNetAvail._last = 0;
+  (_dwWidgets || []).forEach(w => {
+    if (w.type === 'network_avail') _dwDrawNetAvailChart(w.id);
+  });
+});
+
 async function _dwDrawNetAvailChart(wid) {
   const canvas = document.getElementById(`dw-na-canvas-${wid}`);
   if (!canvas) return;
