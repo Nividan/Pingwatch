@@ -66,6 +66,14 @@ PACKAGES = [
         "required": False,
     },
     {
+        "import":   "smbclient",
+        "name":     "smbprotocol",
+        "install":  "smbprotocol>=1.10.0",
+        "pip":      True,
+        "desc":     "SMB / CIFS remote database backup upload",
+        "required": False,
+    },
+    {
         "import":   "cryptography",
         "name":     "cryptography",
         "install":  "cryptography>=41.0.0",
