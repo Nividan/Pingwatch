@@ -2156,6 +2156,21 @@ tbody.bk-grp-collapsed{display:none;}
 .dw-ncm-never .dw-ncm-n{color:var(--warn);}
 .dw-ncm-total .dw-ncm-n{color:var(--text);font-size:1.2rem;}
 
+/* ── Backup Status widget: DB-backup section below the device-config grid ── */
+.dw-bk-section-lbl{font-size:.68rem;font-weight:600;color:var(--text3);
+  text-transform:uppercase;letter-spacing:.5px;padding:2px 6px 4px;}
+.dw-db-card{margin:2px 6px 4px;padding:8px 10px;border-radius:6px;background:var(--bg2);
+  cursor:pointer;transition:background .1s;}
+.dw-db-card:hover{background:var(--bg3);}
+.dw-db-main{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  font-size:.78rem;}
+.dw-db-next{color:var(--text3);font-size:.72rem;white-space:nowrap;}
+.dw-db-remote{margin-top:4px;font-size:.72rem;}
+.dw-db-ok{color:var(--up);}
+.dw-db-warn{color:var(--warn);}
+.dw-db-fail{color:var(--down);}
+.dw-db-muted{color:var(--text3);}
+
 /* ── License date input (dark calendar picker) ───────────────────── */
 .lic-date-inp{color-scheme:dark;background:var(--bg2);color:var(--text);
   border:1px solid var(--border2);border-radius:4px;padding:4px 8px;font-size:13px;width:100%;
