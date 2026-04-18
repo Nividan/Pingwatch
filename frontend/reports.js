@@ -375,7 +375,7 @@ function _rptEditTemplate(tid, presetKind){
               <option value="last_7d"       ${cfg.period==='last_7d'?'selected':''}>Last 7 days</option>
               <option value="last_30d"      ${cfg.period==='last_30d'?'selected':''}>Last 30 days</option>
               <option value="last_90d"      ${cfg.period==='last_90d'?'selected':''}>Last 90 days</option>
-              <option value="last_month"    ${(cfg.period==='last_month'||!cfg.period)?'selected':''}>Last calendar month</option>
+              <option value="last_month"    ${(cfg.period==='last_month'||!cfg.period)?'selected':''}>Last Month</option>
               <option value="last_quarter"  ${cfg.period==='last_quarter'?'selected':''}>Last quarter</option>
               <option value="last_year"     ${cfg.period==='last_year'?'selected':''}>Last 365 days</option>
               <option value="month_to_date" ${cfg.period==='month_to_date'?'selected':''}>Month to date</option>
@@ -738,7 +738,7 @@ function _rptEditSchedule(sid){
               <option value="last_7d"       ${s.period==='last_7d'?'selected':''}>Last 7 days</option>
               <option value="last_30d"      ${s.period==='last_30d'?'selected':''}>Last 30 days</option>
               <option value="last_90d"      ${s.period==='last_90d'?'selected':''}>Last 90 days</option>
-              <option value="last_month"    ${(s.period==='last_month'||!s.period)?'selected':''}>Last calendar month</option>
+              <option value="last_month"    ${(s.period==='last_month'||!s.period)?'selected':''}>Last Month</option>
               <option value="last_quarter"  ${s.period==='last_quarter'?'selected':''}>Last quarter</option>
               <option value="last_year"     ${s.period==='last_year'?'selected':''}>Last 365 days</option>
               <option value="month_to_date" ${s.period==='month_to_date'?'selected':''}>Month to date</option>

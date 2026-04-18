@@ -1148,10 +1148,28 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
 function dmHistRedraw(did, sid) {
   const cache = _histCache[`${did}/${sid}`];
   if (!cache) return;
+  // Modal canvas (sensor detail view)
   const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
   const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
   if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples,
     cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
+  // Dashboard widget canvases for the same sensor — use a different element ID
+  // (dw-canvas-${wid}) so they were skipped here before. Without this, theme
+  // toggles left widgets stuck on the previous palette until the next 30s data
+  // refresh fired _dwLoadSensorChart, which caused the visible "stuck dark
+  // widget on light background" lag.
+  try {
+    if (typeof _dwLoad === 'function') {
+      _dwLoad().forEach(w => {
+        if (w.type !== 'sensor_chart') return;
+        if (w.cfg?.did !== did || w.cfg?.sid !== sid) return;
+        const wc = document.getElementById(`dw-canvas-${w.id}`);
+        const ws = document.getElementById(`dw-stats-${w.id}`);
+        if (wc) _drawHistCanvas(wc, ws, did, sid, cache.summary, cache.samples,
+          cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
+      });
+    }
+  } catch (_) { /* dashboard module may not be loaded yet */ }
 }
 
 function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
