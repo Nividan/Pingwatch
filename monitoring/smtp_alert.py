@@ -320,11 +320,15 @@ def _render_license_body(ctx: dict) -> str:
 
     status, days_lbl, days_val = _days_status(ctx.get('days_left'), ctx.get('state'))
     html += _html_section_hdr('License Status')
-    for lbl, val in [
+    lic_rows = [
         ('Status',      status),
         ('Expiry Date', _safe(ctx.get('expiry_date', '')) or '\u2014'),
         (days_lbl,      days_val),
-    ]:
+    ]
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        lic_rows.append(('Duration', dur))
+    for lbl, val in lic_rows:
         html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
     return html
 
@@ -353,11 +357,15 @@ def _render_tls_body(ctx: dict) -> str:
     status, days_lbl, days_val = _days_status(days_left, ctx.get('state'))
     ms = ctx.get('ms')
     html += _html_section_hdr('Certificate')
-    for lbl, val in [
+    cert_rows = [
         ('Status',  status),
         (days_lbl,  days_val),
         ('Latency', f'{ms:.1f} ms' if ms is not None else '\u2014'),
-    ]:
+    ]
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        cert_rows.append(('Duration', dur))
+    for lbl, val in cert_rows:
         html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
 
     # For TLS the warn_ms/crit_ms fields hold day-thresholds (misnomer in
@@ -397,10 +405,14 @@ def _render_snmp_body(ctx: dict) -> str:
     val = _safe(ctx.get('last_value', '')) or '\u2014'
     ms = ctx.get('ms')
     html += _html_section_hdr('Reading')
-    for lbl, value in [
+    read_rows = [
         ('Current Value', val),
         ('Latency',       f'{ms:.1f} ms' if ms is not None else '\u2014'),
-    ]:
+    ]
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        read_rows.append(('Duration', dur))
+    for lbl, value in read_rows:
         html += _html_stat_row(lbl, value, ri % 2 == 0); ri += 1
 
     # For SNMP warn_ms/crit_ms are value thresholds (field names are a misnomer).
@@ -495,7 +507,7 @@ def _render_latency_text(ctx: dict) -> list:
 
 def _render_license_text(ctx: dict) -> list:
     status, days_lbl, days_val = _days_status(ctx.get('days_left'), ctx.get('state'))
-    return [
+    rows = [
         ('Event',       _safe(ctx.get('event_type', ''))),
         ('Device',      _safe(ctx.get('dname', ''))),
         ('License',     _safe(ctx.get('sname', ''))),
@@ -505,8 +517,12 @@ def _render_license_text(ctx: dict) -> list:
         ('Status',      status),
         ('Expiry Date', _safe(ctx.get('expiry_date', ''))),
         (days_lbl,      days_val),
-        ('Detail',      _safe(ctx.get('detail', ''))),
     ]
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        rows.append(('Duration', dur))
+    rows.append(('Detail', _safe(ctx.get('detail', ''))))
+    return rows
 
 
 def _render_tls_text(ctx: dict) -> list:
@@ -530,6 +546,9 @@ def _render_tls_text(ctx: dict) -> list:
     ms = ctx.get('ms')
     if ms is not None:
         rows.append(('Latency', f"{ms:.1f} ms"))
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        rows.append(('Duration', dur))
     rows.append(('Detail', _safe(ctx.get('detail', ''))))
     return rows
 
@@ -555,6 +574,9 @@ def _render_snmp_text(ctx: dict) -> list:
     ms = ctx.get('ms')
     if ms is not None:
         rows.append(('Latency', f"{ms:.1f} ms"))
+    dur = _fmt_duration(ctx.get('duration_s'))
+    if dur:
+        rows.append(('Duration', dur))
     rows.append(('Detail', _safe(ctx.get('detail', ''))))
     return rows
 
