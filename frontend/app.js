@@ -259,6 +259,34 @@ function toast(msg,type='info'){
 }
 
 // ── Auth ─────────────────────────────────────────────────────────
+function _resetLoginForm(){
+  // Scrub any mid-auth state (TOTP or RADIUS challenge prompt) so the next
+  // login attempt starts fresh. Without this, the button's onclick handler
+  // still points at the challenge-submit function after sign-out and posts
+  // credentials to the wrong endpoint.
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){ userField.disabled=false; }
+  if(passField){ passField.style.display='block'; passField.value=''; }
+  // Clean up TOTP elements
+  const totpField=document.getElementById('login-totp');
+  if(totpField) totpField.remove();
+  const rememberRow=document.getElementById('login-remember-row');
+  if(rememberRow) rememberRow.remove();
+  // Clean up RADIUS challenge elements
+  const radiusPrompt=document.getElementById('login-radius-prompt');
+  if(radiusPrompt) radiusPrompt.remove();
+  const radiusResp=document.getElementById('login-radius-resp');
+  if(radiusResp) radiusResp.remove();
+  // Restore default button + submit handler
+  const btn=document.getElementById('login-btn');
+  if(btn){
+    btn.textContent='Sign In';
+    btn.disabled=false;
+    btn.onclick=submitLogin;
+  }
+}
+
 function showLogin(msg, keepInput){
   document.getElementById('login-screen').style.display='flex';
   const errEl=document.getElementById('login-err');
@@ -266,7 +294,7 @@ function showLogin(msg, keepInput){
   errEl.textContent = msg || '';
   errEl.classList.toggle('info', !!keepInput);
   if(!keepInput){
-    document.getElementById('login-btn').disabled=false;
+    _resetLoginForm();
     setTimeout(()=>document.getElementById('login-user')?.focus(),80);
   }
 }

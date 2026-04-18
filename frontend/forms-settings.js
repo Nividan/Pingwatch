@@ -225,7 +225,7 @@ function _buildSettingsTab_integrations(sr) {
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
         <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD <span id="ibadge-ldap" style="font-size:13px"></span></button>
-        <button id="itab-radius" class="itab" onclick="switchIntegTab('radius')">🛡 RADIUS <span id="ibadge-radius" style="font-size:13px"></span></button>
+        <button id="itab-radius" class="itab" onclick="switchIntegTab('radius')">🧾 RADIUS <span id="ibadge-radius" style="font-size:13px"></span></button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -991,6 +991,13 @@ function _buildSettingsTab_alertRules() {
 }
 
 async function openSettings(initialTab){
+  // Settings are admin-only — non-admins clicking the menu item previously
+  // saw "nothing happen" because /api/users / /api/tls returned 403 and the
+  // Promise.all rejected silently. Surface a clear message instead.
+  if ((S.role || 'viewer') !== 'admin') {
+    toast('Settings is admin-only — your account has read-only access.', 'err');
+    return;
+  }
   _stopLogLive();
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
@@ -2002,10 +2009,14 @@ function renderUserTable(users){
   if(!users||!users.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No users found.</div>';
   const rows=users.map(u=>{
     const isLdap=u.auth_type==='ldap';
+    const isRadius=u.auth_type==='radius';
+    const isRemote=isLdap||isRadius;
     const badge=isLdap
       ?`<span class="usr-badge-ldap">🌐 Domain</span>`
-      :`<span class="usr-badge-local">🔑 Local</span>`;
-    const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
+      :isRadius
+        ?`<span class="usr-badge-radius">🧾 RADIUS</span>`
+        :`<span class="usr-badge-local">🔑 Local</span>`;
+    const resetBtn=isRemote?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
     const totpBtn=u.totp_enabled
       ?`<button onclick="adminReset2FA('${esc(u.username)}')" title="Disable this user's two-factor authentication (e.g. lost phone)">🔐 Reset 2FA</button>`
       :'';
