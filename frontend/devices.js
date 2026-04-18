@@ -26,8 +26,8 @@ function _restoreViewToggle(){
   if(_devView==='list'){
     document.getElementById('vtGrid')?.classList.remove('active');
     document.getElementById('vtList')?.classList.add('active');
-    document.querySelectorAll('.grp-grid').forEach(g => g.classList.add('list-view'));
   }
+  _applyViewMode();
   _initDevCtxMenu();
 }
 
@@ -1039,6 +1039,7 @@ function _renderPage(){
 function _renderPagination(){
   const pg=document.getElementById('devPagination');
   if(!pg) return;
+  if(_devView!=='list'){pg.style.display='none';return;}
   const total=_filteredDids.length;
   const pages=Math.ceil(total/_devPageSize)||1;
   if(total<=_devPageSize){pg.style.display='none';return;}
