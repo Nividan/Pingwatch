@@ -1378,6 +1378,8 @@ function switchMainTab(tab){
   ipamView.style.display     ='none';
   if(reportsView) reportsView.style.display='none';
   document.getElementById('devActBar').style.display='none';
+  const _devPg=document.getElementById('devPagination');
+  if(_devPg) _devPg.style.display='none';
   // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
   if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
   const _mf=document.getElementById('map-frame');

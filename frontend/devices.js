@@ -637,6 +637,18 @@ function restoreGroupOrder(){
 
 function getDragAfter(grid,x,y){
   const cards=[...grid.querySelectorAll('.dc:not(.dc-add):not(.dc-dragging):not(.dc-drop-indicator)')];
+  const rowCards=cards.filter(c=>{
+    const r=c.getBoundingClientRect();
+    return y>=r.top && y<=r.bottom;
+  });
+  if(rowCards.length){
+    for(const c of rowCards){
+      const r=c.getBoundingClientRect();
+      if(x<r.left+r.width/2) return c;
+    }
+    const last=rowCards[rowCards.length-1];
+    return cards[cards.indexOf(last)+1]||null;
+  }
   for(const c of cards){
     const r=c.getBoundingClientRect();
     if(y<r.top+r.height/2) return c;
