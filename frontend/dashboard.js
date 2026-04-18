@@ -238,7 +238,7 @@ async function _dwInit() {
 function _dwRenderTabBar() {
   const bar = document.getElementById('dw-tab-bar');
   if (!bar || !_dwDashboards) return;
-  bar.innerHTML = _dwDashboards.map(d =>
+  const tabs = _dwDashboards.map(d =>
     `<button class="dw-dash-tab${d.id === _dwActiveId ? ' active' : ''}"
              data-id="${d.id}"
              onclick="_dwSwitchTo(${d.id})"
@@ -246,6 +246,9 @@ function _dwRenderTabBar() {
              title="${esc(d.name)}">${esc(d.name)}</button>`
   ).join('') +
   '<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">＋</button>';
+  bar.innerHTML =
+    `<div class="dw-tab-bar-tabs">${tabs}</div>` +
+    `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">＋ Add Widget</button>`;
 }
 
 async function _dwSwitchTo(id) {
