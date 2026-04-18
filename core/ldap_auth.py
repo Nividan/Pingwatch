@@ -253,8 +253,10 @@ def ldap_test_auth_user(username: str, password: str,
 
         if not svc.entries:
             svc.unbind()
-            log.warning(f"LDAP test_auth_user: user {username!r} not found — "
-                        f"base_dn={cfg['base_dn']!r} filter={search_filter!r}")
+            # Not a warning — "user isn't in this directory" is an expected answer,
+            # especially when the user may live in a different auth source (RADIUS, local).
+            log.debug(f"LDAP test_auth_user: user {username!r} not found — "
+                      f"base_dn={cfg['base_dn']!r} filter={search_filter!r}")
             return False, f"User '{username}' not found in directory"
 
         entry = svc.entries[0]
@@ -348,8 +350,16 @@ def ldap_authenticate(username: str, password: str):
                 "dn":           attrs.get("dn", ""),
             }
         else:
-            log.info(f"LDAP authenticate: FAILED for {username!r} — {msg}")
-            _record_err(msg)
+            # "User not found" is an expected outcome when the user lives in a
+            # different auth source (RADIUS, local). Treat it as DEBUG and do
+            # NOT flip the LDAP status badge to "error" — the LDAP server
+            # answered correctly, it just doesn't own this user.
+            _not_found = 'not found' in (msg or '').lower()
+            if _not_found:
+                log.debug(f"LDAP authenticate: {username!r} not in directory")
+            else:
+                log.info(f"LDAP authenticate: FAILED for {username!r} — {msg}")
+                _record_err(msg)
             return None
     except Exception as e:
         log.error(f"LDAP authenticate: unexpected error for {username!r}: {e}")
