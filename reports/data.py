@@ -729,16 +729,30 @@ def _device_health_scores(availability: list, flaps: list, limit: int = 25) -> l
     for a in availability:
         did = a["did"]
         pct = a.get("pct")
-        uptime_pct = pct if pct is not None else 0.0
+        # Skip devices with no probe data in the window — they can't be scored
+        # honestly, and including them handed out free 100s to unmonitored
+        # devices (pct=None was treated as "no penalty" even though it's
+        # actually "no signal").
+        if pct is None or (a.get("total") or 0) == 0:
+            continue
+        uptime_pct = pct
         incidents = inc_by_did.get(did, 0)
         status = status_by_did.get(did, "up")
 
         score = 100.0
-        # Downtime penalty (only if we have uptime data)
-        if pct is not None:
-            score -= 50.0 * (1.0 - max(0.0, min(100.0, pct)) / 100.0)
-        # Incident load (cap at 20)
-        score -= min(20.0, incidents * 0.5)
+        # Downtime penalty — non-linear so sub-percent outages still move the
+        # needle. Previous formula was linear × 50, which meant 99.96% uptime
+        # cost 0.02 pts — every healthy device tied at 100.0, wiping out any
+        # signal between good/great. Shape: (downtime%)^0.7 × 15, capped at 50.
+        #   99.99% → 0.5   (barely visible)
+        #   99.9%  → 3.0
+        #   99%    → 15.0
+        #   95%    → 46.3
+        #   ≤90%   → 50 (cap)
+        downtime = max(0.0, min(100.0, 100.0 - pct))
+        score -= min(50.0, (downtime ** 0.7) * 15.0)
+        # Incident load — 2 pts each, capped at 20 (was 0.5 × count, too gentle).
+        score -= min(20.0, incidents * 2.0)
         # Current status penalty
         if status == "down":
             score -= 20
@@ -773,6 +787,27 @@ _LATENCY_STYPES = {"ping", "tcp", "http", "http_keyword", "dns", "tls", "banner"
 # writes the metric value into result['ms'] for charting purposes.
 
 
+def _weighted_pct(vals_weights, p: float):
+    """Weighted p-th percentile (0–100). Each pair is (value, weight).
+
+    Used by the rollup-backed latency path to produce meaningfully different
+    p50/p95/p99 — the rollup only stores (avg, max) per bucket, but weighting
+    by sample_count recovers a usable distribution shape.
+    """
+    pairs = [(float(v), float(w)) for v, w in vals_weights if w and w > 0]
+    if not pairs:
+        return None
+    pairs.sort(key=lambda x: x[0])
+    total = sum(w for _, w in pairs)
+    target = total * (p / 100.0)
+    cum = 0.0
+    for v, w in pairs:
+        cum += w
+        if cum >= target:
+            return round(v, 1)
+    return round(pairs[-1][0], 1)
+
+
 def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> list:
     """
     Per-sensor latency stats over the window, restricted to probe types whose
@@ -796,33 +831,29 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
     buckets: dict = {}
 
     if is_rollup:
-        # rollup: one bucket row per (did,sid,ts). Aggregate its avg_ms (weighted by sample_count) and max_ms separately.
-        sql_pg = (f"SELECT did, sid, "
-                  f"SUM(COALESCE(avg_ms,0) * COALESCE(sample_count,0)) AS wsum, "
-                  f"SUM(COALESCE(sample_count,0)) AS n, "
-                  f"MAX(COALESCE(max_ms,0)) AS mx, "
-                  f"MIN(COALESCE(min_ms, 999999)) AS mn "
-                  f"FROM {table} WHERE ts>=%s AND ts<%s "
-                  f"AND ok_count > 0 "
-                  f"GROUP BY did, sid")
-        sql_sqlite = (f"SELECT did, sid, "
-                      f"SUM(COALESCE(avg_ms,0) * COALESCE(sample_count,0)), "
-                      f"SUM(COALESCE(sample_count,0)), "
-                      f"MAX(COALESCE(max_ms,0)), "
-                      f"MIN(COALESCE(min_ms, 999999)) "
-                      f"FROM {table} WHERE ts>=? AND ts<? "
-                      f"AND ok_count > 0 "
-                      f"GROUP BY did, sid")
-        rows = []
+        # Per-bucket rows — NOT pre-aggregated. We need the distribution of
+        # avg_ms / max_ms across buckets to compute percentiles meaningfully.
+        # Previous version collapsed every sensor to one row and set
+        # p95 = p99 = max(max_ms), which made both columns identical in every
+        # report — visible as "p95 == p99" on every line for windows > 1 day.
+        sql_pg = (f"SELECT did, sid, COALESCE(sample_count,0) AS n, "
+                  f"COALESCE(avg_ms,0) AS avg_ms, "
+                  f"COALESCE(min_ms,0) AS min_ms, "
+                  f"COALESCE(max_ms,0) AS max_ms "
+                  f"FROM {table} WHERE ts>=%s AND ts<%s AND ok_count > 0")
+        sql_sqlite = (f"SELECT did, sid, COALESCE(sample_count,0), "
+                      f"COALESCE(avg_ms,0), COALESCE(min_ms,0), COALESCE(max_ms,0) "
+                      f"FROM {table} WHERE ts>=? AND ts<? AND ok_count > 0")
+        bucket_rows: dict = {}  # (did,sid) -> list of (n, avg, mn, mx)
         if is_pg():
             from db.pg_pool import pg_cursor
             try:
                 with pg_cursor("logs") as cur:
                     cur.execute(sql_pg, (start_ts, end_ts))
-                    rows = [(r["did"], r["sid"],
-                             float(r["wsum"] or 0), int(r["n"] or 0),
-                             float(r["mx"] or 0), float(r["mn"] or 0))
-                            for r in cur.fetchall()]
+                    for r in cur.fetchall():
+                        bucket_rows.setdefault((r["did"], r["sid"]), []).append(
+                            (int(r["n"]), float(r["avg_ms"]), float(r["min_ms"]), float(r["max_ms"]))
+                        )
             except Exception as e:
                 log.error(f"reports.data latency PG error ({table}): {e}")
         else:
@@ -830,8 +861,9 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
             try:
                 con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
                 for r in con.execute(sql_sqlite, (start_ts, end_ts)).fetchall():
-                    rows.append((r[0], r[1], float(r[2] or 0),
-                                 int(r[3] or 0), float(r[4] or 0), float(r[5] or 0)))
+                    bucket_rows.setdefault((r[0], r[1]), []).append(
+                        (int(r[2]), float(r[3]), float(r[4]), float(r[5]))
+                    )
             except Exception as e:
                 log.error(f"reports.data latency SQLite error ({table}): {e}")
             finally:
@@ -839,28 +871,32 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
 
         out = []
         with STATE._lock:
-            for did, sid, wsum, n, mx, mn in rows:
-                if n <= 0:
-                    continue
+            for (did, sid), rows in bucket_rows.items():
                 dev = STATE.devices.get(did)
                 if not dev:
                     continue
                 s = dev.sensors.get(sid)
-                if not s:
+                if not s or s.stype not in _LATENCY_STYPES:
                     continue
-                if s.stype not in _LATENCY_STYPES:
+                # Weighted percentiles across buckets. p50 tracks typical
+                # latency (weighted by probe count), p95 tracks worst-bucket
+                # latency (tail), p99 is the single worst bucket max.
+                n_total = sum(n for n, *_ in rows) or 0
+                if n_total <= 0:
                     continue
-                avg = round(wsum / n, 1)
-                # Rollups don't store true percentiles — approximate:
-                #   p50 ≈ weighted avg,  p95/p99 ≈ bucket max (upper bound)
+                p50 = _weighted_pct([(avg, n) for n, avg, _, _ in rows], 50)
+                p95 = _weighted_pct([(mx, n)  for n, _, _, mx in rows], 95)
+                p99 = max((mx for _, _, _, mx in rows), default=0.0)
+                mn = min((m for _, _, m, _ in rows if m > 0), default=None)
+                mx = max((m for _, _, _, m in rows), default=0.0)
                 out.append({
                     "did": did, "sid": sid,
                     "dname": dev.name, "sname": s.name, "stype": s.stype,
-                    "samples": n,
-                    "p50": avg,
-                    "p95": round(mx, 1),
-                    "p99": round(mx, 1),
-                    "min": round(mn, 1) if mn < 999999 else None,
+                    "samples": n_total,
+                    "p50": p50,
+                    "p95": p95,
+                    "p99": round(p99, 1),
+                    "min": round(mn, 1) if mn is not None else None,
                     "max": round(mx, 1),
                     "approx": True,
                 })
@@ -929,17 +965,22 @@ def _latency_percentiles(start_ts: float, end_ts: float, limit: int = 100) -> li
 
 # ── SNMP traps ─────────────────────────────────────────────────────────
 
+_SEVERITY_RANK = {"critical": 4, "crit": 4, "error": 3, "warning": 3, "warn": 3, "info": 2, "": 1}
+
+
 def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
     """Top N SNMP trap types (by count) in the window. ts is ISO-8601 text.
 
-    Groups on (trap_name, trap_oid). When trap_name is empty we fall back to the
-    OID; when both are empty the row is labelled 'Unidentified trap'. Empty
-    vendor renders as '—' rather than a blank cell. This keeps the report
-    presentable even when enrichment hasn't run yet.
+    Groups on (trap_name, trap_oid) only — vendor/severity are *not* part of
+    the key. Including them split rows like trap 1.3.6.1.2.1.47.2.0.1 into
+    two near-duplicate entries ("Unknown" vs "—") when enrichment was
+    inconsistent across traps. We now aggregate in Python on the label/oid
+    pair and pick a representative vendor (any non-empty) and the highest-
+    severity tag seen.
     """
     start_iso = _epoch_to_iso(start_ts)
     end_iso   = _epoch_to_iso(end_ts)
-    rows = []
+    raw = []
     try:
         if is_pg():
             from db.pg_pool import pg_cursor
@@ -952,7 +993,7 @@ def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
                     "FROM snmp_traps WHERE ts >= %s AND ts < %s "
                     "GROUP BY name, oid, vendor, severity "
                     "ORDER BY c DESC LIMIT %s",
-                    (start_iso, end_iso, n)
+                    (start_iso, end_iso, n * 4)
                 )
                 raw = [(r["name"], r["oid"], r["vendor"], r["severity"], int(r["c"]))
                        for r in cur.fetchall()]
@@ -966,24 +1007,41 @@ def _top_traps(start_ts: float, end_ts: float, n: int = 10) -> list:
                     "FROM snmp_traps WHERE ts>=? AND ts<? "
                     "GROUP BY trap_name, trap_oid, vendor, severity "
                     "ORDER BY 5 DESC LIMIT ?",
-                    (start_iso, end_iso, n)
+                    (start_iso, end_iso, n * 4)
                 )
                 raw = [(r[0], r[1], r[2], r[3], int(r[4])) for r in cur.fetchall()]
             finally:
                 if con: con.close()
-
-        for name, oid, vendor, severity, count in raw:
-            nm = (name or "").strip()
-            od = (oid or "").strip()
-            label = nm or od or "Unidentified trap"
-            rows.append({
-                "name":     label,
-                "vendor":   (vendor or "").strip() or "—",
-                "severity": (severity or "").strip() or "info",
-                "count":    count,
-            })
     except Exception as e:
         log.error(f"reports.data top_traps error: {e}")
+        return []
+
+    # Merge rows that share the same label — i.e. same trap type, even if
+    # vendor/severity enrichment disagrees across occurrences.
+    merged: dict = {}
+    for name, oid, vendor, severity, count in raw:
+        nm = (name or "").strip()
+        od = (oid or "").strip()
+        label = nm or od or "Unidentified trap"
+        key = (label, od)
+        v = (vendor or "").strip()
+        s = (severity or "").strip().lower()
+        agg = merged.get(key)
+        if agg is None:
+            merged[key] = {"name": label, "vendor": v, "severity": s, "count": count}
+            continue
+        agg["count"] += count
+        # Prefer a real vendor over blank/"Unknown".
+        if (not agg["vendor"] or agg["vendor"].lower() == "unknown") and v and v.lower() != "unknown":
+            agg["vendor"] = v
+        # Keep the highest severity ever tagged on this trap.
+        if _SEVERITY_RANK.get(s, 0) > _SEVERITY_RANK.get(agg["severity"], 0):
+            agg["severity"] = s
+
+    rows = sorted(merged.values(), key=lambda r: -r["count"])[:n]
+    for r in rows:
+        r["vendor"] = r["vendor"] or "—"
+        r["severity"] = r["severity"] or "info"
     return rows
 
 
@@ -1211,12 +1269,57 @@ def _inventory_licenses() -> dict:
 
 
 def _inventory_audit(limit: int = 50) -> list:
-    """Recent audit entries — admin actions / logins."""
+    """Recent audit entries — admin actions / logins.
+
+    Consecutive same-user login events are collapsed into one row with a
+    repeat count. Without this, a user who logged in 15 times in a day
+    fills the table with near-duplicate rows and buries the one real
+    settings_update or user_* action managers actually want to see.
+    """
     try:
         from db.audit import db_get_audit
     except Exception:
         return []
-    return (db_get_audit(limit) or [])
+    # Fetch more than requested so collapsing leaves us with ~limit rows.
+    raw = (db_get_audit(max(limit * 3, 100)) or [])
+    return _collapse_audit(raw, limit)
+
+
+_COLLAPSIBLE_ACTIONS = {
+    "login_ok", "login_ok_trusted_device", "login_fail",
+    "ldap_sync_complete",
+}
+
+
+def _collapse_audit(rows: list, limit: int) -> list:
+    """Merge runs of consecutive identical (actor, action) entries into one.
+
+    Only collapses actions in ``_COLLAPSIBLE_ACTIONS`` — real admin actions
+    (settings_update, user_*, report_*, etc.) always render individually.
+    """
+    if not rows:
+        return []
+    out = []
+    for r in rows:
+        action = (r.get("action") or "").strip()
+        actor  = (r.get("actor") or "").strip()
+        if out and action in _COLLAPSIBLE_ACTIONS:
+            prev = out[-1]
+            if prev.get("action") == action and prev.get("actor") == actor:
+                prev["_repeat"] = prev.get("_repeat", 1) + 1
+                # Keep the earliest ts in 'first_ts', latest in main ts.
+                prev["first_ts"] = r.get("ts")  # rows arrive newest-first, so the older repeat is the "first"
+                continue
+        out.append(dict(r))
+        if len(out) >= limit:
+            break
+    # Decorate collapsed rows for the template
+    for r in out:
+        rep = r.get("_repeat")
+        if rep and rep > 1:
+            base = r.get("target") or r.get("detail") or ""
+            r["target"] = f"{base} · ×{rep}" if base else f"×{rep}"
+    return out
 
 
 def _inventory_users() -> dict:
@@ -1392,8 +1495,16 @@ def build_report_context(kind: str,
     # Per-device health score — useful in exec (manager scorecard),
     # technical (ops triage), and inventory (estate health). Always compute
     # for non-custom kinds so every template can choose to render it.
+    # Inventory is the "compliance / full estate" report — it must list every
+    # scored device, not a top-25. Executive and technical keep the top-25 cap
+    # so their managerial summary stays scannable.
     if want("device_health") or kind in ("executive", "technical", "inventory"):
-        hs_top = int(opts.get("health_top_n", 25)) if is_custom else 25
+        if is_custom:
+            hs_top = int(opts.get("health_top_n", 25))
+        elif kind == "inventory":
+            hs_top = 0  # no cap — list all devices with data
+        else:
+            hs_top = 25
         ctx["device_health"] = _device_health_scores(
             availability, clean_flaps, limit=hs_top
         )

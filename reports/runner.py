@@ -9,6 +9,7 @@ Called from:
 import datetime
 import hashlib
 import os
+import re
 import time
 
 from core.config   import REPORTS_DIR
@@ -37,6 +38,11 @@ def _build_report_id(tpl: dict, ctx: dict) -> str:
 
 
 def _safe_filename(stem: str) -> str:
+    # Strip a trailing " Report" (case-insensitive) from the template portion
+    # of the stem so users who named their template "Executive Summary Report"
+    # don't end up with "Executive_Summary_Report_20260419_010607.pdf" — the
+    # word is redundant (every output file is a report).
+    stem = re.sub(r"\s+report(?=(_\d{8}_\d{6})?$)", "", stem, flags=re.IGNORECASE)
     keep = []
     for ch in stem:
         if ch.isalnum() or ch in "-_.":

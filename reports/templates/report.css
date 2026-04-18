@@ -151,6 +151,12 @@ table.data td {
   border-bottom: 1px solid #eaeef2;
   vertical-align: top;
   color: #1f2328;
+  /* Long group names like "ESXI-PSC_MNG-Cluster" were wrapping at arbitrary
+     positions (mid-word) in earlier renders — "ESXI-PSC-LABCluster" without
+     a break. Allow wrapping at hyphens/underscores explicitly; browsers can
+     also fall back to overflow-wrap for non-breakable strings. */
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 table.data tr:nth-child(even) td { background: #fafbfc; }
 
@@ -213,6 +219,11 @@ img.chart {
   font-size: 8.5pt;
   color: #57606a;
   page-break-inside: avoid;
+  /* Reset the running footer string so the About page doesn't inherit the
+     previous section's h1 name (e.g. "Device health scores" bleeding into
+     the Appendix footer). Without this, the @bottom-right content(text)
+     stays stuck on the last h1 until a new h1 is encountered. */
+  string-set: sect "About this report";
 }
 .appendix h2 { color: #57606a; font-size: 10pt; margin-bottom: 4pt; border: 0; }
 .appendix p  { margin: 3pt 0; line-height: 1.5; }
