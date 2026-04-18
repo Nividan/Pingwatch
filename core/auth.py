@@ -302,6 +302,216 @@ def auth_login(username: str, password: str):
     return _create_session(clean, role)
 
 
+# ── RADIUS login flow ───────────────────────────────────────────────
+# Two-phase: Phase 1 takes (username, password) and may return an Access-Challenge
+# prompt. Phase 2 takes the challenge_id + user response. On full success we apply
+# attribute-based role mapping, auto-provision if needed, then return a session.
+
+_RADIUS_LOGIN_CTX: dict = {}     # challenge_id → {"username", "created_ts"}
+_RADIUS_CTX_LOCK = threading.Lock()
+_RADIUS_CTX_TTL = 120
+
+
+def _prune_radius_ctx_locked() -> None:
+    import time as _t
+    now = _t.time()
+    for k in [k for k, v in _RADIUS_LOGIN_CTX.items()
+              if now - v.get("created_ts", 0) > _RADIUS_CTX_TTL]:
+        _RADIUS_LOGIN_CTX.pop(k, None)
+
+
+def _radius_resolve_role(attrs: dict) -> tuple:
+    """Apply first-match attribute → group mapping. Returns (group_id|None, role_str)."""
+    from db import db_find_group_by_radius
+    import core.settings as _s
+    for name, values in (attrs or {}).items():
+        for v in values:
+            row = db_find_group_by_radius(str(name), str(v))
+            if row:
+                return row["id"], row["default_role"]
+    return None, (_s.get("radius_default_role", "viewer") or "viewer")
+
+
+def _radius_lookup_user(clean: str):
+    """Return {auth_type, role, group_id} or None if user row doesn't exist."""
+    from db.backend import is_pg
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT auth_type, role, group_id FROM users WHERE username=%s",
+                    (clean,)
+                )
+                row = cur.fetchone()
+            if not row:
+                return None
+            return {"auth_type": row["auth_type"] or "local",
+                    "role": row["role"] or "viewer",
+                    "group_id": row["group_id"]}
+        except Exception:
+            return None
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=15)
+        try:
+            row = con.execute(
+                "SELECT auth_type, role, group_id FROM users WHERE username=?",
+                (clean,)
+            ).fetchone()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {"auth_type": row[0] or "local",
+            "role": row[1] or "viewer",
+            "group_id": row[2]}
+
+
+def _radius_update_user(clean: str, role: str, group_id):
+    """Sync a RADIUS user's role + group from fresh attribute mapping."""
+    from db.backend import is_pg
+    try:
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "UPDATE users SET role=%s, group_id=%s WHERE username=%s AND auth_type='radius'",
+                    (role, group_id, clean)
+                )
+        else:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            try:
+                con.execute(
+                    "UPDATE users SET role=?, group_id=? WHERE username=? AND auth_type='radius'",
+                    (role, group_id, clean)
+                )
+                con.commit()
+            finally:
+                con.close()
+    except Exception as e:
+        log.error(f"RADIUS role sync failed for {clean!r}: {e}")
+
+
+def _radius_post_auth(clean: str, attrs: dict, challenge_used: bool) -> dict:
+    """Shared tail: resolve role, auto-provision if needed, create session.
+    Returns {"status": "accept", ...} or {"status": "reject", ...}."""
+    import core.settings as _s
+
+    group_id, role = _radius_resolve_role(attrs)
+    existing = _radius_lookup_user(clean)
+
+    if existing is None:
+        # Unknown user — require auto-provision
+        if not int(_s.get("radius_auto_provision", 0) or 0):
+            log.info(f"RADIUS: rejected unknown user {clean!r} (auto-provision disabled)")
+            return {"status": "reject", "reason": "user not provisioned"}
+        from db import db_add_radius_user
+        ok = db_add_radius_user(clean, role=role, group_id=group_id)
+        if not ok:
+            # Race with another request — re-query
+            existing = _radius_lookup_user(clean)
+            if existing is None:
+                return {"status": "reject", "reason": "provisioning failed"}
+        else:
+            log.info(f"RADIUS: auto-provisioned {clean!r} role={role!r} group_id={group_id}")
+            try:
+                from db import db_log_audit
+                db_log_audit("system", "radius_auto_provision",
+                             "radius_user_provisioned",
+                             f"{clean} role={role}")
+            except Exception:
+                pass
+    else:
+        if existing["auth_type"] != "radius":
+            # Existing local/LDAP user with same name — refuse to override
+            log.warning(f"RADIUS: user {clean!r} exists with auth_type={existing['auth_type']!r} — refused")
+            return {"status": "reject", "reason": "user type conflict"}
+        # Sync role/group if attributes indicate a change
+        if existing["role"] != role or existing["group_id"] != group_id:
+            _radius_update_user(clean, role, group_id)
+
+    token = _create_session(clean, role)
+    return {"status": "accept",
+            "username": clean,
+            "role": role,
+            "token": token,
+            "challenge_used": bool(challenge_used)}
+
+
+def radius_login_phase1(username: str, password: str) -> dict:
+    """Initial RADIUS login. Returns one of:
+      {"status": "accept",    "username", "role", "token", "challenge_used": False}
+      {"status": "challenge", "challenge_id", "prompt"}
+      {"status": "reject",    "reason"}
+    """
+    from core.radius_auth import radius_authenticate
+    clean = _strip_domain(username)
+    try:
+        res = radius_authenticate(clean, password)
+    except Exception as e:
+        log.error(f"RADIUS auth error for {clean!r}: {e}")
+        return {"status": "reject", "reason": "server error"}
+
+    if res is None:
+        return {"status": "reject", "reason": "authentication failed"}
+
+    if res.get("ok"):
+        return _radius_post_auth(clean, res.get("attrs") or {}, challenge_used=False)
+
+    # Access-Challenge path
+    ch = res.get("challenge") or {}
+    cid = ch.get("id")
+    if not cid:
+        return {"status": "reject", "reason": "invalid challenge response"}
+    with _RADIUS_CTX_LOCK:
+        _prune_radius_ctx_locked()
+        _RADIUS_LOGIN_CTX[cid] = {"username": clean, "created_ts": time.time()}
+    return {"status": "challenge", "challenge_id": cid, "prompt": ch.get("prompt", "")}
+
+
+def radius_login_phase2(challenge_id: str, response: str) -> dict:
+    """Continue a RADIUS challenge. Same return shape as phase1 (but accept sets challenge_used=True)."""
+    from core.radius_auth import radius_continue_challenge
+    with _RADIUS_CTX_LOCK:
+        _prune_radius_ctx_locked()
+        ctx = _RADIUS_LOGIN_CTX.get(challenge_id)
+    if ctx is None:
+        return {"status": "reject", "reason": "challenge expired or invalid"}
+
+    try:
+        res = radius_continue_challenge(challenge_id, response)
+    except Exception as e:
+        log.error(f"RADIUS challenge continuation error: {e}")
+        with _RADIUS_CTX_LOCK:
+            _RADIUS_LOGIN_CTX.pop(challenge_id, None)
+        return {"status": "reject", "reason": "server error"}
+
+    if res is None:
+        with _RADIUS_CTX_LOCK:
+            _RADIUS_LOGIN_CTX.pop(challenge_id, None)
+        return {"status": "reject", "reason": "authentication failed"}
+
+    if res.get("ok"):
+        with _RADIUS_CTX_LOCK:
+            _RADIUS_LOGIN_CTX.pop(challenge_id, None)
+        return _radius_post_auth(ctx["username"], res.get("attrs") or {},
+                                 challenge_used=True)
+
+    # Multi-step challenge — carry the user context forward under the new id
+    ch = res.get("challenge") or {}
+    new_cid = ch.get("id")
+    if not new_cid:
+        with _RADIUS_CTX_LOCK:
+            _RADIUS_LOGIN_CTX.pop(challenge_id, None)
+        return {"status": "reject", "reason": "invalid challenge response"}
+    with _RADIUS_CTX_LOCK:
+        _RADIUS_LOGIN_CTX[new_cid] = {"username": ctx["username"], "created_ts": time.time()}
+        _RADIUS_LOGIN_CTX.pop(challenge_id, None)
+    return {"status": "challenge", "challenge_id": new_cid, "prompt": ch.get("prompt", "")}
+
+
 def auth_logout(token: str):
     from db.backend import is_pg
     with _SESSIONS_LOCK:

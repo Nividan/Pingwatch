@@ -57,6 +57,7 @@ from db.users       import (
     db_list_users,
     db_add_user,
     db_add_ldap_user,
+    db_add_radius_user,
     db_get_user_auth_type,
     db_delete_user,
     db_set_password,
@@ -97,6 +98,8 @@ from db.groups      import (
     db_update_group_members,
     db_resolve_group_emails,
     db_get_ldap_mapped_groups,
+    db_find_group_by_radius,
+    db_get_radius_mapped_groups,
 )
 
 # audit
@@ -223,7 +226,7 @@ __all__ = [
     "db_log_err", "db_load_err_logs", "db_clear_err_logs",
     "db_clear_sensor_err_logs",
     # users & settings
-    "db_list_users", "db_add_user", "db_add_ldap_user", "db_get_user_auth_type",
+    "db_list_users", "db_add_user", "db_add_ldap_user", "db_add_radius_user", "db_get_user_auth_type",
     "db_delete_user", "db_set_password",
     "db_load_settings", "db_save_settings",
     "db_list_dashboards", "db_get_dashboard", "db_create_dashboard",
@@ -240,6 +243,7 @@ __all__ = [
     # groups
     "db_list_groups", "db_create_group", "db_update_group", "db_delete_group",
     "db_update_group_members", "db_resolve_group_emails", "db_get_ldap_mapped_groups",
+    "db_find_group_by_radius", "db_get_radius_mapped_groups",
     # audit
     "db_log_audit", "db_get_audit",
     # ipam

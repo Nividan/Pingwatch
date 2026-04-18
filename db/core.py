@@ -816,11 +816,13 @@ def db_init():
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS user_groups (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                name         TEXT    NOT NULL UNIQUE,
-                description  TEXT    DEFAULT '',
-                ldap_dn      TEXT    DEFAULT '',
-                default_role TEXT    DEFAULT 'viewer'
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                name             TEXT    NOT NULL UNIQUE,
+                description      TEXT    DEFAULT '',
+                ldap_dn          TEXT    DEFAULT '',
+                radius_attribute TEXT    DEFAULT '',
+                radius_value     TEXT    DEFAULT '',
+                default_role     TEXT    DEFAULT 'viewer'
             )""")
         # ── Device license tracking ───────────────────────────────────
         con.execute("""
@@ -937,10 +939,12 @@ def db_init():
             "ON report_history(template_id)"
         )
         con.commit()
-        # Migration: LDAP group mapping columns (v0.9+)
+        # Migration: LDAP group mapping columns (v0.9+) + RADIUS attribute mapping (v0.9.2+)
         for _col, _def in [
-            ("ldap_dn",      "TEXT DEFAULT ''"),
-            ("default_role",  "TEXT DEFAULT 'viewer'"),
+            ("ldap_dn",          "TEXT DEFAULT ''"),
+            ("default_role",     "TEXT DEFAULT 'viewer'"),
+            ("radius_attribute", "TEXT DEFAULT ''"),
+            ("radius_value",     "TEXT DEFAULT ''"),
         ]:
             try:
                 con.execute(f"ALTER TABLE user_groups ADD COLUMN {_col} {_def}")

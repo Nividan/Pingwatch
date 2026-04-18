@@ -168,8 +168,30 @@ def db_add_ldap_user(username: str, domain: str, role: str = 'viewer',
         return False
 
 
+def db_add_radius_user(username: str, domain: str = '', role: str = 'viewer',
+                       full_name: str = '', email: str = '',
+                       group_id: int | None = None) -> bool:
+    """Insert a RADIUS-authenticated user (no local password). Returns False if username exists."""
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"INSERT INTO users (username, pw_hash, role, auth_type, domain, "
+                f"full_name, email, group_id) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (username, '__radius__', role, 'radius', domain,
+                 full_name, email, group_id)
+            )
+        return True
+    except Exception as e:
+        msg = str(e).lower()
+        if "unique" not in msg and "duplicate" not in msg:
+            log.error(f"DB add RADIUS user error: {e}")
+        return False
+
+
 def db_get_user_auth_type(username: str) -> str:
-    """Return 'local' or 'ldap' for username, defaulting to 'local' if not found."""
+    """Return 'local', 'ldap', or 'radius' for username, defaulting to 'local' if not found."""
     rows = db_query("main", "SELECT auth_type FROM users WHERE username=?", (username,))
     if not rows:
         return 'local'
