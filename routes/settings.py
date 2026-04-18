@@ -406,6 +406,22 @@ def handle(h, method, path, body):
             if k in _MASKED_KEYS or str(_old_vals.get(k, '')) != str(body[k])
         )
         db_log_audit(user, h.client_address[0], 'settings_update', '', _changes)
+
+        # Re-probe SMTP if any connection-affecting field was just saved, so the
+        # badge reflects the new config without waiting for the next real send.
+        # Fire-and-forget in a daemon thread — must not block the API response
+        # (probe has its own 10s timeout via _connect()).
+        _smtp_keys = {'smtp_host', 'smtp_port', 'smtp_tls', 'smtp_user', 'smtp_pass'}
+        if _smtp_keys & set(body.keys()):
+            import threading as _t
+            def _reprobe():
+                try:
+                    from monitoring.smtp_alert import run_smtp_startup_probe
+                    run_smtp_startup_probe()
+                except Exception:
+                    pass
+            _t.Thread(target=_reprobe, daemon=True, name='smtp-resave-probe').start()
+
         h._json(200, {"ok": True})
         return True
 

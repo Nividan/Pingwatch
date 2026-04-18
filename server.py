@@ -745,6 +745,20 @@ def main():
     _local_url = f"{_scheme}://127.0.0.1:{app_state.effective_port}"
     log.info(f"PingWatch ready -> {_local_url}")
 
+    # ── SMTP startup probe ─────────────────────────────────────────────
+    # Verify SMTP reachability shortly after startup so the badge reflects
+    # real connectivity instead of staying yellow ("Configured") until the
+    # first alert email fires. 10s delay lets the server settle and avoids
+    # racing against settings load on slow disks.
+    def _smtp_probe_delayed():
+        try:
+            time.sleep(10)
+            from monitoring.smtp_alert import run_smtp_startup_probe
+            run_smtp_startup_probe()
+        except Exception as _e:
+            log.warning(f"SMTP startup probe crashed: {_e}")
+    threading.Thread(target=_smtp_probe_delayed, daemon=True, name='smtp-startup-probe').start()
+
     # Optional-dep warnings — make missing modules visible at startup instead of
     # failing later inside a request handler.
     try:
