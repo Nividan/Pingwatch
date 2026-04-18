@@ -1138,14 +1138,24 @@ select{cursor:pointer;appearance:none;
 
 /* Custom report section picker (reports.js template editor) */
 .rpt-sections{display:flex;flex-direction:column;gap:10px;margin-top:6px}
-.rpt-sec-group{border:1px solid var(--border);border-radius:6px;background:var(--bg2);padding:10px 12px}
+/* min-width:0 on the section group itself prevents the wider grid column from
+ * pushing the parent flex/grid container outwards. Backstop overflow hides any
+ * pixel-level rounding artefacts at the edges. */
+.rpt-sec-group{border:1px solid var(--border);border-radius:6px;background:var(--bg2);padding:10px 12px;min-width:0;overflow:hidden}
 .rpt-sec-ghd{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text2);margin-bottom:8px;font-weight:600}
-.rpt-sec-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}
-.rpt-sec-grid .chk-item{font-size:13px;color:var(--text);padding:4px 6px;cursor:pointer}
-.rpt-sec-grid .chk-item:hover{background:var(--bg3)}
+.rpt-sec-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;min-width:0}
+/* CSS Grid items default to min-width:auto, which equals their min-content
+ * size. With a non-wrapping label + inline option pill, that's wider than 1fr,
+ * so the right column was bleeding outside the .rpt-sec-group box. min-width:0
+ * lets the track honour the 1fr constraint and the label ellipsis kicks in
+ * cleanly. */
+.rpt-sec-grid .chk-item{font-size:13px;color:var(--text);padding:4px 6px;cursor:pointer;min-width:0;display:flex;align-items:center;gap:6px}
+.rpt-sec-grid .chk-item:hover{background:var(--bg3);border-radius:4px}
 .rpt-sec-grid .chk-item .chk-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rpt-sec-opt{margin-left:auto;width:auto !important;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:3px;font-size:11px;padding:2px 22px 2px 6px !important}
-.rpt-sec-bopt{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text2);cursor:pointer;user-select:none}
+/* Cap the pill width so a long label like "Top SNMP trap types" still has
+ * room to breathe before the pill kicks in. */
+.rpt-sec-opt{flex:none;width:auto !important;max-width:90px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:3px;font-size:11px;padding:2px 22px 2px 6px !important}
+.rpt-sec-bopt{flex:none;display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text2);cursor:pointer;user-select:none;white-space:nowrap}
 .rpt-sec-bopt input[type=checkbox]{width:12px;height:12px;margin:0;accent-color:var(--accent)}
 .rpt-sec-actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
 

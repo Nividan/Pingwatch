@@ -131,6 +131,18 @@ table.kv td {
 table.kv tr:last-child th,
 table.kv tr:last-child td { border-bottom: 0; }
 
+/* Compact variant used by the Incident Summary when a previous-period
+   column is shown. Default .kv gives the label 55% width — fine for a
+   2-column layout, but with 4 columns (label + current + previous + Δ)
+   each value cell was squeezed to ~15% and the delta span "↑ 480" wrapped
+   onto three lines. Narrow the label and let values keep the arrow+number
+   together. */
+table.kv.kv-compare th { width: 32%; padding-right: 6pt; }
+table.kv.kv-compare td { white-space: nowrap; padding-left: 6pt; }
+table.kv.kv-compare td.small { font-size: 8pt; }
+table.kv.kv-compare tr.kv-head th,
+table.kv.kv-compare tr.kv-head td { border-bottom: 1px solid #d0d7de; }
+
 table.data {
   width: 100%;
   border-collapse: collapse;
