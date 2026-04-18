@@ -583,25 +583,40 @@ def _pick_table(minutes):
 
 # ── Query helpers ─────────────────────────────────────────────────
 
-def db_load_availability(minutes: int = 1440):
-    """Return per-hour aggregate availability across ALL sensors for the last `minutes` minutes."""
-    cutoff = time.time() - minutes * 60
+def db_load_availability(minutes: int = 1440, *, start_ts=None, end_ts=None):
+    """Return per-hour aggregate availability across ALL sensors.
+
+    Default: last ``minutes`` minutes relative to now (used by live dashboards).
+
+    Absolute window: pass ``start_ts`` / ``end_ts`` (epoch seconds) to query a
+    fixed historical period. The report engine uses this so the availability
+    chart matches the report's declared reporting period — without it, the
+    chart rendered "last N minutes relative to report-generation time", which
+    leaked data past the period's end.
+    """
+    if start_ts is None:
+        start_ts = time.time() - minutes * 60
+    else:
+        # Re-derive minutes from the explicit window so _pick_table still
+        # chooses the right rollup resolution (raw / 5m / 1h).
+        minutes = max(1, int(((end_ts or time.time()) - start_ts) // 60))
     table, bucket = _pick_table(minutes)
 
     if table == "sensor_samples":
-        return _avail_from_raw(cutoff)
-    return _avail_from_rollup(cutoff, table)
+        return _avail_from_raw(start_ts, end_ts)
+    return _avail_from_rollup(start_ts, end_ts, table)
 
 
-def _avail_from_raw(cutoff):
+def _avail_from_raw(start_ts, end_ts):
+    where, params_pg, params_sq = _ts_bounds(start_ts, end_ts, pg=True), None, None
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("logs") as cur:
                 cur.execute(
-                    "SELECT FLOOR(ts/3600)*3600 AS h, SUM(ok) AS sum_ok, COUNT(*) AS cnt "
-                    "FROM sensor_samples WHERE ts>=%s GROUP BY h ORDER BY h ASC",
-                    (cutoff,)
+                    f"SELECT FLOOR(ts/3600)*3600 AS h, SUM(ok) AS sum_ok, COUNT(*) AS cnt "
+                    f"FROM sensor_samples WHERE {where[0]} GROUP BY h ORDER BY h ASC",
+                    where[1]
                 )
                 rows = cur.fetchall()
             return [{"ts": r["h"], "pct": round(r["sum_ok"] / r["cnt"] * 100, 1) if r["cnt"] else 0,
@@ -610,13 +625,14 @@ def _avail_from_raw(cutoff):
             log.error(f"DB load availability error: {e}")
             return []
     # SQLite
+    sq = _ts_bounds(start_ts, end_ts, pg=False)
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH)
         rows = con.execute(
-            "SELECT CAST(ts/3600 AS INTEGER)*3600 AS h, SUM(ok), COUNT(*) "
-            "FROM sensor_samples WHERE ts>=? GROUP BY h ORDER BY h ASC",
-            (cutoff,)
+            f"SELECT CAST(ts/3600 AS INTEGER)*3600 AS h, SUM(ok), COUNT(*) "
+            f"FROM sensor_samples WHERE {sq[0]} GROUP BY h ORDER BY h ASC",
+            sq[1]
         ).fetchall()
         return [{"ts": r[0], "pct": round(r[1] / r[2] * 100, 1) if r[2] else 0,
                  "up": int(r[1] or 0), "total": int(r[2] or 0)} for r in rows]
@@ -627,24 +643,25 @@ def _avail_from_raw(cutoff):
         if con: con.close()
 
 
-def _avail_from_rollup(cutoff, table):
+def _avail_from_rollup(start_ts, end_ts, table):
     if is_pg():
         from db.pg_pool import pg_cursor
+        pg = _ts_bounds(start_ts, end_ts, pg=True)
         try:
             with pg_cursor("logs") as cur:
                 if table == "sensor_samples_1h":
                     cur.execute(
                         f"SELECT ts AS h, SUM(ok_count) AS sum_ok, "
                         f"SUM(ok_count + fail_count) AS cnt "
-                        f"FROM {table} WHERE ts>=%s GROUP BY h ORDER BY h ASC",
-                        (cutoff,)
+                        f"FROM {table} WHERE {pg[0]} GROUP BY h ORDER BY h ASC",
+                        pg[1]
                     )
                 else:
                     cur.execute(
                         f"SELECT FLOOR(ts/3600)*3600 AS h, SUM(ok_count) AS sum_ok, "
                         f"SUM(ok_count + fail_count) AS cnt "
-                        f"FROM {table} WHERE ts>=%s GROUP BY h ORDER BY h ASC",
-                        (cutoff,)
+                        f"FROM {table} WHERE {pg[0]} GROUP BY h ORDER BY h ASC",
+                        pg[1]
                     )
                 rows = cur.fetchall()
             return [{"ts": r["h"], "pct": round(r["sum_ok"] / r["cnt"] * 100, 1) if r["cnt"] else 0,
@@ -653,21 +670,22 @@ def _avail_from_rollup(cutoff, table):
             log.error(f"DB load availability (rollup) error: {e}")
             return []
     # SQLite
+    sq = _ts_bounds(start_ts, end_ts, pg=False)
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH)
         if table == "sensor_samples_1h":
             rows = con.execute(
                 f"SELECT ts AS h, SUM(ok_count), SUM(ok_count + fail_count) "
-                f"FROM {table} WHERE ts>=? GROUP BY h ORDER BY h ASC",
-                (cutoff,)
+                f"FROM {table} WHERE {sq[0]} GROUP BY h ORDER BY h ASC",
+                sq[1]
             ).fetchall()
         else:
             rows = con.execute(
                 f"SELECT CAST(ts/3600 AS INTEGER)*3600 AS h, SUM(ok_count), "
                 f"SUM(ok_count + fail_count) "
-                f"FROM {table} WHERE ts>=? GROUP BY h ORDER BY h ASC",
-                (cutoff,)
+                f"FROM {table} WHERE {sq[0]} GROUP BY h ORDER BY h ASC",
+                sq[1]
             ).fetchall()
         return [{"ts": r[0], "pct": round(r[1] / r[2] * 100, 1) if r[2] else 0,
                  "up": int(r[1] or 0), "total": int(r[2] or 0)} for r in rows]
@@ -676,6 +694,19 @@ def _avail_from_rollup(cutoff, table):
         return []
     finally:
         if con: con.close()
+
+
+def _ts_bounds(start_ts, end_ts, *, pg: bool):
+    """Build the (WHERE-fragment, params-tuple) pair for a ts window.
+
+    The fragment always binds the lower bound; the upper bound is added only
+    when ``end_ts`` is supplied so live "last N minutes" callers retain their
+    original shape (no upper bound → open-ended to now).
+    """
+    ph = "%s" if pg else "?"
+    if end_ts is None:
+        return (f"ts>={ph}", (start_ts,))
+    return (f"ts>={ph} AND ts<{ph}", (start_ts, end_ts))
 
 
 def db_load_history(did, sid, minutes=1440, limit=1000):

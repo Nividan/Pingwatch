@@ -51,9 +51,10 @@
 
 <!-- ── Per-device uptime ─────────────────────────────────────────── -->
 {% if "per_device_uptime" in meta.sections %}
+{% set avail_with_data = availability | selectattr('total', 'gt', 0) | list %}
 <section class="section">
   <h1>Per-device uptime</h1>
-  {% if availability %}
+  {% if avail_with_data %}
     <table class="data compact">
       <thead>
         <tr>
@@ -62,7 +63,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for d in availability %}
+        {% for d in avail_with_data %}
         <tr>
           <td>{{ d.dname }}</td>
           <td class="mono">{{ d.host }}</td>
@@ -74,6 +75,9 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if avail_with_data | length < availability | length %}
+      <p class="muted small">{{ avail_with_data | length }} of {{ availability | length }} devices reported probe samples in this period.</p>
+    {% endif %}
   {% else %}
     <p class="muted">No device-level data in this period.</p>
   {% endif %}
@@ -148,45 +152,58 @@
   <div class="two-col">
     <div class="col">
       <table class="kv">
+        {% if previous %}
+        <tr class="kv-head">
+          <th></th><th class="small">This period</th><th class="small muted">{{ previous.label }}</th><th class="small">Δ</th>
+        </tr>
+        {% endif %}
         <tr>
           <th>Total incidents</th>
-          <td>
-            {{ incidents.severity.total }}
-            {% if previous and previous.delta.incidents is not none %}
-              <span class="small">&nbsp;{{ previous.delta.incidents | deltafmt('', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td>{{ incidents.severity.total }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.severity.total }}</td>
+          <td class="small">{% if previous.delta.incidents is not none %}{{ previous.delta.incidents | deltafmt('', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
         <tr>
           <th>Critical / Down</th>
-          <td class="crit">
-            {{ incidents.severity.crit }}
-            {% if previous and previous.delta.crit is not none %}
-              <span class="small">&nbsp;{{ previous.delta.crit | deltafmt('', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td class="crit">{{ incidents.severity.crit }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.severity.crit }}</td>
+          <td class="small">{% if previous.delta.crit is not none %}{{ previous.delta.crit | deltafmt('', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
         <tr>
           <th>Warnings</th>
-          <td class="warn">
-            {{ incidents.severity.warn }}
-            {% if previous and previous.delta.warn is not none %}
-              <span class="small">&nbsp;{{ previous.delta.warn | deltafmt('', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td class="warn">{{ incidents.severity.warn }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.severity.warn }}</td>
+          <td class="small">{% if previous.delta.warn is not none %}{{ previous.delta.warn | deltafmt('', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
-        <tr><th>Auto-resolved</th><td>{{ incidents.severity.resolved }}</td></tr>
+        <tr>
+          <th>Auto-resolved</th>
+          <td>{{ incidents.severity.resolved }}</td>
+          {% if previous %}<td class="muted">{{ previous.severity.resolved }}</td><td></td>{% endif %}
+        </tr>
         <tr>
           <th>MTTR</th>
-          <td>
-            {{ incidents.mttr.mttr_s | durfmt }}
-            {% if previous and previous.delta.mttr_s is not none %}
-              <span class="small">&nbsp;{{ previous.delta.mttr_s | deltafmt(' s', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td>{{ incidents.mttr.mttr_s | durfmt }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.mttr.mttr_s | durfmt }}</td>
+          <td class="small">{% if previous.delta.mttr_s is not none %}{{ previous.delta.mttr_s | deltafmt(' s', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
-        <tr><th>MTBF</th><td>{{ incidents.mttr.mtbf_s | durfmt }}</td></tr>
-        <tr><th>Maintenance windows</th><td>{{ maint_windows | length }}</td></tr>
+        <tr>
+          <th>MTBF</th>
+          <td>{{ incidents.mttr.mtbf_s | durfmt }}</td>
+          {% if previous %}<td class="muted">{{ previous.mttr.mtbf_s | durfmt }}</td><td></td>{% endif %}
+        </tr>
+        <tr>
+          <th>Maintenance windows</th>
+          <td>{{ maint_windows | length }}</td>
+          {% if previous %}<td></td><td></td>{% endif %}
+        </tr>
       </table>
     </div>
     <div class="col">
@@ -390,6 +407,11 @@
 <section class="section">
   <h1>Latency percentiles (per sensor)</h1>
   {% if latency %}
+    {# Chart above the table so the running-footer section name matches
+       when the table spans multiple pages — see technical.html for why. #}
+    {% if charts.latency_bar %}
+      <img class="chart" src="{{ charts.latency_bar }}" alt="Latency percentiles — top sensors">
+    {% endif %}
     <table class="data compact">
       <thead>
         <tr>
@@ -411,9 +433,6 @@
         {% endfor %}
       </tbody>
     </table>
-    {% if charts.latency_bar %}
-      <img class="chart" src="{{ charts.latency_bar }}" alt="Latency percentiles">
-    {% endif %}
   {% else %}
     <p class="muted">No latency-bearing probes recorded in this period.</p>
   {% endif %}

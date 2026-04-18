@@ -294,7 +294,8 @@ def _attach_charts(ctx: dict) -> dict:
     try:
         from db.samples import db_load_availability
         avail_hourly = db_load_availability(
-            max(60, int((ctx["period"]["end_ts"] - ctx["period"]["start_ts"]) / 60))
+            start_ts=ctx["period"]["start_ts"],
+            end_ts=ctx["period"]["end_ts"],
         )
     except Exception as e:
         log.debug(f"reports.engine availability chart data fetch failed: {e}")
