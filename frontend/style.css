@@ -1742,17 +1742,29 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .sdr-extra-row > td     {padding:10px 16px 12px;background:var(--bg);border-bottom:1px solid var(--border);}
 .sdr-extra              {display:flex;flex-wrap:wrap;gap:10px 24px;align-items:flex-start;}
 
-/* ── Dashboard ──────────────────────────────────────────────────── */
+/* ── Dashboard (gridstack-based) ─────────────────────────────────── */
 #dashboardView     {padding:16px;gap:0;}
-.dw-grid           {display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;width:100%;margin-top:16px;}
-.dw-card           {background:var(--card);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;min-height:220px;overflow:hidden;cursor:grab;transition:opacity .15s,border-color .15s;}
-.dw-card.dw-dragging{opacity:.35;border-color:var(--accent);}
-.dw-card.dw-drop-target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent),0 8px 24px rgba(47,129,247,.25);background:rgba(47,129,247,.07);}
-.dw-placeholder{border:2px dashed var(--border)!important;background:transparent!important;cursor:default;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:12px;opacity:.6;}
-.dw-placeholder.dw-drop-target{border-color:var(--accent)!important;background:rgba(47,129,247,.07)!important;color:var(--accent);opacity:1;}
-.dw-card[draggable=true]:active{cursor:grabbing;}
-.dw-wide           {grid-column:span 2;}
-.dw-hdr            {display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);flex-shrink:0;background:rgba(255,255,255,.02);}
+/* #dw-grid becomes a .grid-stack container once widgets are rendered.
+   Layout, drag, and resize are all handled by gridstack.js. */
+.dw-grid           {width:100%;margin-top:16px;min-height:120px;}
+.grid-stack-item-content{inset:0;padding:0;}
+.dw-card           {background:var(--card);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;height:100%;overflow:hidden;transition:border-color .15s;}
+.dw-hdr            {display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);flex-shrink:0;background:rgba(255,255,255,.02);cursor:move;}
+/* Gridstack placeholder (ghost while dragging) — themeable */
+.grid-stack .grid-stack-placeholder > .placeholder-content{
+  background:rgba(47,129,247,.07);border:2px dashed var(--accent);border-radius:8px;
+  inset:0;position:absolute;
+}
+/* Resize handles — hidden until you hover the widget (Grafana-style) */
+.grid-stack-item > .ui-resizable-handle{opacity:0;transition:opacity .15s;}
+.grid-stack-item:hover > .ui-resizable-handle{opacity:.55;}
+.grid-stack-item > .ui-resizable-handle:hover{opacity:1;}
+.grid-stack-item > .ui-resizable-se{
+  width:14px;height:14px;right:3px;bottom:3px;
+  background:linear-gradient(135deg,transparent 50%,var(--text3) 50%);
+  border-bottom-right-radius:6px;
+}
+.grid-stack-item:hover > .ui-resizable-se{background:linear-gradient(135deg,transparent 50%,var(--accent) 50%);}
 .dw-icon           {font-size:13px;flex-shrink:0;}
 .dw-title          {font-size:12px;font-weight:600;color:var(--text2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dw-rm             {background:none;border:none;color:var(--text3);cursor:pointer;font-size:17px;line-height:1;padding:0 2px;transition:color .15s;}
@@ -1774,7 +1786,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .dm-kpi-bar,.dm-hist-summary{transition:opacity .25s}
 .dm-hist-cwrap{transition:opacity .25s}
 .dm-hist-loading{opacity:.25;pointer-events:none;transition:opacity .25s ease}
-.dw-empty          {color:var(--text3);font-size:12px;padding:20px;text-align:center;grid-column:1/-1;}
+.dw-empty          {color:var(--text3);font-size:12px;padding:20px;text-align:center;}
 .dw-add-btn        {margin:14px auto 20px;padding:8px 22px;background:rgba(47,129,247,.12);border:1px dashed rgba(47,129,247,.35);border-radius:8px;color:var(--accent);font-size:12px;cursor:pointer;transition:all .15s;}
 .dw-add-btn:hover  {background:rgba(47,129,247,.2);border-style:solid;}
 /* Dashboard tab bar */
