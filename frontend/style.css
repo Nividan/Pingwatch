@@ -105,10 +105,9 @@ body{
 
 /* ── Network grid background canvas ── */
 #netbg{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.55}
-/* In light mode the canvas uses dark-blue mesh lines that become noisy
-   against a white page. Drop opacity until Phase 2 rewires bg.js to
-   read CSS vars and redraw on theme change. */
-:root[data-theme="light"] #netbg{opacity:.18}
+/* Light mode relies on the in-canvas alpha scale (C.aScale in bg.js) to
+   boost stroke/fill alphas for contrast on white — no macro dimmer here. */
+:root[data-theme="light"] #netbg{opacity:.55}
 #layout,#topbar{z-index:1;position:relative}
 #layout{z-index:1}
 

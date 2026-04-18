@@ -12,9 +12,11 @@
 
   // Theme-aware color cache — refreshed on 'themechange'.
   // Default dark values match the original hardcoded rgbas so first paint
-  // before theme.js runs still looks correct.
-  const C = { accent:[47,129,247], up:[35,209,139] };
+  // before theme.js runs still looks correct. aScale boosts alphas in light
+  // mode so the motif reads on white without retuning every draw site.
+  const C = { accent:[47,129,247], up:[35,209,139], aScale: 1 };
   function _refreshColors(){
+    C.aScale = document.documentElement.getAttribute('data-theme') === 'light' ? 1.7 : 1;
     if (!window.getCssRgb) return;
     const a = window.getCssRgb('--accent'); if (a) C.accent = a;
     const u = window.getCssRgb('--up');     if (u) C.up = u;
@@ -57,8 +59,8 @@
       const ry = H * o.r * .6 * (1 + Math.cos(phase*.9)*.06);
       const hue = o.h + Math.sin(phase*.5)*20;
       const g = ctx.createRadialGradient(cx,cy,0, cx,cy, Math.max(rx,ry));
-      g.addColorStop(0,   hsl(hue, 80, 60, o.s*.18));
-      g.addColorStop(0.4, hsl(hue, 70, 50, o.s*.08));
+      g.addColorStop(0,   hsl(hue, 80, 60, o.s*.18*C.aScale));
+      g.addColorStop(0.4, hsl(hue, 70, 50, o.s*.08*C.aScale));
       g.addColorStop(1,   hsl(hue, 60, 40, 0));
       ctx.save();
       ctx.scale(1, ry/rx);
@@ -84,7 +86,7 @@
         // scan glow on edges
         const sd = Math.min(Math.abs(ay-scan), Math.abs(by-scan));
         const boost = sd < 50 ? .08*(1-sd/50) : 0;
-        ctx.strokeStyle = `rgba(${C.accent.join(',')},${fade*.09+boost})`;
+        ctx.strokeStyle = `rgba(${C.accent.join(',')},${(fade*.09+boost)*C.aScale})`;
         ctx.lineWidth = .7;
         ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
       }
@@ -97,13 +99,13 @@
       // glow halo
       if(boost > .1){
         const g2 = ctx.createRadialGradient(x,y,0,x,y,8);
-        g2.addColorStop(0,`rgba(${C.accent.join(',')},${boost*.3})`);
+        g2.addColorStop(0,`rgba(${C.accent.join(',')},${boost*.3*C.aScale})`);
         g2.addColorStop(1,`rgba(${C.accent.join(',')},0)`);
         ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2);
         ctx.fillStyle=g2; ctx.fill();
       }
       ctx.beginPath(); ctx.arc(x,y,n.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(${C.accent.join(',')},${a})`; ctx.fill();
+      ctx.fillStyle=`rgba(${C.accent.join(',')},${a*C.aScale})`; ctx.fill();
     });
   }
 
@@ -113,14 +115,14 @@
     // primary beam
     const sg = ctx.createLinearGradient(0,scan-60,0,scan+60);
     sg.addColorStop(0,   `rgba(${acc},0)`);
-    sg.addColorStop(.45, `rgba(${acc},.055)`);
-    sg.addColorStop(.5,  `rgba(${acc},.18)`);
-    sg.addColorStop(.55, `rgba(${acc},.055)`);
+    sg.addColorStop(.45, `rgba(${acc},${.055*C.aScale})`);
+    sg.addColorStop(.5,  `rgba(${acc},${.18*C.aScale})`);
+    sg.addColorStop(.55, `rgba(${acc},${.055*C.aScale})`);
     sg.addColorStop(1,   `rgba(${acc},0)`);
     ctx.fillStyle=sg;
     ctx.fillRect(0, scan-60, W, 120);
     // thin bright line
-    ctx.strokeStyle=`rgba(${acc},.22)`;
+    ctx.strokeStyle=`rgba(${acc},${.22*C.aScale})`;
     ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }
