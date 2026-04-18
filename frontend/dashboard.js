@@ -1579,21 +1579,25 @@ async function _dwFetchServerPerf(wid) {
   </div>`);
 }
 
-// ── NCM Backup Status Widget ─────────────────────────────────────
+// ── Backup Status Widget (device configs + DB scheduled backup) ──
 async function _dwNcmStatusRefresh(wid) {
   const el = document.getElementById(`dw-body-${wid}`);
   if (!el) return;
   // Don't show "Loading…" on refresh — only on first render
   if (!el.children.length) el.innerHTML = '<div class="dw-loading">Loading…</div>';
   try {
-    const r = await api('GET', '/api/backups');
-    const devs = (r.devices || []).filter(d => !d.orphaned);
+    const [bk, cfg] = await Promise.all([
+      api('GET', '/api/backups'),
+      api('GET', '/api/settings'),
+    ]);
+    const devs = (bk.devices || []).filter(d => !d.orphaned);
     const total   = devs.length;
     const enabled = devs.filter(d => d.enabled).length;
     const ok      = devs.filter(d => d.last_success === true).length;
     const failed  = devs.filter(d => d.run_count > 0 && d.last_success === false).length;
     const never   = devs.filter(d => d.run_count === 0 && d.enabled).length;
     _dwSwap(el, `
+      <div class="dw-bk-section-lbl">Device Configs</div>
       <div class="dw-ncm-grid">
         <div class="dw-ncm-kpi dw-ncm-ok">
           <span class="dw-ncm-n">${ok}</span>
@@ -1611,10 +1615,134 @@ async function _dwNcmStatusRefresh(wid) {
           <span class="dw-ncm-n">${enabled}/${total}</span>
           <span class="dw-ncm-l">Enabled</span>
         </div>
-      </div>`);
+      </div>
+      ${_dwRenderDbBackup(cfg)}`);
   } catch {
     el.innerHTML = '<div class="dw-err">Failed to load backup status</div>';
   }
+}
+
+function _dwRenderDbBackup(cfg) {
+  const enabled = !!cfg.db_backup_enabled;
+  const lastTs  = cfg.db_backup_last_ts || '';
+  const lastRes = cfg.db_backup_last_result || '';
+  const remoteEnabled = !!cfg.db_backup_remote_enabled;
+  const remoteTs      = cfg.db_backup_remote_last_ts || '';
+  const remoteRes     = cfg.db_backup_remote_last_result || '';
+
+  let statusClass = 'dw-db-muted';
+  let mainLine = '';
+  if (!enabled) {
+    mainLine = 'Disabled';
+  } else if (!lastTs) {
+    mainLine = 'Scheduled, never run yet';
+  } else {
+    const ago = _dwAgoFromStampUnderscore(lastTs);
+    const failed = (lastRes || '').toLowerCase().startsWith('error');
+    const overdue = enabled && _dwIsDbBackupOverdue(lastTs, cfg.db_backup_freq || 'daily');
+    if (failed) {
+      statusClass = 'dw-db-fail';
+      mainLine = `Last: ${ago} \u2718  ${esc(lastRes)}`;
+    } else if (overdue) {
+      statusClass = 'dw-db-warn';
+      mainLine = `Last: ${ago} \u26A0 overdue`;
+    } else {
+      statusClass = 'dw-db-ok';
+      mainLine = `Last: ${ago} \u2714`;
+    }
+  }
+
+  let nextLine = '';
+  if (enabled) {
+    const next = _dwNextDbBackupLabel(cfg);
+    if (next) nextLine = `<span class="dw-db-next">Next: ${esc(next)}</span>`;
+  }
+
+  let remoteLine = '';
+  if (remoteEnabled) {
+    const rType = (cfg.db_backup_remote_type || 'sftp').toUpperCase();
+    if (!remoteTs && !remoteRes) {
+      remoteLine = `<div class="dw-db-remote dw-db-muted">Remote (${esc(rType)}): not yet run</div>`;
+    } else if ((remoteRes || '').toLowerCase().startsWith('error')) {
+      remoteLine = `<div class="dw-db-remote dw-db-fail">Remote (${esc(rType)}): \u2718 ${esc(remoteRes)}</div>`;
+    } else if (remoteTs) {
+      remoteLine = `<div class="dw-db-remote dw-db-ok">Remote (${esc(rType)}): \u2714 uploaded ${esc(_dwAgoFromStampUnderscore(remoteTs))}</div>`;
+    }
+  }
+
+  return `
+    <div class="dw-bk-section-lbl" style="margin-top:10px">Database</div>
+    <div class="dw-db-card" onclick="openSettings('database')" title="Open Database settings">
+      <div class="dw-db-main ${statusClass}">
+        <span>${mainLine}</span>
+        ${nextLine}
+      </div>
+      ${remoteLine}
+    </div>`;
+}
+
+// "2026-04-18_03-00-00" (db_backup_last_ts format) → "3h ago" style string.
+function _dwAgoFromStampUnderscore(stamp) {
+  if (!stamp) return 'never';
+  // Convert underscore/dash format to ISO-ish
+  const m = String(stamp).match(/^(\d{4})-(\d{2})-(\d{2})[_T](\d{2})-(\d{2})-(\d{2})$/);
+  if (!m) return esc(stamp);
+  const dt = new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]));
+  // The stored timestamp is local server time; treat it as local by re-interpreting
+  const local = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+  const diff = (Date.now() - local.getTime()) / 1000;
+  if (diff < 0) return 'just now';
+  if (diff < 60) return `${Math.floor(diff)}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+// Overdue = 1.5× the scheduled interval since last run (daily=36h, weekly=12d).
+function _dwIsDbBackupOverdue(lastTs, freq) {
+  const m = String(lastTs).match(/^(\d{4})-(\d{2})-(\d{2})[_T](\d{2})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const last = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+  const diffSec = (Date.now() - last.getTime()) / 1000;
+  const graceSec = (freq === 'weekly') ? 12 * 86400 : 36 * 3600;
+  return diffSec > graceSec;
+}
+
+// Compute a human "Next: Sat 03:00" label for daily/weekly schedules.
+function _dwNextDbBackupLabel(cfg) {
+  const freq = cfg.db_backup_freq || 'daily';
+  const timeStr = cfg.db_backup_time || '03:00';
+  const [hh, mm] = timeStr.split(':').map(n => parseInt(n, 10) || 0);
+  const now = new Date();
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const fmtClock = () => `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  if (freq === 'daily') {
+    const next = new Date(now); next.setHours(hh, mm, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    const sameDay = next.toDateString() === now.toDateString();
+    return sameDay ? `Today ${fmtClock()}` :
+           next.getDate() === now.getDate() + 1 ? `Tomorrow ${fmtClock()}` :
+           `${dayNames[next.getDay()]} ${fmtClock()}`;
+  }
+  // weekly
+  const daysStr = String(cfg.db_backup_days || '1,2,3,4,5,6,7');
+  const days = new Set(daysStr.split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean));
+  if (!days.size) return '';
+  // weekday(): 0=Sun .. 6=Sat; project uses 1=Mon .. 7=Sun
+  const jsToProj = (d) => d === 0 ? 7 : d;
+  for (let offset = 0; offset < 8; offset++) {
+    const cand = new Date(now);
+    cand.setDate(now.getDate() + offset);
+    cand.setHours(hh, mm, 0, 0);
+    if (cand <= now) continue;
+    if (days.has(jsToProj(cand.getDay()))) {
+      const sameDay = cand.toDateString() === now.toDateString();
+      return sameDay ? `Today ${fmtClock()}` :
+             offset === 1 ? `Tomorrow ${fmtClock()}` :
+             `${dayNames[cand.getDay()]} ${fmtClock()}`;
+    }
+  }
+  return '';
 }
 
 // ── License Overview Widget ──────────────────────────────────────
