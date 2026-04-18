@@ -4,6 +4,60 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## RADIUS Authentication (PAP + Access-Challenge 2FA)
+
+- Third auth source alongside local and LDAP — configure in **Settings → Integrations → RADIUS** (🧾 sub-tab with live status badge)
+- PAP authentication only in v1 (covers FortiAuthenticator, NPS, FreeRADIUS, Cisco ISE in default configs); `pyrad` lazy-imported — installations without it load cleanly
+- **Access-Challenge 2FA** — if the RADIUS server responds with `Access-Challenge` (FortiAuthenticator token, Duo, RSA SecurID, Azure NPS extension), the login UI presents the server's prompt; entering the OTP completes auth. Successfully completing a challenge satisfies 2FA and skips the app's built-in TOTP for that session. Multi-step challenges (chained prompts) are supported
+- **Primary / secondary failover** — `_try_server()` retries on socket error or timeout before failing over to secondary; `Access-Reject` is treated as a definitive answer (no failover). Configurable `radius_timeout` and `radius_retries` per server
+- **Attribute → Group mapping** — each PingWatch group can carry `radius_attribute` + `radius_value` columns (new `user_groups` columns, both SQLite and PostgreSQL, with one-shot migration). On every successful login, returned RADIUS attributes are matched first-match against mapped groups to assign role; configurable `radius_default_role` and `radius_default_group_id` as fallback
+- **Auto-provision** — `radius_auto_provision=1` auto-creates a local user row (`auth_type='radius'`, `pw_hash='__radius__'`) on first successful RADIUS login, via `db_add_radius_user()` mirroring `db_add_ldap_user()`
+- **Realm munging** — `radius_realm_prefix` / `radius_realm_suffix` transform the username before it leaves PingWatch (e.g. prepend `DOMAIN\` or append `@corp.local`)
+- **NAS-Identifier** — sent as `radius_nas_identifier` (default `"pingwatch"`)
+- **Test User Auth dialog** — admin runs a full authentication against the live RADIUS server; returned attributes are displayed raw so they can be copied into the mapping table
+- **Challenge state store** — module-level `_CHALLENGES` dict (TTL 120 s, `threading.Lock`) persists `State` blobs between HTTP requests, same pattern as the TOTP challenge store
+- **Status badge** — Integrations tab shows `ok` / `error` / `configured` / `unconfigured`; updated by `_record_ok()` / `_record_err()` hooks in `core/radius_auth.py`; `GET /api/settings` includes `radius_status`
+- **Add User modal** — "RADIUS" option in the `#au-type` dropdown, gated on `radius_enabled`; hides password fields
+- **User table badge** — `🧾 RADIUS` badge (amber) alongside existing Local and Domain (LDAP) badges; reset-password button suppressed for RADIUS users
+- **Login dispatch order** — explicit RADIUS users (`auth_type='radius'`) always go through RADIUS; existing local/LDAP users use their own path; RADIUS auto-prov is attempted only for completely unknown users (does not interfere with LDAP auto-prov)
+- **Debug logging** — `radius_debug=1` or global `debug_mode` emits attribute-by-attribute comparison traces at DEBUG, matching the LDAP debug level
+- `core/radius_auth.py` NEW; `routes/radius.py` NEW; `frontend/forms-radius.js` NEW; `db/users.py` + `db/groups.py` + `db/core.py` + `db/pg_schema.py` extended; `core/auth.py` + `routes/auth.py` extended; `server.py`, `frontend/forms-settings.js`, `frontend/forms-users.js`, `frontend/app.js` updated; `requirements.txt` + `core/setup_logic.py` + `linux/start.sh` register `pyrad>=2.4`
+
+---
+
+## Remote DB Backup Upload (SFTP + SMB)
+
+- After each successful local DB backup run, PingWatch can automatically upload the snapshot to a remote destination — configure in **Settings → Database → Remote Upload**
+- Two protocols: **SFTP** (paramiko, reuses existing TOFU host-key store from `backup/engine.py`) and **SMB** (`smbprotocol` / `smbclient`, lazy-imported — `smbprotocol>=1.10` added to `requirements.txt` and the setup wizards)
+- Upload runs in the same backup thread immediately after the local `.db` file is written; failures are logged but do not abort the local backup
+- Remote credentials (password) Fernet-encrypted at rest using the same `backup_enc_key` as device backup credentials
+- Remote path, share (SMB), host, port, and username all configurable; retention on the remote side is not managed by PingWatch (upload-only)
+- Status badge in the Backup Status widget DB section shows the outcome of the most recent remote upload attempt
+
+---
+
+## Backup Status widget — Database section
+
+- The existing **Backup Status** dashboard widget now includes a **Database** section below the device-config 2×2 KPI grid
+- Shows last run age with color coding: green (on-schedule), amber (overdue — > 1.5× configured interval: 36 h for daily, 12 d for weekly), red (last run errored)
+- Shows next scheduled run time and, when remote upload is enabled, the remote upload status
+- "Scheduled, never run yet" and "Disabled" states rendered in muted grey
+- Clicking the DB card navigates directly to **Settings → Database**
+- Backed by parallel fetch of `/api/backups` + `/api/settings` in `_dwNcmStatusRefresh()`; new helpers `_dwAgoFromStampUnderscore()`, `_dwIsDbBackupOverdue()`, `_dwNextDbBackupLabel()`
+
+---
+
+## Bug fixes & minor improvements (v0.9.2)
+
+- **Shutdown race — pool closed error** — `autosave_loop` used `time.sleep(60)` that blocked past pool shutdown. Fixed: replaced with `threading.Event.wait(60)` (`_autosave_stop`); `stop_autosave()` signals the event and is called by `server.py` shutdown before `shutdown_writers()` + `pg_close_pool()`
+- **DB backup catch-up** — `_should_fire()` used exact-minute matching; a missed window (restart or stall) was silently skipped. Fixed with catch-up semantics: fires if due time has passed and no run exists for the current window
+- **Bundle export filename** — the DB export bundle now includes the app version in the filename (e.g. `pingwatch-bundle-v0.9.2-2026-04-18.zip`). `frontend/forms-io.js` now reads the `Content-Disposition` header from the export response and prefers the server-supplied filename over a hardcoded one
+- **Stale login form after RADIUS logout** — signing out left the login button's `onclick` pointing at the RADIUS challenge submit. Fixed: `_resetLoginForm()` helper clears any TOTP/RADIUS prompt DOM and restores the default `submitLogin` handler; called from `showLogin()` whenever `!keepInput`
+- **LDAP badge flipping to "error" on RADIUS logins** — `ldap_authenticate` logged WARNING "user not found" and called `_record_err()` when a RADIUS-only user wasn't in LDAP. Fixed: downgraded to DEBUG and removed the `_record_err` call for the not-found case (not an LDAP error)
+- **Viewer clicking Settings** — Settings button was visible to all roles but silently did nothing for non-admins. Fixed: `openSettings()` now guards on `S.role === 'admin'` and shows a clear toast ("Settings is admin-only") for other roles
+
+---
+
 ## Settings UI & observability improvements
 
 - **LDAP/AD status badge** — Integrations tab now shows a live status dot for LDAP/AD alongside the existing SMTP and Syslog dots; `core/ldap_auth.py` tracks the last success/failure timestamp via `_record_ok()` / `_record_err()` hooks wired into `ldap_test_connection`, `ldap_authenticate`, and `ldap_sync_groups`; `get_ldap_status()` returns `ok` / `error` / `configured` / `unconfigured`; `GET /api/settings` now includes `ldap_status` alongside `smtp_status` and `syslog_status`

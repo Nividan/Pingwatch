@@ -22,6 +22,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - [HTTPS / TLS](#https--tls)
 - [Syslog Forwarding](#syslog-forwarding)
 - [LDAP / Active Directory Authentication](#ldap--active-directory-authentication)
+- [RADIUS Authentication](#radius-authentication)
 - [IP Address Management (IPAM)](#ip-address-management-ipam)
 - [Device Configuration Backup](#device-configuration-backup)
 - [Screenshots](#screenshots)
@@ -56,6 +57,8 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 📨 Syslog forwarding — RFC 5424 UDP/TCP to any syslog server
 - 🔁 Server restart and shutdown from the web UI (Settings → General)
 - 🏢 LDAP / Active Directory authentication with encrypted bind credentials, group import, and auto-provisioning
+- 🧾 RADIUS authentication (PAP + Access-Challenge 2FA) — primary/secondary server failover, attribute→role group mapping per-login, auto-provisioning; FortiAuthenticator, NPS, FreeRADIUS, and Cisco ISE compatible
+- ☁️ Remote DB backup upload — automatically upload scheduled SQLite/PostgreSQL snapshots to an SFTP or SMB share after each local backup run; Fernet-encrypted credentials at rest
 - 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration; sortable columns (click headers) and filter dropdowns for Status (Used/Free) and Licenses
 - 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (1 per 4 sensors, 64–512 range); manual override available in Settings → General
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
@@ -96,6 +99,8 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - **System tray:** `pystray` + `Pillow` *(optional)*
 - **VMware:** `pyvmomi` *(optional — only needed when VMware sensors are enabled)*
 - **LDAP/AD:** `ldap3` *(optional — only needed when LDAP auth is enabled)*
+- **RADIUS:** `pyrad` *(optional — only needed when RADIUS auth is enabled)*
+- **Remote backup:** `smbprotocol` *(optional — only needed for SMB remote DB backup uploads)*
 - **PDF reports:** `weasyprint` + `Jinja2` + `matplotlib` *(optional — only needed for the Reports module)*
 
 ---
@@ -220,6 +225,24 @@ Import AD/LDAP groups into PingWatch and tie them to PingWatch roles and notific
 - **Nested groups** — optional AD recursive membership check using `LDAP_MATCHING_RULE_IN_CHAIN` (AD only).
 - **Multi-group priority** — users in multiple imported groups receive the highest role (admin > operator > viewer).
 - **Test User Groups** — admin diagnostic dialog: enter a username and see exactly which LDAP groups they belong to.
+
+---
+
+## RADIUS Authentication
+
+Domain users log in with RADIUS credentials; local and LDAP users are unaffected. Configure in **Settings → Integrations → RADIUS**: primary server (host/port/shared secret), optional secondary server for automatic failover, timeout, retries, NAS-Identifier, and realm prefix/suffix. Shared secrets are Fernet-encrypted at rest.
+
+Use **Test Connection** to verify connectivity (the server only needs to *respond* — not accept) and **Test User Auth** to run a full authentication including any Access-Challenge 2FA steps, with the returned attributes displayed so you can build mappings.
+
+### RADIUS Group Mapping
+
+RADIUS has no group-enumeration API; instead, group assignment is driven by attributes returned on each `Access-Accept`:
+
+- **Attribute → Group mapping** — in the RADIUS panel's mapping table, assign each PingWatch group an attribute name (e.g. `Fortinet-Group-Name`) and value (e.g. `pingwatch-admins`). On every successful login, PingWatch matches the returned attributes to the first mapped group, and assigns the user that group and its default role.
+- **Default role / group** — if no mapping matches, the user receives the configured default role and default group.
+- **Auto-provision** — enable "Auto-provision" and unknown RADIUS users are created automatically on first successful login (no manual user creation required).
+- **Access-Challenge 2FA** — if the RADIUS server issues an `Access-Challenge` (FortiAuthenticator token, Duo, RSA SecurID, Azure NPS extension), the login screen presents the server's prompt and collects the OTP. Successfully completing a challenge skips the app's built-in TOTP step for that login.
+- **Primary/secondary failover** — on timeout or socket error, PingWatch transparently retries against the secondary server (if configured). `Access-Reject` is treated as a definitive answer and does not trigger failover.
 
 ---
 
