@@ -455,26 +455,22 @@ def handle(h, method, path, body):
         username = body.get("username", "").strip()
         password = body.get("password", "")
 
-        # ── RADIUS dispatch: if the user row is flagged auth_type='radius',
-        # or if the user is unknown and RADIUS auto-provision is enabled,
-        # take the RADIUS path (may return an Access-Challenge for 2FA).
+        # ── Auth-source dispatch ──────────────────────────────────────
+        # Order of precedence:
+        #   1. Known user with auth_type='radius' → RADIUS only (no fall-through)
+        #   2. Anyone else → try local/LDAP first via auth_login (preserves existing behavior)
+        #   3. Unknown user (no DB row) AND RADIUS auto-provision → fall back to RADIUS
         clean_user = username.split('\\', 1)[1] if '\\' in username else (
                      username.split('@')[0] if '@' in username else username)
         _existing_auth_type = db_get_user_auth_type(clean_user)
+        _user_row_exists = _user_exists(clean_user)
         _radius_enabled = bool(int(_settings.get("radius_enabled", 0) or 0))
         _radius_autoprov = bool(int(_settings.get("radius_auto_provision", 0) or 0))
-        _try_radius = _radius_enabled and (
-            _existing_auth_type == 'radius'
-            or (_existing_auth_type == 'local'  # default for unknown users
-                and _radius_autoprov
-                and not _user_exists(clean_user)
-                and not _ldap_autoprov_enabled())
-        )
 
-        if _try_radius:
+        # 1. Explicit RADIUS user — take the RADIUS path exclusively
+        if _radius_enabled and _user_row_exists and _existing_auth_type == 'radius':
             outcome = radius_login_phase1(username, password)
             if outcome["status"] == "challenge":
-                # Surface the challenge prompt to the UI — no session yet
                 db_log_audit(clean_user, ip, 'radius_challenge_issued', clean_user)
                 h._json(200, {"radius_challenge": True,
                               "challenge_id": outcome["challenge_id"],
@@ -486,17 +482,33 @@ def handle(h, method, path, body):
                 _emit_post_auth(h, ip, outcome["username"], outcome["role"],
                                 outcome["token"], outcome.get("challenge_used", False))
                 return True
-            # RADIUS rejected — if the user has a radius row, stop here.
-            # Otherwise fall through to local/LDAP below (LDAP auto-prov may still work).
-            if _existing_auth_type == 'radius':
-                with _FAIL_LOCK:
-                    _FAIL_LOG.setdefault(ip, []).append(time.time())
-                db_log_audit(username, ip, 'login_fail', username)
-                h._json(401, {"error": "Invalid username or password"})
-                return True
+            with _FAIL_LOCK:
+                _FAIL_LOG.setdefault(ip, []).append(time.time())
+            db_log_audit(username, ip, 'login_fail', username)
+            h._json(401, {"error": "Invalid username or password"})
+            return True
 
+        # 2. Existing local/LDAP path
         token = auth_login(username, password)
         if not token:
+            # 3. RADIUS fallback for unknown users with auto-provisioning enabled.
+            # Fires only when the user has no DB row at all — existing local/LDAP users
+            # that fail auth here stay rejected.
+            if _radius_enabled and _radius_autoprov and not _user_row_exists:
+                outcome = radius_login_phase1(username, password)
+                if outcome["status"] == "challenge":
+                    db_log_audit(clean_user, ip, 'radius_challenge_issued', clean_user)
+                    h._json(200, {"radius_challenge": True,
+                                  "challenge_id": outcome["challenge_id"],
+                                  "prompt": outcome.get("prompt", "")})
+                    return True
+                if outcome["status"] == "accept":
+                    with _FAIL_LOCK:
+                        _FAIL_LOG.pop(ip, None)
+                    _emit_post_auth(h, ip, outcome["username"], outcome["role"],
+                                    outcome["token"], outcome.get("challenge_used", False))
+                    return True
+                # else: RADIUS also rejected — fall through to 401 below
             with _FAIL_LOCK:
                 _FAIL_LOG.setdefault(ip, []).append(time.time())
             db_log_audit(username, ip, 'login_fail', username)
