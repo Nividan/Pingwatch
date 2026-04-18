@@ -241,22 +241,51 @@ def _get_session_start_ts(stages, target_state, did, sid, db_get_stage_state):
 
 # ── Stage evaluator ──────────────────────────────────────────────
 
+def _diag_log(sensor, label: str, msg: str) -> None:
+    """Emit an INFO diagnostic line when the reason for non-dispatch changes.
+
+    Rate-limited via sensor._alert_diag_last_reason: identical messages stay
+    silent until the reason actually changes. Keeps a CRIT-for-hours sensor
+    from flooding the log while still showing every transition.
+    """
+    prev = getattr(sensor, "_alert_diag_last_reason", None)
+    if msg == prev:
+        return
+    sensor._alert_diag_last_reason = msg
+    log.info(f"alert_profile_engine: {label} — {msg}")
+
+
 def evaluate_and_fire(dev, sensor) -> None:
     """Run the profile evaluator for this sensor on this probe cycle.
 
     Called from Sensor._run_once after the existing flap/threshold blocks
     have already updated _down_since_ts / _threshold_triggered_ts.
     """
+    did = getattr(dev, "did", None) or getattr(dev, "device_id", "")
+    sid = sensor.sensor_id
+    label = f"{getattr(dev, 'name', did)}/{getattr(sensor, 'name', sid)}"
+    is_failing = bool(sensor._down_since_ts) or sensor._threshold_state in ("crit", "warn")
+
     if sensor.alerts_muted or getattr(dev, "alerts_muted", False):
+        if is_failing:
+            _diag_log(sensor, label, f"no dispatch — alerts muted "
+                      f"(sensor={sensor.alerts_muted}, device={getattr(dev, 'alerts_muted', False)})")
         return
 
     profile = resolve_profile_for_sensor(dev, sensor)
-    if not profile or not profile.get("enabled", True):
+    if not profile:
+        if is_failing:
+            _diag_log(sensor, label, "no dispatch — no profile resolved for "
+                      "sensor/device/group/global scope")
+        return
+    if not profile.get("enabled", True):
+        if is_failing:
+            _diag_log(sensor, label, f"no dispatch — profile {profile['name']!r} is disabled")
         return
     stages = profile.get("stages") or []
     if not stages:
-        log.debug(f"alert: {getattr(dev, 'did', '?')}/{sensor.sensor_id} "
-                  f"profile {profile['name']!r} has no stages")
+        if is_failing:
+            _diag_log(sensor, label, f"no dispatch — profile {profile['name']!r} has no stages")
         return
 
     current_state, started_ts = _classify(sensor)
@@ -269,10 +298,10 @@ def evaluate_and_fire(dev, sensor) -> None:
     from db.alert_events  import db_log_event, db_auto_resolve_event
     from monitoring.alert_dispatchers import dispatch, check_maintenance
 
-    did = getattr(dev, "did", None) or getattr(dev, "device_id", "")
-    sid = sensor.sensor_id
-
     fired_recovery = False
+    fired_any      = False
+    matched_trig   = False
+    skip_reasons   = []
 
     for stage in stages:
         trig    = stage["trigger_state"]
@@ -288,7 +317,10 @@ def evaluate_and_fire(dev, sensor) -> None:
         if is_state_stage:
             if current_state != trig:
                 continue
+            matched_trig = True
             if (now - started_ts) < delay:
+                skip_reasons.append(f"stage#{sid_key} delay {delay}s not elapsed "
+                                    f"({now - started_ts:.0f}s so far)")
                 log.debug(f"alert: {did}/{sid} stage {sid_key} "
                           f"delay {delay}s not elapsed ({now - started_ts:.0f}s so far)")
                 continue
@@ -300,8 +332,11 @@ def evaluate_and_fire(dev, sensor) -> None:
             elif repeat > 0 and (now - state.get("last_fire_ts", 0)) >= (repeat * 60):
                 should_fire = True   # repeat interval elapsed
             if not should_fire:
+                skip_reasons.append(f"stage#{sid_key} already fired this session "
+                                    f"(repeat={repeat}min)")
                 continue
             first_fire = (not state or state.get("active_session") != session)
+            fired_any = True
             _fire(stage, dev, sensor, trig, did, sid, session, profile,
                   dispatch, check_maintenance, db_log_event,
                   db_record_stage_fire, first_fire_in_session=first_fire)
@@ -331,11 +366,26 @@ def evaluate_and_fire(dev, sensor) -> None:
                   db_record_stage_fire, recovery=True, duration_s=duration_s)
             fired_recovery = True
 
+    # Diagnostic: sensor is failing but nothing dispatched — explain once
+    # (then stay silent until the reason changes).
+    if current_state != "ok" and not fired_any:
+        if not matched_trig:
+            trigs = sorted({s["trigger_state"] for s in stages
+                            if s["trigger_state"] in ("down", "warning")})
+            reason = (f"no dispatch — no stages match current_state={current_state} "
+                      f"(profile {profile['name']!r} has triggers: {trigs or 'none'})")
+        else:
+            reason = (f"no dispatch — state={current_state} matched but all stages gated: "
+                      f"{'; '.join(skip_reasons) if skip_reasons else 'unknown'}")
+        _diag_log(sensor, label, reason)
+
     # When sensor is fully OK, auto-resolve any active alert event and
     # clear per-stage history so a future failure starts a fresh session.
     # This must run even if no recovery stage dispatched (e.g. profile has
     # no recovery stage, or its recovery stage has no action templates).
     if current_state == "ok":
+        # Reset the diag-throttle so the next failing session logs its first reason.
+        sensor._alert_diag_last_reason = None
         # Fast path: if no stage has ever fired for this sensor (in this process
         # run), there is nothing to clean up — skip the per-stage DB reads.
         # _alert_has_fired is set True inside _fire() and cleared here after cleanup.
@@ -395,8 +445,8 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
                          ctx, state="suppressed")
         except Exception as e:
             log.warning(f"alert_profile_engine: db_log_event (suppressed) error: {e}")
-        log.debug(f"alert_profile_engine: stage {stage['id']} "
-                  f"suppressed by maintenance window {mw_name!r}")
+        log.info(f"alert_profile_engine: stage {stage['id']} "
+                 f"suppressed by maintenance window {mw_name!r}")
         # Still mark as fired so we don't keep retrying every probe
         db_record_stage_fire(stage["id"], did, sid, session)
         return
