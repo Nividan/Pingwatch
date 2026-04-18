@@ -39,11 +39,14 @@ _scope_cache_lock = threading.Lock()
 
 
 def _get_scope_cached(scope_type: str, scope_value: str, cur_ver: int):
-    """Return profile from scope cache; None if not found; _MISS sentinel if stale."""
+    """Return profile from scope cache; None if cached as 'not found'; _MISS if not queried yet or stale."""
     with _scope_cache_lock:
         if _scope_cache_ver != cur_ver:
             return _MISS   # cache is stale — caller must re-query
-        return _scope_cache.get((scope_type, scope_value), None)
+        key = (scope_type, scope_value)
+        if key not in _scope_cache:
+            return _MISS   # never queried this scope under this version
+        return _scope_cache[key]
 
 
 def _set_scope_cached(scope_type: str, scope_value: str, cur_ver: int, profile):
