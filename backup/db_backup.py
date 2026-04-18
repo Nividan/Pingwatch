@@ -13,12 +13,62 @@ PostgreSQL mode:
 """
 
 import datetime
+import getpass
 import os
 import sqlite3
 import subprocess
+import tempfile
 import threading
 
 _running_lock = threading.Lock()
+
+
+def _check_backup_dir_writable(path: str) -> None:
+    """Verify the backup directory exists and is writable by the current process.
+
+    Raises PermissionError with an actionable message if not. ``os.makedirs(...,
+    exist_ok=True)`` does NOT detect this case — it returns silently if the
+    directory already exists, even when the existing owner is different from
+    the current user. The actual permission failure then surfaces deep inside
+    pg_dump or shutil.copy2 with a confusing path-only error like
+    ``[Errno 13] Permission denied: '/home/nive/Pingwatch/backup/database/...'``.
+
+    Catching it here lets us point operators directly at the fix.
+    """
+    if not os.path.isdir(path):
+        # makedirs raised something we didn't catch — re-raise with context
+        raise PermissionError(f"Backup directory does not exist and could not be created: {path}")
+    if not os.access(path, os.W_OK | os.X_OK):
+        try:
+            st = os.stat(path)
+            owner_uid = st.st_uid
+            try:
+                import pwd
+                owner_name = pwd.getpwuid(owner_uid).pw_name
+            except Exception:
+                owner_name = str(owner_uid)
+        except Exception:
+            owner_name = "unknown"
+        try:
+            current_user = getpass.getuser()
+        except Exception:
+            current_user = f"uid={os.getuid() if hasattr(os, 'getuid') else '?'}"
+        raise PermissionError(
+            f"Backup directory not writable by service user "
+            f"'{current_user}' (owned by '{owner_name}'): {path} — "
+            f"fix with: sudo chown -R {current_user} {path}"
+        )
+    # The os.access check is advisory on some filesystems (NFS, ACLs); confirm
+    # by attempting a real write — catches edge cases where access() lies.
+    try:
+        fd, tmp = tempfile.mkstemp(dir=path, prefix='.writetest-', suffix='.tmp')
+        os.close(fd)
+        os.unlink(tmp)
+    except OSError as e:
+        raise PermissionError(
+            f"Backup directory probe-write failed at {path}: {e} — "
+            f"check ownership and ACLs"
+        )
 
 
 def _backup_one(src_path, dest_path, label, log):
@@ -137,6 +187,10 @@ def do_db_backup() -> tuple:
         from db.backend import is_pg, get_config
 
         os.makedirs(DB_BACKUP_DIR, exist_ok=True)
+        # Pre-flight: verify writability NOW (with a clear remediation hint)
+        # rather than letting pg_dump or shutil.copy2 surface a confusing
+        # bare PermissionError from deep inside the backup pipeline.
+        _check_backup_dir_writable(DB_BACKUP_DIR)
         ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
         if is_pg():
