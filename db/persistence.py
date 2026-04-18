@@ -4,6 +4,7 @@ db/persistence.py — Device/sensor save, load, and autosave loop.
 
 import json
 import sqlite3
+import threading
 import time
 
 from core.config  import DB_PATH, LOGS_DB_PATH
@@ -568,14 +569,26 @@ def db_load(state):
 
 # ── Background autosave ──────────────────────────────────────────
 
+_autosave_stop = threading.Event()
+
+
+def stop_autosave() -> None:
+    """Signal the autosave loop to exit. Call before pg_close_pool() at shutdown
+    so the 60 s sleep doesn't land mid-save after the pool is gone (which emits
+    a spurious 'PostgreSQL pool is closed' error)."""
+    _autosave_stop.set()
+
+
 def autosave_loop(state):
     """Save state to DB every 60 s; clean old samples every ~1 hour;
     maintain PG partitions daily."""
-    import time as _time
     from db.samples import db_clean_samples
     _iter = 0
-    while True:
-        _time.sleep(60)
+    while not _autosave_stop.is_set():
+        # Interruptible wait — shutdown signals _autosave_stop so we exit
+        # before pg_close_pool() runs, avoiding 'pool is closed' errors.
+        if _autosave_stop.wait(60):
+            break
         _db_enqueue(lambda: db_save(state))
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
