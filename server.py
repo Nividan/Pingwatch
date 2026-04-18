@@ -857,6 +857,14 @@ def main():
         db_flush_samples()
     except Exception as e:
         log.error(f"db_flush_samples at shutdown failed: {e}")
+    # Stop the 60 s autosave loop BEFORE tearing down writers / the PG pool.
+    # Otherwise its uninterrupted sleep can wake up after pg_close_pool() and
+    # emit a misleading 'PostgreSQL pool is closed' error.
+    try:
+        from db.persistence import stop_autosave
+        stop_autosave()
+    except Exception as e:
+        log.warning(f"stop_autosave failed: {e}")
     try:
         summary = shutdown_writers(timeout=10.0)
         log.info(
