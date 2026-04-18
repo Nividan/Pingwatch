@@ -275,8 +275,21 @@ def evaluate_and_fire(dev, sensor) -> None:
     profile = resolve_profile_for_sensor(dev, sensor)
     if not profile:
         if is_failing:
-            _diag_log(sensor, label, "no dispatch — no profile resolved for "
-                      "sensor/device/group/global scope")
+            dev_group = getattr(dev, "group", "") or "(none)"
+            searched = (f"sensor={did}/{sid}, device={did}, group={dev_group!r}, global")
+            try:
+                from db.alert_profiles import db_list_profiles
+                rows = db_list_profiles() or []
+                dump = (", ".join(
+                    f"id={r['id']} name={r.get('name','')!r} "
+                    f"scope={r.get('scope_type','?')}:{r.get('scope_value','') or '-'} "
+                    f"enabled={r.get('enabled',1)}"
+                    for r in rows) or "(no profiles in DB)")
+            except Exception as e:
+                dump = f"(db_list_profiles failed: {e})"
+            _diag_log(sensor, label,
+                      f"no dispatch — no profile resolved. Searched: {searched}. "
+                      f"Profiles in DB: {dump}")
         return
     if not profile.get("enabled", True):
         if is_failing:
