@@ -74,6 +74,14 @@ PACKAGES = [
         "required": False,
     },
     {
+        "import":   "pyrad",
+        "name":     "pyrad",
+        "install":  "pyrad>=2.4",
+        "pip":      True,
+        "desc":     "RADIUS authentication",
+        "required": False,
+    },
+    {
         "import":   "cryptography",
         "name":     "cryptography",
         "install":  "cryptography>=41.0.0",

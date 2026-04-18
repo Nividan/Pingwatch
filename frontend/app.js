@@ -294,6 +294,12 @@ async function submitLogin(){
       _show2faPrompt(d.challenge_id, user, d.remember_hours_max||0);
       return;
     }
+    // RADIUS Access-Challenge: server needs a second step (token code, push confirm, etc.)
+    if(d.radius_challenge){
+      btn.textContent='Sign In';
+      _showRadiusChallengePrompt(d.challenge_id, user, d.prompt||'Additional verification required');
+      return;
+    }
     _loggedOut=false;
     S.role=d.role||'viewer';
     if(d.session_ttl)_sessionTtl=d.session_ttl;
@@ -397,6 +403,96 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
 function _showLoginErr(msg){
   const err=document.getElementById('login-err');
   if(err){err.textContent=msg; err.style.display='block';}
+}
+
+// ── RADIUS Access-Challenge prompt ───────────────────────────────
+// Rendered when the RADIUS server returns Access-Challenge (typically for 2FA).
+// The server provides a human prompt ("Enter token code", "Approve push", etc.).
+// Multi-step challenges keep re-rendering with a fresh prompt until accept/reject.
+function _showRadiusChallengePrompt(challengeId, username, prompt){
+  const screen=document.getElementById('login-screen');
+  if(!screen) return;
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=''; err.style.display='none';}
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){userField.disabled=true;}
+  if(passField){passField.style.display='none';}
+
+  // Prompt label
+  let promptEl=document.getElementById('login-radius-prompt');
+  if(!promptEl){
+    promptEl=document.createElement('div');
+    promptEl.id='login-radius-prompt';
+    promptEl.style.cssText='margin-top:8px;font-size:13px;color:var(--text2);text-align:center';
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(promptEl, passField.nextSibling);}
+  }
+  promptEl.textContent=prompt||'Additional verification required';
+  promptEl.style.display='block';
+
+  // Response input (reused across multi-step challenges)
+  let respField=document.getElementById('login-radius-resp');
+  if(!respField){
+    respField=document.createElement('input');
+    respField.type='text';
+    respField.id='login-radius-resp';
+    respField.placeholder='Enter response';
+    respField.autocomplete='one-time-code';
+    respField.maxLength=64;
+    respField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    if(promptEl&&promptEl.parentNode){promptEl.parentNode.insertBefore(respField, promptEl.nextSibling);}
+  }
+  respField.style.display='block';
+  respField.value='';
+  setTimeout(()=>respField.focus(),50);
+
+  // Remove any TOTP-specific remember row if it exists (shouldn't, but be safe)
+  const rr=document.getElementById('login-remember-row');
+  if(rr) rr.remove();
+
+  const btn=document.getElementById('login-btn');
+  if(btn){btn.textContent='Verify'; btn.disabled=false;}
+  const submit=async()=>{
+    const response=(respField.value||'').trim();
+    if(!response){_showLoginErr('Enter your response'); return;}
+    btn.disabled=true; btn.textContent='Verifying…';
+    try{
+      const r=await fetch('/api/login/radius_challenge',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({challenge_id:challengeId, response})});
+      const d=await r.json();
+      if(!r.ok||d.error){
+        _showLoginErr(d.error||'Verification failed');
+        btn.disabled=false; btn.textContent='Verify';
+        return;
+      }
+      if(d.radius_challenge){
+        // Multi-step — re-render with fresh prompt and fresh challenge id
+        btn.disabled=false;
+        _showRadiusChallengePrompt(d.challenge_id, username, d.prompt||'Additional verification required');
+        return;
+      }
+      _loggedOut=false;
+      S.role=d.role||'viewer';
+      if(d.session_ttl)_sessionTtl=d.session_ttl;
+      try{
+        const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+        if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});
+      }catch(e){}
+      hideLogin();
+      try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
+      onAuthenticated(d.username);
+      // Reset login UI for next time
+      if(userField){userField.disabled=false;}
+      if(passField){passField.style.display='block';}
+      if(respField){respField.style.display='none';}
+      if(promptEl){promptEl.style.display='none';}
+    }catch(e){
+      _showLoginErr('Server error. Try again.');
+      btn.disabled=false; btn.textContent='Verify';
+    }
+  };
+  btn.onclick=submit;
+  respField.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault(); submit();} };
 }
 
 async function doLogout(){

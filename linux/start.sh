@@ -131,6 +131,7 @@ _PACKAGES = [
     ("cryptography", "TLS certificate generation & encryption", True),
     ("paramiko",     "SSH device backups",                      False),
     ("smbclient",    "SMB / CIFS remote DB backup upload",      False),
+    ("pyrad",        "RADIUS authentication",                   False),
     ("pystray",      "system tray icon",                        False),
     ("PIL",          "image support (tray icon)",               False),
     ("ldap3",        "LDAP / Active Directory authentication",  False),

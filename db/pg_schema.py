@@ -477,16 +477,20 @@ def pg_create_main_schema(cur):
     # ── User Groups ──────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_groups (
-            id           SERIAL PRIMARY KEY,
-            name         TEXT NOT NULL UNIQUE,
-            description  TEXT DEFAULT '',
-            ldap_dn      TEXT DEFAULT '',
-            default_role TEXT DEFAULT 'viewer'
+            id               SERIAL PRIMARY KEY,
+            name             TEXT NOT NULL UNIQUE,
+            description      TEXT DEFAULT '',
+            ldap_dn          TEXT DEFAULT '',
+            radius_attribute TEXT DEFAULT '',
+            radius_value     TEXT DEFAULT '',
+            default_role     TEXT DEFAULT 'viewer'
         )""")
-    # Migration: LDAP group mapping columns
+    # Migration: LDAP group mapping columns + RADIUS attribute mapping
     for _tbl, _col, _typedef in [
-        ("user_groups", "ldap_dn",      "TEXT DEFAULT ''"),
-        ("user_groups", "default_role",  "TEXT DEFAULT 'viewer'"),
+        ("user_groups", "ldap_dn",          "TEXT DEFAULT ''"),
+        ("user_groups", "default_role",     "TEXT DEFAULT 'viewer'"),
+        ("user_groups", "radius_attribute", "TEXT DEFAULT ''"),
+        ("user_groups", "radius_value",     "TEXT DEFAULT ''"),
     ]:
         try:
             cur.execute("SAVEPOINT _alter_ug")

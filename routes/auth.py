@@ -15,7 +15,8 @@ import threading
 import time
 
 from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
-                         auth_revoke_user_sessions, auth_verify_current)
+                         auth_revoke_user_sessions, auth_verify_current,
+                         radius_login_phase1, radius_login_phase2)
 from core.config import (_RE_USER, _RE_USER_PW, _RE_ME_PW,
                          _RE_ME_PROFILE, _RE_USER_PROFILE, _RE_READY)
 from core.config import DB_PATH
@@ -90,6 +91,98 @@ def _get_user_profile(username: str) -> dict:
         return {}
     finally:
         con.close()
+
+# ── RADIUS dispatch helpers ───────────────────────────────────────
+def _user_exists(username: str) -> bool:
+    """True iff a users row for `username` exists (any auth_type)."""
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT 1 FROM users WHERE username=%s LIMIT 1", (username,))
+                return cur.fetchone() is not None
+        except Exception:
+            return False
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=15)
+        try:
+            return con.execute("SELECT 1 FROM users WHERE username=? LIMIT 1",
+                               (username,)).fetchone() is not None
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
+def _ldap_autoprov_enabled() -> bool:
+    return bool(int(_settings.get('ldap_enabled', 0) or 0)
+                and int(_settings.get('ldap_auto_provision', 0) or 0))
+
+
+def _emit_post_auth(h, ip: str, username: str, role: str,
+                    token: str, challenge_used: bool) -> None:
+    """Session-issue path for a successful login.
+
+    Applies the built-in TOTP gate unless `challenge_used=True` (RADIUS
+    Access-Challenge already satisfied a second factor — don't double-prompt).
+    Writes the audit entry, clears rate-limit, emits cookies, and responds.
+    """
+    from core.auth import auth_logout as _logout
+    from core.auth import totp_create_challenge, totp_available
+    from db.users import db_get_totp
+
+    clean_user = username.split('\\', 1)[1] if '\\' in username else (
+                 username.split('@')[0] if '@' in username else username)
+
+    if not challenge_used:
+        try:
+            totp = db_get_totp(clean_user)
+        except Exception:
+            totp = {"enabled": 0}
+        if totp.get("enabled"):
+            _trusted_raw = _get_cookie(h, _TRUSTED_COOKIE)
+            if _trusted_raw:
+                from db.users import db_lookup_trusted_device, db_touch_trusted_device
+                _tok_hash = hashlib.sha256(_trusted_raw.encode()).hexdigest()
+                _td_row = db_lookup_trusted_device(clean_user, _tok_hash)
+                if _td_row:
+                    db_touch_trusted_device(_td_row["id"], ip)
+                    db_log_audit(clean_user, ip, 'login_ok_trusted_device', clean_user)
+                    _sec = "; Secure" if tls_active else ""
+                    _new_max_age = int(_settings.get("totp_remember_hours", 9)) * 3600
+                    h._send_with_cookies(
+                        200,
+                        {"ok": True, "username": username, "role": role,
+                         "session_ttl": int(_settings.get("session_ttl", 86400))},
+                        [
+                            f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}",
+                            _trusted_cookie_header(_trusted_raw, _new_max_age, bool(tls_active)),
+                        ]
+                    )
+                    return
+            if not totp_available():
+                _logout(token)
+                log.error(f"User {clean_user!r} has 2FA enabled but pyotp is not installed — login refused")
+                h._json(503, {"error": "2FA required but server is missing pyotp. Contact administrator."})
+                return
+            _logout(token)
+            cid = totp_create_challenge(clean_user, role)
+            db_log_audit(clean_user, ip, 'login_totp_challenge', clean_user)
+            _remember_max = int(_settings.get("totp_remember_hours", 9))
+            h._json(200, {"totp_required": True, "challenge_id": cid,
+                          "remember_hours_max": _remember_max})
+            return
+
+    # No TOTP, or challenge_used=True (RADIUS already 2FA'd)
+    audit_event = 'login_ok_radius_challenge' if challenge_used else 'login_ok'
+    db_log_audit(username, ip, audit_event, username)
+    _sec = "; Secure" if tls_active else ""
+    h._send_with_cookie(
+        200, {"ok": True, "username": username, "role": role,
+              "session_ttl": int(_settings.get("session_ttl", 86400))},
+        f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
+    )
+
 
 # ── Login rate-limiting state ─────────────────────────────────────
 _FAIL_LOCK   = threading.Lock()
@@ -226,13 +319,16 @@ def handle(h, method, path, body):
         domain    = (body.get("domain") or "").strip()[:100]
         if new_role not in ("viewer", "operator", "admin"):
             new_role = "admin"
-        if auth_type not in ("local", "ldap"):
+        if auth_type not in ("local", "ldap", "radius"):
             auth_type = "local"
         if not username:
             h._json(400, {"error": "username is required"})
             return True
         if auth_type == "ldap":
             ok = db_add_ldap_user(username, domain, new_role)
+        elif auth_type == "radius":
+            from db import db_add_radius_user
+            ok = db_add_radius_user(username, domain, new_role)
         else:
             if not password:
                 h._json(400, {"error": "username and password required"})
@@ -358,7 +454,48 @@ def handle(h, method, path, body):
                 return True
         username = body.get("username", "").strip()
         password = body.get("password", "")
-        token    = auth_login(username, password)
+
+        # ── RADIUS dispatch: if the user row is flagged auth_type='radius',
+        # or if the user is unknown and RADIUS auto-provision is enabled,
+        # take the RADIUS path (may return an Access-Challenge for 2FA).
+        clean_user = username.split('\\', 1)[1] if '\\' in username else (
+                     username.split('@')[0] if '@' in username else username)
+        _existing_auth_type = db_get_user_auth_type(clean_user)
+        _radius_enabled = bool(int(_settings.get("radius_enabled", 0) or 0))
+        _radius_autoprov = bool(int(_settings.get("radius_auto_provision", 0) or 0))
+        _try_radius = _radius_enabled and (
+            _existing_auth_type == 'radius'
+            or (_existing_auth_type == 'local'  # default for unknown users
+                and _radius_autoprov
+                and not _user_exists(clean_user)
+                and not _ldap_autoprov_enabled())
+        )
+
+        if _try_radius:
+            outcome = radius_login_phase1(username, password)
+            if outcome["status"] == "challenge":
+                # Surface the challenge prompt to the UI — no session yet
+                db_log_audit(clean_user, ip, 'radius_challenge_issued', clean_user)
+                h._json(200, {"radius_challenge": True,
+                              "challenge_id": outcome["challenge_id"],
+                              "prompt": outcome.get("prompt", "")})
+                return True
+            if outcome["status"] == "accept":
+                with _FAIL_LOCK:
+                    _FAIL_LOG.pop(ip, None)
+                _emit_post_auth(h, ip, outcome["username"], outcome["role"],
+                                outcome["token"], outcome.get("challenge_used", False))
+                return True
+            # RADIUS rejected — if the user has a radius row, stop here.
+            # Otherwise fall through to local/LDAP below (LDAP auto-prov may still work).
+            if _existing_auth_type == 'radius':
+                with _FAIL_LOCK:
+                    _FAIL_LOG.setdefault(ip, []).append(time.time())
+                db_log_audit(username, ip, 'login_fail', username)
+                h._json(401, {"error": "Invalid username or password"})
+                return True
+
+        token = auth_login(username, password)
         if not token:
             with _FAIL_LOCK:
                 _FAIL_LOG.setdefault(ip, []).append(time.time())
@@ -374,8 +511,6 @@ def handle(h, method, path, body):
         from core.auth import auth_logout as _logout
         from core.auth import totp_create_challenge, totp_available
         from db.users import db_get_totp
-        clean_user = username.split('\\', 1)[1] if '\\' in username else (
-                     username.split('@')[0] if '@' in username else username)
         try:
             totp = db_get_totp(clean_user)
         except Exception:
@@ -525,6 +660,44 @@ def handle(h, method, path, body):
                   "session_ttl": int(_settings.get("session_ttl", 86400))},
             _session_cookie
         )
+        return True
+
+    # ── /api/login/radius_challenge POST ──────────────────────────
+    # Follow-up step when a RADIUS server returned Access-Challenge on /api/login.
+    # Body: {challenge_id, response}. May return another challenge (multi-step 2FA).
+    if path == "/api/login/radius_challenge" and method == "POST":
+        ip = h.client_address[0]
+        with _FAIL_LOCK:
+            now = time.time()
+            _fail_window = int(_settings.get("login_fail_window", _FAIL_WINDOW))
+            _fail_max    = int(_settings.get("login_fail_max",    _FAIL_MAX))
+            _FAIL_LOG[ip] = [t for t in _FAIL_LOG.get(ip, []) if now - t < _fail_window]
+            if len(_FAIL_LOG[ip]) >= _fail_max:
+                h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})
+                return True
+        cid      = (body.get("challenge_id") or "").strip()
+        response = (body.get("response") or "")
+        if not cid or not response:
+            h._json(400, {"error": "challenge_id and response are required"})
+            return True
+        outcome = radius_login_phase2(cid, response)
+        if outcome["status"] == "challenge":
+            # Server came back with another prompt — keep going
+            h._json(200, {"radius_challenge": True,
+                          "challenge_id": outcome["challenge_id"],
+                          "prompt": outcome.get("prompt", "")})
+            return True
+        if outcome["status"] == "accept":
+            with _FAIL_LOCK:
+                _FAIL_LOG.pop(ip, None)
+            _emit_post_auth(h, ip, outcome["username"], outcome["role"],
+                            outcome["token"], outcome.get("challenge_used", True))
+            return True
+        # reject
+        with _FAIL_LOCK:
+            _FAIL_LOG.setdefault(ip, []).append(time.time())
+        db_log_audit('', ip, 'radius_challenge_failed', outcome.get('reason', ''))
+        h._json(401, {"error": "Authentication failed"})
         return True
 
     # ── /api/me/totp/setup POST — issue secret + provisioning URI ─

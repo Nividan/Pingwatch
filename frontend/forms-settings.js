@@ -225,6 +225,7 @@ function _buildSettingsTab_integrations(sr) {
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
         <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD <span id="ibadge-ldap" style="font-size:13px"></span></button>
+        <button id="itab-radius" class="itab" onclick="switchIntegTab('radius')">🛡 RADIUS <span id="ibadge-radius" style="font-size:13px"></span></button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -420,6 +421,108 @@ function _buildSettingsTab_integrations(sr) {
           <div style="display:flex;gap:8px;margin-top:10px">
             <button class="btn-s" style="font-size:12px" onclick="openLdapTestUserGroups()">▶ Test User Groups</button>
           </div>
+        </div>
+
+      </div>
+
+      <!-- ── RADIUS sub-panel ── -->
+      <div id="ipanel-radius" style="display:none">
+        <div id="radius-status-bar"></div>
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable RADIUS Authentication</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Authenticate users against a RADIUS server (FortiAuthenticator, NPS, FreeRADIUS, ISE). Server-side 2FA via Access-Challenge is supported.</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="radius-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- Primary server -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Primary Server</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Host</label>
+            <input type="text" id="radius-server" placeholder="radius.example.com" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="radius-port" value="1812" min="1" max="65535" style="max-width:100px"/></div>
+        </div>
+        <div class="fr"><label class="fl">Shared Secret</label>
+          <input type="password" id="radius-secret" placeholder="shared secret" autocomplete="new-password"/>
+          <div class="fh">Leave blank to keep the currently stored secret.</div>
+        </div>
+
+        <!-- Secondary server -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 10px">Secondary Server (optional — used on primary timeout)</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Host</label>
+            <input type="text" id="radius-server2" placeholder="radius2.example.com (optional)" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="radius-port2" value="1812" min="1" max="65535" style="max-width:100px"/></div>
+        </div>
+        <div class="fr"><label class="fl">Shared Secret</label>
+          <input type="password" id="radius-secret2" placeholder="secondary shared secret" autocomplete="new-password"/></div>
+
+        <!-- Transport -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 10px">Transport</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="radius-timeout" value="5" min="1" max="60" style="max-width:80px"/></div>
+          <div class="fr"><label class="fl">Retries per server</label>
+            <input type="number" id="radius-retries" value="3" min="1" max="10" style="max-width:80px"/></div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">NAS-Identifier</label>
+            <input type="text" id="radius-nas-identifier" value="pingwatch" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Debug</label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="radius-debug" style="width:14px;height:14px;cursor:pointer"/>
+              Verbose logging
+            </label>
+          </div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Realm Prefix</label>
+            <input type="text" id="radius-realm-prefix" placeholder="e.g. DOMAIN\\ (optional)" autocomplete="off"/>
+            <div class="fh">Prepended to username before sending.</div>
+          </div>
+          <div class="fr"><label class="fl">Realm Suffix</label>
+            <input type="text" id="radius-realm-suffix" placeholder="e.g. @example.com (optional)" autocomplete="off"/>
+            <div class="fh">Appended to username before sending.</div>
+          </div>
+        </div>
+
+        <!-- Test buttons -->
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testRadiusConnection()">▶ Test Connection</button>
+          <button class="btn-s" style="font-size:12px" onclick="openRadiusTestAuth()">▶ Test User Auth</button>
+          <div id="radius-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+
+        <!-- Provisioning -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Provisioning</div>
+          <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="radius-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision unknown users at login
+            </label>
+            <div class="fr" style="margin:0">
+              <label class="fl" style="margin-right:4px">Default Role</label>
+              <select id="radius-default-role" style="max-width:140px">
+                <option value="viewer">Viewer</option>
+                <option value="operator">Operator</option>
+                <option value="admin">Admin</option>
+              </select>
+              <div class="fh">Used when no attribute mapping matches.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Attribute → Role mapping -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Attribute → Group Mapping</div>
+          <div class="fh" style="margin-bottom:10px">On login, the first attribute/value that matches a mapping assigns the user to that group (with its default role). Create groups under Users → Groups; set the RADIUS attribute + value here.</div>
+          <div id="radius-mappings-body" style="margin-top:8px"></div>
         </div>
 
       </div>
@@ -2464,7 +2567,7 @@ function _renderIntegStatus(id, status) {
 }
 
 function switchIntegTab(name) {
-  ['smtp', 'syslog', 'ldap'].forEach(t => {
+  ['smtp', 'syslog', 'ldap', 'radius'].forEach(t => {
     document.getElementById(`itab-${t}`)?.classList.toggle('itab-active', t === name);
     const p = document.getElementById(`ipanel-${t}`);
     if (p) p.style.display = t === name ? '' : 'none';
@@ -2474,8 +2577,9 @@ function switchIntegTab(name) {
   const testSyslogBtn = document.getElementById('integ-btn-test-syslog');
   if (testSmtpBtn)   testSmtpBtn.style.display   = name === 'smtp'   ? '' : 'none';
   if (testSyslogBtn) testSyslogBtn.style.display  = name === 'syslog' ? '' : 'none';
-  // Load LDAP fields each time the tab is shown
-  if (name === 'ldap') _loadLdapPanel();
+  // Load panel contents when its tab is shown
+  if (name === 'ldap')   _loadLdapPanel();
+  if (name === 'radius') _loadRadiusPanel();
 }
 
 async function _loadIntegrationsStatus() {
@@ -2484,9 +2588,10 @@ async function _loadIntegrationsStatus() {
     if (r.smtp_status)   _renderIntegStatus('smtp',   r.smtp_status);
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
     if (r.ldap_status)   _renderIntegStatus('ldap',   r.ldap_status);
+    if (r.radius_status) _renderIntegStatus('radius', r.radius_status);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
-  const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+  const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius'].find(
     t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
   ) || 'smtp';
   switchIntegTab(activeSubTab);
@@ -2496,13 +2601,15 @@ async function _saveIntegrations() {
   const btn = document.getElementById('integ-btn-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
   try {
-    const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+    const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius'].find(
       t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
     ) || 'smtp';
     if (activeSubTab === 'smtp') {
       await saveSettings();
     } else if (activeSubTab === 'ldap') {
       await saveLdapSettings();
+    } else if (activeSubTab === 'radius') {
+      await saveRadiusSettings();
     } else {
       await saveSyslogSettings();
     }
