@@ -82,6 +82,11 @@
         <g id="link-labels-layer"></g>
       </g>
     </svg>
+    <!-- Zoom controls (inside canvas-wrap so they shift when side-panel opens) -->
+    <div id="zoom-controls">
+      <div id="zoom-hud" title="Click to reset zoom (Ctrl+0)" onclick="vp={scale:1,tx:0,ty:0};applyViewport()">100%</div>
+      <button id="fit-btn" title="Fit all to view" onclick="fitToView()">FIT</button>
+    </div>
   </div>
 
   <div id="side-panel">
@@ -110,11 +115,6 @@
   <div class="leg-item"><div class="leg-line" style="background:repeating-linear-gradient(90deg,#a855f7 0,#a855f7 6px,transparent 6px,transparent 12px)"></div>WiFi</div>
 </div>
 
-<!-- Zoom controls -->
-<div id="zoom-controls">
-  <div id="zoom-hud" title="Click to reset zoom (Ctrl+0)" onclick="vp={scale:1,tx:0,ty:0};applyViewport()">100%</div>
-  <button id="fit-btn" title="Fit all to view" onclick="fitToView()">FIT</button>
-</div>
 <!-- Hidden import inputs -->
 <input type="file" id="import-file" accept=".json" style="display:none">
 <input type="file" id="pw-layout-import-file" accept=".json" style="display:none">
