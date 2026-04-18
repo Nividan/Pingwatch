@@ -321,7 +321,12 @@ def _prune_radius_ctx_locked() -> None:
 
 
 def _radius_resolve_role(attrs: dict) -> tuple:
-    """Apply first-match attribute → group mapping. Returns (group_id|None, role_str)."""
+    """Apply first-match attribute → group mapping. Returns (group_id|None, role_str).
+
+    Fallback order when no attribute mapping matches:
+      1. radius_default_group_id + its group's default_role (if set)
+      2. radius_default_role with no group
+    """
     from db import db_find_group_by_radius
     import core.settings as _s
     for name, values in (attrs or {}).items():
@@ -329,6 +334,21 @@ def _radius_resolve_role(attrs: dict) -> tuple:
             row = db_find_group_by_radius(str(name), str(v))
             if row:
                 return row["id"], row["default_role"]
+
+    # Default group fallback
+    try:
+        default_gid = int(_s.get("radius_default_group_id", 0) or 0)
+    except (ValueError, TypeError):
+        default_gid = 0
+    if default_gid:
+        try:
+            from db import db_list_groups
+            for g in db_list_groups():
+                if g["id"] == default_gid:
+                    return default_gid, (g.get("default_role") or "viewer")
+        except Exception:
+            pass
+
     return None, (_s.get("radius_default_role", "viewer") or "viewer")
 
 

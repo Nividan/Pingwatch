@@ -38,6 +38,7 @@ def handle(h, method, path, body):
             'radius_realm_suffix':    _settings.get('radius_realm_suffix', ''),
             'radius_auto_provision':  int(_settings.get('radius_auto_provision', 0) or 0),
             'radius_default_role':    _settings.get('radius_default_role', 'viewer'),
+            'radius_default_group_id': (int(_settings.get('radius_default_group_id', 0) or 0) or None),
             'radius_debug':           int(_settings.get('radius_debug', 0) or 0),
         })
         return True
@@ -67,6 +68,24 @@ def handle(h, method, path, body):
                 h._json(400, {'error': 'radius_default_role must be viewer, operator, or admin'})
                 return True
             save['radius_default_role'] = v
+
+        if 'radius_default_group_id' in body:
+            raw = body['radius_default_group_id']
+            if raw in (None, '', 0, '0'):
+                save['radius_default_group_id'] = ''
+            else:
+                try:
+                    gid = int(raw)
+                except (ValueError, TypeError):
+                    h._json(400, {'error': 'radius_default_group_id must be an integer'}); return True
+                # Validate the group actually exists
+                try:
+                    from db import db_list_groups
+                    if not any(g['id'] == gid for g in db_list_groups()):
+                        h._json(400, {'error': 'group does not exist'}); return True
+                except Exception:
+                    pass
+                save['radius_default_group_id'] = str(gid)
 
         for pk in ('radius_port', 'radius_port2'):
             if pk in body:

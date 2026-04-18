@@ -17,9 +17,10 @@ function _radiusCollectForm() {
     radius_nas_identifier: (document.getElementById('radius-nas-identifier')?.value || 'pingwatch').trim(),
     radius_realm_prefix:   (document.getElementById('radius-realm-prefix')?.value || ''),
     radius_realm_suffix:   (document.getElementById('radius-realm-suffix')?.value || ''),
-    radius_auto_provision: document.getElementById('radius-auto-provision')?.checked ? 1 : 0,
-    radius_default_role:   document.getElementById('radius-default-role')?.value || 'viewer',
-    radius_debug:          document.getElementById('radius-debug')?.checked ? 1 : 0,
+    radius_auto_provision:   document.getElementById('radius-auto-provision')?.checked ? 1 : 0,
+    radius_default_role:     document.getElementById('radius-default-role')?.value || 'viewer',
+    radius_default_group_id: parseInt(document.getElementById('radius-default-group')?.value || '0') || '',
+    radius_debug:            document.getElementById('radius-debug')?.checked ? 1 : 0,
   };
 }
 
@@ -89,6 +90,20 @@ async function _loadRadiusPanel() {
   setChk('radius-auto-provision', r.radius_auto_provision);
   set('radius-default-role',      r.radius_default_role || 'viewer');
   setChk('radius-debug',          r.radius_debug);
+
+  // Populate the default-group dropdown from the mappings endpoint (which
+  // already returns the full group list as `available_groups` + `mappings`).
+  try {
+    const m = await api('GET', '/api/radius/attribute_mappings');
+    const dg = document.getElementById('radius-default-group');
+    if (dg) {
+      const all = [...(m.mappings || []), ...(m.available_groups || [])]
+                    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      dg.innerHTML = '<option value="">— None —</option>' +
+        all.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
+      if (r.radius_default_group_id) dg.value = String(r.radius_default_group_id);
+    }
+  } catch(e) { /* non-fatal */ }
 
   const s1 = document.getElementById('radius-secret');
   if (s1) s1.placeholder = r.radius_secret_set ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)' : '';
