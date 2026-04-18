@@ -1101,7 +1101,13 @@ function _hbSetupSparkInteractions() {
     const up  = Math.round(best.pct / 100 * tot);
     const dt  = new Date(best.ts * 1000);
     const t   = `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-    const nearby = _hbSparkEvents.filter(ev => Math.abs(ev.ts - best.ts) <= 900);
+    // Event filter pivot: use the timestamp UNDER THE CURSOR (not the snapped
+    // data point). With 15-min sample buckets, a real-world incident at 12:31
+    // would otherwise miss the ±15-min window when the hover snaps to 13:00.
+    // Centre the cursor on the bucket midpoint by rolling back 900s, the same
+    // offset used when drawing event dots above.
+    const tsHover = t0 + (mx / W) * win - 900;
+    const nearby = _hbSparkEvents.filter(ev => Math.abs(ev.ts - tsHover) <= 900);
     _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t, nearby);
   });
   canvas.addEventListener('mouseleave', _hbSpkTipHide);
@@ -1124,13 +1130,21 @@ function _hbSpkTip(cx, cy, pct, up, down, time, events) {
     (down ? `<div class="hb-tip-row"><span style="color:var(--down)">▼</span> ${down} down</div>` : '');
   if (events && events.length) {
     html += '<div class="hb-tip-sep"></div>';
-    const shown = events.slice(0, 3);
+    // Outages first, then warnings — so a red incident never gets cropped by
+    // the slice(0,3) when it shares a window with several yellow ones.
+    const sorted = events.slice().sort((a, b) => {
+      if (a.type === b.type) return a.ts - b.ts;
+      return a.type === 'outage' ? -1 : 1;
+    });
+    const shown = sorted.slice(0, 3);
     shown.forEach(ev => {
       const ic = ev.type === 'outage' ? '▼' : '⚠';
       const c  = ev.type === 'outage' ? 'var(--down)' : 'var(--warn)';
-      html += `<div class="hb-tip-ev"><span style="color:${c}">${ic}</span> ${esc(ev.label)}</div>`;
+      const edt = new Date(ev.ts * 1000);
+      const et  = `${String(edt.getHours()).padStart(2,'0')}:${String(edt.getMinutes()).padStart(2,'0')}`;
+      html += `<div class="hb-tip-ev"><span style="color:${c}">${ic}</span> <span style="color:var(--text3)">${et}</span> ${esc(ev.label)}</div>`;
     });
-    if (events.length > 3) html += `<div class="hb-tip-ev" style="color:var(--text3)">+${events.length - 3} more</div>`;
+    if (sorted.length > 3) html += `<div class="hb-tip-ev" style="color:var(--text3)">+${sorted.length - 3} more</div>`;
   }
   tip.innerHTML = html;
   tip.style.display = '';
