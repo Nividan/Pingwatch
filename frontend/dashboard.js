@@ -1025,23 +1025,31 @@ function _dwRefreshNetAvail(wid) {
   _dwDrawNetAvailChart(wid); // fire-and-forget
 }
 
-// On theme change, bust the canvas throttle and redraw immediately so colors
-// update without waiting 30s for the next scheduled refresh.
+// Cache last availability payload so theme-change redraws skip the network.
+let _lastAvailability = null;
+
+// On theme change, redraw every visible net-avail canvas synchronously with
+// the cached data so colors flip instantly instead of waiting on a fetch.
 window.addEventListener('themechange', () => {
   _dwRefreshNetAvail._last = 0;
   (_dwWidgets || []).forEach(w => {
-    if (w.type === 'network_avail') _dwDrawNetAvailChart(w.id);
+    if (w.type === 'network_avail') _dwDrawNetAvailChart(w.id, true);
   });
 });
 
-async function _dwDrawNetAvailChart(wid) {
+async function _dwDrawNetAvailChart(wid, useCache) {
   const canvas = document.getElementById(`dw-na-canvas-${wid}`);
   if (!canvas) return;
-  let availability = [];
-  try {
-    const d = await _fetchAvailability();
-    availability = d.availability || [];
-  } catch { return; }
+  let availability;
+  if (useCache && _lastAvailability) {
+    availability = _lastAvailability;
+  } else {
+    try {
+      const d = await _fetchAvailability();
+      availability = d.availability || [];
+      _lastAvailability = availability;
+    } catch { return; }
+  }
   canvas.width = canvas.offsetWidth || 340;
   const W = canvas.width, H = canvas.height || 80;
   const ctx = canvas.getContext('2d');
