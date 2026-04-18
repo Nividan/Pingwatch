@@ -17,6 +17,12 @@ _ERROR_SUPPRESS_S = 300         # seconds between identical error logs
 _last_ok_ts: float = 0          # timestamp of last successful send / test
 _last_err: dict = {'ts': 0.0, 'msg': ''}  # last error
 
+# Probe status tracking — distinct from send status so the badge can show both
+# "Last verified" (probe at startup or post-save) and "Last email sent"
+# (real outbound delivery) as separate signals.
+_last_probe_ok_ts: float = 0
+_last_probe_err: dict = {'ts': 0.0, 'msg': ''}
+
 # PingWatch radar logo — 28x28 PNG (white on transparent, renders on dark/colored bg)
 _LOGO_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAABDklEQVR4nN2WTQqEMAyFBYVZ"
@@ -617,6 +623,82 @@ def _connect(host, port, tls, user, password):
     return srv
 
 
+def _smtp_probe(host, port, tls, user, password) -> None:
+    """Verify SMTP reachability without sending an email.
+
+    Reuses _connect() so the probe exercises the exact code path a real send
+    would take (TCP → optional STARTTLS → optional AUTH). Closes the session
+    immediately with QUIT — never calls sendmail. Raises on any failure so the
+    caller can record the error.
+    """
+    srv = _connect(host, port, tls, user, password)
+    try:
+        srv.quit()
+    except Exception:
+        # QUIT failure is benign — we already proved auth + handshake worked.
+        # Don't let a flaky server's broken close-handshake mark the probe failed.
+        try:
+            srv.close()
+        except Exception:
+            pass
+
+
+def run_smtp_startup_probe() -> tuple:
+    """Probe SMTP connectivity and persist the result.
+
+    Returns (ok: bool, msg: str). Never raises.
+
+    Skipped quietly (DEBUG log) when SMTP is not configured. On any other
+    outcome, updates the in-memory probe state vars and persists three keys
+    to app_settings so the badge survives restarts:
+      smtp_last_check_ts    — unix timestamp (float)
+      smtp_last_check_ok    — '1' / '0'
+      smtp_last_check_error — human-readable error or empty
+    """
+    global _last_probe_ok_ts, _last_probe_err
+    from db.backups import decrypt_pw as _dec_pw
+    host     = str(_cfg('smtp_host', '')).strip()
+    port     = _cfg('smtp_port', 587)
+    tls      = _cfg('smtp_tls',  'starttls')
+    user     = _cfg('smtp_user', '')
+    password = _dec_pw(_cfg('smtp_pass', ''))
+
+    if not host:
+        log.debug("SMTP startup probe: skipped (not configured)")
+        return False, 'not configured'
+
+    now = time.time()
+    try:
+        _smtp_probe(host, port, tls, user, password)
+        _last_probe_ok_ts = now
+        _last_probe_err   = {'ts': 0.0, 'msg': ''}
+        log.info(f"SMTP startup probe: OK ({host}:{port})")
+        _persist_probe_result(now, True, '')
+        return True, 'ok'
+    except Exception as e:
+        msg = str(e)[:200]
+        _last_probe_err = {'ts': now, 'msg': msg}
+        log.warning(f"SMTP startup probe failed ({host}:{port}): {e}")
+        _persist_probe_result(now, False, msg)
+        return False, msg
+
+
+def _persist_probe_result(ts: float, ok: bool, err_msg: str) -> None:
+    """Persist probe result to app_settings so the badge survives restarts."""
+    try:
+        from core.settings import load as _sl
+        from db import _db_enqueue, db_save_settings
+        data = {
+            'smtp_last_check_ts':    f'{ts:.0f}',
+            'smtp_last_check_ok':    '1' if ok else '0',
+            'smtp_last_check_error': err_msg,
+        }
+        _sl(data)
+        _db_enqueue(lambda d=data: db_save_settings(d))
+    except Exception as e:
+        log.debug(f"SMTP probe: could not persist result: {e}")
+
+
 def _safe(v):
     """Strip CR/LF from user-controlled values to prevent email header injection."""
     return str(v or '').replace('\r', '').replace('\n', ' ')
@@ -746,20 +828,71 @@ def test_smtp(cfg):
             except Exception: pass
 
 
+def _restore_probe_state_from_settings() -> None:
+    """Hydrate the in-memory probe state from app_settings on first read.
+
+    Without this, get_smtp_status() returns stale 'configured' (yellow) until
+    the next probe fires — even though the previous probe succeeded and was
+    persisted. Called lazily from get_smtp_status() so module import stays
+    free of DB access.
+    """
+    global _last_probe_ok_ts, _last_probe_err
+    if _last_probe_ok_ts or _last_probe_err['ts']:
+        return  # already hydrated this session
+    try:
+        ts_raw = str(_cfg('smtp_last_check_ts', '') or '').strip()
+        if not ts_raw:
+            return
+        ts = float(ts_raw)
+        ok = str(_cfg('smtp_last_check_ok', '0')) == '1'
+        if ok:
+            _last_probe_ok_ts = ts
+        else:
+            _last_probe_err = {
+                'ts':  ts,
+                'msg': str(_cfg('smtp_last_check_error', '') or '')[:200],
+            }
+    except Exception:
+        pass
+
+
 def get_smtp_status() -> dict:
-    """Return connection status dict for the Settings API."""
+    """Return connection status dict for the Settings API.
+
+    State combines two signals:
+      - send: last real outbound delivery (_last_ok_ts / _last_err)
+      - probe: startup / post-save connectivity check (_last_probe_*)
+
+    A successful probe is sufficient to flip the badge green even when no
+    real email has been sent yet — that's the whole point of the probe.
+    """
+    _restore_probe_state_from_settings()
     host = str(_cfg('smtp_host', '')).strip()
+    # Use whichever success signal is newer
+    ok_ts = max(_last_ok_ts or 0, _last_probe_ok_ts or 0) or 0
+    # Most-recent error wins, but only if newer than the most-recent success
+    err_ts  = max(_last_err['ts'] or 0, _last_probe_err['ts'] or 0) or 0
+    err_msg = (
+        _last_probe_err['msg']
+        if (_last_probe_err['ts'] or 0) >= (_last_err['ts'] or 0)
+        else _last_err['msg']
+    )
+
     if not host:
         state = 'unconfigured'
-    elif _last_err['ts'] and (not _last_ok_ts or _last_err['ts'] > _last_ok_ts):
+    elif err_ts and err_ts > ok_ts:
         state = 'error'
-    elif _last_ok_ts:
+    elif ok_ts:
         state = 'ok'
     else:
-        state = 'configured'   # host is set but nothing has been sent yet
+        state = 'configured'   # host is set but no probe has fired yet
+
     return {
-        'state':        state,
-        'last_ok_ts':   _last_ok_ts or None,
-        'last_err_ts':  _last_err['ts'] or None,
-        'last_err_msg': _last_err['msg'],
+        'state':            state,
+        'last_ok_ts':       _last_ok_ts or None,
+        'last_err_ts':      _last_err['ts'] or None,
+        'last_err_msg':     _last_err['msg'],
+        'last_probe_ok_ts': _last_probe_ok_ts or None,
+        'last_probe_err_ts':  _last_probe_err['ts'] or None,
+        'last_probe_err_msg': _last_probe_err['msg'],
     }

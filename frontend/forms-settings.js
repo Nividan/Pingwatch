@@ -2431,13 +2431,31 @@ function _renderIntegStatus(id, status) {
   const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
   const lastLabels = {smtp: 'Last email sent', syslog: 'Last message sent', ldap: 'Last auth/sync'};
   const lastLabel  = lastLabels[id] || 'Last';
-  const errHtml = (status.state === 'error' && status.last_err_msg)
-    ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(status.last_err_msg)}</div>` : '';
+  // SMTP carries a separate "probe" signal — startup / post-save connectivity check
+  // that doesn't actually deliver mail. Show both lines so a healthy installation
+  // with no recent alerts still reads as verified, not stale.
+  let extraLineHtml = '';
+  if (id === 'smtp' && (status.last_probe_ok_ts || status.last_probe_err_ts)) {
+    const probeOk  = status.last_probe_ok_ts ? _timeAgo(status.last_probe_ok_ts) : 'Never';
+    extraLineHtml = `<span style="font-size:11px;color:var(--text3);margin-left:10px">Last verified: ${probeOk}</span>`;
+  }
+  // Show the most relevant error message — prefer probe error if it's the
+  // newest signal, otherwise fall back to send error.
+  let errMsg = '';
+  if (status.state === 'error') {
+    const sendErrTs  = status.last_err_ts       || 0;
+    const probeErrTs = status.last_probe_err_ts || 0;
+    if (probeErrTs >= sendErrTs && status.last_probe_err_msg) errMsg = status.last_probe_err_msg;
+    else if (status.last_err_msg)                              errMsg = status.last_err_msg;
+  }
+  const errHtml = errMsg
+    ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(errMsg)}</div>` : '';
   el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
     <span style="font-size:16px;line-height:1.3">${icon}</span>
     <div>
       <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
       <span style="font-size:11px;color:var(--text3);margin-left:10px">${lastLabel}: ${lastOk}</span>
+      ${extraLineHtml}
       ${errHtml}
     </div>
   </div>`;
