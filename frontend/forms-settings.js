@@ -501,8 +501,8 @@ function _buildSettingsTab_integrations(sr) {
         <!-- Provisioning -->
         <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
           <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Provisioning</div>
-          <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+          <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-start">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
               <input type="checkbox" id="radius-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
               Auto-provision unknown users at login
             </label>
@@ -514,6 +514,13 @@ function _buildSettingsTab_integrations(sr) {
                 <option value="admin">Admin</option>
               </select>
               <div class="fh">Used when no attribute mapping matches.</div>
+            </div>
+            <div class="fr" style="margin:0">
+              <label class="fl" style="margin-right:4px">Default Group</label>
+              <select id="radius-default-group" style="max-width:180px">
+                <option value="">— None —</option>
+              </select>
+              <div class="fh">Optional. Auto-provisioned users with no attribute match are assigned to this group.</div>
             </div>
           </div>
         </div>

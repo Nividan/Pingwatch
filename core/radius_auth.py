@@ -318,6 +318,7 @@ def radius_authenticate(username: str, password: str) -> dict | None:
         if outcome == "accept":
             _record_ok()
             attrs = _decode_attrs(payload)
+            log.info(f"RADIUS authenticate: SUCCESS for {username!r} (server {idx+1})")
             return {"ok": True, "attrs": attrs, "challenge": None, "server_idx": idx}
         if outcome == "reject":
             _record_ok()  # server answered — not a connectivity problem
@@ -382,6 +383,8 @@ def radius_continue_challenge(challenge_id: str, user_response: str) -> dict | N
     if outcome == "accept":
         _record_ok()
         attrs = _decode_attrs(payload)
+        log.info(f"RADIUS authenticate: SUCCESS for {ch['username']!r} "
+                 f"(server {idx+1}, challenge completed)")
         return {"ok": True, "attrs": attrs, "challenge": None,
                 "server_idx": idx, "challenge_used": True}
     if outcome == "reject":
