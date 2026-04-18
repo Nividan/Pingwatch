@@ -56,13 +56,23 @@ _STATIC_TYPES = {
 }
 
 # ── JS files inlined into index.html ─────────────────────────────
-_JS_FILES = [
+# Vendored third-party JS is listed first so library globals (e.g. GridStack)
+# are available before our own scripts execute.
+_VENDOR_JS_FILES = [
+    "gridstack/gridstack-all.js",
+]
+_JS_FILES = _VENDOR_JS_FILES + [
     "theme.js",
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
     "forms-discovery.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "alerting.js", "app.js",
+]
+
+# Vendored CSS appended to the inline <style> block in the same order.
+_VENDOR_CSS_FILES = [
+    "gridstack/gridstack.min.css",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
@@ -121,8 +131,13 @@ def _load_html() -> bytes:
         css_f = os.path.join(FRONTEND_DIR, "style.css")
         with open(base, "r", encoding="utf-8") as f:
             html = f.read()
+        css_parts = []
+        for name in _VENDOR_CSS_FILES:
+            with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
+                css_parts.append(f.read())
         with open(css_f, "r", encoding="utf-8") as f:
-            html = html.replace("<!-- STYLE_INJECT -->", f"<style>{f.read()}</style>", 1)
+            css_parts.append(f.read())
+        html = html.replace("<!-- STYLE_INJECT -->", f"<style>{''.join(css_parts)}</style>", 1)
         js_parts = []
         for name in _JS_FILES:
             with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:

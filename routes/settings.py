@@ -25,16 +25,18 @@ import core.settings as _settings
 
 _RE_DASH = re.compile(r'^/api/dashboards/(\d+)$')
 
-# Default widgets for new users (zero-config, work out of the box)
+# Default widgets for new users (zero-config, work out of the box).
+# x/y/w/h use a 12-column gridstack layout. cols is retained for
+# backwards-compat with any code that still reads it.
 _DEFAULT_WIDGETS = [
-    {"id": "_d1", "type": "system_status",   "title": "System Status",                      "cols": 1, "cfg": {}},
-    {"id": "_d2", "type": "server_perf",     "title": "Server Performance",                 "cols": 1, "cfg": {}},
-    {"id": "_d3", "type": "event_count",     "title": "Event Summary",                      "cols": 1, "cfg": {}},
-    {"id": "_d4", "type": "internet_health", "title": "Internet Health",                    "cols": 1, "cfg": {}},
-    {"id": "_d5", "type": "network_avail",   "title": "Network Availability History (24h)", "cols": 1, "cfg": {}},
-    {"id": "_d6", "type": "device_status",   "title": "Device Status",                      "cols": 1, "cfg": {}},
-    {"id": "_d7", "type": "down_devices",    "title": "Down & Warning Devices",             "cols": 1, "cfg": {}},
-    {"id": "_d8", "type": "packet_loss",     "title": "Packet Loss",                        "cols": 1, "cfg": {"limit": 10, "threshold": 1}},
+    {"id": "_d1", "type": "system_status",   "title": "System Status",                      "cols": 1, "x": 0, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d2", "type": "server_perf",     "title": "Server Performance",                 "cols": 1, "x": 3, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d3", "type": "event_count",     "title": "Event Summary",                      "cols": 1, "x": 6, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d4", "type": "internet_health", "title": "Internet Health",                    "cols": 1, "x": 9, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d5", "type": "network_avail",   "title": "Network Availability History (24h)", "cols": 1, "x": 0, "y": 4, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d6", "type": "device_status",   "title": "Device Status",                      "cols": 1, "x": 3, "y": 4, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d7", "type": "down_devices",    "title": "Down & Warning Devices",             "cols": 1, "x": 6, "y": 4, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d8", "type": "packet_loss",     "title": "Packet Loss",                        "cols": 1, "x": 9, "y": 4, "w": 3, "h": 4, "cfg": {"limit": 10, "threshold": 1}},
 ]
 
 # Prime psutil CPU counter so first real call returns a meaningful value
