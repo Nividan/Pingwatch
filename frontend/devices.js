@@ -1039,7 +1039,7 @@ function _renderPage(){
 function _renderPagination(){
   const pg=document.getElementById('devPagination');
   if(!pg) return;
-  if(_devView!=='list'){pg.style.display='none';return;}
+  if(_devView!=='list'||activeMainTab!=='devices'){pg.style.display='none';return;}
   const total=_filteredDids.length;
   const pages=Math.ceil(total/_devPageSize)||1;
   if(total<=_devPageSize){pg.style.display='none';return;}

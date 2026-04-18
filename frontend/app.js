@@ -1437,6 +1437,7 @@ function switchMainTab(tab){
     dpanels.style.display=hasDevices?'':'none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshDevices();
+    if(typeof _renderPagination==='function') _renderPagination();
   }
 }
 
