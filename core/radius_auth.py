@@ -85,6 +85,12 @@ def _record_err(msg: str) -> None:
     _last_err = {"ts": time.time(), "msg": (msg or "")[:200]}
 
 
+def _radius_dbg(msg: str) -> None:
+    """Emit a debug log when radius_debug or the general debug_mode is on."""
+    if int(_settings.get('radius_debug', 0) or 0) or int(_settings.get('debug_mode', 0) or 0):
+        log.debug(msg)
+
+
 def get_radius_status() -> dict:
     """Return {state, last_ok_ts, last_err_ts, last_err_msg} for the badge."""
     enabled = int(_settings.get("radius_enabled", 0) or 0)
@@ -233,6 +239,9 @@ def _try_server(host: str, port: int, secret: str, cfg: dict,
     except Exception as e:
         return "error", f"packet build failed: {e}"
 
+    _radius_dbg(f"RADIUS: sending Access-Request to {host}:{port} "
+                f"user={username!r} nas_id={cfg['nas_identifier']!r} "
+                f"state={'yes' if state else 'no'} timeout={cfg['timeout']}s retries={cfg['retries']}")
     try:
         reply = client.SendPacket(req)
     except socket.timeout:
@@ -243,6 +252,12 @@ def _try_server(host: str, port: int, secret: str, cfg: dict,
         return "error", f"send failed: {e}"
 
     code = getattr(reply, "code", None)
+    code_name = {
+        pkt.AccessAccept:    "Access-Accept",
+        pkt.AccessReject:    "Access-Reject",
+        pkt.AccessChallenge: "Access-Challenge",
+    }.get(code, f"code={code}")
+    _radius_dbg(f"RADIUS: received {code_name} from {host}:{port}")
     if code == pkt.AccessAccept:
         return "accept", reply
     if code == pkt.AccessReject:
@@ -308,6 +323,11 @@ def radius_authenticate(username: str, password: str) -> dict | None:
         return None
 
     send_name = _apply_realm(cfg, username)
+    if send_name != username:
+        _radius_dbg(f"RADIUS: realm-munged username {username!r} -> {send_name!r}")
+    _radius_dbg(f"RADIUS authenticate: starting for {username!r} "
+                f"via {cfg['server']}:{cfg['port']}"
+                + (f" + secondary {cfg['server2']}:{cfg['port2']}" if cfg['server2'] else ""))
     last_err = ""
     for idx, host, port, secret in _iter_servers(cfg):
         if not secret:
@@ -319,6 +339,8 @@ def radius_authenticate(username: str, password: str) -> dict | None:
             _record_ok()
             attrs = _decode_attrs(payload)
             log.info(f"RADIUS authenticate: SUCCESS for {username!r} (server {idx+1})")
+            _radius_dbg(f"RADIUS: returned {len(attrs)} attribute(s) for {username!r}: "
+                        + ", ".join(f"{k}={v}" for k, v in attrs.items()))
             return {"ok": True, "attrs": attrs, "challenge": None, "server_idx": idx}
         if outcome == "reject":
             _record_ok()  # server answered — not a connectivity problem
@@ -342,6 +364,7 @@ def radius_authenticate(username: str, password: str) -> dict | None:
                 }
             _record_ok()
             log.info(f"RADIUS: Access-Challenge issued for user {username!r} (server {idx+1})")
+            _radius_dbg(f"RADIUS: challenge prompt={prompt!r} state_len={(len(state) if state else 0)} cid={cid}")
             return {"ok": False, "attrs": {},
                     "challenge": {"id": cid, "prompt": prompt}}
         # error — try next server
@@ -361,9 +384,11 @@ def radius_continue_challenge(challenge_id: str, user_response: str) -> dict | N
         _prune_challenges_locked()
         ch = _CHALLENGES.get(challenge_id)
         if ch is None:
+            _radius_dbg(f"RADIUS: challenge continuation called with unknown/expired cid={challenge_id}")
             return None
         # Consume the entry — if the server returns another challenge, re-insert.
         _CHALLENGES.pop(challenge_id, None)
+    _radius_dbg(f"RADIUS: continuing challenge cid={challenge_id} user={ch['username']!r} server_idx={ch['server_idx']}")
 
     cfg = _get_cfg()
     # Continuation must go to the same server that issued the State blob.

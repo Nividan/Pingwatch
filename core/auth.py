@@ -327,13 +327,32 @@ def _radius_resolve_role(attrs: dict) -> tuple:
       1. radius_default_group_id + its group's default_role (if set)
       2. radius_default_role with no group
     """
-    from db import db_find_group_by_radius
+    from db import db_get_radius_mapped_groups
     import core.settings as _s
+    from core.radius_auth import _radius_dbg
+
+    try:
+        mapped = db_get_radius_mapped_groups() or []
+    except Exception:
+        mapped = []
+
+    attr_count = sum(len(v or []) for v in (attrs or {}).values())
+    _radius_dbg(f"RADIUS resolve: user has {attr_count} attribute value(s), "
+                f"{len(mapped)} RADIUS-mapped group(s) to check")
+    for g in mapped:
+        _radius_dbg(f"RADIUS match:   mapping: {g['name']!r} → "
+                    f"{g['radius_attribute']}={g['radius_value']!r} (role={g['default_role']})")
+
     for name, values in (attrs or {}).items():
-        for v in values:
-            row = db_find_group_by_radius(str(name), str(v))
-            if row:
-                return row["id"], row["default_role"]
+        name_s = str(name)
+        for v in (values or []):
+            v_s = str(v)
+            for g in mapped:
+                if g["radius_attribute"] == name_s and g["radius_value"] == v_s:
+                    _radius_dbg(f"RADIUS match: direct match → attr {name_s}={v_s!r} "
+                                f"-> group {g['name']!r} role={g['default_role']!r}")
+                    return g["id"], g["default_role"]
+            _radius_dbg(f"RADIUS match: no mapping matched attr {name_s}={v_s!r}")
 
     # Default group fallback
     try:
@@ -345,11 +364,15 @@ def _radius_resolve_role(attrs: dict) -> tuple:
             from db import db_list_groups
             for g in db_list_groups():
                 if g["id"] == default_gid:
+                    _radius_dbg(f"RADIUS resolve: no attribute match — falling back "
+                                f"to default group {g['name']!r} role={g.get('default_role') or 'viewer'!r}")
                     return default_gid, (g.get("default_role") or "viewer")
         except Exception:
             pass
 
-    return None, (_s.get("radius_default_role", "viewer") or "viewer")
+    role = _s.get("radius_default_role", "viewer") or "viewer"
+    _radius_dbg(f"RADIUS resolve: no attribute match, no default group — using default role {role!r}")
+    return None, role
 
 
 def _radius_lookup_user(clean: str):
