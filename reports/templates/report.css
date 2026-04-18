@@ -151,13 +151,27 @@ table.data td {
   border-bottom: 1px solid #eaeef2;
   vertical-align: top;
   color: #1f2328;
-  /* Long group names like "ESXI-PSC_MNG-Cluster" were wrapping at arbitrary
-     positions (mid-word) in earlier renders — "ESXI-PSC-LABCluster" without
-     a break. Allow wrapping at hyphens/underscores explicitly; browsers can
-     also fall back to overflow-wrap for non-breakable strings. */
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  /* Break long hyphenated tokens (e.g. "ESXI-PSC_MNG-Cluster") at boundaries
+     if they'd overflow the cell. Using `break-word` (not `anywhere`) keeps
+     short strings like "99.99%" or short IPs intact — the earlier value
+     `overflow-wrap: anywhere` was splitting IP literals across lines. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
+/* Monospace cells are IPs / OIDs / identifiers — wrapping them looks broken
+   (e.g. "172.22.100.23 / 5" on two lines). Keep them atomic; if the column
+   can't fit, WeasyPrint will widen it. */
+table.data td.mono { white-space: nowrap; }
+/* Short status-colored tokens ("99.99%", "up", "down") never wrap — the
+   percent sign was being pushed onto its own line in the narrower health
+   score tables. */
+table.data td.up,
+table.data td.warn,
+table.data td.crit { white-space: nowrap; }
+/* Keep rows atomic across page breaks — the health score table on
+   inventory p.3→p.4 was splitting a single device's row across pages,
+   leaving a headerless orphan at the top of the next page. */
+table.data tr { page-break-inside: avoid; }
 table.data tr:nth-child(even) td { background: #fafbfc; }
 
 /* ── Status / inline cells ─────────────────────────────────────── */
@@ -219,10 +233,15 @@ img.chart {
   font-size: 8.5pt;
   color: #57606a;
   page-break-inside: avoid;
-  /* Reset the running footer string so the About page doesn't inherit the
-     previous section's h1 name (e.g. "Device health scores" bleeding into
-     the Appendix footer). Without this, the @bottom-right content(text)
-     stays stuck on the last h1 until a new h1 is encountered. */
+  /* Force "About this report" onto its own page. Without this, when a
+     report shrinks (e.g. after the latency-chart placement fix trimmed
+     a page off the Ops report), About lands on the same page as the
+     previous section and the running footer shows the earlier h1
+     ("Top SNMP trap types") instead of "About this report" — because
+     string(sect) resolves to the first string-set on the page, which is
+     the SNMP h1, not our appendix. A dedicated page sidesteps it. */
+  page-break-before: always;
+  /* Reset the running footer string on this page. */
   string-set: sect "About this report";
 }
 .appendix h2 { color: #57606a; font-size: 10pt; margin-bottom: 4pt; border: 0; }
