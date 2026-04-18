@@ -33,6 +33,7 @@ Browser / Desktop GUI
         │   ├── auth.py           ← Session management & RBAC
         │   ├── tls.py            ← TLS certificate management
         │   ├── ldap_auth.py      ← LDAP/AD authentication helpers
+        │   ├── radius_auth.py    ← RADIUS authentication helpers (PAP + Access-Challenge 2FA)
         │   ├── logger.py         ← Central logging
         │   └── settings.py       ← Runtime settings cache
         │
@@ -107,6 +108,7 @@ pingwatch/
 │   ├── logger.py           ← App logger, audit logger, in-memory log buffer
 │   ├── auth.py             ← Login, PBKDF2-SHA256, RBAC, session management
 │   ├── ldap_auth.py        ← LDAP/AD auth, group search, nested membership, background sync
+│   ├── radius_auth.py      ← RADIUS auth (PAP + Access-Challenge 2FA), failover, challenge store, status tracker
 │   ├── setup_logic.py      ← Shared setup logic (packages, ports, DB init) for CLI + GUI wizards
 │   ├── app_state.py        ← Shared globals: STATE, effective ports, TLS flag, tray ref
 │   ├── state.py            ← In-memory Device/Sensor objects, probe threads, SSE broadcast
@@ -186,6 +188,7 @@ pingwatch/
 │   ├── alert_events.py     ← Alert history, ACK/resolve
 │   ├── maintenance_windows.py ← Maintenance window CRUD
 │   ├── ldap.py             ← LDAP/AD settings, test, group search, user group lookup
+│   ├── radius.py           ← RADIUS settings, test connection, test auth, attribute mappings
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
 │   ├── discovery.py        ← Subnet discovery scan + bulk device add
 │   ├── licenses.py         ← Device license CRUD + expiration check trigger
@@ -207,6 +210,7 @@ pingwatch/
     ├── forms-settings.js   ← Settings modal (10 tabs)
     ├── forms-users.js      ← User management
     ├── forms-ldap.js       ← LDAP/AD settings modal
+    ├── forms-radius.js     ← RADIUS settings modal, attribute mapping table, test auth dialog
     ├── forms-io.js         ← DB export/import form
     ├── forms-utils.js      ← Shared form helpers
     ├── forms-discovery.js  ← Subnet discovery wizard modal
@@ -254,7 +258,11 @@ Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_
 Server-side input validation helpers used by route handlers before persisting user-supplied values. Functions: `validate_port(v)`, `validate_host(v)`, `validate_interval(v)`, `validate_timeout(v)`, `validate_name(v, max_len)`. Each returns `(value, None)` on success or `(None, "error message")` on failure.
 
 ### `core/auth.py`
-Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for users with `auth_type = ldap`.
+Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for `auth_type='ldap'` users and to `core/radius_auth.py` for `auth_type='radius'` users.
+
+`radius_login_phase1(username, password)` starts a RADIUS login: on `Access-Accept` it calls `_radius_post_auth()` to resolve group/role from returned attributes, auto-provision the user if needed, and issue a session (skipping the built-in TOTP check when the RADIUS server itself issued an `Access-Challenge`). On `Access-Challenge` it stores the challenge in `_RADIUS_LOGIN_CTX` (120 s TTL) and returns `{radius_challenge: true, challenge_id, prompt}`. `radius_login_phase2(challenge_id, response)` continues the flow.
+
+`_radius_resolve_role(attrs)` walks `attrs` against all RADIUS-mapped groups via `db_find_group_by_radius(attr, value)`; first match wins. Falls back to `radius_default_group_id` → `radius_default_role`. Full attribute comparison trace emitted at DEBUG.
 
 `parse_user_agent_label(ua)` — pure-string parser that converts a User-Agent header into a human-readable device label (e.g. `"Chrome on Windows"`, `"Firefox on Linux"`). No library dependency. Used when inserting a new trusted-device record so the Trusted Devices list shows a meaningful name instead of the raw UA string.
 
@@ -273,6 +281,22 @@ Key functions:
 - `ldap_sync_groups()` — iterates all LDAP users in the DB, checks current AD group membership, updates or disables accounts as needed; returns `{"updated": N, "disabled": N, "errors": N}`.
 - `ldap_sync_loop()` — daemon thread that runs `ldap_sync_groups()` on the `ldap_sync_interval` schedule; started by `server.py` on startup.
 - `get_ldap_status()` — returns `{state, last_ok_ts, last_err_ts, last_err_msg}` for the Integrations status badge. State is `ok` (last activity was a success), `error` (last activity was a failure and occurred after the last success), `configured` (config present but no activity yet), or `unconfigured` (no server configured). Updated automatically by `_record_ok()` / `_record_err()` hooks wired into `ldap_test_connection`, `ldap_authenticate`, and `ldap_sync_groups`.
+
+### `core/radius_auth.py`
+RADIUS authentication helpers (pyrad, lazy-imported). Implements PAP only (covers FortiAuthenticator, NPS, FreeRADIUS, Cisco ISE in default configs).
+
+Key functions:
+- `radius_authenticate(username, password)` — sends `Access-Request` to primary (then secondary on socket/timeout error); returns `{ok: True, attrs, challenge: None}` on `Access-Accept`, `{ok: False, challenge: {id, prompt, state}}` on `Access-Challenge`, or `None` on `Access-Reject`.
+- `radius_continue_challenge(challenge_id, user_response)` — echoes stored `State` blob + user response; same return shape (supports multi-step challenges).
+- `radius_test_connection(cfg_overrides)` — sends a deliberately bogus `Access-Request`; any server response (Accept, Reject, or Challenge) proves host + port + shared secret are correct.
+- `radius_test_auth(username, password)` — same as `radius_authenticate` but always uses live config; called from the admin Test Auth dialog.
+- `get_radius_status()` — returns `{state, last_ok_ts, last_err_ts, last_err_msg}` (same schema as `get_ldap_status()`). Updated by `_record_ok()` / `_record_err()` hooks.
+
+**Challenge store** — `_CHALLENGES` dict (module-level, `threading.Lock`) maps `challenge_id` → `{username, state, prompt, created_ts, server_idx, nas_id}`. TTL 120 s; expired entries rejected on lookup.
+
+**Failover** — `_try_server(host, port, secret, ...)` wraps one server attempt with `radius_retries` + `radius_timeout`. Wrapper calls primary first; falls through to secondary only on socket error or timeout. `Access-Reject` is treated as a definitive answer.
+
+**Realm munging** — `_apply_realm(cfg, username)` prepends `radius_realm_prefix` and appends `radius_realm_suffix` before the packet leaves PingWatch.
 
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
@@ -379,6 +403,7 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 | `alert_events.py` | `/api/alert/events`, `/api/alert/events/active`, `/api/alert/events/resolve-all`, `/api/alert/event/{id}`, `/api/alert/event/{id}/ack`, `/api/alert/event/{id}/resolve` |
 | `maintenance_windows.py` | `/api/alert/windows`, `/api/alert/window`, `/api/alert/window/{id}` |
 | `ldap.py` | `/api/ldap/settings`, `/api/ldap/test_connection`, `/api/ldap/test_auth`, `/api/ldap/search_groups`, `/api/ldap/test_user_groups` |
+| `radius.py` | `/api/radius/settings`, `/api/radius/test_connection`, `/api/radius/test_auth`, `/api/radius/test_auth_challenge`, `/api/radius/attribute_mappings` |
 | `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
 | `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
@@ -409,8 +434,8 @@ PingWatch supports two database backends selected via `pingwatch.conf`. All DB m
 | `persistence.py` | Device/sensor save, load, autosave loop; named-column INSERT for sensors (column-order safe across migrations); restores `host_override` flag. Startup restore uses per-sensor indexed seeks (`WHERE did=? AND sid=? ORDER BY ts DESC LIMIT 80`) to exploit the composite index, plus a single batched `GROUP BY` for availability stats — avoids full-table window-function scans that bypass the index on large tables. |
 | `samples.py` | Buffered probe writes, history & summary queries; `_pick_table` routes ≤1 day to raw `sensor_samples`, longer ranges to `sensor_samples_5m` / `sensor_samples_1h`; rollup backfill runs once on first startup (skipped if rollup table already populated) |
 | `events.py` | Flap log, SNMP trap log, sensor error log |
-| `users.py` | User management (local + LDAP), user profiles (`full_name`, `email`, `theme_preference`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder); TOTP helpers (`db_get_totp`, `db_set_totp`, `db_clear_totp`); trusted-device helpers (`db_add_trusted_device`, `db_lookup_trusted_device`, `db_touch_trusted_device`, `db_list_trusted_devices`, `db_revoke_trusted_device`, `db_revoke_trusted_devices`, `db_sweep_expired_trusted_devices`, `db_get_remember_hours`, `db_set_remember_hours`) |
-| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn` (the AD group DN) and `default_role`. `db_get_ldap_mapped_groups()` returns all groups with a non-empty `ldap_dn` — used during login and background sync for group matching. |
+| `users.py` | User management (local + LDAP + RADIUS), user profiles (`full_name`, `email`, `theme_preference`), `app_settings` key/value store, multi-dashboard CRUD (`dashboards` table — list/get/create/rename/delete/save/reorder); TOTP helpers (`db_get_totp`, `db_set_totp`, `db_clear_totp`); trusted-device helpers (`db_add_trusted_device`, `db_lookup_trusted_device`, `db_touch_trusted_device`, `db_list_trusted_devices`, `db_revoke_trusted_device`, `db_revoke_trusted_devices`, `db_sweep_expired_trusted_devices`, `db_get_remember_hours`, `db_set_remember_hours`); `db_add_radius_user(username, role, group_id)` inserts with `auth_type='radius'`, `pw_hash='__radius__'` (mirrors `db_add_ldap_user`) |
+| `groups.py` | User group CRUD, member assignment, email resolution for alert dispatch. LDAP-mapped groups carry `ldap_dn`; RADIUS-mapped groups carry `radius_attribute` + `radius_value`. `db_get_ldap_mapped_groups()` returns all LDAP-mapped groups. `db_find_group_by_radius(attribute, value)` returns the first group whose mapping matches a returned RADIUS attribute. `db_get_radius_mapped_groups()` returns all RADIUS-mapped groups. |
 | `audit.py` | Audit log write & query |
 | `backups.py` | Backup settings (Fernet-encrypted credentials), run history, 3-run retention |
 | `trap_defs.py` | SNMP trap definition queries |
@@ -446,6 +471,30 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `report_footer_text` | text | Custom text shown in the PDF report footer (e.g. "Confidential — Internal Use Only") |
 | `report_brand_color` | `"#rrggbb"` | Accent colour used in the report cover page and headings (defaults to `#2f81f7`) |
 | `report_retention_days` | integer string | How many days to keep report history rows + PDF/CSV files on disk (default `"365"`) |
+| `radius_enabled` | `"1"` / `"0"` | RADIUS authentication master toggle |
+| `radius_server` | str | Primary RADIUS host |
+| `radius_port` | integer string | Primary RADIUS port (default `"1812"`) |
+| `radius_secret_enc` | str | Fernet-encrypted shared secret (primary) |
+| `radius_server2` | str | Optional secondary RADIUS host |
+| `radius_port2` | integer string | Secondary RADIUS port |
+| `radius_secret2_enc` | str | Fernet-encrypted shared secret (secondary) |
+| `radius_timeout` | integer string | Seconds per attempt (default `"5"`) |
+| `radius_retries` | integer string | Retries per server before failover (default `"3"`) |
+| `radius_nas_identifier` | str | `NAS-Identifier` attribute value (default `"pingwatch"`) |
+| `radius_realm_prefix` | str | Prepended to username before sending (e.g. `"DOMAIN\\"`) |
+| `radius_realm_suffix` | str | Appended to username before sending (e.g. `"@corp.local"`) |
+| `radius_auto_provision` | `"1"` / `"0"` | Auto-create local user row on first successful RADIUS login |
+| `radius_default_role` | str | Fallback role when no attribute mapping matches (default `"viewer"`) |
+| `radius_default_group_id` | integer string | Fallback group when no attribute mapping matches |
+| `radius_debug` | `"1"` / `"0"` | Verbose RADIUS debug logging |
+| `db_backup_remote_enabled` | `"1"` / `"0"` | Upload DB backup to remote destination after each local run |
+| `db_backup_remote_type` | `"sftp"` / `"smb"` | Remote transfer protocol |
+| `db_backup_remote_host` | str | Remote server hostname or IP |
+| `db_backup_remote_port` | integer string | Remote port (SFTP default `"22"`, SMB default `"445"`) |
+| `db_backup_remote_user` | str | Remote username |
+| `db_backup_remote_pass_enc` | str | Fernet-encrypted remote password |
+| `db_backup_remote_path` | str | Remote destination directory |
+| `db_backup_remote_share` | str | SMB share name (SMB only) |
 
 ---
 
@@ -459,16 +508,17 @@ The frontend is served as static files — no build step.
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.); reconciles `theme_preference` from `/api/me` into `setTheme(..., {sync:false})` after login |
 | `theme.js` | Theme manager — public API `getTheme()` / `setTheme(t, opts)` / `toggleTheme()` / `getCssVar(name)` / `getCssRgb(name)`. `setTheme` writes `<html data-theme>`, persists `localStorage.pw_theme`, postMessages the map iframe, dispatches a `themechange` `CustomEvent`, refreshes the user-menu button label, and fires `PATCH /api/me/theme` in the background (skipped when `opts.sync===false` to avoid echo when mirroring the server value). `getCssRgb()` parses `#rgb` / `#rrggbb` / `rgb()` / `rgba()` values into `[r,g,b]` tuples — used by canvas modules that need `rgba(${rgb.join(',')},${alpha})` template literals. An inline bootstrap script in `<head>` applies the attribute synchronously before CSS paints — prevents FOUC. Loaded first in the JS bundle so downstream modules can call `getCssVar()` / `getCssRgb()` during init. |
-| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
+| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. `backup_status` widget (`_dwNcmStatusRefresh`) fetches `/api/backups` + `/api/settings` in parallel; renders the existing device-config 2×2 KPI grid (OK/Failed/Never/Enabled) plus a **Database** section (`_dwRenderDbBackup`) showing last-run age (color-coded green/amber/red by overdue threshold), next scheduled run, and optional remote upload status line; clicking the DB card navigates to Settings → Database. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates. History chart + sparkline canvases maintain a module-level `_SCC` RGB cache (`accent` / `up` / `warn` / `down` / `text` / `bg` / `bg2`) populated via `getCssRgb()` and invalidated on the `themechange` event; the listener iterates `_histCache` and calls `dmHistRedraw(did, sid)` on every open chart so all visible history modals repaint immediately after a theme toggle |
 | `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
 | `backups.js` | Backup table, config viewer, patience diff, credential noise toggle, vendor-aware rollback; Cisco/Arista rollback includes enclosing context block + `end` + `wr` |
 | `forms-device.js` | Add/edit device modal; **Licenses section** — collapsible `<details>` with status badges (Valid / Expiring / Expired), days-remaining countdown, warn/crit day inputs, add/delete per license; `_edLicLoad()`, `_edLicRender()`, `_edLicAdd()`, `_edLicDel()`, `_edLicStatusBadge()` |
 | `forms-sensor.js` | Add/edit sensor modal; SNMP interface discovery (walk + metric selector); single-selection auto-syncs OID input field; device-host fallback in discover and add-selected paths; VMware VM discovery with grouped metric checkboxes, smart threshold defaults (`_VM_THR_DEFAULTS`), and bulk sensor add |
-| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator. Integrations tab: SMTP / Syslog / LDAP sub-tabs each carry a live status dot (`ibadge-{id}`) and status bar updated by `_renderIntegStatus()`; LDAP dot reflects `ldap_status` from `GET /api/settings` (ok/error/configured/unconfigured). Logs tab: time-range filter offers 5 m / 15 m / 1 h / 3 h / 6 h (default) / 12 h / 24 h presets plus a **Custom range** option that reveals inline datetime-local pickers (From / To); `_logFilter.customFrom` / `_logFilter.customTo` are sent as `after=` / `before=` params to the log API. Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()`. Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
-| `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal |
+| `forms-settings.js` | Settings modal (10 tabs: General, Users, Groups, Integrations, Database, Logs, Sensors, Networking, Config Backup, Alert Profiles); each tab is built by a dedicated `_buildSettingsTab_*()` function — `openSettings()` is a thin orchestrator (admin-only; non-admins receive a toast). Integrations tab: SMTP / Syslog / LDAP / RADIUS sub-tabs each carry a live status dot (`ibadge-{id}`) and status bar updated by `_renderIntegStatus()`; LDAP and RADIUS dots reflect `ldap_status` / `radius_status` from `GET /api/settings`. RADIUS panel: server settings, shared secrets (sentinelized), failover, realm munging, auto-provision, default role/group, attribute→group mapping table (backed by `forms-radius.js`). User table: `isRadius` check renders `🧾 RADIUS` badge; `isRemote` guard suppresses reset-password button for both LDAP and RADIUS users. Logs tab: time-range filter offers 5 m / 15 m / 1 h / 3 h / 6 h (default) / 12 h / 24 h presets plus a **Custom range** option that reveals inline datetime-local pickers (From / To); `_logFilter.customFrom` / `_logFilter.customTo` are sent as `after=` / `before=` params to the log API. Debug Mode checkbox auto-saves on toggle via `_saveDebugMode()`. Groups tab: "Import from LDAP" button (visible only when LDAP is enabled), LDAP import modal with search + role assignment, LDAP badge on imported groups, LDAP-aware group editor (shows LDAP DN read-only, `default_role` dropdown, hides member checkboxes for LDAP-managed groups) |
+| `forms-users.js` | User management, Change Password modal, self-service Edit Profile modal; Add User modal `#au-type` offers "RADIUS" option (visible only when `radius_enabled=1`); selecting RADIUS hides password fields |
 | `forms-ldap.js` | LDAP/AD settings modal including Group Integration section (auto-provision, nested groups, group base DN, group filter, sync interval) and Test User Groups sub-dialog |
+| `forms-radius.js` | RADIUS settings panel: `_loadRadiusPanel()` + `saveRadiusSettings()` + `testRadiusConnection()`; attribute→group mapping table (`_loadRadiusMappings`, `_radiusMappingRow`, `_saveRadiusMapping`); Test User Auth dialog with Access-Challenge step (`openRadiusTestAuth`, `submitRadiusTestAuth`, `_renderRadiusTestAuthResult`, `_submitRadiusTestAuthChallenge`) |
 | `forms-io.js` | DB export/import modal |
 | `forms-utils.js` | Shared form utilities and canonical helper implementations: `esc()`, `closeM()`, `_overlayClose()`, `msColor()` (latency → CSS colour), `statusClass()` (status string → CSS class), `_lsGet()` / `_lsSet()` (localStorage helpers) — all other JS modules reference these rather than maintaining local copies |
 | `forms-discovery.js` | Subnet Discovery wizard — 5-step modal: CIDR input + live validation, scan progress, filterable/sortable results table (IP, hostname, MAC/vendor, ports, Type column, multi-NIC ⚠ flags), per-device sensor review, bulk add; **per-device group assignment** — default group dropdown plus per-row group input with `_discGrpFocus`/`_discGrpBlur` datalist UX; `customGroups[ip]` overrides; accent border on overridden rows |
@@ -570,6 +620,20 @@ The frontend is served as static files — no build step.
 | `POST` | `/api/ldap/test_auth` | admin | Test full user authentication flow |
 | `POST` | `/api/ldap/search_groups` | admin | Browse/search LDAP directory for groups `{query}` → `{ok, groups: [{dn, cn, description, member_count}]}` |
 | `POST` | `/api/ldap/test_user_groups` | admin | Look up a user's LDAP group memberships `{username}` → `{ok, display_name, email, groups: [dn, ...]}` |
+
+### RADIUS
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/radius/settings` | admin | RADIUS config (shared secrets never returned; `radius_secret_set` / `radius_secret2_set` sentinels indicate if set) |
+| `PATCH` | `/api/radius/settings` | admin | Save RADIUS config; empty secret = keep existing; non-empty = Fernet-encrypt and replace |
+| `POST` | `/api/radius/test_connection` | admin | Send a bogus packet and verify the server responds `{ok, message}` |
+| `POST` | `/api/radius/test_auth` | admin | Run a full authentication `{username, password}` → `{ok, attrs?, challenge?, message}` |
+| `POST` | `/api/radius/test_auth_challenge` | admin | Continue a test-auth challenge `{challenge_id, response}` → same shape |
+| `GET` | `/api/radius/attribute_mappings` | admin | List all groups with their RADIUS mappings + `available_groups` (unmapped) |
+| `POST` | `/api/radius/attribute_mappings` | admin | Set or clear mapping for a group `{group_id, attribute, value}` |
+
+Also extends `POST /api/login` to return `{radius_challenge: true, challenge_id, prompt}` when RADIUS issues an `Access-Challenge`, and adds `POST /api/login/radius_challenge {challenge_id, response}` to complete it.
 
 ### IPAM
 
