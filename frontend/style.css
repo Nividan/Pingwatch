@@ -2523,6 +2523,15 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 /* Repeat badge */
 .aev-repeat{font-size:10px;font-weight:700;color:var(--accent);flex-shrink:0;}
 
+/* "Why no alert" chip — shown when an event produced no alert */
+.aev-reason-chip{
+  display:inline-block;margin-right:6px;
+  padding:2px 8px;border-radius:10px;
+  font-size:10px;font-weight:600;letter-spacing:.2px;
+  background:var(--surface-inset);border:1px solid var(--border);
+  color:var(--text3);white-space:nowrap;vertical-align:middle;
+}
+
 /* ACK / Resolve buttons */
 .aev-btns{display:flex;gap:5px;margin-top:5px;}
 .aev-btn-ack,.aev-btn-res{
