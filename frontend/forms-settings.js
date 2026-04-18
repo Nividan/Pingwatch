@@ -511,6 +511,65 @@ function _buildSettingsTab_database(sr) {
         <div id="dbk-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_last_ts?`Last backup: ${esc(sr.db_backup_last_ts)} \u2014 ${esc(sr.db_backup_last_result)}`:''}</div>
         </div><!-- /dbk-collapse -->
       </div>
+
+      <!-- Remote Upload (Off-box DR) -->
+      <div style="margin-top:4px;padding-top:16px;border-top:1px solid var(--border)">
+        <div onclick="_toggleDbBackupRemote()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
+          <div style="font-size:12px;font-weight:600;color:var(--text2)">Remote Upload (Off-box DR)</div>
+          <span id="dbk-remote-chevron" style="font-size:10px;color:var(--text3);transition:transform .2s;transform:rotate(-90deg)">&#9660;</span>
+        </div>
+        <div id="dbk-remote-collapse" style="display:none;margin-top:16px">
+          <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="flex:1">
+              <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Push backups to remote</div>
+              <div class="fh" style="margin:0">After each local backup, upload files off-box via SFTP or SMB. Remote failure does not fail the local backup.</div>
+            </div>
+            <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-dbk-remote-enabled" ${sr.db_backup_remote_enabled?'checked':''}><span class="tsl"></span></label>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Protocol</label>
+            <select id="st-dbk-remote-type" style="max-width:160px" onchange="_dbkRemoteTypeChange()">
+              <option value="sftp" ${(sr.db_backup_remote_type||'sftp')==='sftp'?'selected':''}>SFTP (SSH)</option>
+              <option value="smb"  ${sr.db_backup_remote_type==='smb'?'selected':''}>SMB / CIFS</option>
+            </select>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Host</label>
+            <input type="text" id="st-dbk-remote-host" value="${esc(sr.db_backup_remote_host||'')}" placeholder="backup-server.example.com"/>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Port</label>
+            <input type="number" id="st-dbk-remote-port" min="1" max="65535" value="${sr.db_backup_remote_port||22}" style="max-width:100px"/>
+          </div>
+          <div class="fr" style="margin-top:14px;display:${(sr.db_backup_remote_type==='smb')?'flex':'none'}" id="st-dbk-remote-share-row">
+            <label class="fl">Share</label>
+            <input type="text" id="st-dbk-remote-share" value="${esc(sr.db_backup_remote_share||'')}" placeholder="backups"/>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Remote Path</label>
+            <input type="text" id="st-dbk-remote-path" value="${esc(sr.db_backup_remote_path||'')}" placeholder="pingwatch/db"/>
+            <div class="fh" id="st-dbk-remote-path-hint">Directory relative to the user's home (SFTP) or under the share (SMB)</div>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Username</label>
+            <input type="text" id="st-dbk-remote-user" value="${esc(sr.db_backup_remote_user||'')}" autocomplete="off"/>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Password</label>
+            <input type="password" id="st-dbk-remote-password" value="" placeholder="${sr.db_backup_remote_password_set?'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)':''}" autocomplete="new-password"/>
+          </div>
+          <div class="fr" style="margin-top:14px;display:${(sr.db_backup_remote_type||'sftp')==='sftp'?'flex':'none'}" id="st-dbk-remote-key-row">
+            <label class="fl">Private Key</label>
+            <textarea id="st-dbk-remote-key" placeholder="${sr.db_backup_remote_key_set?'(key stored \u2014 leave blank to keep)':'-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----'}" rows="4" style="font-family:monospace;font-size:11px;width:100%;resize:vertical"></textarea>
+            <div class="fh">Optional. If set, used instead of password. Passphrase-protected keys use the password field above.</div>
+          </div>
+          <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="testDbBackupRemote()">&#x25B6; Test Connection</button>
+            <span id="dbk-remote-test-result" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+          <div id="dbk-remote-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_remote_last_ts?`Last remote upload: ${esc(sr.db_backup_remote_last_ts)} \u2014 ${esc(sr.db_backup_remote_last_result)}`:(sr.db_backup_remote_last_result?`${esc(sr.db_backup_remote_last_result)}`:'')}</div>
+        </div><!-- /dbk-remote-collapse -->
+      </div>
     </div>`;
 }
 
@@ -2048,6 +2107,31 @@ function _dbkFreqChange(){
   if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
 }
 
+function _toggleDbBackupRemote(){
+  const body = document.getElementById('dbk-remote-collapse');
+  const chevron = document.getElementById('dbk-remote-chevron');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if(chevron) chevron.style.transform = open ? 'rotate(-90deg)' : 'rotate(0deg)';
+}
+
+function _dbkRemoteTypeChange(){
+  const type = document.getElementById('st-dbk-remote-type')?.value || 'sftp';
+  const shareRow = document.getElementById('st-dbk-remote-share-row');
+  const keyRow   = document.getElementById('st-dbk-remote-key-row');
+  const portEl   = document.getElementById('st-dbk-remote-port');
+  const hint     = document.getElementById('st-dbk-remote-path-hint');
+  if(shareRow) shareRow.style.display = type === 'smb' ? 'flex' : 'none';
+  if(keyRow)   keyRow.style.display   = type === 'sftp' ? 'flex' : 'none';
+  if(portEl && (portEl.value === '' || portEl.value === '22' || portEl.value === '445')){
+    portEl.value = type === 'smb' ? '445' : '22';
+  }
+  if(hint) hint.textContent = type === 'smb'
+    ? 'Subdirectory under the share (use forward slashes, e.g. pingwatch/db)'
+    : "Directory relative to the user's home (absolute paths allowed)";
+}
+
 async function _loadDbStats(){
   const mainEl = document.getElementById('db-stats-main');
   const logsEl = document.getElementById('db-stats-logs');
@@ -2188,6 +2272,37 @@ async function _loadDbBackupSettings(){
   const lastInfo = document.getElementById('dbk-last-info');
   if(lastInfo) lastInfo.textContent = r.db_backup_last_ts
     ? `Last backup: ${r.db_backup_last_ts} \u2014 ${r.db_backup_last_result}` : '';
+
+  // Remote upload fields
+  const rEn    = document.getElementById('st-dbk-remote-enabled');
+  const rType  = document.getElementById('st-dbk-remote-type');
+  const rHost  = document.getElementById('st-dbk-remote-host');
+  const rPort  = document.getElementById('st-dbk-remote-port');
+  const rShare = document.getElementById('st-dbk-remote-share');
+  const rPath  = document.getElementById('st-dbk-remote-path');
+  const rUser  = document.getElementById('st-dbk-remote-user');
+  const rPw    = document.getElementById('st-dbk-remote-password');
+  const rKey   = document.getElementById('st-dbk-remote-key');
+  if(rEn)    rEn.checked  = !!r.db_backup_remote_enabled;
+  if(rType)  rType.value  = r.db_backup_remote_type || 'sftp';
+  if(rHost)  rHost.value  = r.db_backup_remote_host  || '';
+  if(rPort)  rPort.value  = r.db_backup_remote_port  || 22;
+  if(rShare) rShare.value = r.db_backup_remote_share || '';
+  if(rPath)  rPath.value  = r.db_backup_remote_path  || '';
+  if(rUser)  rUser.value  = r.db_backup_remote_user  || '';
+  if(rPw)    rPw.placeholder = r.db_backup_remote_password_set ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)' : '';
+  if(rKey)   rKey.placeholder = r.db_backup_remote_key_set ? '(key stored \u2014 leave blank to keep)' : '-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----';
+  _dbkRemoteTypeChange();
+  const rLast = document.getElementById('dbk-remote-last-info');
+  if(rLast){
+    if(r.db_backup_remote_last_ts){
+      rLast.textContent = `Last remote upload: ${r.db_backup_remote_last_ts} \u2014 ${r.db_backup_remote_last_result||'ok'}`;
+    } else if(r.db_backup_remote_last_result){
+      rLast.textContent = r.db_backup_remote_last_result;
+    } else {
+      rLast.textContent = '';
+    }
+  }
 }
 
 async function saveDbBackupSettings(){
@@ -2205,20 +2320,47 @@ async function saveDbBackupSettings(){
   const btn = document.querySelector('#stab-footer-database .btn-p');
   if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
   try {
-    const r = await api('PATCH', '/api/settings', {
+    const body = {
       db_backup_enabled: enabled,
       db_backup_freq:    freq,
       db_backup_time:    time,
       db_backup_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
       db_backup_keep:    keep,
-    });
+    };
+    // Remote upload fields
+    const rEn    = document.getElementById('st-dbk-remote-enabled');
+    const rType  = document.getElementById('st-dbk-remote-type');
+    const rHost  = document.getElementById('st-dbk-remote-host');
+    const rPort  = document.getElementById('st-dbk-remote-port');
+    const rShare = document.getElementById('st-dbk-remote-share');
+    const rPath  = document.getElementById('st-dbk-remote-path');
+    const rUser  = document.getElementById('st-dbk-remote-user');
+    const rPw    = document.getElementById('st-dbk-remote-password');
+    const rKey   = document.getElementById('st-dbk-remote-key');
+    if(rEn)    body.db_backup_remote_enabled = rEn.checked ? 1 : 0;
+    if(rType)  body.db_backup_remote_type    = rType.value || 'sftp';
+    if(rHost)  body.db_backup_remote_host    = (rHost.value || '').trim();
+    if(rPort)  body.db_backup_remote_port    = parseInt(rPort.value) || (body.db_backup_remote_type === 'smb' ? 445 : 22);
+    if(rShare) body.db_backup_remote_share   = (rShare.value || '').trim();
+    if(rPath)  body.db_backup_remote_path    = (rPath.value || '').trim();
+    if(rUser)  body.db_backup_remote_user    = (rUser.value || '').trim();
+    if(rPw && rPw.value) body.db_backup_remote_password = rPw.value;
+    if(rKey && rKey.value && rKey.value.trim()) body.db_backup_remote_key = rKey.value;
+
+    const r = await api('PATCH', '/api/settings', body);
     if(!r?.ok){ toast('Failed to save DB backup settings','err'); return; }
+    // Clear plaintext secret fields post-save so they don't linger in the DOM
+    if(rPw)  rPw.value  = '';
+    if(rKey) rKey.value = '';
     toast('Database backup settings saved','ok');
   } catch(e) {
     toast('Failed to save DB backup settings','err');
+    return;
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save DB Backup'; }
   }
+  // Reload outside the try so its errors don't masquerade as save failures
+  try { await _loadDbBackupSettings(); } catch(_) {}
 }
 
 async function runDbBackupNow(){
@@ -2236,6 +2378,35 @@ async function runDbBackupNow(){
     if(res) res.innerHTML = `<span style="color:var(--down)">\u2718 Request failed</span>`;
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='\u25B6 Run Backup Now'; }
+  }
+}
+
+async function testDbBackupRemote(){
+  const btn = document.querySelector('[onclick="testDbBackupRemote()"]');
+  const res = document.getElementById('dbk-remote-test-result');
+  if(btn){ btn.disabled=true; btn.textContent='Testing...'; }
+  if(res) res.textContent = '';
+  const body = {
+    db_backup_remote_type:  document.getElementById('st-dbk-remote-type')?.value || 'sftp',
+    db_backup_remote_host:  (document.getElementById('st-dbk-remote-host')?.value || '').trim(),
+    db_backup_remote_port:  parseInt(document.getElementById('st-dbk-remote-port')?.value) || 22,
+    db_backup_remote_share: (document.getElementById('st-dbk-remote-share')?.value || '').trim(),
+    db_backup_remote_path:  (document.getElementById('st-dbk-remote-path')?.value || '').trim(),
+    db_backup_remote_user:  (document.getElementById('st-dbk-remote-user')?.value || '').trim(),
+  };
+  const pwEl  = document.getElementById('st-dbk-remote-password');
+  const keyEl = document.getElementById('st-dbk-remote-key');
+  if(pwEl  && pwEl.value)  body.db_backup_remote_password = pwEl.value;
+  if(keyEl && keyEl.value && keyEl.value.trim()) body.db_backup_remote_key = keyEl.value;
+  try {
+    const r = await api('POST', '/api/db/backup/test-remote', body);
+    if(res) res.innerHTML = r.ok
+      ? `<span style="color:var(--up)">\u2714 ${esc(r.msg||'Connected')}</span>`
+      : `<span style="color:var(--down)">\u2718 ${esc(r.msg||'Test failed')}</span>`;
+  } catch(e) {
+    if(res) res.innerHTML = `<span style="color:var(--down)">\u2718 Request failed</span>`;
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='\u25B6 Test Connection'; }
   }
 }
 

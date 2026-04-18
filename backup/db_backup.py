@@ -193,6 +193,7 @@ def do_db_backup() -> tuple:
         _check_backup_dir_writable(DB_BACKUP_DIR)
         ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
+        written = []
         if is_pg():
             cfg = get_config()
             main_file = f"pingwatch-main-{ts}.sql"
@@ -202,9 +203,11 @@ def do_db_backup() -> tuple:
 
             log.info(f"DB backup: starting PG — main schema → {main_dest}")
             _backup_pg_schema(cfg, 'main', main_dest, "Main (PG)", log)
+            written.append(main_dest)
 
             log.info(f"DB backup: starting PG — logs schema → {logs_dest}")
             _backup_pg_schema(cfg, 'logs', logs_dest, "Logs (PG)", log)
+            written.append(logs_dest)
         else:
             main_file = f"pingwatch-main-{ts}.sqlite"
             logs_file = f"pingwatch-logs-{ts}.sqlite"
@@ -213,14 +216,17 @@ def do_db_backup() -> tuple:
 
             log.info(f"DB backup: starting — Main → {main_dest}")
             _backup_one(DB_PATH, main_dest, "Main", log)
+            written.append(main_dest)
 
             # Logs DB may not exist yet on fresh installs — skip gracefully
             if os.path.exists(LOGS_DB_PATH):
                 log.info(f"DB backup: starting — Logs → {logs_dest}")
                 _backup_one(LOGS_DB_PATH, logs_dest, "Logs", log)
+                written.append(logs_dest)
             else:
                 log.info("DB backup: Logs DB not present — skipping logs backup")
 
+        _remote_upload_if_enabled(written, ts, log)
         _enforce_db_retention(log)
         _record_result(ts, "ok")
         return True, f"Backup saved: {main_file}, {logs_file}"
@@ -271,6 +277,42 @@ def _record_result(ts: str, result: str):
         data = {'db_backup_last_result': result}
         if ts:
             data['db_backup_last_ts'] = ts
+        _sl(data)
+        _db_enqueue(lambda d=data: db_save_settings(d))
+    except Exception:
+        pass
+
+
+def _remote_upload_if_enabled(local_paths: list, ts: str, log) -> None:
+    """Push local backups to the configured remote destination. Non-fatal."""
+    try:
+        from core.settings import get as _cfg
+        if not int(_cfg('db_backup_remote_enabled', 0) or 0):
+            return
+        if not local_paths:
+            _record_remote_result("", "error: no files to upload")
+            return
+        from .remote_upload import do_remote_upload
+        ok, msg = do_remote_upload(local_paths)
+        if ok:
+            log.info(f"DB backup: remote upload OK — {msg}")
+            _record_remote_result(ts, "ok")
+        else:
+            log.warning(f"DB backup: remote upload failed — {msg}")
+            _record_remote_result("", f"error: {msg}")
+    except Exception as e:
+        log.error(f"DB backup: remote upload crashed — {e}", exc_info=True)
+        _record_remote_result("", "error: remote upload crashed")
+
+
+def _record_remote_result(ts: str, result: str):
+    """Persist remote-upload last time and result (best-effort)."""
+    try:
+        from core.settings import load as _sl
+        from db import _db_enqueue, db_save_settings
+        data = {'db_backup_remote_last_result': result}
+        if ts:
+            data['db_backup_remote_last_ts'] = ts
         _sl(data)
         _db_enqueue(lambda d=data: db_save_settings(d))
     except Exception:

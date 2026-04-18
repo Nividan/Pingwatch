@@ -130,6 +130,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) if '__file__' in d
 _PACKAGES = [
     ("cryptography", "TLS certificate generation & encryption", True),
     ("paramiko",     "SSH device backups",                      False),
+    ("smbclient",    "SMB / CIFS remote DB backup upload",      False),
     ("pystray",      "system tray icon",                        False),
     ("PIL",          "image support (tray icon)",               False),
     ("ldap3",        "LDAP / Active Directory authentication",  False),
