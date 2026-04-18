@@ -151,7 +151,7 @@
   <h1>Incident summary</h1>
   <div class="two-col">
     <div class="col">
-      <table class="kv">
+      <table class="kv{% if previous %} kv-compare{% endif %}">
         {% if previous %}
         <tr class="kv-head">
           <th></th><th class="small">This period</th><th class="small muted">{{ previous.label }}</th><th class="small">Δ</th>

@@ -129,14 +129,33 @@ def top_bar(rows: list, value_key: str, label_key: str,
         return ""
     try:
         color = color or _PRINT_ACC
-        labels = [str(r.get(label_key, ""))[:28] for r in rows][::-1]
+        # Labels used to be truncated at 28 chars. Two noisy-sensor rows with
+        # the same device and long sensor names ("ESXI-Nala·nala.bslab.local
+        # CPU Usage" and "…CPU Ready (%)") both collapsed to "ESXI-Nala·
+        # nala.bslab.local C" — matplotlib merged them onto one y-tick and
+        # one bar disappeared, leaving its value label floating. Raise the
+        # cap and disambiguate duplicates so every row gets its own bar.
+        raw_labels = [str(r.get(label_key, ""))[:40] for r in rows]
+        seen: dict = {}
+        labels = []
+        for lbl in raw_labels:
+            n = seen.get(lbl, 0)
+            seen[lbl] = n + 1
+            labels.append(lbl if n == 0 else f"{lbl} ({n + 1})")
+        labels = labels[::-1]
         values = [r.get(value_key, 0) for r in rows][::-1]
-        fig, ax = plt.subplots(figsize=(7, max(1.8, 0.35 * len(rows) + 1)))
+        fig, ax = plt.subplots(figsize=(7.2, max(1.8, 0.4 * len(rows) + 1)))
         _style_axes(ax)
         ax.barh(labels, values, color=color, edgecolor=color)
         ax.set_title(title, fontsize=10, loc="left", pad=8)
         ax.grid(True, axis="x", color=_PRINT_GRID, linewidth=0.5)
         ax.grid(False, axis="y")
+        ax.tick_params(axis="y", labelsize=7)
+        # Leave ~8% headroom on the right so end-of-bar value labels don't
+        # get clipped against the axis edge.
+        if values:
+            mx = max(values) or 1
+            ax.set_xlim(0, mx * 1.08)
         for i, v in enumerate(values):
             ax.text(v, i, f"  {v}", va="center", fontsize=8, color=_PRINT_FG)
         return _encode(fig)
