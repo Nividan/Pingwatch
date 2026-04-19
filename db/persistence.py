@@ -15,6 +15,19 @@ from db.core      import _db_enqueue, _logs_enqueue
 import core.settings as _settings
 
 
+def _int_or_none(v):
+    """Coerce a value to int or None. Accepts None, '' → None. Everything else
+    goes through int(). Guards the save path from stray empty-string integers
+    that made it onto a Sensor attribute (PG rejects '' for INTEGER columns).
+    """
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _pg_save(state):
     """Upsert all devices and sensors into PostgreSQL."""
     from db.pg_pool import pg_conn
@@ -35,14 +48,18 @@ def _pg_save(state):
         ]
         snr_rows = [
             (s.device_id, s.sensor_id, s.name, s.stype,
-             s.host, s.port, s.url, s.interval, s.timeout,
+             s.host, _int_or_none(s.port), s.url,
+             _int_or_none(s.interval), _int_or_none(s.timeout),
              int(s.verify_ssl), s.snmp_community,
              s.snmp_oid, s.snmp_version, dev._sid_ctr,
              s.dns_query, s.dns_record_type, s.dns_server,
-             getattr(s, "http_expected_status", 0),
-             getattr(s, "fail_after", 2), getattr(s, "recover_after", 1),
-             getattr(s, "warn_ms", None), getattr(s, "crit_ms", None),
-             getattr(s, "loss_warn_pct", 0), getattr(s, "loss_crit_pct", 0),
+             _int_or_none(getattr(s, "http_expected_status", 0)) or 0,
+             _int_or_none(getattr(s, "fail_after", 2)) or 2,
+             _int_or_none(getattr(s, "recover_after", 1)) or 1,
+             _int_or_none(getattr(s, "warn_ms", None)),
+             _int_or_none(getattr(s, "crit_ms", None)),
+             _int_or_none(getattr(s, "loss_warn_pct", 0)) or 0,
+             _int_or_none(getattr(s, "loss_crit_pct", 0)) or 0,
              getattr(s, "keyword", ""), int(getattr(s, "keyword_case", False)),
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
@@ -180,14 +197,18 @@ def db_save(state):
         ]
         snr_rows = [
             (s.device_id, s.sensor_id, s.name, s.stype,
-             s.host, s.port, s.url, s.interval, s.timeout,
+             s.host, _int_or_none(s.port), s.url,
+             _int_or_none(s.interval), _int_or_none(s.timeout),
              int(s.verify_ssl), s.snmp_community,
              s.snmp_oid, s.snmp_version, dev._sid_ctr,
              s.dns_query, s.dns_record_type, s.dns_server,
-             getattr(s, "http_expected_status", 0),
-             getattr(s, "fail_after", 2), getattr(s, "recover_after", 1),
-             getattr(s, "warn_ms", None), getattr(s, "crit_ms", None),
-             getattr(s, "loss_warn_pct", 0), getattr(s, "loss_crit_pct", 0),
+             _int_or_none(getattr(s, "http_expected_status", 0)) or 0,
+             _int_or_none(getattr(s, "fail_after", 2)) or 2,
+             _int_or_none(getattr(s, "recover_after", 1)) or 1,
+             _int_or_none(getattr(s, "warn_ms", None)),
+             _int_or_none(getattr(s, "crit_ms", None)),
+             _int_or_none(getattr(s, "loss_warn_pct", 0)) or 0,
+             _int_or_none(getattr(s, "loss_crit_pct", 0)) or 0,
              getattr(s, "keyword", ""), int(getattr(s, "keyword_case", False)),
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
