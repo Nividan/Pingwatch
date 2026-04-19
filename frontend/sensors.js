@@ -1148,7 +1148,6 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
 function dmHistRedraw(did, sid) {
   const cache = _histCache[`${did}/${sid}`];
   if (!cache) return;
-  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   // Modal canvas (sensor detail view)
   const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
   const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
@@ -1397,6 +1396,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
 
 function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, snmpUnit) {
   if (!canvas) return;
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   canvas.width = canvas.offsetWidth || 660;
   const W = canvas.width, H = canvas.height || 320;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
