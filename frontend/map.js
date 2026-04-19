@@ -413,10 +413,19 @@ function calcPwLayout(devices) {
     placedRects.push({ x: govr.x, y: govr.y, w: gw, h: gh });
   }
 
-  // 3) Phase 2 — un-positioned groups: slide out of collisions with anchors,
-  //    persist resolved position so it sticks across reloads.
+  // 3) Phase 2 — un-positioned groups: anchor next to the existing layout
+  //    (right of bounding box, top-aligned) instead of the index-based grid,
+  //    then slide out of any remaining collisions. Persist so it sticks.
   for (const d of newly) {
-    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, d.hint);
+    let hint;
+    if (placedRects.length === 0) {
+      hint = d.hint;  // pristine canvas → use natural grid hint
+    } else {
+      const maxX = Math.max(...placedRects.map(r => r.x + r.w));
+      const minY = Math.min(...placedRects.map(r => r.y));
+      hint = { x: maxX + GGAP, y: minY };
+    }
+    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, hint);
     pwGroupOverrides[d.gname] = { ...(pwGroupOverrides[d.gname] || {}),
                                    x: pos.x, y: pos.y, w: d.w, h: d.h };
     _pwGroupDirty = true;
