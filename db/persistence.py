@@ -78,7 +78,12 @@ def _pg_save(state):
              getattr(s, "smtp_password", ""),
              getattr(s, "smtp_from", ""),
              getattr(s, "smtp_rcpt", ""),
-             getattr(s, "smtp_test_level", "ehlo") or "ehlo")
+             getattr(s, "smtp_test_level", "ehlo") or "ehlo",
+             getattr(s, "ssh_user", ""),
+             getattr(s, "ssh_password", ""),
+             getattr(s, "ssh_private_key", ""),
+             getattr(s, "ssh_auth_type", "password") or "password",
+             getattr(s, "ssh_test_level", "banner") or "banner")
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -130,7 +135,8 @@ def _pg_save(state):
                     "alerts_muted,host_override,snmp_unit,"
                     "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
                     "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
-                    "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level) "
+                    "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
+                    "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -154,7 +160,10 @@ def _pg_save(state):
                     "anomaly_min_samples=EXCLUDED.anomaly_min_samples, "
                     "smtp_tls=EXCLUDED.smtp_tls, smtp_user=EXCLUDED.smtp_user, "
                     "smtp_password=EXCLUDED.smtp_password, smtp_from=EXCLUDED.smtp_from, "
-                    "smtp_rcpt=EXCLUDED.smtp_rcpt, smtp_test_level=EXCLUDED.smtp_test_level",
+                    "smtp_rcpt=EXCLUDED.smtp_rcpt, smtp_test_level=EXCLUDED.smtp_test_level, "
+                    "ssh_user=EXCLUDED.ssh_user, ssh_password=EXCLUDED.ssh_password, "
+                    "ssh_private_key=EXCLUDED.ssh_private_key, "
+                    "ssh_auth_type=EXCLUDED.ssh_auth_type, ssh_test_level=EXCLUDED.ssh_test_level",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -227,7 +236,12 @@ def db_save(state):
              getattr(s, "smtp_password", ""),
              getattr(s, "smtp_from", ""),
              getattr(s, "smtp_rcpt", ""),
-             getattr(s, "smtp_test_level", "ehlo") or "ehlo")
+             getattr(s, "smtp_test_level", "ehlo") or "ehlo",
+             getattr(s, "ssh_user", ""),
+             getattr(s, "ssh_password", ""),
+             getattr(s, "ssh_private_key", ""),
+             getattr(s, "ssh_auth_type", "password") or "password",
+             getattr(s, "ssh_test_level", "banner") or "banner")
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -258,8 +272,9 @@ def db_save(state):
             "alerts_muted,host_override,snmp_unit,"
             "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
             "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
-            "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
+            "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -316,7 +331,12 @@ def _pg_load(state):
                 "COALESCE(smtp_password,'') AS smtp_password,"
                 "COALESCE(smtp_from,'') AS smtp_from,"
                 "COALESCE(smtp_rcpt,'') AS smtp_rcpt,"
-                "COALESCE(smtp_test_level,'ehlo') AS smtp_test_level "
+                "COALESCE(smtp_test_level,'ehlo') AS smtp_test_level,"
+                "COALESCE(ssh_user,'') AS ssh_user,"
+                "COALESCE(ssh_password,'') AS ssh_password,"
+                "COALESCE(ssh_private_key,'') AS ssh_private_key,"
+                "COALESCE(ssh_auth_type,'password') AS ssh_auth_type,"
+                "COALESCE(ssh_test_level,'banner') AS ssh_test_level "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -388,6 +408,11 @@ def _pg_load(state):
         s.smtp_from            = row[41] or ""
         s.smtp_rcpt            = row[42] or ""
         s.smtp_test_level      = row[43] or "ehlo"
+        s.ssh_user             = row[44] or ""
+        s.ssh_password         = row[45] or ""
+        s.ssh_private_key      = row[46] or ""
+        s.ssh_auth_type        = row[47] or "password"
+        s.ssh_test_level       = row[48] or "banner"
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -480,7 +505,10 @@ def db_load(state):
             "COALESCE(anomaly_min_samples,50),"
             "COALESCE(smtp_tls,'none'),COALESCE(smtp_user,''),"
             "COALESCE(smtp_password,''),COALESCE(smtp_from,''),"
-            "COALESCE(smtp_rcpt,''),COALESCE(smtp_test_level,'ehlo') "
+            "COALESCE(smtp_rcpt,''),COALESCE(smtp_test_level,'ehlo'),"
+            "COALESCE(ssh_user,''),COALESCE(ssh_password,''),"
+            "COALESCE(ssh_private_key,''),COALESCE(ssh_auth_type,'password'),"
+            "COALESCE(ssh_test_level,'banner') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -527,7 +555,9 @@ def db_load(state):
          vmware_user, vmware_password, vmware_vm_id, vmware_vm_name, vmware_metric,
          anomaly_enabled, anomaly_sensitivity, anomaly_min_samples,
          smtp_tls, smtp_user, smtp_password,
-         smtp_from, smtp_rcpt, smtp_test_level) in srows:
+         smtp_from, smtp_rcpt, smtp_test_level,
+         ssh_user, ssh_password, ssh_private_key,
+         ssh_auth_type, ssh_test_level) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -562,6 +592,11 @@ def db_load(state):
         s.smtp_from            = smtp_from or ""
         s.smtp_rcpt            = smtp_rcpt or ""
         s.smtp_test_level      = smtp_test_level or "ehlo"
+        s.ssh_user             = ssh_user or ""
+        s.ssh_password         = ssh_password or ""
+        s.ssh_private_key      = ssh_private_key or ""
+        s.ssh_auth_type        = ssh_auth_type or "password"
+        s.ssh_test_level       = ssh_test_level or "banner"
         dev.sensors[sid] = s
 
     state._did_ctr = max_did

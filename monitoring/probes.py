@@ -645,3 +645,151 @@ def _decode_resp(msg) -> str:
         try: return msg.decode("utf-8", "replace")
         except Exception: return ""
     return str(msg or "")
+
+
+_SSH_LEVELS = ("connect", "banner", "auth")
+
+
+def _load_ssh_key(blob: str):
+    """Try Ed25519/RSA/ECDSA in order. Returns (pkey, err_or_None).
+
+    Mirrors backup/remote_upload.py:_sftp_load_key. No passphrase support in
+    v1 — a key with a passphrase will fail all loaders and surface as
+    'unrecognised private key format'.
+    """
+    import io
+    import paramiko
+    for loader in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            return loader.from_private_key(io.StringIO(blob)), None
+        except Exception:
+            continue
+    return None, "unrecognised private key format"
+
+
+def probe_ssh(host, port=22, user="", password="", private_key="",
+              auth_type="password", test_level="banner", timeout=8):
+    """Probe an SSH server — layered depth: connect → banner → auth.
+
+    test_level: connect | banner | auth. Each level runs all prior steps.
+    auth_type:  password | key (only consulted at the `auth` level).
+
+    Host key verification is deliberately disabled (MissingHostKeyPolicy) —
+    a reachability probe shouldn't page on key rotation. The backup engine's
+    TOFU store is for command execution, not monitoring.
+    """
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _SSH_LEVELS:
+        test_level = "banner"
+    depth = _SSH_LEVELS.index(test_level)
+    t0 = time.time()
+
+    # ── Level 0: TCP connect only ────────────────────────────────────────
+    if depth == 0:
+        sock = None
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms,
+                    "detail": f"SSH port open ({ms}ms)"}
+        except socket.timeout:
+            return {"ok": False, "ms": None, "detail": f"Connect timeout after {timeout}s"}
+        except ConnectionRefusedError:
+            return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
+        except Exception as e:
+            log_sensors.warning("probe_ssh %s:%s: connect error: %s", host, port, e)
+            return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        finally:
+            if sock:
+                try: sock.close()
+                except Exception: pass
+
+    # ── Level 1: banner read (raw socket — no paramiko needed) ───────────
+    if depth == 1:
+        sock = None
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
+            sock.settimeout(timeout)
+            # SSH banner is terminated by \r\n and should arrive within one recv
+            try:
+                raw = sock.recv(256).decode("utf-8", "replace").strip()
+            except Exception:
+                raw = ""
+            ms = round((time.time() - t0) * 1000, 1)
+            first = raw.split("\n", 1)[0].strip()
+            if first.startswith("SSH-"):
+                return {"ok": True, "ms": ms,
+                        "detail": f"{first[:80]} ({ms}ms)",
+                        "value": first[:100]}
+            return {"ok": False, "ms": ms,
+                    "detail": f"Not SSH (got {first[:60]!r})" if first
+                              else "Not SSH (empty banner)"}
+        except socket.timeout:
+            return {"ok": False, "ms": None, "detail": f"Banner timeout after {timeout}s"}
+        except ConnectionRefusedError:
+            return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
+        except Exception as e:
+            log_sensors.warning("probe_ssh %s:%s: banner error: %s", host, port, e)
+            return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        finally:
+            if sock:
+                try: sock.close()
+                except Exception: pass
+
+    # ── Level 2: full auth via paramiko ──────────────────────────────────
+    try:
+        import paramiko
+    except ImportError:
+        return {"ok": False, "ms": None,
+                "detail": "paramiko not installed — run setup wizard"}
+
+    if not user:
+        return {"ok": False, "ms": None, "detail": "AUTH level requires a username"}
+
+    pkey = None
+    if auth_type == "key":
+        if not private_key:
+            return {"ok": False, "ms": None,
+                    "detail": "AUTH/key level requires a private key"}
+        pkey, kerr = _load_ssh_key(private_key)
+        if kerr:
+            return {"ok": False, "ms": None, "detail": f"Key load failed: {kerr}"}
+    elif auth_type != "password":
+        return {"ok": False, "ms": None, "detail": f"Unknown auth_type: {auth_type!r}"}
+    # password mode falls through with pkey=None
+
+    client = None
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.MissingHostKeyPolicy())
+        kw = dict(
+            hostname=host, port=int(port), username=user,
+            timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
+            allow_agent=False, look_for_keys=False,
+        )
+        if pkey is not None:
+            kw["pkey"] = pkey
+        else:
+            kw["password"] = password
+        client.connect(**kw)
+        ms = round((time.time() - t0) * 1000, 1)
+        return {"ok": True, "ms": ms,
+                "detail": f"SSH auth OK ({auth_type}, {ms}ms)"}
+    except paramiko.AuthenticationException:
+        return {"ok": False, "ms": None, "detail": "auth: authentication failed"}
+    except paramiko.BadHostKeyException as e:
+        return {"ok": False, "ms": None, "detail": f"auth: bad host key — {str(e)[:80]}"}
+    except paramiko.SSHException as e:
+        return {"ok": False, "ms": None, "detail": f"auth: {str(e)[:100]}"}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "detail": f"auth timeout after {timeout}s"}
+    except (ConnectionRefusedError, OSError) as e:
+        return {"ok": False, "ms": None, "detail": f"auth connect: {str(e)[:80]}"}
+    except Exception as e:
+        log_sensors.warning("probe_ssh %s:%s: auth error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": str(e)[:100]}
+    finally:
+        if client:
+            try: client.close()
+            except Exception: pass

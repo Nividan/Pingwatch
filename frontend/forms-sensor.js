@@ -34,7 +34,8 @@ function sensorFormHTML(dev, s=null) {
     ['dns','DNS','Record lookup','⬡'],['tls','TLS','Cert expiry','T'],
     ['http_keyword','HTTP KW','Keyword check','K'],['banner','Banner','TCP banner','B'],
     ['vmware','VMware','VM metrics','V'],
-    ['smtp','SMTP','Mail server','✉']
+    ['smtp','SMTP','Mail server','✉'],
+    ['ssh','SSH','Secure Shell','⇲']
   ];
   const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">${
     _types.map(([k,nm,sub,ico])=>`<button class="stab-nav${curType===k?' active':''}" data-t="${k}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${nm}</span><span class="snav-sub">${sub}</span></span></button>`).join('')
@@ -291,6 +292,50 @@ function sensorFormHTML(dev, s=null) {
           <input type="text" id="as-smfr" value="${esc(s?.smtp_from||'')}" placeholder="probe@example.com" autocomplete="off"/></div>
         <div class="fr"><label class="fl">RCPT TO (recipient)</label>
           <input type="text" id="as-smrc" value="${esc(s?.smtp_rcpt||'')}" placeholder="target@example.com" autocomplete="off"/></div>
+      </div>
+    </div>
+  </div>
+  <!-- SSH -->
+  <div class="fg ${curType==='ssh'?'vis':''}" id="fg-ssh">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Host / IP</label>
+        <input type="text" id="as-shh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-shp" value="${s?.port||22}" min="1" max="65535"/></div>
+    </div>
+    <div class="fr">
+      <label class="fl">Test depth</label>
+      <select id="as-shlvl" onchange="_sshLvlToggle()">
+        ${[['connect','Connect only (TCP)'],['banner','Banner (verify it\\'s SSH + capture version)'],['auth','Auth (full login)']]
+          .map(([v,lbl])=>`<option value="${v}"${(s?.ssh_test_level||'banner')===v?' selected':''}>${lbl}</option>`).join('')}
+      </select>
+      <div class="fh">Each level runs all prior steps. Auth closes immediately after handshake — no command is executed.</div>
+    </div>
+    <div id="as-ssh-auth-row" style="display:${(s?.ssh_test_level||'banner')==='auth'?'':'none'}">
+      <div class="fr" style="margin-top:8px">
+        <label class="fl">Auth method</label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="as-shauth" value="password" ${(s?.ssh_auth_type||'password')==='password'?'checked':''} onchange="_sshLvlToggle()"/> Password
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="as-shauth" value="key" ${(s?.ssh_auth_type||'password')==='key'?'checked':''} onchange="_sshLvlToggle()"/> Private key
+          </label>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:8px">
+        <label class="fl">Username</label>
+        <input type="text" id="as-shu" value="${esc(s?.ssh_user||'')}" placeholder="root / admin / monitor" autocomplete="off"/>
+      </div>
+      <div class="fr" id="as-ssh-pw-row" style="display:${(s?.ssh_auth_type||'password')==='password'?'':'none'};margin-top:8px">
+        <label class="fl">Password</label>
+        <input type="password" id="as-shpw" value="" placeholder="${s?.has_ssh_password?'(unchanged — leave blank to keep)':'SSH password'}" autocomplete="new-password"/>
+      </div>
+      <div class="fr" id="as-ssh-key-row" style="display:${(s?.ssh_auth_type||'password')==='key'?'':'none'};margin-top:8px">
+        <label class="fl">Private key (PEM)</label>
+        <textarea id="as-shkey" rows="6" placeholder="${s?.has_ssh_private_key?'(unchanged — leave blank to keep)':'-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----'}" style="font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical" autocomplete="off"></textarea>
+        <div class="fh">Ed25519 / RSA / ECDSA supported. Passphrase-protected keys not supported in v1.</div>
       </div>
     </div>
   </div>
@@ -578,7 +623,7 @@ async function submitEditSensor(did, sid){
 function selType(t){
   document.getElementById('as-t').value=t;
   document.querySelectorAll('#sensor-sidebar .stab-nav').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
-  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
+  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp','ssh'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);
@@ -1656,6 +1701,9 @@ function collectSensorForm(did){
   } else if(type==='smtp'){
     host=document.getElementById('as-smh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-smp')?.value)||25;
+  } else if(type==='ssh'){
+    host=document.getElementById('as-shh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-shp')?.value)||22;
   }
   const warn_ms      =parseInt(document.getElementById('as-wms')?.value)||null;
   const crit_ms      =parseInt(document.getElementById('as-cms')?.value)||null;
@@ -1704,6 +1752,16 @@ function collectSensorForm(did){
       toast('MAIL FROM level requires From and To addresses','err');return null;
     }
   }
+  if(type==='ssh'){
+    payload.ssh_test_level = document.getElementById('as-shlvl')?.value||'banner';
+    payload.ssh_auth_type  = document.querySelector('input[name="as-shauth"]:checked')?.value||'password';
+    payload.ssh_user       = document.getElementById('as-shu')?.value.trim()||'';
+    payload.ssh_password   = document.getElementById('as-shpw')?.value||'';
+    payload.ssh_private_key= document.getElementById('as-shkey')?.value||'';
+    if(payload.ssh_test_level==='auth' && !payload.ssh_user){
+      toast('AUTH level requires a username','err');return null;
+    }
+  }
   return payload;
 }
 
@@ -1714,6 +1772,18 @@ function _smtpLvlToggle(){
   const mailRow=document.getElementById('as-smtp-mail-row');
   if(authRow) authRow.style.display=(lvl==='auth'||lvl==='mailfrom')?'':'none';
   if(mailRow) mailRow.style.display=(lvl==='mailfrom')?'':'none';
+}
+
+// Toggle SSH auth row (when level=auth) + password/key row (based on auth method radio)
+function _sshLvlToggle(){
+  const lvl=document.getElementById('as-shlvl')?.value||'banner';
+  const authType=document.querySelector('input[name="as-shauth"]:checked')?.value||'password';
+  const authRow=document.getElementById('as-ssh-auth-row');
+  const pwRow  =document.getElementById('as-ssh-pw-row');
+  const keyRow =document.getElementById('as-ssh-key-row');
+  if(authRow) authRow.style.display=(lvl==='auth')?'':'none';
+  if(pwRow)   pwRow.style.display  =(authType==='password')?'':'none';
+  if(keyRow)  keyRow.style.display =(authType==='key')?'':'none';
 }
 
 // Prefill SMTP fields from the system alert-SMTP config (reads /api/settings)
