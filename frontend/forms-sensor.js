@@ -28,18 +28,54 @@ function sensorFormHTML(dev, s=null) {
     : '';
   const curType = s?.stype || 'ping';
   const isEdit = !!s;
+  // Sensor-type catalogue. Tuple shape:
+  //   [key, name, sub, icon, category, keywords]
+  // `category` groups the sidebar; `keywords` is a free-text search index so a
+  // user typing 'web', 'mail' or 'cert' surfaces the right type without having
+  // to know the canonical name.
   const _types = [
-    ['ping','Ping','ICMP echo','◉'],['tcp','TCP Port','Port check','⇌'],
-    ['http','HTTP/S','Web response','◈'],['snmp','SNMP','OID polling','◎'],
-    ['dns','DNS','Record lookup','⬡'],['tls','TLS','Cert expiry','T'],
-    ['http_keyword','HTTP KW','Keyword check','K'],['banner','Banner','TCP banner','B'],
-    ['vmware','VMware','VM metrics','V'],
-    ['smtp','SMTP','Mail server','✉'],
-    ['ssh','SSH','Secure Shell','⇲']
+    ['ping',         'Ping',     'ICMP echo',     '◉','Network',       'icmp echo reachability latency'],
+    ['tcp',          'TCP Port', 'Port check',    '⇌','Network',       'port socket connect'],
+    ['http',         'HTTP/S',   'Web response',  '◈','Network',       'web url status response code'],
+    ['dns',          'DNS',      'Record lookup', '⬡','Network',       'resolve a aaaa mx ns ptr soa'],
+    ['snmp',         'SNMP',     'OID polling',   '◎','Monitoring',    'oid polling counter mib'],
+    ['tls',          'TLS',      'Cert expiry',   'T','Monitoring',    'certificate ssl x509 expiry'],
+    ['banner',       'Banner',   'TCP banner',    'B','Monitoring',    'greeting handshake regex'],
+    ['http_keyword', 'HTTP KW',  'Keyword check', 'K','Application',   'grep match content body'],
+    ['ssh',          'SSH',      'Secure Shell',  '⇲','Auth & Access', 'login secure shell remote'],
+    ['smtp',         'SMTP',     'Mail server',   '✉','Auth & Access', 'mail email server relay'],
+    ['vmware',       'VMware',   'VM metrics',    'V','Virtualization','vsphere esxi vm hypervisor'],
   ];
-  const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">${
-    _types.map(([k,nm,sub,ico])=>`<button class="stab-nav${curType===k?' active':''}" data-t="${k}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${nm}</span><span class="snav-sub">${sub}</span></span></button>`).join('')
-  }</nav>`;
+  // Group by category, preserving order of first appearance.
+  const _catOrder = [];
+  const _byCat = {};
+  for (const t of _types) {
+    const c = t[4] || 'Other';
+    if (!_byCat[c]) { _byCat[c] = []; _catOrder.push(c); }
+    _byCat[c].push(t);
+  }
+  const _navBtn = ([k,nm,sub,ico,cat,kw]) => {
+    // data-search packs everything the filter looks at into one attribute,
+    // so _sensorTypeFilter doesn't need to reach back into _types on every
+    // keystroke. Lower-cased once at render time.
+    const hay = `${nm} ${sub} ${cat} ${kw}`.toLowerCase();
+    return `<button class="stab-nav${curType===k?' active':''}" data-t="${k}" data-search="${esc(hay)}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${esc(nm)}</span><span class="snav-sub">${esc(sub)}</span></span></button>`;
+  };
+  const _catGroups = _catOrder.map(c => `
+    <div class="stab-cat-group" data-cat="${esc(c)}">
+      <div class="stab-cat-hdr">${esc(c)}</div>
+      ${_byCat[c].map(_navBtn).join('')}
+    </div>`).join('');
+  const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">
+    <div class="stab-search-wrap">
+      <input type="text" class="stab-search" id="sensor-type-search"
+             placeholder="🔍 Filter types…" autocomplete="off"
+             oninput="_sensorTypeFilter(this.value)"
+             onkeydown="_sensorTypeKeyNav(event)">
+    </div>
+    <div class="stab-nav-list" id="sensor-nav-list">${_catGroups}</div>
+    <div class="stab-empty" id="sensor-type-empty" style="display:none">No sensor types match</div>
+  </nav>`;
   const _contentOpen = isEdit
     ? '<div style="overflow-y:auto;padding:20px;flex:1">'
     : '<div class="stab-content" style="overflow-y:auto;padding:20px">';
@@ -635,6 +671,55 @@ function selType(t){
     else if(t==='vmware'){const _vm=document.getElementById('as-vmmet-v')?.value||'';_wL.textContent=_vmwareThrLabel(_vm,true);_cL.textContent=_vmwareThrLabel(_vm,false);}
     else{_wL.textContent='Warn Latency (ms)';_cL.textContent='Crit Latency (ms)';}
   }
+}
+
+/* Filter the sensor-type sidebar by a free-text query. Hides any nav button
+ * whose data-search packed-haystack doesn't contain the query, and collapses
+ * category headers that have no remaining visible buttons. Cheap — pure DOM
+ * walk, no re-render. */
+function _sensorTypeFilter(q){
+  const list = document.getElementById('sensor-nav-list');
+  if(!list) return;
+  const needle = (q || '').trim().toLowerCase();
+  let totalVisible = 0;
+  list.querySelectorAll('.stab-cat-group').forEach(g => {
+    let groupVisible = 0;
+    g.querySelectorAll('.stab-nav').forEach(b => {
+      const match = !needle || (b.dataset.search || '').includes(needle);
+      b.style.display = match ? '' : 'none';
+      if(match) groupVisible++;
+    });
+    g.style.display = groupVisible ? '' : 'none';
+    totalVisible += groupVisible;
+  });
+  const empty = document.getElementById('sensor-type-empty');
+  if(empty) empty.style.display = totalVisible ? 'none' : '';
+}
+
+/* Keyboard navigation while the search input is focused.
+ *  ↑ / ↓  — move between visible (filtered) types and auto-select on the way
+ *  Enter  — commit the current selection (already selected by ↑/↓; Enter just
+ *           blurs the search so the user can tab into the form fields)
+ * Auto-selecting on arrow keys means the right-hand form panel updates live
+ * as the user scrubs through types — no extra Enter press needed. */
+function _sensorTypeKeyNav(e){
+  if(!['ArrowUp','ArrowDown','Enter'].includes(e.key)) return;
+  const visible = [...document.querySelectorAll('#sensor-nav-list .stab-nav')]
+    .filter(b => b.style.display !== 'none');
+  if(!visible.length) return;
+  if(e.key === 'Enter'){
+    e.preventDefault();
+    e.target.blur();
+    return;
+  }
+  let idx = visible.findIndex(b => b.classList.contains('active'));
+  if(idx < 0) idx = 0;
+  if(e.key === 'ArrowDown') idx = Math.min(idx + 1, visible.length - 1);
+  if(e.key === 'ArrowUp')   idx = Math.max(idx - 1, 0);
+  const t = visible[idx].dataset.t;
+  if(t) selType(t);
+  visible[idx].scrollIntoView({block:'nearest'});
+  e.preventDefault();
 }
 
 function _applyTypeDefaults(t){
