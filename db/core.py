@@ -532,6 +532,19 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # SSH sensor fields — auth'd probe; password + private key both Fernet ciphertext
+        for col_def in [
+            "ssh_user        TEXT DEFAULT ''",
+            "ssh_password    TEXT DEFAULT ''",
+            "ssh_private_key TEXT DEFAULT ''",
+            "ssh_auth_type   TEXT DEFAULT 'password'",
+            "ssh_test_level  TEXT DEFAULT 'banner'",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
         # Device-level default credentials
         for col in ("snmp_community_default", "snmp_version_default", "vmware_user_default", "vmware_password_default"):
             try:

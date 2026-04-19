@@ -141,6 +141,11 @@ def pg_create_main_schema(cur):
             smtp_from            TEXT DEFAULT '',
             smtp_rcpt            TEXT DEFAULT '',
             smtp_test_level      TEXT DEFAULT 'ehlo',
+            ssh_user             TEXT DEFAULT '',
+            ssh_password         TEXT DEFAULT '',
+            ssh_private_key      TEXT DEFAULT '',
+            ssh_auth_type        TEXT DEFAULT 'password',
+            ssh_test_level       TEXT DEFAULT 'banner',
             PRIMARY KEY (did, sid)
         )""")
 
@@ -161,6 +166,11 @@ def pg_create_main_schema(cur):
         ("sensors", "smtp_from",               "TEXT DEFAULT ''"),
         ("sensors", "smtp_rcpt",               "TEXT DEFAULT ''"),
         ("sensors", "smtp_test_level",         "TEXT DEFAULT 'ehlo'"),
+        ("sensors", "ssh_user",                "TEXT DEFAULT ''"),
+        ("sensors", "ssh_password",            "TEXT DEFAULT ''"),
+        ("sensors", "ssh_private_key",         "TEXT DEFAULT ''"),
+        ("sensors", "ssh_auth_type",           "TEXT DEFAULT 'password'"),
+        ("sensors", "ssh_test_level",          "TEXT DEFAULT 'banner'"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),

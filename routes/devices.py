@@ -480,6 +480,7 @@ def handle(h, method, path, body):
                   "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                   "vmware_disk_path",
                   "smtp_tls", "smtp_user", "smtp_from", "smtp_rcpt", "smtp_test_level",
+                  "ssh_user", "ssh_auth_type", "ssh_test_level",
                   "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
         # Normalize anomaly fields to safe ranges
@@ -505,6 +506,13 @@ def handle(h, method, path, body):
         if body.get("smtp_password"):
             from db.backups import encrypt_pw
             kwargs["smtp_password"] = encrypt_pw(body["smtp_password"])
+        # SSH password + private key: encrypt if provided, skip if empty
+        if body.get("ssh_password"):
+            from db.backups import encrypt_pw
+            kwargs["ssh_password"] = encrypt_pw(body["ssh_password"])
+        if body.get("ssh_private_key"):
+            from db.backups import encrypt_pw
+            kwargs["ssh_private_key"] = encrypt_pw(body["ssh_private_key"])
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
         try:
@@ -650,6 +658,18 @@ def handle(h, method, path, body):
         if stype == "smtp" and smtp_pw_v:
             from db.backups import encrypt_pw
             smtp_pw_v = encrypt_pw(smtp_pw_v)
+        # SSH fields
+        ssh_user_v        = body.get("ssh_user", "")
+        ssh_pw_v          = body.get("ssh_password", "")
+        ssh_key_v         = body.get("ssh_private_key", "")
+        ssh_auth_type_v   = body.get("ssh_auth_type", "password")
+        ssh_test_level_v  = body.get("ssh_test_level", "banner")
+        if stype == "ssh":
+            from db.backups import encrypt_pw
+            if ssh_pw_v:
+                ssh_pw_v = encrypt_pw(ssh_pw_v)
+            if ssh_key_v:
+                ssh_key_v = encrypt_pw(ssh_key_v)
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -686,7 +706,12 @@ def handle(h, method, path, body):
                                smtp_tls=smtp_tls_v, smtp_user=smtp_user_v,
                                smtp_password=smtp_pw_v,
                                smtp_from=smtp_from_v, smtp_rcpt=smtp_rcpt_v,
-                               smtp_test_level=smtp_test_level_v)
+                               smtp_test_level=smtp_test_level_v,
+                               ssh_user=ssh_user_v,
+                               ssh_password=ssh_pw_v,
+                               ssh_private_key=ssh_key_v,
+                               ssh_auth_type=ssh_auth_type_v,
+                               ssh_test_level=ssh_test_level_v)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
