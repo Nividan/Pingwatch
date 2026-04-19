@@ -559,15 +559,27 @@ class MonitorState:
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
+            # Numeric fields must never land as "" on the Sensor — PG's INTEGER
+            # columns reject empty strings at save time. Treat "" as "not provided".
+            _nullable_int_fields = {"port", "warn_ms", "crit_ms"}
+            _int_fields = {"interval", "timeout", "http_expected_status",
+                           "fail_after", "recover_after",
+                           "loss_warn_pct", "loss_crit_pct",
+                           "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"}
             for k, v in kwargs.items():
-                if k in editable and v is not None:
-                    if k == 'host':
-                        if v:  # Non-empty: manually overridden — unlink from device
-                            s.host_override = True
-                        else:  # Cleared: re-link to device host
-                            v = dev.host
-                            s.host_override = False
-                    setattr(s, k, v)
+                if k not in editable or v is None:
+                    continue
+                if k in _nullable_int_fields and v == "":
+                    v = None
+                elif k in _int_fields and v == "":
+                    continue   # keep existing value
+                if k == 'host':
+                    if v:  # Non-empty: manually overridden — unlink from device
+                        s.host_override = True
+                    else:  # Cleared: re-link to device host
+                        v = dev.host
+                        s.host_override = False
+                setattr(s, k, v)
             _anom_enabled_after = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_after    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
             # Reset baseline when user enables anomaly (off→on) or changes sensitivity —
