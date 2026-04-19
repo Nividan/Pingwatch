@@ -578,7 +578,7 @@ async function submitEditSensor(did, sid){
 function selType(t){
   document.getElementById('as-t').value=t;
   document.querySelectorAll('#sensor-sidebar .stab-nav').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
-  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
+  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);

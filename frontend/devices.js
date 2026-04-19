@@ -994,8 +994,16 @@ function _applyDevFilter(query){
 }
 
 function _renderPage(){
-  const start=_devPage*_devPageSize;
-  const visible=new Set(_filteredDids.slice(start,start+_devPageSize));
+  // Pagination only applies to list view — grid view shows every filtered
+  // device. Without this guard, switching from a paginated list view back
+  // to grid silently caps the grid at the list's per-page size, because
+  // the slice below runs regardless of which view is visible. The
+  // pagination CONTROLS were already gated by view in _renderPagination(),
+  // but the underlying slice was not — that asymmetry was the bug.
+  const isList = _devView === 'list';
+  const start  = isList ? _devPage * _devPageSize : 0;
+  const slice  = isList ? _filteredDids.slice(start, start + _devPageSize) : _filteredDids;
+  const visible=new Set(slice);
   const allDids=new Set(_filteredDids);
   // Show/hide individual cards and list rows
   document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
