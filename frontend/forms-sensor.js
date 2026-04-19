@@ -307,7 +307,7 @@ function sensorFormHTML(dev, s=null) {
     <div class="fr">
       <label class="fl">Test depth</label>
       <select id="as-shlvl" onchange="_sshLvlToggle()">
-        ${[['connect','Connect only (TCP)'],['banner','Banner (verify it\\'s SSH + capture version)'],['auth','Auth (full login)']]
+        ${[['connect','Connect only (TCP)'],['banner','Banner (verify SSH + capture version)'],['auth','Auth (full login)']]
           .map(([v,lbl])=>`<option value="${v}"${(s?.ssh_test_level||'banner')===v?' selected':''}>${lbl}</option>`).join('')}
       </select>
       <div class="fh">Each level runs all prior steps. Auth closes immediately after handshake — no command is executed.</div>
