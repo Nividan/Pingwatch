@@ -1821,8 +1821,8 @@ function _logDownload(filename, content, mime) {
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
 
-const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:2000, ssh:1500};
-const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:5000, ssh:4000};
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:2000, ssh:1500, sftp:2000};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:5000, ssh:4000, sftp:5000};
 
 const _SDR_META = {
   ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},
@@ -1835,6 +1835,7 @@ const _SDR_META = {
   banner:       {ico:'📋', label:'Banner',       desc:'TCP banner / regex match'},
   smtp:         {ico:'✉',  label:'SMTP',         desc:'Mail server reachability + MAIL FROM round-trip'},
   ssh:          {ico:'⇲',  label:'SSH',          desc:'SSH port / banner / full auth (password or key)'},
+  sftp:         {ico:'⇑',  label:'SFTP',         desc:'SFTP subsystem + list / stat / SHA256 file integrity'},
 };
 
 function _sdrExtraFields(type, d){

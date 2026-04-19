@@ -83,7 +83,14 @@ def _pg_save(state):
              getattr(s, "ssh_password", ""),
              getattr(s, "ssh_private_key", ""),
              getattr(s, "ssh_auth_type", "password") or "password",
-             getattr(s, "ssh_test_level", "banner") or "banner")
+             getattr(s, "ssh_test_level", "banner") or "banner",
+             getattr(s, "sftp_user", ""),
+             getattr(s, "sftp_password", ""),
+             getattr(s, "sftp_private_key", ""),
+             getattr(s, "sftp_auth_type", "password") or "password",
+             getattr(s, "sftp_test_level", "open") or "open",
+             getattr(s, "sftp_remote_path", ""),
+             getattr(s, "sftp_expected_sha256", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -136,7 +143,9 @@ def _pg_save(state):
                     "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
                     "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
                     "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
-                    "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level) "
+                    "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
+                    "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
+                    "sftp_remote_path,sftp_expected_sha256) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -163,7 +172,12 @@ def _pg_save(state):
                     "smtp_rcpt=EXCLUDED.smtp_rcpt, smtp_test_level=EXCLUDED.smtp_test_level, "
                     "ssh_user=EXCLUDED.ssh_user, ssh_password=EXCLUDED.ssh_password, "
                     "ssh_private_key=EXCLUDED.ssh_private_key, "
-                    "ssh_auth_type=EXCLUDED.ssh_auth_type, ssh_test_level=EXCLUDED.ssh_test_level",
+                    "ssh_auth_type=EXCLUDED.ssh_auth_type, ssh_test_level=EXCLUDED.ssh_test_level, "
+                    "sftp_user=EXCLUDED.sftp_user, sftp_password=EXCLUDED.sftp_password, "
+                    "sftp_private_key=EXCLUDED.sftp_private_key, "
+                    "sftp_auth_type=EXCLUDED.sftp_auth_type, sftp_test_level=EXCLUDED.sftp_test_level, "
+                    "sftp_remote_path=EXCLUDED.sftp_remote_path, "
+                    "sftp_expected_sha256=EXCLUDED.sftp_expected_sha256",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -241,7 +255,14 @@ def db_save(state):
              getattr(s, "ssh_password", ""),
              getattr(s, "ssh_private_key", ""),
              getattr(s, "ssh_auth_type", "password") or "password",
-             getattr(s, "ssh_test_level", "banner") or "banner")
+             getattr(s, "ssh_test_level", "banner") or "banner",
+             getattr(s, "sftp_user", ""),
+             getattr(s, "sftp_password", ""),
+             getattr(s, "sftp_private_key", ""),
+             getattr(s, "sftp_auth_type", "password") or "password",
+             getattr(s, "sftp_test_level", "open") or "open",
+             getattr(s, "sftp_remote_path", ""),
+             getattr(s, "sftp_expected_sha256", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -273,8 +294,10 @@ def db_save(state):
             "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
             "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
             "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
-            "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
+            "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
+            "sftp_remote_path,sftp_expected_sha256) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -336,7 +359,14 @@ def _pg_load(state):
                 "COALESCE(ssh_password,'') AS ssh_password,"
                 "COALESCE(ssh_private_key,'') AS ssh_private_key,"
                 "COALESCE(ssh_auth_type,'password') AS ssh_auth_type,"
-                "COALESCE(ssh_test_level,'banner') AS ssh_test_level "
+                "COALESCE(ssh_test_level,'banner') AS ssh_test_level,"
+                "COALESCE(sftp_user,'') AS sftp_user,"
+                "COALESCE(sftp_password,'') AS sftp_password,"
+                "COALESCE(sftp_private_key,'') AS sftp_private_key,"
+                "COALESCE(sftp_auth_type,'password') AS sftp_auth_type,"
+                "COALESCE(sftp_test_level,'open') AS sftp_test_level,"
+                "COALESCE(sftp_remote_path,'') AS sftp_remote_path,"
+                "COALESCE(sftp_expected_sha256,'') AS sftp_expected_sha256 "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -413,6 +443,13 @@ def _pg_load(state):
         s.ssh_private_key      = row[46] or ""
         s.ssh_auth_type        = row[47] or "password"
         s.ssh_test_level       = row[48] or "banner"
+        s.sftp_user            = row[49] or ""
+        s.sftp_password        = row[50] or ""
+        s.sftp_private_key     = row[51] or ""
+        s.sftp_auth_type       = row[52] or "password"
+        s.sftp_test_level      = row[53] or "open"
+        s.sftp_remote_path     = row[54] or ""
+        s.sftp_expected_sha256 = row[55] or ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -508,7 +545,11 @@ def db_load(state):
             "COALESCE(smtp_rcpt,''),COALESCE(smtp_test_level,'ehlo'),"
             "COALESCE(ssh_user,''),COALESCE(ssh_password,''),"
             "COALESCE(ssh_private_key,''),COALESCE(ssh_auth_type,'password'),"
-            "COALESCE(ssh_test_level,'banner') "
+            "COALESCE(ssh_test_level,'banner'),"
+            "COALESCE(sftp_user,''),COALESCE(sftp_password,''),"
+            "COALESCE(sftp_private_key,''),COALESCE(sftp_auth_type,'password'),"
+            "COALESCE(sftp_test_level,'open'),"
+            "COALESCE(sftp_remote_path,''),COALESCE(sftp_expected_sha256,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -557,7 +598,10 @@ def db_load(state):
          smtp_tls, smtp_user, smtp_password,
          smtp_from, smtp_rcpt, smtp_test_level,
          ssh_user, ssh_password, ssh_private_key,
-         ssh_auth_type, ssh_test_level) in srows:
+         ssh_auth_type, ssh_test_level,
+         sftp_user, sftp_password, sftp_private_key,
+         sftp_auth_type, sftp_test_level,
+         sftp_remote_path, sftp_expected_sha256) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -597,6 +641,13 @@ def db_load(state):
         s.ssh_private_key      = ssh_private_key or ""
         s.ssh_auth_type        = ssh_auth_type or "password"
         s.ssh_test_level       = ssh_test_level or "banner"
+        s.sftp_user            = sftp_user or ""
+        s.sftp_password        = sftp_password or ""
+        s.sftp_private_key     = sftp_private_key or ""
+        s.sftp_auth_type       = sftp_auth_type or "password"
+        s.sftp_test_level      = sftp_test_level or "open"
+        s.sftp_remote_path     = sftp_remote_path or ""
+        s.sftp_expected_sha256 = sftp_expected_sha256 or ""
         dev.sensors[sid] = s
 
     state._did_ctr = max_did

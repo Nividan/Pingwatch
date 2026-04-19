@@ -481,6 +481,8 @@ def handle(h, method, path, body):
                   "vmware_disk_path",
                   "smtp_tls", "smtp_user", "smtp_from", "smtp_rcpt", "smtp_test_level",
                   "ssh_user", "ssh_auth_type", "ssh_test_level",
+                  "sftp_user", "sftp_auth_type", "sftp_test_level",
+                  "sftp_remote_path", "sftp_expected_sha256",
                   "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
         # Normalize anomaly fields to safe ranges
@@ -513,6 +515,22 @@ def handle(h, method, path, body):
         if body.get("ssh_private_key"):
             from db.backups import encrypt_pw
             kwargs["ssh_private_key"] = encrypt_pw(body["ssh_private_key"])
+        # SFTP password + private key: same pattern
+        if body.get("sftp_password"):
+            from db.backups import encrypt_pw
+            kwargs["sftp_password"] = encrypt_pw(body["sftp_password"])
+        if body.get("sftp_private_key"):
+            from db.backups import encrypt_pw
+            kwargs["sftp_private_key"] = encrypt_pw(body["sftp_private_key"])
+        # SFTP checksum level: enforce minimum interval (avoids hammering the
+        # server with big downloads). Guard fires only when both level + interval
+        # are present in the update.
+        if kwargs.get("sftp_test_level") == "checksum" and "interval" in kwargs:
+            try:
+                if int(kwargs["interval"]) < 60:
+                    h._json(400, {"error": "checksum level requires interval ≥ 60s"}); return True
+            except (TypeError, ValueError):
+                h._json(400, {"error": "interval must be an integer"}); return True
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
         try:
@@ -670,6 +688,23 @@ def handle(h, method, path, body):
                 ssh_pw_v = encrypt_pw(ssh_pw_v)
             if ssh_key_v:
                 ssh_key_v = encrypt_pw(ssh_key_v)
+        # SFTP fields
+        sftp_user_v        = body.get("sftp_user", "")
+        sftp_pw_v          = body.get("sftp_password", "")
+        sftp_key_v         = body.get("sftp_private_key", "")
+        sftp_auth_type_v   = body.get("sftp_auth_type", "password")
+        sftp_test_level_v  = body.get("sftp_test_level", "open")
+        sftp_remote_path_v = body.get("sftp_remote_path", "")
+        sftp_expected_v    = body.get("sftp_expected_sha256", "")
+        if stype == "sftp":
+            from db.backups import encrypt_pw
+            if sftp_pw_v:
+                sftp_pw_v = encrypt_pw(sftp_pw_v)
+            if sftp_key_v:
+                sftp_key_v = encrypt_pw(sftp_key_v)
+            # Interval floor for checksum level — matches PATCH guard above
+            if sftp_test_level_v == "checksum" and iv < 60:
+                h._json(400, {"error": "checksum level requires interval ≥ 60s"}); return True
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -711,7 +746,14 @@ def handle(h, method, path, body):
                                ssh_password=ssh_pw_v,
                                ssh_private_key=ssh_key_v,
                                ssh_auth_type=ssh_auth_type_v,
-                               ssh_test_level=ssh_test_level_v)
+                               ssh_test_level=ssh_test_level_v,
+                               sftp_user=sftp_user_v,
+                               sftp_password=sftp_pw_v,
+                               sftp_private_key=sftp_key_v,
+                               sftp_auth_type=sftp_auth_type_v,
+                               sftp_test_level=sftp_test_level_v,
+                               sftp_remote_path=sftp_remote_path_v,
+                               sftp_expected_sha256=sftp_expected_v)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
