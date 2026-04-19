@@ -183,6 +183,11 @@ def handle(h, method, path, body):
         _did, _name, _host = did, name, host
         _db_enqueue(lambda: ipam_sync_device_add(_did, _name, _host))
         db_log_audit(user, h.client_address[0], 'device_create', name)
+        with STATE._lock:
+            _new_dev = STATE.devices.get(did)
+            _added_payload = _new_dev.to_dict() if _new_dev else None
+        if _added_payload:
+            STATE._broadcast("device_added", _added_payload)
         h._json(200, {"did": did})
         return True
 
@@ -353,6 +358,11 @@ def handle(h, method, path, body):
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
         if "alerts_muted" in body:
             STATE._broadcast("device_status", {"did": did, "status": dev.status})
+        with STATE._lock:
+            _upd_dev = STATE.devices.get(did)
+            _upd_payload = _upd_dev.to_dict() if _upd_dev else None
+        if _upd_payload:
+            STATE._broadcast("device_updated", _upd_payload)
         h._json(200, {"status": "updated"})
         return True
 
@@ -409,6 +419,7 @@ def handle(h, method, path, body):
             _db_enqueue(lambda _d=_dd, _s=_sid: db_resolve_flaps_by_sensor(_d, _s))
             _db_enqueue(lambda _d=_dd, _s=_sid: db_clear_stage_state_for_sensor(_d, _s))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
+        STATE._broadcast("device_deleted", {"did": ddid})
         h._json(200, {"status": "ok"})
         return True
 
@@ -611,6 +622,7 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: db_resolve_flaps_by_sensor(_sd, _ss))
         _db_enqueue(lambda: db_clear_stage_state_for_sensor(_sd, _ss))
         db_log_audit(user, h.client_address[0], 'sensor_delete', f"{sdname}/{ssname}")
+        STATE._broadcast("sensor_deleted", {"did": sdid, "sid": ssid})
         h._json(200, {"status": "ok"})
         return True
 
@@ -792,6 +804,11 @@ def handle(h, method, path, body):
         if stype == "vmware" and not vssl and _h not in _vmware_ssl_warned:
             _vmware_ssl_warned.add(_h)
             log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", _h)
+        with STATE._lock:
+            _sdev = STATE.devices.get(did)
+            _spayload = _sdev.sensors[sid].to_dict() if _sdev and sid in _sdev.sensors else None
+        if _spayload:
+            STATE._broadcast("sensor_added", {"did": did, "sensor": _spayload})
         h._json(200, {"sid": sid})
         return True
 
