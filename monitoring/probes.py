@@ -647,6 +647,168 @@ def _decode_resp(msg) -> str:
     return str(msg or "")
 
 
+_SFTP_LEVELS = ("open", "list", "stat", "checksum")
+_SFTP_CHECKSUM_MAX_BYTES = 10 * 1024 * 1024   # 10 MB hard cap
+
+
+def _fmt_bytes(n: int) -> str:
+    if n < 1024: return f"{n} B"
+    if n < 1024 ** 2: return f"{n / 1024:.1f} KB"
+    if n < 1024 ** 3: return f"{n / (1024 ** 2):.1f} MB"
+    return f"{n / (1024 ** 3):.2f} GB"
+
+
+def probe_sftp(host, port=22, user="", password="", private_key="",
+               auth_type="password", test_level="open",
+               remote_path="", expected_sha256="", timeout=10):
+    """Probe an SFTP server — 4 layered depths.
+
+    test_level: open | list | stat | checksum. Each level runs all prior steps.
+    auth_type:  password | key.
+
+    The probe is read-only — never writes, renames, or deletes on the remote.
+    Checksum level streams up to 10 MB and computes SHA256 locally; files over
+    the cap fail with a clear detail (monitoring huge files is the wrong fit).
+    """
+    import hashlib
+
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _SFTP_LEVELS:
+        test_level = "open"
+    depth = _SFTP_LEVELS.index(test_level)
+
+    try:
+        import paramiko
+    except ImportError:
+        return {"ok": False, "ms": None,
+                "detail": "paramiko not installed — run setup wizard"}
+
+    if not user:
+        return {"ok": False, "ms": None, "detail": "SFTP requires a username"}
+
+    pkey = None
+    if auth_type == "key":
+        if not private_key:
+            return {"ok": False, "ms": None,
+                    "detail": "SFTP/key auth requires a private key"}
+        pkey, kerr = _load_ssh_key(private_key)
+        if kerr:
+            return {"ok": False, "ms": None, "detail": f"Key load failed: {kerr}"}
+    elif auth_type != "password":
+        return {"ok": False, "ms": None, "detail": f"Unknown auth_type: {auth_type!r}"}
+
+    if depth >= 1 and not remote_path:
+        return {"ok": False, "ms": None,
+                "detail": f"{test_level}: remote path is required"}
+    if depth == 3 and not expected_sha256:
+        return {"ok": False, "ms": None,
+                "detail": "checksum: expected SHA256 is required"}
+
+    t0 = time.time()
+    client = None
+    sftp = None
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.MissingHostKeyPolicy())
+        kw = dict(
+            hostname=host, port=int(port), username=user,
+            timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
+            allow_agent=False, look_for_keys=False,
+        )
+        if pkey is not None: kw["pkey"] = pkey
+        else:                kw["password"] = password
+        client.connect(**kw)
+        sftp = client.open_sftp()
+
+        # Level 0: open
+        if depth == 0:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SFTP subsystem OK ({ms}ms)"}
+
+        # Level 1: list
+        if depth == 1:
+            try:
+                entries = sftp.listdir(remote_path)
+            except IOError as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"list: {str(e)[:100]}"}
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms,
+                    "detail": f"list {remote_path}: {len(entries)} entries ({ms}ms)",
+                    "value": str(len(entries))}
+
+        # Level 2: stat
+        if depth == 2:
+            try:
+                st = sftp.stat(remote_path)
+            except IOError as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"stat: {str(e)[:100]}"}
+            size = int(getattr(st, "st_size", 0) or 0)
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms,
+                    "detail": f"stat {remote_path}: {_fmt_bytes(size)} ({ms}ms)",
+                    "value": str(size)}
+
+        # Level 3: checksum (stream SHA256, cap at 10 MB)
+        try:
+            # Pre-flight: fail fast if stat says the file is over the cap
+            try:
+                st = sftp.stat(remote_path)
+                if int(getattr(st, "st_size", 0) or 0) > _SFTP_CHECKSUM_MAX_BYTES:
+                    return {"ok": False, "ms": None,
+                            "detail": f"checksum: file exceeds {_fmt_bytes(_SFTP_CHECKSUM_MAX_BYTES)} cap"}
+            except IOError as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"checksum/stat: {str(e)[:100]}"}
+            h = hashlib.sha256()
+            total = 0
+            with sftp.open(remote_path, "rb") as rf:
+                while True:
+                    chunk = rf.read(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _SFTP_CHECKSUM_MAX_BYTES:
+                        return {"ok": False, "ms": None,
+                                "detail": f"checksum: file exceeds {_fmt_bytes(_SFTP_CHECKSUM_MAX_BYTES)} cap"}
+                    h.update(chunk)
+        except IOError as e:
+            return {"ok": False, "ms": None,
+                    "detail": f"checksum/read: {str(e)[:100]}"}
+        got = h.hexdigest()
+        want = (expected_sha256 or "").strip().lower()
+        if got.lower() != want:
+            return {"ok": False, "ms": None,
+                    "detail": f"checksum: mismatch (got {got[:12]}…, expected {want[:12]}…)"}
+        ms = round((time.time() - t0) * 1000, 1)
+        return {"ok": True, "ms": ms,
+                "detail": f"checksum OK ({_fmt_bytes(total)}, {ms}ms)",
+                "value": got[:12]}
+
+    except paramiko.AuthenticationException:
+        return {"ok": False, "ms": None, "detail": "auth: authentication failed"}
+    except paramiko.BadHostKeyException as e:
+        return {"ok": False, "ms": None, "detail": f"auth: bad host key — {str(e)[:80]}"}
+    except paramiko.SSHException as e:
+        return {"ok": False, "ms": None, "detail": f"sftp: {str(e)[:100]}"}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "detail": f"sftp timeout after {timeout}s"}
+    except (ConnectionRefusedError, OSError) as e:
+        return {"ok": False, "ms": None, "detail": f"sftp connect: {str(e)[:80]}"}
+    except Exception as e:
+        log_sensors.warning("probe_sftp %s:%s: unexpected error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": str(e)[:100]}
+    finally:
+        if sftp:
+            try: sftp.close()
+            except Exception: pass
+        if client:
+            try: client.close()
+            except Exception: pass
+
+
 _SSH_LEVELS = ("connect", "banner", "auth")
 
 

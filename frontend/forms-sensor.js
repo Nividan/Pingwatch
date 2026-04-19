@@ -44,6 +44,7 @@ function sensorFormHTML(dev, s=null) {
     ['http_keyword', 'HTTP KW',  'Keyword check', 'K','Application',   'grep match content body'],
     ['ssh',          'SSH',      'Secure Shell',  '⇲','Auth & Access', 'login secure shell remote'],
     ['smtp',         'SMTP',     'Mail server',   '✉','Auth & Access', 'mail email server relay'],
+    ['sftp',         'SFTP',     'Secure file transfer','⇑','File Transfer','file upload download scp transfer backup'],
     ['vmware',       'VMware',   'VM metrics',    'V','Virtualization','vsphere esxi vm hypervisor'],
   ];
   // Group by category, preserving order of first appearance.
@@ -375,6 +376,61 @@ function sensorFormHTML(dev, s=null) {
       </div>
     </div>
   </div>
+  <!-- SFTP -->
+  <div class="fg ${curType==='sftp'?'vis':''}" id="fg-sftp">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Host / IP</label>
+        <input type="text" id="as-sfh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-sfp" value="${s?.port||22}" min="1" max="65535"/></div>
+    </div>
+    <div class="fr">
+      <label class="fl">Test depth</label>
+      <select id="as-sflvl" onchange="_sftpLvlToggle()">
+        ${[['open','Open SFTP subsystem (verify sftp-server is enabled)'],
+            ['list','+ List directory'],
+            ['stat','+ Stat specific file'],
+            ['checksum','+ Download + SHA256 verify (read-only)']]
+          .map(([v,lbl])=>`<option value="${v}"${(s?.sftp_test_level||'open')===v?' selected':''}>${lbl}</option>`).join('')}
+      </select>
+      <div class="fh">Each level runs all prior steps. Checksum is non-destructive — never writes or deletes on the remote.</div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Auth method</label>
+      <div style="display:flex;gap:16px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="as-sfauth" value="password" ${(s?.sftp_auth_type||'password')==='password'?'checked':''} onchange="_sftpLvlToggle()"/> Password
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="as-sfauth" value="key" ${(s?.sftp_auth_type||'password')==='key'?'checked':''} onchange="_sftpLvlToggle()"/> Private key
+        </label>
+      </div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Username</label>
+      <input type="text" id="as-sfu" value="${esc(s?.sftp_user||'')}" placeholder="backup / monitor / nive" autocomplete="off"/>
+    </div>
+    <div class="fr" id="as-sftp-pw-row" style="display:${(s?.sftp_auth_type||'password')==='password'?'':'none'};margin-top:8px">
+      <label class="fl">Password</label>
+      <input type="password" id="as-sfpw" value="" placeholder="${s?.has_sftp_password?'(unchanged — leave blank to keep)':'SFTP password'}" autocomplete="new-password"/>
+    </div>
+    <div class="fr" id="as-sftp-key-row" style="display:${(s?.sftp_auth_type||'password')==='key'?'':'none'};margin-top:8px">
+      <label class="fl">Private key (PEM)</label>
+      <textarea id="as-sfkey" rows="6" placeholder="${s?.has_sftp_private_key?'(unchanged — leave blank to keep)':'-----BEGIN OPENSSH PRIVATE KEY-----'}" style="font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical" autocomplete="off"></textarea>
+      <div class="fh">Ed25519 / RSA / ECDSA supported. Passphrase-protected keys not supported.</div>
+    </div>
+    <div class="fr" id="as-sftp-path-row" style="display:${['list','stat','checksum'].includes(s?.sftp_test_level||'open')?'':'none'};margin-top:8px">
+      <label class="fl">Remote path</label>
+      <input type="text" id="as-sfpath" value="${esc(s?.sftp_remote_path||'')}" placeholder="/backups  or  /backups/latest.tar.gz" autocomplete="off"/>
+      <div class="fh">Directory for <b>list</b>, file for <b>stat</b> / <b>checksum</b>.</div>
+    </div>
+    <div class="fr" id="as-sftp-sha-row" style="display:${(s?.sftp_test_level||'open')==='checksum'?'':'none'};margin-top:8px">
+      <label class="fl">Expected SHA256</label>
+      <input type="text" id="as-sfsha" value="${esc(s?.sftp_expected_sha256||'')}" placeholder="a1b2c3… (64 hex chars)" autocomplete="off" style="font-family:Consolas,Monaco,monospace;font-size:11px"/>
+      <div class="fh">Compute locally with <code>sha256sum</code>. Max file size: 10 MB.</div>
+    </div>
+  </div>
   <!-- Alert Thresholds -->
   <div class="snr-section">
     <div class="snr-section-lbl">Alert Thresholds</div>
@@ -659,7 +715,7 @@ async function submitEditSensor(did, sid){
 function selType(t){
   document.getElementById('as-t').value=t;
   document.querySelectorAll('#sensor-sidebar .stab-nav').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
-  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp','ssh'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
+  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp','ssh','sftp'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);
@@ -1789,6 +1845,9 @@ function collectSensorForm(did){
   } else if(type==='ssh'){
     host=document.getElementById('as-shh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-shp')?.value)||22;
+  } else if(type==='sftp'){
+    host=document.getElementById('as-sfh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-sfp')?.value)||22;
   }
   const warn_ms      =parseInt(document.getElementById('as-wms')?.value)||null;
   const crit_ms      =parseInt(document.getElementById('as-cms')?.value)||null;
@@ -1847,6 +1906,32 @@ function collectSensorForm(did){
       toast('AUTH level requires a username','err');return null;
     }
   }
+  if(type==='sftp'){
+    payload.sftp_test_level      = document.getElementById('as-sflvl')?.value||'open';
+    payload.sftp_auth_type       = document.querySelector('input[name="as-sfauth"]:checked')?.value||'password';
+    payload.sftp_user            = document.getElementById('as-sfu')?.value.trim()||'';
+    payload.sftp_password        = document.getElementById('as-sfpw')?.value||'';
+    payload.sftp_private_key     = document.getElementById('as-sfkey')?.value||'';
+    payload.sftp_remote_path     = document.getElementById('as-sfpath')?.value.trim()||'';
+    payload.sftp_expected_sha256 = document.getElementById('as-sfsha')?.value.trim()||'';
+    if(!payload.sftp_user){
+      toast('SFTP requires a username','err');return null;
+    }
+    if(['list','stat','checksum'].includes(payload.sftp_test_level) && !payload.sftp_remote_path){
+      toast(`SFTP ${payload.sftp_test_level} level requires a remote path`,'err');return null;
+    }
+    if(payload.sftp_test_level==='checksum'){
+      if(!payload.sftp_expected_sha256){
+        toast('Checksum level requires an expected SHA256','err');return null;
+      }
+      if(!/^[a-fA-F0-9]{64}$/.test(payload.sftp_expected_sha256)){
+        toast('SHA256 must be 64 hex characters','err');return null;
+      }
+      if((payload.interval||0) < 60){
+        toast('Checksum level requires interval ≥ 60s','err');return null;
+      }
+    }
+  }
   return payload;
 }
 
@@ -1869,6 +1954,33 @@ function _sshLvlToggle(){
   if(authRow) authRow.style.display=(lvl==='auth')?'':'none';
   if(pwRow)   pwRow.style.display  =(authType==='password')?'':'none';
   if(keyRow)  keyRow.style.display =(authType==='key')?'':'none';
+}
+
+// Toggle SFTP conditional rows + bump interval/timeout when checksum is picked.
+// Path row appears at list/stat/checksum; SHA row only at checksum.
+function _sftpLvlToggle(){
+  const lvl=document.getElementById('as-sflvl')?.value||'open';
+  const authType=document.querySelector('input[name="as-sfauth"]:checked')?.value||'password';
+  const pwRow  =document.getElementById('as-sftp-pw-row');
+  const keyRow =document.getElementById('as-sftp-key-row');
+  const pathRow=document.getElementById('as-sftp-path-row');
+  const shaRow =document.getElementById('as-sftp-sha-row');
+  if(pwRow)   pwRow.style.display  =(authType==='password')?'':'none';
+  if(keyRow)  keyRow.style.display =(authType==='key')?'':'none';
+  if(pathRow) pathRow.style.display=(['list','stat','checksum'].includes(lvl))?'':'none';
+  if(shaRow)  shaRow.style.display =(lvl==='checksum')?'':'none';
+  // Checksum downloads bytes — default to 5min interval + 30s timeout to avoid
+  // hammering the server. Only bump if the current value is lower than the
+  // recommended floor; leave higher values alone.
+  if(lvl==='checksum'){
+    const iv=document.getElementById('as-iv');
+    const tm=document.getElementById('as-tmo');
+    if(iv && (parseInt(iv.value)||0) < 300){
+      iv.value=300;
+      iv.title='checksum level: min 60s, default 300s — avoids hammering the server with file downloads';
+    }
+    if(tm && (parseInt(tm.value)||0) < 30){ tm.value=30; }
+  }
 }
 
 // Prefill SMTP fields from the system alert-SMTP config (reads /api/settings)

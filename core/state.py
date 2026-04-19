@@ -79,7 +79,7 @@ class _SensorScheduler:
             self._wake.clear()
 
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
-from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh
+from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp
 from .settings import get as _cfg
 from .logger import log_sensors
 
@@ -125,7 +125,10 @@ class Sensor:
                  smtp_tls="none", smtp_user="", smtp_password="",
                  smtp_from="", smtp_rcpt="", smtp_test_level="ehlo",
                  ssh_user="", ssh_password="", ssh_private_key="",
-                 ssh_auth_type="password", ssh_test_level="banner"):
+                 ssh_auth_type="password", ssh_test_level="banner",
+                 sftp_user="", sftp_password="", sftp_private_key="",
+                 sftp_auth_type="password", sftp_test_level="open",
+                 sftp_remote_path="", sftp_expected_sha256=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -180,6 +183,14 @@ class Sensor:
         self.ssh_private_key = ssh_private_key or ""    # Fernet ciphertext (multi-line PEM)
         self.ssh_auth_type   = ssh_auth_type or "password"  # password | key
         self.ssh_test_level  = ssh_test_level or "banner"   # connect | banner | auth
+        # SFTP fields — reuses SSH pattern; read-only probe (open / list / stat / checksum)
+        self.sftp_user            = sftp_user or ""
+        self.sftp_password        = sftp_password or ""        # Fernet ciphertext
+        self.sftp_private_key     = sftp_private_key or ""     # Fernet ciphertext
+        self.sftp_auth_type       = sftp_auth_type or "password"
+        self.sftp_test_level      = sftp_test_level or "open"
+        self.sftp_remote_path     = sftp_remote_path or ""     # dir (list) or file (stat/checksum)
+        self.sftp_expected_sha256 = sftp_expected_sha256 or "" # hex; checksum level only
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -287,6 +298,17 @@ class Sensor:
                              decrypt_pw(self.ssh_private_key),
                              self.ssh_auth_type,
                              self.ssh_test_level, self.timeout)
+        if self.stype == "sftp":
+            from db.backups import decrypt_pw
+            return probe_sftp(self.host, self.port or 22,
+                              self.sftp_user,
+                              decrypt_pw(self.sftp_password),
+                              decrypt_pw(self.sftp_private_key),
+                              self.sftp_auth_type,
+                              self.sftp_test_level,
+                              self.sftp_remote_path,
+                              self.sftp_expected_sha256,
+                              self.timeout)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -337,6 +359,13 @@ class Sensor:
             "ssh_test_level":        self.ssh_test_level,
             "has_ssh_password":      bool(self.ssh_password),
             "has_ssh_private_key":   bool(self.ssh_private_key),
+            "sftp_user":             self.sftp_user,
+            "sftp_auth_type":        self.sftp_auth_type,
+            "sftp_test_level":       self.sftp_test_level,
+            "sftp_remote_path":      self.sftp_remote_path,
+            "sftp_expected_sha256":  self.sftp_expected_sha256,
+            "has_sftp_password":     bool(self.sftp_password),
+            "has_sftp_private_key":  bool(self.sftp_private_key),
             "threshold_state":       self._threshold_state,
             "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
             "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
@@ -523,7 +552,10 @@ class MonitorState:
                    smtp_tls="none", smtp_user="", smtp_password="",
                    smtp_from="", smtp_rcpt="", smtp_test_level="ehlo",
                    ssh_user="", ssh_password="", ssh_private_key="",
-                   ssh_auth_type="password", ssh_test_level="banner"):
+                   ssh_auth_type="password", ssh_test_level="banner",
+                   sftp_user="", sftp_password="", sftp_private_key="",
+                   sftp_auth_type="password", sftp_test_level="open",
+                   sftp_remote_path="", sftp_expected_sha256=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -546,7 +578,13 @@ class MonitorState:
                        smtp_test_level=smtp_test_level,
                        ssh_user=ssh_user, ssh_password=ssh_password,
                        ssh_private_key=ssh_private_key,
-                       ssh_auth_type=ssh_auth_type, ssh_test_level=ssh_test_level)
+                       ssh_auth_type=ssh_auth_type, ssh_test_level=ssh_test_level,
+                       sftp_user=sftp_user, sftp_password=sftp_password,
+                       sftp_private_key=sftp_private_key,
+                       sftp_auth_type=sftp_auth_type,
+                       sftp_test_level=sftp_test_level,
+                       sftp_remote_path=sftp_remote_path,
+                       sftp_expected_sha256=sftp_expected_sha256)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -584,6 +622,9 @@ class MonitorState:
                         "smtp_from", "smtp_rcpt", "smtp_test_level",
                         "ssh_user", "ssh_password", "ssh_private_key",
                         "ssh_auth_type", "ssh_test_level",
+                        "sftp_user", "sftp_password", "sftp_private_key",
+                        "sftp_auth_type", "sftp_test_level",
+                        "sftp_remote_path", "sftp_expected_sha256",
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)

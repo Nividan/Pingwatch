@@ -146,6 +146,13 @@ def pg_create_main_schema(cur):
             ssh_private_key      TEXT DEFAULT '',
             ssh_auth_type        TEXT DEFAULT 'password',
             ssh_test_level       TEXT DEFAULT 'banner',
+            sftp_user            TEXT DEFAULT '',
+            sftp_password        TEXT DEFAULT '',
+            sftp_private_key     TEXT DEFAULT '',
+            sftp_auth_type       TEXT DEFAULT 'password',
+            sftp_test_level      TEXT DEFAULT 'open',
+            sftp_remote_path     TEXT DEFAULT '',
+            sftp_expected_sha256 TEXT DEFAULT '',
             PRIMARY KEY (did, sid)
         )""")
 
@@ -171,6 +178,13 @@ def pg_create_main_schema(cur):
         ("sensors", "ssh_private_key",         "TEXT DEFAULT ''"),
         ("sensors", "ssh_auth_type",           "TEXT DEFAULT 'password'"),
         ("sensors", "ssh_test_level",          "TEXT DEFAULT 'banner'"),
+        ("sensors", "sftp_user",               "TEXT DEFAULT ''"),
+        ("sensors", "sftp_password",           "TEXT DEFAULT ''"),
+        ("sensors", "sftp_private_key",        "TEXT DEFAULT ''"),
+        ("sensors", "sftp_auth_type",          "TEXT DEFAULT 'password'"),
+        ("sensors", "sftp_test_level",         "TEXT DEFAULT 'open'"),
+        ("sensors", "sftp_remote_path",        "TEXT DEFAULT ''"),
+        ("sensors", "sftp_expected_sha256",    "TEXT DEFAULT ''"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),

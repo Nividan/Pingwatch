@@ -545,6 +545,21 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # SFTP sensor fields — read-only probe, creds Fernet ciphertext
+        for col_def in [
+            "sftp_user            TEXT DEFAULT ''",
+            "sftp_password        TEXT DEFAULT ''",
+            "sftp_private_key     TEXT DEFAULT ''",
+            "sftp_auth_type       TEXT DEFAULT 'password'",
+            "sftp_test_level      TEXT DEFAULT 'open'",
+            "sftp_remote_path     TEXT DEFAULT ''",
+            "sftp_expected_sha256 TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
         # Device-level default credentials
         for col in ("snmp_community_default", "snmp_version_default", "vmware_user_default", "vmware_password_default"):
             try:

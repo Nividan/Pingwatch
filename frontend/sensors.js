@@ -1,5 +1,5 @@
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? SENSOR TILES �?�?�?�?�?�?�?�?�?�?�?�?
-function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':t==='vmware'?'V':t==='smtp'?'✉':t==='ssh'?'⇲':'◈'}
+function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':t==='vmware'?'V':t==='smtp'?'✉':t==='ssh'?'⇲':t==='sftp'?'⇑':'◈'}
 // msC kept as a thin alias for backward compatibility — canonical impl is msColor() in forms-utils.js
 const msC = msColor;
 function fmtTs(ts){try{return new Date(ts).toLocaleTimeString('en-GB');}catch(e){return ts;}}
