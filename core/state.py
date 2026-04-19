@@ -913,10 +913,15 @@ class MonitorState:
             elif s.last_ms is not None:
                 _thr_chk = s.last_ms
             if _thr_chk is not None:
-                if s.stype == 'tls' and s._last_rate is None:
-                    # TLS cert expiry: lower days = worse → alert when below threshold
+                # Inverted-threshold metrics: lower value = worse (alert when ≤ threshold).
+                # Covers TLS cert expiry (days-to-expiry) and VMware datastore free-space (GB).
+                _inverted = (
+                    (s.stype == 'tls' and s._last_rate is None) or
+                    (s.stype == 'vmware' and s.vmware_metric.startswith('dstore_'))
+                )
+                if _inverted:
                     if s.crit_ms and _thr_chk <= s.crit_ms:    _new_thr = "crit"
-                    elif s.warn_ms and _thr_chk <= s.warn_ms:   _new_thr = "warn"
+                    elif s.warn_ms and _thr_chk <= s.warn_ms:  _new_thr = "warn"
                 else:
                     if s.crit_ms and _thr_chk >= s.crit_ms:    _new_thr = "crit"
                     elif s.warn_ms and _thr_chk >= s.warn_ms:  _new_thr = "warn"

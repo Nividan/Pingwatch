@@ -259,17 +259,18 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:4px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="dp-btn" type="button" onclick="discoverVMs()" id="as-vm-disc-btn">⊕ Discover VMs</button>
-        <button class="dp-btn" type="button" onclick="discoverHosts()" id="as-vmh-disc-btn">⊕ Discover Hosts</button>
+        <button class="dp-btn" type="button" onclick="discoverVMs()" id="as-vm-disc-btn">▥ Discover VMs</button>
+        <button class="dp-btn" type="button" onclick="discoverHosts()" id="as-vmh-disc-btn">▦ Discover Hosts</button>
+        <button class="dp-btn" type="button" onclick="discoverDatastores()" id="as-vmds-disc-btn">▤ Discover Datastores</button>
         <span id="as-vm-status" style="font-size:11px;color:var(--text3)"></span>
       </div>
       <div id="as-vm-list" style="display:none;margin-top:8px"></div>
     </div>
     <div class="fgrid" style="margin-top:4px">
-      <div class="fr"><label class="fl">VM / Host ID</label>
-        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123 or host-28 (from discovery)" autocomplete="off" readonly/>
+      <div class="fr"><label class="fl">VM / Host / Datastore ID</label>
+        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123, host-28, or datastore-14 (from discovery)" autocomplete="off" readonly/>
         <input type="hidden" id="as-vmnm" value="${esc(s?.vmware_vm_name||'')}"/>
-        <div class="fh">Managed Object ID — use Discover VMs or Discover Hosts above</div>
+        <div class="fh">Managed Object ID — use a Discover button above</div>
       </div>
       <div class="fr"><label class="fl">Metric</label>
         <select id="as-vmmet"><option value="">— select metric —</option></select>
@@ -1172,7 +1173,10 @@ async function addSelectedIfaceSensors(){
 // ── VMware VM Discovery ──────────────────────────────────────────────────
 
 let _vmwareMetrics=null;
+let _vmwareDatastoreMetrics=null;
 let _vmSelectedMemMB=0;  // memory of currently selected VM (MB), for smart threshold defaults
+let _vmSelectedCapacityGB=0;  // capacity of currently selected datastore (GB), for smart threshold defaults
+let _vmDstoreMode=false;  // true when the metric dropdown is showing datastore metrics
 
 // Fixed per-metric defaults (used when VM RAM not available or metric isn't memory-based)
 const _VM_THR_DEFAULTS={
@@ -1198,8 +1202,13 @@ function _vmwareThrAutoFill(metric, memMB){
   const ci=document.getElementById('as-cms');
   if(!wi||!ci||wi.value||ci.value) return;
   let w=null,c=null;
+  // Datastore free-space: defaults scale with discovered capacity
+  if(metric && metric.startsWith('dstore_') && _vmSelectedCapacityGB>0){
+    w=Math.round(_vmSelectedCapacityGB*0.20);
+    c=Math.round(_vmSelectedCapacityGB*0.10);
+  }
   // Memory metrics: compute from VM/host RAM
-  if(memMB>0){
+  else if(memMB>0){
     if(metric==='mem_consumed'||metric==='host_mem_consumed'){ w=Math.round(memMB*0.80); c=Math.round(memMB*0.90); }
     else if(metric==='mem_active'||metric==='host_mem_active'){ w=Math.round(memMB*0.50); c=Math.round(memMB*0.70); }
   }
@@ -1211,6 +1220,7 @@ function _vmwareThrAutoFill(metric, memMB){
 function _vmwareThrLabel(metric, isWarn){
   const pfx=isWarn?'Warn':'Crit';
   if(!metric) return pfx+' Value';
+  if(metric.startsWith('dstore_')) return pfx+' (GB free — alert below)';
   const m=_allVmwareMetrics().find(x=>x.v===metric);
   const u=m?.unit||'';
   if(u==='%')       return pfx+' %';
@@ -1220,6 +1230,7 @@ function _vmwareThrLabel(metric, isWarn){
   if(u==='ms')      return pfx+' ms';
   if(u==='seconds') return pfx+' seconds';
   if(u==='watt')    return pfx+' watt';
+  if(u==='GB')      return pfx+' GB';
   return pfx+' Value';
 }
 
@@ -1280,33 +1291,53 @@ let _vmwareHostMetrics=null;
 async function _vmwareLoadMetrics(){
   const sel=document.getElementById('as-vmmet');
   if(!sel) return;
+  // Detect mode from the saved metric when opening an existing sensor
+  const cur=document.getElementById('as-vmmet-v')?.value||'';
+  if(cur.startsWith('dstore_')) _vmDstoreMode=true;
+  else if(cur) _vmDstoreMode=false;
   sel.onchange=()=>_vmwareThrUpdateLabels();
-  if(sel.options.length>1){ _vmwareThrUpdateLabels(); return; }
-  if(!_vmwareMetrics||!_vmwareHostMetrics){
-    try{
-      const [vmR,hostR]=await Promise.all([fetch('/api/vmware/metrics'),fetch('/api/vmware/host-metrics')]);
-      const vmD=await vmR.json(), hostD=await hostR.json();
-      _vmwareMetrics=vmD.metrics||[];
-      _vmwareHostMetrics=hostD.metrics||[];
-    }catch(e){ return; }
+  // Always rebuild options when the mode might have flipped between opens
+  sel.innerHTML='<option value="">— select metric —</option>';
+  if(_vmDstoreMode){
+    if(!_vmwareDatastoreMetrics){
+      try{
+        const r=await fetch('/api/vmware/datastore-metrics');
+        const d=await r.json();
+        _vmwareDatastoreMetrics=d.metrics||[];
+      }catch(e){ return; }
+    }
+    const grp=document.createElement('optgroup');
+    grp.label='Datastore Metrics';
+    _vmwareDatastoreMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l;grp.appendChild(o);});
+    sel.appendChild(grp);
+  }else{
+    if(!_vmwareMetrics||!_vmwareHostMetrics){
+      try{
+        const [vmR,hostR]=await Promise.all([fetch('/api/vmware/metrics'),fetch('/api/vmware/host-metrics')]);
+        const vmD=await vmR.json(), hostD=await hostR.json();
+        _vmwareMetrics=vmD.metrics||[];
+        _vmwareHostMetrics=hostD.metrics||[];
+      }catch(e){ return; }
+    }
+    const vmGrp=document.createElement('optgroup');
+    vmGrp.label='VM Metrics';
+    _vmwareMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';vmGrp.appendChild(o);});
+    sel.appendChild(vmGrp);
+    const hostGrp=document.createElement('optgroup');
+    hostGrp.label='Host Metrics';
+    _vmwareHostMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';hostGrp.appendChild(o);});
+    sel.appendChild(hostGrp);
   }
-  const vmGrp=document.createElement('optgroup');
-  vmGrp.label='VM Metrics';
-  _vmwareMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';vmGrp.appendChild(o);});
-  sel.appendChild(vmGrp);
-  const hostGrp=document.createElement('optgroup');
-  hostGrp.label='Host Metrics';
-  _vmwareHostMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';hostGrp.appendChild(o);});
-  sel.appendChild(hostGrp);
-  const cur=document.getElementById('as-vmmet-v')?.value;
   if(cur) sel.value=cur;
   _vmwareThrUpdateLabels();
 }
-function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[])]; }
+function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[]),...(_vmwareDatastoreMetrics||[])]; }
 
 let _discHostMode=false;  // true when host discovery table is shown
 async function discoverVMs(){
   _discHostMode=false;
+  _vmDstoreMode=false;
+  _vmSelectedCapacityGB=0;
   const did      =window._ifaceDid;
   const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
   const username =document.getElementById('as-vmu')?.value.trim()||'';
@@ -1332,7 +1363,7 @@ async function discoverVMs(){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
     return;
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover VMs'; }
+    if(btn){ btn.disabled=false; btn.textContent='▥ Discover VMs'; }
   }
   if(r.error){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
@@ -1409,6 +1440,8 @@ async function discoverVMs(){
 
 async function discoverHosts(){
   _discHostMode=true;
+  _vmDstoreMode=false;
+  _vmSelectedCapacityGB=0;
   const did      =window._ifaceDid;
   const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
   const username =document.getElementById('as-vmu')?.value.trim()||'';
@@ -1434,7 +1467,7 @@ async function discoverHosts(){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
     return;
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover Hosts'; }
+    if(btn){ btn.disabled=false; btn.textContent='▦ Discover Hosts'; }
   }
   if(r.error){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
@@ -1508,6 +1541,134 @@ async function discoverHosts(){
   html+='</div></div>';
   listEl.innerHTML=html;
   listEl.style.display='';
+}
+
+async function discoverDatastores(){
+  _discHostMode=false;
+  _vmDstoreMode=true;
+  const did      =window._ifaceDid;
+  const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
+  const username =document.getElementById('as-vmu')?.value.trim()||'';
+  const password =document.getElementById('as-vmpw')?.value||'';
+  const port     =parseInt(document.getElementById('as-vmp')?.value)||443;
+  const vssl     =document.getElementById('as-vmssl')?.checked!==false;
+  const btn      =document.getElementById('as-vmds-disc-btn');
+  const statusEl =document.getElementById('as-vm-status');
+  const listEl   =document.getElementById('as-vm-list');
+  const dev=did?S.devices[did]:null;
+  if(!host){ toast('Enter a Host / IP first','err'); return; }
+  if(!username){ toast('Enter a Username','err'); return; }
+  if(!password && !dev?.has_vmware_password_default){ toast('Enter a Password','err'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Connecting to vCenter…'; }
+  if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  const payload={host,username,password,port,verify_ssl:vssl};
+  if(!password && did) payload.did=did;
+  let r;
+  try{
+    r=await api('POST','/api/vmware/datastores',payload);
+  }catch(e){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    return;
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='▤ Discover Datastores'; }
+  }
+  if(r.error){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
+    return;
+  }
+  const datastores=r.datastores||[];
+  if(!datastores.length){
+    if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No datastores found.'; }
+    return;
+  }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${datastores.length} datastore${datastores.length!==1?'s':''} discovered — click one to select`; }
+
+  // Ensure datastore metrics are loaded (for labels)
+  if(!_vmwareDatastoreMetrics){
+    try{
+      const mr=await fetch('/api/vmware/datastore-metrics');
+      const md=await mr.json();
+      _vmwareDatastoreMetrics=md.metrics||[];
+    }catch(e){}
+  }
+
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<input type="text" id="as-vm-search" placeholder="Search datastore names…" oninput="filterDatastores(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
+  html+='</div>';
+  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:320px">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:180px">Datastore</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Type</th>';
+  html+='<th style="padding:5px 8px;text-align:right;white-space:nowrap">Capacity</th>';
+  html+='<th style="padding:5px 8px;text-align:right;white-space:nowrap">Free</th>';
+  html+='<th style="padding:5px 8px;text-align:right;white-space:nowrap">Free %</th>';
+  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap">State</th>';
+  html+='<th style="padding:5px 8px"></th>';
+  html+='</tr></thead><tbody id="as-vm-tbody">';
+
+  datastores.forEach((d,i)=>{
+    const rowBg=i%2?'background:var(--bg2)':'';
+    const capStr=d.capacity_gb>=1024?(d.capacity_gb/1024).toFixed(2)+' TB':d.capacity_gb+' GB';
+    const freeStr=d.free_gb>=1024?(d.free_gb/1024).toFixed(2)+' TB':d.free_gb+' GB';
+    const freePctClr=d.free_pct<10?'var(--down)':d.free_pct<20?'var(--warn)':'var(--up)';
+    const stClr=d.accessible?'var(--up)':'var(--down)';
+    const stText=d.accessible?'accessible':'unavailable';
+    html+=`<tr style="border-top:1px solid var(--border);${rowBg}" data-ds-name="${esc(d.name)}">`;
+    html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap" title="${esc(d.name)}">${esc(d.name)}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${esc(d.type||'')}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);text-align:right;white-space:nowrap">${capStr}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text2);text-align:right;white-space:nowrap">${freeStr}</td>`;
+    html+=`<td style="padding:4px 8px;color:${freePctClr};text-align:right;white-space:nowrap">${d.free_pct}%</td>`;
+    html+=`<td style="padding:4px 8px;color:${stClr};text-align:center;white-space:nowrap">${stText}</td>`;
+    html+=`<td style="padding:4px 8px;text-align:right;white-space:nowrap"><button class="btn-p" type="button" style="font-size:11px;padding:3px 10px" onclick='selectDatastore(${JSON.stringify(d).replace(/'/g,"&#39;")})'>Select</button></td>`;
+    html+='</tr>';
+  });
+
+  html+='</tbody></table></div></div>';
+  listEl.innerHTML=html;
+  listEl.style.display='';
+}
+
+function filterDatastores(q){
+  const term=(q||'').toLowerCase();
+  document.querySelectorAll('#as-vm-tbody tr').forEach(tr=>{
+    const name=(tr.getAttribute('data-ds-name')||'').toLowerCase();
+    tr.style.display=name.includes(term)?'':'none';
+  });
+}
+
+function selectDatastore(d){
+  _vmDstoreMode=true;
+  _vmSelectedCapacityGB=d.capacity_gb||0;
+  _vmSelectedMemMB=0;
+  const oidEl=document.getElementById('as-vmid');
+  if(oidEl) oidEl.value=d.ds_id||'';
+  const nmEl=document.getElementById('as-vmnm');
+  if(nmEl) nmEl.value=d.name||'';
+  // Rebuild the metric dropdown in datastore mode, then pick the single metric
+  const metV=document.getElementById('as-vmmet-v');
+  if(metV) metV.value='dstore_free_gb';
+  _vmwareLoadMetrics().then(()=>{
+    const sel=document.getElementById('as-vmmet');
+    if(sel){ sel.value='dstore_free_gb'; }
+    _vmwareThrUpdateLabels();
+  });
+  // Prefill sensor name if blank or still the default
+  const nameEl=document.getElementById('as-n');
+  if(nameEl&&(!nameEl.value||nameEl.value.startsWith('Ping,'))){
+    nameEl.value=`${d.name} Free Space`;
+  }
+  const listEl=document.getElementById('as-vm-list');
+  if(listEl) listEl.style.display='none';
+  const statusEl=document.getElementById('as-vm-status');
+  if(statusEl){
+    statusEl.style.color='var(--up)';
+    const capStr=d.capacity_gb>=1024?(d.capacity_gb/1024).toFixed(2)+' TB':d.capacity_gb+' GB';
+    statusEl.textContent=`Selected: ${d.name} (${capStr}) — thresholds auto-filled to 20% / 10% of capacity`;
+  }
 }
 
 function toggleAllVMs(cb){
