@@ -1827,6 +1827,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
 
 function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did, sid) {
   if (!sumEl) return;
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   let _bSec;
   if      (minutes <= 5760)   _bSec = 3600;
