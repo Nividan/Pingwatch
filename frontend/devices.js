@@ -625,12 +625,28 @@ function saveGroupOrder(){
 }
 
 function restoreGroupOrder(){
-  const order=_lsGet('pw-grp-order', []);
-  if(!order.length) return;
   const dpanels=document.getElementById('dpanels');
+  if(!dpanels) return;
+  const order=_lsGet('pw-grp-order', []);
+  // Snapshot current DOM order BEFORE any appendChild reflow, so we can
+  // identify which groups are not yet in the saved order (newly created or
+  // SSE-arrived).
+  const beforeWraps=[...dpanels.querySelectorAll('.grp-wrap')];
+  const knownIds=new Set(order.map(g => grpId(g)));
+  // 1) Saved groups first, in their saved order. appendChild moves elements
+  //    to the end, so iterating in order builds the saved sequence at the
+  //    bottom of dpanels.
   order.forEach(grp=>{
     const wrap=document.getElementById(grpId(grp));
     if(wrap) dpanels.appendChild(wrap);
+  });
+  // 2) Then any UNSAVED groups (not in pw-grp-order), preserving their
+  //    pre-restore DOM order. Without this step, unsaved newcomers got
+  //    "left behind" at the top of dpanels because saved groups were
+  //    moved past them — that's why a freshly-added group appeared at the
+  //    very top of the device list.
+  beforeWraps.forEach(w => {
+    if(!knownIds.has(w.id)) dpanels.appendChild(w);
   });
 }
 // ─────────────────────────────────────────────────────────────────
@@ -751,6 +767,11 @@ function submitAddGroup(){
   if(exists){ toast('Group already exists','err'); return; }
   // Create the section (empty)
   ensureGroupSection(name);
+  // Persist the new group at the END of the saved order. Without this, the
+  // group is unsaved and the next restoreGroupOrder() pass would push every
+  // saved group past it (appendChild reflow), making the new group jump to
+  // the top of the device list — which is the opposite of what users expect.
+  saveGroupOrder();
   // Make dpanels visible if it wasn't
   document.getElementById('emptyMain').style.display='none';
   if(activeMainTab==='devices'){
