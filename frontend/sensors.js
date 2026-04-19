@@ -912,7 +912,8 @@ const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',d
   host_cpu_usage:'%',host_cpu_ready:'%',host_mem_active:'MB',host_mem_consumed:'MB',host_mem_usage_pct:'%',host_mem_swap:'MB',
   host_disk_read:'KBps',host_disk_write:'KBps',host_disk_usage:'KBps',host_disk_dev_lat:'ms',host_disk_kern_lat:'ms',
   host_ds_read_lat:'ms',host_ds_write_lat:'ms',host_net_rx:'KBps',host_net_tx:'KBps',host_net_usage:'KBps',
-  host_power:'watt',host_uptime:'seconds'};
+  host_power:'watt',host_uptime:'seconds',
+  dstore_free_gb:'GB'};
 function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
 function _fmtVmVal(v,u){
   if(v==null)return'—';
@@ -924,10 +925,11 @@ function _fmtVmVal(v,u){
     case'ms':return v.toFixed(1)+' ms';
     case'seconds':{const d=Math.floor(v/86400),h=Math.floor((v%86400)/3600),m=Math.floor((v%3600)/60);return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m`;}
     case'watt':return v.toFixed(0)+' W';
+    case'GB':return v>=1024?(v/1024).toFixed(2)+' TB':v.toFixed(1)+' GB';
     default:return String(v);
   }
 }
-function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':u==='watt'?'W':'';}
+function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':u==='watt'?'W':u==='GB'?'GB':'';}
 function _fmtVmYLabel(v,u){
   switch(u){
     case'%':return Math.round(v)+'%';
@@ -937,6 +939,7 @@ function _fmtVmYLabel(v,u){
     case'ms':return Math.round(v)+'ms';
     case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v/60)+'m';
     case'watt':return Math.round(v)+'W';
+    case'GB':return v>=1024?(v/1024).toFixed(2)+'TB':Math.round(v)+'GB';
     default:return String(Math.round(v));
   }
 }

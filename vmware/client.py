@@ -74,12 +74,36 @@ HOST_METRICS = [
     {"v": "host_uptime",         "l": "Uptime",                 "group": "sys",       "counter": "sys.uptime.latest",                    "unit": "seconds"},
 ]
 
+DATASTORE_METRICS = [
+    {"v": "dstore_free_gb",   "l": "Free Space (GB)",           "group": "capacity",  "counter": None,                                      "unit": "GB"},
+]
+
 # Quick lookup: metric key → definition
-_METRIC_BY_KEY      = {m["v"]: m for m in VM_METRICS}
-_HOST_METRIC_BY_KEY = {m["v"]: m for m in HOST_METRICS}
+_METRIC_BY_KEY       = {m["v"]: m for m in VM_METRICS}
+_HOST_METRIC_BY_KEY  = {m["v"]: m for m in HOST_METRICS}
+_DSTORE_METRIC_BY_KEY = {m["v"]: m for m in DATASTORE_METRICS}
 
 # pyvmomi counter name → metric key
 _COUNTER_TO_KEY = {m["counter"]: m["v"] for m in VM_METRICS}
+
+
+def _fmt_bytes(n):
+    """Render an integer byte count as a compact human-readable string."""
+    if n is None:
+        return "—"
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "—"
+    if n >= 1024 ** 4:
+        return f"{n / 1024 ** 4:.2f} TB"
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.1f} GB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024 ** 2:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{int(n)} B"
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +283,56 @@ def vmware_discover_hosts(host, user, password, port=443, verify_ssl=False):
 
 
 # ---------------------------------------------------------------------------
+# Datastore discovery
+# ---------------------------------------------------------------------------
+
+def vmware_discover_datastores(host, user, password, port=443, verify_ssl=False):
+    """Connect to vCenter/ESXi and return a list of Datastore dicts.
+
+    Each dict: {ds_id, name, type, capacity_bytes, free_bytes,
+                capacity_gb, free_gb, free_pct, accessible}
+    """
+    _, _, vim, _ = _require_pyvmomi()
+
+    try:
+        si = _get_session(host, user, password, port, verify_ssl)
+    except (PermissionError, ConnectionError):
+        _invalidate_session(host, user)
+        raise
+
+    content = si.RetrieveContent()
+    view = content.viewManager.CreateContainerView(
+        content.rootFolder, [vim.Datastore], recursive=True
+    )
+
+    datastores = []
+    try:
+        for ds in view.view:
+            try:
+                summary = ds.summary
+                capacity = int(summary.capacity or 0)
+                free     = int(summary.freeSpace or 0)
+                datastores.append({
+                    "ds_id":           ds._moId,
+                    "name":            summary.name or ds.name or "",
+                    "type":            summary.type or "",
+                    "capacity_bytes":  capacity,
+                    "free_bytes":      free,
+                    "capacity_gb":     round(capacity / 1024 ** 3, 1),
+                    "free_gb":         round(free / 1024 ** 3, 1),
+                    "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
+                    "accessible":      bool(summary.accessible),
+                })
+            except Exception:
+                continue  # skip datastores we can't read
+    finally:
+        view.Destroy()
+
+    datastores.sort(key=lambda d: d["name"].lower())
+    return datastores
+
+
+# ---------------------------------------------------------------------------
 # Metric cache — avoids redundant QueryPerf when many sensors target same VM/Host
 # ---------------------------------------------------------------------------
 
@@ -355,27 +429,32 @@ def vmware_probe(host, user, password, vm_id, metric,
 
     Returns {ok, ms, detail, value} matching the PingWatch probe contract.
     """
-    is_host = metric.startswith("host_")
+    is_datastore = metric.startswith("dstore_")
+    is_host      = (not is_datastore) and metric.startswith("host_")
 
-    mdef = (_HOST_METRIC_BY_KEY if is_host else _METRIC_BY_KEY).get(metric)
+    if is_datastore:
+        mdef = _DSTORE_METRIC_BY_KEY.get(metric)
+    else:
+        mdef = (_HOST_METRIC_BY_KEY if is_host else _METRIC_BY_KEY).get(metric)
     if not mdef:
         return {"ok": False, "ms": None,
                 "detail": f"Unknown metric: {metric}"}
 
     t0 = time.time()
 
-    # ── Check metric cache ────────────────────────────────────────────
+    # ── Check metric cache (skip for datastore — cheap property read) ─
     cache_key = (host, vm_id)
     now_mono = time.monotonic()
 
-    with _metric_cache_lock:
-        cached = _metric_cache.get(cache_key)
-        if cached and (now_mono - cached["ts"]) < _METRIC_CACHE_TTL:
-            val = cached["data"].get(metric)
-            if val is not None:
-                return {"ok": True, "ms": float(val),
-                        "detail": f"{mdef['l']}: {val} {mdef['unit']}",
-                        "value": str(val)}
+    if not is_datastore:
+        with _metric_cache_lock:
+            cached = _metric_cache.get(cache_key)
+            if cached and (now_mono - cached["ts"]) < _METRIC_CACHE_TTL:
+                val = cached["data"].get(metric)
+                if val is not None:
+                    return {"ok": True, "ms": float(val),
+                            "detail": f"{mdef['l']}: {val} {mdef['unit']}",
+                            "value": str(val)}
 
     # ── Cache miss — query vCenter ────────────────────────────────────
     _, _, vim, _ = _require_pyvmomi()
@@ -390,6 +469,50 @@ def vmware_probe(host, user, password, vm_id, metric,
         return {"ok": False, "ms": None, "detail": str(e)}
 
     content = si.RetrieveContent()
+
+    # ══════════════════════════════════════════════════════════════════
+    # Datastore metric branch
+    # ══════════════════════════════════════════════════════════════════
+    if is_datastore:
+        ds_moref = None
+        try:
+            view = content.viewManager.CreateContainerView(
+                content.rootFolder, [vim.Datastore], recursive=True
+            )
+            for ds in view.view:
+                if ds._moId == vm_id:
+                    ds_moref = ds
+                    break
+            view.Destroy()
+        except Exception:
+            pass
+
+        if ds_moref is None:
+            return {"ok": False, "ms": None,
+                    "detail": f"Datastore {vm_id} not found"}
+
+        try:
+            summary   = ds_moref.summary
+            ds_name   = summary.name or ds_moref.name or "datastore"
+            cap_bytes = int(summary.capacity or 0)
+            free_bytes = int(summary.freeSpace or 0)
+            accessible = bool(summary.accessible)
+        except Exception:
+            return {"ok": False, "ms": None,
+                    "detail": "Could not read datastore summary"}
+
+        if not accessible:
+            return {"ok": False, "ms": None,
+                    "detail": f"{ds_name}: datastore not accessible (maintenance / unmounted)"}
+        if cap_bytes <= 0:
+            return {"ok": False, "ms": None,
+                    "detail": f"{ds_name}: capacity reported as 0"}
+
+        free_gb  = round(free_bytes / 1024 ** 3, 1)
+        free_pct = round(free_bytes / cap_bytes * 100, 1)
+        detail = f"{ds_name}: {_fmt_bytes(free_bytes)} free ({free_pct}% of {_fmt_bytes(cap_bytes)})"
+        return {"ok": True, "ms": free_gb,
+                "detail": detail, "value": str(free_gb)}
 
     # ══════════════════════════════════════════════════════════════════
     # ESXi host metric branch
