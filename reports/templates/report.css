@@ -102,9 +102,29 @@ p  { margin: 4pt 0; orphans: 2; widows: 2; }
 .headline-caption { font-size: 9pt; color: #57606a; margin-top: 3pt; line-height: 1.4; }
 
 /* ── Two-column grid ───────────────────────────────────────────── */
-.two-col { display: flex; gap: 18pt; align-items: center; margin-top: 4pt; }
-.two-col .col { flex: 1; min-width: 0; }
+/* Switched from `display:flex` to `display:table` because WeasyPrint's flex
+ * implementation does not honour `min-width:0` on flex children: when the
+ * second column held a wide donut chart (e.g. severity_donut.png), the chart
+ * stayed at its natural width instead of scaling down and overflowed left
+ * into the value column — visibly putting the chart on top of the table
+ * numbers in the Incident Summary. Table layout gives deterministic column
+ * widths that WeasyPrint renders correctly in every version.
+ *
+ * Default 50/50 matches the previous flex layout so table|table sections
+ * (Estate overview, License status, etc.) render unchanged. */
+.two-col { display: table; width: 100%; border-spacing: 18pt 0; border-collapse: separate; margin-top: 4pt; }
+.two-col .col { display: table-cell; vertical-align: middle; width: 50%; }
 .two-col .col:last-child { text-align: center; }
+/* Hard-cap any chart inside a two-col cell so even a high-res PNG can't
+ * push past its cell — this is the actual fix for the Incident-Summary
+ * overlap. `width:100%` forces it to scale to the cell; `max-height` caps
+ * the vertical so a tall chart doesn't dwarf the adjacent table. */
+.two-col .col img.chart { width: 100%; max-width: 100%; max-height: 200pt; height: auto; }
+/* Modifier: weight the data column wider when paired with a chart, so the
+ * 4-column kv-compare table (label + current + previous + Δ) has room to
+ * breathe. Add `class="two-col two-col-chart"` to opt in. */
+.two-col.two-col-chart .col:first-child { width: 58%; }
+.two-col.two-col-chart .col:last-child  { width: 42%; }
 
 /* ── Tables ────────────────────────────────────────────────────── */
 table.kv {
