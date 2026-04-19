@@ -119,12 +119,19 @@ p  { margin: 4pt 0; orphans: 2; widows: 2; }
  * push past its cell — this is the actual fix for the Incident-Summary
  * overlap. `width:100%` forces it to scale to the cell; `max-height` caps
  * the vertical so a tall chart doesn't dwarf the adjacent table. */
-.two-col .col img.chart { width: 100%; max-width: 100%; max-height: 200pt; height: auto; }
-/* Modifier: weight the data column wider when paired with a chart, so the
- * 4-column kv-compare table (label + current + previous + Δ) has room to
- * breathe. Add `class="two-col two-col-chart"` to opt in. */
-.two-col.two-col-chart .col:first-child { width: 58%; }
-.two-col.two-col-chart .col:last-child  { width: 42%; }
+.two-col .col img.chart { width: 100%; max-width: 100%; max-height: 240pt; height: auto; }
+/* Modifier: weight the chart column wider so the donut renders larger.
+ * Also tightens the data table by cutting its share — this pulls the value
+ * columns closer to the labels (no more "Total incidents ........ 488"
+ * gap from a too-wide data cell). 48/52 keeps the 4-column kv-compare table
+ * (label + current + previous + Δ) fitting cleanly while giving the donut
+ * meaningfully more room. */
+.two-col.two-col-chart .col:first-child { width: 48%; }
+.two-col.two-col-chart .col:last-child  { width: 52%; }
+/* Lift the chart cap further when it's the explicit chart column.
+ * 260pt is roughly 2.5× the kv-compare row height × 7 rows, which keeps the
+ * donut visually balanced against the table. */
+.two-col.two-col-chart .col img.chart { max-height: 260pt; }
 
 /* ── Tables ────────────────────────────────────────────────────── */
 table.kv {

@@ -33,7 +33,8 @@ function sensorFormHTML(dev, s=null) {
     ['http','HTTP/S','Web response','◈'],['snmp','SNMP','OID polling','◎'],
     ['dns','DNS','Record lookup','⬡'],['tls','TLS','Cert expiry','T'],
     ['http_keyword','HTTP KW','Keyword check','K'],['banner','Banner','TCP banner','B'],
-    ['vmware','VMware','VM metrics','V']
+    ['vmware','VMware','VM metrics','V'],
+    ['smtp','SMTP','Mail server','✉']
   ];
   const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">${
     _types.map(([k,nm,sub,ico])=>`<button class="stab-nav${curType===k?' active':''}" data-t="${k}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${nm}</span><span class="snav-sub">${sub}</span></span></button>`).join('')
@@ -241,6 +242,56 @@ function sensorFormHTML(dev, s=null) {
       <label class="fl">Disk Path</label>
       <input type="text" id="as-vm-diskpath" value="${esc(s?.vmware_disk_path||'')}" placeholder="e.g. C:\\ or /" autocomplete="off"/>
       <div class="fh">Partition to monitor — leave blank for most-used disk</div>
+    </div>
+  </div>
+  <!-- SMTP -->
+  <div class="fg ${curType==='smtp'?'vis':''}" id="fg-smtp">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Mail server host</label>
+        <input type="text" id="as-smh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-smp" value="${s?.port||25}" min="1" max="65535"/>
+        <div class="fh" style="margin-top:4px">
+          <span class="pc" style="cursor:pointer" onclick="document.getElementById('as-smp').value=25;document.getElementById('as-smtls').value='none'">25 plain</span>
+          <span class="pc" style="cursor:pointer;margin-left:4px" onclick="document.getElementById('as-smp').value=587;document.getElementById('as-smtls').value='starttls'">587 STARTTLS</span>
+          <span class="pc" style="cursor:pointer;margin-left:4px" onclick="document.getElementById('as-smp').value=465;document.getElementById('as-smtls').value='ssl'">465 SSL</span>
+        </div>
+      </div>
+    </div>
+    <div class="fgrid">
+      <div class="fr"><label class="fl">TLS</label>
+        <select id="as-smtls">
+          ${['none','starttls','ssl'].map(v=>`<option value="${v}"${(s?.smtp_tls||'none')===v?' selected':''}>${v==='none'?'None (plaintext)':v==='starttls'?'STARTTLS':'SSL/TLS'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fr"><label class="fl">Test depth</label>
+        <select id="as-smlvl" onchange="_smtpLvlToggle()">
+          ${[['connect','Connect only'],['ehlo','EHLO'],['starttls','STARTTLS'],['auth','AUTH (LOGIN)'],['mailfrom','MAIL FROM round-trip']]
+            .map(([v,lbl])=>`<option value="${v}"${(s?.smtp_test_level||'ehlo')===v?' selected':''}>${lbl}</option>`).join('')}
+        </select>
+        <div class="fh">Each level runs all prior steps. MAIL FROM issues RSET — no mail is actually sent.</div>
+      </div>
+    </div>
+    <div class="fr" style="margin-top:4px">
+      <button class="dp-btn" type="button" onclick="_smtpUseSystem()">Use system SMTP</button>
+      <span class="fh" style="margin-left:8px">prefills host / port / TLS / user from alert config</span>
+    </div>
+    <div id="as-smtp-auth-row" style="display:${['auth','mailfrom'].includes(s?.smtp_test_level||'ehlo')?'':'none'}">
+      <div class="fgrid" style="margin-top:8px">
+        <div class="fr"><label class="fl">Username</label>
+          <input type="text" id="as-smu" value="${esc(s?.smtp_user||'')}" placeholder="user@example.com" autocomplete="off"/></div>
+        <div class="fr"><label class="fl">Password</label>
+          <input type="password" id="as-smpw" value="" placeholder="${s?.has_smtp_password?'(unchanged — leave blank to keep)':'SMTP password'}" autocomplete="new-password"/></div>
+      </div>
+    </div>
+    <div id="as-smtp-mail-row" style="display:${(s?.smtp_test_level||'ehlo')==='mailfrom'?'':'none'}">
+      <div class="fgrid" style="margin-top:8px">
+        <div class="fr"><label class="fl">MAIL FROM (sender)</label>
+          <input type="text" id="as-smfr" value="${esc(s?.smtp_from||'')}" placeholder="probe@example.com" autocomplete="off"/></div>
+        <div class="fr"><label class="fl">RCPT TO (recipient)</label>
+          <input type="text" id="as-smrc" value="${esc(s?.smtp_rcpt||'')}" placeholder="target@example.com" autocomplete="off"/></div>
+      </div>
     </div>
   </div>
   <!-- Alert Thresholds -->
@@ -1602,6 +1653,9 @@ function collectSensorForm(did){
     host=document.getElementById('as-vmh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-vmp')?.value)||443;
     verify_ssl=document.getElementById('as-vmssl')?.checked!==false;
+  } else if(type==='smtp'){
+    host=document.getElementById('as-smh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-smp')?.value)||25;
   }
   const warn_ms      =parseInt(document.getElementById('as-wms')?.value)||null;
   const crit_ms      =parseInt(document.getElementById('as-cms')?.value)||null;
@@ -1635,7 +1689,45 @@ function collectSensorForm(did){
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}
   }
+  if(type==='smtp'){
+    payload.smtp_tls        =document.getElementById('as-smtls')?.value||'none';
+    payload.smtp_test_level =document.getElementById('as-smlvl')?.value||'ehlo';
+    payload.smtp_user       =document.getElementById('as-smu')?.value.trim()||'';
+    payload.smtp_password   =document.getElementById('as-smpw')?.value||'';
+    payload.smtp_from       =document.getElementById('as-smfr')?.value.trim()||'';
+    payload.smtp_rcpt       =document.getElementById('as-smrc')?.value.trim()||'';
+    const _lvl=payload.smtp_test_level;
+    if((_lvl==='auth'||_lvl==='mailfrom')&&!payload.smtp_user){
+      toast('AUTH level requires a username','err');return null;
+    }
+    if(_lvl==='mailfrom'&&(!payload.smtp_from||!payload.smtp_rcpt)){
+      toast('MAIL FROM level requires From and To addresses','err');return null;
+    }
+  }
   return payload;
+}
+
+// Toggle visibility of auth + mailfrom rows when test level changes
+function _smtpLvlToggle(){
+  const lvl=document.getElementById('as-smlvl')?.value||'ehlo';
+  const authRow=document.getElementById('as-smtp-auth-row');
+  const mailRow=document.getElementById('as-smtp-mail-row');
+  if(authRow) authRow.style.display=(lvl==='auth'||lvl==='mailfrom')?'':'none';
+  if(mailRow) mailRow.style.display=(lvl==='mailfrom')?'':'none';
+}
+
+// Prefill SMTP fields from the system alert-SMTP config (reads /api/settings)
+async function _smtpUseSystem(){
+  try{
+    const r=await api('GET','/api/settings');
+    if(!r||!r.smtp_host){ toast('No system SMTP configured yet','info');return; }
+    const h=document.getElementById('as-smh'); if(h)h.value=r.smtp_host;
+    const p=document.getElementById('as-smp'); if(p&&r.smtp_port)p.value=r.smtp_port;
+    const t=document.getElementById('as-smtls'); if(t&&r.smtp_tls)t.value=r.smtp_tls;
+    const u=document.getElementById('as-smu'); if(u&&r.smtp_user)u.value=r.smtp_user;
+    _smtpLvlToggle();
+    toast('Prefilled from system SMTP — enter password to complete','info');
+  }catch(e){ toast('Could not load system SMTP config','err'); }
 }
 
 async function submitAddSensor(did){

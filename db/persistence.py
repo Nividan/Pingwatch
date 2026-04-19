@@ -55,7 +55,13 @@ def _pg_save(state):
              getattr(s, "vmware_metric", ""),
              int(getattr(s, "anomaly_enabled", 0) or 0),
              int(getattr(s, "anomaly_sensitivity", 2) or 2),
-             int(getattr(s, "anomaly_min_samples", 50) or 50))
+             int(getattr(s, "anomaly_min_samples", 50) or 50),
+             getattr(s, "smtp_tls", "none") or "none",
+             getattr(s, "smtp_user", ""),
+             getattr(s, "smtp_password", ""),
+             getattr(s, "smtp_from", ""),
+             getattr(s, "smtp_rcpt", ""),
+             getattr(s, "smtp_test_level", "ehlo") or "ehlo")
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -106,7 +112,8 @@ def _pg_save(state):
                     "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
                     "alerts_muted,host_override,snmp_unit,"
                     "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
-                    "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples) "
+                    "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
+                    "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -127,7 +134,10 @@ def _pg_save(state):
                     "vmware_metric=EXCLUDED.vmware_metric, "
                     "anomaly_enabled=EXCLUDED.anomaly_enabled, "
                     "anomaly_sensitivity=EXCLUDED.anomaly_sensitivity, "
-                    "anomaly_min_samples=EXCLUDED.anomaly_min_samples",
+                    "anomaly_min_samples=EXCLUDED.anomaly_min_samples, "
+                    "smtp_tls=EXCLUDED.smtp_tls, smtp_user=EXCLUDED.smtp_user, "
+                    "smtp_password=EXCLUDED.smtp_password, smtp_from=EXCLUDED.smtp_from, "
+                    "smtp_rcpt=EXCLUDED.smtp_rcpt, smtp_test_level=EXCLUDED.smtp_test_level",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -190,7 +200,13 @@ def db_save(state):
              getattr(s, "vmware_metric", ""),
              int(getattr(s, "anomaly_enabled", 0) or 0),
              int(getattr(s, "anomaly_sensitivity", 2) or 2),
-             int(getattr(s, "anomaly_min_samples", 50) or 50))
+             int(getattr(s, "anomaly_min_samples", 50) or 50),
+             getattr(s, "smtp_tls", "none") or "none",
+             getattr(s, "smtp_user", ""),
+             getattr(s, "smtp_password", ""),
+             getattr(s, "smtp_from", ""),
+             getattr(s, "smtp_rcpt", ""),
+             getattr(s, "smtp_test_level", "ehlo") or "ehlo")
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -220,8 +236,9 @@ def db_save(state):
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
             "alerts_muted,host_override,snmp_unit,"
             "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
-            "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
+            "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -272,7 +289,13 @@ def _pg_load(state):
                 "COALESCE(vmware_metric,'') AS vmware_metric,"
                 "COALESCE(anomaly_enabled,0) AS anomaly_enabled,"
                 "COALESCE(anomaly_sensitivity,2) AS anomaly_sensitivity,"
-                "COALESCE(anomaly_min_samples,50) AS anomaly_min_samples "
+                "COALESCE(anomaly_min_samples,50) AS anomaly_min_samples,"
+                "COALESCE(smtp_tls,'none') AS smtp_tls,"
+                "COALESCE(smtp_user,'') AS smtp_user,"
+                "COALESCE(smtp_password,'') AS smtp_password,"
+                "COALESCE(smtp_from,'') AS smtp_from,"
+                "COALESCE(smtp_rcpt,'') AS smtp_rcpt,"
+                "COALESCE(smtp_test_level,'ehlo') AS smtp_test_level "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -338,6 +361,12 @@ def _pg_load(state):
         s.anomaly_enabled      = int(row[35] or 0)
         s.anomaly_sensitivity  = int(row[36] or 2)
         s.anomaly_min_samples  = int(row[37] or 50)
+        s.smtp_tls             = row[38] or "none"
+        s.smtp_user            = row[39] or ""
+        s.smtp_password        = row[40] or ""
+        s.smtp_from            = row[41] or ""
+        s.smtp_rcpt            = row[42] or ""
+        s.smtp_test_level      = row[43] or "ehlo"
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -427,7 +456,10 @@ def db_load(state):
             "COALESCE(vmware_user,''),COALESCE(vmware_password,''),"
             "COALESCE(vmware_vm_id,''),COALESCE(vmware_vm_name,''),COALESCE(vmware_metric,''),"
             "COALESCE(anomaly_enabled,0),COALESCE(anomaly_sensitivity,2),"
-            "COALESCE(anomaly_min_samples,50) "
+            "COALESCE(anomaly_min_samples,50),"
+            "COALESCE(smtp_tls,'none'),COALESCE(smtp_user,''),"
+            "COALESCE(smtp_password,''),COALESCE(smtp_from,''),"
+            "COALESCE(smtp_rcpt,''),COALESCE(smtp_test_level,'ehlo') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -472,7 +504,9 @@ def db_load(state):
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
          alerts_muted, host_override, snmp_unit,
          vmware_user, vmware_password, vmware_vm_id, vmware_vm_name, vmware_metric,
-         anomaly_enabled, anomaly_sensitivity, anomaly_min_samples) in srows:
+         anomaly_enabled, anomaly_sensitivity, anomaly_min_samples,
+         smtp_tls, smtp_user, smtp_password,
+         smtp_from, smtp_rcpt, smtp_test_level) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -501,6 +535,12 @@ def db_load(state):
         s.anomaly_enabled      = int(anomaly_enabled or 0)
         s.anomaly_sensitivity  = int(anomaly_sensitivity or 2)
         s.anomaly_min_samples  = int(anomaly_min_samples or 50)
+        s.smtp_tls             = smtp_tls or "none"
+        s.smtp_user            = smtp_user or ""
+        s.smtp_password        = smtp_password or ""
+        s.smtp_from            = smtp_from or ""
+        s.smtp_rcpt            = smtp_rcpt or ""
+        s.smtp_test_level      = smtp_test_level or "ehlo"
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
