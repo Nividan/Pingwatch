@@ -1021,13 +1021,13 @@ function openDetail(did,sid,initialTab){
         <div class="dm-kpi-item" id="kpi-avg-${did}-${sid}">Avg<br><span>—</span></div>
         <div class="dm-kpi-item" id="kpi-min-${did}-${sid}">Min<br><span>—</span></div>
         <div class="dm-kpi-item" id="kpi-max-${did}-${sid}">Max<br><span>—</span></div>
-        <div class="dm-kpi-item" id="kpi-loss-${did}-${sid}">Loss %<br><span>—</span></div>
+        ${s.stype==='ping'?`<div class="dm-kpi-item" id="kpi-loss-${did}-${sid}">Loss %<br><span>—</span></div>`:''}
         <div class="dm-kpi-item" id="kpi-jitter-${did}-${sid}">Jitter<br><span>—</span></div>
       </div>
       <div class="dm-metric-toggles">
         <label><input type="checkbox" id="tog-avg-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Avg</label>
         <label><input type="checkbox" id="tog-band-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Min/Max</label>
-        <label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>
+        ${s.stype==='ping'?`<label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>`:''}
         <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
         ${s?.anomaly_enabled && ['ping','tcp','http','dns','http_keyword','banner'].includes(s.stype)
           ? `<label title="Show learned baseline band (μ ± k·σ)"><input type="checkbox" id="tog-baseline-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> 🧠 Baseline</label>` : ''}
@@ -1148,6 +1148,7 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
 function dmHistRedraw(did, sid) {
   const cache = _histCache[`${did}/${sid}`];
   if (!cache) return;
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   // Modal canvas (sensor detail view)
   const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
   const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
@@ -1190,7 +1191,7 @@ function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
   const avgJitt  = summary.length ? jitterSum/summary.length : 0;
   _setKpi(`kpi-avail-${did}-${sid}`, 'Avail', avail.toFixed(1)+'%',
     avail<80?'dm-kpi-crit':avail<95?'dm-kpi-warn':avail===100?'dm-kpi-good':'');
-  _setKpi(`kpi-loss-${did}-${sid}`, 'Loss %', avgLoss.toFixed(1)+'%',
+  if (_isPing) _setKpi(`kpi-loss-${did}-${sid}`, 'Loss %', avgLoss.toFixed(1)+'%',
     avgLoss>=20?'dm-kpi-crit':avgLoss>=5?'dm-kpi-warn':avgLoss===0?'dm-kpi-good':'');
 
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
@@ -1424,7 +1425,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   // Read toggle states
   const togAvg    = document.getElementById(`tog-avg-${did}-${sid}`)?.checked ?? true;
   const togBand   = document.getElementById(`tog-band-${did}-${sid}`)?.checked ?? true;
-  const togLoss   = document.getElementById(`tog-loss-${did}-${sid}`)?.checked ?? true;
+  const togLoss   = _isPing && (document.getElementById(`tog-loss-${did}-${sid}`)?.checked ?? true);
   const togJitter = document.getElementById(`tog-jitter-${did}-${sid}`)?.checked ?? false;
 
   // Use fixed windowStart from cache (set at fetch time) so redraws don't shift the chart
@@ -1950,7 +1951,7 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
     const loss   = _b.cnt > 0 ? (_b.lsum / _b.cnt).toFixed(1) : '0.0';
     const jitter = _b.cnt > 0 ? (_b.jsum / _b.cnt).toFixed(1) : '0.0';
     const lossPct = parseFloat(loss);
-    const rowCls = lossPct > 20 ? 'hrow-crit' : lossPct > 5 ? 'hrow-warn' : '';
+    const rowCls = _isPing && lossPct > 20 ? 'hrow-crit' : _isPing && lossPct > 5 ? 'hrow-warn' : '';
     return `<tr class="${rowCls}">
       <td>${lbl}</td>
       <td style="color:var(--up)">${_b.ok}↑</td>
@@ -1959,12 +1960,12 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
       <td>${avg!=null?avg+'ms':'—'}</td>
       <td>${minMs!=null?minMs+'ms':'—'}</td>
       <td>${maxMs!=null?maxMs+'ms':'—'}</td>
-      <td style="color:${lossPct>5?'var(--warn)':'var(--text2)'}">${loss}%</td>
+      ${_isPing?`<td style="color:${lossPct>5?'var(--warn)':'var(--text2)'}">${loss}%</td>`:''}
       <td style="color:rgba(188,130,255,.85)">${jitter}ms</td>
     </tr>`;
   }).join('');
   sumEl.innerHTML = `<table class="dm-hist-tbl">
-    <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th><th>Loss</th><th>Jitter</th></tr></thead>
+    <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th>${_isPing?'<th>Loss</th>':''}<th>Jitter</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }

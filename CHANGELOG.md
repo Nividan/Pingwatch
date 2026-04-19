@@ -4,6 +4,56 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## SFTP Probe Sensor
+
+- New sensor type `sftp` — verifies the SFTP subsystem on a remote host with **4 layered test depths**: `open` (auth + subsystem), `list` (directory listing), `stat` (file metadata + size), `checksum` (SHA-256 integrity check, read-only, ≤ 10 MB cap)
+- Password or private-key auth (Ed25519 / RSA / ECDSA PEM); credentials Fernet-encrypted at rest (`sftp_password`, `sftp_private_key`); API serializes only `has_sftp_password` / `has_sftp_private_key` booleans — no plaintext ever returned
+- `checksum` depth streams via 65 536-byte chunks into `hashlib.sha256()`; a pre-flight `stat` check enforces the 10 MB cap and returns `"checksum: file exceeds 10MB cap"` rather than pinning the probe thread on a large file
+- Phase-tagged failure detail on every error (e.g. `"open: subsystem not enabled"`, `"list: /backups not found"`, `"checksum: mismatch (got a1b2…, expected f0e1…)"`)
+- **Interval policy for `checksum` level** — minimum 60 s (server rejects lower with `400`); form auto-bumps interval to 300 s and timeout to 30 s when `checksum` is selected (leaves higher values untouched)
+- Smart defaults: port `22`, `warn_ms=2000`, `crit_ms=5000`, `timeout=10s` (30 s when checksum), `test_level=open`, `auth_type=password`
+- Rose-colored badge `#fb7185` across all 7 CSS badge families; light-theme override `#be123c`
+- New "**File Transfer**" sensor category introduced in the Add Sensor sidebar
+- 7 new DB columns: `sftp_user`, `sftp_password`, `sftp_private_key`, `sftp_auth_type`, `sftp_test_level`, `sftp_remote_path`, `sftp_expected_sha256` — SQLite `ALTER TABLE` + PG `CREATE TABLE` / migrations
+- `monitoring/probes.py` + `core/state.py` + `db/core.py` + `db/pg_schema.py` + `db/persistence.py` + `routes/devices.py` + `frontend/forms-sensor.js` + `frontend/sensors.js` + `frontend/forms-settings.js` + `frontend/style.css` updated
+
+---
+
+## SSH Probe Sensor
+
+- New sensor type `ssh` — 3 layered test depths: `connect` (TCP + SSH handshake), `banner` (captures SSH version string in detail), `auth` (password or private-key login)
+- Password or private-key auth (Ed25519 / RSA / ECDSA PEM); both credentials Fernet-encrypted at rest; API exposes `has_ssh_password` / `has_ssh_private_key` booleans only
+- `_load_ssh_key()` helper in `monitoring/probes.py` loads multi-type PEM from `io.StringIO` — reused by SFTP probe
+- `paramiko` lazy-imported inside `probe_ssh()`; graceful `"paramiko not installed — run setup wizard"` fallback
+- `MissingHostKeyPolicy` used (monitoring surface — not a MITM gate; consistent with backup engine TOFU)
+- Smart defaults: port `22`, `warn_ms=1500`, `crit_ms=4000`, `timeout=10s`, `test_level=connect`, `auth_type=password`
+- Lime-colored badge `#a3e635` across all 7 CSS badge families; light-theme override `#4d7c0f`
+- 5 new DB columns: `ssh_user`, `ssh_password`, `ssh_private_key`, `ssh_auth_type`, `ssh_test_level`
+- `monitoring/probes.py` + `core/state.py` + `db/core.py` + `db/pg_schema.py` + `db/persistence.py` + `routes/devices.py` + `frontend/forms-sensor.js` + `frontend/sensors.js` + `frontend/forms-settings.js` + `frontend/style.css` updated
+
+---
+
+## SMTP Probe Sensor
+
+- New sensor type `smtp` — 5 layered test depths: `connect` (TCP), `ehlo` (EHLO handshake), `starttls` (STARTTLS upgrade), `auth` (login), `mailfrom` (MAIL FROM round-trip — no mail delivered)
+- TLS mode selector: plain / STARTTLS / SSL (port auto-suggestion: 25 / 587 / 465)
+- **"Use system SMTP"** button pre-fills host, port, TLS mode, and username from the system SMTP settings (Settings → Email)
+- Credentials Fernet-encrypted at rest (`smtp_password`); API exposes `has_smtp_password` boolean only
+- Phase-tagged failure detail (e.g. `"auth: 535 Authentication failed"`, `"starttls: server does not support STARTTLS"`)
+- Smart defaults: port `587`, `warn_ms=2000`, `crit_ms=5000`, `timeout=15s`, `test_level=ehlo`, TLS `starttls`
+- Pink-colored badge `#f472b6` across all 7 CSS badge families; light-theme override `#be185d`
+- 6 new DB columns: `smtp_host`, `smtp_port`, `smtp_tls`, `smtp_test_level`, `smtp_user`, `smtp_password`
+- `monitoring/probes.py` + `core/state.py` + `db/core.py` + `db/pg_schema.py` + `db/persistence.py` + `routes/devices.py` + `frontend/forms-sensor.js` + `frontend/sensors.js` + `frontend/forms-settings.js` + `frontend/style.css` updated
+
+---
+
+## Bug fixes & minor improvements (probe engine)
+
+- **Alert profile engine log spam** — "no dispatch — all stages gated" was firing at INFO on every probe cycle for every sensor in a non-OK state. Changed `_diag_log()` from `log.info()` to `log.debug()` in `monitoring/alert_profile_engine.py`; the messages are still emitted when debug mode is on, they just no longer pollute the default INFO stream
+- **PG integer column rejection on empty string** — `update_sensor()` and save paths in `db/persistence.py` could pass `''` for numeric fields (port, interval, timeout, warn_ms, crit_ms) when a form field was blank. PostgreSQL rejects `''` for `INTEGER` columns. Fixed: added `_int_or_none(v)` helper at the top of `persistence.py` (coerces `''` / `None` / non-numeric → `None`); applied to all numeric fields in every save tuple. `update_sensor()` in `core/state.py` treats `''` the same as `None` for the same field set
+
+---
+
 ## RADIUS Authentication (PAP + Access-Challenge 2FA)
 
 - Third auth source alongside local and LDAP — configure in **Settings → Integrations → RADIUS** (🧾 sub-tab with live status badge)

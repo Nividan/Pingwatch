@@ -33,7 +33,8 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 ## Features
 
 - 📡 Real-time device monitoring via Server-Sent Events (SSE)
-- 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner, VMware
+- 🔎 Multiple sensor types: ICMP, HTTP/S, TCP, TLS, SNMP, DNS, Banner, VMware, SMTP, SSH, SFTP
+- 🔌 Searchable, categorized sensor type browser — keyword search and sensor category sections in the Add Sensor sidebar
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
 - 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays and repeat intervals; cascade resolution (sensor → device → group → global) so one global profile covers everything while individual scopes can override; reusable action templates (email, webhook, syslog, browser push); maintenance window suppression
@@ -83,6 +84,9 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 | **DNS** | Record lookup and resolution-time checks |
 | **Banner** | Raw TCP banner capture with optional regex match |
 | **VMware** | vSphere VM monitoring — CPU, memory, disk, datastore latency, network, uptime, power state; auto-discovery from vCenter/ESXi |
+| **SMTP** | Layered mail-server probe — connect, EHLO, STARTTLS, AUTH, MAIL FROM round-trip (no mail sent) |
+| **SSH** | Layered SSH probe — TCP connect, banner capture, password or private-key authentication |
+| **SFTP** | SFTP subsystem probe — subsystem open, directory list, file stat, SHA-256 file integrity check (read-only) |
 
 ---
 
@@ -94,7 +98,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - **Frontend:** Vanilla HTML, CSS, JavaScript — no build step
 - **Real-time:** Server-Sent Events (SSE)
 - **TLS:** `cryptography` (RSA-2048, X.509, Fernet encryption)
-- **SSH backup:** `paramiko`
+- **SSH backup + SSH/SFTP probes:** `paramiko`
 - **PostgreSQL:** `psycopg2` *(optional — only needed when PostgreSQL backend is enabled)*
 - **System tray:** `pystray` + `Pillow` *(optional)*
 - **VMware:** `pyvmomi` *(optional — only needed when VMware sensors are enabled)*
