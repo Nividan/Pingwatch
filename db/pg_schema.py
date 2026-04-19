@@ -135,6 +135,12 @@ def pg_create_main_schema(cur):
             vmware_vm_id         TEXT DEFAULT '',
             vmware_vm_name       TEXT DEFAULT '',
             vmware_metric        TEXT DEFAULT '',
+            smtp_tls             TEXT DEFAULT 'none',
+            smtp_user            TEXT DEFAULT '',
+            smtp_password        TEXT DEFAULT '',
+            smtp_from            TEXT DEFAULT '',
+            smtp_rcpt            TEXT DEFAULT '',
+            smtp_test_level      TEXT DEFAULT 'ehlo',
             PRIMARY KEY (did, sid)
         )""")
 
@@ -149,6 +155,12 @@ def pg_create_main_schema(cur):
         ("sensors", "anomaly_enabled",         "INTEGER DEFAULT 0"),
         ("sensors", "anomaly_sensitivity",     "INTEGER DEFAULT 2"),
         ("sensors", "anomaly_min_samples",     "INTEGER DEFAULT 50"),
+        ("sensors", "smtp_tls",                "TEXT DEFAULT 'none'"),
+        ("sensors", "smtp_user",               "TEXT DEFAULT ''"),
+        ("sensors", "smtp_password",           "TEXT DEFAULT ''"),
+        ("sensors", "smtp_from",               "TEXT DEFAULT ''"),
+        ("sensors", "smtp_rcpt",               "TEXT DEFAULT ''"),
+        ("sensors", "smtp_test_level",         "TEXT DEFAULT 'ehlo'"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),

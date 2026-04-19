@@ -479,6 +479,7 @@ def handle(h, method, path, body):
                   "snmp_unit",
                   "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                   "vmware_disk_path",
+                  "smtp_tls", "smtp_user", "smtp_from", "smtp_rcpt", "smtp_test_level",
                   "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
         # Normalize anomaly fields to safe ranges
@@ -500,6 +501,10 @@ def handle(h, method, path, body):
         if body.get("vmware_password"):
             from db.backups import encrypt_pw
             kwargs["vmware_password"] = encrypt_pw(body["vmware_password"])
+        # SMTP password: same pattern — encrypt if provided, skip if empty
+        if body.get("smtp_password"):
+            from db.backups import encrypt_pw
+            kwargs["smtp_password"] = encrypt_pw(body["smtp_password"])
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
         try:
@@ -635,6 +640,16 @@ def handle(h, method, path, body):
         if stype == "vmware" and vm_pw and not _vm_pw_from_device:
             from db.backups import encrypt_pw
             vm_pw = encrypt_pw(vm_pw)
+        # SMTP fields
+        smtp_tls_v        = body.get("smtp_tls", "none")
+        smtp_user_v       = body.get("smtp_user", "")
+        smtp_pw_v         = body.get("smtp_password", "")
+        smtp_from_v       = body.get("smtp_from", "")
+        smtp_rcpt_v       = body.get("smtp_rcpt", "")
+        smtp_test_level_v = body.get("smtp_test_level", "ehlo")
+        if stype == "smtp" and smtp_pw_v:
+            from db.backups import encrypt_pw
+            smtp_pw_v = encrypt_pw(smtp_pw_v)
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -667,7 +682,11 @@ def handle(h, method, path, body):
                                snmp_unit=sunit,
                                vmware_user=vm_user, vmware_password=vm_pw,
                                vmware_vm_id=vm_vmid, vmware_vm_name=vm_vmname,
-                               vmware_metric=vm_metric, vmware_disk_path=vm_disk_path)
+                               vmware_metric=vm_metric, vmware_disk_path=vm_disk_path,
+                               smtp_tls=smtp_tls_v, smtp_user=smtp_user_v,
+                               smtp_password=smtp_pw_v,
+                               smtp_from=smtp_from_v, smtp_rcpt=smtp_rcpt_v,
+                               smtp_test_level=smtp_test_level_v)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:

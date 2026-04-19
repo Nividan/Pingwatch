@@ -518,6 +518,20 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # SMTP sensor fields — auth'd probe; smtp_password is Fernet ciphertext
+        for col_def in [
+            "smtp_tls        TEXT DEFAULT 'none'",
+            "smtp_user       TEXT DEFAULT ''",
+            "smtp_password   TEXT DEFAULT ''",
+            "smtp_from       TEXT DEFAULT ''",
+            "smtp_rcpt       TEXT DEFAULT ''",
+            "smtp_test_level TEXT DEFAULT 'ehlo'",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
         # Device-level default credentials
         for col in ("snmp_community_default", "snmp_version_default", "vmware_user_default", "vmware_password_default"):
             try:

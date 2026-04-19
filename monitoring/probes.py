@@ -499,3 +499,149 @@ def probe_banner(host, port, banner_regex="", timeout=5):
         if s:
             try: s.close()
             except Exception: pass
+
+
+_SMTP_LEVELS = ("connect", "ehlo", "starttls", "auth", "mailfrom")
+
+
+def probe_smtp(host, port=25, tls="none", user="", password="",
+               from_addr="", rcpt="", test_level="ehlo", timeout=10):
+    """Probe an SMTP server — layered depth from TCP connect up to MAIL FROM round-trip.
+
+    test_level: one of connect | ehlo | starttls | auth | mailfrom. Each level
+                runs all prior steps. MAIL FROM level does MAIL FROM → RCPT TO
+                → RSET (no DATA — no real mail is sent).
+    tls:        none | starttls | ssl.
+    """
+    import smtplib
+
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _SMTP_LEVELS:
+        test_level = "ehlo"
+    depth = _SMTP_LEVELS.index(test_level)
+    t0 = time.time()
+
+    # ── Level 0: plain TCP connect + read 220 banner ────────────────────
+    if depth == 0:
+        sock = None
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
+            ms = round((time.time() - t0) * 1000, 1)
+            if tls == "ssl":
+                return {"ok": True, "ms": ms,
+                        "detail": f"SMTPS port open ({ms}ms)"}
+            sock.settimeout(timeout)
+            try:
+                banner = sock.recv(256).decode(errors="replace").strip()
+            except Exception:
+                banner = ""
+            ms = round((time.time() - t0) * 1000, 1)
+            if banner.startswith("220"):
+                return {"ok": True, "ms": ms,
+                        "detail": f"SMTP banner: {banner[:80]} ({ms}ms)"}
+            return {"ok": False, "ms": ms,
+                    "detail": f"Unexpected banner: {banner[:80] or '(empty)'}"}
+        except socket.timeout:
+            return {"ok": False, "ms": None, "detail": f"Connect timeout after {timeout}s"}
+        except ConnectionRefusedError:
+            return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
+        except Exception as e:
+            log_sensors.warning("probe_smtp %s:%s: connect error: %s", host, port, e)
+            return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        finally:
+            if sock:
+                try: sock.close()
+                except Exception: pass
+
+    # ── Levels 1-4: use smtplib — constructor does CONNECT + EHLO ───────
+    srv = None
+    try:
+        if tls == "ssl":
+            srv = smtplib.SMTP_SSL(host, int(port), timeout=timeout)
+        else:
+            srv = smtplib.SMTP(host, int(port), timeout=timeout)
+
+        # Level 1: ehlo (already done by constructor — nothing extra)
+        if depth == 1:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SMTP EHLO OK ({ms}ms)"}
+
+        # Level 2: starttls (only when tls=starttls — ssl already encrypted)
+        if tls == "starttls":
+            try:
+                srv.starttls()
+                srv.ehlo()
+            except smtplib.SMTPException as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"STARTTLS failed: {str(e)[:100]}"}
+        if depth == 2:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SMTP STARTTLS OK ({ms}ms)"}
+
+        # Level 3: auth
+        if not user:
+            return {"ok": False, "ms": None,
+                    "detail": "AUTH level requires user + password"}
+        try:
+            srv.login(user, password)
+        except smtplib.SMTPAuthenticationError as e:
+            return {"ok": False, "ms": None,
+                    "detail": f"AUTH failed: {str(e)[:100]}"}
+        except smtplib.SMTPException as e:
+            return {"ok": False, "ms": None,
+                    "detail": f"AUTH error: {str(e)[:100]}"}
+        if depth == 3:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SMTP AUTH OK ({ms}ms)"}
+
+        # Level 4: mailfrom round-trip (RSET after RCPT — no DATA)
+        if not from_addr or not rcpt:
+            return {"ok": False, "ms": None,
+                    "detail": "MAIL FROM level requires From and To addresses"}
+        try:
+            code, msg = srv.mail(from_addr)
+        except smtplib.SMTPException as e:
+            return {"ok": False, "ms": None, "detail": f"MAIL FROM error: {str(e)[:100]}"}
+        if code != 250:
+            return {"ok": False, "ms": None,
+                    "detail": f"MAIL FROM rejected: {code} {_decode_resp(msg)[:80]}"}
+        try:
+            code, msg = srv.rcpt(rcpt)
+        except smtplib.SMTPException as e:
+            return {"ok": False, "ms": None, "detail": f"RCPT TO error: {str(e)[:100]}"}
+        if code not in (250, 251):
+            return {"ok": False, "ms": None,
+                    "detail": f"RCPT TO rejected: {code} {_decode_resp(msg)[:80]}"}
+        try: srv.rset()
+        except Exception: pass
+        ms = round((time.time() - t0) * 1000, 1)
+        return {"ok": True, "ms": ms,
+                "detail": f"SMTP MAIL FROM round-trip OK ({ms}ms)"}
+
+    except smtplib.SMTPConnectError as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP connect error: {str(e)[:100]}"}
+    except smtplib.SMTPServerDisconnected as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP server disconnected: {str(e)[:100]}"}
+    except smtplib.SMTPException as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP error: {str(e)[:100]}"}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "detail": f"SMTP timeout after {timeout}s"}
+    except (ConnectionRefusedError, OSError) as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP connect: {str(e)[:80]}"}
+    except Exception as e:
+        log_sensors.warning("probe_smtp %s:%s: unexpected error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": str(e)[:100]}
+    finally:
+        if srv:
+            try: srv.quit()
+            except Exception:
+                try: srv.close()
+                except Exception: pass
+
+
+def _decode_resp(msg) -> str:
+    if isinstance(msg, bytes):
+        try: return msg.decode("utf-8", "replace")
+        except Exception: return ""
+    return str(msg or "")

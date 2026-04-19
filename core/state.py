@@ -79,7 +79,7 @@ class _SensorScheduler:
             self._wake.clear()
 
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
-from monitoring.probes import probe_tls, probe_http_keyword, probe_banner
+from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp
 from .settings import get as _cfg
 from .logger import log_sensors
 
@@ -121,7 +121,9 @@ class Sensor:
                  alerts_muted=False, snmp_unit="",
                  vmware_user="", vmware_password="",
                  vmware_vm_id="", vmware_vm_name="", vmware_metric="",
-                 vmware_disk_path=""):
+                 vmware_disk_path="",
+                 smtp_tls="none", smtp_user="", smtp_password="",
+                 smtp_from="", smtp_rcpt="", smtp_test_level="ehlo"):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -163,6 +165,13 @@ class Sensor:
         self.vmware_vm_name  = vmware_vm_name or ""    # VM display name (e.g. "dc0.bslab.local")
         self.vmware_metric   = vmware_metric or ""     # metric key from VM_METRICS
         self.vmware_disk_path = vmware_disk_path or ""  # for disk_used_pct: e.g. "C:\" or "/"
+        # SMTP fields — auth'd probe; password is Fernet-encrypted at rest
+        self.smtp_tls        = smtp_tls or "none"       # none | starttls | ssl
+        self.smtp_user       = smtp_user or ""
+        self.smtp_password   = smtp_password or ""      # Fernet ciphertext
+        self.smtp_from       = smtp_from or ""          # envelope sender for MAIL FROM round-trip
+        self.smtp_rcpt       = smtp_rcpt or ""          # recipient; probe issues RSET — no DATA
+        self.smtp_test_level = smtp_test_level or "ehlo"  # connect | ehlo | starttls | auth | mailfrom
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -256,6 +265,12 @@ class Sensor:
                                 verify_ssl=self.verify_ssl,
                                 timeout=self.timeout,
                                 disk_path=self.vmware_disk_path)
+        if self.stype == "smtp":
+            from db.backups import decrypt_pw
+            return probe_smtp(self.host, self.port or 25, self.smtp_tls,
+                              self.smtp_user, decrypt_pw(self.smtp_password),
+                              self.smtp_from, self.smtp_rcpt,
+                              self.smtp_test_level, self.timeout)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -295,6 +310,12 @@ class Sensor:
             "vmware_metric":         self.vmware_metric,
             "vmware_disk_path":      self.vmware_disk_path,
             "has_vmware_password":   bool(self.vmware_password),
+            "smtp_tls":              self.smtp_tls,
+            "smtp_user":             self.smtp_user,
+            "smtp_from":             self.smtp_from,
+            "smtp_rcpt":             self.smtp_rcpt,
+            "smtp_test_level":       self.smtp_test_level,
+            "has_smtp_password":     bool(self.smtp_password),
             "threshold_state":       self._threshold_state,
             "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
             "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
@@ -477,7 +498,9 @@ class MonitorState:
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
                    vmware_user="", vmware_password="",
                    vmware_vm_id="", vmware_vm_name="", vmware_metric="",
-                   vmware_disk_path=""):
+                   vmware_disk_path="",
+                   smtp_tls="none", smtp_user="", smtp_password="",
+                   smtp_from="", smtp_rcpt="", smtp_test_level="ehlo"):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -494,7 +517,10 @@ class MonitorState:
                        snmp_unit=snmp_unit,
                        vmware_user=vmware_user, vmware_password=vmware_password,
                        vmware_vm_id=vmware_vm_id, vmware_vm_name=vmware_vm_name,
-                       vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path)
+                       vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path,
+                       smtp_tls=smtp_tls, smtp_user=smtp_user, smtp_password=smtp_password,
+                       smtp_from=smtp_from, smtp_rcpt=smtp_rcpt,
+                       smtp_test_level=smtp_test_level)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -528,6 +554,8 @@ class MonitorState:
                         "vmware_user", "vmware_password",
                         "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                         "vmware_disk_path",
+                        "smtp_tls", "smtp_user", "smtp_password",
+                        "smtp_from", "smtp_rcpt", "smtp_test_level",
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
