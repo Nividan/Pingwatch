@@ -115,7 +115,7 @@ pingwatch/
 │   └── tls.py              ← RSA-2048 cert generation, DB→certs/→auto-generate discovery
 │
 ├── monitoring/
-│   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner)
+│   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner, SMTP, SSH, SFTP)
 │   ├── subnet_discovery.py      ← Subnet scan engine (liveness + enrichment + duplicate detection)
 │   ├── alert_profile_engine.py  ← PRTG-style profile evaluator (cascade resolution, stage timing, dispatch hook)
 │   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
@@ -311,7 +311,13 @@ Subnet discovery scan engine. Exposes `start_scan(cidr, skip_monitored, mode)`, 
 Scan state (`_SCANS` dict, keyed by 16-char hex UUID) is in-memory and auto-purged after 1 hour. Maximum CIDR size is /16 (65 534 hosts); larger inputs are rejected at validation. The `run_subnet_scan()` helper wraps the full flow for future scheduled-scan use.
 
 ### `monitoring/probes.py`
-All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match). VMware probing is handled by `vmware/client.py`, called from `core/state.py`. `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
+All sensor probe types on per-sensor background threads: ICMP, HTTP/S (status + keyword), TCP, TLS (cert validity + handshake), SNMP OID polling (v1/v2c), DNS, Banner (regex match), SMTP, SSH, SFTP. VMware probing is handled by `vmware/client.py`, called from `core/state.py`. `probe_snmp` uses `-On` (numeric OID output), parses stdout only (avoids MIB-warning corruption), picks the last `=`-containing line, and returns `snmp_type` (e.g. `Counter32`, `Gauge32`, `STRING`) alongside the value so the state loop can calculate rates. `snmpwalk_interfaces` walks ifTable + ifXTable to return interface index, name, description, status, and speed.
+
+`probe_smtp(host, port, tls_mode, test_level, user, password, mail_from, timeout)` — 5 layered depths (`connect` → `ehlo` → `starttls` → `auth` → `mailfrom`); each depth runs all prior steps. `smtplib` only — no new dependencies. Phase-tagged failure detail (e.g. `"auth: 535 Authentication failed"`).
+
+`probe_ssh(host, port, test_level, auth_type, user, password, private_key, timeout)` — 3 depths (`connect` → `banner` → `auth`); `banner` depth captures the SSH version string in `detail`. `paramiko` lazy-imported. `_load_ssh_key()` helper handles Ed25519 / RSA / ECDSA PEM from `io.StringIO`.
+
+`probe_sftp(host, port, user, password, private_key, auth_type, test_level, remote_path, expected_sha256, timeout)` — 4 depths (`open` → `list` → `stat` → `checksum`). `checksum` level streams at most 10 MB via 65 536-byte chunks into `hashlib.sha256()`; files larger than the cap return `"checksum: file exceeds 10MB cap"` (pre-flight `stat` check). All operations are read-only. `paramiko` lazy-imported; shares `_load_ssh_key()` with SSH probe.
 
 ### `backup/engine.py`
 SSH (paramiko) and Telnet connections to network devices. Features: TOFU SSH host key verification, password and keyboard-interactive auth (JUNOS), enable-mode escalation (Cisco), paging disable command, per-command idle timeouts, configurable command list.
@@ -775,10 +781,16 @@ Also extends `POST /api/login` to return `{radius_challenge: true, challenge_id,
 
 ### Adding a new sensor type
 
-1. **`monitoring/probes.py`** — add a `probe_<type>(sensor)` function that returns `(ok, latency_ms, detail)`.
-2. **`core/config.py`** — add the type string to `SENSOR_TYPES`.
-3. **`frontend/forms-sensor.js`** — add the type to the sensor-type selector and its config fields.
-4. **`frontend/sensors.js`** — add display logic for the new type's detail string if needed.
+1. **`monitoring/probes.py`** — add a `probe_<type>(...)` function returning `{ok, ms, detail, value?}`. Lazy-import any optional dependency inside the function.
+2. **`core/state.py`** — add type-specific fields to `Sensor.__init__`; add a dispatch branch in `Sensor.probe()` (decrypt secrets via `decrypt_pw()` at call time); expose non-secret fields + `has_*` booleans in `to_dict()`; extend `add_sensor()` signature and `Sensor()` call; add new fields to the `editable` list in `update_sensor()`.
+3. **`db/core.py`** — add idempotent `ALTER TABLE ADD COLUMN` migrations for every new column (guards with `try/except` so re-runs are safe).
+4. **`db/pg_schema.py`** — add columns to the `sensors` `CREATE TABLE` block and append them to the `_migrations` list.
+5. **`db/persistence.py`** — extend all 4 save/load paths (PG save, PG load, SQLite save, SQLite load) with the new columns at the tail of each tuple. Use `_int_or_none(v)` for any numeric field in save tuples — empty strings from the API would otherwise cause PG `invalid input syntax for type integer` errors.
+6. **`routes/devices.py`** — accept new fields in the POST (create) and PATCH (update) handlers; pass secrets through `encrypt_pw()` before handing to STATE. Add server-side validation as needed (e.g. SFTP checksum level requires `interval ≥ 60 s`).
+7. **`frontend/forms-sensor.js`** — append a **6-tuple** `[key, name, sub, icon, category, keywords]` to `_types`; add the type string to the `selType()` array (omitting it keeps the form panel permanently hidden); add a `fg-<type>` form block; extend `collectSensorForm()` with a payload branch for the new type.
+8. **`frontend/sensors.js`** — add `sIco('<type>')` → icon character so the sensor tile renders the right glyph.
+9. **`frontend/forms-settings.js`** — add `<type>: warn_ms` to `_SDR_WARN_DEF`, `<type>: crit_ms` to `_SDR_CRIT_DEF`, and an entry to `_SDR_META` so the sensor defaults table in Settings shows a row for the new type.
+10. **`frontend/style.css`** — add colored badge CSS across **all 7 class families**: `.stl-tbdg.<type>`, `.s-ico.<type>`, `.dc-snr-ico.<type>`, `.dc-snr.snr-t-<type>`, `.dlr-snr.snr-t-<type>`, `.dm-tbdg.<type>`, `.sdr-row[data-type=<type>]`, plus a light-theme override block for AA contrast on white. Use a color not already taken by an existing type (ping=blue, http=yellow, tcp=teal, tls=purple, snmp=orange, dns=sky, banner=indigo, vmware=cyan, smtp=pink, ssh=lime, sftp=rose).
 
 ### Adding a new settings key
 
