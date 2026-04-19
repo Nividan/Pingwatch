@@ -248,20 +248,24 @@ import re as _re
 _DIAG_NUM_RE = _re.compile(r'\d+')
 
 def _diag_log(sensor, label: str, msg: str) -> None:
-    """Emit an INFO diagnostic when the reason CATEGORY changes.
+    """Emit a DEBUG diagnostic when the reason CATEGORY changes.
 
     Rate-limited via sensor._alert_diag_last_reason. Varying numbers (elapsed
     seconds, delays) are normalized out of the key so a countdown like
     "0s so far"→"11s so far"→"27s so far" is treated as one stable reason.
     The logged message still shows the real numbers; only the comparison
     key is normalized.
+
+    These "why didn't this alert fire" explanations are useful during triage
+    but produce dozens of lines per oscillating sensor — kept at DEBUG so
+    they don't drown out real Alert dispatch / recovery events at INFO.
     """
     key = _DIAG_NUM_RE.sub('N', msg)
     prev = getattr(sensor, "_alert_diag_last_reason", None)
     if key == prev:
         return
     sensor._alert_diag_last_reason = key
-    log.info(f"alert_profile_engine: {label} — {msg}")
+    log.debug(f"alert_profile_engine: {label} — {msg}")
 
 
 def evaluate_and_fire(dev, sensor) -> None:
