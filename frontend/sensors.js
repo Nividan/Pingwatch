@@ -1174,6 +1174,7 @@ function dmHistRedraw(did, sid) {
 }
 
 function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   const _setKpi = (id, label, val, cls) => {
     const el = document.getElementById(id);
     if (!el) return;
