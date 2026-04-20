@@ -85,6 +85,23 @@ def _get_oidc_status() -> dict:
                 "last_err_ts": None, "last_err_msg": ""}
 
 
+def _get_auth_refresh_last_ts() -> float | None:
+    """Most recent last_ok_ts across the four auth backends.
+
+    Used by the Integrations tab "Last run" indicator. Returns None if no
+    backend has ever reported OK (fresh boot, nothing configured, etc.).
+    """
+    ts_values = []
+    for fn in (_get_ldap_status, _get_radius_status, _get_saml_status, _get_oidc_status):
+        try:
+            s = fn()
+            if s and s.get("last_ok_ts"):
+                ts_values.append(float(s["last_ok_ts"]))
+        except Exception:
+            pass
+    return max(ts_values) if ts_values else None
+
+
 def _get_effective_workers() -> int:
     """Return the number of probe workers currently in use."""
     try:
@@ -241,6 +258,9 @@ def handle(h, method, path, body):
             "oidc_status":           _get_oidc_status(),
             "oidc_enabled":          int(_settings.get("oidc_enabled", 0) or 0),
             "oidc_display_name":     _settings.get("oidc_display_name", "") or "Single Sign-On",
+            # Auth backend background health check — interval + last-run summary
+            "auth_refresh_interval_min": int(_settings.get("auth_refresh_interval_min", 60) or 60),
+            "auth_refresh_last_ts":      _get_auth_refresh_last_ts(),
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
@@ -312,6 +332,16 @@ def handle(h, method, path, body):
             _sal = "1" if body["syslog_app_logs"] else "0"
             _settings.load({"syslog_app_logs": _sal})
             _db_enqueue(lambda _v=_sal: db_save_settings({"syslog_app_logs": _v}))
+        if "auth_refresh_interval_min" in body:
+            try:
+                _arm = int(body["auth_refresh_interval_min"])
+            except (ValueError, TypeError):
+                h._json(400, {"error": "auth_refresh_interval_min must be an integer"}); return True
+            # Fixed allow-list prevents a typo setting a 1-second busy loop.
+            if _arm not in (0, 15, 30, 60, 240, 720):
+                h._json(400, {"error": "auth_refresh_interval_min must be one of 0, 15, 30, 60, 240, 720"}); return True
+            _settings.load({"auth_refresh_interval_min": _arm})
+            _db_enqueue(lambda _v=_arm: db_save_settings({"auth_refresh_interval_min": _v}))
         if "syslog_app_log_level" in body:
             _sall = str(body["syslog_app_log_level"]).lower().strip()
             if _sall not in ("debug", "info", "warning", "error"):
@@ -470,6 +500,23 @@ def handle(h, method, path, body):
             _t.Thread(target=_reprobe, daemon=True, name='smtp-resave-probe').start()
 
         h._json(200, {"ok": True})
+        return True
+
+    # ── /api/auth/health/run_now POST ────────────────────────────
+    # Admin button in Settings → Integrations → Background Health Check strip.
+    # Skips the current wait on the refresh thread and runs an iteration now.
+    # Returns immediately — actual results show up in the status badges
+    # (GET /api/settings) and the log when the iteration completes.
+    if path == "/api/auth/health/run_now" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        try:
+            from core.auth_health import trigger_run_now
+            trigger_run_now()
+            h._json(200, {"ok": True, "msg": "refresh triggered"})
+        except Exception as _e:
+            log.error(f"auth_health run_now failed: {_e}")
+            h._json(500, {"ok": False, "error": "trigger failed"})
         return True
 
     # ── /api/settings/syslog_test POST ───────────────────────────

@@ -173,6 +173,7 @@
       <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
       <button class="mtab" id="tabIpam" onclick="switchMainTab('ipam')">📋 IP Addresses</button>
       <button class="mtab" id="tabReports" onclick="switchMainTab('reports')">📊 Reports</button>
+      <button class="mtab rbac-admin" id="tabLogs" onclick="switchMainTab('logs')">📜 Logs</button>
     </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
@@ -337,6 +338,7 @@
     <!-- IP Addresses (IPAM) view -->
     <div id="ipamView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="reportsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
+    <div id="logsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
   </div>
 </div>
 <div id="toast"></div>

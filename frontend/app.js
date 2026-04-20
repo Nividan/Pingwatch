@@ -884,9 +884,9 @@ async function _logBadgeInit() {
 function _openLogBadge() {
   _lsSet('logBadgeSeen', String(_logBadgeTotal));
   _updateLogBadge();
-  // Pre-filter to WARNING+ when opening from badge
-  if (typeof _logFilter !== 'undefined') _logFilter.level = 'WARNING';
-  openSettings('logs');
+  // Pre-filter the Logs tab to WARNING+ when opening from the badge
+  if (typeof _lvFilter !== 'undefined') _lvFilter.minLevel = 'WARNING';
+  switchMainTab('logs');
 }
 
 function _requestNotifPermission() {
@@ -1396,12 +1396,14 @@ function switchMainTab(tab){
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
+  { const _lb=document.getElementById('tabLogs');    if(_lb) _lb.classList.toggle('active',tab==='logs');    }
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
   const reportsView  =document.getElementById('reportsView');
+  const logsView     =document.getElementById('logsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -1410,6 +1412,9 @@ function switchMainTab(tab){
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
   if(reportsView) reportsView.style.display='none';
+  if(logsView)    logsView.style.display   ='none';
+  // Deactivate logs polling when switching away from the Logs tab
+  if(tab!=='logs' && typeof _logsDeactivate==='function') _logsDeactivate();
   document.getElementById('devActBar').style.display='none';
   const _devPg=document.getElementById('devPagination');
   if(_devPg) _devPg.style.display='none';
@@ -1463,6 +1468,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _rptInit==='function') _rptInit();
+  } else if(tab==='logs'){
+    if(logsView) logsView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _logsInit==='function') _logsInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';

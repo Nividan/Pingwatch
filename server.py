@@ -72,7 +72,7 @@ _JS_FILES = _VENDOR_JS_FILES + [
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
     "forms-saml.js", "forms-oidc.js",
     "forms-discovery.js",
-    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "alerting.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "app.js",
 ]
 
 # Vendored CSS appended to the inline <style> block in the same order.
@@ -634,6 +634,16 @@ def main():
     from core.logger import set_debug_mode as _set_dbg
     _set_dbg(int(_settings.get("debug_mode", 0) or 0) == 1)
 
+    # Auth backend config sanity pass — populates status badges for LDAP /
+    # RADIUS / SAML / OIDC before the HTTP listener is up. Fast + local-only:
+    # no network calls, no heavy crypto. Failures are logged; the hourly
+    # refresh thread (started further below) does the live checks.
+    try:
+        from core.auth_health import boot_sanity_pass
+        boot_sanity_pass()
+    except Exception as _e:
+        log.warning(f"Auth boot sanity pass crashed: {_e}")
+
     # Auto-scale probe executor: 1 worker per 4 sensors, clamped [64, 512].
     # Manual override: set max_workers_executor to 4-512 in settings.
     # Setting it to 0 (or blank in UI) returns to auto mode.
@@ -775,6 +785,16 @@ def main():
     _attach_app_log_handlers()
     from core.ldap_auth import ldap_sync_loop
     threading.Thread(target=ldap_sync_loop, daemon=True, name="ldap-sync").start()
+
+    # Background auth health refresh — revalidates LDAP bind, OIDC discovery,
+    # and certs on auth_refresh_interval_min (default 60min). Catches rotated
+    # credentials / expired certs before a user hits the error.
+    try:
+        from core.auth_health import start_auth_refresh_loop
+        start_auth_refresh_loop()
+    except Exception as _e:
+        log.warning(f"Auth refresh loop did not start: {_e}")
+
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
@@ -930,6 +950,11 @@ def main():
         stop_ldap_sync()
     except Exception as e:
         log.warning(f"stop_ldap_sync failed: {e}")
+    try:
+        from core.auth_health import stop_auth_refresh_loop
+        stop_auth_refresh_loop()
+    except Exception as e:
+        log.warning(f"stop_auth_refresh_loop failed: {e}")
     try:
         from reports.scheduler import stop_scheduler as stop_report_scheduler
         stop_report_scheduler()
