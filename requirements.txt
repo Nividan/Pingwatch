@@ -10,6 +10,7 @@ qrcode>=7.4.0  # QR code image rendering for 2FA enrolment
 smbprotocol>=1.10.0  # SMB / CIFS remote database backup upload
 pyrad>=2.4     # RADIUS authentication (FortiAuthenticator, NPS, FreeRADIUS)
 pysaml2>=7.5   # SAML 2.0 SSO (pure Python — no xmlsec1 system dep)
+signxml>=3.2   # SAML XML signature verification (pysaml2 no longer pulls it automatically)
 authlib>=1.3   # OpenID Connect SSO (Authorization Code + PKCE, JWKS, JWT)
 
 # Reports module — HTML→PDF rendering and chart generation

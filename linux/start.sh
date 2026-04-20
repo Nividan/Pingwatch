@@ -133,6 +133,7 @@ _PACKAGES = [
     ("smbclient",    "SMB / CIFS remote DB backup upload",      False),
     ("pyrad",        "RADIUS authentication",                   False),
     ("saml2",        "SAML 2.0 SSO",                            False),
+    ("signxml",      "SAML XML signature verification",         False),
     ("authlib",      "OpenID Connect SSO",                      False),
     ("pystray",      "system tray icon",                        False),
     ("PIL",          "image support (tray icon)",               False),
