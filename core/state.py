@@ -420,6 +420,10 @@ class Device:
         self.webhook_url  = ""
         self.alerts_muted = False
         self.secondary_ips = []
+        # Bulk-import linkage — populated by the import path when the device
+        # was created from a file. NULL for manual / Discovery additions.
+        # Format: "<source>:<native_id>" e.g. "prtg:2001".
+        self.external_id  = None
         self.sensors      = {}
         self._sid_ctr     = 0
         # Device-level default credentials (pre-fill for new sensors)

@@ -106,8 +106,25 @@ def pg_create_main_schema(cur):
             snmp_version_default     TEXT DEFAULT '',
             vmware_user_default      TEXT DEFAULT '',
             vmware_password_default  TEXT DEFAULT '',
-            secondary_ips            TEXT DEFAULT '[]'
+            secondary_ips            TEXT DEFAULT '[]',
+            external_id              TEXT DEFAULT NULL
         )""")
+    # Bulk-import external_id — idempotent add for pre-existing installs.
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='devices'
+                             AND column_name='external_id') THEN
+                ALTER TABLE devices ADD COLUMN external_id TEXT DEFAULT NULL;
+            END IF;
+        END $$
+    """)
+    # Partial unique index — NULL external_ids don't collide.
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_external_id
+            ON devices(external_id) WHERE external_id IS NOT NULL
+    """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sensors (

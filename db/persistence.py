@@ -43,7 +43,8 @@ def _pg_save(state):
              getattr(dev, "snmp_version_default", ""),
              getattr(dev, "vmware_user_default", ""),
              getattr(dev, "vmware_password_default", ""),
-             json.dumps(getattr(dev, "secondary_ips", []) or []))
+             json.dumps(getattr(dev, "secondary_ips", []) or []),
+             getattr(dev, "external_id", None))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -113,7 +114,7 @@ def _pg_save(state):
                     cur,
                     "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
                     "snmp_community_default,snmp_version_default,vmware_user_default,"
-                    "vmware_password_default,secondary_ips) "
+                    "vmware_password_default,secondary_ips,external_id) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
@@ -123,7 +124,8 @@ def _pg_save(state):
                     "snmp_version_default=EXCLUDED.snmp_version_default, "
                     "vmware_user_default=EXCLUDED.vmware_user_default, "
                     "vmware_password_default=EXCLUDED.vmware_password_default, "
-                    "secondary_ips=EXCLUDED.secondary_ips",
+                    "secondary_ips=EXCLUDED.secondary_ips, "
+                    "external_id=EXCLUDED.external_id",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -226,7 +228,8 @@ def db_save(state):
              getattr(dev, "snmp_version_default", ""),
              getattr(dev, "vmware_user_default", ""),
              getattr(dev, "vmware_password_default", ""),
-             json.dumps(getattr(dev, "secondary_ips", []) or []))
+             json.dumps(getattr(dev, "secondary_ips", []) or []),
+             getattr(dev, "external_id", None))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -291,7 +294,12 @@ def db_save(state):
     try:
         con = sqlite3.connect(DB_PATH, timeout=15)
         cur = con.cursor()
-        cur.executemany("INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+        cur.executemany(
+            "INSERT OR REPLACE INTO devices "
+            "(did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
+            "snmp_community_default,snmp_version_default,vmware_user_default,"
+            "vmware_password_default,secondary_ips,external_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -347,7 +355,8 @@ def _pg_load(state):
                 "COALESCE(snmp_version_default,'') AS snmp_version_default,"
                 "COALESCE(vmware_user_default,'') AS vmware_user_default,"
                 "COALESCE(vmware_password_default,'') AS vmware_password_default,"
-                "COALESCE(secondary_ips,'[]') AS secondary_ips "
+                "COALESCE(secondary_ips,'[]') AS secondary_ips,"
+                "external_id "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -422,6 +431,7 @@ def _pg_load(state):
             dev.secondary_ips = json.loads(row[11] or "[]")
         except (json.JSONDecodeError, TypeError):
             dev.secondary_ips = []
+        dev.external_id = row[12] if len(row) > 12 else None
         state.devices[did] = dev
 
     for row in srows:
@@ -554,7 +564,7 @@ def db_load(state):
             "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
             "COALESCE(snmp_community_default,''),COALESCE(snmp_version_default,''),"
             "COALESCE(vmware_user_default,''),COALESCE(vmware_password_default,''),"
-            "COALESCE(secondary_ips,'[]') FROM devices"
+            "COALESCE(secondary_ips,'[]'),external_id FROM devices"
         ).fetchall()
         srows = con.execute(
             "SELECT did,sid,name,stype,host,port,url,interval,timeout,"
@@ -597,7 +607,7 @@ def db_load(state):
     max_did = 0
     for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
          snmp_community_default, snmp_version_default, vmware_user_default,
-         vmware_password_default, secondary_ips_json) in devs:
+         vmware_password_default, secondary_ips_json, external_id) in devs:
         dev = Device(did, name, host, grp)
         try:
             n = int(did.replace("d", ""))
@@ -615,6 +625,7 @@ def db_load(state):
             dev.secondary_ips = json.loads(secondary_ips_json or "[]")
         except (json.JSONDecodeError, TypeError):
             dev.secondary_ips = []
+        dev.external_id = external_id or None
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,
