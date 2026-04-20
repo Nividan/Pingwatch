@@ -64,6 +64,9 @@
     </div>
     <div class="login-body">
       <div class="login-err" id="login-err"></div>
+      <!-- SSO buttons (populated by app.js after fetching /api/settings) -->
+      <div id="sso-methods" style="display:none;flex-direction:column;gap:8px;margin-bottom:14px"></div>
+      <div id="sso-divider" style="display:none;margin:10px 0;text-align:center;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px"><span style="background:var(--bg2);padding:0 10px">or sign in with account</span></div>
       <div class="login-field">
         <label class="login-label" for="login-user">Username</label>
         <input class="login-input" id="login-user" type="text" placeholder="admin" autocomplete="username" autocapitalize="none"/>

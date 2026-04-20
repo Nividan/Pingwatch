@@ -297,7 +297,40 @@ function showLogin(msg, keepInput){
     _resetLoginForm();
     setTimeout(()=>document.getElementById('login-user')?.focus(),80);
   }
+  // Populate SSO buttons (async, non-blocking — login form is usable immediately)
+  _renderSsoButtons();
 }
+
+// Fetch /api/settings (public fields only for unauthenticated callers) to
+// discover which SSO methods are enabled, then render a button per method
+// above the local username/password form. Idempotent — safe to call repeatedly.
+async function _renderSsoButtons(){
+  const container = document.getElementById('sso-methods');
+  const divider   = document.getElementById('sso-divider');
+  if(!container) return;
+  container.innerHTML = '';
+  container.style.display = 'none';
+  if(divider) divider.style.display = 'none';
+  let s;
+  try {
+    const r = await fetch('/api/settings/public_auth', {credentials: 'same-origin'});
+    if(!r.ok) return;
+    s = await r.json();
+  } catch(e) { return; }
+  const methods = [];
+  if(s.saml_enabled) methods.push({id:'saml', label: s.saml_display_name || 'Sign in with Single Sign-On', href:'/api/saml/login'});
+  if(s.oidc_enabled) methods.push({id:'oidc', label: s.oidc_display_name || 'Sign in with Single Sign-On', href:'/api/oidc/login'});
+  if(!methods.length) return;
+  const html = methods.map(m =>
+    `<a href="${m.href}" class="sso-btn" id="sso-btn-${m.id}" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;color:var(--text);text-decoration:none;font-weight:500;font-size:13px;transition:background .1s" onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='var(--bg3)'"><span style="font-size:16px">🔑</span>${_esc(m.label)}</a>`
+  ).join('');
+  container.innerHTML = html;
+  container.style.display = 'flex';
+  if(divider) divider.style.display = 'block';
+}
+
+function _esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
 function hideLogin(){
   document.getElementById('login-screen').style.display='none';
 }

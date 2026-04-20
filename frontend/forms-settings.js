@@ -226,6 +226,8 @@ function _buildSettingsTab_integrations(sr) {
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
         <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD <span id="ibadge-ldap" style="font-size:13px"></span></button>
         <button id="itab-radius" class="itab" onclick="switchIntegTab('radius')">🧾 RADIUS <span id="ibadge-radius" style="font-size:13px"></span></button>
+        <button id="itab-saml" class="itab" onclick="switchIntegTab('saml')">🪪 SAML 2.0 <span id="ibadge-saml" style="font-size:13px"></span></button>
+        <button id="itab-oidc" class="itab" onclick="switchIntegTab('oidc')">🪙 OIDC <span id="ibadge-oidc" style="font-size:13px"></span></button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -532,6 +534,230 @@ function _buildSettingsTab_integrations(sr) {
           <div id="radius-mappings-body" style="margin-top:8px"></div>
         </div>
 
+      </div>
+
+      <!-- ── SAML 2.0 sub-panel ── -->
+      <div id="ipanel-saml" style="display:none">
+        <div id="saml-status-bar"></div>
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable SAML 2.0 SSO</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">SP-initiated single sign-on. Works with Okta, Azure AD / Entra ID, ADFS, Keycloak, PingFederate, OneLogin, Shibboleth.</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="saml-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- SP (this system) -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Service Provider (this system)</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">SP Entity ID</label>
+            <input type="text" id="saml-sp-entity-id" placeholder="https://pingwatch.example.com/saml/metadata" autocomplete="off"/>
+            <div class="fh">Unique identifier for this SP. Typically the metadata URL.</div>
+          </div>
+          <div class="fr"><label class="fl">ACS URL</label>
+            <input type="text" id="saml-sp-acs-url" placeholder="https://pingwatch.example.com/api/saml/acs" autocomplete="off"/>
+            <div class="fh">Assertion Consumer Service — where the IdP POSTs responses.</div>
+          </div>
+        </div>
+        <div class="fr" style="margin-top:10px">
+          <label class="fl">SP Signing Certificate</label>
+          <div id="saml-sp-cert-info" style="font-size:12px;color:var(--text2);padding:8px;background:var(--bg3);border-radius:6px;margin-bottom:6px">No cert — click Generate to create one.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn-s" style="font-size:12px" onclick="generateSamlSpCert()">⚙ Generate SP signing cert</button>
+            <button class="btn-s" style="font-size:12px" onclick="downloadSamlSpMetadata()">⤓ Download SP metadata (XML)</button>
+          </div>
+          <div class="fh" style="margin-top:6px">RSA-2048, self-signed, 825-day validity. Give the metadata to your IdP admin.</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="saml-sign-authn-requests" style="width:14px;height:14px;cursor:pointer"/>
+              Sign AuthnRequests
+            </label>
+          </div>
+          <div class="fr">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="saml-want-assertions-signed" style="width:14px;height:14px;cursor:pointer"/>
+              Require signed assertions
+            </label>
+          </div>
+        </div>
+
+        <!-- IdP metadata import -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Identity Provider</div>
+          <div class="fr">
+            <label class="fl">Import IdP Metadata</label>
+            <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--text2)">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="url" checked onchange="_samlMetaSrcToggle()"/> By URL</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="xml" onchange="_samlMetaSrcToggle()"/> Paste XML</label>
+            </div>
+            <input type="text" id="saml-meta-url" placeholder="https://idp.example.com/metadata" autocomplete="off"/>
+            <textarea id="saml-meta-xml" rows="5" placeholder="<md:EntityDescriptor ...>" style="display:none;font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical;width:100%;padding:6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);margin-top:4px"></textarea>
+            <div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+              <button class="btn-s" style="font-size:12px" onclick="importSamlMetadata()">⇩ Import metadata</button>
+              <div id="saml-meta-result" style="font-size:12px;flex:1"></div>
+            </div>
+          </div>
+          <div class="fgrid" style="margin-top:10px">
+            <div class="fr"><label class="fl">IdP Entity ID</label>
+              <input type="text" id="saml-idp-entity-id" placeholder="(auto-filled after import)" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">IdP SSO URL</label>
+              <input type="text" id="saml-idp-sso-url" placeholder="(auto-filled after import)" autocomplete="off"/></div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">IdP Signing Certificate</label>
+            <div id="saml-idp-cert-info" style="font-size:12px;color:var(--text2);padding:8px;background:var(--bg3);border-radius:6px">No cert — import IdP metadata.</div>
+          </div>
+        </div>
+
+        <!-- Attribute mapping -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Attribute Mapping</div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Username attribute</label>
+              <input type="text" id="saml-attr-username" value="NameID" autocomplete="off"/>
+              <div class="fh">Use <code>NameID</code> for the subject, or an attribute name like <code>uid</code>.</div></div>
+            <div class="fr"><label class="fl">Email attribute</label>
+              <input type="text" id="saml-attr-email" value="mail" autocomplete="off"/></div>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Display Name attribute</label>
+              <input type="text" id="saml-attr-display-name" value="displayName" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Groups attribute</label>
+              <input type="text" id="saml-attr-groups" value="memberOf" autocomplete="off"/>
+              <div class="fh">Values from this attribute match user-group mappings below.</div></div>
+          </div>
+        </div>
+
+        <!-- Provisioning -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Provisioning</div>
+          <div style="display:flex;gap:24px;margin-bottom:10px;flex-wrap:wrap;align-items:flex-start">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="saml-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision new users on first sign-in
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="saml-allow-unmapped" style="width:14px;height:14px;cursor:pointer"/>
+              Allow users who don't match any mapped group
+            </label>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Default Role</label>
+              <select id="saml-default-role" style="max-width:140px">
+                <option value="viewer">Viewer</option>
+                <option value="operator">Operator</option>
+                <option value="admin">Admin</option>
+              </select>
+              <div class="fh">Applied when no group mapping matches.</div></div>
+            <div class="fr"><label class="fl">Login button label</label>
+              <input type="text" id="saml-display-name" placeholder="Sign in with Company SSO" autocomplete="off"/>
+              <div class="fh">Shown on the PingWatch login screen.</div></div>
+          </div>
+        </div>
+
+        <!-- Test -->
+        <div style="display:flex;gap:8px;margin-top:16px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testSamlConfig()">▶ Test Configuration</button>
+          <div id="saml-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+      </div>
+
+      <!-- ── OIDC sub-panel ── -->
+      <div id="ipanel-oidc" style="display:none">
+        <div id="oidc-status-bar"></div>
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable OpenID Connect SSO</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Authorization Code flow with PKCE. Works with Azure AD / Entra ID, Okta, Google Workspace, Keycloak, Auth0, Authentik.</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="oidc-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- Issuer + client -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Identity Provider</div>
+        <div class="fr">
+          <label class="fl">Issuer URL</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="oidc-issuer-url" placeholder="https://login.microsoftonline.com/{tenant}/v2.0" autocomplete="off" style="flex:1"/>
+            <button class="btn-s" style="font-size:12px;white-space:nowrap" onclick="refreshOidcDiscovery()">↻ Auto-discover</button>
+          </div>
+          <div class="fh">PingWatch will fetch <code>/.well-known/openid-configuration</code> from this URL.</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Client ID</label>
+            <input type="text" id="oidc-client-id" placeholder="application / client ID" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Client Secret</label>
+            <input type="password" id="oidc-client-secret" placeholder="leave blank to keep existing" autocomplete="new-password"/></div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Redirect URI</label>
+            <input type="text" id="oidc-redirect-uri" placeholder="https://pingwatch.example.com/api/oidc/callback" autocomplete="off"/>
+            <div class="fh">Register this URL with your IdP.</div></div>
+          <div class="fr"><label class="fl">Scopes</label>
+            <input type="text" id="oidc-scopes" value="openid profile email groups" autocomplete="off"/>
+            <div class="fh">Space-separated. Most IdPs need at least <code>openid profile email</code>.</div></div>
+        </div>
+
+        <!-- Discovery display -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Discovery Endpoints <span id="oidc-discovery-ts" style="text-transform:none;font-weight:400;color:var(--text3);margin-left:8px"></span></div>
+          <div id="oidc-discovery-panel" style="font-size:12px;color:var(--text2);font-family:Consolas,Monaco,monospace;padding:10px;background:var(--bg3);border-radius:6px">Not fetched yet — click Auto-discover.</div>
+        </div>
+
+        <!-- Claim mapping -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Claim Mapping</div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Username claim</label>
+              <input type="text" id="oidc-claim-username" value="preferred_username" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Email claim</label>
+              <input type="text" id="oidc-claim-email" value="email" autocomplete="off"/></div>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Display Name claim</label>
+              <input type="text" id="oidc-claim-display-name" value="name" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Groups claim</label>
+              <input type="text" id="oidc-claim-groups" value="groups" autocomplete="off"/>
+              <div class="fh">Claim whose values are matched against user-group mappings.</div></div>
+          </div>
+        </div>
+
+        <!-- Provisioning -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Provisioning</div>
+          <div style="display:flex;gap:24px;margin-bottom:10px;flex-wrap:wrap;align-items:flex-start">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="oidc-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision new users on first sign-in
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="oidc-allow-unmapped" style="width:14px;height:14px;cursor:pointer"/>
+              Allow users who don't match any mapped group
+            </label>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Default Role</label>
+              <select id="oidc-default-role" style="max-width:140px">
+                <option value="viewer">Viewer</option>
+                <option value="operator">Operator</option>
+                <option value="admin">Admin</option>
+              </select></div>
+            <div class="fr"><label class="fl">Login button label</label>
+              <input type="text" id="oidc-display-name" placeholder="Sign in with Azure AD" autocomplete="off"/></div>
+          </div>
+        </div>
+
+        <!-- Test -->
+        <div style="display:flex;gap:8px;margin-top:16px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testOidcConfig()">▶ Test Configuration</button>
+          <div id="oidc-test-result" style="font-size:12px;flex:1"></div>
+        </div>
       </div>
     </div>`;
 }
@@ -2764,7 +2990,7 @@ function _renderIntegStatus(id, status) {
 }
 
 function switchIntegTab(name) {
-  ['smtp', 'syslog', 'ldap', 'radius'].forEach(t => {
+  ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].forEach(t => {
     document.getElementById(`itab-${t}`)?.classList.toggle('itab-active', t === name);
     const p = document.getElementById(`ipanel-${t}`);
     if (p) p.style.display = t === name ? '' : 'none';
@@ -2777,6 +3003,8 @@ function switchIntegTab(name) {
   // Load panel contents when its tab is shown
   if (name === 'ldap')   _loadLdapPanel();
   if (name === 'radius') _loadRadiusPanel();
+  if (name === 'saml')   _loadSamlPanel();
+  if (name === 'oidc')   _loadOidcPanel();
 }
 
 async function _loadIntegrationsStatus() {
@@ -2786,9 +3014,11 @@ async function _loadIntegrationsStatus() {
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
     if (r.ldap_status)   _renderIntegStatus('ldap',   r.ldap_status);
     if (r.radius_status) _renderIntegStatus('radius', r.radius_status);
+    if (r.saml_status)   _renderIntegStatus('saml',   r.saml_status);
+    if (r.oidc_status)   _renderIntegStatus('oidc',   r.oidc_status);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
-  const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius'].find(
+  const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].find(
     t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
   ) || 'smtp';
   switchIntegTab(activeSubTab);
@@ -2798,7 +3028,7 @@ async function _saveIntegrations() {
   const btn = document.getElementById('integ-btn-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
   try {
-    const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius'].find(
+    const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].find(
       t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
     ) || 'smtp';
     if (activeSubTab === 'smtp') {
@@ -2807,6 +3037,10 @@ async function _saveIntegrations() {
       await saveLdapSettings();
     } else if (activeSubTab === 'radius') {
       await saveRadiusSettings();
+    } else if (activeSubTab === 'saml') {
+      await saveSamlSettings();
+    } else if (activeSubTab === 'oidc') {
+      await saveOidcSettings();
     } else {
       await saveSyslogSettings();
     }
