@@ -168,3 +168,7 @@ _RE_LICENSES_CHECK    = re.compile(r'^/api/licenses/check$')
 _RE_DISCOVERY_SCAN     = re.compile(r'^/api/discovery/scan$')
 _RE_DISCOVERY_STATUS   = re.compile(r'^/api/discovery/scan/([a-f0-9]{16})$')
 _RE_DISCOVERY_BULK_ADD = re.compile(r'^/api/discovery/bulk-add$')
+# Bulk Device Import
+_RE_IMPORT_PARSE       = re.compile(r'^/api/import/parse$')
+_RE_IMPORT_APPLY       = re.compile(r'^/api/import/apply$')
+_RE_IMPORT_SW_INSPECT  = re.compile(r'^/api/import/sw/inspect$')

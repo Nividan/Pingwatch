@@ -18,6 +18,9 @@ weasyprint>=62.0      # HTML+CSS → PDF (needs Pango/Cairo system libs — see 
 Jinja2>=3.1           # HTML template rendering for report body + email
 matplotlib>=3.7       # Charts (rendered to PNG, embedded as data URIs)
 
+# Bulk Device Import — XLSX reader for SolarWinds exports (.xlsx/.xlsm)
+openpyxl>=3.1         # Pure-Python; CSV/JSON/PRTG/Zabbix imports work without it
+
 # Optional: PostgreSQL backend (required only if using PostgreSQL instead of SQLite)
 psycopg2-binary>=2.9.9
 

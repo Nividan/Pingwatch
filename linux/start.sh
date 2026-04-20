@@ -143,6 +143,7 @@ _PACKAGES = [
     ("jinja2",       "report HTML template rendering",          False),
     ("matplotlib",   "report charts (PNG rendering)",           False),
     ("weasyprint",   "PDF report generation (HTML->PDF)",       False),
+    ("openpyxl",     "XLSX reader (SolarWinds bulk imports)",   False),
     ("tkinter",      "status window GUI",                       False),
 ]
 all_ok = True
