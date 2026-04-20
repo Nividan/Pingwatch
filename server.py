@@ -22,7 +22,11 @@ try:
     import pystray
     from PIL import Image, ImageDraw
     _TRAY = True
-except ImportError:
+except Exception:
+    # ImportError: pystray/PIL not installed.
+    # ValueError / other: headless Linux — pystray tries to load a GUI backend
+    # (appindicator/Gtk, xorg) at import time and raises when the namespace is
+    # absent. Either way, tray is not available; keep running.
     _TRAY = False
 
 import core.settings as _settings
