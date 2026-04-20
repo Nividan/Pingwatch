@@ -1353,16 +1353,16 @@ function _buildSettingsTab_autoDiscovery(sr) {
       </div>
     </div>
 
-    <div class="ad-strip">
-      <div class="ad-strip-row">
-        <label><input type="checkbox" id="ad-enabled"  ${enabled ?'checked':''}/> Enabled</label>
-        <label><input type="checkbox" id="ad-paused"   ${paused  ?'checked':''}/> Pause (skip scans but keep daemon alive)</label>
-        <label><input type="checkbox" id="ad-alert-new" ${alertNew?'checked':''}/> Alert on new device</label>
-        <label><input type="checkbox" id="ad-use-ptr"  ${usePtr  ?'checked':''}/> Reverse-DNS naming</label>
+    <div class="disc-strip">
+      <div class="disc-strip-row">
+        <label><input type="checkbox" id="disc-enabled"  ${enabled ?'checked':''}/> Enabled</label>
+        <label><input type="checkbox" id="disc-paused"   ${paused  ?'checked':''}/> Pause (skip scans but keep daemon alive)</label>
+        <label><input type="checkbox" id="disc-alert-new" ${alertNew?'checked':''}/> Alert on new device</label>
+        <label><input type="checkbox" id="disc-use-ptr"  ${usePtr  ?'checked':''}/> Reverse-DNS naming</label>
       </div>
-      <div class="ad-strip-row">
+      <div class="disc-strip-row">
         <label>Interval
-          <select id="ad-interval">
+          <select id="disc-interval">
             <option value="15"    ${intv===15?'selected':''}>15 min</option>
             <option value="30"    ${intv===30?'selected':''}>30 min</option>
             <option value="60"    ${intv===60?'selected':''}>1 hour</option>
@@ -1374,31 +1374,31 @@ function _buildSettingsTab_autoDiscovery(sr) {
           </select>
         </label>
         <label>First-scan cap
-          <input type="number" id="ad-cap" value="${cap}" min="0" max="1000" title="Max devices a subnet's FIRST scan can create. 0 = disabled."/>
+          <input type="number" id="disc-cap" value="${cap}" min="0" max="1000" title="Max devices a subnet's FIRST scan can create. 0 = disabled."/>
         </label>
         <label>During maintenance
-          <select id="ad-maint">
+          <select id="disc-maint">
             <option value="skip" ${maint==='skip'?'selected':''}>Skip scan</option>
             <option value="run"  ${maint==='run' ?'selected':''}>Run scan anyway</option>
           </select>
         </label>
         <button class="btn-s" onclick="triggerAutoDiscoveryNow()" title="Run a scan pass right now">🔄 Run now</button>
       </div>
-      <div class="ad-lastrun" id="ad-lastrun">Last run: <strong>—</strong></div>
+      <div class="disc-lastrun" id="disc-lastrun">Last run: <strong>—</strong></div>
     </div>
 
-    <div class="ad-sup-hd">Suppressed hosts</div>
+    <div class="disc-sup-hd">Suppressed hosts</div>
     <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
       Hosts that were auto-added and later manually deleted. Auto-Discovery will not re-add them.
       Remove an entry here to allow re-discovery.
     </div>
-    <div id="ad-sup-wrap"><div class="ad-sup-empty">Loading…</div></div>
+    <div id="disc-sup-wrap"><div class="disc-sup-empty">Loading…</div></div>
 
-    <div class="ad-sup-hd" style="margin-top:18px">Recent activity</div>
+    <div class="disc-sup-hd" style="margin-top:18px">Recent activity</div>
     <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
       Scheduler ticks, cap hits, subnet toggles, and admin actions. Sourced from the audit log.
     </div>
-    <div id="ad-activity-wrap"><div class="ad-sup-empty">Loading…</div></div>
+    <div id="disc-activity-wrap"><div class="disc-sup-empty">Loading…</div></div>
 
     <details class="imp-help" style="margin-top:14px">
       <summary>❓ How Auto-Discovery works</summary>
@@ -3544,7 +3544,7 @@ async function _loadAutoDiscoveryStatus() {
     _renderAutoDiscoveryLastRun(r);
     _renderAutoDiscoverySuppressed(r.suppressed_hosts || []);
   } catch (e) {
-    const lr = document.getElementById('ad-lastrun');
+    const lr = document.getElementById('disc-lastrun');
     if (lr) lr.innerHTML = '<span style="color:var(--down)">Failed to load status</span>';
   }
   // Activity pane — independent of /status so one endpoint failure doesn't
@@ -3553,8 +3553,8 @@ async function _loadAutoDiscoveryStatus() {
     const a = await api('GET', '/api/auto-discovery/activity');
     _renderAutoDiscoveryActivity(a.entries || []);
   } catch {
-    const w = document.getElementById('ad-activity-wrap');
-    if (w) w.innerHTML = '<div class="ad-sup-empty" style="color:var(--down)">Failed to load activity</div>';
+    const w = document.getElementById('disc-activity-wrap');
+    if (w) w.innerHTML = '<div class="disc-sup-empty" style="color:var(--down)">Failed to load activity</div>';
   }
 }
 
@@ -3570,34 +3570,34 @@ const _AD_ACTION_LABELS = {
 };
 
 function _renderAutoDiscoveryActivity(entries) {
-  const wrap = document.getElementById('ad-activity-wrap');
+  const wrap = document.getElementById('disc-activity-wrap');
   if (!wrap) return;
   if (!entries.length) {
-    wrap.innerHTML = '<div class="ad-sup-empty">No activity yet.</div>';
+    wrap.innerHTML = '<div class="disc-sup-empty">No activity yet.</div>';
     return;
   }
   const rows = entries.map(e => {
     let when = '';
     try { when = new Date(parseFloat(e.ts) * 1000).toLocaleString(); } catch {}
     const lbl = _AD_ACTION_LABELS[e.action] || esc(e.action);
-    const tgt = e.target ? `<span class="ad-act-target">${esc(e.target)}</span>` : '';
-    const det = e.detail ? `<span class="ad-act-detail">${esc(e.detail)}</span>` : '';
-    const who = (e.actor && e.actor !== 'system') ? `<span class="ad-act-actor">${esc(e.actor)}</span>` : '';
+    const tgt = e.target ? `<span class="disc-act-target">${esc(e.target)}</span>` : '';
+    const det = e.detail ? `<span class="disc-act-detail">${esc(e.detail)}</span>` : '';
+    const who = (e.actor && e.actor !== 'system') ? `<span class="disc-act-actor">${esc(e.actor)}</span>` : '';
     return `<tr>
-      <td class="ad-act-when">${esc(when)}</td>
-      <td class="ad-act-label">${lbl}</td>
+      <td class="disc-act-when">${esc(when)}</td>
+      <td class="disc-act-label">${lbl}</td>
       <td>${tgt}${det ? ' — ' : ''}${det}</td>
       <td>${who}</td>
     </tr>`;
   }).join('');
-  wrap.innerHTML = `<table class="ad-sup-tbl ad-act-tbl">
+  wrap.innerHTML = `<table class="disc-sup-tbl disc-act-tbl">
     <thead><tr><th>When</th><th>Event</th><th>Details</th><th>Actor</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
 
 function _renderAutoDiscoveryLastRun(st) {
-  const lr = document.getElementById('ad-lastrun');
+  const lr = document.getElementById('disc-lastrun');
   if (!lr) return;
   const stats = st.last_run_stats || {};
   if (!st.last_run_ts) {
@@ -3626,10 +3626,10 @@ function _renderAutoDiscoveryLastRun(st) {
 }
 
 function _renderAutoDiscoverySuppressed(entries) {
-  const wrap = document.getElementById('ad-sup-wrap');
+  const wrap = document.getElementById('disc-sup-wrap');
   if (!wrap) return;
   if (!entries || !entries.length) {
-    wrap.innerHTML = '<div class="ad-sup-empty">No suppressed hosts.</div>';
+    wrap.innerHTML = '<div class="disc-sup-empty">No suppressed hosts.</div>';
     return;
   }
   const rows = entries.map(e => {
@@ -3644,7 +3644,7 @@ function _renderAutoDiscoverySuppressed(entries) {
       <td><button class="btn-s rbac-admin" onclick="_unsuppressAdHost('${esc(e.host || '').replace(/'/g,'&#39;')}')">Remove</button></td>
     </tr>`;
   }).join('');
-  wrap.innerHTML = `<table class="ad-sup-tbl">
+  wrap.innerHTML = `<table class="disc-sup-tbl">
     <thead><tr><th>Host</th><th>Name</th><th>Suppressed by</th><th>When</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -3669,13 +3669,13 @@ async function _unsuppressAdHost(host) {
 
 async function saveAutoDiscoverySettings() {
   const body = {
-    auto_discover_enabled:        document.getElementById('ad-enabled')?.checked ? 1 : 0,
-    auto_discover_paused:         document.getElementById('ad-paused')?.checked ? 1 : 0,
-    auto_discover_alert_on_new:   document.getElementById('ad-alert-new')?.checked ? 1 : 0,
-    auto_discover_use_ptr:        document.getElementById('ad-use-ptr')?.checked ? 1 : 0,
-    auto_discover_interval_min:   parseInt(document.getElementById('ad-interval')?.value || '60', 10),
-    auto_discover_first_scan_cap: parseInt(document.getElementById('ad-cap')?.value || '100', 10),
-    auto_discover_during_maint:   document.getElementById('ad-maint')?.value || 'skip',
+    auto_discover_enabled:        document.getElementById('disc-enabled')?.checked ? 1 : 0,
+    auto_discover_paused:         document.getElementById('disc-paused')?.checked ? 1 : 0,
+    auto_discover_alert_on_new:   document.getElementById('disc-alert-new')?.checked ? 1 : 0,
+    auto_discover_use_ptr:        document.getElementById('disc-use-ptr')?.checked ? 1 : 0,
+    auto_discover_interval_min:   parseInt(document.getElementById('disc-interval')?.value || '60', 10),
+    auto_discover_first_scan_cap: parseInt(document.getElementById('disc-cap')?.value || '100', 10),
+    auto_discover_during_maint:   document.getElementById('disc-maint')?.value || 'skip',
   };
   try {
     await api('PATCH', '/api/settings', body);
