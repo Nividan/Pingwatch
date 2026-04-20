@@ -494,6 +494,7 @@ def handle(h, method, path, body):
                   "ssh_user", "ssh_auth_type", "ssh_test_level",
                   "sftp_user", "sftp_auth_type", "sftp_test_level",
                   "sftp_remote_path", "sftp_expected_sha256",
+                  "radius_test_level", "radius_username", "radius_nas_id",
                   "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
         # Normalize anomaly fields to safe ranges
@@ -533,6 +534,13 @@ def handle(h, method, path, body):
         if body.get("sftp_private_key"):
             from db.backups import encrypt_pw
             kwargs["sftp_private_key"] = encrypt_pw(body["sftp_private_key"])
+        # RADIUS shared secret + user password: encrypt if provided, skip if empty
+        if body.get("radius_secret"):
+            from db.backups import encrypt_pw
+            kwargs["radius_secret"] = encrypt_pw(body["radius_secret"])
+        if body.get("radius_password"):
+            from db.backups import encrypt_pw
+            kwargs["radius_password"] = encrypt_pw(body["radius_password"])
         # SFTP checksum level: enforce minimum interval (avoids hammering the
         # server with big downloads). Guard fires only when both level + interval
         # are present in the update.
@@ -717,6 +725,18 @@ def handle(h, method, path, body):
             # Interval floor for checksum level — matches PATCH guard above
             if sftp_test_level_v == "checksum" and iv < 60:
                 h._json(400, {"error": "checksum level requires interval ≥ 60s"}); return True
+        # RADIUS fields
+        radius_secret_v    = body.get("radius_secret", "")
+        radius_level_v     = body.get("radius_test_level", "reachable")
+        radius_user_v      = body.get("radius_username", "")
+        radius_pw_v        = body.get("radius_password", "")
+        radius_nas_id_v    = body.get("radius_nas_id", "")
+        if stype == "radius":
+            from db.backups import encrypt_pw
+            if radius_secret_v:
+                radius_secret_v = encrypt_pw(radius_secret_v)
+            if radius_pw_v:
+                radius_pw_v = encrypt_pw(radius_pw_v)
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -765,7 +785,12 @@ def handle(h, method, path, body):
                                sftp_auth_type=sftp_auth_type_v,
                                sftp_test_level=sftp_test_level_v,
                                sftp_remote_path=sftp_remote_path_v,
-                               sftp_expected_sha256=sftp_expected_v)
+                               sftp_expected_sha256=sftp_expected_v,
+                               radius_secret=radius_secret_v,
+                               radius_test_level=radius_level_v,
+                               radius_username=radius_user_v,
+                               radius_password=radius_pw_v,
+                               radius_nas_id=radius_nas_id_v)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:

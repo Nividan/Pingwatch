@@ -153,6 +153,11 @@ def pg_create_main_schema(cur):
             sftp_test_level      TEXT DEFAULT 'open',
             sftp_remote_path     TEXT DEFAULT '',
             sftp_expected_sha256 TEXT DEFAULT '',
+            radius_secret        TEXT DEFAULT '',
+            radius_test_level    TEXT DEFAULT 'reachable',
+            radius_username      TEXT DEFAULT '',
+            radius_password      TEXT DEFAULT '',
+            radius_nas_id        TEXT DEFAULT '',
             PRIMARY KEY (did, sid)
         )""")
 
@@ -185,6 +190,11 @@ def pg_create_main_schema(cur):
         ("sensors", "sftp_test_level",         "TEXT DEFAULT 'open'"),
         ("sensors", "sftp_remote_path",        "TEXT DEFAULT ''"),
         ("sensors", "sftp_expected_sha256",    "TEXT DEFAULT ''"),
+        ("sensors", "radius_secret",           "TEXT DEFAULT ''"),
+        ("sensors", "radius_test_level",       "TEXT DEFAULT 'reachable'"),
+        ("sensors", "radius_username",         "TEXT DEFAULT ''"),
+        ("sensors", "radius_password",         "TEXT DEFAULT ''"),
+        ("sensors", "radius_nas_id",           "TEXT DEFAULT ''"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),

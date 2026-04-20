@@ -44,6 +44,7 @@ function sensorFormHTML(dev, s=null) {
     ['http_keyword', 'HTTP KW',  'Keyword check', 'K','Application',   'grep match content body'],
     ['ssh',          'SSH',      'Secure Shell',  '⇲','Auth & Access', 'login secure shell remote'],
     ['smtp',         'SMTP',     'Mail server',   '✉','Auth & Access', 'mail email server relay'],
+    ['radius',       'RADIUS',   'AAA auth test', 'R','Auth & Access', 'aaa authentication authorization accounting nas freeradius nps ise fortiauthenticator login 1812'],
     ['sftp',         'SFTP',     'Secure file transfer','⇑','File Transfer','file upload download scp transfer backup'],
     ['vmware',       'VMware',   'VM metrics',    'V','Virtualization','vsphere esxi vm hypervisor'],
   ];
@@ -432,6 +433,45 @@ function sensorFormHTML(dev, s=null) {
       <div class="fh">Compute locally with <code>sha256sum</code>. Max file size: 10 MB.</div>
     </div>
   </div>
+  <!-- RADIUS -->
+  <div class="fg ${curType==='radius'?'vis':''}" id="fg-radius">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">RADIUS server</label>
+        <input type="text" id="as-rdh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-rdp" value="${s?.port||1812}" min="1" max="65535"/>
+        <div class="fh">1812 = RFC 2865 authentication (default).</div>
+      </div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Shared secret</label>
+      <input type="password" id="as-rdsec" value="" placeholder="${s?.has_radius_secret?'(unchanged — leave blank to keep)':'RADIUS shared secret'}" autocomplete="new-password"/>
+      <div class="fh">The client↔server secret — not a user password. Fernet-encrypted at rest.</div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Test depth</label>
+      <select id="as-rdlvl" onchange="_radiusLvlToggle()">
+        ${[['reachable','Reachable (random user, any reply = up — no real creds needed)'],
+            ['auth','+ Full auth (real username + password, expect Access-Accept)']]
+          .map(([v,lbl])=>`<option value="${v}"${(s?.radius_test_level||'reachable')===v?' selected':''}>${lbl}</option>`).join('')}
+      </select>
+      <div class="fh">PAP only. 2FA challenges are flagged as failures (non-interactive probe).</div>
+    </div>
+    <div class="fr" id="as-rd-user-row" style="display:${(s?.radius_test_level||'reachable')==='auth'?'':'none'};margin-top:8px">
+      <label class="fl">Username</label>
+      <input type="text" id="as-rdu" value="${esc(s?.radius_username||'')}" placeholder="test user" autocomplete="off"/>
+    </div>
+    <div class="fr" id="as-rd-pw-row" style="display:${(s?.radius_test_level||'reachable')==='auth'?'':'none'};margin-top:8px">
+      <label class="fl">Password</label>
+      <input type="password" id="as-rdpw" value="" placeholder="${s?.has_radius_password?'(unchanged — leave blank to keep)':'RADIUS user password'}" autocomplete="new-password"/>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">NAS-Identifier</label>
+      <input type="text" id="as-rdnas" value="${esc(s?.radius_nas_id||'')}" placeholder="pingwatch" autocomplete="off"/>
+      <div class="fh">Optional — some servers filter or log by this attribute. Defaults to <code>pingwatch</code>.</div>
+    </div>
+  </div>
   <!-- Alert Thresholds -->
   <div class="snr-section">
     <div class="snr-section-lbl">Alert Thresholds</div>
@@ -716,7 +756,7 @@ async function submitEditSensor(did, sid){
 function selType(t){
   document.getElementById('as-t').value=t;
   document.querySelectorAll('#sensor-sidebar .stab-nav').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
-  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp','ssh','sftp'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
+  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp','ssh','sftp','radius'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);
@@ -2093,6 +2133,28 @@ function collectSensorForm(did){
       }
     }
   }
+  if(type==='radius'){
+    payload.host              = document.getElementById('as-rdh')?.value.trim()||payload.host;
+    payload.port              = parseInt(document.getElementById('as-rdp')?.value)||1812;
+    payload.radius_test_level = document.getElementById('as-rdlvl')?.value||'reachable';
+    payload.radius_secret     = document.getElementById('as-rdsec')?.value||'';
+    payload.radius_username   = document.getElementById('as-rdu')?.value.trim()||'';
+    payload.radius_password   = document.getElementById('as-rdpw')?.value||'';
+    payload.radius_nas_id     = document.getElementById('as-rdnas')?.value.trim()||'';
+    // Shared secret is required on create; on edit, blank means "keep existing"
+    const _isEdit = !window._snrAddMode;
+    if(!payload.radius_secret && !_isEdit){
+      toast('RADIUS requires a shared secret','err');return null;
+    }
+    if(payload.radius_test_level==='auth'){
+      if(!payload.radius_username){
+        toast('auth level requires a username','err');return null;
+      }
+      if(!payload.radius_password && !_isEdit){
+        toast('auth level requires a password','err');return null;
+      }
+    }
+  }
   return payload;
 }
 
@@ -2142,6 +2204,15 @@ function _sftpLvlToggle(){
     }
     if(tm && (parseInt(tm.value)||0) < 30){ tm.value=30; }
   }
+}
+
+function _radiusLvlToggle(){
+  const lvl=document.getElementById('as-rdlvl')?.value||'reachable';
+  const userRow=document.getElementById('as-rd-user-row');
+  const pwRow  =document.getElementById('as-rd-pw-row');
+  const show=(lvl==='auth');
+  if(userRow) userRow.style.display=show?'':'none';
+  if(pwRow)   pwRow.style.display  =show?'':'none';
 }
 
 // Prefill SMTP fields from the system alert-SMTP config (reads /api/settings)

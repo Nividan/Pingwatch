@@ -474,6 +474,25 @@ def radius_test_connection(cfg_overrides: dict | None = None) -> tuple[bool, str
     return False, msg
 
 
+def radius_probe_once(host: str, port: int, secret: str,
+                      username: str, password: str,
+                      nas_id: str = "pingwatch",
+                      timeout: int = 5, retries: int = 1) -> tuple[str, object]:
+    """One-shot probe helper for monitoring/probes.py.
+
+    Thin wrapper around _try_server() with a synthetic cfg — lets the probe
+    layer reuse all the pyrad plumbing (packet build, send, retry, socket
+    error classification, reply decode) without touching the user-auth flow.
+
+    Returns (outcome, payload) where outcome ∈ {"accept","reject","challenge","error"}.
+    """
+    cfg = {"timeout": max(1, int(timeout or 5)),
+           "retries": max(1, int(retries or 1)),
+           "nas_identifier": (nas_id or "pingwatch").strip(),
+           "debug": 0}
+    return _try_server(host, int(port), secret, cfg, username, password)
+
+
 def radius_test_auth(username: str, password: str) -> dict:
     """Admin helper — returns a UI-friendly dict, including discovered attributes."""
     try:

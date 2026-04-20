@@ -90,7 +90,12 @@ def _pg_save(state):
              getattr(s, "sftp_auth_type", "password") or "password",
              getattr(s, "sftp_test_level", "open") or "open",
              getattr(s, "sftp_remote_path", ""),
-             getattr(s, "sftp_expected_sha256", ""))
+             getattr(s, "sftp_expected_sha256", ""),
+             getattr(s, "radius_secret", ""),
+             getattr(s, "radius_test_level", "reachable") or "reachable",
+             getattr(s, "radius_username", ""),
+             getattr(s, "radius_password", ""),
+             getattr(s, "radius_nas_id", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -145,7 +150,8 @@ def _pg_save(state):
                     "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
                     "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
                     "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
-                    "sftp_remote_path,sftp_expected_sha256) "
+                    "sftp_remote_path,sftp_expected_sha256,"
+                    "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -177,7 +183,12 @@ def _pg_save(state):
                     "sftp_private_key=EXCLUDED.sftp_private_key, "
                     "sftp_auth_type=EXCLUDED.sftp_auth_type, sftp_test_level=EXCLUDED.sftp_test_level, "
                     "sftp_remote_path=EXCLUDED.sftp_remote_path, "
-                    "sftp_expected_sha256=EXCLUDED.sftp_expected_sha256",
+                    "sftp_expected_sha256=EXCLUDED.sftp_expected_sha256, "
+                    "radius_secret=EXCLUDED.radius_secret, "
+                    "radius_test_level=EXCLUDED.radius_test_level, "
+                    "radius_username=EXCLUDED.radius_username, "
+                    "radius_password=EXCLUDED.radius_password, "
+                    "radius_nas_id=EXCLUDED.radius_nas_id",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -262,7 +273,12 @@ def db_save(state):
              getattr(s, "sftp_auth_type", "password") or "password",
              getattr(s, "sftp_test_level", "open") or "open",
              getattr(s, "sftp_remote_path", ""),
-             getattr(s, "sftp_expected_sha256", ""))
+             getattr(s, "sftp_expected_sha256", ""),
+             getattr(s, "radius_secret", ""),
+             getattr(s, "radius_test_level", "reachable") or "reachable",
+             getattr(s, "radius_username", ""),
+             getattr(s, "radius_password", ""),
+             getattr(s, "radius_nas_id", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -296,8 +312,9 @@ def db_save(state):
             "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
             "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
             "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
-            "sftp_remote_path,sftp_expected_sha256) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "sftp_remote_path,sftp_expected_sha256,"
+            "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -366,7 +383,12 @@ def _pg_load(state):
                 "COALESCE(sftp_auth_type,'password') AS sftp_auth_type,"
                 "COALESCE(sftp_test_level,'open') AS sftp_test_level,"
                 "COALESCE(sftp_remote_path,'') AS sftp_remote_path,"
-                "COALESCE(sftp_expected_sha256,'') AS sftp_expected_sha256 "
+                "COALESCE(sftp_expected_sha256,'') AS sftp_expected_sha256,"
+                "COALESCE(radius_secret,'') AS radius_secret,"
+                "COALESCE(radius_test_level,'reachable') AS radius_test_level,"
+                "COALESCE(radius_username,'') AS radius_username,"
+                "COALESCE(radius_password,'') AS radius_password,"
+                "COALESCE(radius_nas_id,'') AS radius_nas_id "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -450,6 +472,11 @@ def _pg_load(state):
         s.sftp_test_level      = row[53] or "open"
         s.sftp_remote_path     = row[54] or ""
         s.sftp_expected_sha256 = row[55] or ""
+        s.radius_secret        = row[56] or ""
+        s.radius_test_level    = row[57] or "reachable"
+        s.radius_username      = row[58] or ""
+        s.radius_password      = row[59] or ""
+        s.radius_nas_id        = row[60] or ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -549,7 +576,10 @@ def db_load(state):
             "COALESCE(sftp_user,''),COALESCE(sftp_password,''),"
             "COALESCE(sftp_private_key,''),COALESCE(sftp_auth_type,'password'),"
             "COALESCE(sftp_test_level,'open'),"
-            "COALESCE(sftp_remote_path,''),COALESCE(sftp_expected_sha256,'') "
+            "COALESCE(sftp_remote_path,''),COALESCE(sftp_expected_sha256,''),"
+            "COALESCE(radius_secret,''),COALESCE(radius_test_level,'reachable'),"
+            "COALESCE(radius_username,''),COALESCE(radius_password,''),"
+            "COALESCE(radius_nas_id,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -601,7 +631,9 @@ def db_load(state):
          ssh_auth_type, ssh_test_level,
          sftp_user, sftp_password, sftp_private_key,
          sftp_auth_type, sftp_test_level,
-         sftp_remote_path, sftp_expected_sha256) in srows:
+         sftp_remote_path, sftp_expected_sha256,
+         radius_secret, radius_test_level,
+         radius_username, radius_password, radius_nas_id) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -648,6 +680,11 @@ def db_load(state):
         s.sftp_test_level      = sftp_test_level or "open"
         s.sftp_remote_path     = sftp_remote_path or ""
         s.sftp_expected_sha256 = sftp_expected_sha256 or ""
+        s.radius_secret        = radius_secret or ""
+        s.radius_test_level    = radius_test_level or "reachable"
+        s.radius_username      = radius_username or ""
+        s.radius_password      = radius_password or ""
+        s.radius_nas_id        = radius_nas_id or ""
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
