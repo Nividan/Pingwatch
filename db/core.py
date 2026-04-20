@@ -476,6 +476,17 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Auto-Discovery origin breadcrumb (v0.9.3+) — lets the device UI
+        # answer "where did this come from + when?" without digging logs.
+        for _ad_dev_col in [
+            "ALTER TABLE devices ADD COLUMN discovered_at       REAL DEFAULT 0",
+            "ALTER TABLE devices ADD COLUMN discovered_from_cidr TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(_ad_dev_col)
+                con.commit()
+            except Exception:
+                pass  # column already exists
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (

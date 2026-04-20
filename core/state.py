@@ -424,6 +424,10 @@ class Device:
         # was created from a file. NULL for manual / Discovery additions.
         # Format: "<source>:<native_id>" e.g. "prtg:2001".
         self.external_id  = None
+        # Auto-Discovery origin breadcrumb. Both 0/"" unless the device was
+        # created by monitoring/auto_discovery.py.
+        self.discovered_at        = 0.0
+        self.discovered_from_cidr = ""
         self.sensors      = {}
         self._sid_ctr     = 0
         # Device-level default credentials (pre-fill for new sensors)
@@ -478,6 +482,9 @@ class Device:
             "snmp_version_default":        self.snmp_version_default,
             "vmware_user_default":         self.vmware_user_default,
             "has_vmware_password_default":  bool(self.vmware_password_default),
+            # Origin breadcrumb (Auto-Discovery). 0/"" for manually-added devices.
+            "discovered_at":         float(getattr(self, "discovered_at", 0) or 0),
+            "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
         }
 
 

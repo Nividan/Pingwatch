@@ -4,6 +4,19 @@ function grpId(g){ return 'grp-'+btoa(unescape(encodeURIComponent(g))).replace(/
 function gridId(g){ return 'gg-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 function cntId(g){  return 'gc-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 
+// Tiny origin chip shown next to the device name on cards/rows when the
+// device was auto-added by monitoring/auto_discovery.py. Empty string for
+// manually-added or bulk-imported devices.
+function _renderAutoDiscoveryChip(dev){
+  const ts  = parseFloat(dev && dev.discovered_at);
+  const cidr = (dev && dev.discovered_from_cidr) || '';
+  if (!ts || !cidr) return '';
+  let whenStr = '';
+  try { whenStr = new Date(ts * 1000).toLocaleString(); } catch {}
+  const tip = `Auto-discovered from ${cidr}` + (whenStr ? ` · ${whenStr}` : '');
+  return ` <span class="dc-ad-chip" title="${esc(tip)}">📡</span>`;
+}
+
 // ── View mode (grid / list) ─────────────────────────────────────
 let _devView = localStorage.getItem('pw-dev-view') || 'grid';
 
@@ -386,13 +399,14 @@ function sSnrPreview(did){
 function cardHTML(dev){
   const st=dev.status||'unknown';
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
+  const adChip = _renderAutoDiscoveryChip(dev);
   return `
   <div class="dc ${st}" id="dp-${dev.device_id}" onclick="openDevWin('${dev.device_id}')">
     <div class="dc-bar ${st}" id="dcbar-${dev.device_id}"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
     <div class="dc-body">
       <div>
-        <div class="dc-name">${esc(dev.name)}</div>
+        <div class="dc-name">${esc(dev.name)}${adChip}</div>
         <div class="dc-host">${esc(dev.host)}</div>
       </div>
       <div class="dc-status ${st}" id="dcst-${dev.device_id}">

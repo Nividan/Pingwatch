@@ -17,11 +17,21 @@ from urllib.parse import unquote
 from core.config import (
     _RE_AD_RUN_NOW, _RE_AD_STATUS,
     _RE_AD_SUPPRESS_REMOVE, _RE_AD_APPROVE_FIRST,
+    _RE_AD_ACTIVITY,
 )
 from core.logger import log
 from core.validation import validate_host
 from db import db_log_audit, db_get_subnet, db_approve_first_scan
+from db.audit import db_get_audit
 from monitoring import auto_discovery
+
+# audit_log `action` values worth surfacing in the Auto-Discovery activity pane.
+# Keep this list narrow — the pane is feature-scoped, not a generic audit view.
+_AUDIT_ACTION_PREFIXES = (
+    "auto_discovery_",        # tick, run_now, cap_hit, unsuppress, approve_first_scan
+    "ipam_subnet_edit",       # consolidated subnet edit (new)
+    "ipam_auto_discover_",    # legacy narrow toggle (back-compat)
+)
 
 
 def handle(h, method, path, body):
@@ -49,6 +59,22 @@ def handle(h, method, path, body):
         if not user:
             return True
         h._json(200, auto_discovery.get_last_run_status())
+        return True
+
+    # ── GET /api/auto-discovery/activity ─────────────────────────
+    # Audit-log-backed "recent activity" feed for the settings UI.
+    # Reuses existing audit_log writes; no new storage.
+    if _RE_AD_ACTIVITY.match(path) and method == "GET":
+        user, _ = h._require("viewer")
+        if not user:
+            return True
+        try:
+            rows = db_get_audit(limit=100,
+                                action_prefixes=list(_AUDIT_ACTION_PREFIXES))
+        except Exception as e:
+            log.warning(f"auto_discovery activity query failed: {e}")
+            rows = []
+        h._json(200, {"entries": rows})
         return True
 
     # ── POST /api/auto-discovery/suppressed/<host>/remove ────────

@@ -44,7 +44,9 @@ def _pg_save(state):
              getattr(dev, "vmware_user_default", ""),
              getattr(dev, "vmware_password_default", ""),
              json.dumps(getattr(dev, "secondary_ips", []) or []),
-             getattr(dev, "external_id", None))
+             getattr(dev, "external_id", None),
+             float(getattr(dev, "discovered_at", 0) or 0),
+             getattr(dev, "discovered_from_cidr", "") or "")
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -114,7 +116,8 @@ def _pg_save(state):
                     cur,
                     "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
                     "snmp_community_default,snmp_version_default,vmware_user_default,"
-                    "vmware_password_default,secondary_ips,external_id) "
+                    "vmware_password_default,secondary_ips,external_id,"
+                    "discovered_at,discovered_from_cidr) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
@@ -125,7 +128,9 @@ def _pg_save(state):
                     "vmware_user_default=EXCLUDED.vmware_user_default, "
                     "vmware_password_default=EXCLUDED.vmware_password_default, "
                     "secondary_ips=EXCLUDED.secondary_ips, "
-                    "external_id=EXCLUDED.external_id",
+                    "external_id=EXCLUDED.external_id, "
+                    "discovered_at=EXCLUDED.discovered_at, "
+                    "discovered_from_cidr=EXCLUDED.discovered_from_cidr",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -229,7 +234,9 @@ def db_save(state):
              getattr(dev, "vmware_user_default", ""),
              getattr(dev, "vmware_password_default", ""),
              json.dumps(getattr(dev, "secondary_ips", []) or []),
-             getattr(dev, "external_id", None))
+             getattr(dev, "external_id", None),
+             float(getattr(dev, "discovered_at", 0) or 0),
+             getattr(dev, "discovered_from_cidr", "") or "")
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -298,8 +305,9 @@ def db_save(state):
             "INSERT OR REPLACE INTO devices "
             "(did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
             "snmp_community_default,snmp_version_default,vmware_user_default,"
-            "vmware_password_default,secondary_ips,external_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "vmware_password_default,secondary_ips,external_id,"
+            "discovered_at,discovered_from_cidr) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -356,7 +364,9 @@ def _pg_load(state):
                 "COALESCE(vmware_user_default,'') AS vmware_user_default,"
                 "COALESCE(vmware_password_default,'') AS vmware_password_default,"
                 "COALESCE(secondary_ips,'[]') AS secondary_ips,"
-                "external_id "
+                "external_id,"
+                "COALESCE(discovered_at,0) AS discovered_at,"
+                "COALESCE(discovered_from_cidr,'') AS discovered_from_cidr "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -432,6 +442,8 @@ def _pg_load(state):
         except (json.JSONDecodeError, TypeError):
             dev.secondary_ips = []
         dev.external_id = row[12] if len(row) > 12 else None
+        dev.discovered_at        = float(row[13] or 0) if len(row) > 13 else 0.0
+        dev.discovered_from_cidr = (row[14] or "")    if len(row) > 14 else ""
         state.devices[did] = dev
 
     for row in srows:
@@ -564,7 +576,9 @@ def db_load(state):
             "SELECT did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
             "COALESCE(snmp_community_default,''),COALESCE(snmp_version_default,''),"
             "COALESCE(vmware_user_default,''),COALESCE(vmware_password_default,''),"
-            "COALESCE(secondary_ips,'[]'),external_id FROM devices"
+            "COALESCE(secondary_ips,'[]'),external_id,"
+            "COALESCE(discovered_at,0),COALESCE(discovered_from_cidr,'') "
+            "FROM devices"
         ).fetchall()
         srows = con.execute(
             "SELECT did,sid,name,stype,host,port,url,interval,timeout,"
@@ -607,7 +621,8 @@ def db_load(state):
     max_did = 0
     for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
          snmp_community_default, snmp_version_default, vmware_user_default,
-         vmware_password_default, secondary_ips_json, external_id) in devs:
+         vmware_password_default, secondary_ips_json, external_id,
+         discovered_at, discovered_from_cidr) in devs:
         dev = Device(did, name, host, grp)
         try:
             n = int(did.replace("d", ""))
@@ -626,6 +641,8 @@ def db_load(state):
         except (json.JSONDecodeError, TypeError):
             dev.secondary_ips = []
         dev.external_id = external_id or None
+        dev.discovered_at        = float(discovered_at or 0)
+        dev.discovered_from_cidr = discovered_from_cidr or ""
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,

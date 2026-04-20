@@ -107,7 +107,9 @@ def pg_create_main_schema(cur):
             vmware_user_default      TEXT DEFAULT '',
             vmware_password_default  TEXT DEFAULT '',
             secondary_ips            TEXT DEFAULT '[]',
-            external_id              TEXT DEFAULT NULL
+            external_id              TEXT DEFAULT NULL,
+            discovered_at            DOUBLE PRECISION DEFAULT 0,
+            discovered_from_cidr     TEXT DEFAULT ''
         )""")
     # Bulk-import external_id — idempotent add for pre-existing installs.
     cur.execute("""
@@ -228,6 +230,8 @@ def pg_create_main_schema(cur):
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
         ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
         ("main.devices", "secondary_ips",           "TEXT DEFAULT '[]'"),
+        ("main.devices", "discovered_at",           "DOUBLE PRECISION DEFAULT 0"),
+        ("main.devices", "discovered_from_cidr",    "TEXT DEFAULT ''"),
         # Auto-Discovery (v0.9.3+)
         ("ipam_subnets", "auto_discover",           "INTEGER DEFAULT 0"),
         ("ipam_subnets", "first_scan_approved",     "INTEGER DEFAULT 0"),

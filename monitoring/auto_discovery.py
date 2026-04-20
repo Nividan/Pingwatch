@@ -463,7 +463,7 @@ def _scan_subnet(subnet: dict) -> dict:
             if alt:
                 r["hostname"] = alt   # mutates the scan result in place
 
-    device_specs = _build_device_specs(allowed_results, group, use_ptr)
+    device_specs = _build_device_specs(allowed_results, group, use_ptr, cidr=cidr)
     if not device_specs:
         _commit_last_scan_ts(sid)
         return stats
@@ -513,10 +513,16 @@ def _filter_suppressed(results: list) -> tuple[list, int]:
     return kept, skipped
 
 
-def _build_device_specs(results: list, group: str, use_ptr: bool) -> list:
-    """Convert _enrich_host result rows into create_devices_batch input shape."""
+def _build_device_specs(results: list, group: str, use_ptr: bool,
+                         cidr: str = "") -> list:
+    """Convert _enrich_host result rows into create_devices_batch input shape.
+
+    `cidr` feeds the per-device origin breadcrumb (`discovered_from_cidr`)
+    so the device UI can show "Auto-discovered from 10.0.0.0/24".
+    """
     from monitoring.subnet_discovery import _suggest_sensors
     specs: list = []
+    now = time.time()
     for r in results or []:
         ip = (r.get("ip") or "").strip()
         if not ip:
@@ -530,11 +536,13 @@ def _build_device_specs(results: list, group: str, use_ptr: bool) -> list:
         for s in sensors:
             s.pop("enabled", None)
         specs.append({
-            "external_id": f"discovery:{ip}",
-            "name":        name,
-            "host":        ip,
-            "group":       group,
-            "sensors":     sensors,
+            "external_id":          f"discovery:{ip}",
+            "name":                 name,
+            "host":                 ip,
+            "group":                group,
+            "sensors":              sensors,
+            "discovered_at":        now,
+            "discovered_from_cidr": cidr,
         })
     return specs
 

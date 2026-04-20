@@ -1394,6 +1394,12 @@ function _buildSettingsTab_autoDiscovery(sr) {
     </div>
     <div id="ad-sup-wrap"><div class="ad-sup-empty">Loading…</div></div>
 
+    <div class="ad-sup-hd" style="margin-top:18px">Recent activity</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
+      Scheduler ticks, cap hits, subnet toggles, and admin actions. Sourced from the audit log.
+    </div>
+    <div id="ad-activity-wrap"><div class="ad-sup-empty">Loading…</div></div>
+
     <details class="imp-help" style="margin-top:14px">
       <summary>❓ How Auto-Discovery works</summary>
       <div class="imp-help-body">
@@ -3541,6 +3547,53 @@ async function _loadAutoDiscoveryStatus() {
     const lr = document.getElementById('ad-lastrun');
     if (lr) lr.innerHTML = '<span style="color:var(--down)">Failed to load status</span>';
   }
+  // Activity pane — independent of /status so one endpoint failure doesn't
+  // break the other.
+  try {
+    const a = await api('GET', '/api/auto-discovery/activity');
+    _renderAutoDiscoveryActivity(a.entries || []);
+  } catch {
+    const w = document.getElementById('ad-activity-wrap');
+    if (w) w.innerHTML = '<div class="ad-sup-empty" style="color:var(--down)">Failed to load activity</div>';
+  }
+}
+
+// Map raw audit action strings to friendly labels for the activity pane.
+const _AD_ACTION_LABELS = {
+  auto_discovery_tick:                 '🔄 Scheduler tick',
+  auto_discovery_run_now:              '▶ Run now',
+  auto_discovery_cap_hit:              '⚠ First-scan cap hit',
+  auto_discovery_approve_first_scan:   '✓ First-scan approved',
+  auto_discovery_unsuppress:           '↺ Host unsuppressed',
+  ipam_subnet_edit:                    '✎ Subnet edited',
+  ipam_auto_discover_toggle:           '🔍 Auto-Discover toggled',
+};
+
+function _renderAutoDiscoveryActivity(entries) {
+  const wrap = document.getElementById('ad-activity-wrap');
+  if (!wrap) return;
+  if (!entries.length) {
+    wrap.innerHTML = '<div class="ad-sup-empty">No activity yet.</div>';
+    return;
+  }
+  const rows = entries.map(e => {
+    let when = '';
+    try { when = new Date(parseFloat(e.ts) * 1000).toLocaleString(); } catch {}
+    const lbl = _AD_ACTION_LABELS[e.action] || esc(e.action);
+    const tgt = e.target ? `<span class="ad-act-target">${esc(e.target)}</span>` : '';
+    const det = e.detail ? `<span class="ad-act-detail">${esc(e.detail)}</span>` : '';
+    const who = (e.actor && e.actor !== 'system') ? `<span class="ad-act-actor">${esc(e.actor)}</span>` : '';
+    return `<tr>
+      <td class="ad-act-when">${esc(when)}</td>
+      <td class="ad-act-label">${lbl}</td>
+      <td>${tgt}${det ? ' — ' : ''}${det}</td>
+      <td>${who}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<table class="ad-sup-tbl ad-act-tbl">
+    <thead><tr><th>When</th><th>Event</th><th>Details</th><th>Actor</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 function _renderAutoDiscoveryLastRun(st) {

@@ -2942,6 +2942,10 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .imp-help-body code{background:var(--bg2);padding:1px 5px;border-radius:2px;font-size:11px;
   font-family:ui-monospace,Consolas,monospace;color:var(--text);}
 
+/* Auto-Discovery origin chip on device cards */
+.dc-ad-chip{font-size:11px;opacity:.55;cursor:help;margin-left:4px;vertical-align:middle;}
+.dc-ad-chip:hover{opacity:1;}
+
 /* IPAM Edit Subnet modal — section grouping */
 .ipam-edit-sec{border:1px solid var(--border);border-radius:4px;padding:10px 14px;
   background:var(--bg3);}
@@ -2966,5 +2970,12 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .ad-sup-tbl th,.ad-sup-tbl td{padding:4px 8px;border-bottom:1px solid var(--border2);text-align:left;}
 .ad-sup-tbl th{color:var(--text3);font-weight:600;background:var(--bg3);}
 .ad-sup-empty{color:var(--text3);font-size:12px;font-style:italic;padding:8px 0;}
+.ad-act-tbl td{vertical-align:top;}
+.ad-act-when{white-space:nowrap;color:var(--text3);font-size:11px;
+  font-family:ui-monospace,Consolas,monospace;}
+.ad-act-label{white-space:nowrap;font-weight:600;color:var(--text2);}
+.ad-act-target{color:var(--text2);font-family:ui-monospace,Consolas,monospace;font-size:11px;}
+.ad-act-detail{color:var(--text3);font-size:11px;}
+.ad-act-actor{color:var(--accent);font-size:11px;}
 
 .evt-dtl-label{font-size:11px;color:var(--text3);width:76px;flex-shrink:0;font-weight:600;}
