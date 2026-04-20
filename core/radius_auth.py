@@ -69,6 +69,9 @@ ATTRIBUTE Message-Authenticator  80 octets
 
 _last_ok_ts: float | None = None
 _last_err:   dict = {}   # {"ts": float, "msg": str}
+# Lock added when auth_health refresh loop started running concurrently with
+# live login attempts — prevents torn reads of {ts, msg} during badge render.
+_status_lock = threading.Lock()
 
 _CHALLENGES: dict = {}   # cid → {"username", "state", "prompt", "created_ts", "server_idx", "nas_id"}
 _CHALLENGE_TTL = 120
@@ -77,12 +80,14 @@ _CHALLENGES_LOCK = threading.Lock()
 
 def _record_ok() -> None:
     global _last_ok_ts
-    _last_ok_ts = time.time()
+    with _status_lock:
+        _last_ok_ts = time.time()
 
 
 def _record_err(msg: str) -> None:
     global _last_err
-    _last_err = {"ts": time.time(), "msg": (msg or "")[:200]}
+    with _status_lock:
+        _last_err = {"ts": time.time(), "msg": (msg or "")[:200]}
 
 
 def _radius_dbg(msg: str) -> None:
@@ -95,19 +100,22 @@ def get_radius_status() -> dict:
     """Return {state, last_ok_ts, last_err_ts, last_err_msg} for the badge."""
     enabled = int(_settings.get("radius_enabled", 0) or 0)
     server = (_settings.get("radius_server", "") or "").strip()
+    with _status_lock:
+        ok_ts = _last_ok_ts
+        err = dict(_last_err) if _last_err else {}
     if not enabled or not server:
         state = "unconfigured"
-    elif _last_err and (not _last_ok_ts or _last_err["ts"] > _last_ok_ts):
+    elif err and (not ok_ts or err["ts"] > ok_ts):
         state = "error"
-    elif _last_ok_ts:
+    elif ok_ts:
         state = "ok"
     else:
         state = "configured"
     return {
         "state":        state,
-        "last_ok_ts":   _last_ok_ts,
-        "last_err_ts":  _last_err.get("ts") if _last_err else None,
-        "last_err_msg": _last_err.get("msg", "") if _last_err else "",
+        "last_ok_ts":   ok_ts,
+        "last_err_ts":  err.get("ts") if err else None,
+        "last_err_msg": err.get("msg", "") if err else "",
     }
 
 

@@ -150,6 +150,14 @@ function _buildSettingsTab_general(sr) {
         </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Logging</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
+          <span style="font-size:12px">Debug Mode</span>
+        </label>
+        <div class="fh" style="margin-top:6px">Enable verbose debug logging. When off, only INFO and above is written to log files. View logs in the <a href="javascript:void(0)" onclick="closeM('mset');switchMainTab('logs')" style="color:var(--accent)">Logs</a> tab.</div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Server Controls</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="serverRestart()">&#x21BA; Restart Server</button>
@@ -219,7 +227,28 @@ function _buildSettingsTab_groups() {
 }
 
 function _buildSettingsTab_integrations(sr) {
+  const _ari = Number.isFinite(sr.auth_refresh_interval_min) ? sr.auth_refresh_interval_min : 60;
   return `<div class="mbdy stab-fade" id="stab-integrations" style="display:none;overflow-y:auto;flex:1">
+      <!-- Background Health Check strip — covers LDAP / RADIUS / SAML / OIDC only -->
+      <div style="display:flex;align-items:center;gap:14px;padding:10px 12px;margin-bottom:14px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;flex-wrap:wrap">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">🩺 Auth Health Check</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:12px;color:var(--text3)">Interval</label>
+          <select id="auth-refresh-interval" onchange="saveAuthRefreshInterval()" style="font-size:12px;padding:3px 6px">
+            <option value="0"   ${_ari===0  ?'selected':''}>Off</option>
+            <option value="15"  ${_ari===15 ?'selected':''}>15 min</option>
+            <option value="30"  ${_ari===30 ?'selected':''}>30 min</option>
+            <option value="60"  ${_ari===60 ?'selected':''}>1 hour</option>
+            <option value="240" ${_ari===240?'selected':''}>4 hours</option>
+            <option value="720" ${_ari===720?'selected':''}>12 hours</option>
+          </select>
+        </div>
+        <div style="font-size:12px;color:var(--text3)">
+          Last run: <span id="auth-refresh-last" style="color:var(--text2)">—</span>
+        </div>
+        <button class="btn-s" style="font-size:12px" onclick="triggerAuthRefreshNow()" title="Run all four backend checks right now">🔄 Run now</button>
+        <div id="auth-refresh-msg" style="font-size:11px;color:var(--text3);flex:1"></div>
+      </div>
       <!-- Sub-tab bar -->
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
@@ -914,61 +943,6 @@ function _buildSettingsTab_database(sr) {
     </div>`;
 }
 
-function _buildSettingsTab_logs(sr) {
-  return `<div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
-      <div style="padding:10px 14px 6px;border-bottom:1px solid var(--border)">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
-          <span style="font-size:12px;font-weight:600;color:var(--text2)">Debug Mode</span>
-        </label>
-        <div class="fh" style="margin-top:4px">Enable verbose debug logging. When off, only INFO and above is written to log files.</div>
-      </div>
-      <div class="log-subtab-bar">
-        <button class="log-stab active" id="lstab-btn-app"     onclick="_switchLogTab('app')">Application</button>
-        <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
-        <button class="log-stab"        id="lstab-btn-audit"   onclick="_switchLogTab('audit')">Audit</button>
-        <button class="log-stab"        id="lstab-btn-backup"  onclick="_switchLogTab('backup')">Backup</button>
-        <div style="margin-left:auto;display:flex;gap:4px;align-items:center">
-          <button class="btn-s log-live-btn" id="logLiveBtn" onclick="_toggleLogLive()" style="font-size:11px;padding:4px 10px">\u25cb Live</button>
-          <button class="btn-s" onclick="_loadLogTab()" style="font-size:11px;padding:4px 10px">\u21bb Refresh</button>
-        </div>
-      </div>
-      <div class="log-filter-bar">
-        <select id="logFTime" onchange="_onLogFilterChange()">
-          <option value="all">All time</option>
-          <option value="5m">Last 5 min</option>
-          <option value="15m">Last 15 min</option>
-          <option value="1h">Last 1 hour</option>
-          <option value="3h">Last 3 hours</option>
-          <option value="6h" selected>Last 6 hours</option>
-          <option value="12h">Last 12 hours</option>
-          <option value="24h">Last 24 hours</option>
-          <option value="custom">Custom range\u2026</option>
-        </select>
-        <div id="logFCustomWrap" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
-          <input type="datetime-local" id="logFCustomFrom" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
-          <span style="font-size:11px;color:var(--text3)">to</span>
-          <input type="datetime-local" id="logFCustomTo" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
-        </div>
-        <select id="logFLevel" onchange="_onLogFilterChange()">
-          <option value="">All Levels</option>
-          <option value="DEBUG">DEBUG</option>
-          <option value="INFO">INFO</option>
-          <option value="WARNING">WARNING</option>
-          <option value="ERROR">ERROR</option>
-          <option value="CRITICAL">CRITICAL</option>
-        </select>
-        <input id="logFSearch" type="search" placeholder="Search logs\u2026 (level:error device:FortiGate)" oninput="_onLogFilterChange()" class="log-search">
-        <button class="log-clear-btn" onclick="_clearLogFilters()" title="Clear all filters">\u2715</button>
-        <div class="log-export-group">
-          <button class="log-export-btn" onclick="_exportLogCsv()" title="Export as CSV">\u2b07 CSV</button>
-          <button class="log-export-btn" onclick="_exportLogJson()" title="Export as JSON">\u2b07 JSON</button>
-        </div>
-      </div>
-      <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading\u2026</span></div>
-    </div>`;
-}
-
 function _buildSettingsTab_reports(sr) {
   return `<div class="mbdy stab-fade" id="stab-reports" style="display:none;overflow-y:auto;flex:1">
       <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
@@ -1404,7 +1378,6 @@ async function openSettings(initialTab){
     toast('Settings is admin-only — your account has read-only access.', 'err');
     return;
   }
-  _stopLogLive();
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
     api('GET','/api/settings'),
@@ -1413,12 +1386,12 @@ async function openSettings(initialTab){
   ]);
   window._tlsSettings = {...tr, org_name: sr.org_name||''};
   const o=document.createElement('div'); o.className='mo'; o.id='mset';
-  _overlayClose(o, ()=>{_stopLogLive();closeM('mset');});
+  _overlayClose(o, ()=>closeM('mset'));
   o.innerHTML=`
   <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
     <div class="mhd">
       <div class="mttl">⚙ Settings</div>
-      <button class="mclose" onclick="_stopLogLive();closeM('mset')">✕</button>
+      <button class="mclose" onclick="closeM('mset')">✕</button>
     </div>
     <div class="stab-layout">
     <nav class="stab-sidebar">
@@ -1427,7 +1400,6 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
       <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
       <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
-      <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
       <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">📄 Reports</button>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
@@ -1441,7 +1413,6 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_groups()}
     ${_buildSettingsTab_integrations(sr)}
     ${_buildSettingsTab_database(sr)}
-    ${_buildSettingsTab_logs(sr)}
     ${_buildSettingsTab_reports(sr)}
     ${_buildSettingsTab_sensors(sr)}
     ${_buildSettingsTab_networking(sr, tr)}
@@ -1468,9 +1439,6 @@ async function openSettings(initialTab){
     <div class="mft" id="stab-footer-database" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
-    </div>
-    <div class="mft" id="stab-footer-logs" style="display:none">
-      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
     </div>
     <div class="mft" id="stab-footer-reports" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -1507,7 +1475,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','logs','reports','sensors','networking','certificates','backup','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','reports','sensors','networking','certificates','backup','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -1541,7 +1509,6 @@ function switchSettingsTab(tab){
           nextEl.classList.remove('stab-out');
           setTimeout(() => {
             _stabSwitching = false;
-            if (tab === 'logs')         _loadLogTab();
             if (tab === 'sensors')      loadSensorsDefaultsTab();
             if (tab === 'backup')       _loadBackupScheduleSettings();
             if (tab === 'database')     _loadDbBackupSettings();
@@ -1557,7 +1524,6 @@ function switchSettingsTab(tab){
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
     _stabSwitching = false;
-    if (tab === 'logs')        _loadLogTab();
     if (tab === 'sensors')     loadSensorsDefaultsTab();
     if (tab === 'backup')      _loadBackupScheduleSettings();
     if (tab === 'database')    _loadDbBackupSettings();
@@ -1999,230 +1965,6 @@ async function submitInstallSigned(){
     showErr('Request failed — check server connectivity.');
     btn.disabled=false;btn.textContent='Install Certificate';
   }
-}
-
-let _activeLogTab = 'app';
-let _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
-let _logLiveMode = false;
-let _logLiveTimer = null;
-let _logLastTs = '';
-let _logData = [];
-let _logSearchDebounce = null;
-
-function _switchLogTab(key) {
-  _activeLogTab = key;
-  ['app','sensors','audit','backup'].forEach(k => {
-    document.getElementById(`lstab-btn-${k}`)?.classList.toggle('active', k === key);
-  });
-  _logLastTs = '';
-  _logData = [];
-  _loadLogTab();
-}
-
-function _parseLogSearch(raw) {
-  const result = { level: '', search: '' };
-  if (!raw) return result;
-  const parts = raw.trim().split(/\s+/);
-  const textParts = [];
-  for (const part of parts) {
-    const lower = part.toLowerCase();
-    if (lower.startsWith('level:')) {
-      const val = part.substring(6).toUpperCase();
-      if (['DEBUG','INFO','WARNING','ERROR','CRITICAL'].includes(val)) result.level = val;
-    } else if (lower.startsWith('device:')) {
-      textParts.push(part.substring(7));
-    } else {
-      textParts.push(part);
-    }
-  }
-  result.search = textParts.join(' ');
-  return result;
-}
-
-function _onLogFilterChange() {
-  _logFilter.timeRange = document.getElementById('logFTime')?.value || 'all';
-  _logFilter.level     = document.getElementById('logFLevel')?.value || '';
-  _logFilter.search    = document.getElementById('logFSearch')?.value || '';
-
-  const customWrap = document.getElementById('logFCustomWrap');
-  if (customWrap) customWrap.style.display = _logFilter.timeRange === 'custom' ? 'flex' : 'none';
-
-  if (_logFilter.timeRange === 'custom') {
-    _logFilter.customFrom = document.getElementById('logFCustomFrom')?.value || '';
-    _logFilter.customTo   = document.getElementById('logFCustomTo')?.value   || '';
-  } else {
-    _logFilter.customFrom = '';
-    _logFilter.customTo   = '';
-  }
-
-  _logLastTs = '';
-  clearTimeout(_logSearchDebounce);
-  _logSearchDebounce = setTimeout(_loadLogTab, 300);
-}
-
-function _clearLogFilters() {
-  _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
-  _logLastTs = '';
-  ['logFTime','logFLevel','logFSearch','logFCustomFrom','logFCustomTo'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? '6h' : '';
-    else el.value = '';
-  });
-  const customWrap = document.getElementById('logFCustomWrap');
-  if (customWrap) customWrap.style.display = 'none';
-  _loadLogTab();
-}
-
-function _colorLog(text, searchTerm) {
-  if (!text) return '<span style="color:var(--text3)">(empty)</span>';
-  const e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
-  const hl = (searchTerm && searchTerm.trim())
-    ? (s => {
-        const escaped = e(s);
-        const q = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return escaped.replace(new RegExp(`(${q})`, 'gi'), '<mark class="ll-hl">$1</mark>');
-      })
-    : e;
-  return text.split('\n').map(line => {
-    if (!line) return '<div class="ll-row ll-empty"></div>';
-    const m = line.match(RE);
-    if (m) {
-      const [,ts,lvl,msg] = m;
-      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${hl(ts)}</span><span class="ll-${lvl.toLowerCase()}">${hl(lvl)}</span></span><span class="ll-msg">${hl(msg)}</span></div>`;
-    }
-    return `<div class="ll-row ll-cont"><span class="ll-msg">${hl(line)}</span></div>`;
-  }).join('');
-}
-
-async function _loadLogTab() {
-  const el  = document.getElementById('log-body');
-  const lbl = document.getElementById('log-footer-label');
-  if (!el) return;
-
-  // Sync dropdown values with _logFilter (may have been set externally, e.g. badge click)
-  const _lfEl = document.getElementById('logFLevel');
-  if (_lfEl && _lfEl.value !== _logFilter.level) _lfEl.value = _logFilter.level;
-
-  const parsed = _parseLogSearch(_logFilter.search);
-  const params = new URLSearchParams();
-  const level = parsed.level || _logFilter.level;
-  if (level) params.set('level', level);
-
-  const _dtLocal = d => d.getFullYear() + '-' +
-    String(d.getMonth()+1).padStart(2,'0') + '-' +
-    String(d.getDate()).padStart(2,'0') + ' ' +
-    String(d.getHours()).padStart(2,'0') + ':' +
-    String(d.getMinutes()).padStart(2,'0') + ':' +
-    String(d.getSeconds()).padStart(2,'0');
-
-  if (_logLiveMode && _logLastTs) {
-    params.set('after', _logLastTs);
-  } else if (_logFilter.timeRange === 'custom') {
-    if (_logFilter.customFrom) params.set('after',  _logFilter.customFrom.replace('T', ' '));
-    if (_logFilter.customTo)   params.set('before', _logFilter.customTo.replace('T', ' '));
-  } else if (_logFilter.timeRange !== 'all') {
-    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '3h': 3*3600, '6h': 6*3600, '12h': 12*3600, '24h': 86400 };
-    const sec = offsets[_logFilter.timeRange];
-    if (sec) params.set('after', _dtLocal(new Date(Date.now() - sec * 1000)));
-  }
-  if (parsed.search) params.set('search', parsed.search);
-  const qs = params.toString();
-  const url = `/api/logs/${_activeLogTab}` + (qs ? '?' + qs : '');
-
-  try {
-    const r = await fetch(url);
-    if (!r.ok) { el.textContent = 'Access denied'; return; }
-    const d = await r.json();
-    const searchTerm = parsed.search || '';
-
-    if (_logLiveMode && _logLastTs) {
-      if (d.lines) el.innerHTML += _colorLog(d.lines, searchTerm);
-      // no new lines → keep existing content
-    } else {
-      el.innerHTML = _colorLog(d.lines || '(empty)', searchTerm);
-      _logData = (d.lines || '').split('\n').filter(l => l);
-    }
-
-    if (d.lines) {
-      const lines = d.lines.split('\n');
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const tm = lines[i].match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
-        if (tm) { _logLastTs = tm[1]; break; }
-      }
-    }
-
-    if (_logLiveMode) el.scrollTop = el.scrollHeight;
-
-    const names = { app:'pingwatch.log', sensors:'pingwatchsensors.log',
-                    audit:'pingwatchaudit.log', backup:'pingwatchbackup.log' };
-    if (lbl) {
-      const showing = d.shown != null ? d.shown.toLocaleString() : '?';
-      const total   = d.total != null ? d.total.toLocaleString() : '?';
-      lbl.textContent = `Showing ${showing} / ${total} logs \u00b7 ${names[_activeLogTab] || ''}`;
-    }
-  } catch(e) {
-    el.textContent = `Failed to load: ${String(e)}`;
-  }
-}
-
-function _toggleLogLive() {
-  _logLiveMode = !_logLiveMode;
-  const btn = document.getElementById('logLiveBtn');
-  if (btn) {
-    btn.classList.toggle('log-live-on', _logLiveMode);
-    btn.textContent = _logLiveMode ? '\uD83D\uDFE2 Live' : '\u25cb Live';
-  }
-  if (_logLiveMode) {
-    _logLastTs = '';
-    _loadLogTab();
-    _logLiveTimer = setInterval(() => {
-      if (!document.getElementById('log-body')) { _stopLogLive(); return; }
-      _loadLogTab();
-    }, 3000);
-  } else {
-    _stopLogLive();
-  }
-}
-
-function _stopLogLive() {
-  _logLiveMode = false;
-  if (_logLiveTimer) { clearInterval(_logLiveTimer); _logLiveTimer = null; }
-  const btn = document.getElementById('logLiveBtn');
-  if (btn) { btn.classList.remove('log-live-on'); btn.textContent = '\u25cb Live';}
-}
-
-function _exportLogCsv() {
-  if (!_logData.length) { toast('No log data to export','warn'); return; }
-  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
-  const header = 'Timestamp,Level,Message\n';
-  const rows = _logData.map(line => {
-    const m = line.match(RE);
-    if (m) return [m[1], m[2], m[3]].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(',');
-    return '"","","' + String(line).replace(/"/g,'""') + '"';
-  });
-  _logDownload(`pingwatch-${_activeLogTab}.csv`, header + rows.join('\n'), 'text/csv');
-}
-
-function _exportLogJson() {
-  if (!_logData.length) { toast('No log data to export','warn'); return; }
-  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
-  const out = _logData.map(line => {
-    const m = line.match(RE);
-    if (m) return { timestamp: m[1], level: m[2], message: m[3] };
-    return { timestamp: '', level: '', message: line };
-  });
-  _logDownload(`pingwatch-${_activeLogTab}.json`, JSON.stringify(out, null, 2), 'application/json');
-}
-
-function _logDownload(filename, content, mime) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type: mime }));
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
@@ -3027,12 +2769,83 @@ async function _loadIntegrationsStatus() {
     if (r.radius_status) _renderIntegStatus('radius', r.radius_status);
     if (r.saml_status)   _renderIntegStatus('saml',   r.saml_status);
     if (r.oidc_status)   _renderIntegStatus('oidc',   r.oidc_status);
+    _renderAuthRefreshLastRun(r.auth_refresh_last_ts, r.auth_refresh_interval_min);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
   const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].find(
     t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
   ) || 'smtp';
   switchIntegTab(activeSubTab);
+}
+
+function _renderAuthRefreshLastRun(lastTs, intervalMin) {
+  const el = document.getElementById('auth-refresh-last');
+  if (!el) return;
+  if (!lastTs) {
+    el.textContent = 'never';
+    el.style.color = 'var(--text3)';
+    return;
+  }
+  const ageSec = Math.floor(Date.now() / 1000 - lastTs);
+  let label;
+  if (ageSec < 60)         label = `${ageSec}s ago`;
+  else if (ageSec < 3600)  label = `${Math.floor(ageSec / 60)}m ago`;
+  else if (ageSec < 86400) label = `${Math.floor(ageSec / 3600)}h ago`;
+  else                     label = `${Math.floor(ageSec / 86400)}d ago`;
+  // Green if within 2× the configured interval (allows for one missed tick),
+  // yellow if older, neutral if interval is 0 (refresh disabled).
+  const interval = Number(intervalMin) || 60;
+  const ageMin = ageSec / 60;
+  let color = 'var(--text2)';
+  if (interval > 0) {
+    if (ageMin <= interval * 2)      color = 'var(--up)';
+    else                             color = 'var(--warn)';
+  }
+  el.textContent = label;
+  el.style.color = color;
+}
+
+async function saveAuthRefreshInterval() {
+  const sel = document.getElementById('auth-refresh-interval');
+  if (!sel) return;
+  const v = parseInt(sel.value, 10);
+  const msg = document.getElementById('auth-refresh-msg');
+  try {
+    await api('PATCH', '/api/settings', { auth_refresh_interval_min: v });
+    if (msg) {
+      msg.textContent = v === 0 ? 'Refresh disabled — boot sanity check still runs.'
+                                : `Refresh interval set to ${v} min.`;
+      msg.style.color = 'var(--up)';
+      setTimeout(() => { if (msg) msg.textContent = ''; }, 4000);
+    }
+  } catch(e) {
+    if (msg) {
+      msg.textContent = 'Save failed: ' + (e.message || e);
+      msg.style.color = 'var(--down)';
+    }
+  }
+}
+
+async function triggerAuthRefreshNow() {
+  const msg = document.getElementById('auth-refresh-msg');
+  if (msg) { msg.textContent = 'Triggering…'; msg.style.color = 'var(--text3)'; }
+  try {
+    const r = await api('POST', '/api/auth/health/run_now', {});
+    if (msg) {
+      msg.textContent = r.ok ? 'Refresh triggered — badges will update in a few seconds.'
+                             : ('Trigger failed: ' + (r.error || ''));
+      msg.style.color = r.ok ? 'var(--up)' : 'var(--down)';
+    }
+    // Re-poll status a few times to reflect the result without forcing a full reload.
+    setTimeout(_loadIntegrationsStatus, 2000);
+    setTimeout(_loadIntegrationsStatus, 6000);
+    setTimeout(_loadIntegrationsStatus, 12000);
+  } catch(e) {
+    if (msg) {
+      msg.textContent = 'Trigger failed: ' + (e.message || e);
+      msg.style.color = 'var(--down)';
+    }
+  }
 }
 
 async function _saveIntegrations() {
