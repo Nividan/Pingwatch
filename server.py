@@ -66,6 +66,7 @@ _JS_FILES = _VENDOR_JS_FILES + [
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
+    "forms-saml.js", "forms-oidc.js",
     "forms-discovery.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "alerting.js", "app.js",
 ]
@@ -300,8 +301,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return None
-            return json.loads(self.rfile.read(n)) if n else {}
-        except (ValueError, json.JSONDecodeError):
+            if n == 0:
+                return {}
+            raw = self.rfile.read(n)
+            ctype = (self.headers.get("Content-Type", "") or "").lower()
+            # application/x-www-form-urlencoded — used by SAML ACS and OAuth callbacks
+            if ctype.startswith("application/x-www-form-urlencoded"):
+                from urllib.parse import parse_qs
+                try:
+                    parsed = parse_qs(raw.decode("utf-8", errors="replace"),
+                                      keep_blank_values=True)
+                    return {k: (v[0] if v else "") for k, v in parsed.items()}
+                except Exception:
+                    return {}
+            try:
+                return json.loads(raw) if raw else {}
+            except (ValueError, json.JSONDecodeError):
+                return {}
+        except Exception:
             return {}
 
     # ── GET ───────────────────────────────────────────────────────
@@ -372,8 +389,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -398,8 +415,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -407,12 +424,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 

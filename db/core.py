@@ -737,12 +737,23 @@ def db_init():
             ("totp_enabled",        "INTEGER DEFAULT 0"),
             ("totp_recovery",       "TEXT DEFAULT ''"),
             ("totp_remember_hours", "INTEGER DEFAULT 9"),
+            # SSO — federated identity subject. Format: "saml|<entity>|<nameid>" or
+            # "oidc|<issuer>|<sub>". Local/LDAP/RADIUS users keep NULL.
+            ("external_id",         "TEXT DEFAULT NULL"),
         ]:
             try:
                 con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")
                 con.commit()
             except Exception:
                 pass
+        # Unique index on external_id to prevent duplicate JIT provisioning.
+        # Partial (WHERE NOT NULL) so local users with NULL external_id don't collide.
+        try:
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id "
+                        "ON users(external_id) WHERE external_id IS NOT NULL")
+            con.commit()
+        except Exception:
+            pass
         # Anomaly detection — per-sensor opt-in config
         for _col, _def in [
             ("anomaly_enabled",     "INTEGER DEFAULT 0"),
@@ -995,11 +1006,15 @@ def db_init():
         )
         con.commit()
         # Migration: LDAP group mapping columns (v0.9+) + RADIUS attribute mapping (v0.9.2+)
+        # + SAML/OIDC SSO group mapping (v1.1+) — per-protocol group values so
+        # admins can use different formats (e.g. SAML sends DNs, OIDC sends short names).
         for _col, _def in [
-            ("ldap_dn",          "TEXT DEFAULT ''"),
-            ("default_role",     "TEXT DEFAULT 'viewer'"),
-            ("radius_attribute", "TEXT DEFAULT ''"),
-            ("radius_value",     "TEXT DEFAULT ''"),
+            ("ldap_dn",           "TEXT DEFAULT ''"),
+            ("default_role",      "TEXT DEFAULT 'viewer'"),
+            ("radius_attribute",  "TEXT DEFAULT ''"),
+            ("radius_value",      "TEXT DEFAULT ''"),
+            ("saml_group_value",  "TEXT DEFAULT ''"),
+            ("oidc_group_value",  "TEXT DEFAULT ''"),
         ]:
             try:
                 con.execute(f"ALTER TABLE user_groups ADD COLUMN {_col} {_def}")

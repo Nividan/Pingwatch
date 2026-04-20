@@ -33,7 +33,8 @@ def pg_create_main_schema(cur):
             totp_secret         TEXT DEFAULT '',
             totp_enabled        INTEGER DEFAULT 0,
             totp_recovery       TEXT DEFAULT '',
-            totp_remember_hours INTEGER DEFAULT 9
+            totp_remember_hours INTEGER DEFAULT 9,
+            external_id         TEXT DEFAULT NULL
         )""")
     # Migration: add theme_preference for existing installs
     cur.execute("""
@@ -72,7 +73,17 @@ def pg_create_main_schema(cur):
                              AND column_name='totp_remember_hours') THEN
                 ALTER TABLE users ADD COLUMN totp_remember_hours INTEGER DEFAULT 9;
             END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='external_id') THEN
+                ALTER TABLE users ADD COLUMN external_id TEXT DEFAULT NULL;
+            END IF;
         END $$
+    """)
+    # SSO — unique index on external_id (partial, so local users with NULL don't collide)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id
+            ON users(external_id) WHERE external_id IS NOT NULL
     """)
 
     cur.execute("""
@@ -529,14 +540,18 @@ def pg_create_main_schema(cur):
             ldap_dn          TEXT DEFAULT '',
             radius_attribute TEXT DEFAULT '',
             radius_value     TEXT DEFAULT '',
+            saml_group_value TEXT DEFAULT '',
+            oidc_group_value TEXT DEFAULT '',
             default_role     TEXT DEFAULT 'viewer'
         )""")
-    # Migration: LDAP group mapping columns + RADIUS attribute mapping
+    # Migration: LDAP / RADIUS / SAML / OIDC group mapping columns
     for _tbl, _col, _typedef in [
-        ("user_groups", "ldap_dn",          "TEXT DEFAULT ''"),
-        ("user_groups", "default_role",     "TEXT DEFAULT 'viewer'"),
-        ("user_groups", "radius_attribute", "TEXT DEFAULT ''"),
-        ("user_groups", "radius_value",     "TEXT DEFAULT ''"),
+        ("user_groups", "ldap_dn",           "TEXT DEFAULT ''"),
+        ("user_groups", "default_role",      "TEXT DEFAULT 'viewer'"),
+        ("user_groups", "radius_attribute",  "TEXT DEFAULT ''"),
+        ("user_groups", "radius_value",      "TEXT DEFAULT ''"),
+        ("user_groups", "saml_group_value",  "TEXT DEFAULT ''"),
+        ("user_groups", "oidc_group_value",  "TEXT DEFAULT ''"),
     ]:
         try:
             cur.execute("SAVEPOINT _alter_ug")

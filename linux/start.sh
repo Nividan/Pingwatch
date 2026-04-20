@@ -132,6 +132,8 @@ _PACKAGES = [
     ("paramiko",     "SSH device backups",                      False),
     ("smbclient",    "SMB / CIFS remote DB backup upload",      False),
     ("pyrad",        "RADIUS authentication",                   False),
+    ("saml2",        "SAML 2.0 SSO",                            False),
+    ("authlib",      "OpenID Connect SSO",                      False),
     ("pystray",      "system tray icon",                        False),
     ("PIL",          "image support (tray icon)",               False),
     ("ldap3",        "LDAP / Active Directory authentication",  False),

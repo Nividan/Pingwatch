@@ -82,6 +82,22 @@ PACKAGES = [
         "required": False,
     },
     {
+        "import":   "saml2",
+        "name":     "pysaml2",
+        "install":  "pysaml2>=7.5",
+        "pip":      True,
+        "desc":     "SAML 2.0 SSO (enterprise identity federation)",
+        "required": False,
+    },
+    {
+        "import":   "authlib",
+        "name":     "authlib",
+        "install":  "authlib>=1.3",
+        "pip":      True,
+        "desc":     "OpenID Connect SSO (Azure AD, Okta, Google, Keycloak)",
+        "required": False,
+    },
+    {
         "import":   "cryptography",
         "name":     "cryptography",
         "install":  "cryptography>=41.0.0",

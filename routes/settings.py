@@ -67,6 +67,24 @@ def _get_radius_status() -> dict:
     return get_radius_status()
 
 
+def _get_saml_status() -> dict:
+    try:
+        from core.saml_auth import get_saml_status
+        return get_saml_status()
+    except Exception:
+        return {"state": "unconfigured", "last_ok_ts": None,
+                "last_err_ts": None, "last_err_msg": ""}
+
+
+def _get_oidc_status() -> dict:
+    try:
+        from core.oidc_auth import get_oidc_status
+        return get_oidc_status()
+    except Exception:
+        return {"state": "unconfigured", "last_ok_ts": None,
+                "last_err_ts": None, "last_err_msg": ""}
+
+
 def _get_effective_workers() -> int:
     """Return the number of probe workers currently in use."""
     try:
@@ -93,6 +111,18 @@ def _local_ip() -> str:
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+
+    # ── /api/settings/public_auth GET (NO AUTH — login screen SSO probe) ──
+    # Returns ONLY the flags + display names needed to render SSO buttons on
+    # the unauthenticated login page. Never exposes any real secrets or config.
+    if path == "/api/settings/public_auth" and method == "GET":
+        h._json(200, {
+            "saml_enabled":      int(_settings.get("saml_enabled", 0) or 0),
+            "saml_display_name": _settings.get("saml_display_name", "") or "Single Sign-On",
+            "oidc_enabled":      int(_settings.get("oidc_enabled", 0) or 0),
+            "oidc_display_name": _settings.get("oidc_display_name", "") or "Single Sign-On",
+        })
+        return True
 
     # ── /api/settings GET ─────────────────────────────────────────
     if path == "/api/settings" and method == "GET":
@@ -203,6 +233,14 @@ def handle(h, method, path, body):
             "ldap_status":   _get_ldap_status(),
             "radius_status": _get_radius_status(),
             "radius_enabled": int(_settings.get("radius_enabled", 0) or 0),
+            # SAML / OIDC federated SSO — status + public-facing fields
+            # (used by the login screen to render "Sign in with {idp}" buttons)
+            "saml_status":           _get_saml_status(),
+            "saml_enabled":          int(_settings.get("saml_enabled", 0) or 0),
+            "saml_display_name":     _settings.get("saml_display_name", "") or "Single Sign-On",
+            "oidc_status":           _get_oidc_status(),
+            "oidc_enabled":          int(_settings.get("oidc_enabled", 0) or 0),
+            "oidc_display_name":     _settings.get("oidc_display_name", "") or "Single Sign-On",
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
