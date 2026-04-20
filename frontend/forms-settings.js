@@ -590,12 +590,17 @@ function _buildSettingsTab_integrations(sr) {
           <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Identity Provider</div>
           <div class="fr">
             <label class="fl">Import IdP Metadata</label>
-            <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--text2)">
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="url" checked onchange="_samlMetaSrcToggle()"/> By URL</label>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="xml" onchange="_samlMetaSrcToggle()"/> Paste XML</label>
+            <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--text2);flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="url"  checked onchange="_samlMetaSrcToggle()"/> By URL</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="xml"          onchange="_samlMetaSrcToggle()"/> Paste XML</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="file"         onchange="_samlMetaSrcToggle()"/> Upload XML file</label>
             </div>
             <input type="text" id="saml-meta-url" placeholder="https://idp.example.com/metadata" autocomplete="off"/>
             <textarea id="saml-meta-xml" rows="5" placeholder="<md:EntityDescriptor ...>" style="display:none;font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical;width:100%;padding:6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);margin-top:4px"></textarea>
+            <div id="saml-meta-file-wrap" style="display:none;margin-top:4px">
+              <input type="file" id="saml-meta-file" accept=".xml,application/xml,text/xml,application/samlmetadata+xml" onchange="_samlLoadFileToTextarea(this)" style="font-size:12px;color:var(--text2)"/>
+              <div style="font-size:11px;color:var(--text3);margin-top:3px">Contents load into the Paste XML area so you can review before import.</div>
+            </div>
             <div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
               <button class="btn-s" style="font-size:12px" onclick="importSamlMetadata()">⇩ Import metadata</button>
               <div id="saml-meta-result" style="font-size:12px;flex:1"></div>
