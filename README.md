@@ -340,21 +340,21 @@ Click any device row in the Backups tab to open the Config Viewer:
 ## Screenshots
 
 ### 📡 Network Dashboard
-<img width="800" alt="Network Dashboard" src="https://github.com/user-attachments/assets/91e2237f-a3c8-447c-adbc-5d91e950f63a" />
-<img width="800" alt="Network Dashboard 2" src="https://github.com/user-attachments/assets/276fc670-1425-4150-ae9d-21ee33da8565" />
+<img width="2560" height="1271" alt="image" src="https://github.com/user-attachments/assets/500ed8ab-8df4-406b-90dd-0321940c3068" />
+<img width="2560" height="1271" alt="image" src="https://github.com/user-attachments/assets/54a96720-b07e-4f01-8b4e-63cb297b9f3a" />
 
 ### 🖥 Device Information
-<img width="800" alt="Device List" src="https://github.com/user-attachments/assets/06a38bfa-3dd1-431e-8dd1-60873d9624e8" />
-<img width="800" alt="Device Detail" src="https://github.com/user-attachments/assets/3a027022-4a46-4fc2-b2e3-9f017b06a2e8" />
-<img width="480" alt="Device Panel" src="https://github.com/user-attachments/assets/131ceef8-bb9c-4abb-9346-f993f409365f" />
-<img width="480" height="1140" alt="image" src="https://github.com/user-attachments/assets/e8d2eab4-257d-43a7-802b-adda20a7764b" />
-<img width="480" height="278" alt="image" src="https://github.com/user-attachments/assets/235cd301-7d46-4926-839f-9c8a4f3702f0" />
-<img width="800" height="963" alt="image" src="https://github.com/user-attachments/assets/ab494a71-8d03-4c7c-8a44-5fcc2b3948c1" />
-
+<img width="1303" height="1009" alt="image" src="https://github.com/user-attachments/assets/b10a4c98-2ab7-4345-a15b-a32d9dbf625a" />
+<img width="950" height="520" alt="image" src="https://github.com/user-attachments/assets/a2711b55-addd-4418-b28f-913de6a72695" />
+<img width="829" height="640" alt="image" src="https://github.com/user-attachments/assets/0d9250df-41f6-4820-b196-fbdd8234b729" />
+<img width="827" height="873" alt="image" src="https://github.com/user-attachments/assets/ff069acd-b38e-471c-9075-21c34fb0318d" />
+<img width="905" height="255" alt="image" src="https://github.com/user-attachments/assets/4be6527e-81e8-4bc3-856d-a4cab7fc54d2" />
+<img width="950" height="1194" alt="image" src="https://github.com/user-attachments/assets/5b030d19-7a55-40be-9f54-4460fb7f6f1c" />
 
 ### 📜 Event Logs
-<img width="800" alt="Event Log" src="https://github.com/user-attachments/assets/210e31ec-6367-4e60-bcbd-5257f36f5a5d" />
-<img width="800" alt="Event Log 2" src="https://github.com/user-attachments/assets/3a26e38d-6f12-46db-9d46-11f27561d001" />
+<img width="2553" height="824" alt="image" src="https://github.com/user-attachments/assets/3b712979-225a-430d-86eb-7cca035e21f7" />
+<img width="2541" height="834" alt="image" src="https://github.com/user-attachments/assets/93cbf83c-5f4a-41b3-a8da-b0007a4a023d" />
+<img width="2554" height="650" alt="image" src="https://github.com/user-attachments/assets/ecbbe526-044e-4dda-9717-e3e3bbff3394" />
 
 ### 🗺 Network Topology Manager
 <img width="800" alt="Live Topology Map" src="https://github.com/user-attachments/assets/2eff647b-befd-4c4c-b0e6-ee43adb1c713" />
@@ -367,8 +367,17 @@ Click any device row in the Backups tab to open the Config Viewer:
 <img width="500" height="800" alt="Config Diff" src="https://github.com/user-attachments/assets/920450a2-def2-4de0-a822-37c87167a25a" />
 
 ### 🗂 IP Address Manager
-<img width="500" height="492" alt="IPAM" src="https://github.com/user-attachments/assets/42864325-72b5-4e7b-80ea-16637beb0d5f" />
-<img width="800" height="364" alt="IPAM Subnets" src="https://github.com/user-attachments/assets/2397d53a-8891-4a96-a5f3-865dcb859f6c" />
+<img width="493" height="342" alt="image" src="https://github.com/user-attachments/assets/d14eb249-b688-4565-b083-b2ddd643ede2" />
+<img width="2548" height="1175" alt="image" src="https://github.com/user-attachments/assets/24be49d0-2f8e-42c8-a8dc-13d78049f7ab" />
+
+### 🗂 Reports
+<img width="2545" height="463" alt="image" src="https://github.com/user-attachments/assets/f6487481-c179-4b6d-a9c7-524cf9e853b6" />
+<img width="1085" height="943" alt="image" src="https://github.com/user-attachments/assets/5bb587ae-ea10-4b74-85b6-6462090c30c5" />
+
+### 🗂 Settings
+<img width="1079" height="1129" alt="image" src="https://github.com/user-attachments/assets/1cc6e207-03ef-4e1e-b31d-e79ceed61e5b" />
+<img width="1061" height="752" alt="image" src="https://github.com/user-attachments/assets/3fad13cc-59de-4918-b4f4-62a915ef5550" />
+
 
 ### Setup GUI Wizard
 <img width="816" height="806" alt="image" src="https://github.com/user-attachments/assets/ef9d9527-9944-467e-8757-4382761aff80" />
