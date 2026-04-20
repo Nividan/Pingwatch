@@ -350,6 +350,7 @@ Click any device row in the Backups tab to open the Config Viewer:
 <img width="827" height="873" alt="image" src="https://github.com/user-attachments/assets/ff069acd-b38e-471c-9075-21c34fb0318d" />
 <img width="905" height="255" alt="image" src="https://github.com/user-attachments/assets/4be6527e-81e8-4bc3-856d-a4cab7fc54d2" />
 <img width="950" height="1194" alt="image" src="https://github.com/user-attachments/assets/5b030d19-7a55-40be-9f54-4460fb7f6f1c" />
+<img width="1047" height="1083" alt="image" src="https://github.com/user-attachments/assets/39506190-4bba-43b7-b9ec-23457a8bd73b" />
 
 ### 📜 Event Logs
 <img width="2553" height="824" alt="image" src="https://github.com/user-attachments/assets/3b712979-225a-430d-86eb-7cca035e21f7" />
