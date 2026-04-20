@@ -155,6 +155,7 @@
         <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_open2faModal()"><span class="usr-dd-ico">🔐</span>Two-Factor Authentication</button>
         <button class="usr-dd-item" id="usrThemeBtn" role="menuitem" onclick="_usrDdClose();toggleTheme()" title="Toggle between dark and light themes"><span class="usr-dd-ico">☀</span>Switch to Light</button>
         <div class="usr-dd-sep"></div>
+        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openAbout()"><span class="usr-dd-ico">ⓘ</span>About PingWatch</button>
         <button class="usr-dd-item usr-dd-item--danger" role="menuitem" onclick="_usrDdClose();doLogout()"><span class="usr-dd-ico">⏻</span>Sign Out</button>
       </div>
     </div>
@@ -266,6 +267,7 @@
       <div class="dev-act-left">
         <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">➕ Add Device</button>
         <button id="btnDiscover" class="btn-sm rbac-op"            onclick="openDiscoverSubnet()" title="Scan a subnet for unmonitored devices">📡 Discover Subnet</button>
+        <button id="btnImport"   class="btn-sm rbac-op"            onclick="openBulkImport()" title="Import devices from JSON, CSV, PRTG, SolarWinds, or Zabbix">📥 Import from File</button>
         <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">🗂️ Add Group</button>
       </div>
       <div class="view-toggle">

@@ -177,6 +177,14 @@ PACKAGES = [
         "desc":     "PDF report generation (HTML→PDF; Linux also needs libpango/libcairo)",
         "required": False,
     },
+    {
+        "import":   "openpyxl",
+        "name":     "openpyxl",
+        "install":  "openpyxl>=3.1",
+        "pip":      True,
+        "desc":     "XLSX reader for SolarWinds bulk device imports",
+        "required": False,
+    },
 ]
 
 

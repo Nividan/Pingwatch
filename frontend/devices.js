@@ -203,13 +203,19 @@ function _initDevCtxMenu(){
         <div class="dci-sep"></div>
         <div class="dci ${muted?'dci-green':'dci-warn'}" onclick="_hideDcm();_toggleMuteDevice('${did}')">
           ${muted?'🔔 Unmute Alerts':'🔕 Mute Alerts'}
-        </div>`;
+        </div>
+        <div class="dci-sep"></div>
+        <div class="dci dci-danger rbac-op" onclick="_hideDcm();delDev('${did}')">🗑️ Delete Device</div>`;
     } else if(grpHdr){
       _ctxGrp=grpHdr.closest('.grp-wrap')?.dataset.grpName||'';
+      const _isDefault = _ctxGrp === 'Default Group';
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openEditGroup==='function')openEditGroup(_ctxGrp)">⚙️ Edit Group</div>
         <div class="dci-sep"></div>
-        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp)">🖥️ Add Device</div>`;
+        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp)">🖥️ Add Device</div>
+        ${_isDefault ? '' : `
+        <div class="dci-sep"></div>
+        <div class="dci dci-danger rbac-op" onclick="_hideDcm();_deleteGroup(${JSON.stringify(_ctxGrp)})">🗑️ Delete Group</div>`}`;
     } else {
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
@@ -217,6 +223,34 @@ function _initDevCtxMenu(){
     }
     _showDcm(e.clientX+2,e.clientY+2);
   });
+}
+
+// Delete a group by moving all its devices to "Default Group".
+// Groups in PingWatch are just a label field on each device, so deletion
+// is implemented as a bulk re-label — the group name disappears once no
+// device carries it.
+async function _deleteGroup(gname){
+  if(!gname || gname==='Default Group'){
+    toast('Cannot delete the Default Group','err');
+    return;
+  }
+  const members = Object.values(S.devices).filter(d => (d.group||'Default Group') === gname);
+  const n = members.length;
+  const msg = n === 0
+    ? `Delete group "${gname}"?`
+    : `Delete group "${gname}"?\n\nThe ${n} device${n===1?'':'s'} inside will be moved to "Default Group".`;
+  if(!confirm(msg)) return;
+  try{
+    if(n > 0){
+      await Promise.all(members.map(d =>
+        api('PATCH', `/api/device/${d.device_id}`, { group: 'Default Group' })
+      ));
+    }
+    toast(`Group "${gname}" deleted`,'ok');
+    if(typeof _refreshDevices==='function') _refreshDevices();
+  }catch(e){
+    toast('Failed to delete group: '+(e.message||e),'err');
+  }
 }
 
 async function _toggleMuteDevice(did){

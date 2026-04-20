@@ -71,7 +71,7 @@ _JS_FILES = _VENDOR_JS_FILES + [
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
     "forms-saml.js", "forms-oidc.js",
-    "forms-discovery.js",
+    "forms-discovery.js", "forms-import.js",
     "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "app.js",
 ]
 
@@ -419,8 +419,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 

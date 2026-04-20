@@ -10,48 +10,18 @@ import core.app_state as app_state
 from core.config import (
     _RE_DISCOVERY_SCAN, _RE_DISCOVERY_STATUS, _RE_DISCOVERY_BULK_ADD,
 )
-from db import _db_enqueue, db_save, db_log_audit
-from db.ipam import ipam_sync_device_add, db_list_subnets, db_add_subnet
+from core.device_importer import create_devices_batch
+from db import _db_enqueue, db_log_audit
+from db.ipam import db_list_subnets, db_add_subnet
 from core.logger import log
 from monitoring.subnet_discovery import start_scan, get_scan, cancel_scan
 
 STATE = app_state.STATE
 
-# ── Sensor field whitelist per stype (defense in depth) ────────────
-_ALLOWED_SENSOR_FIELDS = {
-    "ping":   set(),
-    "tcp":    {"port"},
-    "http":   {"port", "url", "verify_ssl"},
-    "tls":    {"port"},
-    "snmp":   {"port", "snmp_community", "snmp_version", "snmp_oid"},
-    "banner": {"port", "banner_regex"},
-    "dns":    {"port"},
-}
-
-
-def _build_sensor_kwargs(spec: dict) -> dict:
-    """Filter incoming sensor spec to fields valid for its stype.
-
-    Returns a kwargs dict ready to pass to STATE.add_sensor().
-    Unknown fields are silently dropped.
-    """
-    stype = str(spec.get("stype", "ping")).strip().lower()
-    if stype not in _ALLOWED_SENSOR_FIELDS:
-        stype = "ping"
-    allowed = _ALLOWED_SENSOR_FIELDS[stype]
-    out = {}
-    for key in allowed:
-        if key in spec and spec[key] not in (None, ""):
-            out[key] = spec[key]
-    # Defaults that match the single-device add flow
-    if stype == "snmp":
-        out.setdefault("snmp_community", "public")
-        out.setdefault("snmp_version", "2c")
-        out.setdefault("snmp_oid", "1.3.6.1.2.1.1.3.0")  # sysUpTime
-    if stype == "http" and "url" in out:
-        # add_sensor takes `url=`, not http_url
-        pass
-    return out, stype
+# NOTE: The sensor field allow-list + per-stype kwarg builder that used to live
+# here were extracted to core/device_importer.py so both Discovery and the
+# Bulk Import feature share the same validation and defaults. Callers should
+# pass device dicts directly to create_devices_batch().
 
 
 def handle(h, method, path, body):
@@ -122,87 +92,15 @@ def handle(h, method, path, body):
         if len(items) > 500:
             h._json(400, {"error": "too many devices (max 500 per call)"}); return True
 
-        # Snapshot existing hosts + secondary IPs (lowercased) for dedup.
-        with STATE._lock:
-            existing_hosts = {
-                (d.host or "").lower()
-                for d in STATE.devices.values() if getattr(d, "host", "")
-            }
-            for d in STATE.devices.values():
-                for sip in getattr(d, "secondary_ips", []) or []:
-                    if sip:
-                        existing_hosts.add(sip.lower())
-
-        created, errors = [], []
-        for idx, item in enumerate(items):
-            try:
-                if not isinstance(item, dict):
-                    errors.append({"index": idx, "host": "", "error": "invalid item"})
-                    continue
-                name  = str(item.get("name", "")).strip()[:255]
-                host  = str(item.get("host", "")).lower().strip()[:253]
-                group = str(item.get("group", "Discovered")).strip() or "Discovered"
-
-                if not name or not host:
-                    errors.append({"index": idx, "host": host,
-                                   "error": "name and host required"})
-                    continue
-                if not h._valid_host(host):
-                    errors.append({"index": idx, "host": host,
-                                   "error": "invalid host"})
-                    continue
-                if host in existing_hosts:
-                    errors.append({"index": idx, "host": host,
-                                   "error": "already monitored"})
-                    continue
-
-                did = STATE.add_device(name, host, group)
-                if not did:
-                    errors.append({"index": idx, "host": host,
-                                   "error": "create failed"})
-                    continue
-                existing_hosts.add(host)
-
-                # Create requested sensors
-                sensor_sids = []
-                for s in (item.get("sensors") or []):
-                    if not isinstance(s, dict):
-                        continue
-                    s_name = str(s.get("name", "Sensor")).strip()[:255] or "Sensor"
-                    kwargs, s_stype = _build_sensor_kwargs(s)
-                    try:
-                        sid = STATE.add_sensor(did, s_name, s_stype, **kwargs)
-                        if sid is not None:
-                            try:
-                                STATE.start_sensor(did, sid)
-                            except Exception:
-                                pass
-                            sensor_sids.append(sid)
-                    except Exception as e:
-                        log.warning(
-                            f"discovery bulk-add: sensor create failed "
-                            f"({host} {s_stype}): {e}"
-                        )
-
-                created.append({"did": did, "host": host, "name": name,
-                                "sensors": sensor_sids})
-
-                _did, _name, _host = did, name, host
-                _db_enqueue(
-                    lambda d=_did, n=_name, ho=_host: ipam_sync_device_add(d, n, ho)
-                )
-            except Exception as e:
-                log.error(f"discovery bulk-add: device create failed: {e}")
-                errors.append({"index": idx,
-                               "host": str(item.get("host", "")) if isinstance(item, dict) else "",
-                               "error": "create failed"})
-
-        # Single persist after the whole batch
-        _db_enqueue(lambda: db_save(STATE))
+        # Add-only semantics — Discovery finds NEW hosts, never updates existing.
+        # Delta reconciliation (add_update / replace) is intentionally reserved
+        # for the Bulk Import feature's /api/import/apply endpoint.
+        result = create_devices_batch(items, default_group="Discovered")
+        created = result["created"]
+        errors  = result["errors"]
 
         # Auto-add scanned CIDR to IPAM if it doesn't already exist,
         # then immediately back-populate allocations from the just-added devices.
-        # Must be a single enqueued function so the subnet exists when sync runs.
         _cidr = str(body.get("cidr", "")).strip()
         if _cidr and "/" in _cidr and created:
             try:

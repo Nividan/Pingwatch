@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "devices": [
+
+    {
+      "name": "router1",
+      "host": "10.0.0.1",
+      "group": "Core Network",
+      "snmp_community_default": "public",
+      "snmp_version_default":   "2c",
+      "sensors": [
+        { "name": "ICMP",   "stype": "ping" },
+        { "name": "Uptime", "stype": "snmp", "snmp_oid": "1.3.6.1.2.1.1.3.0" },
+        { "name": "SSH",    "stype": "tcp",  "port": 22 }
+      ]
+    },
+
+    {
+      "name": "web01",
+      "host": "10.0.1.5",
+      "group": "Web Servers",
+      "sensors": [
+        { "name": "Ping",      "stype": "ping" },
+        { "name": "HTTP Home", "stype": "http", "url": "https://web01/health", "http_expected_status": 200 },
+        { "name": "TLS Cert",  "stype": "tls",  "port": 443 }
+      ]
+    },
+
+    {
+      "name": "db01",
+      "host": "10.0.2.1",
+      "group": "Databases",
+      "external_id": "my-cmdb:db01",
+      "sensors": [
+        { "name": "Ping",     "stype": "ping" },
+        { "name": "Postgres", "stype": "tcp", "port": 5432 }
+      ]
+    },
+
+    {
+      "name": "mail01",
+      "host": "mail.example.com",
+      "group": "Mail",
+      "sensors": [
+        { "name": "SMTP",  "stype": "smtp", "port": 25, "smtp_tls": "starttls", "smtp_test_level": "ehlo" },
+        { "name": "DNS A", "stype": "dns",  "dns_query": "mail.example.com", "dns_record_type": "A" }
+      ]
+    }
+
+  ]
+}
