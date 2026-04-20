@@ -27,12 +27,26 @@ _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "COALESCE(dns_server,'')         AS dns_server")
 
 
+def _fmt_ts(v) -> str:
+    """Normalize last_auto_scan_ts to a JSON-safe string.
+
+    PG returns datetime; SQLite returns str (our writer uses strftime). Either
+    way, downstream code just shows this in the UI — a single format is fine.
+    """
+    if v is None or v == "":
+        return ""
+    try:
+        return v.strftime("%Y-%m-%d %H:%M:%S")   # datetime → str
+    except AttributeError:
+        return str(v)                             # already a str
+
+
 def _row_to_subnet_pg(r) -> dict:
     return {"id": r["id"], "cidr": r["cidr"], "name": r["name"],
             "created_by": r["created_by"], "created_at": r["created_at"],
             "auto_discover":       int(r.get("auto_discover") or 0),
             "first_scan_approved": int(r.get("first_scan_approved") or 0),
-            "last_auto_scan_ts":   r.get("last_auto_scan_ts"),
+            "last_auto_scan_ts":   _fmt_ts(r.get("last_auto_scan_ts")),
             "dns_server":          (r.get("dns_server") or "")}
 
 
@@ -41,7 +55,7 @@ def _row_to_subnet_sqlite(r) -> dict:
             "created_by": r[3], "created_at": r[4],
             "auto_discover":       int(r[5] or 0),
             "first_scan_approved": int(r[6] or 0),
-            "last_auto_scan_ts":   r[7],
+            "last_auto_scan_ts":   _fmt_ts(r[7]),
             "dns_server":          (r[8] or "") if len(r) > 8 else ""}
 
 
