@@ -904,9 +904,9 @@ function _buildSettingsTab_networking(sr, tr) {
           </label>
           <div class="fh">When enabled, a redirect server runs on the HTTP port and sends browsers to HTTPS automatically.</div>
         </div>
-
-        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)" id="net-cert-section">
-          ${_renderCertSection(tr)}
+        <div class="fh" style="margin-top:10px">
+          The server certificate and trusted CA certificates are managed in the
+          <a href="javascript:void(0)" onclick="switchSettingsTab('certificates')" style="color:var(--accent)">Certificates</a> tab.
         </div>
       </div>
 
@@ -914,6 +914,174 @@ function _buildSettingsTab_networking(sr, tr) {
         Port changes and HTTPS toggle require a server restart to take effect.
       </div>
     </div>`;
+}
+
+function _buildSettingsTab_certificates(sr, tr) {
+  return `<div class="mbdy stab-fade" id="stab-certificates" style="display:none;overflow-y:auto;flex:1">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Certificate</div>
+      <div class="fh" style="margin-bottom:12px">The TLS certificate served by PingWatch's HTTPS listener (port ${tr.tls_port||8443}).</div>
+      <div id="net-cert-section">
+        ${_renderCertSection(tr)}
+      </div>
+
+      <div style="margin-top:24px;padding-top:18px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px">Trusted CA Certificates</div>
+        <div class="fh" style="margin-bottom:12px">
+          Used by HTTPS, HTTP-keyword, VMware, TLS, and SMTP sensors when SSL verification is enabled.
+          System CAs remain trusted; uploaded CAs are added on top.
+        </div>
+        <div id="trusted-cas-section">
+          <div style="font-size:12px;color:var(--text3);padding:12px 0">Loading…</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _renderTrustedCAsSection(cas) {
+  const list = Array.isArray(cas) ? cas : [];
+  let body;
+  if (list.length === 0) {
+    body = `<div style="padding:14px 14px;background:var(--bg3);border:1px dashed var(--border);border-radius:6px;font-size:12px;color:var(--text3)">
+      No trusted CAs uploaded. Upload an internal/corporate CA so sensors can verify private certificates without disabling SSL verification.
+    </div>`;
+  } else {
+    body = list.map(c => {
+      const days = _daysUntil(c.not_after);
+      const badgeColor = days < 0 ? 'var(--err)' : days <= 30 ? 'var(--warn)' : 'var(--ok)';
+      const badgeTxt   = days < 0 ? 'EXPIRED' : (days <= 30 ? `⚠ ${days}d left` : `✓ ${days}d`);
+      const fpShort    = (c.id || '').slice(0, 16);
+      return `<div style="padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="display:grid;grid-template-columns:90px 1fr;gap:4px 10px;font-size:12px">
+            <span style="color:var(--text3)">Subject</span><span style="word-break:break-all">${esc(c.subject||'—')}</span>
+            <span style="color:var(--text3)">Issuer</span><span style="word-break:break-all">${esc(c.issuer||'—')}</span>
+            <span style="color:var(--text3)">Expires</span><span>${esc(c.not_after||'—')} <span style="color:${badgeColor};font-weight:600">${badgeTxt}</span></span>
+            <span style="color:var(--text3)">Fingerprint</span><span style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(fpShort)}…</span>
+          </div>
+        </div>
+        <button class="btn-s" style="font-size:11px;padding:4px 10px;flex-shrink:0" onclick="deleteTrustedCA('${esc(c.id)}')">Delete</button>
+      </div>`;
+    }).join('');
+  }
+  return `${body}
+    <div style="margin-top:12px">
+      <button class="btn-s" onclick="openUploadCA()">Upload CA Certificate</button>
+    </div>`;
+}
+
+function _daysUntil(ymd) {
+  if (!ymd) return 0;
+  const d = new Date(ymd + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return 0;
+  return Math.floor((d.getTime() - Date.now()) / 86400000);
+}
+
+async function _loadTrustedCAs() {
+  const sec = document.getElementById('trusted-cas-section');
+  if (!sec) return;
+  try {
+    const r = await api('GET', '/api/tls/ca-certs');
+    sec.innerHTML = _renderTrustedCAsSection(r.cas || []);
+  } catch (e) {
+    sec.innerHTML = `<div style="font-size:12px;color:var(--err)">Failed to load trusted CAs: ${esc(e.message||e)}</div>`;
+  }
+}
+
+async function _refreshTrustedCAsSection() {
+  return _loadTrustedCAs();
+}
+
+let _ucaTab = 'pem';
+function _switchUcaTab(t) {
+  _ucaTab = t;
+  document.getElementById('uca-tab-pem').classList.toggle('active', t === 'pem');
+  document.getElementById('uca-tab-file').classList.toggle('active', t === 'file');
+  document.getElementById('uca-pane-pem').style.display  = t === 'pem'  ? '' : 'none';
+  document.getElementById('uca-pane-file').style.display = t === 'file' ? '' : 'none';
+}
+
+function openUploadCA() {
+  closeM('muca');
+  _ucaTab = 'pem';
+  const o = document.createElement('div'); o.className = 'mo'; o.id = 'muca';
+  _overlayClose(o, () => closeM('muca'));
+  o.innerHTML = `
+  <div class="mbox" style="width:580px;max-width:96vw">
+    <div class="mhd"><div class="mttl">Upload Trusted CA Certificate</div><button class="mclose" onclick="closeM('muca')">✕</button></div>
+    <div class="mbdy">
+      <div class="uc-tabs">
+        <button class="uc-tab active" id="uca-tab-pem"  onclick="_switchUcaTab('pem')">Paste PEM</button>
+        <button class="uc-tab"        id="uca-tab-file" onclick="_switchUcaTab('file')">Upload File</button>
+      </div>
+      <div id="uca-pane-pem">
+        <div class="fr">
+          <label class="fl">CA Certificate (PEM)</label>
+          <textarea id="uca-pem" rows="9" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+          <div class="fh" style="margin-top:6px">Paste a single CA certificate. Must be a CA (Basic Constraints CA:TRUE) and not expired.</div>
+        </div>
+      </div>
+      <div id="uca-pane-file" style="display:none">
+        <div class="fr">
+          <label class="fl">Certificate File</label>
+          <div class="fh" style="margin-bottom:6px">.cer, .crt, .pem, .der — DER or PEM encoded</div>
+          <input type="file" id="uca-f-cert" accept=".cer,.crt,.pem,.der"/>
+          <div id="uca-f-cert-name" class="uc-file-label"></div>
+        </div>
+      </div>
+      <div id="uca-err" style="display:none;margin-top:10px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--err)"></div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('muca')">Cancel</button>
+      <button class="btn-p" id="btn-uca-save" onclick="submitUploadCA()">Validate &amp; Add</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  // Mirror existing file-name display behaviour from openUploadCert
+  const fEl = document.getElementById('uca-f-cert');
+  if (fEl) fEl.addEventListener('change', () => {
+    const n = fEl.files?.[0]?.name || '';
+    document.getElementById('uca-f-cert-name').textContent = n ? `Selected: ${n}` : '';
+  });
+}
+
+async function submitUploadCA() {
+  const errEl = document.getElementById('uca-err');
+  const btn   = document.getElementById('btn-uca-save');
+  const showErr = msg => { errEl.textContent = msg; errEl.style.display = ''; };
+  btn.disabled = true; btn.textContent = 'Validating…';
+  errEl.style.display = 'none';
+  try {
+    let r;
+    if (_ucaTab === 'pem') {
+      const pem = (document.getElementById('uca-pem')?.value || '').trim();
+      if (!pem) { showErr('Paste a CA certificate in PEM format.'); btn.disabled = false; btn.textContent = 'Validate & Add'; return; }
+      r = await api('POST', '/api/tls/ca-certs', { pem });
+    } else {
+      const fEl = document.getElementById('uca-f-cert');
+      if (!fEl?.files?.length) { showErr('Select a certificate file.'); btn.disabled = false; btn.textContent = 'Validate & Add'; return; }
+      const cert_b64 = await _readFileAsB64(fEl);
+      r = await api('POST', '/api/tls/ca-certs', { cert_b64 });
+    }
+    if (r.error) { showErr(r.error); btn.disabled = false; btn.textContent = 'Validate & Add'; return; }
+    closeM('muca');
+    toast('CA certificate added', 'ok');
+    await _refreshTrustedCAsSection();
+  } catch (e) {
+    showErr('Request failed — check server connectivity.');
+    btn.disabled = false; btn.textContent = 'Validate & Add';
+  }
+}
+
+async function deleteTrustedCA(id) {
+  if (!confirm('Remove this trusted CA? Sensors that depend on it for SSL verification will start failing immediately.')) return;
+  try {
+    const r = await api('DELETE', `/api/tls/ca-certs/${encodeURIComponent(id)}`);
+    if (r.error) { toast(r.error, 'err'); return; }
+    toast('CA removed', 'ok');
+    await _refreshTrustedCAsSection();
+  } catch (e) {
+    toast('Failed to delete CA: ' + (e.message || e), 'err');
+  }
 }
 
 function _buildSettingsTab_backup(sr) {
@@ -1032,6 +1200,7 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">📄 Reports</button>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
+      <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">🔐 Certificates</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
     </nav>
@@ -1045,6 +1214,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_reports(sr)}
     ${_buildSettingsTab_sensors(sr)}
     ${_buildSettingsTab_networking(sr, tr)}
+    ${_buildSettingsTab_certificates(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
     ${_buildSettingsTab_alertRules()}
     <div class="mft" id="stab-footer-general">
@@ -1083,6 +1253,9 @@ async function openSettings(initialTab){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
     </div>
+    <div class="mft" id="stab-footer-certificates" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
     <div class="mft" id="stab-footer-backup" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
@@ -1103,7 +1276,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','logs','reports','sensors','networking','backup','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','logs','reports','sensors','networking','certificates','backup','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -1144,6 +1317,7 @@ function switchSettingsTab(tab){
             if (tab === 'alert-rules')  { _alertingLoadRules(); _alertingLoadMaint(); }
             if (tab === 'groups')       _groupsLoad();
             if (tab === 'integrations') _loadIntegrationsStatus();
+            if (tab === 'certificates') _loadTrustedCAs();
           }, 220);
         });
       });
@@ -1160,6 +1334,7 @@ function switchSettingsTab(tab){
     if (tab === 'maint')        _alertingLoadMaint();
     if (tab === 'groups')       _groupsLoad();
     if (tab === 'integrations') _loadIntegrationsStatus();
+    if (tab === 'certificates') _loadTrustedCAs();
   }
 }
 
