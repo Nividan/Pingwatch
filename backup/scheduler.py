@@ -64,7 +64,13 @@ def _load_last_ts(key: str):
 
 
 def _save_last_ts(key: str, dt: datetime.datetime) -> None:
-    """Persist a last-fired timestamp to settings (best-effort, non-blocking)."""
+    """Persist a last-fired timestamp to settings (best-effort, non-blocking).
+
+    Failures are logged at WARNING (not DEBUG) — a silent save miss here
+    means the next reboot replays the last scheduled slot, which is hard
+    to diagnose without the log line. The two callers tolerate failure,
+    so we don't re-raise.
+    """
     try:
         from core.settings import load as _sl
         from db import _db_enqueue, db_save_settings
@@ -72,7 +78,7 @@ def _save_last_ts(key: str, dt: datetime.datetime) -> None:
         _sl(data)
         _db_enqueue(lambda d=data: db_save_settings(d))
     except Exception as e:
-        log.debug(f"Backup scheduler: could not persist {key}: {e}")
+        log.warning(f"Backup scheduler: could not persist {key}: {e}")
 
 
 _stop = threading.Event()
@@ -125,8 +131,13 @@ def _scheduler_loop():
 
             # ── Fire device config backups ────────────────────────────────
             if enabled and _should_fire(last_fired, freq, time_str, days_str):
+                _first_save = (last_fired is None)
                 last_fired = datetime.datetime.now()
                 _save_last_ts('backup_sched_last_ts', last_fired)
+                if _first_save:
+                    log.info(f"Backup scheduler: first device-backup timestamp recorded "
+                             f"({last_fired.strftime(_LAST_TS_FMT)}) — "
+                             f"previous value was missing; restarts will now show this date")
 
                 devices = db_get_backup_list()
                 scheduled = [d for d in devices
@@ -157,8 +168,13 @@ def _scheduler_loop():
 
             # ── Fire database backup ──────────────────────────────────────
             if db_en and _should_fire(last_db_fired, db_freq, db_time, db_days):
+                _first_db_save = (last_db_fired is None)
                 last_db_fired = datetime.datetime.now()
                 _save_last_ts('db_backup_last_ts', last_db_fired)
+                if _first_db_save:
+                    log.info(f"Backup scheduler: first DB-backup timestamp recorded "
+                             f"({last_db_fired.strftime(_LAST_TS_FMT)}) — "
+                             f"previous value was missing; restarts will now show this date")
                 log.info("Backup scheduler: firing database backup")
                 from .db_backup import do_db_backup
                 threading.Thread(target=do_db_backup, daemon=True, name='sched-db-bk').start()
