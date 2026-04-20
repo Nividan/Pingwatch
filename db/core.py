@@ -586,6 +586,23 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Bulk-import external_id — links a device back to its source record in
+        # PRTG / Zabbix / SolarWinds / a native JSON file. Stable across host +
+        # name changes, so re-imports from the same source reconcile instead
+        # of duplicating. Format: "<source>:<native_id>" (e.g. "prtg:2001").
+        # NULL for manually-added and Discovery-added devices.
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN external_id TEXT DEFAULT NULL")
+            con.commit()
+        except Exception:
+            pass
+        # Partial unique index — NULL external_ids don't collide.
+        try:
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_external_id "
+                        "ON devices(external_id) WHERE external_id IS NOT NULL")
+            con.commit()
+        except Exception:
+            pass
         # backup_devices — replace per-device schedule with global-schedule flag
         try:
             con.execute("ALTER TABLE backup_devices ADD COLUMN in_schedule INTEGER DEFAULT 0")
