@@ -120,6 +120,12 @@ def _make_ssl_ctx(verify_ssl):
     if not verify_ssl:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+    else:
+        # Bare SSLContext doesn't auto-load defaults — populate system CAs first,
+        # then layer on any user-uploaded trusted CAs from /api/tls/ca-certs.
+        ctx.load_default_certs()
+        from core.ssl_trust import apply_trusted_cas
+        apply_trusted_cas(ctx)
     return ctx
 
 

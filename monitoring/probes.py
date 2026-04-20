@@ -80,6 +80,11 @@ def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode    = ssl.CERT_NONE
+        elif url.startswith("https://"):
+            from core.ssl_trust import apply_trusted_cas, get_trusted_ca_pem
+            if get_trusted_ca_pem():
+                ctx = ssl.create_default_context()
+                apply_trusted_cas(ctx)
         req = urllib.request.Request(url, headers={"User-Agent": "PingWatch/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             ms   = round((time.time() - t0) * 1000, 1)
@@ -392,6 +397,8 @@ def probe_tls(host, port=443, timeout=10):
             host = host[len(_pfx):].split("/")[0]
             break
     ctx = ssl.create_default_context()
+    from core.ssl_trust import apply_trusted_cas
+    apply_trusted_cas(ctx)
     t0 = time.time()
     conn = None
     try:
@@ -435,6 +442,11 @@ def probe_http_keyword(url, keyword, timeout=8, verify_ssl=True, case_sensitive=
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode    = ssl.CERT_NONE
+        elif url.startswith("https://"):
+            from core.ssl_trust import apply_trusted_cas, get_trusted_ca_pem
+            if get_trusted_ca_pem():
+                ctx = ssl.create_default_context()
+                apply_trusted_cas(ctx)
         req = urllib.request.Request(url, headers={"User-Agent": "PingWatch/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             ms   = round((time.time() - t0) * 1000, 1)
@@ -557,8 +569,14 @@ def probe_smtp(host, port=25, tls="none", user="", password="",
     # ── Levels 1-4: use smtplib — constructor does CONNECT + EHLO ───────
     srv = None
     try:
+        if tls in ("ssl", "starttls"):
+            _ssl_ctx = ssl.create_default_context()
+            from core.ssl_trust import apply_trusted_cas
+            apply_trusted_cas(_ssl_ctx)
+        else:
+            _ssl_ctx = None
         if tls == "ssl":
-            srv = smtplib.SMTP_SSL(host, int(port), timeout=timeout)
+            srv = smtplib.SMTP_SSL(host, int(port), timeout=timeout, context=_ssl_ctx)
         else:
             srv = smtplib.SMTP(host, int(port), timeout=timeout)
 
@@ -570,7 +588,7 @@ def probe_smtp(host, port=25, tls="none", user="", password="",
         # Level 2: starttls (only when tls=starttls — ssl already encrypted)
         if tls == "starttls":
             try:
-                srv.starttls()
+                srv.starttls(context=_ssl_ctx)
                 srv.ehlo()
             except smtplib.SMTPException as e:
                 return {"ok": False, "ms": None,
