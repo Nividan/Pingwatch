@@ -79,7 +79,7 @@ class _SensorScheduler:
             self._wake.clear()
 
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
-from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp
+from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp, probe_radius
 from .settings import get as _cfg
 from .logger import log_sensors
 
@@ -128,7 +128,9 @@ class Sensor:
                  ssh_auth_type="password", ssh_test_level="banner",
                  sftp_user="", sftp_password="", sftp_private_key="",
                  sftp_auth_type="password", sftp_test_level="open",
-                 sftp_remote_path="", sftp_expected_sha256=""):
+                 sftp_remote_path="", sftp_expected_sha256="",
+                 radius_secret="", radius_test_level="reachable",
+                 radius_username="", radius_password="", radius_nas_id=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -191,6 +193,12 @@ class Sensor:
         self.sftp_test_level      = sftp_test_level or "open"
         self.sftp_remote_path     = sftp_remote_path or ""     # dir (list) or file (stat/checksum)
         self.sftp_expected_sha256 = sftp_expected_sha256 or "" # hex; checksum level only
+        # RADIUS fields — shared secret + optional user creds, both Fernet-encrypted
+        self.radius_secret      = radius_secret or ""      # Fernet ciphertext (shared secret)
+        self.radius_test_level  = radius_test_level or "reachable"  # reachable | auth
+        self.radius_username    = radius_username or ""
+        self.radius_password    = radius_password or ""    # Fernet ciphertext (user password, auth level)
+        self.radius_nas_id      = radius_nas_id or ""      # NAS-Identifier attribute; defaults to "pingwatch" at probe time
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -309,6 +317,15 @@ class Sensor:
                               self.sftp_remote_path,
                               self.sftp_expected_sha256,
                               self.timeout)
+        if self.stype == "radius":
+            from db.backups import decrypt_pw
+            return probe_radius(self.host, self.port or 1812,
+                                decrypt_pw(self.radius_secret),
+                                self.radius_test_level,
+                                self.radius_username,
+                                decrypt_pw(self.radius_password),
+                                self.radius_nas_id or "pingwatch",
+                                self.timeout)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -366,6 +383,11 @@ class Sensor:
             "sftp_expected_sha256":  self.sftp_expected_sha256,
             "has_sftp_password":     bool(self.sftp_password),
             "has_sftp_private_key":  bool(self.sftp_private_key),
+            "radius_test_level":     self.radius_test_level,
+            "radius_username":       self.radius_username,
+            "radius_nas_id":         self.radius_nas_id,
+            "has_radius_secret":     bool(self.radius_secret),
+            "has_radius_password":   bool(self.radius_password),
             "threshold_state":       self._threshold_state,
             "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
             "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
@@ -555,7 +577,9 @@ class MonitorState:
                    ssh_auth_type="password", ssh_test_level="banner",
                    sftp_user="", sftp_password="", sftp_private_key="",
                    sftp_auth_type="password", sftp_test_level="open",
-                   sftp_remote_path="", sftp_expected_sha256=""):
+                   sftp_remote_path="", sftp_expected_sha256="",
+                   radius_secret="", radius_test_level="reachable",
+                   radius_username="", radius_password="", radius_nas_id=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -584,7 +608,12 @@ class MonitorState:
                        sftp_auth_type=sftp_auth_type,
                        sftp_test_level=sftp_test_level,
                        sftp_remote_path=sftp_remote_path,
-                       sftp_expected_sha256=sftp_expected_sha256)
+                       sftp_expected_sha256=sftp_expected_sha256,
+                       radius_secret=radius_secret,
+                       radius_test_level=radius_test_level,
+                       radius_username=radius_username,
+                       radius_password=radius_password,
+                       radius_nas_id=radius_nas_id)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -625,6 +654,8 @@ class MonitorState:
                         "sftp_user", "sftp_password", "sftp_private_key",
                         "sftp_auth_type", "sftp_test_level",
                         "sftp_remote_path", "sftp_expected_sha256",
+                        "radius_secret", "radius_test_level",
+                        "radius_username", "radius_password", "radius_nas_id",
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)

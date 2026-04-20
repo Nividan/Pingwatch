@@ -3,6 +3,7 @@ probes.py — Sensor probe implementations: ping, tcp, http, snmp.
 """
 
 import re
+import secrets
 import ssl
 import socket
 import subprocess
@@ -973,3 +974,100 @@ def probe_ssh(host, port=22, user="", password="", private_key="",
         if client:
             try: client.close()
             except Exception: pass
+
+
+_RADIUS_LEVELS = ("reachable", "auth")
+
+
+def probe_radius(host, port=1812, secret="", test_level="reachable",
+                 user="", password="", nas_id="pingwatch", timeout=5):
+    """Probe a RADIUS auth server — layered depth: reachable → auth.
+
+    reachable: send Access-Request with a random probe user; any RADIUS
+               reply (Accept / Reject / Challenge) proves the server is up
+               and the shared secret is correct.
+    auth:      send a real user + password, require Access-Accept.
+               Access-Reject / Access-Challenge are failures with clear detail.
+
+    Dispatches via core.radius_auth.radius_probe_once(), reusing the same
+    pyrad plumbing that powers PingWatch's own RADIUS user-login backend.
+    """
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _RADIUS_LEVELS:
+        test_level = "reachable"
+    if not secret:
+        return {"ok": False, "ms": None, "detail": "shared secret required"}
+
+    try:
+        import pyrad  # noqa: F401
+    except ImportError:
+        return {"ok": False, "ms": None,
+                "detail": "pyrad not installed — run setup wizard"}
+
+    from core.radius_auth import radius_probe_once
+
+    # Build probe credentials
+    if test_level == "auth":
+        if not user:
+            return {"ok": False, "ms": None,
+                    "detail": "auth level requires a username"}
+        if not password:
+            return {"ok": False, "ms": None,
+                    "detail": "auth level requires a password"}
+        send_user = user
+        send_pw   = password
+    else:  # reachable
+        send_user = f"__pingwatch_probe_{secrets.token_hex(4)}"
+        send_pw   = "probe-" + secrets.token_hex(8)
+
+    t0 = time.time()
+    try:
+        outcome, payload = radius_probe_once(
+            host, int(port or 1812), secret,
+            send_user, send_pw,
+            nas_id=(nas_id or "pingwatch"),
+            timeout=timeout, retries=1,
+        )
+    except Exception as e:
+        log_sensors.warning("probe_radius %s:%s: unexpected error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": f"probe error: {str(e)[:100]}"}
+
+    ms = round((time.time() - t0) * 1000, 1)
+
+    if test_level == "reachable":
+        if outcome in ("accept", "reject", "challenge"):
+            pretty = {"accept": "Access-Accept",
+                      "reject": "Access-Reject",
+                      "challenge": "Access-Challenge"}[outcome]
+            return {"ok": True, "ms": ms,
+                    "detail": f"reachable: server responded ({pretty}) in {ms}ms",
+                    "value": outcome}
+        # error
+        msg = str(payload) if payload else "no response"
+        return {"ok": False, "ms": None, "detail": f"reachable: {msg[:120]}"}
+
+    # auth level
+    if outcome == "accept":
+        # Count reply attributes for a richer detail
+        attr_count = 0
+        try:
+            from core.radius_auth import _decode_attrs
+            attr_count = len(_decode_attrs(payload))
+        except Exception:
+            pass
+        attr_suffix = f" ({attr_count} attrs)" if attr_count else ""
+        return {"ok": True, "ms": ms,
+                "detail": f"auth: Access-Accept{attr_suffix} in {ms}ms",
+                "value": "accept"}
+    if outcome == "reject":
+        return {"ok": False, "ms": ms,
+                "detail": "auth: Access-Reject (wrong credentials or account disabled)",
+                "value": "reject"}
+    if outcome == "challenge":
+        return {"ok": False, "ms": ms,
+                "detail": "auth: Access-Challenge received (2FA required, not supported for probes)",
+                "value": "challenge"}
+    # error
+    msg = str(payload) if payload else "no response"
+    return {"ok": False, "ms": None, "detail": f"auth: {msg[:120]}"}
