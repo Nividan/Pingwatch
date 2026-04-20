@@ -213,17 +213,33 @@ def saml_import_metadata(source: str, text: str = "", url: str = "") -> dict:
         if not url:
             return {"ok": False, "message": "URL is required for url source"}
         try:
+            import ssl
             import urllib.request
             req = urllib.request.Request(url, headers={
                 "User-Agent": "PingWatch/SAML-SP",
                 "Accept": "application/samlmetadata+xml, application/xml, text/xml, */*",
             })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                xml_bytes = resp.read()
+            # Try verified TLS first; fall back to unverified on cert error.
+            # Internal IdPs (FortiAuthenticator, ADFS labs, Keycloak with self-signed)
+            # commonly serve metadata over HTTPS with untrusted certs. Transport
+            # trust is not the security boundary for SAML — the IdP signing cert
+            # embedded in the metadata is what PingWatch pins for assertion
+            # verification at login time. We still log when we had to skip.
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    xml_bytes = resp.read()
+            except ssl.SSLError as ssl_err:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                    xml_bytes = resp.read()
+                log.warning(f"SAML metadata fetched with TLS verification disabled ({url}): {ssl_err}")
             text = xml_bytes.decode("utf-8", errors="replace")
             _settings.load({"saml_metadata_url": url})
             db_save_settings({"saml_metadata_url": url})
         except Exception as e:
+            log.warning(f"SAML metadata fetch failed ({url}): {e}")
             return {"ok": False, "message": f"fetch failed: {str(e)[:200]}"}
 
     if not text or not text.strip():

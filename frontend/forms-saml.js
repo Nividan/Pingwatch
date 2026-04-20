@@ -4,10 +4,28 @@
 
 function _samlMetaSrcToggle() {
   const src = document.querySelector('input[name="saml-meta-src"]:checked')?.value || 'url';
-  const urlEl = document.getElementById('saml-meta-url');
-  const xmlEl = document.getElementById('saml-meta-xml');
-  if (urlEl) urlEl.style.display = (src === 'url') ? '' : 'none';
-  if (xmlEl) xmlEl.style.display = (src === 'xml') ? '' : 'none';
+  const urlEl  = document.getElementById('saml-meta-url');
+  const xmlEl  = document.getElementById('saml-meta-xml');
+  const fileEl = document.getElementById('saml-meta-file-wrap');
+  if (urlEl)  urlEl.style.display  = (src === 'url')  ? '' : 'none';
+  if (xmlEl)  xmlEl.style.display  = (src === 'xml')  ? '' : 'none';
+  if (fileEl) fileEl.style.display = (src === 'file') ? '' : 'none';
+}
+
+async function _samlLoadFileToTextarea(fileInput) {
+  const f = fileInput?.files?.[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    const ta = document.getElementById('saml-meta-xml');
+    if (ta) ta.value = text;
+    // Auto-flip to Paste XML so the user can review before import
+    const pasteRadio = document.querySelector('input[name="saml-meta-src"][value="xml"]');
+    if (pasteRadio) { pasteRadio.checked = true; _samlMetaSrcToggle(); }
+    _samlShowResult('saml-meta-result', null, `Loaded ${f.name} (${f.size} bytes) — review and click Import`);
+  } catch(e) {
+    _samlShowResult('saml-meta-result', false, 'Could not read file: ' + (e.message || e));
+  }
 }
 
 function _samlCollectForm() {
@@ -147,7 +165,7 @@ async function importSamlMetadata() {
   try {
     r = await api('POST', '/api/saml/metadata/import', body);
   } catch(e) {
-    _samlShowResult('saml-meta-result', false, 'Request failed');
+    _samlShowResult('saml-meta-result', false, e.message || 'Request failed');
     return;
   }
   if (r.error) { _samlShowResult('saml-meta-result', false, r.error); return; }
