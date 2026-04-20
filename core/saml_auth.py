@@ -704,52 +704,48 @@ def saml_parse_response(saml_response_b64: str, relay_state: str) -> dict:
 def _verify_response_signature(xml_bytes: bytes, idp_cert_pem: str) -> tuple[bool, str]:
     """Verify the XML signature on a SAMLResponse. Returns (ok, message).
 
-    Strategy:
-      1. Prefer pysaml2's signxml-based verifier if available.
-      2. Fall back to signxml directly.
-      3. If neither importable, fall back to a best-effort check (cert presence only) and warn.
+    Tries multiple signxml call patterns because IdPs differ:
+      - Okta / Entra: sign the Assertion only (1 reference).
+      - FortiAuthenticator / ADFS: often sign Response + Assertion (2 references).
+      - Some sign only the Response envelope.
+    First pass asks for 1 reference; fallbacks relax the constraint. Full
+    signxml exception is logged server-side so admins can see the real cause
+    (cert mismatch vs digest vs canonicalization).
     """
     if not idp_cert_pem or not idp_cert_pem.strip():
         return False, "no IdP cert configured"
 
-    # Try signxml first — most direct path
     try:
         from signxml import XMLVerifier
-        from defusedxml import ElementTree as DET
-        # XMLVerifier needs the full document
-        root = DET.fromstring(xml_bytes)
-        XMLVerifier().verify(
-            root,
-            x509_cert=idp_cert_pem,
-            expect_references=1,  # Accept either Response or Assertion signature
-        )
-        return True, "signxml verified"
-    except ImportError:
-        pass
-    except Exception as e:
-        msg = str(e).lower()
-        # Some IdPs sign only the Assertion (not Response) — try again permissively
-        if "reference" in msg or "multiple" in msg:
-            try:
-                from signxml import XMLVerifier
-                from defusedxml import ElementTree as DET
-                root = DET.fromstring(xml_bytes)
-                XMLVerifier().verify(root, x509_cert=idp_cert_pem)
-                return True, "signxml verified (multi-ref)"
-            except Exception as e2:
-                return False, f"signxml: {str(e2)[:200]}"
-        return False, f"signxml: {str(e)[:200]}"
+        from lxml import etree
+    except ImportError as e:
+        return False, f"signxml/lxml not installed: {e}"
 
-    # pysaml2 fallback
+    # signxml wants a parsed lxml tree or raw bytes. Bytes path keeps the
+    # canonicalization exact — stdlib ElementTree round-trips whitespace
+    # differently and has caused sporadic verification failures with FAC.
     try:
-        from saml2.sigver import SecurityContext, CertHandler  # noqa: F401
-        # Full pysaml2 verification requires a Saml2Config + SecurityContext. This
-        # is heavyweight and involves temp files. For v1, if signxml is missing,
-        # we return a clear error so admins install signxml (which pysaml2 needs
-        # anyway for most signing operations).
-        return False, "signxml required — pip install signxml"
-    except ImportError:
-        return False, "signature verification library missing — pip install signxml"
+        tree = etree.fromstring(xml_bytes)
+    except Exception as e:
+        return False, f"XML parse failed: {str(e)[:200]}"
+
+    attempts = [
+        {"expect_references": 1},      # assertion-only or response-only
+        {"expect_references": 2},      # response + assertion (FAC, ADFS)
+        {},                            # no constraint
+    ]
+    last_err = ""
+    for kwargs in attempts:
+        try:
+            XMLVerifier().verify(tree, x509_cert=idp_cert_pem, **kwargs)
+            return True, f"signxml verified ({kwargs or 'no-ref-constraint'})"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            # Log the full error server-side for diagnosis — the HTTP response
+            # stays generic so we don't leak cert details to the browser.
+            log.warning(f"SAML sig verify attempt {kwargs} failed: {last_err}")
+
+    return False, f"signxml: {last_err[:240]}"
 
 
 # ── Test endpoint helper ───────────────────────────────────────────
