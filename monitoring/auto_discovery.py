@@ -276,7 +276,8 @@ def _tick() -> None:
             return
         if _inside_maintenance_window() and \
            (_settings.get("auto_discover_during_maint", "skip") or "skip") == "skip":
-            log.debug("Auto-Discovery: tick skipped (maintenance window active)")
+            log.info("Auto-Discovery: tick skipped — maintenance window active "
+                     "(auto_discover_during_maint=skip)")
             return
 
         subnets = [s for s in db_list_subnets()
@@ -347,12 +348,49 @@ def _tick() -> None:
 
 
 def _inside_maintenance_window() -> bool:
+    """Return True if *right now* falls inside an active maintenance window.
+
+    `db_active_windows()` only filters by the overall start_ts/end_ts range;
+    for recurring windows, that range is typically years long. We re-apply
+    the recur_days + recur_start/recur_end rules here, mirroring what
+    monitoring.alert_dispatchers.in_maintenance_window() does.
+    """
+    import datetime as _dt
     try:
         from db.maintenance_windows import db_active_windows
-        return bool(db_active_windows())
+        windows = db_active_windows()
     except Exception as e:
         log.warning(f"Auto-Discovery: maintenance-window check failed: {e}")
         return False
+    if not windows:
+        return False
+
+    now_dt  = _dt.datetime.now()
+    now_day = now_dt.isoweekday()   # 1=Mon..7=Sun
+    now_t   = now_dt.time()
+
+    for w in windows:
+        if not w.get("recurring"):
+            return True    # non-recurring + in-range ⇒ active
+        days = [d.strip() for d in str(w.get("recur_days", "")).split(",") if d.strip()]
+        if days and str(now_day) not in days:
+            continue
+        rs = w.get("recur_start", "")
+        re_ = w.get("recur_end", "")
+        if not rs or not re_:
+            return True    # recurring but no time bounds ⇒ all-day on matching weekday
+        try:
+            rs_t = _dt.datetime.strptime(rs, "%H:%M").time()
+            re_t = _dt.datetime.strptime(re_, "%H:%M").time()
+        except ValueError:
+            continue
+        if rs_t <= re_t:
+            if rs_t <= now_t <= re_t:
+                return True
+        else:   # crosses midnight
+            if now_t >= rs_t or now_t <= re_t:
+                return True
+    return False
 
 
 # ── One subnet scan ────────────────────────────────────────────────
