@@ -23,7 +23,8 @@ from db.core     import _db_enqueue
 _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "COALESCE(auto_discover,0)       AS auto_discover, "
                 "COALESCE(first_scan_approved,0) AS first_scan_approved, "
-                "last_auto_scan_ts")
+                "last_auto_scan_ts, "
+                "COALESCE(dns_server,'')         AS dns_server")
 
 
 def _row_to_subnet_pg(r) -> dict:
@@ -31,7 +32,8 @@ def _row_to_subnet_pg(r) -> dict:
             "created_by": r["created_by"], "created_at": r["created_at"],
             "auto_discover":       int(r.get("auto_discover") or 0),
             "first_scan_approved": int(r.get("first_scan_approved") or 0),
-            "last_auto_scan_ts":   r.get("last_auto_scan_ts")}
+            "last_auto_scan_ts":   r.get("last_auto_scan_ts"),
+            "dns_server":          (r.get("dns_server") or "")}
 
 
 def _row_to_subnet_sqlite(r) -> dict:
@@ -39,7 +41,8 @@ def _row_to_subnet_sqlite(r) -> dict:
             "created_by": r[3], "created_at": r[4],
             "auto_discover":       int(r[5] or 0),
             "first_scan_approved": int(r[6] or 0),
-            "last_auto_scan_ts":   r[7]}
+            "last_auto_scan_ts":   r[7],
+            "dns_server":          (r[8] or "") if len(r) > 8 else ""}
 
 
 def db_list_subnets() -> list:
@@ -101,6 +104,75 @@ def db_get_subnet(subnet_id: int) -> dict | None:
     except Exception as e:
         log.error(f"IPAM get subnet error (id={subnet_id}): {e}")
         return None
+    finally:
+        con.close()
+
+
+# ── Generic multi-field update (used by PATCH /api/ipam/subnets/<id>) ──
+
+# Keep this whitelist tight — the PATCH route passes user input straight in.
+_SUBNET_UPDATABLE_FIELDS = {
+    "name":                ("TEXT",    80),
+    "auto_discover":       ("INT",     None),
+    "first_scan_approved": ("INT",     None),
+    "dns_server":          ("TEXT",    255),
+}
+
+
+def db_update_subnet(subnet_id: int, fields: dict) -> bool:
+    """Update an arbitrary subset of subnet fields in one statement.
+
+    Unknown keys are silently dropped (defense in depth). Returns True on
+    success — caller validates field values before calling.
+    """
+    clean: dict = {}
+    for k, v in (fields or {}).items():
+        spec = _SUBNET_UPDATABLE_FIELDS.get(k)
+        if not spec:
+            continue
+        kind, maxlen = spec
+        if kind == "INT":
+            try:
+                clean[k] = 1 if int(v) else 0
+            except (TypeError, ValueError):
+                continue
+        else:
+            s = "" if v is None else str(v).strip()
+            if maxlen:
+                s = s[:maxlen]
+            clean[k] = s
+    if not clean:
+        return True   # no-op — nothing to update
+
+    set_cols = list(clean.keys())
+    values   = [clean[k] for k in set_cols]
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        placeholders = ", ".join(f"{c}=%s" for c in set_cols)
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    f"UPDATE ipam_subnets SET {placeholders} WHERE id=%s",
+                    (*values, subnet_id)
+                )
+            return True
+        except Exception as e:
+            log.error(f"IPAM update_subnet error (id={subnet_id}): {e}")
+            return False
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        placeholders = ", ".join(f"{c}=?" for c in set_cols)
+        con.execute(
+            f"UPDATE ipam_subnets SET {placeholders} WHERE id=?",
+            (*values, subnet_id)
+        )
+        con.commit()
+        return True
+    except Exception as e:
+        log.error(f"IPAM update_subnet error (id={subnet_id}): {e}")
+        return False
     finally:
         con.close()
 

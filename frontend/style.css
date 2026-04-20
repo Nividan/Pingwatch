@@ -2942,12 +2942,13 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .imp-help-body code{background:var(--bg2);padding:1px 5px;border-radius:2px;font-size:11px;
   font-family:ui-monospace,Consolas,monospace;color:var(--text);}
 
-/* IPAM per-subnet Auto-Discover toggle */
-.ipam-ad-toggle{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
-  background:var(--bg3);border:1px solid var(--border);border-radius:4px;
-  font-size:12px;color:var(--text2);cursor:pointer;user-select:none;}
-.ipam-ad-toggle:hover{background:var(--bg4);color:var(--text);}
-.ipam-ad-toggle input{margin:0;cursor:pointer;}
+/* IPAM Edit Subnet modal — section grouping */
+.ipam-edit-sec{border:1px solid var(--border);border-radius:4px;padding:10px 14px;
+  background:var(--bg3);}
+.ipam-edit-hd{font-size:12px;font-weight:600;color:var(--text);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:8px;}
+.ipam-edit-meta{margin-top:8px;padding:6px 10px;background:var(--bg2);border-radius:3px;
+  font-size:12px;color:var(--text3);}
 
 /* Auto-Discovery settings tab (.ad-* mirrors .ah-* Auth Health pattern) */
 .ad-strip{background:var(--bg3);border:1px solid var(--border);border-radius:4px;

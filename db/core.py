@@ -566,11 +566,12 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
-        # Migration: Auto-Discovery columns on ipam_subnets (v0.9.3+)
+        # Migration: Auto-Discovery + per-subnet DNS columns on ipam_subnets (v0.9.3+)
         for _ad_col in [
             "ALTER TABLE ipam_subnets ADD COLUMN auto_discover       INTEGER DEFAULT 0",
             "ALTER TABLE ipam_subnets ADD COLUMN first_scan_approved INTEGER DEFAULT 0",
             "ALTER TABLE ipam_subnets ADD COLUMN last_auto_scan_ts   TEXT    DEFAULT NULL",
+            "ALTER TABLE ipam_subnets ADD COLUMN dns_server          TEXT    DEFAULT ''",
         ]:
             try:
                 con.execute(_ad_col)

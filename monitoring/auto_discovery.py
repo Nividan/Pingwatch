@@ -252,7 +252,7 @@ def _get_interval_min() -> int:
         v = int(_settings.get("auto_discover_interval_min", 60) or 60)
     except (TypeError, ValueError):
         v = 60
-    allowed = (0, 15, 30, 60, 240, 720, 1440)
+    allowed = (0, 15, 30, 60, 240, 720, 1440, 4320, 10080)
     return v if v in allowed else 60
 
 
@@ -449,6 +449,20 @@ def _scan_subnet(subnet: dict) -> dict:
     # Build device specs.
     use_ptr = bool(int(_settings.get("auto_discover_use_ptr", 1) or 1))
     group   = _group_name_for_cidr(cidr)
+
+    # Per-subnet DNS override — when set, re-resolve each host's PTR record
+    # against the specified DNS server instead of relying on the system
+    # resolver's answer (which `_enrich_host` already cached in `hostname`).
+    dns_override = (subnet.get("dns_server") or "").strip() if use_ptr else ""
+    if dns_override:
+        for r in allowed_results:
+            ip = (r.get("ip") or "").strip()
+            if not ip:
+                continue
+            alt = _resolve_ptr(ip, dns_override)
+            if alt:
+                r["hostname"] = alt   # mutates the scan result in place
+
     device_specs = _build_device_specs(allowed_results, group, use_ptr)
     if not device_specs:
         _commit_last_scan_ts(sid)
@@ -523,6 +537,36 @@ def _build_device_specs(results: list, group: str, use_ptr: bool) -> list:
             "sensors":     sensors,
         })
     return specs
+
+
+def _resolve_ptr(ip: str, dns_server: str, timeout: float = 2.5) -> str:
+    """Reverse-DNS lookup for `ip` against a specific DNS server.
+
+    Returns the resolved hostname (without trailing dot) or '' on any
+    failure. IPv4 only in v1 — IPv6 reverse zones live under .ip6.arpa
+    and aren't worth the extra path length until we see a need.
+    """
+    ip = (ip or "").strip()
+    if not ip or "." not in ip:
+        return ""
+    try:
+        octets = ip.split(".")
+        if len(octets) != 4:
+            return ""
+        arpa = ".".join(reversed(octets)) + ".in-addr.arpa"
+    except Exception:
+        return ""
+    try:
+        from monitoring.probes import probe_dns
+        r = probe_dns(host="", query=arpa, record_type="PTR",
+                      dns_server=dns_server, timeout=timeout)
+    except Exception as e:
+        log.debug(f"Auto-Discovery: PTR via {dns_server} for {ip} failed: {e}")
+        return ""
+    if not r or not r.get("ok"):
+        return ""
+    val = (r.get("value") or "").strip().rstrip(".")
+    return val
 
 
 def _group_name_for_cidr(cidr: str) -> str:

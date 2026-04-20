@@ -362,8 +362,8 @@ def handle(h, method, path, body):
                 _ai = int(body["auto_discover_interval_min"])
             except (ValueError, TypeError):
                 h._json(400, {"error": "auto_discover_interval_min must be an integer"}); return True
-            if _ai not in (0, 15, 30, 60, 240, 720, 1440):
-                h._json(400, {"error": "auto_discover_interval_min must be one of 0, 15, 30, 60, 240, 720, 1440"}); return True
+            if _ai not in (0, 15, 30, 60, 240, 720, 1440, 4320, 10080):
+                h._json(400, {"error": "auto_discover_interval_min must be one of 0, 15, 30, 60, 240, 720, 1440, 4320, 10080"}); return True
             _settings.load({"auto_discover_interval_min": _ai})
             _db_enqueue(lambda _v=_ai: db_save_settings({"auto_discover_interval_min": _v}))
         if "auto_discover_first_scan_cap" in body:

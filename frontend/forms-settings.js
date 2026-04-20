@@ -1363,12 +1363,14 @@ function _buildSettingsTab_autoDiscovery(sr) {
       <div class="ad-strip-row">
         <label>Interval
           <select id="ad-interval">
-            <option value="15"   ${intv===15?'selected':''}>15 min</option>
-            <option value="30"   ${intv===30?'selected':''}>30 min</option>
-            <option value="60"   ${intv===60?'selected':''}>1 hour</option>
-            <option value="240"  ${intv===240?'selected':''}>4 hours</option>
-            <option value="720"  ${intv===720?'selected':''}>12 hours</option>
-            <option value="1440" ${intv===1440?'selected':''}>24 hours</option>
+            <option value="15"    ${intv===15?'selected':''}>15 min</option>
+            <option value="30"    ${intv===30?'selected':''}>30 min</option>
+            <option value="60"    ${intv===60?'selected':''}>1 hour</option>
+            <option value="240"   ${intv===240?'selected':''}>4 hours</option>
+            <option value="720"   ${intv===720?'selected':''}>12 hours</option>
+            <option value="1440"  ${intv===1440?'selected':''}>24 hours</option>
+            <option value="4320"  ${intv===4320?'selected':''}>3 days</option>
+            <option value="10080" ${intv===10080?'selected':''}>7 days</option>
           </select>
         </label>
         <label>First-scan cap

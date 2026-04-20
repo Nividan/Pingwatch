@@ -38,13 +38,8 @@ function _ipamRenderShell() {
         <option value="">— Select a subnet —</option>
       </select>
       <button class="btn-sm btn-accent rbac-op" onclick="_ipamOpenAddSubnet()">＋ Add Subnet</button>
-      <button class="btn-sm rbac-op" id="ipam-ren-btn" onclick="_ipamOpenRename()" disabled>✎ Rename</button>
+      <button class="btn-sm rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">⚙ Edit</button>
       <button class="btn-sm rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled style="color:var(--down)">✕ Remove</button>
-      <label class="ipam-ad-toggle rbac-op" id="ipam-ad-wrap" style="display:none"
-             title="Periodically scan this subnet and auto-add new hosts as devices">
-        <input type="checkbox" id="ipam-ad-cb" onchange="_ipamToggleAutoDiscover(this.checked)"/>
-        <span>🔍 Auto-Discover</span>
-      </label>
       <button class="btn-sm rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">Refresh DNS</button>
       <div style="width:1px;height:18px;background:var(--border);margin:0 4px"></div>
       <input class="ipam-search" id="ipam-search" type="search" placeholder="🔍  Search IP, name or DNS…"
@@ -57,41 +52,6 @@ function _ipamRenderShell() {
       </div>
     </div>`;
   applyRbac();
-}
-
-// ── Auto-Discovery per-subnet toggle ──────────────────────────────────────
-function _ipamRefreshAutoDiscoverToggle(subnet) {
-  const wrap = document.getElementById('ipam-ad-wrap');
-  const cb   = document.getElementById('ipam-ad-cb');
-  if (!wrap || !cb) return;
-  wrap.style.display = '';
-  cb.checked = !!(subnet && (subnet.auto_discover | 0));
-}
-
-async function _ipamToggleAutoDiscover(enabled) {
-  if (!_ipamSelectedId) return;
-  const cb = document.getElementById('ipam-ad-cb');
-  try {
-    const r = await fetch(
-      `/api/ipam/subnet/${_ipamSelectedId}/auto-discover`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !!enabled }) }
-    );
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      toast(d.error || 'Toggle failed', 'err');
-      if (cb) cb.checked = !enabled;   // revert UI
-      return;
-    }
-    toast(enabled ? 'Auto-Discovery enabled on this subnet'
-                  : 'Auto-Discovery disabled on this subnet', 'ok');
-    // Refresh the cached subnet object so the flag sticks on re-select.
-    const cur = _ipamSubnets.find(s => s.id === _ipamSelectedId);
-    if (cur) cur.auto_discover = enabled ? 1 : 0;
-  } catch (e) {
-    toast('Network error', 'err');
-    if (cb) cb.checked = !enabled;
-  }
 }
 
 // ── License status cache ───────────────────────────────────────────────────
@@ -173,9 +133,7 @@ async function _ipamOnSubnetChange(idVal) {
   if (!id) {
     _ipamSelectedId = null;
     document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
-    document.getElementById('ipam-ren-btn')?.setAttribute('disabled', '');
-    const adWrap = document.getElementById('ipam-ad-wrap');
-    if (adWrap) adWrap.style.display = 'none';
+    document.getElementById('ipam-edit-btn')?.setAttribute('disabled', '');
     _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
     return;
   }
@@ -183,7 +141,7 @@ async function _ipamOnSubnetChange(idVal) {
   _ipamSortCol = 'status_ip'; _ipamSortDir = 1;
   _ipamFilterStatus = ''; _ipamFilterLic = '';
   document.getElementById('ipam-rm-btn')?.removeAttribute('disabled');
-  document.getElementById('ipam-ren-btn')?.removeAttribute('disabled');
+  document.getElementById('ipam-edit-btn')?.removeAttribute('disabled');
   // Keep select in sync
   const sel = document.getElementById('ipam-sel');
   if (sel) sel.value = id;
@@ -197,9 +155,6 @@ async function _ipamOnSubnetChange(idVal) {
   // Show Refresh DNS button for operators when a subnet is selected
   const dnsBtn = document.getElementById('ipam-dns-btn');
   if (dnsBtn) dnsBtn.style.display = '';
-
-  // Reflect the subnet's auto-discover flag in the header toggle
-  _ipamRefreshAutoDiscoverToggle(subnet);
 
   // Generate all usable IPs from CIDR, merge with allocations
   const ips = _ipamExpandCidr(subnet.cidr);
@@ -657,61 +612,140 @@ async function _ipamSaveSubnet() {
 }
 
 // ── Rename subnet ──────────────────────────────────────────────────────────
-function _ipamOpenRename() {
+// ── Edit Subnet — unified modal for all per-subnet config ───────────────
+function _ipamOpenEdit() {
   if (!_ipamSelectedId) return;
   const sub = _ipamSubnets.find(s => s.id === _ipamSelectedId);
   if (!sub) return;
-  closeM('ipam-ren-modal');
+  closeM('ipam-edit-modal');
+
+  const adChecked    = !!(sub.auto_discover | 0);
+  const firstPending = !!(sub.auto_discover | 0) && !(sub.first_scan_approved | 0) && !sub.last_auto_scan_ts;
+  const lastScanStr  = sub.last_auto_scan_ts || '—';
+
   const o = document.createElement('div');
-  o.className = 'mo'; o.id = 'ipam-ren-modal';
-  _overlayClose(o, () => closeM('ipam-ren-modal'));
+  o.className = 'mo'; o.id = 'ipam-edit-modal';
+  _overlayClose(o, () => closeM('ipam-edit-modal'));
   o.innerHTML = `
-    <div class="mbox" style="width:min(95vw,380px)">
+    <div class="mbox" style="width:min(95vw,520px)">
       <div class="mhd">
-        <div class="mttl">✎ Rename Subnet</div>
-        <button class="mclose" onclick="closeM('ipam-ren-modal')">✕</button>
+        <div class="mttl">⚙ Edit Subnet</div>
+        <button class="mclose" onclick="closeM('ipam-edit-modal')">✕</button>
       </div>
-      <div class="mbdy" style="gap:12px">
-        <div class="fr">
-          <label class="fl">CIDR</label>
-          <input type="text" value="${esc(sub.cidr)}" disabled style="font-family:'Courier New',monospace;opacity:.6"/>
+      <div class="mbdy" style="gap:14px">
+
+        <div class="ipam-edit-sec">
+          <div class="ipam-edit-hd">General</div>
+          <div class="fr">
+            <label class="fl">CIDR</label>
+            <input type="text" value="${esc(sub.cidr)}" disabled
+                   style="font-family:ui-monospace,Consolas,monospace;opacity:.6"/>
+          </div>
+          <div class="fr">
+            <label class="fl">Label</label>
+            <input type="text" id="ipam-edit-name" value="${esc(sub.name||'')}"
+                   placeholder="e.g. Office LAN" autocomplete="off" maxlength="80"/>
+          </div>
         </div>
-        <div class="fr">
-          <label class="fl">Label</label>
-          <input type="text" id="ipam-ren-name" value="${esc(sub.name||'')}" placeholder="e.g. Office LAN" autocomplete="off"/>
+
+        <div class="ipam-edit-sec">
+          <div class="ipam-edit-hd">Auto-Discovery</div>
+          <label class="cb-row" style="padding:4px 0">
+            <input type="checkbox" id="ipam-edit-ad" ${adChecked?'checked':''}/>
+            <span>Auto-discover new hosts in this subnet</span>
+          </label>
+          <div class="fh" style="margin-bottom:6px">
+            Periodically scan this subnet. New hosts become devices with a ping sensor
+            plus any services the Port Scanner detects. Global cadence + safety rails
+            live in Settings → 📡 Auto-Discovery.
+          </div>
+          <div class="fr">
+            <label class="fl">DNS server <span class="fh" style="margin-left:6px">(optional)</span></label>
+            <input type="text" id="ipam-edit-dns" value="${esc(sub.dns_server||'')}"
+                   placeholder="e.g. 10.0.0.53 — empty = use system resolver"
+                   autocomplete="off" maxlength="255"/>
+          </div>
+          <div class="fh">
+            Used for reverse-DNS naming of auto-added devices in this subnet. Leave empty
+            to use the server's default resolver.
+          </div>
+          <div class="ipam-edit-meta">
+            Last auto-scan: <strong>${esc(String(lastScanStr))}</strong>
+            ${firstPending ? `<div style="margin-top:6px">
+              <span style="color:var(--warn)">⚠ First-scan pending</span> —
+              <button class="btn-s" onclick="_ipamApproveFirstScan()">Approve first scan</button>
+              <div class="fh" style="margin-top:4px">Overrides the first-scan cap once for this subnet.</div>
+            </div>` : ''}
+          </div>
         </div>
+
       </div>
       <div class="mft">
-        <button class="btn-s" onclick="closeM('ipam-ren-modal')">Cancel</button>
-        <button class="btn-p" id="ipam-ren-save" onclick="_ipamSaveRename()">Save</button>
+        <button class="btn-s" onclick="closeM('ipam-edit-modal')">Cancel</button>
+        <button class="btn-p" id="ipam-edit-save" onclick="_ipamSaveEdit()">Save</button>
       </div>
     </div>`;
   document.body.appendChild(o);
-  const inp = o.querySelector('#ipam-ren-name');
-  inp.addEventListener('keydown', e => { if (e.key === 'Enter') _ipamSaveRename(); });
-  setTimeout(() => { inp.focus(); inp.select(); }, 50);
+  const inp = o.querySelector('#ipam-edit-name');
+  if (inp) {
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') _ipamSaveEdit(); });
+    setTimeout(() => { inp.focus(); inp.select(); }, 50);
+  }
 }
 
-async function _ipamSaveRename() {
+async function _ipamSaveEdit() {
   if (!_ipamSelectedId) return;
-  const name = (document.getElementById('ipam-ren-name')?.value || '').trim();
-  const btn = document.getElementById('ipam-ren-save');
+  const sub = _ipamSubnets.find(s => s.id === _ipamSelectedId);
+  if (!sub) return;
+  const btn = document.getElementById('ipam-edit-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}`, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name}),
-  });
-  if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    toast(d.error || 'Rename failed', 'err');
-    return;
+
+  const body = {
+    name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
+    auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
+    dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
+  };
+
+  try {
+    const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Save failed', 'err');
+      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+      return;
+    }
+    closeM('ipam-edit-modal');
+    toast('Subnet updated', 'ok');
+    _ipamGlobalCache = null;
+    await _ipamLoadSubnets();
+  } catch {
+    toast('Network error', 'err');
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   }
-  closeM('ipam-ren-modal');
-  toast('Subnet renamed', 'ok');
-  _ipamGlobalCache = null;
-  await _ipamLoadSubnets();
+}
+
+async function _ipamApproveFirstScan() {
+  if (!_ipamSelectedId) return;
+  try {
+    const r = await fetch(
+      `/api/auto-discovery/subnet/${_ipamSelectedId}/approve-first-scan`,
+      { method: 'POST' }
+    );
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Approve failed', 'err');
+      return;
+    }
+    toast('First scan approved — next tick will ignore the cap', 'ok');
+    closeM('ipam-edit-modal');
+    await _ipamLoadSubnets();
+  } catch {
+    toast('Network error', 'err');
+  }
 }
 
 // ── Remove subnet ──────────────────────────────────────────────────────────

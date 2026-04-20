@@ -21,6 +21,7 @@ from core.config import (
     _RE_IPAM_AD_TOGGLE,
 )
 from core.logger import log
+from core.validation import validate_host
 from db import (
     _db_enqueue,
     db_log_audit,
@@ -30,6 +31,7 @@ from db import (
     db_rename_subnet,
     db_delete_subnet,
     db_set_auto_discover,
+    db_update_subnet,
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
@@ -123,6 +125,8 @@ def handle(h, method, path, body):
         return True
 
     # ── POST /api/ipam/subnet/<id>/auto-discover ─────────────────
+    # Legacy narrow endpoint; kept for back-compat. New UI uses the
+    # consolidated PATCH below.
     m = _RE_IPAM_AD_TOGGLE.match(path)
     if m and method == 'POST':
         user, _ = h._require('operator')
@@ -143,7 +147,9 @@ def handle(h, method, path, body):
         h._json(200, {'ok': True, 'enabled': enabled})
         return True
 
-    # ── PATCH /api/ipam/subnets/<id> — rename ─────────────────────
+    # ── PATCH /api/ipam/subnets/<id> — multi-field edit ───────────
+    # Accepts any subset of: name, auto_discover, dns_server. The
+    # editor modal builds a single payload with only changed fields.
     m = _RE_IPAM_SUBNET.match(path)
     if m and method == 'PATCH':
         user, _ = h._require('operator')
@@ -152,11 +158,43 @@ def handle(h, method, path, body):
         sub = db_get_subnet(subnet_id)
         if not sub:
             h._json(404, {'error': 'Subnet not found'}); return True
-        name = (body.get('name') or '').strip()[:80]
-        db_rename_subnet(subnet_id, name)
-        db_log_audit(user, h.client_address[0], 'ipam_subnet_rename',
-                     f"{sub['cidr']} → {name!r}")
-        h._json(200, {'ok': True})
+
+        updates: dict = {}
+        audit_parts: list = []
+
+        if 'name' in body:
+            new_name = (body.get('name') or '').strip()[:80]
+            if new_name != (sub.get('name') or ''):
+                updates['name'] = new_name
+                audit_parts.append(f"name={new_name!r}")
+
+        if 'auto_discover' in body:
+            new_ad = 1 if body.get('auto_discover') else 0
+            if new_ad != int(sub.get('auto_discover') or 0):
+                updates['auto_discover'] = new_ad
+                audit_parts.append(f"auto_discover={bool(new_ad)}")
+
+        if 'dns_server' in body:
+            raw = (body.get('dns_server') or '').strip()
+            # Allow empty (use system resolver) or a bare IP / hostname; reject
+            # anything else so typos become a 400 instead of a broken scan.
+            if raw:
+                try:
+                    validate_host(raw)
+                except ValueError as ve:
+                    log.warning(f"IPAM dns_server rejected: {ve}")
+                    h._json(400, {'error': 'dns_server must be a valid IP or hostname'}); return True
+            if raw != (sub.get('dns_server') or ''):
+                updates['dns_server'] = raw
+                audit_parts.append(f"dns_server={raw or '<system>'}")
+
+        if updates:
+            if not db_update_subnet(subnet_id, updates):
+                h._json(500, {'error': 'update failed'}); return True
+            db_log_audit(user, h.client_address[0], 'ipam_subnet_edit',
+                         f"{sub['cidr']} — {'; '.join(audit_parts)}")
+
+        h._json(200, {'ok': True, 'updated': list(updates.keys())})
         return True
 
     # ── DELETE /api/ipam/subnets/<id> ─────────────────────────────

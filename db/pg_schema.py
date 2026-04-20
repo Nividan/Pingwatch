@@ -232,6 +232,7 @@ def pg_create_main_schema(cur):
         ("ipam_subnets", "auto_discover",           "INTEGER DEFAULT 0"),
         ("ipam_subnets", "first_scan_approved",     "INTEGER DEFAULT 0"),
         ("ipam_subnets", "last_auto_scan_ts",       "TIMESTAMP DEFAULT NULL"),
+        ("ipam_subnets", "dns_server",              "TEXT DEFAULT ''"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -374,7 +375,8 @@ def pg_create_main_schema(cur):
             created_at          DOUBLE PRECISION DEFAULT 0,
             auto_discover       INTEGER DEFAULT 0,
             first_scan_approved INTEGER DEFAULT 0,
-            last_auto_scan_ts   TIMESTAMP DEFAULT NULL
+            last_auto_scan_ts   TIMESTAMP DEFAULT NULL,
+            dns_server          TEXT DEFAULT ''
         )""")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ipam_subnets_cidr ON ipam_subnets(cidr)"
