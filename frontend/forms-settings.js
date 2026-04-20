@@ -2425,14 +2425,20 @@ async function saveSensorTypeDefaults(){
 function renderUserTable(users){
   if(!users||!users.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No users found.</div>';
   const rows=users.map(u=>{
-    const isLdap=u.auth_type==='ldap';
+    const isLdap  =u.auth_type==='ldap';
     const isRadius=u.auth_type==='radius';
-    const isRemote=isLdap||isRadius;
+    const isSaml  =u.auth_type==='saml';
+    const isOidc  =u.auth_type==='oidc';
+    const isRemote=isLdap||isRadius||isSaml||isOidc;
     const badge=isLdap
       ?`<span class="usr-badge-ldap">🌐 Domain</span>`
       :isRadius
         ?`<span class="usr-badge-radius">🧾 RADIUS</span>`
-        :`<span class="usr-badge-local">🔑 Local</span>`;
+        :isSaml
+          ?`<span class="usr-badge-saml">🪪 SAML</span>`
+          :isOidc
+            ?`<span class="usr-badge-oidc">🪙 OIDC</span>`
+            :`<span class="usr-badge-local">🔑 Local</span>`;
     const resetBtn=isRemote?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
     const totpBtn=u.totp_enabled
       ?`<button onclick="adminReset2FA('${esc(u.username)}')" title="Disable this user's two-factor authentication (e.g. lost phone)">🔐 Reset 2FA</button>`
