@@ -578,6 +578,7 @@ def handle(h, method, path, body):
         else:
             _main_sz = os.path.getsize(DB_PATH)      if os.path.exists(DB_PATH)      else 0
             _logs_sz = os.path.getsize(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else 0
+        from core.config import SYS as _SYS
         h._json(200, {
             "version":        app_state.APP_VERSION,
             "version_name":   app_state.APP_VERSION_NAME,
@@ -587,6 +588,9 @@ def handle(h, method, path, body):
             "db_size_bytes":      _main_sz,
             "logs_db_size_bytes": _logs_sz,
             "log_size_bytes":     _log_bytes,
+            "python_version":     f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "platform":           _SYS,
+            "db_backend":         "postgresql" if is_pg() else "sqlite",
         })
         return True
 

@@ -369,6 +369,25 @@ function _impRenderReview(){
     </div>
     ${skippedHtml}
     ${errorsHtml}
+    <details class="imp-help">
+      <summary>How matching &amp; modes work</summary>
+      <div class="imp-help-body">
+        <p><strong>Match order</strong> — for each row, PingWatch looks for an existing device by
+          <code>external_id</code> first (exact), then by <code>host</code> (case-insensitive).
+          The row is tagged <span class="imp-chip imp-chip-new">NEW</span> if no match,
+          <span class="imp-chip imp-chip-update">UPDATE</span> if matched. Device <em>name</em> is never
+          used for matching — duplicate names are allowed.</p>
+        <p><strong>Mode behavior on matched rows:</strong></p>
+        <ul>
+          <li><strong>Add only</strong> — skip matched rows (reported as <em>already monitored</em>). New devices created.</li>
+          <li><strong>Add + update</strong> <em>(default)</em> — update matched devices in place:
+            name/group/defaults overwritten (empty file values leave existing field alone);
+            sensors merged by name (new ones added, matching ones updated, manually-added sensors preserved — never deleted).</li>
+          <li><strong>Replace</strong> — same as Add + update, PLUS any existing device <em>not</em> in this file is deleted (confirmation required).</li>
+        </ul>
+        <p><strong>Tip</strong> — set an <code>external_id</code> in your file (e.g. <code>"my-cmdb:db01"</code>) so re-imports survive hostname or IP changes.</p>
+      </div>
+    </details>
     <div class="imp-mode-row">
       <span>Mode:</span>
       <label class="cb-row"><input type="radio" name="imp-mode" value="add_only" ${_imp.mode==='add_only'?'checked':''} onchange="_impSetMode('add_only')"/> Add only</label>

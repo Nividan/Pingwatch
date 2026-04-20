@@ -593,6 +593,102 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowDown'){e.preventDefault();items[(idx+1)%items.length]?.focus();}
   if(e.key==='ArrowUp'){e.preventDefault();items[(idx-1+items.length)%items.length]?.focus();}
 });
+
+// ── About PingWatch modal ─────────────────────────────────────────────────
+async function openAbout(){
+  closeM('m-about');
+  // Fetch server_info for live version/platform/backend/uptime
+  let info = {};
+  try { info = await api('GET', '/api/server_info'); } catch(_) {}
+  const ver      = info.version || '—';
+  const py       = info.python_version || '—';
+  const plat     = (info.platform || '—').replace('Darwin', 'macOS');
+  const backend  = info.db_backend === 'postgresql' ? 'PostgreSQL' : 'SQLite';
+  const uptime   = info.uptime_s != null ? _fmtUptime(info.uptime_s) : '—';
+  const year     = new Date().getFullYear();
+
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'm-about';
+  _overlayClose(o, () => closeM('m-about'));
+  o.innerHTML = `
+    <div class="mbox about-box" style="max-width:460px">
+      <div class="mhd">
+        <div class="mttl">About</div>
+        <button class="mclose" onclick="closeM('m-about')">✕</button>
+      </div>
+      <div class="mbdy about-body">
+        <div class="about-logo">
+          <svg width="56" height="56" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="8.5" stroke="currentColor" stroke-width="1" opacity=".35"/>
+            <circle cx="10" cy="10" r="5"   stroke="currentColor" stroke-width="1" opacity=".55"/>
+            <circle cx="10" cy="10" r="2"   fill="currentColor" opacity=".9"/>
+            <line x1="1.5" y1="10" x2="5"    y2="10" stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+            <line x1="15"  y1="10" x2="18.5" y2="10" stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+            <line x1="10"  y1="1.5" x2="10" y2="5"    stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+            <line x1="10"  y1="15"  x2="10" y2="18.5" stroke="currentColor" stroke-width="1.2" opacity=".7"/>
+          </svg>
+        </div>
+        <div class="about-title"><span class="tw-ping">Ping</span><span class="tw-watch">Watch</span></div>
+        <div class="about-tagline">Real-Time Network Monitoring Platform</div>
+
+        <div class="about-grid">
+          <span class="about-k">Version</span>      <span class="about-v" id="about-ver">${esc(ver)}</span>
+          <span class="about-k">Build</span>        <span class="about-v">Python ${esc(py)} · ${esc(backend)} · ${esc(plat)}</span>
+          <span class="about-k">Uptime</span>       <span class="about-v">${esc(uptime)}</span>
+        </div>
+
+        <div class="about-sep"></div>
+
+        <div class="about-credit">
+          <span class="about-credit-emoji">🤖</span>
+          Designed and built with
+          <a href="https://claude.ai" target="_blank" rel="noopener noreferrer">Claude AI</a>
+          as an AI-driven development experiment.
+        </div>
+
+        <div class="about-sep"></div>
+
+        <div class="about-links">
+          <a href="https://github.com/Nividan/Pingwatch" target="_blank" rel="noopener noreferrer">🐙 GitHub repository</a>
+          <a href="https://github.com/Nividan/Pingwatch/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">📜 MIT License</a>
+        </div>
+
+        <div class="about-copyright">© ${year} Nividan</div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="_aboutCopyVersion()" title="Copy version + build info">⎘ Copy version</button>
+        <button class="btn-p" onclick="closeM('m-about')">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+function _fmtUptime(sec){
+  sec = Math.max(0, Math.floor(sec||0));
+  const d = Math.floor(sec/86400); sec %= 86400;
+  const h = Math.floor(sec/3600);  sec %= 3600;
+  const m = Math.floor(sec/60);
+  const s = sec % 60;
+  if(d) return `${d}d ${h}h ${m}m`;
+  if(h) return `${h}h ${m}m`;
+  if(m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function _aboutCopyVersion(){
+  const el = document.getElementById('about-ver');
+  // Pull the grid labels' text content for a meaningful clipboard payload
+  const lines = [];
+  document.querySelectorAll('#m-about .about-grid .about-k').forEach((k, i) => {
+    const v = document.querySelectorAll('#m-about .about-grid .about-v')[i];
+    if (v) lines.push(`${k.textContent}: ${v.textContent}`);
+  });
+  const txt = `PingWatch\n${lines.join('\n')}`;
+  navigator.clipboard.writeText(txt).then(
+    () => toast('Copied to clipboard','ok'),
+    () => toast('Copy failed','err'),
+  );
+}
 // Poll /api/ready until the server has finished db_load(). Returns quickly
 // (~1 request, no splash) in the normal case where the server is already up.
 // Shows a themed splash overlay when the server is mid-restart so the user
