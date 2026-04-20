@@ -339,8 +339,41 @@ Click any device row in the Backups tab to open the Config Viewer:
 
 ## Screenshots
 
+### 📡 Network Dashboard
+<img width="2539" height="892" alt="image" src="https://github.com/user-attachments/assets/05f0ec79-c657-4615-b0f1-90b6154ff2bd" />
+<img width="2552" height="887" alt="image" src="https://github.com/user-attachments/assets/8e53dfa7-346d-4a63-ae24-300d74ef5947" />
+<img width="1055" height="595" alt="image" src="https://github.com/user-attachments/assets/c8d69b3a-e8bd-4ab9-abb7-76cbadf40b69" />
+<img width="910" height="716" alt="image" src="https://github.com/user-attachments/assets/4c9bfc88-dacc-4340-a0f8-81af7898ba9b" />
+<img width="918" height="1052" alt="image" src="https://github.com/user-attachments/assets/a0b43954-fab7-4c44-b9ae-04bd3c17742b" />
+<img width="905" height="255" alt="image" src="https://github.com/user-attachments/assets/4be6527e-81e8-4bc3-856d-a4cab7fc54d2" />
+<img width="1047" height="1083" alt="image" src="https://github.com/user-attachments/assets/39506190-4bba-43b7-b9ec-23457a8bd73b" />
 
+### 🖥 Device Information
+<img width="2535" height="458" alt="image" src="https://github.com/user-attachments/assets/292cc408-7fea-4e4b-bc68-b17435ed15cc" />
+<img width="2541" height="444" alt="image" src="https://github.com/user-attachments/assets/5ab32fb2-95dd-4d44-b0d1-66974c805cd2" />
 
+### 📜 Event Logs
+<img width="2541" height="444" alt="image" src="https://github.com/user-attachments/assets/28c27cf9-4f6a-48cd-9f56-0bc1132094a8" />
+
+### 🗺 Network Topology Manager
+<img width="2551" height="1277" alt="image" src="https://github.com/user-attachments/assets/952d9a56-d08f-4837-ada4-b11cecfe532b" />
+<img width="2536" height="1265" alt="image" src="https://github.com/user-attachments/assets/7d62daf0-d0f2-4d84-8876-da668924c7be" />
+
+### 💾 Device Configuration Backup
+<img width="655" height="801" alt="image" src="https://github.com/user-attachments/assets/485aef55-4da2-4357-ac5b-a35501321b6f" />
+
+### 🗂 IP Address Manager
+<img width="2547" height="284" alt="image" src="https://github.com/user-attachments/assets/14d026a2-3b14-4685-bbfc-957fe2733272" />
+
+### 🗂 Reports
+<img width="2552" height="468" alt="image" src="https://github.com/user-attachments/assets/355df49f-fe19-4223-b10b-ef90e9c11d1a" />
+
+### 🗂 Settings
+<img width="1160" height="1124" alt="image" src="https://github.com/user-attachments/assets/ed37694e-765d-48a6-90bc-6d120eebe181" />
+<img width="1198" height="764" alt="image" src="https://github.com/user-attachments/assets/6ed184cb-1a68-4bdc-baa8-a15ebc597031" />
+
+### Setup GUI Wizard
+<img width="816" height="806" alt="image" src="https://github.com/user-attachments/assets/ef9d9527-9944-467e-8757-4382761aff80" />
 
 ---
 
