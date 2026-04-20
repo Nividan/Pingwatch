@@ -83,16 +83,16 @@ function _rptBuildSectionsHtml(cfg){
       if(it.opt && it.opt.type === 'bool'){
         const cur = (optsCfg[it.opt.key] === undefined) ? !!it.opt.def : !!optsCfg[it.opt.key];
         optHtml = `<label class="rpt-sec-bopt" onclick="event.stopPropagation()">
-          <input type="checkbox" data-bopt="${esc(it.opt.key)}" ${cur?'checked':''}>
+          <input type="checkbox" data-bopt="${esc(it.opt.key)}" ${cur?'checked':''} onchange="_rptUpdateSummary()">
           <span>${esc(it.opt.sublabel || '')}</span>
         </label>`;
       } else if(it.opt){
         const cur = optsCfg[it.opt.key] ?? it.opt.def;
         const opts = it.opt.values.map(([v,label])=>`<option value="${v}" ${Number(cur)===v?'selected':''}>${esc(label)}</option>`).join('');
-        optHtml = `<select class="rpt-sec-opt" data-opt="${esc(it.opt.key)}" onclick="event.stopPropagation()">${opts}</select>`;
+        optHtml = `<select class="rpt-sec-opt" data-opt="${esc(it.opt.key)}" onclick="event.stopPropagation()" onchange="_rptUpdateSummary()">${opts}</select>`;
       }
       return `<label class="chk-item">
-        <input type="checkbox" data-sec="${esc(it.id)}" ${checked}>
+        <input type="checkbox" data-sec="${esc(it.id)}" ${checked} onchange="_rptUpdateSummary()">
         <span class="chk-lbl">${esc(it.label)}</span>
         ${optHtml}
       </label>`;
@@ -102,14 +102,7 @@ function _rptBuildSectionsHtml(cfg){
       <div class="rpt-sec-grid">${items}</div>
     </div>`;
   }).join('');
-  return `<div class="rpt-sections">${groups}</div>
-    <div class="rpt-sec-actions">
-      <button type="button" class="btn-s" onclick="_rptSecPreset('all')">Select all</button>
-      <button type="button" class="btn-s" onclick="_rptSecPreset('none')">Clear</button>
-      <button type="button" class="btn-s" onclick="_rptSecPreset('exec')">Executive preset</button>
-      <button type="button" class="btn-s" onclick="_rptSecPreset('tech')">Technical preset</button>
-      <button type="button" class="btn-s" onclick="_rptSecPreset('inv')">Inventory preset</button>
-    </div>`;
+  return `<div class="rpt-sections">${groups}</div>`;
 }
 
 function _rptSecPreset(name){
@@ -123,16 +116,64 @@ function _rptSecPreset(name){
   wrap.querySelectorAll('input[type=checkbox][data-sec]').forEach(cb => {
     cb.checked = set.has(cb.dataset.sec);
   });
+  _rptUpdateSummary();
 }
 
+/* Switch the modal between single-column (fixed kinds) and two-column (custom).
+ * In custom mode the section grid + presets live on the left, output settings on
+ * the right; .mbox-wide opens the modal up to ~1040px so both columns breathe.
+ */
 function _rptToggleCustom(){
   const sel  = document.getElementById('_rt_kind');
-  const wrap = document.getElementById('_rt_sections_wrap');
   const box  = document.querySelector('#rptTplModal .mbox');
-  if(!sel || !wrap) return;
+  const grid = document.querySelector('#rptTplModal .rpt-edit-grid');
+  const left = document.getElementById('_rt_left_col');
+  const wrap = document.getElementById('_rt_sections_wrap');
+  if(!sel) return;
   const on = (sel.value === 'custom');
-  wrap.style.display = on ? '' : 'none';
-  if(box) box.style.maxWidth = on ? '780px' : '620px';
+  if(box){
+    box.classList.toggle('mbox-rpt-wide', on);
+    box.classList.toggle('mbox-rpt-narrow', !on);
+  }
+  // Collapse the empty left track when not in custom mode (.no-left swaps the
+  // grid template to a single column — keeps the right column from sitting in
+  // a half-width track on the right side of the modal).
+  if(grid) grid.classList.toggle('no-left', !on);
+  if(left) left.style.display = on ? '' : 'none';
+  if(wrap) wrap.style.display = on ? '' : 'none';
+  _rptUpdateSummary();
+}
+
+/* Live "what you're saving" summary in the right column footer.
+ * Fires on any section/option/period/output toggle so the user can review
+ * a custom template without scrolling back up. Cheap — just reads DOM state.
+ */
+function _rptUpdateSummary(){
+  const el = document.getElementById('_rt_summary');
+  if(!el) return;
+  const kind = document.getElementById('_rt_kind')?.value || 'executive';
+  const periodSel = document.getElementById('_rt_period');
+  const periodLbl = periodSel ? (periodSel.options[periodSel.selectedIndex]?.text || '—') : '—';
+  const sevSel = document.getElementById('_rt_severity');
+  const sevLbl = sevSel ? (sevSel.options[sevSel.selectedIndex]?.text || '') : '';
+  const csv  = !!document.getElementById('_rt_csv')?.checked;
+  const pdfa = document.getElementById('_rt_pdfa')?.value || '';
+  let secCount = '';
+  if(kind === 'custom'){
+    const wrap = document.getElementById('_rt_sections_wrap');
+    const total = wrap ? wrap.querySelectorAll('input[type=checkbox][data-sec]').length : 0;
+    const on    = wrap ? wrap.querySelectorAll('input[type=checkbox][data-sec]:checked').length : 0;
+    secCount = `${on} / ${total} sections`;
+  } else {
+    secCount = kind.charAt(0).toUpperCase() + kind.slice(1) + ' preset';
+  }
+  const pdfLbl = pdfa ? pdfa.toUpperCase() : 'Standard PDF';
+  const csvLbl = csv ? ' + CSV' : '';
+  el.innerHTML =
+    `<span class="rpt-sum-pill">📄 ${esc(secCount)}</span>` +
+    `<span class="rpt-sum-pill">${esc(periodLbl)}</span>` +
+    (sevLbl ? `<span class="rpt-sum-pill">${esc(sevLbl)}</span>` : '') +
+    `<span class="rpt-sum-pill">${esc(pdfLbl)}${csvLbl}</span>`;
 }
 
 /* ── Modal helpers (replace native confirm/alert and show progress) ── */
@@ -324,7 +365,17 @@ async function _rptRenderTemplates(){
 function _rptEditTemplate(tid, presetKind){
   closeM('rptTplModal');
   (async()=>{
-    let t = {name:'', kind: presetKind||'executive', description:'', config_json:{period:'last_month'}};
+    // Pre-fill a clean default name per preset kind so users don't end up
+    // with stutter-names like "Executive Summary Report" — every PDF is a
+    // report, so the word "Report" is redundant in the template name (and
+    // becomes redundant in the filename). Users are still free to rename.
+    const _presetName = {
+      executive: 'Executive Summary',
+      technical: 'Technical / Operations',
+      inventory: 'Inventory & Compliance',
+      custom:    'Custom Report',
+    }[presetKind] || '';
+    let t = {name:_presetName, kind: presetKind||'executive', description:'', config_json:{period:'last_month'}};
     if(tid){
       try{ const r = await api('GET', '/api/reports/template/'+tid); t = r.template || t; }catch(_){}
     }
@@ -342,98 +393,130 @@ function _rptEditTemplate(tid, presetKind){
     const o = document.createElement('div');
     o.className = 'mo'; o.id = 'rptTplModal';
     _overlayClose(o, ()=>closeM('rptTplModal'));
-    const _maxW = (t.kind === 'custom') ? '780px' : '620px';
+    const isCustom = (t.kind === 'custom');
+    const wideClass = isCustom ? 'mbox-rpt-wide' : 'mbox-rpt-narrow';
+    /* Two-column layout (Option B):
+     *   Left  — Report Sections grid + presets (custom kind only)
+     *   Right — Identity / Period / Output settings + live summary
+     * For non-custom kinds the left column hides and the right column expands
+     * to full width via CSS so the modal stays compact.
+     */
     o.innerHTML = `
-      <div class="mbox" style="max-width:${_maxW};max-height:90vh;display:flex;flex-direction:column">
+      <div class="mbox ${wideClass}">
         <div class="mhd"><span>${tid?'Edit':'New'} Report Template</span></div>
-        <div class="mbdy" style="overflow-y:auto;flex:1">
-          <div class="fr">
-            <label class="fl">Name</label>
-            <input type="text" id="_rt_name" value="${esc(t.name)}" placeholder="e.g. Monthly Exec Summary">
-          </div>
-          <div class="fr">
-            <label class="fl">Kind</label>
-            <select id="_rt_kind" onchange="_rptToggleCustom()">
-              <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
-              <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
-              <option value="inventory" ${t.kind==='inventory'?'selected':''}>Inventory &amp; Compliance (devices, backups, IPAM, licenses)</option>
-              <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom — pick your own sections</option>
-            </select>
-          </div>
-          <div class="fr" id="_rt_sections_wrap" style="${t.kind==='custom'?'':'display:none'}">
-            <label class="fl">Report sections</label>
-            <div class="fh">Pick the blocks to include. Per-section drop-downs tune size / depth. Use a preset as a starting point and tweak.</div>
-            ${_rptBuildSectionsHtml(cfg)}
-          </div>
-          <div class="fr">
-            <label class="fl">Description (optional)</label>
-            <input type="text" id="_rt_desc" value="${esc(t.description||'')}">
-          </div>
-          <div class="fr">
-            <label class="fl">Default Period</label>
-            <select id="_rt_period" onchange="_rptTogglePeriod()">
-              <option value="last_7d"       ${cfg.period==='last_7d'?'selected':''}>Last 7 days</option>
-              <option value="last_30d"      ${cfg.period==='last_30d'?'selected':''}>Last 30 days</option>
-              <option value="last_90d"      ${cfg.period==='last_90d'?'selected':''}>Last 90 days</option>
-              <option value="last_month"    ${(cfg.period==='last_month'||!cfg.period)?'selected':''}>Last calendar month</option>
-              <option value="last_quarter"  ${cfg.period==='last_quarter'?'selected':''}>Last quarter</option>
-              <option value="last_year"     ${cfg.period==='last_year'?'selected':''}>Last 365 days</option>
-              <option value="month_to_date" ${cfg.period==='month_to_date'?'selected':''}>Month to date</option>
-              <option value="custom"        ${periodIsCustom?'selected':''}>Custom range…</option>
-            </select>
-          </div>
-          <div class="fr" id="_rt_custom_wrap" style="${periodIsCustom?'':'display:none'}">
-            <label class="fl">Custom range</label>
-            <div class="fgrid">
-              <div>
-                <div class="fh" style="margin-bottom:3px">Start</div>
-                <input type="datetime-local" id="_rt_custom_start" value="${esc(customStart)}">
+        <div class="mbdy rpt-edit-body">
+          <div class="rpt-edit-grid${isCustom ? '' : ' no-left'}">
+            <!-- ── LEFT COLUMN: section picker (custom only) ── -->
+            <div class="rpt-edit-left" id="_rt_left_col" style="${isCustom?'':'display:none'}">
+              <div class="rpt-col-hd">
+                <span class="rpt-col-title">Report sections</span>
+                <span class="rpt-col-sub">Pick the blocks to include. Per-section drop-downs tune size / depth.</span>
               </div>
-              <div>
-                <div class="fh" style="margin-bottom:3px">End</div>
-                <input type="datetime-local" id="_rt_custom_end" value="${esc(customEnd)}">
+              <div class="rpt-preset-bar">
+                <span class="rpt-preset-lbl">Quick start</span>
+                <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('exec')">Executive</button>
+                <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('tech')">Technical</button>
+                <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('inv')">Inventory</button>
+                <span class="rpt-preset-sep"></span>
+                <button type="button" class="rpt-preset-btn ghost" onclick="_rptSecPreset('all')">All</button>
+                <button type="button" class="rpt-preset-btn ghost" onclick="_rptSecPreset('none')">Clear</button>
+              </div>
+              <div id="_rt_sections_wrap">${_rptBuildSectionsHtml(cfg)}</div>
+            </div>
+            <!-- ── RIGHT COLUMN: identity + period + output ── -->
+            <div class="rpt-edit-right">
+              <div class="rpt-col-hd">
+                <span class="rpt-col-title">Template settings</span>
+                <span class="rpt-col-sub">Identity, period, and output format.</span>
+              </div>
+              <div class="fr">
+                <label class="fl">Name</label>
+                <input type="text" id="_rt_name" value="${esc(t.name)}" placeholder="e.g. Monthly Exec Summary">
+              </div>
+              <div class="fr">
+                <label class="fl">Kind</label>
+                <select id="_rt_kind" onchange="_rptToggleCustom()">
+                  <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
+                  <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
+                  <option value="inventory" ${t.kind==='inventory'?'selected':''}>Inventory &amp; Compliance (devices, backups, IPAM, licenses)</option>
+                  <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom — pick your own sections</option>
+                </select>
+              </div>
+              <div class="fr">
+                <label class="fl">Description (optional)</label>
+                <input type="text" id="_rt_desc" value="${esc(t.description||'')}">
+              </div>
+              <div class="fr">
+                <label class="fl">Default Period</label>
+                <select id="_rt_period" onchange="_rptTogglePeriod();_rptUpdateSummary()">
+                  <option value="last_7d"       ${cfg.period==='last_7d'?'selected':''}>Last 7 days</option>
+                  <option value="last_30d"      ${cfg.period==='last_30d'?'selected':''}>Last 30 days</option>
+                  <option value="last_90d"      ${cfg.period==='last_90d'?'selected':''}>Last 90 days</option>
+                  <option value="last_month"    ${(cfg.period==='last_month'||!cfg.period)?'selected':''}>Last Month</option>
+                  <option value="last_quarter"  ${cfg.period==='last_quarter'?'selected':''}>Last quarter</option>
+                  <option value="last_year"     ${cfg.period==='last_year'?'selected':''}>Last 365 days</option>
+                  <option value="month_to_date" ${cfg.period==='month_to_date'?'selected':''}>Month to date</option>
+                  <option value="custom"        ${periodIsCustom?'selected':''}>Custom range…</option>
+                </select>
+              </div>
+              <div class="fr" id="_rt_custom_wrap" style="${periodIsCustom?'':'display:none'}">
+                <label class="fl">Custom range</label>
+                <div class="fgrid">
+                  <div>
+                    <div class="fh" style="margin-bottom:3px">Start</div>
+                    <input type="datetime-local" id="_rt_custom_start" value="${esc(customStart)}">
+                  </div>
+                  <div>
+                    <div class="fh" style="margin-bottom:3px">End</div>
+                    <input type="datetime-local" id="_rt_custom_end" value="${esc(customEnd)}">
+                  </div>
+                </div>
+                <div class="fh">Times use your browser's local timezone. Server converts to Unix epoch on save.</div>
+              </div>
+              <div class="fr">
+                <label class="fl">Incident severity filter</label>
+                <select id="_rt_severity" onchange="_rptUpdateSummary()">
+                  <option value="all"  ${(!cfg.severity_min || cfg.severity_min==='all')?'selected':''}>All incidents (default)</option>
+                  <option value="warn" ${cfg.severity_min==='warn'?'selected':''}>Warning and above</option>
+                  <option value="crit" ${cfg.severity_min==='crit'?'selected':''}>Critical / Down only</option>
+                </select>
+                <div class="fh">Trim out lower-severity noise. Executive reports usually want "Critical only"; technical/ops reports usually want "All".</div>
+              </div>
+              <div class="fr">
+                <label class="fl">Cover title</label>
+                <input type="text" id="_rt_title" value="${esc(cfg.title||'')}" placeholder="defaults to kind">
+              </div>
+              <div class="fr">
+                <label class="fl">Subtitle (optional)</label>
+                <input type="text" id="_rt_subtitle" value="${esc(cfg.subtitle||'')}">
+              </div>
+              <div class="fr" style="display:flex;align-items:center;gap:8px">
+                <input type="checkbox" id="_rt_csv" ${cfg.include_csv?'checked':''} style="width:auto" onchange="_rptUpdateSummary()">
+                <label for="_rt_csv" style="color:var(--text);font-size:13px;cursor:pointer">Include CSV sidecar (attaches an Excel-friendly .csv alongside the PDF)</label>
+              </div>
+              <div class="fr">
+                <label class="fl">PDF compliance level</label>
+                <select id="_rt_pdfa" onchange="_rptUpdateSummary()">
+                  <option value=""          ${!cfg.pdfa_mode?'selected':''}>Standard PDF (default)</option>
+                  <option value="pdf/a-1b"  ${cfg.pdfa_mode==='pdf/a-1b'?'selected':''}>PDF/A-1b — long-term archival</option>
+                  <option value="pdf/a-2b"  ${cfg.pdfa_mode==='pdf/a-2b'?'selected':''}>PDF/A-2b — modern archival</option>
+                  <option value="pdf/a-3b"  ${cfg.pdfa_mode==='pdf/a-3b'?'selected':''}>PDF/A-3b — archival + embedded data</option>
+                </select>
+                <div class="fh">Pick an archival level if your compliance policy requires it. Adds ~15% to file size. Needs WeasyPrint ≥ 62 on the server — falls back to standard PDF otherwise.</div>
               </div>
             </div>
-            <div class="fh">Times use your browser's local timezone. Server converts to Unix epoch on save.</div>
-          </div>
-          <div class="fr">
-            <label class="fl">Incident severity filter</label>
-            <select id="_rt_severity">
-              <option value="all"  ${(!cfg.severity_min || cfg.severity_min==='all')?'selected':''}>All incidents (default)</option>
-              <option value="warn" ${cfg.severity_min==='warn'?'selected':''}>Warning and above</option>
-              <option value="crit" ${cfg.severity_min==='crit'?'selected':''}>Critical / Down only</option>
-            </select>
-            <div class="fh">Trim out lower-severity noise. Executive reports usually want "Critical only"; technical/ops reports usually want "All".</div>
-          </div>
-          <div class="fr">
-            <label class="fl">Cover title</label>
-            <input type="text" id="_rt_title" value="${esc(cfg.title||'')}" placeholder="defaults to kind">
-          </div>
-          <div class="fr">
-            <label class="fl">Subtitle (optional)</label>
-            <input type="text" id="_rt_subtitle" value="${esc(cfg.subtitle||'')}">
-          </div>
-          <div class="fr" style="display:flex;align-items:center;gap:8px">
-            <input type="checkbox" id="_rt_csv" ${cfg.include_csv?'checked':''} style="width:auto">
-            <label for="_rt_csv" style="color:var(--text);font-size:13px;cursor:pointer">Include CSV sidecar (attaches an Excel-friendly .csv alongside the PDF)</label>
-          </div>
-          <div class="fr">
-            <label class="fl">PDF compliance level</label>
-            <select id="_rt_pdfa">
-              <option value=""          ${!cfg.pdfa_mode?'selected':''}>Standard PDF (default)</option>
-              <option value="pdf/a-1b"  ${cfg.pdfa_mode==='pdf/a-1b'?'selected':''}>PDF/A-1b — long-term archival</option>
-              <option value="pdf/a-2b"  ${cfg.pdfa_mode==='pdf/a-2b'?'selected':''}>PDF/A-2b — modern archival</option>
-              <option value="pdf/a-3b"  ${cfg.pdfa_mode==='pdf/a-3b'?'selected':''}>PDF/A-3b — archival + embedded data</option>
-            </select>
-            <div class="fh">Pick an archival level if your compliance policy requires it. Adds ~15% to file size. Needs WeasyPrint ≥ 62 on the server — falls back to standard PDF otherwise.</div>
           </div>
         </div>
-        <div class="mft">
-          <button class="btn-s" onclick="closeM('rptTplModal')">Cancel</button>
-          <button class="btn-p" onclick="_rptSaveTemplate('${esc(tid||'')}')">${tid?'Save':'Create'}</button>
+        <div class="mft rpt-edit-foot">
+          <div class="rpt-summary-bar" id="_rt_summary"></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn-s" onclick="closeM('rptTplModal')">Cancel</button>
+            <button class="btn-p" onclick="_rptSaveTemplate('${esc(tid||'')}')">${tid?'Save':'Create'}</button>
+          </div>
         </div>
       </div>`;
     document.body.appendChild(o);
+    _rptUpdateSummary();
   })();
 }
 
@@ -738,7 +821,7 @@ function _rptEditSchedule(sid){
               <option value="last_7d"       ${s.period==='last_7d'?'selected':''}>Last 7 days</option>
               <option value="last_30d"      ${s.period==='last_30d'?'selected':''}>Last 30 days</option>
               <option value="last_90d"      ${s.period==='last_90d'?'selected':''}>Last 90 days</option>
-              <option value="last_month"    ${(s.period==='last_month'||!s.period)?'selected':''}>Last calendar month</option>
+              <option value="last_month"    ${(s.period==='last_month'||!s.period)?'selected':''}>Last Month</option>
               <option value="last_quarter"  ${s.period==='last_quarter'?'selected':''}>Last quarter</option>
               <option value="last_year"     ${s.period==='last_year'?'selected':''}>Last 365 days</option>
               <option value="month_to_date" ${s.period==='month_to_date'?'selected':''}>Month to date</option>

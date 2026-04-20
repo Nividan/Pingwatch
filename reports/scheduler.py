@@ -92,6 +92,9 @@ def _prune_history_once() -> int:
     return n
 
 
+_stop = threading.Event()
+
+
 def _scheduler_loop():
     from db import db_list_report_schedules, db_record_schedule_run
     from reports.runner import run_schedule
@@ -100,9 +103,13 @@ def _scheduler_loop():
     last_fired: dict = {}       # schedule_id -> datetime of last fire (for 90 s dedupe)
     last_prune_ts = 0.0
 
-    while True:
+    while not _stop.is_set():
         try:
-            time.sleep(30)
+            # Interruptible sleep so shutdown doesn't have to wait up to 30 s
+            # before the scheduler notices and exits — preventing a crash on
+            # the next db_list_report_schedules() once pg_close_pool() has run.
+            if _stop.wait(30):
+                break
             now = datetime.datetime.now()
 
             # Retention sweep once per hour — cheap, bounded query
@@ -115,6 +122,8 @@ def _scheduler_loop():
 
             schedules = db_list_report_schedules() or []
             for sch in schedules:
+                if _stop.is_set():
+                    break
                 if not sch.get("enabled"):
                     continue
                 sid = sch["id"]
@@ -138,10 +147,12 @@ def _scheduler_loop():
                                      daemon=True, name=f"rep-sched-{sid}")
                 t.start()
                 # Stagger multiple schedules landing in the same minute
-                time.sleep(2)
+                if _stop.wait(2):
+                    break
 
         except Exception as e:
             log.error(f"Report scheduler error: {e}")
+    log.info("Report scheduler stopped")
 
 
 def start_scheduler():
@@ -149,3 +160,8 @@ def start_scheduler():
     t = threading.Thread(target=_scheduler_loop, daemon=True,
                          name="report-scheduler")
     t.start()
+
+
+def stop_scheduler() -> None:
+    """Signal the report scheduler loop to exit (call at shutdown before pg_close_pool)."""
+    _stop.set()

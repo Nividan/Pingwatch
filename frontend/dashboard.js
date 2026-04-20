@@ -238,7 +238,7 @@ async function _dwInit() {
 function _dwRenderTabBar() {
   const bar = document.getElementById('dw-tab-bar');
   if (!bar || !_dwDashboards) return;
-  bar.innerHTML = _dwDashboards.map(d =>
+  const tabs = _dwDashboards.map(d =>
     `<button class="dw-dash-tab${d.id === _dwActiveId ? ' active' : ''}"
              data-id="${d.id}"
              onclick="_dwSwitchTo(${d.id})"
@@ -246,6 +246,9 @@ function _dwRenderTabBar() {
              title="${esc(d.name)}">${esc(d.name)}</button>`
   ).join('') +
   '<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">＋</button>';
+  bar.innerHTML =
+    `<div class="dw-tab-bar-tabs">${tabs}</div>` +
+    `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">＋ Add Widget</button>`;
 }
 
 async function _dwSwitchTo(id) {
@@ -432,49 +435,119 @@ function _dwStartTick() {
   }, 10000);
 }
 
-// ── Grid render ───────────────────────────────────────────────────
+// ── Grid render (gridstack.js) ───────────────────────────────────
+// _dwGrid holds the active GridStack instance; destroyed and recreated
+// on every full render (switching dashboards, adding/removing widgets).
+let _dwGrid = null;
+let _dwSaveTimer = null;
+
+// Widgets created before the gridstack migration have no x/y/w/h fields.
+// Assign sequential positions based on their cols hint so the upgrade is
+// visually similar to the pre-migration layout. Returns true if anything
+// was filled in (caller should persist).
+function _dwEnsurePositions(widgets) {
+  let changed = false;
+  let x = 0, y = 0, rowH = 4;
+  for (const w of widgets) {
+    if (w.x !== undefined && w.y !== undefined && w.w !== undefined && w.h !== undefined) continue;
+    const gw = w.w ?? (w.cols === 2 ? 6 : 3);
+    const gh = w.h ?? 4;
+    if (x + gw > 12) { x = 0; y += rowH; rowH = gh; }
+    w.x = x; w.y = y; w.w = gw; w.h = gh;
+    x += gw; rowH = Math.max(rowH, gh);
+    changed = true;
+  }
+  return changed;
+}
+
+// Read positions back from gridstack and persist (debounced).
+function _dwSaveGridPositions() {
+  if (_dwSaveTimer) clearTimeout(_dwSaveTimer);
+  _dwSaveTimer = setTimeout(() => {
+    const grid = document.getElementById('dw-grid');
+    if (!grid) return;
+    const widgets = _dwLoad();
+    const byId = new Map(widgets.map(w => [w.id, w]));
+    grid.querySelectorAll('.grid-stack-item').forEach(el => {
+      const id = el.getAttribute('gs-id');
+      const w  = byId.get(id);
+      if (!w) return;
+      w.x = parseInt(el.getAttribute('gs-x'), 10) || 0;
+      w.y = parseInt(el.getAttribute('gs-y'), 10) || 0;
+      w.w = parseInt(el.getAttribute('gs-w'), 10) || w.w || 3;
+      w.h = parseInt(el.getAttribute('gs-h'), 10) || w.h || 4;
+    });
+    widgets.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    _dwSave(widgets);
+  }, 400);
+}
+
 function _dwRenderAll() {
   const grid = document.getElementById('dw-grid');
   if (!grid) return;
+  // Tear down previous gridstack instance (keeps DOM; we replace it below)
+  if (_dwGrid) {
+    try { _dwGrid.destroy(false); } catch {}
+    _dwGrid = null;
+  }
   // Clear any per-card intervals from previous render
   grid.querySelectorAll('.dw-card').forEach(c => { if (c._interval) { clearInterval(c._interval); c._interval = null; } });
   const widgets = _dwLoad();
   if (!widgets.length) {
     grid.innerHTML = '<div class="dw-empty">No widgets yet. Click <strong>＋ Add Widget</strong> to get started.</div>';
+    grid.classList.remove('grid-stack');
     return;
   }
-  grid.innerHTML = widgets.map(w => `
-    <div class="dw-card${w.cols === 2 ? ' dw-wide' : ''}" id="dw-${w.id}" data-wid="${w.id}"
-         draggable="true"
-         ondragstart="_dwDragStart(event,'${w.id}')"
-         ondragover="_dwDragOver(event,'${w.id}')"
-         ondragleave="_dwDragLeave(event)"
-         ondragend="_dwDragEnd(event)"
-         ondrop="_dwDrop(event,'${w.id}')">
-      <div class="dw-hdr">
-        <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||'◧'}</span>
-        <span class="dw-title">${esc(w.title)}</span>
-        <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">✎</button>
-        <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">⤢</button>
-        <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">×</button>
-      </div>
-      <div class="dw-body" id="dw-body-${w.id}"></div>
-    </div>`).join('');
+  // One-shot migration for dashboards stored before gridstack
+  if (_dwEnsurePositions(widgets)) _dwSave(widgets);
+  grid.classList.add('grid-stack');
+  grid.innerHTML = widgets.map(w => {
+    const hasPos = (w.x !== undefined && w.y !== undefined);
+    const gw = w.w ?? (w.cols === 2 ? 6 : 3);
+    const gh = w.h ?? 4;
+    const posAttrs = hasPos
+      ? `gs-x="${w.x}" gs-y="${w.y}"`
+      : `gs-auto-position="true"`;
+    return `
+      <div class="grid-stack-item" gs-id="${esc(w.id)}" ${posAttrs} gs-w="${gw}" gs-h="${gh}">
+        <div class="grid-stack-item-content">
+          <div class="dw-card" id="dw-${w.id}" data-wid="${w.id}">
+            <div class="dw-hdr">
+              <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||'◧'}</span>
+              <span class="dw-title">${esc(w.title)}</span>
+              <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">✎</button>
+              <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">⤢</button>
+              <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">×</button>
+            </div>
+            <div class="dw-body" id="dw-body-${w.id}"></div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+  // Initialize gridstack — draggable by the header only so clicks on buttons
+  // and interactive widget bodies still work normally.
+  _dwGrid = GridStack.init({
+    column: 12,
+    cellHeight: 80,
+    margin: 7,
+    float: true,
+    animate: true,
+    resizable: { handles: 's,e,se' },
+    draggable: { handle: '.dw-hdr' },
+    alwaysShowResizeHandle: false,
+  }, grid);
+  _dwGrid.on('change', _dwSaveGridPositions);
+  // If anything was auto-placed, flush the resulting positions back so reload is stable
+  if (widgets.some(w => w.x === undefined || w.y === undefined)) _dwSaveGridPositions();
+  // Render widget contents
   widgets.forEach(w => {
     const reg = _DW_REG[w.type];
     if (reg) reg.render(w.id, w.cfg);
   });
-  // Show shimmer loading overlay until first real data arrives.
-  // Only add the class if data hasn't already been marked as arrived AND
-  // the state is genuinely empty — this prevents a stuck shimmer when
-  // _dwClearLoading() fires before _dwRenderAll() completes (race between
-  // loadAll's /api/devices and _dwInit's /api/dashboards).
+  // Shimmer loading overlay (unchanged semantics)
   const _stateEmpty = !Object.keys(S.sensors).length && !Object.keys(S.devices).length;
   if (!_dwDataArrived && _stateEmpty) {
-    console.debug('[pw:dw] render: state empty, adding shimmer');
     grid.querySelectorAll('.dw-body').forEach(el => el.classList.add('dw-loading'));
-  } else if (_dwDataArrived) {
-    console.debug('[pw:dw] render: data already arrived, skipping shimmer');
   }
   _dwStartTick();
 }
@@ -485,108 +558,6 @@ function _dwRemove(wid) {
   const widgets = _dwLoad().filter(w => w.id !== wid);
   _dwSave(widgets);
   _dwRenderAll();
-}
-
-// ── Drag-and-drop reorder ─────────────────────────────────────────
-let _dwDragSrcId = null;
-let _dwDropDone  = false;
-
-function _dwDragStart(e, wid) {
-  _dwDragSrcId = wid;
-  _dwDropDone  = false;
-  e.dataTransfer.effectAllowed = 'move';
-  setTimeout(() => {
-    document.getElementById(`dw-${wid}`)?.classList.add('dw-dragging');
-    // Append a drop-here placeholder at the end of the grid
-    const grid = document.getElementById('dw-grid');
-    if (grid && !document.getElementById('dw-placeholder')) {
-      const ph = document.createElement('div');
-      ph.id        = 'dw-placeholder';
-      ph.className = 'dw-card dw-placeholder';
-      ph.innerHTML = '<span style="pointer-events:none">↓ Drop here</span>';
-      ph.addEventListener('dragover',  _dwPlaceholderOver);
-      ph.addEventListener('dragleave', _dwDragLeave);
-      ph.addEventListener('drop',      _dwPlaceholderDrop);
-      grid.appendChild(ph);
-    }
-  }, 0);
-}
-
-function _dwDragOver(e, targetId) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  if (!_dwDragSrcId || _dwDragSrcId === targetId) return;
-  const grid  = document.getElementById('dw-grid');
-  const srcEl = document.getElementById(`dw-${_dwDragSrcId}`);
-  const tgtEl = document.getElementById(`dw-${targetId}`);
-  if (!srcEl || !tgtEl || !grid) return;
-  grid.querySelectorAll('.dw-drop-target').forEach(el => el.classList.remove('dw-drop-target'));
-  tgtEl.classList.add('dw-drop-target');
-  const rect = tgtEl.getBoundingClientRect();
-  if (e.clientY < rect.top + rect.height / 2) {
-    grid.insertBefore(srcEl, tgtEl);
-  } else {
-    grid.insertBefore(srcEl, tgtEl.nextSibling);
-  }
-}
-
-function _dwPlaceholderOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  if (!_dwDragSrcId) return;
-  const grid  = document.getElementById('dw-grid');
-  const srcEl = document.getElementById(`dw-${_dwDragSrcId}`);
-  const ph    = document.getElementById('dw-placeholder');
-  if (!srcEl || !ph || !grid) return;
-  grid.querySelectorAll('.dw-drop-target').forEach(el => el.classList.remove('dw-drop-target'));
-  ph.classList.add('dw-drop-target');
-  // Move dragged card just before the placeholder (append to real cards)
-  grid.insertBefore(srcEl, ph);
-}
-
-function _dwPlaceholderDrop(e) {
-  e.preventDefault();
-  _dwDropDone = true;
-  _dwCleanupDrag();
-  _dwSaveDomOrder();
-  _dwDragSrcId = null;
-}
-
-function _dwDragLeave(e) {
-  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
-    e.currentTarget.classList.remove('dw-drop-target');
-  }
-}
-
-function _dwDrop(e, targetId) {
-  e.preventDefault();
-  _dwDropDone = true;
-  _dwCleanupDrag();
-  if (!_dwDragSrcId) return;
-  _dwSaveDomOrder();
-  _dwDragSrcId = null;
-}
-
-function _dwDragEnd(e) {
-  _dwCleanupDrag();
-  if (!_dwDropDone) _dwRenderAll(); // cancelled — restore
-  _dwDragSrcId = null;
-  _dwDropDone  = false;
-}
-
-function _dwCleanupDrag() {
-  document.querySelectorAll('.dw-dragging, .dw-drop-target').forEach(el =>
-    el.classList.remove('dw-dragging', 'dw-drop-target'));
-  document.getElementById('dw-placeholder')?.remove();
-}
-
-function _dwSaveDomOrder() {
-  const grid = document.getElementById('dw-grid');
-  if (!grid) return;
-  const newOrder  = [...grid.querySelectorAll('.dw-card[data-wid]')].map(el => el.dataset.wid);
-  const widgets   = _dwLoad();
-  const reordered = newOrder.map(id => widgets.find(w => w.id === id)).filter(Boolean);
-  _dwSave(reordered);
 }
 
 // ── Add widget — picker + config ──────────────────────────────────
@@ -692,7 +663,8 @@ function _dwConfirmAdd(type) {
     if (sen && dev && title === reg.label) finalTitle = `${dev.name} / ${sen.name}`;
   }
   const widgets = _dwLoad();
-  widgets.push({ id: Math.random().toString(36).slice(2, 9), type, title: finalTitle, cols: reg.defaultCols, cfg });
+  // x/y left undefined so gridstack auto-places the new widget at the first free cell.
+  widgets.push({ id: Math.random().toString(36).slice(2, 9), type, title: finalTitle, cols: reg.defaultCols, w: reg.defaultCols === 2 ? 6 : 3, h: 4, cfg });
   _dwSave(widgets);
   document.getElementById('dw-cfg-overlay')?.remove();
   _dwRenderAll();
@@ -1025,14 +997,31 @@ function _dwRefreshNetAvail(wid) {
   _dwDrawNetAvailChart(wid); // fire-and-forget
 }
 
-async function _dwDrawNetAvailChart(wid) {
+// Cache last availability payload so theme-change redraws skip the network.
+let _lastAvailability = null;
+
+// On theme change, redraw every visible net-avail canvas synchronously with
+// the cached data so colors flip instantly instead of waiting on a fetch.
+window.addEventListener('themechange', () => {
+  _dwRefreshNetAvail._last = 0;
+  (_dwWidgets || []).forEach(w => {
+    if (w.type === 'network_avail') _dwDrawNetAvailChart(w.id, true);
+  });
+});
+
+async function _dwDrawNetAvailChart(wid, useCache) {
   const canvas = document.getElementById(`dw-na-canvas-${wid}`);
   if (!canvas) return;
-  let availability = [];
-  try {
-    const d = await _fetchAvailability();
-    availability = d.availability || [];
-  } catch { return; }
+  let availability;
+  if (useCache && _lastAvailability) {
+    availability = _lastAvailability;
+  } else {
+    try {
+      const d = await _fetchAvailability();
+      availability = d.availability || [];
+      _lastAvailability = availability;
+    } catch { return; }
+  }
   canvas.width = canvas.offsetWidth || 340;
   const W = canvas.width, H = canvas.height || 80;
   const ctx = canvas.getContext('2d');
@@ -1579,21 +1568,25 @@ async function _dwFetchServerPerf(wid) {
   </div>`);
 }
 
-// ── NCM Backup Status Widget ─────────────────────────────────────
+// ── Backup Status Widget (device configs + DB scheduled backup) ──
 async function _dwNcmStatusRefresh(wid) {
   const el = document.getElementById(`dw-body-${wid}`);
   if (!el) return;
   // Don't show "Loading…" on refresh — only on first render
   if (!el.children.length) el.innerHTML = '<div class="dw-loading">Loading…</div>';
   try {
-    const r = await api('GET', '/api/backups');
-    const devs = (r.devices || []).filter(d => !d.orphaned);
+    const [bk, cfg] = await Promise.all([
+      api('GET', '/api/backups'),
+      api('GET', '/api/settings'),
+    ]);
+    const devs = (bk.devices || []).filter(d => !d.orphaned);
     const total   = devs.length;
     const enabled = devs.filter(d => d.enabled).length;
     const ok      = devs.filter(d => d.last_success === true).length;
     const failed  = devs.filter(d => d.run_count > 0 && d.last_success === false).length;
     const never   = devs.filter(d => d.run_count === 0 && d.enabled).length;
     _dwSwap(el, `
+      <div class="dw-bk-section-lbl">Device Configs</div>
       <div class="dw-ncm-grid">
         <div class="dw-ncm-kpi dw-ncm-ok">
           <span class="dw-ncm-n">${ok}</span>
@@ -1611,10 +1604,134 @@ async function _dwNcmStatusRefresh(wid) {
           <span class="dw-ncm-n">${enabled}/${total}</span>
           <span class="dw-ncm-l">Enabled</span>
         </div>
-      </div>`);
+      </div>
+      ${_dwRenderDbBackup(cfg)}`);
   } catch {
     el.innerHTML = '<div class="dw-err">Failed to load backup status</div>';
   }
+}
+
+function _dwRenderDbBackup(cfg) {
+  const enabled = !!cfg.db_backup_enabled;
+  const lastTs  = cfg.db_backup_last_ts || '';
+  const lastRes = cfg.db_backup_last_result || '';
+  const remoteEnabled = !!cfg.db_backup_remote_enabled;
+  const remoteTs      = cfg.db_backup_remote_last_ts || '';
+  const remoteRes     = cfg.db_backup_remote_last_result || '';
+
+  let statusClass = 'dw-db-muted';
+  let mainLine = '';
+  if (!enabled) {
+    mainLine = 'Disabled';
+  } else if (!lastTs) {
+    mainLine = 'Scheduled, never run yet';
+  } else {
+    const ago = _dwAgoFromStampUnderscore(lastTs);
+    const failed = (lastRes || '').toLowerCase().startsWith('error');
+    const overdue = enabled && _dwIsDbBackupOverdue(lastTs, cfg.db_backup_freq || 'daily');
+    if (failed) {
+      statusClass = 'dw-db-fail';
+      mainLine = `Last: ${ago} \u2718  ${esc(lastRes)}`;
+    } else if (overdue) {
+      statusClass = 'dw-db-warn';
+      mainLine = `Last: ${ago} \u26A0 overdue`;
+    } else {
+      statusClass = 'dw-db-ok';
+      mainLine = `Last: ${ago} \u2714`;
+    }
+  }
+
+  let nextLine = '';
+  if (enabled) {
+    const next = _dwNextDbBackupLabel(cfg);
+    if (next) nextLine = `<span class="dw-db-next">Next: ${esc(next)}</span>`;
+  }
+
+  let remoteLine = '';
+  if (remoteEnabled) {
+    const rType = (cfg.db_backup_remote_type || 'sftp').toUpperCase();
+    if (!remoteTs && !remoteRes) {
+      remoteLine = `<div class="dw-db-remote dw-db-muted">Remote (${esc(rType)}): not yet run</div>`;
+    } else if ((remoteRes || '').toLowerCase().startsWith('error')) {
+      remoteLine = `<div class="dw-db-remote dw-db-fail">Remote (${esc(rType)}): \u2718 ${esc(remoteRes)}</div>`;
+    } else if (remoteTs) {
+      remoteLine = `<div class="dw-db-remote dw-db-ok">Remote (${esc(rType)}): \u2714 uploaded ${esc(_dwAgoFromStampUnderscore(remoteTs))}</div>`;
+    }
+  }
+
+  return `
+    <div class="dw-bk-section-lbl" style="margin-top:10px">Database</div>
+    <div class="dw-db-card" onclick="openSettings('database')" title="Open Database settings">
+      <div class="dw-db-main ${statusClass}">
+        <span>${mainLine}</span>
+        ${nextLine}
+      </div>
+      ${remoteLine}
+    </div>`;
+}
+
+// "2026-04-18_03-00-00" (db_backup_last_ts format) → "3h ago" style string.
+function _dwAgoFromStampUnderscore(stamp) {
+  if (!stamp) return 'never';
+  // Convert underscore/dash format to ISO-ish
+  const m = String(stamp).match(/^(\d{4})-(\d{2})-(\d{2})[_T](\d{2})-(\d{2})-(\d{2})$/);
+  if (!m) return esc(stamp);
+  const dt = new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]));
+  // The stored timestamp is local server time; treat it as local by re-interpreting
+  const local = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+  const diff = (Date.now() - local.getTime()) / 1000;
+  if (diff < 0) return 'just now';
+  if (diff < 60) return `${Math.floor(diff)}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+// Overdue = 1.5× the scheduled interval since last run (daily=36h, weekly=12d).
+function _dwIsDbBackupOverdue(lastTs, freq) {
+  const m = String(lastTs).match(/^(\d{4})-(\d{2})-(\d{2})[_T](\d{2})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const last = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+  const diffSec = (Date.now() - last.getTime()) / 1000;
+  const graceSec = (freq === 'weekly') ? 12 * 86400 : 36 * 3600;
+  return diffSec > graceSec;
+}
+
+// Compute a human "Next: Sat 03:00" label for daily/weekly schedules.
+function _dwNextDbBackupLabel(cfg) {
+  const freq = cfg.db_backup_freq || 'daily';
+  const timeStr = cfg.db_backup_time || '03:00';
+  const [hh, mm] = timeStr.split(':').map(n => parseInt(n, 10) || 0);
+  const now = new Date();
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const fmtClock = () => `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  if (freq === 'daily') {
+    const next = new Date(now); next.setHours(hh, mm, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    const sameDay = next.toDateString() === now.toDateString();
+    return sameDay ? `Today ${fmtClock()}` :
+           next.getDate() === now.getDate() + 1 ? `Tomorrow ${fmtClock()}` :
+           `${dayNames[next.getDay()]} ${fmtClock()}`;
+  }
+  // weekly
+  const daysStr = String(cfg.db_backup_days || '1,2,3,4,5,6,7');
+  const days = new Set(daysStr.split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean));
+  if (!days.size) return '';
+  // weekday(): 0=Sun .. 6=Sat; project uses 1=Mon .. 7=Sun
+  const jsToProj = (d) => d === 0 ? 7 : d;
+  for (let offset = 0; offset < 8; offset++) {
+    const cand = new Date(now);
+    cand.setDate(now.getDate() + offset);
+    cand.setHours(hh, mm, 0, 0);
+    if (cand <= now) continue;
+    if (days.has(jsToProj(cand.getDay()))) {
+      const sameDay = cand.toDateString() === now.toDateString();
+      return sameDay ? `Today ${fmtClock()}` :
+             offset === 1 ? `Tomorrow ${fmtClock()}` :
+             `${dayNames[cand.getDay()]} ${fmtClock()}`;
+    }
+  }
+  return '';
 }
 
 // ── License Overview Widget ──────────────────────────────────────

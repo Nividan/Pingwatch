@@ -150,6 +150,14 @@ function _buildSettingsTab_general(sr) {
         </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Logging</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
+          <span style="font-size:12px">Debug Mode</span>
+        </label>
+        <div class="fh" style="margin-top:6px">Enable verbose debug logging. When off, only INFO and above is written to log files. View logs in the <a href="javascript:void(0)" onclick="closeM('mset');switchMainTab('logs')" style="color:var(--accent)">Logs</a> tab.</div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Server Controls</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="serverRestart()">&#x21BA; Restart Server</button>
@@ -219,12 +227,36 @@ function _buildSettingsTab_groups() {
 }
 
 function _buildSettingsTab_integrations(sr) {
+  const _ari = Number.isFinite(sr.auth_refresh_interval_min) ? sr.auth_refresh_interval_min : 60;
   return `<div class="mbdy stab-fade" id="stab-integrations" style="display:none;overflow-y:auto;flex:1">
+      <!-- Background Health Check strip — covers LDAP / RADIUS / SAML / OIDC only -->
+      <div style="display:flex;align-items:center;gap:14px;padding:10px 12px;margin-bottom:14px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;flex-wrap:wrap">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">🩺 Auth Health Check</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:12px;color:var(--text3)">Interval</label>
+          <select id="auth-refresh-interval" onchange="saveAuthRefreshInterval()" style="font-size:12px;padding:3px 6px">
+            <option value="0"   ${_ari===0  ?'selected':''}>Off</option>
+            <option value="15"  ${_ari===15 ?'selected':''}>15 min</option>
+            <option value="30"  ${_ari===30 ?'selected':''}>30 min</option>
+            <option value="60"  ${_ari===60 ?'selected':''}>1 hour</option>
+            <option value="240" ${_ari===240?'selected':''}>4 hours</option>
+            <option value="720" ${_ari===720?'selected':''}>12 hours</option>
+          </select>
+        </div>
+        <div style="font-size:12px;color:var(--text3)">
+          Last run: <span id="auth-refresh-last" style="color:var(--text2)">—</span>
+        </div>
+        <button class="btn-s" style="font-size:12px" onclick="triggerAuthRefreshNow()" title="Run all four backend checks right now">🔄 Run now</button>
+        <div id="auth-refresh-msg" style="font-size:11px;color:var(--text3);flex:1"></div>
+      </div>
       <!-- Sub-tab bar -->
       <div style="display:flex;gap:6px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button id="itab-smtp" class="itab itab-active" onclick="switchIntegTab('smtp')">📧 SMTP <span id="ibadge-smtp" style="font-size:13px"></span></button>
         <button id="itab-syslog" class="itab" onclick="switchIntegTab('syslog')">📤 Syslog <span id="ibadge-syslog" style="font-size:13px"></span></button>
         <button id="itab-ldap" class="itab" onclick="switchIntegTab('ldap')">🔐 LDAP / AD <span id="ibadge-ldap" style="font-size:13px"></span></button>
+        <button id="itab-radius" class="itab" onclick="switchIntegTab('radius')">🧾 RADIUS <span id="ibadge-radius" style="font-size:13px"></span></button>
+        <button id="itab-saml" class="itab" onclick="switchIntegTab('saml')">🪪 SAML 2.0 <span id="ibadge-saml" style="font-size:13px"></span></button>
+        <button id="itab-oidc" class="itab" onclick="switchIntegTab('oidc')">🪙 OIDC <span id="ibadge-oidc" style="font-size:13px"></span></button>
       </div>
 
       <!-- ── SMTP sub-panel ── -->
@@ -423,6 +455,344 @@ function _buildSettingsTab_integrations(sr) {
         </div>
 
       </div>
+
+      <!-- ── RADIUS sub-panel ── -->
+      <div id="ipanel-radius" style="display:none">
+        <div id="radius-status-bar"></div>
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable RADIUS Authentication</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Authenticate users against a RADIUS server (FortiAuthenticator, NPS, FreeRADIUS, ISE). Server-side 2FA via Access-Challenge is supported.</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="radius-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- Primary server -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Primary Server</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Host</label>
+            <input type="text" id="radius-server" placeholder="radius.example.com" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="radius-port" value="1812" min="1" max="65535" style="max-width:100px"/></div>
+        </div>
+        <div class="fr"><label class="fl">Shared Secret</label>
+          <input type="password" id="radius-secret" placeholder="shared secret" autocomplete="new-password"/>
+          <div class="fh">Leave blank to keep the currently stored secret.</div>
+        </div>
+
+        <!-- Secondary server -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 10px">Secondary Server (optional — used on primary timeout)</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Host</label>
+            <input type="text" id="radius-server2" placeholder="radius2.example.com (optional)" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="radius-port2" value="1812" min="1" max="65535" style="max-width:100px"/></div>
+        </div>
+        <div class="fr"><label class="fl">Shared Secret</label>
+          <input type="password" id="radius-secret2" placeholder="secondary shared secret" autocomplete="new-password"/></div>
+
+        <!-- Transport -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 10px">Transport</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Timeout (s)</label>
+            <input type="number" id="radius-timeout" value="5" min="1" max="60" style="max-width:80px"/></div>
+          <div class="fr"><label class="fl">Retries per server</label>
+            <input type="number" id="radius-retries" value="3" min="1" max="10" style="max-width:80px"/></div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">NAS-Identifier</label>
+            <input type="text" id="radius-nas-identifier" value="pingwatch" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Debug</label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="radius-debug" style="width:14px;height:14px;cursor:pointer"/>
+              Verbose logging
+            </label>
+          </div>
+        </div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Realm Prefix</label>
+            <input type="text" id="radius-realm-prefix" placeholder="e.g. DOMAIN\\ (optional)" autocomplete="off"/>
+            <div class="fh">Prepended to username before sending.</div>
+          </div>
+          <div class="fr"><label class="fl">Realm Suffix</label>
+            <input type="text" id="radius-realm-suffix" placeholder="e.g. @example.com (optional)" autocomplete="off"/>
+            <div class="fh">Appended to username before sending.</div>
+          </div>
+        </div>
+
+        <!-- Test buttons -->
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testRadiusConnection()">▶ Test Connection</button>
+          <button class="btn-s" style="font-size:12px" onclick="openRadiusTestAuth()">▶ Test User Auth</button>
+          <div id="radius-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+
+        <!-- Provisioning -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Provisioning</div>
+          <div style="display:flex;gap:24px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-start">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="radius-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision unknown users at login
+            </label>
+            <div class="fr" style="margin:0">
+              <label class="fl" style="margin-right:4px">Default Role</label>
+              <select id="radius-default-role" style="max-width:140px">
+                <option value="viewer">Viewer</option>
+                <option value="operator">Operator</option>
+                <option value="admin">Admin</option>
+              </select>
+              <div class="fh">Used when no attribute mapping matches.</div>
+            </div>
+            <div class="fr" style="margin:0">
+              <label class="fl" style="margin-right:4px">Default Group</label>
+              <select id="radius-default-group" style="max-width:180px">
+                <option value="">— None —</option>
+              </select>
+              <div class="fh">Optional. Auto-provisioned users with no attribute match are assigned to this group.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Attribute → Role mapping -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Attribute → Group Mapping</div>
+          <div class="fh" style="margin-bottom:10px">On login, the first attribute/value that matches a mapping assigns the user to that group (with its default role). Create groups under Users → Groups; set the RADIUS attribute + value here.</div>
+          <div id="radius-mappings-body" style="margin-top:8px"></div>
+        </div>
+
+      </div>
+
+      <!-- ── SAML 2.0 sub-panel ── -->
+      <div id="ipanel-saml" style="display:none">
+        <div id="saml-status-bar"></div>
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable SAML 2.0 SSO</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">SP-initiated single sign-on. Works with Okta, Azure AD / Entra ID, ADFS, Keycloak, PingFederate, OneLogin, Shibboleth.</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="saml-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- SP (this system) -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Service Provider (this system)</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">SP Entity ID</label>
+            <input type="text" id="saml-sp-entity-id" placeholder="https://pingwatch.example.com/saml/metadata" autocomplete="off"/>
+            <div class="fh">Unique identifier for this SP. Typically the metadata URL.</div>
+          </div>
+          <div class="fr"><label class="fl">ACS URL</label>
+            <input type="text" id="saml-sp-acs-url" placeholder="https://pingwatch.example.com/api/saml/acs" autocomplete="off"/>
+            <div class="fh">Assertion Consumer Service — where the IdP POSTs responses.</div>
+          </div>
+        </div>
+        <div class="fr" style="margin-top:10px">
+          <label class="fl">SP Signing Certificate</label>
+          <div id="saml-sp-cert-info" style="font-size:12px;color:var(--text2);padding:8px;background:var(--bg3);border-radius:6px;margin-bottom:6px">No cert — click Generate to create one.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn-s" style="font-size:12px" onclick="generateSamlSpCert()">⚙ Generate SP signing cert</button>
+            <button class="btn-s" style="font-size:12px" onclick="downloadSamlSpMetadata()">⤓ Download SP metadata (XML)</button>
+          </div>
+          <div class="fh" style="margin-top:6px">RSA-2048, self-signed, 825-day validity. Give the metadata to your IdP admin.</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="saml-sign-authn-requests" style="width:14px;height:14px;cursor:pointer"/>
+              Sign AuthnRequests
+            </label>
+          </div>
+          <div class="fr">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+              <input type="checkbox" id="saml-want-assertions-signed" style="width:14px;height:14px;cursor:pointer"/>
+              Require signed assertions
+            </label>
+          </div>
+        </div>
+
+        <!-- IdP metadata import -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Identity Provider</div>
+          <div class="fr">
+            <label class="fl">Import IdP Metadata</label>
+            <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--text2);flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="url"  checked onchange="_samlMetaSrcToggle()"/> By URL</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="xml"          onchange="_samlMetaSrcToggle()"/> Paste XML</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="saml-meta-src" value="file"         onchange="_samlMetaSrcToggle()"/> Upload XML file</label>
+            </div>
+            <input type="text" id="saml-meta-url" placeholder="https://idp.example.com/metadata" autocomplete="off"/>
+            <textarea id="saml-meta-xml" rows="5" placeholder="<md:EntityDescriptor ...>" style="display:none;font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical;width:100%;padding:6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);margin-top:4px"></textarea>
+            <div id="saml-meta-file-wrap" style="display:none;margin-top:4px">
+              <input type="file" id="saml-meta-file" accept=".xml,application/xml,text/xml,application/samlmetadata+xml" onchange="_samlLoadFileToTextarea(this)" style="font-size:12px;color:var(--text2)"/>
+              <div style="font-size:11px;color:var(--text3);margin-top:3px">Contents load into the Paste XML area so you can review before import.</div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+              <button class="btn-s" style="font-size:12px" onclick="importSamlMetadata()">⇩ Import metadata</button>
+              <div id="saml-meta-result" style="font-size:12px;flex:1"></div>
+            </div>
+          </div>
+          <div class="fgrid" style="margin-top:10px">
+            <div class="fr"><label class="fl">IdP Entity ID</label>
+              <input type="text" id="saml-idp-entity-id" placeholder="(auto-filled after import)" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">IdP SSO URL</label>
+              <input type="text" id="saml-idp-sso-url" placeholder="(auto-filled after import)" autocomplete="off"/></div>
+          </div>
+          <div class="fr" style="margin-top:10px">
+            <label class="fl">IdP Signing Certificate</label>
+            <div id="saml-idp-cert-info" style="font-size:12px;color:var(--text2);padding:8px;background:var(--bg3);border-radius:6px">No cert — import IdP metadata.</div>
+          </div>
+        </div>
+
+        <!-- Attribute mapping -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Attribute Mapping</div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Username attribute</label>
+              <input type="text" id="saml-attr-username" value="NameID" autocomplete="off"/>
+              <div class="fh">Use <code>NameID</code> for the subject, or an attribute name like <code>uid</code>.</div></div>
+            <div class="fr"><label class="fl">Email attribute</label>
+              <input type="text" id="saml-attr-email" value="mail" autocomplete="off"/></div>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Display Name attribute</label>
+              <input type="text" id="saml-attr-display-name" value="displayName" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Groups attribute</label>
+              <input type="text" id="saml-attr-groups" value="memberOf" autocomplete="off"/>
+              <div class="fh">Values from this attribute match user-group mappings below.</div></div>
+          </div>
+        </div>
+
+        <!-- Provisioning -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Provisioning</div>
+          <div style="display:flex;gap:24px;margin-bottom:10px;flex-wrap:wrap;align-items:flex-start">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="saml-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision new users on first sign-in
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="saml-allow-unmapped" style="width:14px;height:14px;cursor:pointer"/>
+              Allow users who don't match any mapped group
+            </label>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Default Role</label>
+              <select id="saml-default-role" style="max-width:140px">
+                <option value="viewer">Viewer</option>
+                <option value="operator">Operator</option>
+                <option value="admin">Admin</option>
+              </select>
+              <div class="fh">Applied when no group mapping matches.</div></div>
+            <div class="fr"><label class="fl">Login button label</label>
+              <input type="text" id="saml-display-name" placeholder="Sign in with Company SSO" autocomplete="off"/>
+              <div class="fh">Shown on the PingWatch login screen.</div></div>
+          </div>
+        </div>
+
+        <!-- Test -->
+        <div style="display:flex;gap:8px;margin-top:16px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testSamlConfig()">▶ Test Configuration</button>
+          <div id="saml-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+      </div>
+
+      <!-- ── OIDC sub-panel ── -->
+      <div id="ipanel-oidc" style="display:none">
+        <div id="oidc-status-bar"></div>
+
+        <!-- Enable toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--bg3);border-radius:8px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Enable OpenID Connect SSO</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Authorization Code flow with PKCE. Works with Azure AD / Entra ID, Okta, Google Workspace, Keycloak, Auth0, Authentik.</div>
+          </div>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="oidc-enabled"><span class="tsl"></span></label>
+        </div>
+
+        <!-- Issuer + client -->
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Identity Provider</div>
+        <div class="fr">
+          <label class="fl">Issuer URL</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="oidc-issuer-url" placeholder="https://login.microsoftonline.com/{tenant}/v2.0" autocomplete="off" style="flex:1"/>
+            <button class="btn-s" style="font-size:12px;white-space:nowrap" onclick="refreshOidcDiscovery()">↻ Auto-discover</button>
+          </div>
+          <div class="fh">PingWatch will fetch <code>/.well-known/openid-configuration</code> from this URL.</div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Client ID</label>
+            <input type="text" id="oidc-client-id" placeholder="application / client ID" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Client Secret</label>
+            <input type="password" id="oidc-client-secret" placeholder="leave blank to keep existing" autocomplete="new-password"/></div>
+        </div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fr"><label class="fl">Redirect URI</label>
+            <input type="text" id="oidc-redirect-uri" placeholder="https://pingwatch.example.com/api/oidc/callback" autocomplete="off"/>
+            <div class="fh">Register this URL with your IdP.</div></div>
+          <div class="fr"><label class="fl">Scopes</label>
+            <input type="text" id="oidc-scopes" value="openid profile email groups" autocomplete="off"/>
+            <div class="fh">Space-separated. Most IdPs need at least <code>openid profile email</code>.</div></div>
+        </div>
+
+        <!-- Discovery display -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Discovery Endpoints <span id="oidc-discovery-ts" style="text-transform:none;font-weight:400;color:var(--text3);margin-left:8px"></span></div>
+          <div id="oidc-discovery-panel" style="font-size:12px;color:var(--text2);font-family:Consolas,Monaco,monospace;padding:10px;background:var(--bg3);border-radius:6px">Not fetched yet — click Auto-discover.</div>
+        </div>
+
+        <!-- Claim mapping -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Claim Mapping</div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Username claim</label>
+              <input type="text" id="oidc-claim-username" value="preferred_username" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Email claim</label>
+              <input type="text" id="oidc-claim-email" value="email" autocomplete="off"/></div>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Display Name claim</label>
+              <input type="text" id="oidc-claim-display-name" value="name" autocomplete="off"/></div>
+            <div class="fr"><label class="fl">Groups claim</label>
+              <input type="text" id="oidc-claim-groups" value="groups" autocomplete="off"/>
+              <div class="fh">Claim whose values are matched against user-group mappings.</div></div>
+          </div>
+        </div>
+
+        <!-- Provisioning -->
+        <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Provisioning</div>
+          <div style="display:flex;gap:24px;margin-bottom:10px;flex-wrap:wrap;align-items:flex-start">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="oidc-auto-provision" style="width:14px;height:14px;cursor:pointer"/>
+              Auto-provision new users on first sign-in
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);padding-top:6px">
+              <input type="checkbox" id="oidc-allow-unmapped" style="width:14px;height:14px;cursor:pointer"/>
+              Allow users who don't match any mapped group
+            </label>
+          </div>
+          <div class="fgrid">
+            <div class="fr"><label class="fl">Default Role</label>
+              <select id="oidc-default-role" style="max-width:140px">
+                <option value="viewer">Viewer</option>
+                <option value="operator">Operator</option>
+                <option value="admin">Admin</option>
+              </select></div>
+            <div class="fr"><label class="fl">Login button label</label>
+              <input type="text" id="oidc-display-name" placeholder="Sign in with Azure AD" autocomplete="off"/></div>
+          </div>
+        </div>
+
+        <!-- Test -->
+        <div style="display:flex;gap:8px;margin-top:16px;align-items:center;flex-wrap:wrap">
+          <button class="btn-s" style="font-size:12px" onclick="testOidcConfig()">▶ Test Configuration</button>
+          <div id="oidc-test-result" style="font-size:12px;flex:1"></div>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -511,61 +881,65 @@ function _buildSettingsTab_database(sr) {
         <div id="dbk-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_last_ts?`Last backup: ${esc(sr.db_backup_last_ts)} \u2014 ${esc(sr.db_backup_last_result)}`:''}</div>
         </div><!-- /dbk-collapse -->
       </div>
-    </div>`;
-}
 
-function _buildSettingsTab_logs(sr) {
-  return `<div class="mbdy stab-fade" id="stab-logs" style="display:none;padding:0;overflow-y:auto;flex:1">
-      <div style="padding:10px 14px 6px;border-bottom:1px solid var(--border)">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
-          <span style="font-size:12px;font-weight:600;color:var(--text2)">Debug Mode</span>
-        </label>
-        <div class="fh" style="margin-top:4px">Enable verbose debug logging. When off, only INFO and above is written to log files.</div>
-      </div>
-      <div class="log-subtab-bar">
-        <button class="log-stab active" id="lstab-btn-app"     onclick="_switchLogTab('app')">Application</button>
-        <button class="log-stab"        id="lstab-btn-sensors" onclick="_switchLogTab('sensors')">Sensors</button>
-        <button class="log-stab"        id="lstab-btn-audit"   onclick="_switchLogTab('audit')">Audit</button>
-        <button class="log-stab"        id="lstab-btn-backup"  onclick="_switchLogTab('backup')">Backup</button>
-        <div style="margin-left:auto;display:flex;gap:4px;align-items:center">
-          <button class="btn-s log-live-btn" id="logLiveBtn" onclick="_toggleLogLive()" style="font-size:11px;padding:4px 10px">\u25cb Live</button>
-          <button class="btn-s" onclick="_loadLogTab()" style="font-size:11px;padding:4px 10px">\u21bb Refresh</button>
+      <!-- Remote Upload (Off-box DR) -->
+      <div style="margin-top:4px;padding-top:16px;border-top:1px solid var(--border)">
+        <div onclick="_toggleDbBackupRemote()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
+          <div style="font-size:12px;font-weight:600;color:var(--text2)">Remote Upload (Off-box DR)</div>
+          <span id="dbk-remote-chevron" style="font-size:10px;color:var(--text3);transition:transform .2s;transform:rotate(-90deg)">&#9660;</span>
         </div>
+        <div id="dbk-remote-collapse" style="display:none;margin-top:16px">
+          <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="flex:1">
+              <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Push backups to remote</div>
+              <div class="fh" style="margin:0">After each local backup, upload files off-box via SFTP or SMB. Remote failure does not fail the local backup.</div>
+            </div>
+            <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-dbk-remote-enabled" ${sr.db_backup_remote_enabled?'checked':''}><span class="tsl"></span></label>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Protocol</label>
+            <select id="st-dbk-remote-type" style="max-width:160px" onchange="_dbkRemoteTypeChange()">
+              <option value="sftp" ${(sr.db_backup_remote_type||'sftp')==='sftp'?'selected':''}>SFTP (SSH)</option>
+              <option value="smb"  ${sr.db_backup_remote_type==='smb'?'selected':''}>SMB / CIFS</option>
+            </select>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Host</label>
+            <input type="text" id="st-dbk-remote-host" value="${esc(sr.db_backup_remote_host||'')}" placeholder="backup-server.example.com"/>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Port</label>
+            <input type="number" id="st-dbk-remote-port" min="1" max="65535" value="${sr.db_backup_remote_port||22}" style="max-width:100px"/>
+          </div>
+          <div class="fr" style="margin-top:14px;display:${(sr.db_backup_remote_type==='smb')?'flex':'none'}" id="st-dbk-remote-share-row">
+            <label class="fl">Share</label>
+            <input type="text" id="st-dbk-remote-share" value="${esc(sr.db_backup_remote_share||'')}" placeholder="backups"/>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Remote Path</label>
+            <input type="text" id="st-dbk-remote-path" value="${esc(sr.db_backup_remote_path||'')}" placeholder="pingwatch/db"/>
+            <div class="fh" id="st-dbk-remote-path-hint">Directory relative to the user's home (SFTP) or under the share (SMB)</div>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Username</label>
+            <input type="text" id="st-dbk-remote-user" value="${esc(sr.db_backup_remote_user||'')}" autocomplete="off"/>
+          </div>
+          <div class="fr" style="margin-top:14px">
+            <label class="fl">Password</label>
+            <input type="password" id="st-dbk-remote-password" value="" placeholder="${sr.db_backup_remote_password_set?'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)':''}" autocomplete="new-password"/>
+          </div>
+          <div class="fr" style="margin-top:14px;display:${(sr.db_backup_remote_type||'sftp')==='sftp'?'flex':'none'}" id="st-dbk-remote-key-row">
+            <label class="fl">Private Key</label>
+            <textarea id="st-dbk-remote-key" placeholder="${sr.db_backup_remote_key_set?'(key stored \u2014 leave blank to keep)':'-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----'}" rows="4" style="font-family:monospace;font-size:11px;width:100%;resize:vertical"></textarea>
+            <div class="fh">Optional. If set, used instead of password. Passphrase-protected keys use the password field above.</div>
+          </div>
+          <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn-s" style="font-size:12px;padding:7px 14px" onclick="testDbBackupRemote()">&#x25B6; Test Connection</button>
+            <span id="dbk-remote-test-result" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+          <div id="dbk-remote-last-info" style="margin-top:6px;font-size:11px;color:var(--text3)">${sr.db_backup_remote_last_ts?`Last remote upload: ${esc(sr.db_backup_remote_last_ts)} \u2014 ${esc(sr.db_backup_remote_last_result)}`:(sr.db_backup_remote_last_result?`${esc(sr.db_backup_remote_last_result)}`:'')}</div>
+        </div><!-- /dbk-remote-collapse -->
       </div>
-      <div class="log-filter-bar">
-        <select id="logFTime" onchange="_onLogFilterChange()">
-          <option value="all">All time</option>
-          <option value="5m">Last 5 min</option>
-          <option value="15m">Last 15 min</option>
-          <option value="1h">Last 1 hour</option>
-          <option value="3h">Last 3 hours</option>
-          <option value="6h" selected>Last 6 hours</option>
-          <option value="12h">Last 12 hours</option>
-          <option value="24h">Last 24 hours</option>
-          <option value="custom">Custom range\u2026</option>
-        </select>
-        <div id="logFCustomWrap" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
-          <input type="datetime-local" id="logFCustomFrom" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
-          <span style="font-size:11px;color:var(--text3)">to</span>
-          <input type="datetime-local" id="logFCustomTo" onchange="_onLogFilterChange()" style="font-size:11px;padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);max-width:170px">
-        </div>
-        <select id="logFLevel" onchange="_onLogFilterChange()">
-          <option value="">All Levels</option>
-          <option value="DEBUG">DEBUG</option>
-          <option value="INFO">INFO</option>
-          <option value="WARNING">WARNING</option>
-          <option value="ERROR">ERROR</option>
-          <option value="CRITICAL">CRITICAL</option>
-        </select>
-        <input id="logFSearch" type="search" placeholder="Search logs\u2026 (level:error device:FortiGate)" oninput="_onLogFilterChange()" class="log-search">
-        <button class="log-clear-btn" onclick="_clearLogFilters()" title="Clear all filters">\u2715</button>
-        <div class="log-export-group">
-          <button class="log-export-btn" onclick="_exportLogCsv()" title="Export as CSV">\u2b07 CSV</button>
-          <button class="log-export-btn" onclick="_exportLogJson()" title="Export as JSON">\u2b07 JSON</button>
-        </div>
-      </div>
-      <div id="log-body" class="log-viewer"><span style="color:var(--text3)">Loading\u2026</span></div>
     </div>`;
 }
 
@@ -735,9 +1109,9 @@ function _buildSettingsTab_networking(sr, tr) {
           </label>
           <div class="fh">When enabled, a redirect server runs on the HTTP port and sends browsers to HTTPS automatically.</div>
         </div>
-
-        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)" id="net-cert-section">
-          ${_renderCertSection(tr)}
+        <div class="fh" style="margin-top:10px">
+          The server certificate and trusted CA certificates are managed in the
+          <a href="javascript:void(0)" onclick="switchSettingsTab('certificates')" style="color:var(--accent)">Certificates</a> tab.
         </div>
       </div>
 
@@ -745,6 +1119,174 @@ function _buildSettingsTab_networking(sr, tr) {
         Port changes and HTTPS toggle require a server restart to take effect.
       </div>
     </div>`;
+}
+
+function _buildSettingsTab_certificates(sr, tr) {
+  return `<div class="mbdy stab-fade" id="stab-certificates" style="display:none;overflow-y:auto;flex:1">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:12px">Server Certificate</div>
+      <div class="fh" style="margin-bottom:12px">The TLS certificate served by PingWatch's HTTPS listener (port ${tr.tls_port||8443}).</div>
+      <div id="net-cert-section">
+        ${_renderCertSection(tr)}
+      </div>
+
+      <div style="margin-top:24px;padding-top:18px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px">Trusted CA Certificates</div>
+        <div class="fh" style="margin-bottom:12px">
+          Used by HTTPS, HTTP-keyword, VMware, TLS, and SMTP sensors when SSL verification is enabled.
+          System CAs remain trusted; uploaded CAs are added on top.
+        </div>
+        <div id="trusted-cas-section">
+          <div style="font-size:12px;color:var(--text3);padding:12px 0">Loading…</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _renderTrustedCAsSection(cas) {
+  const list = Array.isArray(cas) ? cas : [];
+  let body;
+  if (list.length === 0) {
+    body = `<div style="padding:14px 14px;background:var(--bg3);border:1px dashed var(--border);border-radius:6px;font-size:12px;color:var(--text3)">
+      No trusted CAs uploaded. Upload an internal/corporate CA so sensors can verify private certificates without disabling SSL verification.
+    </div>`;
+  } else {
+    body = list.map(c => {
+      const days = _daysUntil(c.not_after);
+      const badgeColor = days < 0 ? 'var(--err)' : days <= 30 ? 'var(--warn)' : 'var(--ok)';
+      const badgeTxt   = days < 0 ? 'EXPIRED' : (days <= 30 ? `⚠ ${days}d left` : `✓ ${days}d`);
+      const fpShort    = (c.id || '').slice(0, 16);
+      return `<div style="padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="display:grid;grid-template-columns:90px 1fr;gap:4px 10px;font-size:12px">
+            <span style="color:var(--text3)">Subject</span><span style="word-break:break-all">${esc(c.subject||'—')}</span>
+            <span style="color:var(--text3)">Issuer</span><span style="word-break:break-all">${esc(c.issuer||'—')}</span>
+            <span style="color:var(--text3)">Expires</span><span>${esc(c.not_after||'—')} <span style="color:${badgeColor};font-weight:600">${badgeTxt}</span></span>
+            <span style="color:var(--text3)">Fingerprint</span><span style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(fpShort)}…</span>
+          </div>
+        </div>
+        <button class="btn-s" style="font-size:11px;padding:4px 10px;flex-shrink:0" onclick="deleteTrustedCA('${esc(c.id)}')">Delete</button>
+      </div>`;
+    }).join('');
+  }
+  return `${body}
+    <div style="margin-top:12px">
+      <button class="btn-s" onclick="openUploadCA()">Upload CA Certificate</button>
+    </div>`;
+}
+
+function _daysUntil(ymd) {
+  if (!ymd) return 0;
+  const d = new Date(ymd + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return 0;
+  return Math.floor((d.getTime() - Date.now()) / 86400000);
+}
+
+async function _loadTrustedCAs() {
+  const sec = document.getElementById('trusted-cas-section');
+  if (!sec) return;
+  try {
+    const r = await api('GET', '/api/tls/ca-certs');
+    sec.innerHTML = _renderTrustedCAsSection(r.cas || []);
+  } catch (e) {
+    sec.innerHTML = `<div style="font-size:12px;color:var(--err)">Failed to load trusted CAs: ${esc(e.message||e)}</div>`;
+  }
+}
+
+async function _refreshTrustedCAsSection() {
+  return _loadTrustedCAs();
+}
+
+let _ucaTab = 'pem';
+function _switchUcaTab(t) {
+  _ucaTab = t;
+  document.getElementById('uca-tab-pem').classList.toggle('active', t === 'pem');
+  document.getElementById('uca-tab-file').classList.toggle('active', t === 'file');
+  document.getElementById('uca-pane-pem').style.display  = t === 'pem'  ? '' : 'none';
+  document.getElementById('uca-pane-file').style.display = t === 'file' ? '' : 'none';
+}
+
+function openUploadCA() {
+  closeM('muca');
+  _ucaTab = 'pem';
+  const o = document.createElement('div'); o.className = 'mo'; o.id = 'muca';
+  _overlayClose(o, () => closeM('muca'));
+  o.innerHTML = `
+  <div class="mbox" style="width:580px;max-width:96vw">
+    <div class="mhd"><div class="mttl">Upload Trusted CA Certificate</div><button class="mclose" onclick="closeM('muca')">✕</button></div>
+    <div class="mbdy">
+      <div class="uc-tabs">
+        <button class="uc-tab active" id="uca-tab-pem"  onclick="_switchUcaTab('pem')">Paste PEM</button>
+        <button class="uc-tab"        id="uca-tab-file" onclick="_switchUcaTab('file')">Upload File</button>
+      </div>
+      <div id="uca-pane-pem">
+        <div class="fr">
+          <label class="fl">CA Certificate (PEM)</label>
+          <textarea id="uca-pem" rows="9" style="font-family:monospace;font-size:11px;resize:vertical" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+          <div class="fh" style="margin-top:6px">Paste a single CA certificate. Must be a CA (Basic Constraints CA:TRUE) and not expired.</div>
+        </div>
+      </div>
+      <div id="uca-pane-file" style="display:none">
+        <div class="fr">
+          <label class="fl">Certificate File</label>
+          <div class="fh" style="margin-bottom:6px">.cer, .crt, .pem, .der — DER or PEM encoded</div>
+          <input type="file" id="uca-f-cert" accept=".cer,.crt,.pem,.der"/>
+          <div id="uca-f-cert-name" class="uc-file-label"></div>
+        </div>
+      </div>
+      <div id="uca-err" style="display:none;margin-top:10px;padding:8px;background:var(--bg3);border-radius:4px;font-size:12px;color:var(--err)"></div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('muca')">Cancel</button>
+      <button class="btn-p" id="btn-uca-save" onclick="submitUploadCA()">Validate &amp; Add</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  // Mirror existing file-name display behaviour from openUploadCert
+  const fEl = document.getElementById('uca-f-cert');
+  if (fEl) fEl.addEventListener('change', () => {
+    const n = fEl.files?.[0]?.name || '';
+    document.getElementById('uca-f-cert-name').textContent = n ? `Selected: ${n}` : '';
+  });
+}
+
+async function submitUploadCA() {
+  const errEl = document.getElementById('uca-err');
+  const btn   = document.getElementById('btn-uca-save');
+  const showErr = msg => { errEl.textContent = msg; errEl.style.display = ''; };
+  btn.disabled = true; btn.textContent = 'Validating…';
+  errEl.style.display = 'none';
+  try {
+    let r;
+    if (_ucaTab === 'pem') {
+      const pem = (document.getElementById('uca-pem')?.value || '').trim();
+      if (!pem) { showErr('Paste a CA certificate in PEM format.'); btn.disabled = false; btn.textContent = 'Validate & Add'; return; }
+      r = await api('POST', '/api/tls/ca-certs', { pem });
+    } else {
+      const fEl = document.getElementById('uca-f-cert');
+      if (!fEl?.files?.length) { showErr('Select a certificate file.'); btn.disabled = false; btn.textContent = 'Validate & Add'; return; }
+      const cert_b64 = await _readFileAsB64(fEl);
+      r = await api('POST', '/api/tls/ca-certs', { cert_b64 });
+    }
+    if (r.error) { showErr(r.error); btn.disabled = false; btn.textContent = 'Validate & Add'; return; }
+    closeM('muca');
+    toast('CA certificate added', 'ok');
+    await _refreshTrustedCAsSection();
+  } catch (e) {
+    showErr('Request failed — check server connectivity.');
+    btn.disabled = false; btn.textContent = 'Validate & Add';
+  }
+}
+
+async function deleteTrustedCA(id) {
+  if (!confirm('Remove this trusted CA? Sensors that depend on it for SSL verification will start failing immediately.')) return;
+  try {
+    const r = await api('DELETE', `/api/tls/ca-certs/${encodeURIComponent(id)}`);
+    if (r.error) { toast(r.error, 'err'); return; }
+    toast('CA removed', 'ok');
+    await _refreshTrustedCAsSection();
+  } catch (e) {
+    toast('Failed to delete CA: ' + (e.message || e), 'err');
+  }
 }
 
 function _buildSettingsTab_backup(sr) {
@@ -829,7 +1371,13 @@ function _buildSettingsTab_alertRules() {
 }
 
 async function openSettings(initialTab){
-  _stopLogLive();
+  // Settings are admin-only — non-admins clicking the menu item previously
+  // saw "nothing happen" because /api/users / /api/tls returned 403 and the
+  // Promise.all rejected silently. Surface a clear message instead.
+  if ((S.role || 'viewer') !== 'admin') {
+    toast('Settings is admin-only — your account has read-only access.', 'err');
+    return;
+  }
   closeM('mset');
   const [sr, ur, tr] = await Promise.all([
     api('GET','/api/settings'),
@@ -838,12 +1386,12 @@ async function openSettings(initialTab){
   ]);
   window._tlsSettings = {...tr, org_name: sr.org_name||''};
   const o=document.createElement('div'); o.className='mo'; o.id='mset';
-  _overlayClose(o, ()=>{_stopLogLive();closeM('mset');});
+  _overlayClose(o, ()=>closeM('mset'));
   o.innerHTML=`
   <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
     <div class="mhd">
       <div class="mttl">⚙ Settings</div>
-      <button class="mclose" onclick="_stopLogLive();closeM('mset')">✕</button>
+      <button class="mclose" onclick="closeM('mset')">✕</button>
     </div>
     <div class="stab-layout">
     <nav class="stab-sidebar">
@@ -852,10 +1400,10 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
       <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
       <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
-      <button class="stab-nav" id="stab-btn-logs" onclick="switchSettingsTab('logs')">📜 Logs</button>
       <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">📄 Reports</button>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
+      <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">🔐 Certificates</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
     </nav>
@@ -865,10 +1413,10 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_groups()}
     ${_buildSettingsTab_integrations(sr)}
     ${_buildSettingsTab_database(sr)}
-    ${_buildSettingsTab_logs(sr)}
     ${_buildSettingsTab_reports(sr)}
     ${_buildSettingsTab_sensors(sr)}
     ${_buildSettingsTab_networking(sr, tr)}
+    ${_buildSettingsTab_certificates(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
     ${_buildSettingsTab_alertRules()}
     <div class="mft" id="stab-footer-general">
@@ -892,9 +1440,6 @@ async function openSettings(initialTab){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveDbBackupSettings()">Save DB Backup</button>
     </div>
-    <div class="mft" id="stab-footer-logs" style="display:none">
-      <span id="log-footer-label" style="font-size:11px;color:var(--text3)">Loading\u2026</span>
-    </div>
     <div class="mft" id="stab-footer-reports" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveReportSettings()">Save Report Settings</button>
@@ -906,6 +1451,9 @@ async function openSettings(initialTab){
     <div class="mft" id="stab-footer-networking" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
+    </div>
+    <div class="mft" id="stab-footer-certificates" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
     <div class="mft" id="stab-footer-backup" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -927,7 +1475,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','logs','reports','sensors','networking','backup','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','reports','sensors','networking','certificates','backup','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -961,13 +1509,13 @@ function switchSettingsTab(tab){
           nextEl.classList.remove('stab-out');
           setTimeout(() => {
             _stabSwitching = false;
-            if (tab === 'logs')         _loadLogTab();
             if (tab === 'sensors')      loadSensorsDefaultsTab();
             if (tab === 'backup')       _loadBackupScheduleSettings();
             if (tab === 'database')     _loadDbBackupSettings();
             if (tab === 'alert-rules')  { _alertingLoadRules(); _alertingLoadMaint(); }
             if (tab === 'groups')       _groupsLoad();
             if (tab === 'integrations') _loadIntegrationsStatus();
+            if (tab === 'certificates') _loadTrustedCAs();
           }, 220);
         });
       });
@@ -976,7 +1524,6 @@ function switchSettingsTab(tab){
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
     _stabSwitching = false;
-    if (tab === 'logs')        _loadLogTab();
     if (tab === 'sensors')     loadSensorsDefaultsTab();
     if (tab === 'backup')      _loadBackupScheduleSettings();
     if (tab === 'database')    _loadDbBackupSettings();
@@ -984,6 +1531,7 @@ function switchSettingsTab(tab){
     if (tab === 'maint')        _alertingLoadMaint();
     if (tab === 'groups')       _groupsLoad();
     if (tab === 'integrations') _loadIntegrationsStatus();
+    if (tab === 'certificates') _loadTrustedCAs();
   }
 }
 
@@ -1419,234 +1967,10 @@ async function submitInstallSigned(){
   }
 }
 
-let _activeLogTab = 'app';
-let _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
-let _logLiveMode = false;
-let _logLiveTimer = null;
-let _logLastTs = '';
-let _logData = [];
-let _logSearchDebounce = null;
-
-function _switchLogTab(key) {
-  _activeLogTab = key;
-  ['app','sensors','audit','backup'].forEach(k => {
-    document.getElementById(`lstab-btn-${k}`)?.classList.toggle('active', k === key);
-  });
-  _logLastTs = '';
-  _logData = [];
-  _loadLogTab();
-}
-
-function _parseLogSearch(raw) {
-  const result = { level: '', search: '' };
-  if (!raw) return result;
-  const parts = raw.trim().split(/\s+/);
-  const textParts = [];
-  for (const part of parts) {
-    const lower = part.toLowerCase();
-    if (lower.startsWith('level:')) {
-      const val = part.substring(6).toUpperCase();
-      if (['DEBUG','INFO','WARNING','ERROR','CRITICAL'].includes(val)) result.level = val;
-    } else if (lower.startsWith('device:')) {
-      textParts.push(part.substring(7));
-    } else {
-      textParts.push(part);
-    }
-  }
-  result.search = textParts.join(' ');
-  return result;
-}
-
-function _onLogFilterChange() {
-  _logFilter.timeRange = document.getElementById('logFTime')?.value || 'all';
-  _logFilter.level     = document.getElementById('logFLevel')?.value || '';
-  _logFilter.search    = document.getElementById('logFSearch')?.value || '';
-
-  const customWrap = document.getElementById('logFCustomWrap');
-  if (customWrap) customWrap.style.display = _logFilter.timeRange === 'custom' ? 'flex' : 'none';
-
-  if (_logFilter.timeRange === 'custom') {
-    _logFilter.customFrom = document.getElementById('logFCustomFrom')?.value || '';
-    _logFilter.customTo   = document.getElementById('logFCustomTo')?.value   || '';
-  } else {
-    _logFilter.customFrom = '';
-    _logFilter.customTo   = '';
-  }
-
-  _logLastTs = '';
-  clearTimeout(_logSearchDebounce);
-  _logSearchDebounce = setTimeout(_loadLogTab, 300);
-}
-
-function _clearLogFilters() {
-  _logFilter = { timeRange: '6h', level: '', search: '', customFrom: '', customTo: '' };
-  _logLastTs = '';
-  ['logFTime','logFLevel','logFSearch','logFCustomFrom','logFCustomTo'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (el.tagName === 'SELECT') el.value = (id === 'logFTime') ? '6h' : '';
-    else el.value = '';
-  });
-  const customWrap = document.getElementById('logFCustomWrap');
-  if (customWrap) customWrap.style.display = 'none';
-  _loadLogTab();
-}
-
-function _colorLog(text, searchTerm) {
-  if (!text) return '<span style="color:var(--text3)">(empty)</span>';
-  const e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
-  const hl = (searchTerm && searchTerm.trim())
-    ? (s => {
-        const escaped = e(s);
-        const q = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return escaped.replace(new RegExp(`(${q})`, 'gi'), '<mark class="ll-hl">$1</mark>');
-      })
-    : e;
-  return text.split('\n').map(line => {
-    if (!line) return '<div class="ll-row ll-empty"></div>';
-    const m = line.match(RE);
-    if (m) {
-      const [,ts,lvl,msg] = m;
-      return `<div class="ll-row"><span class="ll-pre"><span class="ll-ts">${hl(ts)}</span><span class="ll-${lvl.toLowerCase()}">${hl(lvl)}</span></span><span class="ll-msg">${hl(msg)}</span></div>`;
-    }
-    return `<div class="ll-row ll-cont"><span class="ll-msg">${hl(line)}</span></div>`;
-  }).join('');
-}
-
-async function _loadLogTab() {
-  const el  = document.getElementById('log-body');
-  const lbl = document.getElementById('log-footer-label');
-  if (!el) return;
-
-  // Sync dropdown values with _logFilter (may have been set externally, e.g. badge click)
-  const _lfEl = document.getElementById('logFLevel');
-  if (_lfEl && _lfEl.value !== _logFilter.level) _lfEl.value = _logFilter.level;
-
-  const parsed = _parseLogSearch(_logFilter.search);
-  const params = new URLSearchParams();
-  const level = parsed.level || _logFilter.level;
-  if (level) params.set('level', level);
-
-  const _dtLocal = d => d.getFullYear() + '-' +
-    String(d.getMonth()+1).padStart(2,'0') + '-' +
-    String(d.getDate()).padStart(2,'0') + ' ' +
-    String(d.getHours()).padStart(2,'0') + ':' +
-    String(d.getMinutes()).padStart(2,'0') + ':' +
-    String(d.getSeconds()).padStart(2,'0');
-
-  if (_logLiveMode && _logLastTs) {
-    params.set('after', _logLastTs);
-  } else if (_logFilter.timeRange === 'custom') {
-    if (_logFilter.customFrom) params.set('after',  _logFilter.customFrom.replace('T', ' '));
-    if (_logFilter.customTo)   params.set('before', _logFilter.customTo.replace('T', ' '));
-  } else if (_logFilter.timeRange !== 'all') {
-    const offsets = { '5m': 5*60, '15m': 15*60, '1h': 3600, '3h': 3*3600, '6h': 6*3600, '12h': 12*3600, '24h': 86400 };
-    const sec = offsets[_logFilter.timeRange];
-    if (sec) params.set('after', _dtLocal(new Date(Date.now() - sec * 1000)));
-  }
-  if (parsed.search) params.set('search', parsed.search);
-  const qs = params.toString();
-  const url = `/api/logs/${_activeLogTab}` + (qs ? '?' + qs : '');
-
-  try {
-    const r = await fetch(url);
-    if (!r.ok) { el.textContent = 'Access denied'; return; }
-    const d = await r.json();
-    const searchTerm = parsed.search || '';
-
-    if (_logLiveMode && _logLastTs) {
-      if (d.lines) el.innerHTML += _colorLog(d.lines, searchTerm);
-      // no new lines → keep existing content
-    } else {
-      el.innerHTML = _colorLog(d.lines || '(empty)', searchTerm);
-      _logData = (d.lines || '').split('\n').filter(l => l);
-    }
-
-    if (d.lines) {
-      const lines = d.lines.split('\n');
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const tm = lines[i].match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
-        if (tm) { _logLastTs = tm[1]; break; }
-      }
-    }
-
-    if (_logLiveMode) el.scrollTop = el.scrollHeight;
-
-    const names = { app:'pingwatch.log', sensors:'pingwatchsensors.log',
-                    audit:'pingwatchaudit.log', backup:'pingwatchbackup.log' };
-    if (lbl) {
-      const showing = d.shown != null ? d.shown.toLocaleString() : '?';
-      const total   = d.total != null ? d.total.toLocaleString() : '?';
-      lbl.textContent = `Showing ${showing} / ${total} logs \u00b7 ${names[_activeLogTab] || ''}`;
-    }
-  } catch(e) {
-    el.textContent = `Failed to load: ${String(e)}`;
-  }
-}
-
-function _toggleLogLive() {
-  _logLiveMode = !_logLiveMode;
-  const btn = document.getElementById('logLiveBtn');
-  if (btn) {
-    btn.classList.toggle('log-live-on', _logLiveMode);
-    btn.textContent = _logLiveMode ? '\uD83D\uDFE2 Live' : '\u25cb Live';
-  }
-  if (_logLiveMode) {
-    _logLastTs = '';
-    _loadLogTab();
-    _logLiveTimer = setInterval(() => {
-      if (!document.getElementById('log-body')) { _stopLogLive(); return; }
-      _loadLogTab();
-    }, 3000);
-  } else {
-    _stopLogLive();
-  }
-}
-
-function _stopLogLive() {
-  _logLiveMode = false;
-  if (_logLiveTimer) { clearInterval(_logLiveTimer); _logLiveTimer = null; }
-  const btn = document.getElementById('logLiveBtn');
-  if (btn) { btn.classList.remove('log-live-on'); btn.textContent = '\u25cb Live';}
-}
-
-function _exportLogCsv() {
-  if (!_logData.length) { toast('No log data to export','warn'); return; }
-  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
-  const header = 'Timestamp,Level,Message\n';
-  const rows = _logData.map(line => {
-    const m = line.match(RE);
-    if (m) return [m[1], m[2], m[3]].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(',');
-    return '"","","' + String(line).replace(/"/g,'""') + '"';
-  });
-  _logDownload(`pingwatch-${_activeLogTab}.csv`, header + rows.join('\n'), 'text/csv');
-}
-
-function _exportLogJson() {
-  if (!_logData.length) { toast('No log data to export','warn'); return; }
-  const RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)/;
-  const out = _logData.map(line => {
-    const m = line.match(RE);
-    if (m) return { timestamp: m[1], level: m[2], message: m[3] };
-    return { timestamp: '', level: '', message: line };
-  });
-  _logDownload(`pingwatch-${_activeLogTab}.json`, JSON.stringify(out, null, 2), 'application/json');
-}
-
-function _logDownload(filename, content, mime) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type: mime }));
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-}
-
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
 
-const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300};
-const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000};
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:2000, ssh:1500, sftp:2000, radius:500};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:5000, ssh:4000, sftp:5000, radius:2000};
 
 const _SDR_META = {
   ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},
@@ -1657,6 +1981,10 @@ const _SDR_META = {
   tls:          {ico:'🔒', label:'TLS',          desc:'TLS/SSL certificate expiry'},
   http_keyword: {ico:'🏷', label:'HTTP Keyword', desc:'HTTP response body search'},
   banner:       {ico:'📋', label:'Banner',       desc:'TCP banner / regex match'},
+  smtp:         {ico:'✉',  label:'SMTP',         desc:'Mail server reachability + MAIL FROM round-trip'},
+  ssh:          {ico:'⇲',  label:'SSH',          desc:'SSH port / banner / full auth (password or key)'},
+  sftp:         {ico:'⇑',  label:'SFTP',         desc:'SFTP subsystem + list / stat / SHA256 file integrity'},
+  radius:       {ico:'R',  label:'RADIUS',       desc:'AAA auth server reachability / full auth (PAP)'},
 };
 
 function _sdrExtraFields(type, d){
@@ -1839,11 +2167,21 @@ async function saveSensorTypeDefaults(){
 function renderUserTable(users){
   if(!users||!users.length) return '<div style="color:var(--text3);font-size:12px;padding:8px 0">No users found.</div>';
   const rows=users.map(u=>{
-    const isLdap=u.auth_type==='ldap';
+    const isLdap  =u.auth_type==='ldap';
+    const isRadius=u.auth_type==='radius';
+    const isSaml  =u.auth_type==='saml';
+    const isOidc  =u.auth_type==='oidc';
+    const isRemote=isLdap||isRadius||isSaml||isOidc;
     const badge=isLdap
       ?`<span class="usr-badge-ldap">🌐 Domain</span>`
-      :`<span class="usr-badge-local">🔑 Local</span>`;
-    const resetBtn=isLdap?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
+      :isRadius
+        ?`<span class="usr-badge-radius">🧾 RADIUS</span>`
+        :isSaml
+          ?`<span class="usr-badge-saml">🪪 SAML</span>`
+          :isOidc
+            ?`<span class="usr-badge-oidc">🪙 OIDC</span>`
+            :`<span class="usr-badge-local">🔑 Local</span>`;
+    const resetBtn=isRemote?'':`<button onclick="openResetPw('${esc(u.username)}')">🔑 Reset Pw</button>`;
     const totpBtn=u.totp_enabled
       ?`<button onclick="adminReset2FA('${esc(u.username)}')" title="Disable this user's two-factor authentication (e.g. lost phone)">🔐 Reset 2FA</button>`
       :'';
@@ -2048,6 +2386,31 @@ function _dbkFreqChange(){
   if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
 }
 
+function _toggleDbBackupRemote(){
+  const body = document.getElementById('dbk-remote-collapse');
+  const chevron = document.getElementById('dbk-remote-chevron');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if(chevron) chevron.style.transform = open ? 'rotate(-90deg)' : 'rotate(0deg)';
+}
+
+function _dbkRemoteTypeChange(){
+  const type = document.getElementById('st-dbk-remote-type')?.value || 'sftp';
+  const shareRow = document.getElementById('st-dbk-remote-share-row');
+  const keyRow   = document.getElementById('st-dbk-remote-key-row');
+  const portEl   = document.getElementById('st-dbk-remote-port');
+  const hint     = document.getElementById('st-dbk-remote-path-hint');
+  if(shareRow) shareRow.style.display = type === 'smb' ? 'flex' : 'none';
+  if(keyRow)   keyRow.style.display   = type === 'sftp' ? 'flex' : 'none';
+  if(portEl && (portEl.value === '' || portEl.value === '22' || portEl.value === '445')){
+    portEl.value = type === 'smb' ? '445' : '22';
+  }
+  if(hint) hint.textContent = type === 'smb'
+    ? 'Subdirectory under the share (use forward slashes, e.g. pingwatch/db)'
+    : "Directory relative to the user's home (absolute paths allowed)";
+}
+
 async function _loadDbStats(){
   const mainEl = document.getElementById('db-stats-main');
   const logsEl = document.getElementById('db-stats-logs');
@@ -2188,6 +2551,37 @@ async function _loadDbBackupSettings(){
   const lastInfo = document.getElementById('dbk-last-info');
   if(lastInfo) lastInfo.textContent = r.db_backup_last_ts
     ? `Last backup: ${r.db_backup_last_ts} \u2014 ${r.db_backup_last_result}` : '';
+
+  // Remote upload fields
+  const rEn    = document.getElementById('st-dbk-remote-enabled');
+  const rType  = document.getElementById('st-dbk-remote-type');
+  const rHost  = document.getElementById('st-dbk-remote-host');
+  const rPort  = document.getElementById('st-dbk-remote-port');
+  const rShare = document.getElementById('st-dbk-remote-share');
+  const rPath  = document.getElementById('st-dbk-remote-path');
+  const rUser  = document.getElementById('st-dbk-remote-user');
+  const rPw    = document.getElementById('st-dbk-remote-password');
+  const rKey   = document.getElementById('st-dbk-remote-key');
+  if(rEn)    rEn.checked  = !!r.db_backup_remote_enabled;
+  if(rType)  rType.value  = r.db_backup_remote_type || 'sftp';
+  if(rHost)  rHost.value  = r.db_backup_remote_host  || '';
+  if(rPort)  rPort.value  = r.db_backup_remote_port  || 22;
+  if(rShare) rShare.value = r.db_backup_remote_share || '';
+  if(rPath)  rPath.value  = r.db_backup_remote_path  || '';
+  if(rUser)  rUser.value  = r.db_backup_remote_user  || '';
+  if(rPw)    rPw.placeholder = r.db_backup_remote_password_set ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)' : '';
+  if(rKey)   rKey.placeholder = r.db_backup_remote_key_set ? '(key stored \u2014 leave blank to keep)' : '-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----';
+  _dbkRemoteTypeChange();
+  const rLast = document.getElementById('dbk-remote-last-info');
+  if(rLast){
+    if(r.db_backup_remote_last_ts){
+      rLast.textContent = `Last remote upload: ${r.db_backup_remote_last_ts} \u2014 ${r.db_backup_remote_last_result||'ok'}`;
+    } else if(r.db_backup_remote_last_result){
+      rLast.textContent = r.db_backup_remote_last_result;
+    } else {
+      rLast.textContent = '';
+    }
+  }
 }
 
 async function saveDbBackupSettings(){
@@ -2205,20 +2599,47 @@ async function saveDbBackupSettings(){
   const btn = document.querySelector('#stab-footer-database .btn-p');
   if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
   try {
-    const r = await api('PATCH', '/api/settings', {
+    const body = {
       db_backup_enabled: enabled,
       db_backup_freq:    freq,
       db_backup_time:    time,
       db_backup_days:    days.length ? days.join(',') : '1,2,3,4,5,6,7',
       db_backup_keep:    keep,
-    });
+    };
+    // Remote upload fields
+    const rEn    = document.getElementById('st-dbk-remote-enabled');
+    const rType  = document.getElementById('st-dbk-remote-type');
+    const rHost  = document.getElementById('st-dbk-remote-host');
+    const rPort  = document.getElementById('st-dbk-remote-port');
+    const rShare = document.getElementById('st-dbk-remote-share');
+    const rPath  = document.getElementById('st-dbk-remote-path');
+    const rUser  = document.getElementById('st-dbk-remote-user');
+    const rPw    = document.getElementById('st-dbk-remote-password');
+    const rKey   = document.getElementById('st-dbk-remote-key');
+    if(rEn)    body.db_backup_remote_enabled = rEn.checked ? 1 : 0;
+    if(rType)  body.db_backup_remote_type    = rType.value || 'sftp';
+    if(rHost)  body.db_backup_remote_host    = (rHost.value || '').trim();
+    if(rPort)  body.db_backup_remote_port    = parseInt(rPort.value) || (body.db_backup_remote_type === 'smb' ? 445 : 22);
+    if(rShare) body.db_backup_remote_share   = (rShare.value || '').trim();
+    if(rPath)  body.db_backup_remote_path    = (rPath.value || '').trim();
+    if(rUser)  body.db_backup_remote_user    = (rUser.value || '').trim();
+    if(rPw && rPw.value) body.db_backup_remote_password = rPw.value;
+    if(rKey && rKey.value && rKey.value.trim()) body.db_backup_remote_key = rKey.value;
+
+    const r = await api('PATCH', '/api/settings', body);
     if(!r?.ok){ toast('Failed to save DB backup settings','err'); return; }
+    // Clear plaintext secret fields post-save so they don't linger in the DOM
+    if(rPw)  rPw.value  = '';
+    if(rKey) rKey.value = '';
     toast('Database backup settings saved','ok');
   } catch(e) {
     toast('Failed to save DB backup settings','err');
+    return;
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Save DB Backup'; }
   }
+  // Reload outside the try so its errors don't masquerade as save failures
+  try { await _loadDbBackupSettings(); } catch(_) {}
 }
 
 async function runDbBackupNow(){
@@ -2236,6 +2657,35 @@ async function runDbBackupNow(){
     if(res) res.innerHTML = `<span style="color:var(--down)">\u2718 Request failed</span>`;
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='\u25B6 Run Backup Now'; }
+  }
+}
+
+async function testDbBackupRemote(){
+  const btn = document.querySelector('[onclick="testDbBackupRemote()"]');
+  const res = document.getElementById('dbk-remote-test-result');
+  if(btn){ btn.disabled=true; btn.textContent='Testing...'; }
+  if(res) res.textContent = '';
+  const body = {
+    db_backup_remote_type:  document.getElementById('st-dbk-remote-type')?.value || 'sftp',
+    db_backup_remote_host:  (document.getElementById('st-dbk-remote-host')?.value || '').trim(),
+    db_backup_remote_port:  parseInt(document.getElementById('st-dbk-remote-port')?.value) || 22,
+    db_backup_remote_share: (document.getElementById('st-dbk-remote-share')?.value || '').trim(),
+    db_backup_remote_path:  (document.getElementById('st-dbk-remote-path')?.value || '').trim(),
+    db_backup_remote_user:  (document.getElementById('st-dbk-remote-user')?.value || '').trim(),
+  };
+  const pwEl  = document.getElementById('st-dbk-remote-password');
+  const keyEl = document.getElementById('st-dbk-remote-key');
+  if(pwEl  && pwEl.value)  body.db_backup_remote_password = pwEl.value;
+  if(keyEl && keyEl.value && keyEl.value.trim()) body.db_backup_remote_key = keyEl.value;
+  try {
+    const r = await api('POST', '/api/db/backup/test-remote', body);
+    if(res) res.innerHTML = r.ok
+      ? `<span style="color:var(--up)">\u2714 ${esc(r.msg||'Connected')}</span>`
+      : `<span style="color:var(--down)">\u2718 ${esc(r.msg||'Test failed')}</span>`;
+  } catch(e) {
+    if(res) res.innerHTML = `<span style="color:var(--down)">\u2718 Request failed</span>`;
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='\u25B6 Test Connection'; }
   }
 }
 
@@ -2260,13 +2710,31 @@ function _renderIntegStatus(id, status) {
   const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
   const lastLabels = {smtp: 'Last email sent', syslog: 'Last message sent', ldap: 'Last auth/sync'};
   const lastLabel  = lastLabels[id] || 'Last';
-  const errHtml = (status.state === 'error' && status.last_err_msg)
-    ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(status.last_err_msg)}</div>` : '';
+  // SMTP carries a separate "probe" signal — startup / post-save connectivity check
+  // that doesn't actually deliver mail. Show both lines so a healthy installation
+  // with no recent alerts still reads as verified, not stale.
+  let extraLineHtml = '';
+  if (id === 'smtp' && (status.last_probe_ok_ts || status.last_probe_err_ts)) {
+    const probeOk  = status.last_probe_ok_ts ? _timeAgo(status.last_probe_ok_ts) : 'Never';
+    extraLineHtml = `<span style="font-size:11px;color:var(--text3);margin-left:10px">Last verified: ${probeOk}</span>`;
+  }
+  // Show the most relevant error message — prefer probe error if it's the
+  // newest signal, otherwise fall back to send error.
+  let errMsg = '';
+  if (status.state === 'error') {
+    const sendErrTs  = status.last_err_ts       || 0;
+    const probeErrTs = status.last_probe_err_ts || 0;
+    if (probeErrTs >= sendErrTs && status.last_probe_err_msg) errMsg = status.last_probe_err_msg;
+    else if (status.last_err_msg)                              errMsg = status.last_err_msg;
+  }
+  const errHtml = errMsg
+    ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(errMsg)}</div>` : '';
   el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
     <span style="font-size:16px;line-height:1.3">${icon}</span>
     <div>
       <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
       <span style="font-size:11px;color:var(--text3);margin-left:10px">${lastLabel}: ${lastOk}</span>
+      ${extraLineHtml}
       ${errHtml}
     </div>
   </div>`;
@@ -2275,7 +2743,7 @@ function _renderIntegStatus(id, status) {
 }
 
 function switchIntegTab(name) {
-  ['smtp', 'syslog', 'ldap'].forEach(t => {
+  ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].forEach(t => {
     document.getElementById(`itab-${t}`)?.classList.toggle('itab-active', t === name);
     const p = document.getElementById(`ipanel-${t}`);
     if (p) p.style.display = t === name ? '' : 'none';
@@ -2285,8 +2753,11 @@ function switchIntegTab(name) {
   const testSyslogBtn = document.getElementById('integ-btn-test-syslog');
   if (testSmtpBtn)   testSmtpBtn.style.display   = name === 'smtp'   ? '' : 'none';
   if (testSyslogBtn) testSyslogBtn.style.display  = name === 'syslog' ? '' : 'none';
-  // Load LDAP fields each time the tab is shown
-  if (name === 'ldap') _loadLdapPanel();
+  // Load panel contents when its tab is shown
+  if (name === 'ldap')   _loadLdapPanel();
+  if (name === 'radius') _loadRadiusPanel();
+  if (name === 'saml')   _loadSamlPanel();
+  if (name === 'oidc')   _loadOidcPanel();
 }
 
 async function _loadIntegrationsStatus() {
@@ -2295,25 +2766,105 @@ async function _loadIntegrationsStatus() {
     if (r.smtp_status)   _renderIntegStatus('smtp',   r.smtp_status);
     if (r.syslog_status) _renderIntegStatus('syslog', r.syslog_status);
     if (r.ldap_status)   _renderIntegStatus('ldap',   r.ldap_status);
+    if (r.radius_status) _renderIntegStatus('radius', r.radius_status);
+    if (r.saml_status)   _renderIntegStatus('saml',   r.saml_status);
+    if (r.oidc_status)   _renderIntegStatus('oidc',   r.oidc_status);
+    _renderAuthRefreshLastRun(r.auth_refresh_last_ts, r.auth_refresh_interval_min);
   } catch(e) { /* non-critical */ }
   // Show correct footer buttons for the currently visible sub-tab
-  const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+  const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].find(
     t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
   ) || 'smtp';
   switchIntegTab(activeSubTab);
+}
+
+function _renderAuthRefreshLastRun(lastTs, intervalMin) {
+  const el = document.getElementById('auth-refresh-last');
+  if (!el) return;
+  if (!lastTs) {
+    el.textContent = 'never';
+    el.style.color = 'var(--text3)';
+    return;
+  }
+  const ageSec = Math.floor(Date.now() / 1000 - lastTs);
+  let label;
+  if (ageSec < 60)         label = `${ageSec}s ago`;
+  else if (ageSec < 3600)  label = `${Math.floor(ageSec / 60)}m ago`;
+  else if (ageSec < 86400) label = `${Math.floor(ageSec / 3600)}h ago`;
+  else                     label = `${Math.floor(ageSec / 86400)}d ago`;
+  // Green if within 2× the configured interval (allows for one missed tick),
+  // yellow if older, neutral if interval is 0 (refresh disabled).
+  const interval = Number(intervalMin) || 60;
+  const ageMin = ageSec / 60;
+  let color = 'var(--text2)';
+  if (interval > 0) {
+    if (ageMin <= interval * 2)      color = 'var(--up)';
+    else                             color = 'var(--warn)';
+  }
+  el.textContent = label;
+  el.style.color = color;
+}
+
+async function saveAuthRefreshInterval() {
+  const sel = document.getElementById('auth-refresh-interval');
+  if (!sel) return;
+  const v = parseInt(sel.value, 10);
+  const msg = document.getElementById('auth-refresh-msg');
+  try {
+    await api('PATCH', '/api/settings', { auth_refresh_interval_min: v });
+    if (msg) {
+      msg.textContent = v === 0 ? 'Refresh disabled — boot sanity check still runs.'
+                                : `Refresh interval set to ${v} min.`;
+      msg.style.color = 'var(--up)';
+      setTimeout(() => { if (msg) msg.textContent = ''; }, 4000);
+    }
+  } catch(e) {
+    if (msg) {
+      msg.textContent = 'Save failed: ' + (e.message || e);
+      msg.style.color = 'var(--down)';
+    }
+  }
+}
+
+async function triggerAuthRefreshNow() {
+  const msg = document.getElementById('auth-refresh-msg');
+  if (msg) { msg.textContent = 'Triggering…'; msg.style.color = 'var(--text3)'; }
+  try {
+    const r = await api('POST', '/api/auth/health/run_now', {});
+    if (msg) {
+      msg.textContent = r.ok ? 'Refresh triggered — badges will update in a few seconds.'
+                             : ('Trigger failed: ' + (r.error || ''));
+      msg.style.color = r.ok ? 'var(--up)' : 'var(--down)';
+    }
+    // Re-poll status a few times to reflect the result without forcing a full reload.
+    setTimeout(_loadIntegrationsStatus, 2000);
+    setTimeout(_loadIntegrationsStatus, 6000);
+    setTimeout(_loadIntegrationsStatus, 12000);
+  } catch(e) {
+    if (msg) {
+      msg.textContent = 'Trigger failed: ' + (e.message || e);
+      msg.style.color = 'var(--down)';
+    }
+  }
 }
 
 async function _saveIntegrations() {
   const btn = document.getElementById('integ-btn-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
   try {
-    const activeSubTab = ['smtp', 'syslog', 'ldap'].find(
+    const activeSubTab = ['smtp', 'syslog', 'ldap', 'radius', 'saml', 'oidc'].find(
       t => document.getElementById(`ipanel-${t}`)?.style.display !== 'none'
     ) || 'smtp';
     if (activeSubTab === 'smtp') {
       await saveSettings();
     } else if (activeSubTab === 'ldap') {
       await saveLdapSettings();
+    } else if (activeSubTab === 'radius') {
+      await saveRadiusSettings();
+    } else if (activeSubTab === 'saml') {
+      await saveSamlSettings();
+    } else if (activeSubTab === 'oidc') {
+      await saveOidcSettings();
     } else {
       await saveSyslogSettings();
     }

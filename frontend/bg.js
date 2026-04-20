@@ -11,22 +11,46 @@
   let _bgRafId = null;
 
   // Theme-aware color cache — refreshed on 'themechange'.
-  // Default dark values match the original hardcoded rgbas so first paint
-  // before theme.js runs still looks correct.
-  const C = { accent:[47,129,247], up:[35,209,139] };
+  // Per-layer alpha scales: mesh wants a boost on white, but aurora orbs
+  // and the scan beam want to be *dimmer* — a single global multiplier
+  // overshoots and renders the scan as a visible horizontal band.
+  const C = {
+    accent:[47,129,247], up:[35,209,139],
+    hue: 213,
+    meshScale: 1, auroraScale: 1, scanScale: 1,
+  };
+  function rgbToHue(r,g,b){
+    r/=255; g/=255; b/=255;
+    const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn;
+    if(d===0) return 213;
+    let h;
+    if(mx===r)      h=((g-b)/d)%6;
+    else if(mx===g) h=(b-r)/d+2;
+    else            h=(r-g)/d+4;
+    h*=60; if(h<0) h+=360;
+    return h;
+  }
   function _refreshColors(){
+    const light = document.documentElement.getAttribute('data-theme') === 'light';
+    C.meshScale   = light ? 1.7  : 1;
+    C.auroraScale = light ? 0.6  : 1;
+    C.scanScale   = light ? 0.55 : 1;
     if (!window.getCssRgb) return;
-    const a = window.getCssRgb('--accent'); if (a) C.accent = a;
-    const u = window.getCssRgb('--up');     if (u) C.up = u;
+    const a = window.getCssRgb('--accent');
+    if (a) { C.accent = a; C.hue = rgbToHue(a[0],a[1],a[2]); }
+    const u = window.getCssRgb('--up'); if (u) C.up = u;
   }
   _refreshColors();
   window.addEventListener('themechange', _refreshColors);
 
-  // Aurora orbs
+  // Aurora orbs — dh is hue offset from C.hue (theme accent), so orbs
+  // always sit in the same color family as --accent instead of drifting
+  // into purple/cyan blobs on white. Offsets preserve today's dark-mode
+  // spread (dark accent hue ~215 → 220, 255, 190).
   const ORBS = [
-    {xr:.18, yr:.25, r:.38, h:220, s:.8, spd:.00008},
-    {xr:.75, yr:.65, r:.32, h:255, s:.7, spd:.00012},
-    {xr:.55, yr:.12, r:.25, h:190, s:.6, spd:.00015},
+    {xr:.18, yr:.25, r:.38, dh:5,   s:.8, spd:.00008},
+    {xr:.75, yr:.65, r:.32, dh:40,  s:.7, spd:.00012},
+    {xr:.55, yr:.12, r:.25, dh:-25, s:.6, spd:.00015},
   ];
 
   function resize(){
@@ -55,10 +79,10 @@
       const cy = H * (o.yr + Math.cos(phase)*.06);
       const rx = W * o.r * (1 + Math.sin(phase*.7)*.08);
       const ry = H * o.r * .6 * (1 + Math.cos(phase*.9)*.06);
-      const hue = o.h + Math.sin(phase*.5)*20;
+      const hue = C.hue + o.dh + Math.sin(phase*.5)*20;
       const g = ctx.createRadialGradient(cx,cy,0, cx,cy, Math.max(rx,ry));
-      g.addColorStop(0,   hsl(hue, 80, 60, o.s*.18));
-      g.addColorStop(0.4, hsl(hue, 70, 50, o.s*.08));
+      g.addColorStop(0,   hsl(hue, 80, 60, o.s*.18*C.auroraScale));
+      g.addColorStop(0.4, hsl(hue, 70, 50, o.s*.08*C.auroraScale));
       g.addColorStop(1,   hsl(hue, 60, 40, 0));
       ctx.save();
       ctx.scale(1, ry/rx);
@@ -84,7 +108,7 @@
         // scan glow on edges
         const sd = Math.min(Math.abs(ay-scan), Math.abs(by-scan));
         const boost = sd < 50 ? .08*(1-sd/50) : 0;
-        ctx.strokeStyle = `rgba(${C.accent.join(',')},${fade*.09+boost})`;
+        ctx.strokeStyle = `rgba(${C.accent.join(',')},${(fade*.09+boost)*C.meshScale})`;
         ctx.lineWidth = .7;
         ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
       }
@@ -97,13 +121,13 @@
       // glow halo
       if(boost > .1){
         const g2 = ctx.createRadialGradient(x,y,0,x,y,8);
-        g2.addColorStop(0,`rgba(${C.accent.join(',')},${boost*.3})`);
+        g2.addColorStop(0,`rgba(${C.accent.join(',')},${boost*.3*C.meshScale})`);
         g2.addColorStop(1,`rgba(${C.accent.join(',')},0)`);
         ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2);
         ctx.fillStyle=g2; ctx.fill();
       }
       ctx.beginPath(); ctx.arc(x,y,n.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(${C.accent.join(',')},${a})`; ctx.fill();
+      ctx.fillStyle=`rgba(${C.accent.join(',')},${a*C.meshScale})`; ctx.fill();
     });
   }
 
@@ -113,14 +137,14 @@
     // primary beam
     const sg = ctx.createLinearGradient(0,scan-60,0,scan+60);
     sg.addColorStop(0,   `rgba(${acc},0)`);
-    sg.addColorStop(.45, `rgba(${acc},.055)`);
-    sg.addColorStop(.5,  `rgba(${acc},.18)`);
-    sg.addColorStop(.55, `rgba(${acc},.055)`);
+    sg.addColorStop(.45, `rgba(${acc},${.055*C.scanScale})`);
+    sg.addColorStop(.5,  `rgba(${acc},${.18*C.scanScale})`);
+    sg.addColorStop(.55, `rgba(${acc},${.055*C.scanScale})`);
     sg.addColorStop(1,   `rgba(${acc},0)`);
     ctx.fillStyle=sg;
     ctx.fillRect(0, scan-60, W, 120);
     // thin bright line
-    ctx.strokeStyle=`rgba(${acc},.22)`;
+    ctx.strokeStyle=`rgba(${acc},${.22*C.scanScale})`;
     ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(0,scan); ctx.lineTo(W,scan); ctx.stroke();
   }

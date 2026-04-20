@@ -22,7 +22,11 @@ try:
     import pystray
     from PIL import Image, ImageDraw
     _TRAY = True
-except ImportError:
+except Exception:
+    # ImportError: pystray/PIL not installed.
+    # ValueError / other: headless Linux — pystray tries to load a GUI backend
+    # (appindicator/Gtk, xorg) at import time and raises when the namespace is
+    # absent. Either way, tray is not available; keep running.
     _TRAY = False
 
 import core.settings as _settings
@@ -56,13 +60,24 @@ _STATIC_TYPES = {
 }
 
 # ── JS files inlined into index.html ─────────────────────────────
-_JS_FILES = [
+# Vendored third-party JS is listed first so library globals (e.g. GridStack)
+# are available before our own scripts execute.
+_VENDOR_JS_FILES = [
+    "gridstack/gridstack-all.js",
+]
+_JS_FILES = _VENDOR_JS_FILES + [
     "theme.js",
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
-    "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js",
+    "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
+    "forms-saml.js", "forms-oidc.js",
     "forms-discovery.js",
-    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "alerting.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "app.js",
+]
+
+# Vendored CSS appended to the inline <style> block in the same order.
+_VENDOR_CSS_FILES = [
+    "gridstack/gridstack.min.css",
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
@@ -121,8 +136,13 @@ def _load_html() -> bytes:
         css_f = os.path.join(FRONTEND_DIR, "style.css")
         with open(base, "r", encoding="utf-8") as f:
             html = f.read()
+        css_parts = []
+        for name in _VENDOR_CSS_FILES:
+            with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
+                css_parts.append(f.read())
         with open(css_f, "r", encoding="utf-8") as f:
-            html = html.replace("<!-- STYLE_INJECT -->", f"<style>{f.read()}</style>", 1)
+            css_parts.append(f.read())
+        html = html.replace("<!-- STYLE_INJECT -->", f"<style>{''.join(css_parts)}</style>", 1)
         js_parts = []
         for name in _JS_FILES:
             with open(os.path.join(FRONTEND_DIR, name), "r", encoding="utf-8") as f:
@@ -285,8 +305,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return None
-            return json.loads(self.rfile.read(n)) if n else {}
-        except (ValueError, json.JSONDecodeError):
+            if n == 0:
+                return {}
+            raw = self.rfile.read(n)
+            ctype = (self.headers.get("Content-Type", "") or "").lower()
+            # application/x-www-form-urlencoded — used by SAML ACS and OAuth callbacks
+            if ctype.startswith("application/x-www-form-urlencoded"):
+                from urllib.parse import parse_qs
+                try:
+                    parsed = parse_qs(raw.decode("utf-8", errors="replace"),
+                                      keep_blank_values=True)
+                    return {k: (v[0] if v else "") for k, v in parsed.items()}
+                except Exception:
+                    return {}
+            try:
+                return json.loads(raw) if raw else {}
+            except (ValueError, json.JSONDecodeError):
+                return {}
+        except Exception:
             return {}
 
     # ── GET ───────────────────────────────────────────────────────
@@ -357,8 +393,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -383,8 +419,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -392,12 +428,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -598,6 +634,16 @@ def main():
     from core.logger import set_debug_mode as _set_dbg
     _set_dbg(int(_settings.get("debug_mode", 0) or 0) == 1)
 
+    # Auth backend config sanity pass — populates status badges for LDAP /
+    # RADIUS / SAML / OIDC before the HTTP listener is up. Fast + local-only:
+    # no network calls, no heavy crypto. Failures are logged; the hourly
+    # refresh thread (started further below) does the live checks.
+    try:
+        from core.auth_health import boot_sanity_pass
+        boot_sanity_pass()
+    except Exception as _e:
+        log.warning(f"Auth boot sanity pass crashed: {_e}")
+
     # Auto-scale probe executor: 1 worker per 4 sensors, clamped [64, 512].
     # Manual override: set max_workers_executor to 4-512 in settings.
     # Setting it to 0 (or blank in UI) returns to auto mode.
@@ -739,11 +785,35 @@ def main():
     _attach_app_log_handlers()
     from core.ldap_auth import ldap_sync_loop
     threading.Thread(target=ldap_sync_loop, daemon=True, name="ldap-sync").start()
+
+    # Background auth health refresh — revalidates LDAP bind, OIDC discovery,
+    # and certs on auth_refresh_interval_min (default 60min). Catches rotated
+    # credentials / expired certs before a user hits the error.
+    try:
+        from core.auth_health import start_auth_refresh_loop
+        start_auth_refresh_loop()
+    except Exception as _e:
+        log.warning(f"Auth refresh loop did not start: {_e}")
+
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
     _local_url = f"{_scheme}://127.0.0.1:{app_state.effective_port}"
     log.info(f"PingWatch ready -> {_local_url}")
+
+    # ── SMTP startup probe ─────────────────────────────────────────────
+    # Verify SMTP reachability shortly after startup so the badge reflects
+    # real connectivity instead of staying yellow ("Configured") until the
+    # first alert email fires. 10s delay lets the server settle and avoids
+    # racing against settings load on slow disks.
+    def _smtp_probe_delayed():
+        try:
+            time.sleep(10)
+            from monitoring.smtp_alert import run_smtp_startup_probe
+            run_smtp_startup_probe()
+        except Exception as _e:
+            log.warning(f"SMTP startup probe crashed: {_e}")
+    threading.Thread(target=_smtp_probe_delayed, daemon=True, name='smtp-startup-probe').start()
 
     # Optional-dep warnings — make missing modules visible at startup instead of
     # failing later inside a request handler.
@@ -843,6 +913,14 @@ def main():
         db_flush_samples()
     except Exception as e:
         log.error(f"db_flush_samples at shutdown failed: {e}")
+    # Stop the 60 s autosave loop BEFORE tearing down writers / the PG pool.
+    # Otherwise its uninterrupted sleep can wake up after pg_close_pool() and
+    # emit a misleading 'PostgreSQL pool is closed' error.
+    try:
+        from db.persistence import stop_autosave
+        stop_autosave()
+    except Exception as e:
+        log.warning(f"stop_autosave failed: {e}")
     try:
         summary = shutdown_writers(timeout=10.0)
         log.info(
@@ -862,15 +940,31 @@ def main():
     # otherwise they race pg_close_pool() and spam 'NoneType has no
     # attribute getconn' errors until the process actually exits.
     try:
-        from db.samples import stop_sample_flush
+        from db.samples import stop_sample_flush, stop_rollup_worker
         stop_sample_flush()
+        stop_rollup_worker()
     except Exception as e:
-        log.warning(f"stop_sample_flush failed: {e}")
+        log.warning(f"stop sample/rollup workers failed: {e}")
     try:
         from core.ldap_auth import stop_ldap_sync
         stop_ldap_sync()
     except Exception as e:
         log.warning(f"stop_ldap_sync failed: {e}")
+    try:
+        from core.auth_health import stop_auth_refresh_loop
+        stop_auth_refresh_loop()
+    except Exception as e:
+        log.warning(f"stop_auth_refresh_loop failed: {e}")
+    try:
+        from reports.scheduler import stop_scheduler as stop_report_scheduler
+        stop_report_scheduler()
+    except Exception as e:
+        log.warning(f"stop report scheduler failed: {e}")
+    try:
+        from backup.scheduler import stop_scheduler as stop_backup_scheduler
+        stop_backup_scheduler()
+    except Exception as e:
+        log.warning(f"stop backup scheduler failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()

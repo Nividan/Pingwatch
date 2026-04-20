@@ -33,7 +33,8 @@ def pg_create_main_schema(cur):
             totp_secret         TEXT DEFAULT '',
             totp_enabled        INTEGER DEFAULT 0,
             totp_recovery       TEXT DEFAULT '',
-            totp_remember_hours INTEGER DEFAULT 9
+            totp_remember_hours INTEGER DEFAULT 9,
+            external_id         TEXT DEFAULT NULL
         )""")
     # Migration: add theme_preference for existing installs
     cur.execute("""
@@ -72,7 +73,17 @@ def pg_create_main_schema(cur):
                              AND column_name='totp_remember_hours') THEN
                 ALTER TABLE users ADD COLUMN totp_remember_hours INTEGER DEFAULT 9;
             END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema='main' AND table_name='users'
+                             AND column_name='external_id') THEN
+                ALTER TABLE users ADD COLUMN external_id TEXT DEFAULT NULL;
+            END IF;
         END $$
+    """)
+    # SSO — unique index on external_id (partial, so local users with NULL don't collide)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id
+            ON users(external_id) WHERE external_id IS NOT NULL
     """)
 
     cur.execute("""
@@ -135,6 +146,29 @@ def pg_create_main_schema(cur):
             vmware_vm_id         TEXT DEFAULT '',
             vmware_vm_name       TEXT DEFAULT '',
             vmware_metric        TEXT DEFAULT '',
+            smtp_tls             TEXT DEFAULT 'none',
+            smtp_user            TEXT DEFAULT '',
+            smtp_password        TEXT DEFAULT '',
+            smtp_from            TEXT DEFAULT '',
+            smtp_rcpt            TEXT DEFAULT '',
+            smtp_test_level      TEXT DEFAULT 'ehlo',
+            ssh_user             TEXT DEFAULT '',
+            ssh_password         TEXT DEFAULT '',
+            ssh_private_key      TEXT DEFAULT '',
+            ssh_auth_type        TEXT DEFAULT 'password',
+            ssh_test_level       TEXT DEFAULT 'banner',
+            sftp_user            TEXT DEFAULT '',
+            sftp_password        TEXT DEFAULT '',
+            sftp_private_key     TEXT DEFAULT '',
+            sftp_auth_type       TEXT DEFAULT 'password',
+            sftp_test_level      TEXT DEFAULT 'open',
+            sftp_remote_path     TEXT DEFAULT '',
+            sftp_expected_sha256 TEXT DEFAULT '',
+            radius_secret        TEXT DEFAULT '',
+            radius_test_level    TEXT DEFAULT 'reachable',
+            radius_username      TEXT DEFAULT '',
+            radius_password      TEXT DEFAULT '',
+            radius_nas_id        TEXT DEFAULT '',
             PRIMARY KEY (did, sid)
         )""")
 
@@ -149,6 +183,29 @@ def pg_create_main_schema(cur):
         ("sensors", "anomaly_enabled",         "INTEGER DEFAULT 0"),
         ("sensors", "anomaly_sensitivity",     "INTEGER DEFAULT 2"),
         ("sensors", "anomaly_min_samples",     "INTEGER DEFAULT 50"),
+        ("sensors", "smtp_tls",                "TEXT DEFAULT 'none'"),
+        ("sensors", "smtp_user",               "TEXT DEFAULT ''"),
+        ("sensors", "smtp_password",           "TEXT DEFAULT ''"),
+        ("sensors", "smtp_from",               "TEXT DEFAULT ''"),
+        ("sensors", "smtp_rcpt",               "TEXT DEFAULT ''"),
+        ("sensors", "smtp_test_level",         "TEXT DEFAULT 'ehlo'"),
+        ("sensors", "ssh_user",                "TEXT DEFAULT ''"),
+        ("sensors", "ssh_password",            "TEXT DEFAULT ''"),
+        ("sensors", "ssh_private_key",         "TEXT DEFAULT ''"),
+        ("sensors", "ssh_auth_type",           "TEXT DEFAULT 'password'"),
+        ("sensors", "ssh_test_level",          "TEXT DEFAULT 'banner'"),
+        ("sensors", "sftp_user",               "TEXT DEFAULT ''"),
+        ("sensors", "sftp_password",           "TEXT DEFAULT ''"),
+        ("sensors", "sftp_private_key",        "TEXT DEFAULT ''"),
+        ("sensors", "sftp_auth_type",          "TEXT DEFAULT 'password'"),
+        ("sensors", "sftp_test_level",         "TEXT DEFAULT 'open'"),
+        ("sensors", "sftp_remote_path",        "TEXT DEFAULT ''"),
+        ("sensors", "sftp_expected_sha256",    "TEXT DEFAULT ''"),
+        ("sensors", "radius_secret",           "TEXT DEFAULT ''"),
+        ("sensors", "radius_test_level",       "TEXT DEFAULT 'reachable'"),
+        ("sensors", "radius_username",         "TEXT DEFAULT ''"),
+        ("sensors", "radius_password",         "TEXT DEFAULT ''"),
+        ("sensors", "radius_nas_id",           "TEXT DEFAULT ''"),
         ("main.devices", "snmp_community_default",  "TEXT DEFAULT ''"),
         ("main.devices", "snmp_version_default",    "TEXT DEFAULT ''"),
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
@@ -477,16 +534,24 @@ def pg_create_main_schema(cur):
     # ── User Groups ──────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_groups (
-            id           SERIAL PRIMARY KEY,
-            name         TEXT NOT NULL UNIQUE,
-            description  TEXT DEFAULT '',
-            ldap_dn      TEXT DEFAULT '',
-            default_role TEXT DEFAULT 'viewer'
+            id               SERIAL PRIMARY KEY,
+            name             TEXT NOT NULL UNIQUE,
+            description      TEXT DEFAULT '',
+            ldap_dn          TEXT DEFAULT '',
+            radius_attribute TEXT DEFAULT '',
+            radius_value     TEXT DEFAULT '',
+            saml_group_value TEXT DEFAULT '',
+            oidc_group_value TEXT DEFAULT '',
+            default_role     TEXT DEFAULT 'viewer'
         )""")
-    # Migration: LDAP group mapping columns
+    # Migration: LDAP / RADIUS / SAML / OIDC group mapping columns
     for _tbl, _col, _typedef in [
-        ("user_groups", "ldap_dn",      "TEXT DEFAULT ''"),
-        ("user_groups", "default_role",  "TEXT DEFAULT 'viewer'"),
+        ("user_groups", "ldap_dn",           "TEXT DEFAULT ''"),
+        ("user_groups", "default_role",      "TEXT DEFAULT 'viewer'"),
+        ("user_groups", "radius_attribute",  "TEXT DEFAULT ''"),
+        ("user_groups", "radius_value",      "TEXT DEFAULT ''"),
+        ("user_groups", "saml_group_value",  "TEXT DEFAULT ''"),
+        ("user_groups", "oidc_group_value",  "TEXT DEFAULT ''"),
     ]:
         try:
             cur.execute("SAVEPOINT _alter_ug")

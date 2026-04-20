@@ -29,48 +29,61 @@
 <!-- ── Severity breakdown ────────────────────────────────────────── -->
 <section class="section">
   <h1>Incident Summary</h1>
-  <div class="two-col">
+  <div class="two-col two-col-chart">
     <div class="col">
-      <table class="kv">
+      <table class="kv{% if previous %} kv-compare{% endif %}">
+        {% if previous %}
+        <tr class="kv-head">
+          <th></th><th class="small">This period</th><th class="small muted">{{ previous.label }}</th><th class="small">Δ</th>
+        </tr>
+        {% endif %}
         <tr>
           <th>Total incidents</th>
-          <td>
-            {{ incidents.severity.total }}
-            {% if previous and previous.delta.incidents is not none %}
-              <span class="small">&nbsp;{{ previous.delta.incidents | deltafmt('', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td>{{ incidents.severity.total }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.severity.total }}</td>
+          <td class="small">{% if previous.delta.incidents is not none %}{{ previous.delta.incidents | deltafmt('', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
         <tr>
           <th>Critical / Down</th>
-          <td class="crit">
-            {{ incidents.severity.crit }}
-            {% if previous and previous.delta.crit is not none %}
-              <span class="small">&nbsp;{{ previous.delta.crit | deltafmt('', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td class="crit">{{ incidents.severity.crit }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.severity.crit }}</td>
+          <td class="small">{% if previous.delta.crit is not none %}{{ previous.delta.crit | deltafmt('', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
         <tr>
           <th>Warnings</th>
-          <td class="warn">
-            {{ incidents.severity.warn }}
-            {% if previous and previous.delta.warn is not none %}
-              <span class="small">&nbsp;{{ previous.delta.warn | deltafmt('', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td class="warn">{{ incidents.severity.warn }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.severity.warn }}</td>
+          <td class="small">{% if previous.delta.warn is not none %}{{ previous.delta.warn | deltafmt('', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
-        <tr><th>Auto-resolved</th><td>{{ incidents.severity.resolved }}</td></tr>
+        <tr>
+          <th>Auto-resolved</th>
+          <td>{{ incidents.severity.resolved }}</td>
+          {% if previous %}<td class="muted">{{ previous.severity.resolved }}</td><td></td>{% endif %}
+        </tr>
         <tr>
           <th>MTTR</th>
-          <td>
-            {{ incidents.mttr.mttr_s | durfmt }}
-            {% if previous and previous.delta.mttr_s is not none %}
-              <span class="small">&nbsp;{{ previous.delta.mttr_s | deltafmt(' s', 0, 'lower') | safe }}</span>
-            {% endif %}
-          </td>
+          <td>{{ incidents.mttr.mttr_s | durfmt }}</td>
+          {% if previous %}
+          <td class="muted">{{ previous.mttr.mttr_s | durfmt }}</td>
+          <td class="small">{% if previous.delta.mttr_s is not none %}{{ previous.delta.mttr_s | deltafmt(' s', 0, 'lower') | safe }}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
-        <tr><th>MTBF</th><td>{{ incidents.mttr.mtbf_s | durfmt }}</td></tr>
-        <tr><th>Maintenance windows</th><td>{{ maint_windows | length }}</td></tr>
+        <tr>
+          <th>MTBF</th>
+          <td>{{ incidents.mttr.mtbf_s | durfmt }}</td>
+          {% if previous %}<td class="muted">{{ previous.mttr.mtbf_s | durfmt }}</td><td></td>{% endif %}
+        </tr>
+        <tr>
+          <th>Maintenance windows</th>
+          <td>{{ maint_windows | length }}</td>
+          {% if previous %}<td></td><td></td>{% endif %}
+        </tr>
         {% if meta.config_issue_count %}
         <tr>
           <th>Sensor config issues</th>
@@ -170,7 +183,7 @@
 <!-- ── Device health scores ──────────────────────────────────────── -->
 {% if device_health %}
 <section class="section">
-  <h1>Device health scores</h1>
+  <h1>Device health scores {% if device_health | length >= 25 %}(top 25){% endif %}</h1>
   <p class="muted small">Composite 0–100 per device. Penalties: downtime up to 50, incident load up to 20, currently DOWN −20 or WARN −10. Green ≥ 90 · Amber ≥ 70 · Red &lt; 70.</p>
   <table class="data compact">
     <thead>

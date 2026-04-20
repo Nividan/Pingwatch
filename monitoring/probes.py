@@ -3,6 +3,7 @@ probes.py — Sensor probe implementations: ping, tcp, http, snmp.
 """
 
 import re
+import secrets
 import ssl
 import socket
 import subprocess
@@ -80,6 +81,11 @@ def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode    = ssl.CERT_NONE
+        elif url.startswith("https://"):
+            from core.ssl_trust import apply_trusted_cas, get_trusted_ca_pem
+            if get_trusted_ca_pem():
+                ctx = ssl.create_default_context()
+                apply_trusted_cas(ctx)
         req = urllib.request.Request(url, headers={"User-Agent": "PingWatch/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             ms   = round((time.time() - t0) * 1000, 1)
@@ -392,6 +398,8 @@ def probe_tls(host, port=443, timeout=10):
             host = host[len(_pfx):].split("/")[0]
             break
     ctx = ssl.create_default_context()
+    from core.ssl_trust import apply_trusted_cas
+    apply_trusted_cas(ctx)
     t0 = time.time()
     conn = None
     try:
@@ -435,6 +443,11 @@ def probe_http_keyword(url, keyword, timeout=8, verify_ssl=True, case_sensitive=
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode    = ssl.CERT_NONE
+        elif url.startswith("https://"):
+            from core.ssl_trust import apply_trusted_cas, get_trusted_ca_pem
+            if get_trusted_ca_pem():
+                ctx = ssl.create_default_context()
+                apply_trusted_cas(ctx)
         req = urllib.request.Request(url, headers={"User-Agent": "PingWatch/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             ms   = round((time.time() - t0) * 1000, 1)
@@ -499,3 +512,562 @@ def probe_banner(host, port, banner_regex="", timeout=5):
         if s:
             try: s.close()
             except Exception: pass
+
+
+_SMTP_LEVELS = ("connect", "ehlo", "starttls", "auth", "mailfrom")
+
+
+def probe_smtp(host, port=25, tls="none", user="", password="",
+               from_addr="", rcpt="", test_level="ehlo", timeout=10):
+    """Probe an SMTP server — layered depth from TCP connect up to MAIL FROM round-trip.
+
+    test_level: one of connect | ehlo | starttls | auth | mailfrom. Each level
+                runs all prior steps. MAIL FROM level does MAIL FROM → RCPT TO
+                → RSET (no DATA — no real mail is sent).
+    tls:        none | starttls | ssl.
+    """
+    import smtplib
+
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _SMTP_LEVELS:
+        test_level = "ehlo"
+    depth = _SMTP_LEVELS.index(test_level)
+    t0 = time.time()
+
+    # ── Level 0: plain TCP connect + read 220 banner ────────────────────
+    if depth == 0:
+        sock = None
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
+            ms = round((time.time() - t0) * 1000, 1)
+            if tls == "ssl":
+                return {"ok": True, "ms": ms,
+                        "detail": f"SMTPS port open ({ms}ms)"}
+            sock.settimeout(timeout)
+            try:
+                banner = sock.recv(256).decode(errors="replace").strip()
+            except Exception:
+                banner = ""
+            ms = round((time.time() - t0) * 1000, 1)
+            if banner.startswith("220"):
+                return {"ok": True, "ms": ms,
+                        "detail": f"SMTP banner: {banner[:80]} ({ms}ms)"}
+            return {"ok": False, "ms": ms,
+                    "detail": f"Unexpected banner: {banner[:80] or '(empty)'}"}
+        except socket.timeout:
+            return {"ok": False, "ms": None, "detail": f"Connect timeout after {timeout}s"}
+        except ConnectionRefusedError:
+            return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
+        except Exception as e:
+            log_sensors.warning("probe_smtp %s:%s: connect error: %s", host, port, e)
+            return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        finally:
+            if sock:
+                try: sock.close()
+                except Exception: pass
+
+    # ── Levels 1-4: use smtplib — constructor does CONNECT + EHLO ───────
+    srv = None
+    try:
+        if tls in ("ssl", "starttls"):
+            _ssl_ctx = ssl.create_default_context()
+            from core.ssl_trust import apply_trusted_cas
+            apply_trusted_cas(_ssl_ctx)
+        else:
+            _ssl_ctx = None
+        if tls == "ssl":
+            srv = smtplib.SMTP_SSL(host, int(port), timeout=timeout, context=_ssl_ctx)
+        else:
+            srv = smtplib.SMTP(host, int(port), timeout=timeout)
+
+        # Level 1: ehlo (already done by constructor — nothing extra)
+        if depth == 1:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SMTP EHLO OK ({ms}ms)"}
+
+        # Level 2: starttls (only when tls=starttls — ssl already encrypted)
+        if tls == "starttls":
+            try:
+                srv.starttls(context=_ssl_ctx)
+                srv.ehlo()
+            except smtplib.SMTPException as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"STARTTLS failed: {str(e)[:100]}"}
+        if depth == 2:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SMTP STARTTLS OK ({ms}ms)"}
+
+        # Level 3: auth
+        if not user:
+            return {"ok": False, "ms": None,
+                    "detail": "AUTH level requires user + password"}
+        try:
+            srv.login(user, password)
+        except smtplib.SMTPAuthenticationError as e:
+            return {"ok": False, "ms": None,
+                    "detail": f"AUTH failed: {str(e)[:100]}"}
+        except smtplib.SMTPException as e:
+            return {"ok": False, "ms": None,
+                    "detail": f"AUTH error: {str(e)[:100]}"}
+        if depth == 3:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SMTP AUTH OK ({ms}ms)"}
+
+        # Level 4: mailfrom round-trip (RSET after RCPT — no DATA)
+        if not from_addr or not rcpt:
+            return {"ok": False, "ms": None,
+                    "detail": "MAIL FROM level requires From and To addresses"}
+        try:
+            code, msg = srv.mail(from_addr)
+        except smtplib.SMTPException as e:
+            return {"ok": False, "ms": None, "detail": f"MAIL FROM error: {str(e)[:100]}"}
+        if code != 250:
+            return {"ok": False, "ms": None,
+                    "detail": f"MAIL FROM rejected: {code} {_decode_resp(msg)[:80]}"}
+        try:
+            code, msg = srv.rcpt(rcpt)
+        except smtplib.SMTPException as e:
+            return {"ok": False, "ms": None, "detail": f"RCPT TO error: {str(e)[:100]}"}
+        if code not in (250, 251):
+            return {"ok": False, "ms": None,
+                    "detail": f"RCPT TO rejected: {code} {_decode_resp(msg)[:80]}"}
+        try: srv.rset()
+        except Exception: pass
+        ms = round((time.time() - t0) * 1000, 1)
+        return {"ok": True, "ms": ms,
+                "detail": f"SMTP MAIL FROM round-trip OK ({ms}ms)"}
+
+    except smtplib.SMTPConnectError as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP connect error: {str(e)[:100]}"}
+    except smtplib.SMTPServerDisconnected as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP server disconnected: {str(e)[:100]}"}
+    except smtplib.SMTPException as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP error: {str(e)[:100]}"}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "detail": f"SMTP timeout after {timeout}s"}
+    except (ConnectionRefusedError, OSError) as e:
+        return {"ok": False, "ms": None, "detail": f"SMTP connect: {str(e)[:80]}"}
+    except Exception as e:
+        log_sensors.warning("probe_smtp %s:%s: unexpected error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": str(e)[:100]}
+    finally:
+        if srv:
+            try: srv.quit()
+            except Exception:
+                try: srv.close()
+                except Exception: pass
+
+
+def _decode_resp(msg) -> str:
+    if isinstance(msg, bytes):
+        try: return msg.decode("utf-8", "replace")
+        except Exception: return ""
+    return str(msg or "")
+
+
+_SFTP_LEVELS = ("open", "list", "stat", "checksum")
+_SFTP_CHECKSUM_MAX_BYTES = 10 * 1024 * 1024   # 10 MB hard cap
+
+
+def _fmt_bytes(n: int) -> str:
+    if n < 1024: return f"{n} B"
+    if n < 1024 ** 2: return f"{n / 1024:.1f} KB"
+    if n < 1024 ** 3: return f"{n / (1024 ** 2):.1f} MB"
+    return f"{n / (1024 ** 3):.2f} GB"
+
+
+def probe_sftp(host, port=22, user="", password="", private_key="",
+               auth_type="password", test_level="open",
+               remote_path="", expected_sha256="", timeout=10):
+    """Probe an SFTP server — 4 layered depths.
+
+    test_level: open | list | stat | checksum. Each level runs all prior steps.
+    auth_type:  password | key.
+
+    The probe is read-only — never writes, renames, or deletes on the remote.
+    Checksum level streams up to 10 MB and computes SHA256 locally; files over
+    the cap fail with a clear detail (monitoring huge files is the wrong fit).
+    """
+    import hashlib
+
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _SFTP_LEVELS:
+        test_level = "open"
+    depth = _SFTP_LEVELS.index(test_level)
+
+    try:
+        import paramiko
+    except ImportError:
+        return {"ok": False, "ms": None,
+                "detail": "paramiko not installed — run setup wizard"}
+
+    if not user:
+        return {"ok": False, "ms": None, "detail": "SFTP requires a username"}
+
+    pkey = None
+    if auth_type == "key":
+        if not private_key:
+            return {"ok": False, "ms": None,
+                    "detail": "SFTP/key auth requires a private key"}
+        pkey, kerr = _load_ssh_key(private_key)
+        if kerr:
+            return {"ok": False, "ms": None, "detail": f"Key load failed: {kerr}"}
+    elif auth_type != "password":
+        return {"ok": False, "ms": None, "detail": f"Unknown auth_type: {auth_type!r}"}
+
+    if depth >= 1 and not remote_path:
+        return {"ok": False, "ms": None,
+                "detail": f"{test_level}: remote path is required"}
+    if depth == 3 and not expected_sha256:
+        return {"ok": False, "ms": None,
+                "detail": "checksum: expected SHA256 is required"}
+
+    t0 = time.time()
+    client = None
+    sftp = None
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.MissingHostKeyPolicy())
+        kw = dict(
+            hostname=host, port=int(port), username=user,
+            timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
+            allow_agent=False, look_for_keys=False,
+        )
+        if pkey is not None: kw["pkey"] = pkey
+        else:                kw["password"] = password
+        client.connect(**kw)
+        sftp = client.open_sftp()
+
+        # Level 0: open
+        if depth == 0:
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms, "detail": f"SFTP subsystem OK ({ms}ms)"}
+
+        # Level 1: list
+        if depth == 1:
+            try:
+                entries = sftp.listdir(remote_path)
+            except IOError as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"list: {str(e)[:100]}"}
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms,
+                    "detail": f"list {remote_path}: {len(entries)} entries ({ms}ms)",
+                    "value": str(len(entries))}
+
+        # Level 2: stat
+        if depth == 2:
+            try:
+                st = sftp.stat(remote_path)
+            except IOError as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"stat: {str(e)[:100]}"}
+            size = int(getattr(st, "st_size", 0) or 0)
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms,
+                    "detail": f"stat {remote_path}: {_fmt_bytes(size)} ({ms}ms)",
+                    "value": str(size)}
+
+        # Level 3: checksum (stream SHA256, cap at 10 MB)
+        try:
+            # Pre-flight: fail fast if stat says the file is over the cap
+            try:
+                st = sftp.stat(remote_path)
+                if int(getattr(st, "st_size", 0) or 0) > _SFTP_CHECKSUM_MAX_BYTES:
+                    return {"ok": False, "ms": None,
+                            "detail": f"checksum: file exceeds {_fmt_bytes(_SFTP_CHECKSUM_MAX_BYTES)} cap"}
+            except IOError as e:
+                return {"ok": False, "ms": None,
+                        "detail": f"checksum/stat: {str(e)[:100]}"}
+            h = hashlib.sha256()
+            total = 0
+            with sftp.open(remote_path, "rb") as rf:
+                while True:
+                    chunk = rf.read(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _SFTP_CHECKSUM_MAX_BYTES:
+                        return {"ok": False, "ms": None,
+                                "detail": f"checksum: file exceeds {_fmt_bytes(_SFTP_CHECKSUM_MAX_BYTES)} cap"}
+                    h.update(chunk)
+        except IOError as e:
+            return {"ok": False, "ms": None,
+                    "detail": f"checksum/read: {str(e)[:100]}"}
+        got = h.hexdigest()
+        want = (expected_sha256 or "").strip().lower()
+        if got.lower() != want:
+            return {"ok": False, "ms": None,
+                    "detail": f"checksum: mismatch (got {got[:12]}…, expected {want[:12]}…)"}
+        ms = round((time.time() - t0) * 1000, 1)
+        return {"ok": True, "ms": ms,
+                "detail": f"checksum OK ({_fmt_bytes(total)}, {ms}ms)",
+                "value": got[:12]}
+
+    except paramiko.AuthenticationException:
+        return {"ok": False, "ms": None, "detail": "auth: authentication failed"}
+    except paramiko.BadHostKeyException as e:
+        return {"ok": False, "ms": None, "detail": f"auth: bad host key — {str(e)[:80]}"}
+    except paramiko.SSHException as e:
+        return {"ok": False, "ms": None, "detail": f"sftp: {str(e)[:100]}"}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "detail": f"sftp timeout after {timeout}s"}
+    except (ConnectionRefusedError, OSError) as e:
+        return {"ok": False, "ms": None, "detail": f"sftp connect: {str(e)[:80]}"}
+    except Exception as e:
+        log_sensors.warning("probe_sftp %s:%s: unexpected error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": str(e)[:100]}
+    finally:
+        if sftp:
+            try: sftp.close()
+            except Exception: pass
+        if client:
+            try: client.close()
+            except Exception: pass
+
+
+_SSH_LEVELS = ("connect", "banner", "auth")
+
+
+def _load_ssh_key(blob: str):
+    """Try Ed25519/RSA/ECDSA in order. Returns (pkey, err_or_None).
+
+    Mirrors backup/remote_upload.py:_sftp_load_key. No passphrase support in
+    v1 — a key with a passphrase will fail all loaders and surface as
+    'unrecognised private key format'.
+    """
+    import io
+    import paramiko
+    for loader in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            return loader.from_private_key(io.StringIO(blob)), None
+        except Exception:
+            continue
+    return None, "unrecognised private key format"
+
+
+def probe_ssh(host, port=22, user="", password="", private_key="",
+              auth_type="password", test_level="banner", timeout=8):
+    """Probe an SSH server — layered depth: connect → banner → auth.
+
+    test_level: connect | banner | auth. Each level runs all prior steps.
+    auth_type:  password | key (only consulted at the `auth` level).
+
+    Host key verification is deliberately disabled (MissingHostKeyPolicy) —
+    a reachability probe shouldn't page on key rotation. The backup engine's
+    TOFU store is for command execution, not monitoring.
+    """
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _SSH_LEVELS:
+        test_level = "banner"
+    depth = _SSH_LEVELS.index(test_level)
+    t0 = time.time()
+
+    # ── Level 0: TCP connect only ────────────────────────────────────────
+    if depth == 0:
+        sock = None
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
+            ms = round((time.time() - t0) * 1000, 1)
+            return {"ok": True, "ms": ms,
+                    "detail": f"SSH port open ({ms}ms)"}
+        except socket.timeout:
+            return {"ok": False, "ms": None, "detail": f"Connect timeout after {timeout}s"}
+        except ConnectionRefusedError:
+            return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
+        except Exception as e:
+            log_sensors.warning("probe_ssh %s:%s: connect error: %s", host, port, e)
+            return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        finally:
+            if sock:
+                try: sock.close()
+                except Exception: pass
+
+    # ── Level 1: banner read (raw socket — no paramiko needed) ───────────
+    if depth == 1:
+        sock = None
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
+            sock.settimeout(timeout)
+            # SSH banner is terminated by \r\n and should arrive within one recv
+            try:
+                raw = sock.recv(256).decode("utf-8", "replace").strip()
+            except Exception:
+                raw = ""
+            ms = round((time.time() - t0) * 1000, 1)
+            first = raw.split("\n", 1)[0].strip()
+            if first.startswith("SSH-"):
+                return {"ok": True, "ms": ms,
+                        "detail": f"{first[:80]} ({ms}ms)",
+                        "value": first[:100]}
+            return {"ok": False, "ms": ms,
+                    "detail": f"Not SSH (got {first[:60]!r})" if first
+                              else "Not SSH (empty banner)"}
+        except socket.timeout:
+            return {"ok": False, "ms": None, "detail": f"Banner timeout after {timeout}s"}
+        except ConnectionRefusedError:
+            return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
+        except Exception as e:
+            log_sensors.warning("probe_ssh %s:%s: banner error: %s", host, port, e)
+            return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        finally:
+            if sock:
+                try: sock.close()
+                except Exception: pass
+
+    # ── Level 2: full auth via paramiko ──────────────────────────────────
+    try:
+        import paramiko
+    except ImportError:
+        return {"ok": False, "ms": None,
+                "detail": "paramiko not installed — run setup wizard"}
+
+    if not user:
+        return {"ok": False, "ms": None, "detail": "AUTH level requires a username"}
+
+    pkey = None
+    if auth_type == "key":
+        if not private_key:
+            return {"ok": False, "ms": None,
+                    "detail": "AUTH/key level requires a private key"}
+        pkey, kerr = _load_ssh_key(private_key)
+        if kerr:
+            return {"ok": False, "ms": None, "detail": f"Key load failed: {kerr}"}
+    elif auth_type != "password":
+        return {"ok": False, "ms": None, "detail": f"Unknown auth_type: {auth_type!r}"}
+    # password mode falls through with pkey=None
+
+    client = None
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.MissingHostKeyPolicy())
+        kw = dict(
+            hostname=host, port=int(port), username=user,
+            timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
+            allow_agent=False, look_for_keys=False,
+        )
+        if pkey is not None:
+            kw["pkey"] = pkey
+        else:
+            kw["password"] = password
+        client.connect(**kw)
+        ms = round((time.time() - t0) * 1000, 1)
+        return {"ok": True, "ms": ms,
+                "detail": f"SSH auth OK ({auth_type}, {ms}ms)"}
+    except paramiko.AuthenticationException:
+        return {"ok": False, "ms": None, "detail": "auth: authentication failed"}
+    except paramiko.BadHostKeyException as e:
+        return {"ok": False, "ms": None, "detail": f"auth: bad host key — {str(e)[:80]}"}
+    except paramiko.SSHException as e:
+        return {"ok": False, "ms": None, "detail": f"auth: {str(e)[:100]}"}
+    except socket.timeout:
+        return {"ok": False, "ms": None, "detail": f"auth timeout after {timeout}s"}
+    except (ConnectionRefusedError, OSError) as e:
+        return {"ok": False, "ms": None, "detail": f"auth connect: {str(e)[:80]}"}
+    except Exception as e:
+        log_sensors.warning("probe_ssh %s:%s: auth error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": str(e)[:100]}
+    finally:
+        if client:
+            try: client.close()
+            except Exception: pass
+
+
+_RADIUS_LEVELS = ("reachable", "auth")
+
+
+def probe_radius(host, port=1812, secret="", test_level="reachable",
+                 user="", password="", nas_id="pingwatch", timeout=5):
+    """Probe a RADIUS auth server — layered depth: reachable → auth.
+
+    reachable: send Access-Request with a random probe user; any RADIUS
+               reply (Accept / Reject / Challenge) proves the server is up
+               and the shared secret is correct.
+    auth:      send a real user + password, require Access-Accept.
+               Access-Reject / Access-Challenge are failures with clear detail.
+
+    Dispatches via core.radius_auth.radius_probe_once(), reusing the same
+    pyrad plumbing that powers PingWatch's own RADIUS user-login backend.
+    """
+    if not _validate_host_quick(host):
+        return {"ok": False, "ms": None, "detail": "invalid hostname"}
+    if test_level not in _RADIUS_LEVELS:
+        test_level = "reachable"
+    if not secret:
+        return {"ok": False, "ms": None, "detail": "shared secret required"}
+
+    try:
+        import pyrad  # noqa: F401
+    except ImportError:
+        return {"ok": False, "ms": None,
+                "detail": "pyrad not installed — run setup wizard"}
+
+    from core.radius_auth import radius_probe_once
+
+    # Build probe credentials
+    if test_level == "auth":
+        if not user:
+            return {"ok": False, "ms": None,
+                    "detail": "auth level requires a username"}
+        if not password:
+            return {"ok": False, "ms": None,
+                    "detail": "auth level requires a password"}
+        send_user = user
+        send_pw   = password
+    else:  # reachable
+        send_user = f"__pingwatch_probe_{secrets.token_hex(4)}"
+        send_pw   = "probe-" + secrets.token_hex(8)
+
+    t0 = time.time()
+    try:
+        outcome, payload = radius_probe_once(
+            host, int(port or 1812), secret,
+            send_user, send_pw,
+            nas_id=(nas_id or "pingwatch"),
+            timeout=timeout, retries=1,
+        )
+    except Exception as e:
+        log_sensors.warning("probe_radius %s:%s: unexpected error: %s", host, port, e)
+        return {"ok": False, "ms": None, "detail": f"probe error: {str(e)[:100]}"}
+
+    ms = round((time.time() - t0) * 1000, 1)
+
+    if test_level == "reachable":
+        if outcome in ("accept", "reject", "challenge"):
+            pretty = {"accept": "Access-Accept",
+                      "reject": "Access-Reject",
+                      "challenge": "Access-Challenge"}[outcome]
+            return {"ok": True, "ms": ms,
+                    "detail": f"reachable: server responded ({pretty}) in {ms}ms",
+                    "value": outcome}
+        # error
+        msg = str(payload) if payload else "no response"
+        return {"ok": False, "ms": None, "detail": f"reachable: {msg[:120]}"}
+
+    # auth level
+    if outcome == "accept":
+        # Count reply attributes for a richer detail
+        attr_count = 0
+        try:
+            from core.radius_auth import _decode_attrs
+            attr_count = len(_decode_attrs(payload))
+        except Exception:
+            pass
+        attr_suffix = f" ({attr_count} attrs)" if attr_count else ""
+        return {"ok": True, "ms": ms,
+                "detail": f"auth: Access-Accept{attr_suffix} in {ms}ms",
+                "value": "accept"}
+    if outcome == "reject":
+        return {"ok": False, "ms": ms,
+                "detail": "auth: Access-Reject (wrong credentials or account disabled)",
+                "value": "reject"}
+    if outcome == "challenge":
+        return {"ok": False, "ms": ms,
+                "detail": "auth: Access-Challenge received (2FA required, not supported for probes)",
+                "value": "challenge"}
+    # error
+    msg = str(payload) if payload else "no response"
+    return {"ok": False, "ms": None, "detail": f"auth: {msg[:120]}"}

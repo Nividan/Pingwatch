@@ -79,7 +79,7 @@ class _SensorScheduler:
             self._wake.clear()
 
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
-from monitoring.probes import probe_tls, probe_http_keyword, probe_banner
+from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp, probe_radius
 from .settings import get as _cfg
 from .logger import log_sensors
 
@@ -121,7 +121,16 @@ class Sensor:
                  alerts_muted=False, snmp_unit="",
                  vmware_user="", vmware_password="",
                  vmware_vm_id="", vmware_vm_name="", vmware_metric="",
-                 vmware_disk_path=""):
+                 vmware_disk_path="",
+                 smtp_tls="none", smtp_user="", smtp_password="",
+                 smtp_from="", smtp_rcpt="", smtp_test_level="ehlo",
+                 ssh_user="", ssh_password="", ssh_private_key="",
+                 ssh_auth_type="password", ssh_test_level="banner",
+                 sftp_user="", sftp_password="", sftp_private_key="",
+                 sftp_auth_type="password", sftp_test_level="open",
+                 sftp_remote_path="", sftp_expected_sha256="",
+                 radius_secret="", radius_test_level="reachable",
+                 radius_username="", radius_password="", radius_nas_id=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -163,6 +172,33 @@ class Sensor:
         self.vmware_vm_name  = vmware_vm_name or ""    # VM display name (e.g. "dc0.bslab.local")
         self.vmware_metric   = vmware_metric or ""     # metric key from VM_METRICS
         self.vmware_disk_path = vmware_disk_path or ""  # for disk_used_pct: e.g. "C:\" or "/"
+        # SMTP fields — auth'd probe; password is Fernet-encrypted at rest
+        self.smtp_tls        = smtp_tls or "none"       # none | starttls | ssl
+        self.smtp_user       = smtp_user or ""
+        self.smtp_password   = smtp_password or ""      # Fernet ciphertext
+        self.smtp_from       = smtp_from or ""          # envelope sender for MAIL FROM round-trip
+        self.smtp_rcpt       = smtp_rcpt or ""          # recipient; probe issues RSET — no DATA
+        self.smtp_test_level = smtp_test_level or "ehlo"  # connect | ehlo | starttls | auth | mailfrom
+        # SSH fields — auth'd probe; password + private key both Fernet-encrypted
+        self.ssh_user        = ssh_user or ""
+        self.ssh_password    = ssh_password or ""       # Fernet ciphertext
+        self.ssh_private_key = ssh_private_key or ""    # Fernet ciphertext (multi-line PEM)
+        self.ssh_auth_type   = ssh_auth_type or "password"  # password | key
+        self.ssh_test_level  = ssh_test_level or "banner"   # connect | banner | auth
+        # SFTP fields — reuses SSH pattern; read-only probe (open / list / stat / checksum)
+        self.sftp_user            = sftp_user or ""
+        self.sftp_password        = sftp_password or ""        # Fernet ciphertext
+        self.sftp_private_key     = sftp_private_key or ""     # Fernet ciphertext
+        self.sftp_auth_type       = sftp_auth_type or "password"
+        self.sftp_test_level      = sftp_test_level or "open"
+        self.sftp_remote_path     = sftp_remote_path or ""     # dir (list) or file (stat/checksum)
+        self.sftp_expected_sha256 = sftp_expected_sha256 or "" # hex; checksum level only
+        # RADIUS fields — shared secret + optional user creds, both Fernet-encrypted
+        self.radius_secret      = radius_secret or ""      # Fernet ciphertext (shared secret)
+        self.radius_test_level  = radius_test_level or "reachable"  # reachable | auth
+        self.radius_username    = radius_username or ""
+        self.radius_password    = radius_password or ""    # Fernet ciphertext (user password, auth level)
+        self.radius_nas_id      = radius_nas_id or ""      # NAS-Identifier attribute; defaults to "pingwatch" at probe time
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -256,6 +292,40 @@ class Sensor:
                                 verify_ssl=self.verify_ssl,
                                 timeout=self.timeout,
                                 disk_path=self.vmware_disk_path)
+        if self.stype == "smtp":
+            from db.backups import decrypt_pw
+            return probe_smtp(self.host, self.port or 25, self.smtp_tls,
+                              self.smtp_user, decrypt_pw(self.smtp_password),
+                              self.smtp_from, self.smtp_rcpt,
+                              self.smtp_test_level, self.timeout)
+        if self.stype == "ssh":
+            from db.backups import decrypt_pw
+            return probe_ssh(self.host, self.port or 22,
+                             self.ssh_user,
+                             decrypt_pw(self.ssh_password),
+                             decrypt_pw(self.ssh_private_key),
+                             self.ssh_auth_type,
+                             self.ssh_test_level, self.timeout)
+        if self.stype == "sftp":
+            from db.backups import decrypt_pw
+            return probe_sftp(self.host, self.port or 22,
+                              self.sftp_user,
+                              decrypt_pw(self.sftp_password),
+                              decrypt_pw(self.sftp_private_key),
+                              self.sftp_auth_type,
+                              self.sftp_test_level,
+                              self.sftp_remote_path,
+                              self.sftp_expected_sha256,
+                              self.timeout)
+        if self.stype == "radius":
+            from db.backups import decrypt_pw
+            return probe_radius(self.host, self.port or 1812,
+                                decrypt_pw(self.radius_secret),
+                                self.radius_test_level,
+                                self.radius_username,
+                                decrypt_pw(self.radius_password),
+                                self.radius_nas_id or "pingwatch",
+                                self.timeout)
         return {"ok": False, "ms": None, "detail": "Unknown sensor type"}
 
     def to_dict(self):
@@ -295,6 +365,29 @@ class Sensor:
             "vmware_metric":         self.vmware_metric,
             "vmware_disk_path":      self.vmware_disk_path,
             "has_vmware_password":   bool(self.vmware_password),
+            "smtp_tls":              self.smtp_tls,
+            "smtp_user":             self.smtp_user,
+            "smtp_from":             self.smtp_from,
+            "smtp_rcpt":             self.smtp_rcpt,
+            "smtp_test_level":       self.smtp_test_level,
+            "has_smtp_password":     bool(self.smtp_password),
+            "ssh_user":              self.ssh_user,
+            "ssh_auth_type":         self.ssh_auth_type,
+            "ssh_test_level":        self.ssh_test_level,
+            "has_ssh_password":      bool(self.ssh_password),
+            "has_ssh_private_key":   bool(self.ssh_private_key),
+            "sftp_user":             self.sftp_user,
+            "sftp_auth_type":        self.sftp_auth_type,
+            "sftp_test_level":       self.sftp_test_level,
+            "sftp_remote_path":      self.sftp_remote_path,
+            "sftp_expected_sha256":  self.sftp_expected_sha256,
+            "has_sftp_password":     bool(self.sftp_password),
+            "has_sftp_private_key":  bool(self.sftp_private_key),
+            "radius_test_level":     self.radius_test_level,
+            "radius_username":       self.radius_username,
+            "radius_nas_id":         self.radius_nas_id,
+            "has_radius_secret":     bool(self.radius_secret),
+            "has_radius_password":   bool(self.radius_password),
             "threshold_state":       self._threshold_state,
             "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
             "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
@@ -477,7 +570,16 @@ class MonitorState:
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
                    vmware_user="", vmware_password="",
                    vmware_vm_id="", vmware_vm_name="", vmware_metric="",
-                   vmware_disk_path=""):
+                   vmware_disk_path="",
+                   smtp_tls="none", smtp_user="", smtp_password="",
+                   smtp_from="", smtp_rcpt="", smtp_test_level="ehlo",
+                   ssh_user="", ssh_password="", ssh_private_key="",
+                   ssh_auth_type="password", ssh_test_level="banner",
+                   sftp_user="", sftp_password="", sftp_private_key="",
+                   sftp_auth_type="password", sftp_test_level="open",
+                   sftp_remote_path="", sftp_expected_sha256="",
+                   radius_secret="", radius_test_level="reachable",
+                   radius_username="", radius_password="", radius_nas_id=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -494,7 +596,24 @@ class MonitorState:
                        snmp_unit=snmp_unit,
                        vmware_user=vmware_user, vmware_password=vmware_password,
                        vmware_vm_id=vmware_vm_id, vmware_vm_name=vmware_vm_name,
-                       vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path)
+                       vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path,
+                       smtp_tls=smtp_tls, smtp_user=smtp_user, smtp_password=smtp_password,
+                       smtp_from=smtp_from, smtp_rcpt=smtp_rcpt,
+                       smtp_test_level=smtp_test_level,
+                       ssh_user=ssh_user, ssh_password=ssh_password,
+                       ssh_private_key=ssh_private_key,
+                       ssh_auth_type=ssh_auth_type, ssh_test_level=ssh_test_level,
+                       sftp_user=sftp_user, sftp_password=sftp_password,
+                       sftp_private_key=sftp_private_key,
+                       sftp_auth_type=sftp_auth_type,
+                       sftp_test_level=sftp_test_level,
+                       sftp_remote_path=sftp_remote_path,
+                       sftp_expected_sha256=sftp_expected_sha256,
+                       radius_secret=radius_secret,
+                       radius_test_level=radius_test_level,
+                       radius_username=radius_username,
+                       radius_password=radius_password,
+                       radius_nas_id=radius_nas_id)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -528,18 +647,39 @@ class MonitorState:
                         "vmware_user", "vmware_password",
                         "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                         "vmware_disk_path",
+                        "smtp_tls", "smtp_user", "smtp_password",
+                        "smtp_from", "smtp_rcpt", "smtp_test_level",
+                        "ssh_user", "ssh_password", "ssh_private_key",
+                        "ssh_auth_type", "ssh_test_level",
+                        "sftp_user", "sftp_password", "sftp_private_key",
+                        "sftp_auth_type", "sftp_test_level",
+                        "sftp_remote_path", "sftp_expected_sha256",
+                        "radius_secret", "radius_test_level",
+                        "radius_username", "radius_password", "radius_nas_id",
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
+            # Numeric fields must never land as "" on the Sensor — PG's INTEGER
+            # columns reject empty strings at save time. Treat "" as "not provided".
+            _nullable_int_fields = {"port", "warn_ms", "crit_ms"}
+            _int_fields = {"interval", "timeout", "http_expected_status",
+                           "fail_after", "recover_after",
+                           "loss_warn_pct", "loss_crit_pct",
+                           "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"}
             for k, v in kwargs.items():
-                if k in editable and v is not None:
-                    if k == 'host':
-                        if v:  # Non-empty: manually overridden — unlink from device
-                            s.host_override = True
-                        else:  # Cleared: re-link to device host
-                            v = dev.host
-                            s.host_override = False
-                    setattr(s, k, v)
+                if k not in editable or v is None:
+                    continue
+                if k in _nullable_int_fields and v == "":
+                    v = None
+                elif k in _int_fields and v == "":
+                    continue   # keep existing value
+                if k == 'host':
+                    if v:  # Non-empty: manually overridden — unlink from device
+                        s.host_override = True
+                    else:  # Cleared: re-link to device host
+                        v = dev.host
+                        s.host_override = False
+                setattr(s, k, v)
             _anom_enabled_after = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_after    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
             # Reset baseline when user enables anomaly (off→on) or changes sensitivity —
@@ -804,10 +944,15 @@ class MonitorState:
             elif s.last_ms is not None:
                 _thr_chk = s.last_ms
             if _thr_chk is not None:
-                if s.stype == 'tls' and s._last_rate is None:
-                    # TLS cert expiry: lower days = worse → alert when below threshold
+                # Inverted-threshold metrics: lower value = worse (alert when ≤ threshold).
+                # Covers TLS cert expiry (days-to-expiry) and VMware datastore free-space (GB).
+                _inverted = (
+                    (s.stype == 'tls' and s._last_rate is None) or
+                    (s.stype == 'vmware' and s.vmware_metric.startswith('dstore_'))
+                )
+                if _inverted:
                     if s.crit_ms and _thr_chk <= s.crit_ms:    _new_thr = "crit"
-                    elif s.warn_ms and _thr_chk <= s.warn_ms:   _new_thr = "warn"
+                    elif s.warn_ms and _thr_chk <= s.warn_ms:  _new_thr = "warn"
                 else:
                     if s.crit_ms and _thr_chk >= s.crit_ms:    _new_thr = "crit"
                     elif s.warn_ms and _thr_chk >= s.warn_ms:  _new_thr = "warn"

@@ -1,5 +1,5 @@
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? SENSOR TILES �?�?�?�?�?�?�?�?�?�?�?�?
-function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':t==='vmware'?'V':'◈'}
+function sIco(t){return t==='ping'?'◉':t==='tcp'?'⇌':t==='snmp'?'◎':t==='dns'?'⬡':t==='tls'?'T':t==='http_keyword'?'K':t==='banner'?'B':t==='vmware'?'V':t==='smtp'?'✉':t==='ssh'?'⇲':t==='sftp'?'⇑':t==='radius'?'R':'◈'}
 // msC kept as a thin alias for backward compatibility — canonical impl is msColor() in forms-utils.js
 const msC = msColor;
 function fmtTs(ts){try{return new Date(ts).toLocaleTimeString('en-GB');}catch(e){return ts;}}
@@ -912,7 +912,8 @@ const _VM_UNITS={cpu_usage:'%',cpu_ready:'%',mem_active:'MB',mem_consumed:'MB',d
   host_cpu_usage:'%',host_cpu_ready:'%',host_mem_active:'MB',host_mem_consumed:'MB',host_mem_usage_pct:'%',host_mem_swap:'MB',
   host_disk_read:'KBps',host_disk_write:'KBps',host_disk_usage:'KBps',host_disk_dev_lat:'ms',host_disk_kern_lat:'ms',
   host_ds_read_lat:'ms',host_ds_write_lat:'ms',host_net_rx:'KBps',host_net_tx:'KBps',host_net_usage:'KBps',
-  host_power:'watt',host_uptime:'seconds'};
+  host_power:'watt',host_uptime:'seconds',
+  dstore_free_gb:'GB'};
 function _vmUnit(did,sid){const s=S.sensors[`${did}/${sid}`];return(s?.stype==='vmware')?(_VM_UNITS[s.vmware_metric]||''):null;}
 function _fmtVmVal(v,u){
   if(v==null)return'—';
@@ -924,10 +925,11 @@ function _fmtVmVal(v,u){
     case'ms':return v.toFixed(1)+' ms';
     case'seconds':{const d=Math.floor(v/86400),h=Math.floor((v%86400)/3600),m=Math.floor((v%3600)/60);return d>0?`${d}d ${h}h ${m}m`:h>0?`${h}h ${m}m`:`${m}m`;}
     case'watt':return v.toFixed(0)+' W';
+    case'GB':return v>=1024?(v/1024).toFixed(2)+' TB':v.toFixed(1)+' GB';
     default:return String(v);
   }
 }
-function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':u==='watt'?'W':'';}
+function _vmUnitLabel(u){return u==='%'?'%':u==='MB'?'MB':u==='KB'?'MB':u==='KBps'?'KBps':u==='ms'?'ms':u==='seconds'?'time':u==='watt'?'W':u==='GB'?'GB':'';}
 function _fmtVmYLabel(v,u){
   switch(u){
     case'%':return Math.round(v)+'%';
@@ -937,6 +939,7 @@ function _fmtVmYLabel(v,u){
     case'ms':return Math.round(v)+'ms';
     case'seconds':return v>=86400?(v/86400).toFixed(1)+'d':v>=3600?(v/3600).toFixed(1)+'h':Math.round(v/60)+'m';
     case'watt':return Math.round(v)+'W';
+    case'GB':return v>=1024?(v/1024).toFixed(2)+'TB':Math.round(v)+'GB';
     default:return String(Math.round(v));
   }
 }
@@ -1021,13 +1024,13 @@ function openDetail(did,sid,initialTab){
         <div class="dm-kpi-item" id="kpi-avg-${did}-${sid}">Avg<br><span>—</span></div>
         <div class="dm-kpi-item" id="kpi-min-${did}-${sid}">Min<br><span>—</span></div>
         <div class="dm-kpi-item" id="kpi-max-${did}-${sid}">Max<br><span>—</span></div>
-        <div class="dm-kpi-item" id="kpi-loss-${did}-${sid}">Loss %<br><span>—</span></div>
+        ${s.stype==='ping'?`<div class="dm-kpi-item" id="kpi-loss-${did}-${sid}">Loss %<br><span>—</span></div>`:''}
         <div class="dm-kpi-item" id="kpi-jitter-${did}-${sid}">Jitter<br><span>—</span></div>
       </div>
       <div class="dm-metric-toggles">
         <label><input type="checkbox" id="tog-avg-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Avg</label>
         <label><input type="checkbox" id="tog-band-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Min/Max</label>
-        <label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>
+        ${s.stype==='ping'?`<label><input type="checkbox" id="tog-loss-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> Loss%</label>`:''}
         <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
         ${s?.anomaly_enabled && ['ping','tcp','http','dns','http_keyword','banner'].includes(s.stype)
           ? `<label title="Show learned baseline band (μ ± k·σ)"><input type="checkbox" id="tog-baseline-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> 🧠 Baseline</label>` : ''}
@@ -1148,13 +1151,32 @@ async function _renderHistoryChart(canvas, statsEl, sumEl, did, sid, minutes) {
 function dmHistRedraw(did, sid) {
   const cache = _histCache[`${did}/${sid}`];
   if (!cache) return;
+  // Modal canvas (sensor detail view)
   const canvas  = document.getElementById(`dm-hist-canvas-${did}-${sid}`);
   const statsEl = document.getElementById(`dm-hist-stats-${did}-${sid}`);
   if (canvas) _drawHistCanvas(canvas, statsEl, did, sid, cache.summary, cache.samples,
     cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
+  // Dashboard widget canvases for the same sensor — use a different element ID
+  // (dw-canvas-${wid}) so they were skipped here before. Without this, theme
+  // toggles left widgets stuck on the previous palette until the next 30s data
+  // refresh fired _dwLoadSensorChart, which caused the visible "stuck dark
+  // widget on light background" lag.
+  try {
+    if (typeof _dwLoad === 'function') {
+      _dwLoad().forEach(w => {
+        if (w.type !== 'sensor_chart') return;
+        if (w.cfg?.did !== did || w.cfg?.sid !== sid) return;
+        const wc = document.getElementById(`dw-canvas-${w.id}`);
+        const ws = document.getElementById(`dw-stats-${w.id}`);
+        if (wc) _drawHistCanvas(wc, ws, did, sid, cache.summary, cache.samples,
+          cache.minutes, cache.windowStart, cache.rateSamples, cache.snmpUnit);
+      });
+    }
+  } catch (_) { /* dashboard module may not be loaded yet */ }
 }
 
 function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   const _setKpi = (id, label, val, cls) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1172,7 +1194,7 @@ function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
   const avgJitt  = summary.length ? jitterSum/summary.length : 0;
   _setKpi(`kpi-avail-${did}-${sid}`, 'Avail', avail.toFixed(1)+'%',
     avail<80?'dm-kpi-crit':avail<95?'dm-kpi-warn':avail===100?'dm-kpi-good':'');
-  _setKpi(`kpi-loss-${did}-${sid}`, 'Loss %', avgLoss.toFixed(1)+'%',
+  if (_isPing) _setKpi(`kpi-loss-${did}-${sid}`, 'Loss %', avgLoss.toFixed(1)+'%',
     avgLoss>=20?'dm-kpi-crit':avgLoss>=5?'dm-kpi-warn':avgLoss===0?'dm-kpi-good':'');
 
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
@@ -1377,6 +1399,7 @@ function _setupHistTooltip(canvas, summary, did, sid, minutes, rateSamples, snmp
 
 function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, windowStart, rateSamples, snmpUnit) {
   if (!canvas) return;
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   canvas.width = canvas.offsetWidth || 660;
   const W = canvas.width, H = canvas.height || 320;
   const LEFT = 52, RIGHT = 48, BOT = 28, TOP = 12;
@@ -1406,7 +1429,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   // Read toggle states
   const togAvg    = document.getElementById(`tog-avg-${did}-${sid}`)?.checked ?? true;
   const togBand   = document.getElementById(`tog-band-${did}-${sid}`)?.checked ?? true;
-  const togLoss   = document.getElementById(`tog-loss-${did}-${sid}`)?.checked ?? true;
+  const togLoss   = _isPing && (document.getElementById(`tog-loss-${did}-${sid}`)?.checked ?? true);
   const togJitter = document.getElementById(`tog-jitter-${did}-${sid}`)?.checked ?? false;
 
   // Use fixed windowStart from cache (set at fetch time) so redraws don't shift the chart
@@ -1807,6 +1830,7 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
 
 function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did, sid) {
   if (!sumEl) return;
+  const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
   const _isCounter = Array.isArray(rateSamples) && rateSamples.length > 0;
   let _bSec;
   if      (minutes <= 5760)   _bSec = 3600;
@@ -1932,7 +1956,7 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
     const loss   = _b.cnt > 0 ? (_b.lsum / _b.cnt).toFixed(1) : '0.0';
     const jitter = _b.cnt > 0 ? (_b.jsum / _b.cnt).toFixed(1) : '0.0';
     const lossPct = parseFloat(loss);
-    const rowCls = lossPct > 20 ? 'hrow-crit' : lossPct > 5 ? 'hrow-warn' : '';
+    const rowCls = _isPing && lossPct > 20 ? 'hrow-crit' : _isPing && lossPct > 5 ? 'hrow-warn' : '';
     return `<tr class="${rowCls}">
       <td>${lbl}</td>
       <td style="color:var(--up)">${_b.ok}↑</td>
@@ -1941,12 +1965,12 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
       <td>${avg!=null?avg+'ms':'—'}</td>
       <td>${minMs!=null?minMs+'ms':'—'}</td>
       <td>${maxMs!=null?maxMs+'ms':'—'}</td>
-      <td style="color:${lossPct>5?'var(--warn)':'var(--text2)'}">${loss}%</td>
+      ${_isPing?`<td style="color:${lossPct>5?'var(--warn)':'var(--text2)'}">${loss}%</td>`:''}
       <td style="color:rgba(188,130,255,.85)">${jitter}ms</td>
     </tr>`;
   }).join('');
   sumEl.innerHTML = `<table class="dm-hist-tbl">
-    <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th><th>Loss</th><th>Jitter</th></tr></thead>
+    <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th>${_isPing?'<th>Loss</th>':''}<th>Jitter</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }

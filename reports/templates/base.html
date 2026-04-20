@@ -31,8 +31,10 @@
   <h2>About this report</h2>
   <p>Data range: {{ period.start_ts | datefmt('%Y-%m-%d %H:%M') }} &rarr;
     {{ period.end_ts | datefmt('%Y-%m-%d %H:%M') }} ({{ period.days }} days).
-    Rendered in {{ meta.render_ms }} ms.</p>
-  {% if meta.report_id %}
+    {# Ops/engineering readers get render-time + report-id for debugging;
+       the Executive Summary is a manager artifact and doesn't need either. #}
+    {% if meta.kind != 'executive' %}Rendered in {{ meta.render_ms }} ms.{% endif %}</p>
+  {% if meta.report_id and meta.kind != 'executive' %}
     <p class="mono">Report ID: {{ meta.report_id }}</p>
   {% endif %}
   {% if company.footer %}<p>{{ company.footer }}</p>{% endif %}

@@ -25,16 +25,18 @@ import core.settings as _settings
 
 _RE_DASH = re.compile(r'^/api/dashboards/(\d+)$')
 
-# Default widgets for new users (zero-config, work out of the box)
+# Default widgets for new users (zero-config, work out of the box).
+# x/y/w/h use a 12-column gridstack layout. cols is retained for
+# backwards-compat with any code that still reads it.
 _DEFAULT_WIDGETS = [
-    {"id": "_d1", "type": "system_status",   "title": "System Status",                      "cols": 1, "cfg": {}},
-    {"id": "_d2", "type": "server_perf",     "title": "Server Performance",                 "cols": 1, "cfg": {}},
-    {"id": "_d3", "type": "event_count",     "title": "Event Summary",                      "cols": 1, "cfg": {}},
-    {"id": "_d4", "type": "internet_health", "title": "Internet Health",                    "cols": 1, "cfg": {}},
-    {"id": "_d5", "type": "network_avail",   "title": "Network Availability History (24h)", "cols": 1, "cfg": {}},
-    {"id": "_d6", "type": "device_status",   "title": "Device Status",                      "cols": 1, "cfg": {}},
-    {"id": "_d7", "type": "down_devices",    "title": "Down & Warning Devices",             "cols": 1, "cfg": {}},
-    {"id": "_d8", "type": "packet_loss",     "title": "Packet Loss",                        "cols": 1, "cfg": {"limit": 10, "threshold": 1}},
+    {"id": "_d1", "type": "system_status",   "title": "System Status",                      "cols": 1, "x": 0, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d2", "type": "server_perf",     "title": "Server Performance",                 "cols": 1, "x": 3, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d3", "type": "event_count",     "title": "Event Summary",                      "cols": 1, "x": 6, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d4", "type": "internet_health", "title": "Internet Health",                    "cols": 1, "x": 9, "y": 0, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d5", "type": "network_avail",   "title": "Network Availability History (24h)", "cols": 1, "x": 0, "y": 4, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d6", "type": "device_status",   "title": "Device Status",                      "cols": 1, "x": 3, "y": 4, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d7", "type": "down_devices",    "title": "Down & Warning Devices",             "cols": 1, "x": 6, "y": 4, "w": 3, "h": 4, "cfg": {}},
+    {"id": "_d8", "type": "packet_loss",     "title": "Packet Loss",                        "cols": 1, "x": 9, "y": 4, "w": 3, "h": 4, "cfg": {"limit": 10, "threshold": 1}},
 ]
 
 # Prime psutil CPU counter so first real call returns a meaningful value
@@ -58,6 +60,46 @@ def _get_syslog_status() -> dict:
 def _get_ldap_status() -> dict:
     from core.ldap_auth import get_ldap_status
     return get_ldap_status()
+
+
+def _get_radius_status() -> dict:
+    from core.radius_auth import get_radius_status
+    return get_radius_status()
+
+
+def _get_saml_status() -> dict:
+    try:
+        from core.saml_auth import get_saml_status
+        return get_saml_status()
+    except Exception:
+        return {"state": "unconfigured", "last_ok_ts": None,
+                "last_err_ts": None, "last_err_msg": ""}
+
+
+def _get_oidc_status() -> dict:
+    try:
+        from core.oidc_auth import get_oidc_status
+        return get_oidc_status()
+    except Exception:
+        return {"state": "unconfigured", "last_ok_ts": None,
+                "last_err_ts": None, "last_err_msg": ""}
+
+
+def _get_auth_refresh_last_ts() -> float | None:
+    """Most recent last_ok_ts across the four auth backends.
+
+    Used by the Integrations tab "Last run" indicator. Returns None if no
+    backend has ever reported OK (fresh boot, nothing configured, etc.).
+    """
+    ts_values = []
+    for fn in (_get_ldap_status, _get_radius_status, _get_saml_status, _get_oidc_status):
+        try:
+            s = fn()
+            if s and s.get("last_ok_ts"):
+                ts_values.append(float(s["last_ok_ts"]))
+        except Exception:
+            pass
+    return max(ts_values) if ts_values else None
 
 
 def _get_effective_workers() -> int:
@@ -86,6 +128,18 @@ def _local_ip() -> str:
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+
+    # ── /api/settings/public_auth GET (NO AUTH — login screen SSO probe) ──
+    # Returns ONLY the flags + display names needed to render SSO buttons on
+    # the unauthenticated login page. Never exposes any real secrets or config.
+    if path == "/api/settings/public_auth" and method == "GET":
+        h._json(200, {
+            "saml_enabled":      int(_settings.get("saml_enabled", 0) or 0),
+            "saml_display_name": _settings.get("saml_display_name", "") or "Single Sign-On",
+            "oidc_enabled":      int(_settings.get("oidc_enabled", 0) or 0),
+            "oidc_display_name": _settings.get("oidc_display_name", "") or "Single Sign-On",
+        })
+        return True
 
     # ── /api/settings GET ─────────────────────────────────────────
     if path == "/api/settings" and method == "GET":
@@ -165,6 +219,19 @@ def handle(h, method, path, body):
             "db_backup_keep":        int(_settings.get("db_backup_keep",    7) or 7),
             "db_backup_last_ts":     _settings.get("db_backup_last_ts",     ""),
             "db_backup_last_result": _settings.get("db_backup_last_result", ""),
+            # Group I2 — remote DB backup upload (SFTP / SMB)
+            "db_backup_remote_enabled":     int(_settings.get("db_backup_remote_enabled", 0) or 0),
+            "db_backup_remote_type":        _settings.get("db_backup_remote_type", "sftp"),
+            "db_backup_remote_host":        _settings.get("db_backup_remote_host", ""),
+            "db_backup_remote_port":        int(_settings.get("db_backup_remote_port", 22) or 22),
+            "db_backup_remote_share":       _settings.get("db_backup_remote_share", ""),
+            "db_backup_remote_path":        _settings.get("db_backup_remote_path", ""),
+            "db_backup_remote_user":        _settings.get("db_backup_remote_user", ""),
+            # Secrets: never returned in plaintext — only a "set"/"" sentinel
+            "db_backup_remote_password_set": bool(_settings.get("db_backup_remote_password_enc", "")),
+            "db_backup_remote_key_set":      bool(_settings.get("db_backup_remote_key_enc", "")),
+            "db_backup_remote_last_ts":      _settings.get("db_backup_remote_last_ts", ""),
+            "db_backup_remote_last_result":  _settings.get("db_backup_remote_last_result", ""),
             # Group H — syslog forwarding
             "syslog_host":         _settings.get("syslog_host",         ""),
             "syslog_port":         int(_settings.get("syslog_port",         514) or 514),
@@ -181,6 +248,19 @@ def handle(h, method, path, body):
             "smtp_status":   _get_smtp_status(),
             "syslog_status": _get_syslog_status(),
             "ldap_status":   _get_ldap_status(),
+            "radius_status": _get_radius_status(),
+            "radius_enabled": int(_settings.get("radius_enabled", 0) or 0),
+            # SAML / OIDC federated SSO — status + public-facing fields
+            # (used by the login screen to render "Sign in with {idp}" buttons)
+            "saml_status":           _get_saml_status(),
+            "saml_enabled":          int(_settings.get("saml_enabled", 0) or 0),
+            "saml_display_name":     _settings.get("saml_display_name", "") or "Single Sign-On",
+            "oidc_status":           _get_oidc_status(),
+            "oidc_enabled":          int(_settings.get("oidc_enabled", 0) or 0),
+            "oidc_display_name":     _settings.get("oidc_display_name", "") or "Single Sign-On",
+            # Auth backend background health check — interval + last-run summary
+            "auth_refresh_interval_min": int(_settings.get("auth_refresh_interval_min", 60) or 60),
+            "auth_refresh_last_ts":      _get_auth_refresh_last_ts(),
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
@@ -252,6 +332,16 @@ def handle(h, method, path, body):
             _sal = "1" if body["syslog_app_logs"] else "0"
             _settings.load({"syslog_app_logs": _sal})
             _db_enqueue(lambda _v=_sal: db_save_settings({"syslog_app_logs": _v}))
+        if "auth_refresh_interval_min" in body:
+            try:
+                _arm = int(body["auth_refresh_interval_min"])
+            except (ValueError, TypeError):
+                h._json(400, {"error": "auth_refresh_interval_min must be an integer"}); return True
+            # Fixed allow-list prevents a typo setting a 1-second busy loop.
+            if _arm not in (0, 15, 30, 60, 240, 720):
+                h._json(400, {"error": "auth_refresh_interval_min must be one of 0, 15, 30, 60, 240, 720"}); return True
+            _settings.load({"auth_refresh_interval_min": _arm})
+            _db_enqueue(lambda _v=_arm: db_save_settings({"auth_refresh_interval_min": _v}))
         if "syslog_app_log_level" in body:
             _sall = str(body["syslog_app_log_level"]).lower().strip()
             if _sall not in ("debug", "info", "warning", "error"):
@@ -299,6 +389,38 @@ def handle(h, method, path, body):
                 _val = str(body[_k]).strip()
                 _settings.load({_k: _val})
                 _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
+        # Remote DB backup upload (SFTP / SMB)
+        if "db_backup_remote_enabled" in body:
+            _v = "1" if body["db_backup_remote_enabled"] else "0"
+            _settings.load({"db_backup_remote_enabled": _v})
+            _db_enqueue(lambda v=_v: db_save_settings({"db_backup_remote_enabled": v}))
+        if "db_backup_remote_port" in body:
+            try:
+                _vp = int(body["db_backup_remote_port"])
+                if _vp < 1 or _vp > 65535:
+                    raise ValueError
+            except (ValueError, TypeError):
+                h._json(400, {"error": "db_backup_remote_port must be 1–65535"}); return True
+            _settings.load({"db_backup_remote_port": str(_vp)})
+            _db_enqueue(lambda v=str(_vp): db_save_settings({"db_backup_remote_port": v}))
+        for _k in ("db_backup_remote_type", "db_backup_remote_host",
+                   "db_backup_remote_share", "db_backup_remote_path",
+                   "db_backup_remote_user"):
+            if _k in body:
+                _val = str(body[_k]).strip()
+                _settings.load({_k: _val})
+                _db_enqueue(lambda _k=_k, _v=_val: db_save_settings({_k: _v}))
+        # Remote auth secrets — empty = keep stored, non-empty = encrypt + replace
+        if body.get("db_backup_remote_password"):
+            from db.backups import encrypt_pw as _enc_remote_pw
+            _pw_enc = _enc_remote_pw(str(body["db_backup_remote_password"]))
+            _settings.load({"db_backup_remote_password_enc": _pw_enc})
+            _db_enqueue(lambda _p=_pw_enc: db_save_settings({"db_backup_remote_password_enc": _p}))
+        if body.get("db_backup_remote_key"):
+            from db.backups import encrypt_pw as _enc_remote_key
+            _k_enc = _enc_remote_key(str(body["db_backup_remote_key"]))
+            _settings.load({"db_backup_remote_key_enc": _k_enc})
+            _db_enqueue(lambda _k=_k_enc: db_save_settings({"db_backup_remote_key_enc": _k}))
         # Server-side logo size guard (2 MB base64 ≈ 2.8 MB string)
         if "email_logo_data" in body:
             _logo_val = str(body["email_logo_data"]).strip()
@@ -361,7 +483,40 @@ def handle(h, method, path, body):
             if k in _MASKED_KEYS or str(_old_vals.get(k, '')) != str(body[k])
         )
         db_log_audit(user, h.client_address[0], 'settings_update', '', _changes)
+
+        # Re-probe SMTP if any connection-affecting field was just saved, so the
+        # badge reflects the new config without waiting for the next real send.
+        # Fire-and-forget in a daemon thread — must not block the API response
+        # (probe has its own 10s timeout via _connect()).
+        _smtp_keys = {'smtp_host', 'smtp_port', 'smtp_tls', 'smtp_user', 'smtp_pass'}
+        if _smtp_keys & set(body.keys()):
+            import threading as _t
+            def _reprobe():
+                try:
+                    from monitoring.smtp_alert import run_smtp_startup_probe
+                    run_smtp_startup_probe()
+                except Exception:
+                    pass
+            _t.Thread(target=_reprobe, daemon=True, name='smtp-resave-probe').start()
+
         h._json(200, {"ok": True})
+        return True
+
+    # ── /api/auth/health/run_now POST ────────────────────────────
+    # Admin button in Settings → Integrations → Background Health Check strip.
+    # Skips the current wait on the refresh thread and runs an iteration now.
+    # Returns immediately — actual results show up in the status badges
+    # (GET /api/settings) and the log when the iteration completes.
+    if path == "/api/auth/health/run_now" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        try:
+            from core.auth_health import trigger_run_now
+            trigger_run_now()
+            h._json(200, {"ok": True, "msg": "refresh triggered"})
+        except Exception as _e:
+            log.error(f"auth_health run_now failed: {_e}")
+            h._json(500, {"ok": False, "error": "trigger failed"})
         return True
 
     # ── /api/settings/syslog_test POST ───────────────────────────
@@ -614,6 +769,29 @@ def handle(h, method, path, body):
         from backup.db_backup import do_db_backup
         ok, msg = do_db_backup()
         h._json(200 if ok else 500, {"ok": ok, "msg": msg})
+        return True
+
+    # ── /api/db/backup/test-remote POST ───────────────────────────────
+    if path == "/api/db/backup/test-remote" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        try:
+            overrides = {
+                "type":     str(body.get("db_backup_remote_type", "") or "").strip(),
+                "host":     str(body.get("db_backup_remote_host", "") or "").strip(),
+                "port":     body.get("db_backup_remote_port"),
+                "share":    str(body.get("db_backup_remote_share", "") or "").strip(),
+                "path":     str(body.get("db_backup_remote_path", "") or "").strip(),
+                "user":     str(body.get("db_backup_remote_user", "") or "").strip(),
+                "password": body.get("db_backup_remote_password") or "",
+                "key":      body.get("db_backup_remote_key") or "",
+            }
+            from backup.remote_upload import test_remote
+            ok, msg = test_remote(overrides)
+            h._json(200, {"ok": ok, "msg": msg})
+        except Exception as e:
+            log.error(f"Remote backup test crashed: {e}")
+            h._json(500, {"ok": False, "msg": "test failed — check server logs"})
         return True
 
     # ── GET /api/db/stats ─────────────────────────────────────────

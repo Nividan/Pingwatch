@@ -183,6 +183,11 @@ def handle(h, method, path, body):
         _did, _name, _host = did, name, host
         _db_enqueue(lambda: ipam_sync_device_add(_did, _name, _host))
         db_log_audit(user, h.client_address[0], 'device_create', name)
+        with STATE._lock:
+            _new_dev = STATE.devices.get(did)
+            _added_payload = _new_dev.to_dict() if _new_dev else None
+        if _added_payload:
+            STATE._broadcast("device_added", _added_payload)
         h._json(200, {"did": did})
         return True
 
@@ -353,6 +358,11 @@ def handle(h, method, path, body):
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
         if "alerts_muted" in body:
             STATE._broadcast("device_status", {"did": did, "status": dev.status})
+        with STATE._lock:
+            _upd_dev = STATE.devices.get(did)
+            _upd_payload = _upd_dev.to_dict() if _upd_dev else None
+        if _upd_payload:
+            STATE._broadcast("device_updated", _upd_payload)
         h._json(200, {"status": "updated"})
         return True
 
@@ -409,6 +419,7 @@ def handle(h, method, path, body):
             _db_enqueue(lambda _d=_dd, _s=_sid: db_resolve_flaps_by_sensor(_d, _s))
             _db_enqueue(lambda _d=_dd, _s=_sid: db_clear_stage_state_for_sensor(_d, _s))
         db_log_audit(user, h.client_address[0], 'device_delete', ddname)
+        STATE._broadcast("device_deleted", {"did": ddid})
         h._json(200, {"status": "ok"})
         return True
 
@@ -479,6 +490,11 @@ def handle(h, method, path, body):
                   "snmp_unit",
                   "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                   "vmware_disk_path",
+                  "smtp_tls", "smtp_user", "smtp_from", "smtp_rcpt", "smtp_test_level",
+                  "ssh_user", "ssh_auth_type", "ssh_test_level",
+                  "sftp_user", "sftp_auth_type", "sftp_test_level",
+                  "sftp_remote_path", "sftp_expected_sha256",
+                  "radius_test_level", "radius_username", "radius_nas_id",
                   "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
         # Normalize anomaly fields to safe ranges
@@ -500,6 +516,40 @@ def handle(h, method, path, body):
         if body.get("vmware_password"):
             from db.backups import encrypt_pw
             kwargs["vmware_password"] = encrypt_pw(body["vmware_password"])
+        # SMTP password: same pattern — encrypt if provided, skip if empty
+        if body.get("smtp_password"):
+            from db.backups import encrypt_pw
+            kwargs["smtp_password"] = encrypt_pw(body["smtp_password"])
+        # SSH password + private key: encrypt if provided, skip if empty
+        if body.get("ssh_password"):
+            from db.backups import encrypt_pw
+            kwargs["ssh_password"] = encrypt_pw(body["ssh_password"])
+        if body.get("ssh_private_key"):
+            from db.backups import encrypt_pw
+            kwargs["ssh_private_key"] = encrypt_pw(body["ssh_private_key"])
+        # SFTP password + private key: same pattern
+        if body.get("sftp_password"):
+            from db.backups import encrypt_pw
+            kwargs["sftp_password"] = encrypt_pw(body["sftp_password"])
+        if body.get("sftp_private_key"):
+            from db.backups import encrypt_pw
+            kwargs["sftp_private_key"] = encrypt_pw(body["sftp_private_key"])
+        # RADIUS shared secret + user password: encrypt if provided, skip if empty
+        if body.get("radius_secret"):
+            from db.backups import encrypt_pw
+            kwargs["radius_secret"] = encrypt_pw(body["radius_secret"])
+        if body.get("radius_password"):
+            from db.backups import encrypt_pw
+            kwargs["radius_password"] = encrypt_pw(body["radius_password"])
+        # SFTP checksum level: enforce minimum interval (avoids hammering the
+        # server with big downloads). Guard fires only when both level + interval
+        # are present in the update.
+        if kwargs.get("sftp_test_level") == "checksum" and "interval" in kwargs:
+            try:
+                if int(kwargs["interval"]) < 60:
+                    h._json(400, {"error": "checksum level requires interval ≥ 60s"}); return True
+            except (TypeError, ValueError):
+                h._json(400, {"error": "interval must be an integer"}); return True
         if "port" in body: kwargs["port"] = body["port"]
         if "type" in body: kwargs["stype"] = body["type"]
         try:
@@ -580,6 +630,7 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: db_resolve_flaps_by_sensor(_sd, _ss))
         _db_enqueue(lambda: db_clear_stage_state_for_sensor(_sd, _ss))
         db_log_audit(user, h.client_address[0], 'sensor_delete', f"{sdname}/{ssname}")
+        STATE._broadcast("sensor_deleted", {"did": sdid, "sid": ssid})
         h._json(200, {"status": "ok"})
         return True
 
@@ -635,6 +686,57 @@ def handle(h, method, path, body):
         if stype == "vmware" and vm_pw and not _vm_pw_from_device:
             from db.backups import encrypt_pw
             vm_pw = encrypt_pw(vm_pw)
+        # SMTP fields
+        smtp_tls_v        = body.get("smtp_tls", "none")
+        smtp_user_v       = body.get("smtp_user", "")
+        smtp_pw_v         = body.get("smtp_password", "")
+        smtp_from_v       = body.get("smtp_from", "")
+        smtp_rcpt_v       = body.get("smtp_rcpt", "")
+        smtp_test_level_v = body.get("smtp_test_level", "ehlo")
+        if stype == "smtp" and smtp_pw_v:
+            from db.backups import encrypt_pw
+            smtp_pw_v = encrypt_pw(smtp_pw_v)
+        # SSH fields
+        ssh_user_v        = body.get("ssh_user", "")
+        ssh_pw_v          = body.get("ssh_password", "")
+        ssh_key_v         = body.get("ssh_private_key", "")
+        ssh_auth_type_v   = body.get("ssh_auth_type", "password")
+        ssh_test_level_v  = body.get("ssh_test_level", "banner")
+        if stype == "ssh":
+            from db.backups import encrypt_pw
+            if ssh_pw_v:
+                ssh_pw_v = encrypt_pw(ssh_pw_v)
+            if ssh_key_v:
+                ssh_key_v = encrypt_pw(ssh_key_v)
+        # SFTP fields
+        sftp_user_v        = body.get("sftp_user", "")
+        sftp_pw_v          = body.get("sftp_password", "")
+        sftp_key_v         = body.get("sftp_private_key", "")
+        sftp_auth_type_v   = body.get("sftp_auth_type", "password")
+        sftp_test_level_v  = body.get("sftp_test_level", "open")
+        sftp_remote_path_v = body.get("sftp_remote_path", "")
+        sftp_expected_v    = body.get("sftp_expected_sha256", "")
+        if stype == "sftp":
+            from db.backups import encrypt_pw
+            if sftp_pw_v:
+                sftp_pw_v = encrypt_pw(sftp_pw_v)
+            if sftp_key_v:
+                sftp_key_v = encrypt_pw(sftp_key_v)
+            # Interval floor for checksum level — matches PATCH guard above
+            if sftp_test_level_v == "checksum" and iv < 60:
+                h._json(400, {"error": "checksum level requires interval ≥ 60s"}); return True
+        # RADIUS fields
+        radius_secret_v    = body.get("radius_secret", "")
+        radius_level_v     = body.get("radius_test_level", "reachable")
+        radius_user_v      = body.get("radius_username", "")
+        radius_pw_v        = body.get("radius_password", "")
+        radius_nas_id_v    = body.get("radius_nas_id", "")
+        if stype == "radius":
+            from db.backups import encrypt_pw
+            if radius_secret_v:
+                radius_secret_v = encrypt_pw(radius_secret_v)
+            if radius_pw_v:
+                radius_pw_v = encrypt_pw(radius_pw_v)
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -667,7 +769,28 @@ def handle(h, method, path, body):
                                snmp_unit=sunit,
                                vmware_user=vm_user, vmware_password=vm_pw,
                                vmware_vm_id=vm_vmid, vmware_vm_name=vm_vmname,
-                               vmware_metric=vm_metric, vmware_disk_path=vm_disk_path)
+                               vmware_metric=vm_metric, vmware_disk_path=vm_disk_path,
+                               smtp_tls=smtp_tls_v, smtp_user=smtp_user_v,
+                               smtp_password=smtp_pw_v,
+                               smtp_from=smtp_from_v, smtp_rcpt=smtp_rcpt_v,
+                               smtp_test_level=smtp_test_level_v,
+                               ssh_user=ssh_user_v,
+                               ssh_password=ssh_pw_v,
+                               ssh_private_key=ssh_key_v,
+                               ssh_auth_type=ssh_auth_type_v,
+                               ssh_test_level=ssh_test_level_v,
+                               sftp_user=sftp_user_v,
+                               sftp_password=sftp_pw_v,
+                               sftp_private_key=sftp_key_v,
+                               sftp_auth_type=sftp_auth_type_v,
+                               sftp_test_level=sftp_test_level_v,
+                               sftp_remote_path=sftp_remote_path_v,
+                               sftp_expected_sha256=sftp_expected_v,
+                               radius_secret=radius_secret_v,
+                               radius_test_level=radius_level_v,
+                               radius_username=radius_user_v,
+                               radius_password=radius_pw_v,
+                               radius_nas_id=radius_nas_id_v)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:
@@ -706,6 +829,11 @@ def handle(h, method, path, body):
         if stype == "vmware" and not vssl and _h not in _vmware_ssl_warned:
             _vmware_ssl_warned.add(_h)
             log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", _h)
+        with STATE._lock:
+            _sdev = STATE.devices.get(did)
+            _spayload = _sdev.sensors[sid].to_dict() if _sdev and sid in _sdev.sensors else None
+        if _spayload:
+            STATE._broadcast("sensor_added", {"did": did, "sensor": _spayload})
         h._json(200, {"sid": sid})
         return True
 

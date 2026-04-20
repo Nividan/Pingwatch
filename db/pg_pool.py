@@ -13,6 +13,17 @@ from core.logger import log
 
 _pool = None   # psycopg2.pool.ThreadedConnectionPool (created by pg_init_pool)
 _pool_sema = None  # threading.Semaphore — gates getconn() so callers block instead of crashing
+_pool_closed = False  # set by pg_close_pool(); makes pg_conn fail fast post-shutdown
+
+
+class PoolClosedError(Exception):
+    """Raised when pg_conn() is called after pg_close_pool() has run.
+
+    Signals to any background thread that it must exit, instead of crashing
+    with the cryptic AttributeError ('NoneType' object has no attribute
+    'getconn') that the previous version produced.
+    """
+    pass
 
 
 def pg_init_pool():
@@ -41,8 +52,15 @@ def pg_init_pool():
 
 
 def pg_close_pool():
-    """Close all pooled connections (called at shutdown)."""
-    global _pool
+    """Close all pooled connections (called at shutdown).
+
+    Sets the ``_pool_closed`` flag so subsequent pg_conn() calls raise a clear
+    PoolClosedError instead of crashing with ``'NoneType' has no attribute
+    'getconn'``. Callers that didn't get a stop signal in time can catch this
+    and exit cleanly.
+    """
+    global _pool, _pool_closed
+    _pool_closed = True
     if _pool:
         try:
             _pool.closeall()
@@ -90,10 +108,19 @@ def pg_conn(schema="main"):
     A semaphore gates access so callers block (up to 30 s) instead of
     getting an immediate ``PoolError`` when the pool is fully checked out.
     """
+    # Fail fast if the pool was closed (shutdown already ran). Without this
+    # check, a late background thread blocks on the semaphore and then crashes
+    # with AttributeError when _pool is None.
+    if _pool_closed or _pool is None:
+        raise PoolClosedError("PostgreSQL pool is closed")
     if not _pool_sema.acquire(timeout=30):
         raise Exception("connection pool timeout")
     con = None
     try:
+        # Re-check inside the gated section: pg_close_pool() may have run
+        # between the early check and our semaphore acquire.
+        if _pool_closed or _pool is None:
+            raise PoolClosedError("PostgreSQL pool is closed")
         con = _pool.getconn()
         # Health check: detect stale connections after PG restart
         try:

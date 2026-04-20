@@ -46,11 +46,46 @@ if [ "${1:-}" = "--install-service" ]; then
     # (CapabilityBoundingSet=CAP_NET_BIND_SERVICE would strip root's DAC_OVERRIDE)
     sed -i "s|^# User=pingwatch|User=$ACTUAL_USER|" "$SERVICE_DST"
     sed -i "s|^# Group=pingwatch|Group=$ACTUAL_GROUP|" "$SERVICE_DST"
+
+    # ── Polkit rule: let $ACTUAL_USER manage pingwatch.service without password
+    # Without this, every `systemctl start/stop/restart pingwatch` triggers a
+    # polkit auth prompt for the pingwatch admin user — fine for occasional ops,
+    # painful for the typical pull-and-restart workflow. Scope is narrow: only
+    # this one unit, only this one user.
+    POLKIT_DIR="/etc/polkit-1/rules.d"
+    POLKIT_RULE="$POLKIT_DIR/49-pingwatch.rules"
+    if [ -d "$POLKIT_DIR" ]; then
+        cat > "$POLKIT_RULE" <<EOF
+// PingWatch — auto-installed by start.sh --install-service
+// Allows '$ACTUAL_USER' to start/stop/restart pingwatch.service without a
+// polkit password prompt. Remove with: sudo bash start.sh --uninstall-service
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "pingwatch.service" &&
+        subject.user == "$ACTUAL_USER") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+        chmod 0644 "$POLKIT_RULE"
+        # polkit picks up rule changes automatically on most distros, but
+        # restarting the daemon guarantees the rule is live before the next
+        # systemctl call. Tolerate the absence of polkit (unusual on systemd
+        # systems but possible on stripped-down containers).
+        systemctl restart polkit 2>/dev/null \
+            || systemctl restart polkitd 2>/dev/null \
+            || true
+        echo "[OK]  Polkit rule installed: $ACTUAL_USER can manage pingwatch.service without password"
+    else
+        echo "[WARN] $POLKIT_DIR not found — skipping polkit rule"
+        echo "       (you'll be prompted for password on systemctl start/stop/restart)"
+    fi
+
     systemctl daemon-reload
     systemctl enable pingwatch
     systemctl start  pingwatch
     echo "[OK]  PingWatch service installed and started."
-    echo "      Check status:  sudo systemctl status pingwatch"
+    echo "      Check status:  systemctl status pingwatch"
     echo "      Live logs:     journalctl -u pingwatch -f"
     exit 0
 fi
@@ -63,6 +98,14 @@ if [ "${1:-}" = "--uninstall-service" ]; then
     systemctl stop    pingwatch 2>/dev/null || true
     systemctl disable pingwatch 2>/dev/null || true
     rm -f /etc/systemd/system/pingwatch.service
+    # Remove the polkit rule that --install-service may have created
+    if [ -f /etc/polkit-1/rules.d/49-pingwatch.rules ]; then
+        rm -f /etc/polkit-1/rules.d/49-pingwatch.rules
+        systemctl restart polkit 2>/dev/null \
+            || systemctl restart polkitd 2>/dev/null \
+            || true
+        echo "[OK]  Polkit rule removed."
+    fi
     systemctl daemon-reload
     echo "[OK]  PingWatch service removed."
     exit 0
@@ -87,6 +130,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) if '__file__' in d
 _PACKAGES = [
     ("cryptography", "TLS certificate generation & encryption", True),
     ("paramiko",     "SSH device backups",                      False),
+    ("smbclient",    "SMB / CIFS remote DB backup upload",      False),
+    ("pyrad",        "RADIUS authentication",                   False),
+    ("saml2",        "SAML 2.0 SSO",                            False),
+    ("signxml",      "SAML XML signature verification",         False),
+    ("authlib",      "OpenID Connect SSO",                      False),
     ("pystray",      "system tray icon",                        False),
     ("PIL",          "image support (tray icon)",               False),
     ("ldap3",        "LDAP / Active Directory authentication",  False),

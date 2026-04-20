@@ -1,13 +1,16 @@
 """
 routes/tls.py — TLS/HTTPS certificate management API endpoints.
 
-GET    /api/tls            → cert metadata + TLS settings (no private key)
-PATCH  /api/tls            → update tls_enabled, tls_port, http_redirect
-POST   /api/tls/upload     → upload and validate a new cert+key pair (PEM)
-POST   /api/tls/upload-pfx → upload a PFX/PKCS#12 bundle (base64)
-POST   /api/tls/generate   → generate a new self-signed certificate
-POST   /api/tls/csr        → generate a CSR + private key
-GET    /api/tls/csr        → retrieve last generated CSR PEM
+GET    /api/tls                → cert metadata + TLS settings (no private key)
+PATCH  /api/tls                → update tls_enabled, tls_port, http_redirect
+POST   /api/tls/upload         → upload and validate a new cert+key pair (PEM)
+POST   /api/tls/upload-pfx     → upload a PFX/PKCS#12 bundle (base64)
+POST   /api/tls/generate       → generate a new self-signed certificate
+POST   /api/tls/csr            → generate a CSR + private key
+GET    /api/tls/csr            → retrieve last generated CSR PEM
+GET    /api/tls/ca-certs       → list user-uploaded trusted CA certificates
+POST   /api/tls/ca-certs       → upload a trusted CA cert (PEM or base64 file)
+DELETE /api/tls/ca-certs/<id>  → remove a trusted CA by SHA-256 fingerprint
 """
 
 import base64
@@ -17,6 +20,7 @@ import core.app_state as app_state
 
 from core.config import (_RE_TLS, _RE_TLS_UPLOAD, _RE_TLS_GENERATE,
                          _RE_TLS_UPLOAD_PFX, _RE_TLS_CSR, _RE_TLS_INSTALL,
+                         _RE_TLS_CA_CERTS, _RE_TLS_CA_CERT_ID,
                          TLS_PORT_DEFAULT)
 from db          import _db_enqueue, db_log_audit, db_save_settings
 from core.logger import log
@@ -351,4 +355,111 @@ def handle(h, method, path, body):
         h._json(200, {"ok": True, "cert": info, "restart_required": True})
         return True
 
+    # ── GET /api/tls/ca-certs ─────────────────────────────────────
+    if _RE_TLS_CA_CERTS.match(path) and method == "GET":
+        user, _ = h._require("admin")
+        if not user: return True
+        h._json(200, {"cas": _load_ca_list()})
+        return True
+
+    # ── POST /api/tls/ca-certs ────────────────────────────────────
+    if _RE_TLS_CA_CERTS.match(path) and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+
+        pem      = (body.get("pem")      or "").strip()
+        cert_b64 = (body.get("cert_b64") or "").strip()
+
+        if cert_b64 and not pem:
+            from core.tls import load_der_cert
+            try:
+                pem = load_der_cert(base64.b64decode(cert_b64))
+            except Exception as e:
+                h._json(400, {"error": f"Invalid certificate file: {e}"})
+                return True
+
+        if not pem:
+            h._json(400, {"error": "pem or cert_b64 is required"})
+            return True
+
+        from core.tls import canonicalize_cert_pem, parse_ca_cert_info
+        try:
+            pem = canonicalize_cert_pem(pem)
+        except ValueError as e:
+            h._json(400, {"error": str(e)})
+            return True
+
+        try:
+            info = parse_ca_cert_info(pem)
+        except ValueError as e:
+            h._json(400, {"error": str(e)})
+            return True
+
+        cas = _load_ca_list()
+        if any(c.get("id") == info["id"] for c in cas):
+            h._json(400, {"error": "CA already trusted"})
+            return True
+
+        import datetime as _dt
+        entry = {
+            "id":          info["id"],
+            "pem":         pem,
+            "subject":     info["subject"],
+            "issuer":      info["issuer"],
+            "not_before":  info["not_before"],
+            "not_after":   info["not_after"],
+            "uploaded_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        cas.append(entry)
+        _persist_ca_list(cas)
+        from core.ssl_trust import invalidate_cache
+        invalidate_cache()
+        db_log_audit(user, h.client_address[0], "ca_cert_add", "",
+                     f"subject={info['subject']} expires={info['not_after']}")
+        h._json(200, {"ok": True, "ca": entry})
+        return True
+
+    # ── DELETE /api/tls/ca-certs/<id> ─────────────────────────────
+    m = _RE_TLS_CA_CERT_ID.match(path)
+    if m and method == "DELETE":
+        user, _ = h._require("admin")
+        if not user: return True
+        cid = m.group(1)
+        cas = _load_ca_list()
+        idx = next((i for i, c in enumerate(cas) if c.get("id") == cid), -1)
+        if idx < 0:
+            h._json(404, {"error": "CA not found"})
+            return True
+        removed = cas.pop(idx)
+        _persist_ca_list(cas)
+        from core.ssl_trust import invalidate_cache
+        invalidate_cache()
+        db_log_audit(user, h.client_address[0], "ca_cert_delete", "",
+                     f"subject={removed.get('subject','?')}")
+        h._json(200, {"ok": True})
+        return True
+
     return False
+
+
+# ── Trusted CA storage helpers ────────────────────────────────────────────────
+
+def _load_ca_list() -> list:
+    """Return the current trusted CA list from settings (always a list)."""
+    import json as _json
+    raw = _settings.get("trusted_ca_certs", "")
+    if not raw:
+        return []
+    try:
+        v = _json.loads(raw) if isinstance(raw, str) else raw
+        return v if isinstance(v, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
+def _persist_ca_list(cas: list) -> None:
+    """Write the trusted CA list back to settings + DB (synchronous mutate, async DB write)."""
+    import json as _json
+    blob = _json.dumps(cas)
+    _settings.load({"trusted_ca_certs": blob})
+    _db_enqueue(lambda _b=blob: db_save_settings({"trusted_ca_certs": _b}))
