@@ -68,10 +68,13 @@ def shutdown_writers(timeout: float = 10.0) -> dict:
     proceeding.
     """
     half = max(0.1, timeout / 2)
-    _DB_QUEUE.put(None)
-    _LOGS_QUEUE.put(None)
+    # Capture pending counts BEFORE enqueuing the sentinel — otherwise the
+    # sentinel itself inflates the count by 1, producing the misleading
+    # 'pending=1' on otherwise-idle queues.
     main_pending = _DB_QUEUE.qsize()
     logs_pending = _LOGS_QUEUE.qsize()
+    _DB_QUEUE.put(None)
+    _LOGS_QUEUE.put(None)
     _db_writer_thread.join(timeout=half)
     _logs_writer_thread.join(timeout=half)
     return {
@@ -515,6 +518,61 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # SMTP sensor fields — auth'd probe; smtp_password is Fernet ciphertext
+        for col_def in [
+            "smtp_tls        TEXT DEFAULT 'none'",
+            "smtp_user       TEXT DEFAULT ''",
+            "smtp_password   TEXT DEFAULT ''",
+            "smtp_from       TEXT DEFAULT ''",
+            "smtp_rcpt       TEXT DEFAULT ''",
+            "smtp_test_level TEXT DEFAULT 'ehlo'",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
+        # SSH sensor fields — auth'd probe; password + private key both Fernet ciphertext
+        for col_def in [
+            "ssh_user        TEXT DEFAULT ''",
+            "ssh_password    TEXT DEFAULT ''",
+            "ssh_private_key TEXT DEFAULT ''",
+            "ssh_auth_type   TEXT DEFAULT 'password'",
+            "ssh_test_level  TEXT DEFAULT 'banner'",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
+        # SFTP sensor fields — read-only probe, creds Fernet ciphertext
+        for col_def in [
+            "sftp_user            TEXT DEFAULT ''",
+            "sftp_password        TEXT DEFAULT ''",
+            "sftp_private_key     TEXT DEFAULT ''",
+            "sftp_auth_type       TEXT DEFAULT 'password'",
+            "sftp_test_level      TEXT DEFAULT 'open'",
+            "sftp_remote_path     TEXT DEFAULT ''",
+            "sftp_expected_sha256 TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
+        # RADIUS sensor fields — AAA auth probe, shared secret + optional user creds
+        for col_def in [
+            "radius_secret        TEXT DEFAULT ''",
+            "radius_test_level    TEXT DEFAULT 'reachable'",
+            "radius_username      TEXT DEFAULT ''",
+            "radius_password      TEXT DEFAULT ''",
+            "radius_nas_id        TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col_def}")
+                con.commit()
+            except Exception:
+                pass
         # Device-level default credentials
         for col in ("snmp_community_default", "snmp_version_default", "vmware_user_default", "vmware_password_default"):
             try:
@@ -679,12 +737,23 @@ def db_init():
             ("totp_enabled",        "INTEGER DEFAULT 0"),
             ("totp_recovery",       "TEXT DEFAULT ''"),
             ("totp_remember_hours", "INTEGER DEFAULT 9"),
+            # SSO — federated identity subject. Format: "saml|<entity>|<nameid>" or
+            # "oidc|<issuer>|<sub>". Local/LDAP/RADIUS users keep NULL.
+            ("external_id",         "TEXT DEFAULT NULL"),
         ]:
             try:
                 con.execute(f"ALTER TABLE users ADD COLUMN {_col} {_def}")
                 con.commit()
             except Exception:
                 pass
+        # Unique index on external_id to prevent duplicate JIT provisioning.
+        # Partial (WHERE NOT NULL) so local users with NULL external_id don't collide.
+        try:
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id "
+                        "ON users(external_id) WHERE external_id IS NOT NULL")
+            con.commit()
+        except Exception:
+            pass
         # Anomaly detection — per-sensor opt-in config
         for _col, _def in [
             ("anomaly_enabled",     "INTEGER DEFAULT 0"),
@@ -813,11 +882,13 @@ def db_init():
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS user_groups (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                name         TEXT    NOT NULL UNIQUE,
-                description  TEXT    DEFAULT '',
-                ldap_dn      TEXT    DEFAULT '',
-                default_role TEXT    DEFAULT 'viewer'
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                name             TEXT    NOT NULL UNIQUE,
+                description      TEXT    DEFAULT '',
+                ldap_dn          TEXT    DEFAULT '',
+                radius_attribute TEXT    DEFAULT '',
+                radius_value     TEXT    DEFAULT '',
+                default_role     TEXT    DEFAULT 'viewer'
             )""")
         # ── Device license tracking ───────────────────────────────────
         con.execute("""
@@ -934,10 +1005,16 @@ def db_init():
             "ON report_history(template_id)"
         )
         con.commit()
-        # Migration: LDAP group mapping columns (v0.9+)
+        # Migration: LDAP group mapping columns (v0.9+) + RADIUS attribute mapping (v0.9.2+)
+        # + SAML/OIDC SSO group mapping (v1.1+) — per-protocol group values so
+        # admins can use different formats (e.g. SAML sends DNs, OIDC sends short names).
         for _col, _def in [
-            ("ldap_dn",      "TEXT DEFAULT ''"),
-            ("default_role",  "TEXT DEFAULT 'viewer'"),
+            ("ldap_dn",           "TEXT DEFAULT ''"),
+            ("default_role",      "TEXT DEFAULT 'viewer'"),
+            ("radius_attribute",  "TEXT DEFAULT ''"),
+            ("radius_value",      "TEXT DEFAULT ''"),
+            ("saml_group_value",  "TEXT DEFAULT ''"),
+            ("oidc_group_value",  "TEXT DEFAULT ''"),
         ]:
             try:
                 con.execute(f"ALTER TABLE user_groups ADD COLUMN {_col} {_def}")

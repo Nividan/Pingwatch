@@ -102,9 +102,36 @@ p  { margin: 4pt 0; orphans: 2; widows: 2; }
 .headline-caption { font-size: 9pt; color: #57606a; margin-top: 3pt; line-height: 1.4; }
 
 /* ── Two-column grid ───────────────────────────────────────────── */
-.two-col { display: flex; gap: 18pt; align-items: center; margin-top: 4pt; }
-.two-col .col { flex: 1; min-width: 0; }
+/* Switched from `display:flex` to `display:table` because WeasyPrint's flex
+ * implementation does not honour `min-width:0` on flex children: when the
+ * second column held a wide donut chart (e.g. severity_donut.png), the chart
+ * stayed at its natural width instead of scaling down and overflowed left
+ * into the value column — visibly putting the chart on top of the table
+ * numbers in the Incident Summary. Table layout gives deterministic column
+ * widths that WeasyPrint renders correctly in every version.
+ *
+ * Default 50/50 matches the previous flex layout so table|table sections
+ * (Estate overview, License status, etc.) render unchanged. */
+.two-col { display: table; width: 100%; border-spacing: 18pt 0; border-collapse: separate; margin-top: 4pt; }
+.two-col .col { display: table-cell; vertical-align: middle; width: 50%; }
 .two-col .col:last-child { text-align: center; }
+/* Hard-cap any chart inside a two-col cell so even a high-res PNG can't
+ * push past its cell — this is the actual fix for the Incident-Summary
+ * overlap. `width:100%` forces it to scale to the cell; `max-height` caps
+ * the vertical so a tall chart doesn't dwarf the adjacent table. */
+.two-col .col img.chart { width: 100%; max-width: 100%; max-height: 240pt; height: auto; }
+/* Modifier: weight the chart column wider so the donut renders larger.
+ * Also tightens the data table by cutting its share — this pulls the value
+ * columns closer to the labels (no more "Total incidents ........ 488"
+ * gap from a too-wide data cell). 48/52 keeps the 4-column kv-compare table
+ * (label + current + previous + Δ) fitting cleanly while giving the donut
+ * meaningfully more room. */
+.two-col.two-col-chart .col:first-child { width: 48%; }
+.two-col.two-col-chart .col:last-child  { width: 52%; }
+/* Lift the chart cap further when it's the explicit chart column.
+ * 260pt is roughly 2.5× the kv-compare row height × 7 rows, which keeps the
+ * donut visually balanced against the table. */
+.two-col.two-col-chart .col img.chart { max-height: 260pt; }
 
 /* ── Tables ────────────────────────────────────────────────────── */
 table.kv {
@@ -131,6 +158,18 @@ table.kv td {
 table.kv tr:last-child th,
 table.kv tr:last-child td { border-bottom: 0; }
 
+/* Compact variant used by the Incident Summary when a previous-period
+   column is shown. Default .kv gives the label 55% width — fine for a
+   2-column layout, but with 4 columns (label + current + previous + Δ)
+   each value cell was squeezed to ~15% and the delta span "↑ 480" wrapped
+   onto three lines. Narrow the label and let values keep the arrow+number
+   together. */
+table.kv.kv-compare th { width: 32%; padding-right: 6pt; }
+table.kv.kv-compare td { white-space: nowrap; padding-left: 6pt; }
+table.kv.kv-compare td.small { font-size: 8pt; }
+table.kv.kv-compare tr.kv-head th,
+table.kv.kv-compare tr.kv-head td { border-bottom: 1px solid #d0d7de; }
+
 table.data {
   width: 100%;
   border-collapse: collapse;
@@ -151,7 +190,27 @@ table.data td {
   border-bottom: 1px solid #eaeef2;
   vertical-align: top;
   color: #1f2328;
+  /* Break long hyphenated tokens (e.g. "ESXI-PSC_MNG-Cluster") at boundaries
+     if they'd overflow the cell. Using `break-word` (not `anywhere`) keeps
+     short strings like "99.99%" or short IPs intact — the earlier value
+     `overflow-wrap: anywhere` was splitting IP literals across lines. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
+/* Monospace cells are IPs / OIDs / identifiers — wrapping them looks broken
+   (e.g. "172.22.100.23 / 5" on two lines). Keep them atomic; if the column
+   can't fit, WeasyPrint will widen it. */
+table.data td.mono { white-space: nowrap; }
+/* Short status-colored tokens ("99.99%", "up", "down") never wrap — the
+   percent sign was being pushed onto its own line in the narrower health
+   score tables. */
+table.data td.up,
+table.data td.warn,
+table.data td.crit { white-space: nowrap; }
+/* Keep rows atomic across page breaks — the health score table on
+   inventory p.3→p.4 was splitting a single device's row across pages,
+   leaving a headerless orphan at the top of the next page. */
+table.data tr { page-break-inside: avoid; }
 table.data tr:nth-child(even) td { background: #fafbfc; }
 
 /* ── Status / inline cells ─────────────────────────────────────── */
@@ -213,6 +272,16 @@ img.chart {
   font-size: 8.5pt;
   color: #57606a;
   page-break-inside: avoid;
+  /* Force "About this report" onto its own page. Without this, when a
+     report shrinks (e.g. after the latency-chart placement fix trimmed
+     a page off the Ops report), About lands on the same page as the
+     previous section and the running footer shows the earlier h1
+     ("Top SNMP trap types") instead of "About this report" — because
+     string(sect) resolves to the first string-set on the page, which is
+     the SNMP h1, not our appendix. A dedicated page sidesteps it. */
+  page-break-before: always;
+  /* Reset the running footer string on this page. */
+  string-set: sect "About this report";
 }
 .appendix h2 { color: #57606a; font-size: 10pt; margin-bottom: 4pt; border: 0; }
 .appendix p  { margin: 3pt 0; line-height: 1.5; }

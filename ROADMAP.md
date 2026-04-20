@@ -19,8 +19,7 @@ Completed work lives in [CHANGELOG.md](CHANGELOG.md). This file tracks planned w
 
 **Integrations**
 - **Teams First-Class Integration** — native adaptive-card dispatcher; include scheduled-report delivery (PDF + CSV sidecar) as a second delivery option on the schedule editor alongside email
-- **Probe types to add** — `smtp` (MAIL FROM round-trip), `ldap` (bind test), `postgres` / `mysql` (connection test)
-- **SAML / OIDC SSO** — enterprise SSO alongside LDAP
+- **Probe types to add** — `ldap` (bind test), `postgres` / `mysql` (connection test), `ntp` (time-sync check), `imap` / `pop3` (mailbox auth), `mssql` (connection test) — `smtp`, `ssh`, `sftp`, `radius` are shipped
 - **API Tokens** — scoped REST tokens (read-only / full) for scripts, CI, Terraform
 
 **UI**

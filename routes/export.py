@@ -644,12 +644,18 @@ def handle(h, method, path, body):
         if not fpath:
             h._json(404, {"error": "unknown log"}); return True
 
-        qs        = parse_qs(urlparse(h.path).query)
-        f_level   = (qs.get("level", [""])[0]).upper()
-        f_after   = qs.get("after", [""])[0]
-        f_before  = qs.get("before", [""])[0]
-        f_search  = qs.get("search", [""])[0].lower()
-        f_limit   = min(int(qs.get("limit", ["2000"])[0] or 2000), 5000)
+        qs         = parse_qs(urlparse(h.path).query)
+        f_level    = (qs.get("level",     [""])[0]).upper()
+        f_minlvl   = (qs.get("min_level", [""])[0]).upper()
+        f_after    = qs.get("after",  [""])[0]
+        f_before   = qs.get("before", [""])[0]
+        f_search   = qs.get("search", [""])[0].lower()
+        f_limit    = min(int(qs.get("limit", ["2000"])[0] or 2000), 5000)
+
+        # Normalise WARN → WARNING for the minimum-level comparison.
+        _LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "WARN": 30,
+                       "ERROR": 40, "CRITICAL": 50}
+        f_minlvl_rank = _LEVEL_RANK.get(f_minlvl, 0)
 
         try:
             with open(fpath, "r", encoding="utf-8", errors="replace") as _lf:
@@ -675,6 +681,8 @@ def handle(h, method, path, body):
             _pass = True
             if f_level and lvl != f_level:
                 _pass = False; continue
+            if f_minlvl_rank and _LEVEL_RANK.get(lvl, 0) < f_minlvl_rank:
+                _pass = False; continue
             if f_after and ts <= f_after:
                 _pass = False; continue
             if f_before and ts >= f_before:
@@ -684,12 +692,32 @@ def handle(h, method, path, body):
             filtered.append(line)
 
         shown = filtered[-f_limit:]
+
+        # File stats (size + rotation count). Failure-safe.
+        import os as _os
+        file_size = 0
+        rotated_count = 0
+        try:
+            file_size = _os.path.getsize(fpath)
+        except OSError:
+            pass
+        try:
+            _dir = _os.path.dirname(fpath)
+            _base = _os.path.basename(fpath)
+            for _f in _os.listdir(_dir):
+                if _f.startswith(_base + ".") and _f[len(_base)+1:].isdigit():
+                    rotated_count += 1
+        except OSError:
+            pass
+
         h._json(200, {
             "log":      key,
             "lines":    "\n".join(shown),
             "total":    total,
             "filtered": len(filtered),
             "shown":    len(shown),
+            "file_size":      file_size,
+            "rotated_count":  rotated_count,
         })
         return True
 

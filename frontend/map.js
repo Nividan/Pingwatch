@@ -108,18 +108,18 @@ const _NTM_BG_PALETTES = {
     particleC:    [9,105,218],
     particleG:    [26,127,55],
     particleP:    [124,58,237],
-    connections:  'rgba(9,105,218,0.14)',
-    scanSoft:     'rgba(9,105,218,0.05)',
-    scanLine:     'rgba(9,105,218,0.14)',
+    connections:  'rgba(9,105,218,0.22)',
+    scanSoft:     'rgba(9,105,218,0.08)',
+    scanLine:     'rgba(9,105,218,0.22)',
     corners:      'rgba(9,105,218,0.7)',
     cornersDim:   'rgba(9,105,218,0.3)',
-    crosshair:    'rgba(9,105,218,0.16)',
+    crosshair:    'rgba(9,105,218,0.24)',
     ringC:        [9,105,218],
     ringG:        [26,127,55],
     ringP:        [124,58,237],
-    dashConn:     'rgba(9,105,218,0.18)',
-    dashScanSoft: 'rgba(9,105,218,0.06)',
-    dashScanLine: 'rgba(9,105,218,0.16)',
+    dashConn:     'rgba(9,105,218,0.28)',
+    dashScanSoft: 'rgba(9,105,218,0.10)',
+    dashScanLine: 'rgba(9,105,218,0.26)',
   },
 };
 let _NTM_BG = _NTM_BG_PALETTES.dark;
@@ -382,92 +382,133 @@ function calcPwLayout(devices) {
              h: nrows * NH + PAD * 2 + 28 };   // 28px = group title bar
   });
 
-  // Row-based layout: accumulate X across each row to prevent overlap
+  // Two-phase placement: anchor user-positioned groups first, then slide
+  // un-positioned groups out of any collision with the anchors.
+  //
+  // 1) Compute each entry's natural grid hint (used as starting position for
+  //    the slide search if the group has no override yet).
   let gi = 0, rowY = STARTY;
+  const decorated = [];
   for (let r = 0; r < entries.length; r += COLS) {
     const row  = entries.slice(r, r + COLS);
     const rowH = Math.max(...row.map(e => e.h));
     let gx = STARTX;
-    for (const { gname, devs, NW, NH, w, h } of row) {
-      const govr = pwGroupOverrides[gname] || {};
-      const gax = govr.x ?? gx, gay = govr.y ?? rowY;
-      syntheticGroups.push({ id: 'pw_g_' + gi, name: gname,
-                             x: gax, y: gay,
-                             w: govr.w ?? w,  h: govr.h ?? h,
-                             color: govr.color || '#00d4ff' });
+    for (const ent of row) {
+      decorated.push({ ...ent, gi: gi++, hint: { x: gx, y: rowY } });
+      gx += ent.w + GGAP;
+    }
+    rowY += rowH + ROWGAP;
+  }
 
-      // Build the "occupied" list from devices that already have (x,y) overrides
-      const occupied = [];
-      let hasAnyOverride = false;
+  // 2) Phase 1 — fixed groups (have a saved x/y override).
+  const placedRects = [];
+  const fixed = decorated.filter(d => {
+    const o = pwGroupOverrides[d.gname];
+    return o && o.x != null && o.y != null;
+  });
+  const newly = decorated.filter(d => !fixed.includes(d));
+  for (const d of fixed) {
+    const govr = pwGroupOverrides[d.gname];
+    const gw = govr.w ?? d.w, gh = govr.h ?? d.h;
+    placedRects.push({ x: govr.x, y: govr.y, w: gw, h: gh });
+  }
+
+  // 3) Phase 2 — un-positioned groups: anchor next to the existing layout
+  //    (right of bounding box, top-aligned) instead of the index-based grid,
+  //    then slide out of any remaining collisions. Persist so it sticks.
+  for (const d of newly) {
+    let hint;
+    if (placedRects.length === 0) {
+      hint = d.hint;  // pristine canvas → use natural grid hint
+    } else {
+      const maxX = Math.max(...placedRects.map(r => r.x + r.w));
+      const minY = Math.min(...placedRects.map(r => r.y));
+      hint = { x: maxX + GGAP, y: minY };
+    }
+    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, hint);
+    pwGroupOverrides[d.gname] = { ...(pwGroupOverrides[d.gname] || {}),
+                                   x: pos.x, y: pos.y, w: d.w, h: d.h };
+    _pwGroupDirty = true;
+    placedRects.push({ x: pos.x, y: pos.y, w: d.w, h: d.h });
+  }
+
+  // 4) Render every group + its devices using the resolved positions.
+  for (const { gname, devs, NW, NH, w, h, gi } of decorated) {
+    const govr = pwGroupOverrides[gname] || {};
+    const gax = govr.x, gay = govr.y;
+    const gw  = govr.w ?? w, gh = govr.h ?? h;
+    syntheticGroups.push({ id: 'pw_g_' + gi, name: gname,
+                           x: gax, y: gay,
+                           w: gw, h: gh,
+                           color: govr.color || '#00d4ff' });
+
+    // Build the "occupied" list from devices that already have (x,y) overrides
+    const occupied = [];
+    let hasAnyOverride = false;
+    for (const dev of devs) {
+      const ovr = pwOverrides[dev.device_id];
+      if (ovr?.x != null && ovr?.y != null) {
+        const nt = ovr.node_type || pwDeviceType(dev);
+        const s  = nsize(nt, null) || { w: 170, h: 95 };
+        occupied.push({ x: ovr.x, y: ovr.y, w: s.w, h: s.h });
+        hasAnyOverride = true;
+      }
+    }
+
+    if (!hasAnyOverride) {
+      // Pristine group — column-major grid (max MAX_ROWS per column)
+      devs.forEach((dev, i) => {
+        const dc = Math.floor(i / MAX_ROWS), dr = i % MAX_ROWS;
+        syntheticNodes.push(deviceToNode(dev,
+          gax + PAD + dc * NW,
+          gay + PAD + 28 + dr * NH));
+      });
+    } else {
+      // Customized group — smart placement for un-overridden devices
+      const groupRect = { x: gax, y: gay, w: gw, h: gh };
+      const INNER_PAD = 24, TITLE_H = 28;
+
+      // 1) Push all overridden nodes first (deviceToNode pulls from ovr)
       for (const dev of devs) {
         const ovr = pwOverrides[dev.device_id];
         if (ovr?.x != null && ovr?.y != null) {
-          const nt = ovr.node_type || pwDeviceType(dev);
-          const s  = nsize(nt, null) || { w: 170, h: 95 };
-          occupied.push({ x: ovr.x, y: ovr.y, w: s.w, h: s.h });
-          hasAnyOverride = true;
+          syntheticNodes.push(deviceToNode(dev, 0, 0));  // ovr wins inside deviceToNode
         }
       }
 
-      if (!hasAnyOverride) {
-        // Pristine group — column-major grid (max MAX_ROWS per column)
-        devs.forEach((dev, i) => {
-          const dc = Math.floor(i / MAX_ROWS), dr = i % MAX_ROWS;
-          syntheticNodes.push(deviceToNode(dev,
-            gax + PAD + dc * NW,
-            gay + PAD + 28 + dr * NH));
-        });
-      } else {
-        // Customized group — smart placement for un-overridden devices
-        const groupRect = { x: gax, y: gay, w: govr.w ?? w, h: govr.h ?? h };
-        const INNER_PAD = 24, TITLE_H = 28;
+      // 2) Place each unplaced device into a free slot (grow group if needed)
+      for (const dev of devs) {
+        const ovr = pwOverrides[dev.device_id];
+        if (ovr?.x != null && ovr?.y != null) continue;
+        const nt = ovr?.node_type || pwDeviceType(dev);
+        const sz = nsize(nt, null) || { w: 170, h: 95 };
 
-        // 1) Push all overridden nodes first (deviceToNode pulls from ovr)
-        for (const dev of devs) {
-          const ovr = pwOverrides[dev.device_id];
-          if (ovr?.x != null && ovr?.y != null) {
-            syntheticNodes.push(deviceToNode(dev, 0, 0));  // ovr wins inside deviceToNode
-          }
+        let pos = _findFreeSlotInGroup(groupRect, occupied, sz.w, sz.h);
+        if (!pos) {
+          // Group is full → grow vertically (and widen if the node is too wide)
+          const maxY = occupied.reduce((m, o) => Math.max(m, o.y + o.h),
+                                       groupRect.y + TITLE_H);
+          pos = { x: groupRect.x + INNER_PAD, y: maxY + 20 };
+          const neededH = (pos.y + sz.h + INNER_PAD) - groupRect.y;
+          const neededW = Math.max(groupRect.w, sz.w + 2 * INNER_PAD);
+          groupRect.h = Math.max(groupRect.h, neededH);
+          groupRect.w = neededW;
+          pwGroupOverrides[gname] = { ...(pwGroupOverrides[gname] || govr),
+                                      x: gax, y: gay,
+                                      w: groupRect.w, h: groupRect.h };
+          _pwGroupDirty = true;
+          // Patch the syntheticGroups entry so this render reflects the new size
+          const sg = syntheticGroups[syntheticGroups.length - 1];
+          if (sg && sg.name === gname) { sg.w = groupRect.w; sg.h = groupRect.h; }
         }
 
-        // 2) Place each unplaced device into a free slot (grow group if needed)
-        for (const dev of devs) {
-          const ovr = pwOverrides[dev.device_id];
-          if (ovr?.x != null && ovr?.y != null) continue;
-          const nt = ovr?.node_type || pwDeviceType(dev);
-          const sz = nsize(nt, null) || { w: 170, h: 95 };
-
-          let pos = _findFreeSlotInGroup(groupRect, occupied, sz.w, sz.h);
-          if (!pos) {
-            // Group is full → grow vertically (and widen if the node is too wide)
-            const maxY = occupied.reduce((m, o) => Math.max(m, o.y + o.h),
-                                         groupRect.y + TITLE_H);
-            pos = { x: groupRect.x + INNER_PAD, y: maxY + 20 };
-            const neededH = (pos.y + sz.h + INNER_PAD) - groupRect.y;
-            const neededW = Math.max(groupRect.w, sz.w + 2 * INNER_PAD);
-            groupRect.h = Math.max(groupRect.h, neededH);
-            groupRect.w = neededW;
-            pwGroupOverrides[gname] = { ...(pwGroupOverrides[gname] || govr),
-                                        x: gax, y: gay,
-                                        w: groupRect.w, h: groupRect.h };
-            _pwGroupDirty = true;
-            // Patch the syntheticGroups entry so this render reflects the new size
-            const sg = syntheticGroups[syntheticGroups.length - 1];
-            if (sg && sg.name === gname) { sg.w = groupRect.w; sg.h = groupRect.h; }
-          }
-
-          pwOverrides[dev.device_id] = { ...(pwOverrides[dev.device_id] || {}),
-                                         x: pos.x, y: pos.y };
-          _pwNodeDirty = true;
-          occupied.push({ x: pos.x, y: pos.y, w: sz.w, h: sz.h });
-          syntheticNodes.push(deviceToNode(dev, pos.x, pos.y));
-        }
+        pwOverrides[dev.device_id] = { ...(pwOverrides[dev.device_id] || {}),
+                                       x: pos.x, y: pos.y };
+        _pwNodeDirty = true;
+        occupied.push({ x: pos.x, y: pos.y, w: sz.w, h: sz.h });
+        syntheticNodes.push(deviceToNode(dev, pos.x, pos.y));
       }
-
-      gx += w + GGAP;
-      gi++;
     }
-    rowY += rowH + ROWGAP;
   }
 
   // Batched persistence — one PATCH per settings key per layout pass
@@ -748,7 +789,64 @@ function startPwSSE() {
         _pwSensorThresholdUpdate(d.did, d.sid, state);
       });
     });
+    // ── Live device CRUD: keep map in sync without manual refresh ──
+    pwSSE.addEventListener('device_added', e => {
+      if (!isPingWatchPage || !_ntmVisible) return;
+      const dev = JSON.parse(e.data);
+      if (_pwDevMap[dev.device_id]) return;  // already known (race with manual reload)
+      pwDevices.push(dev);
+      _pwDevMap[dev.device_id] = dev;
+      renderPingWatchCanvas();
+    });
+    pwSSE.addEventListener('device_updated', e => {
+      if (!isPingWatchPage || !_ntmVisible) return;
+      const dev = JSON.parse(e.data);
+      const idx = pwDevices.findIndex(d => d.device_id === dev.device_id);
+      if (idx < 0) return;
+      const oldGroup = pwDevices[idx].group;
+      pwDevices[idx] = dev;
+      _pwDevMap[dev.device_id] = dev;
+      if (oldGroup !== dev.group) _pwCleanupOrphanGroups();
+      renderPingWatchCanvas();
+    });
+    pwSSE.addEventListener('device_deleted', e => {
+      if (!isPingWatchPage || !_ntmVisible) return;
+      const { did } = JSON.parse(e.data);
+      pwDevices = pwDevices.filter(d => d.device_id !== did);
+      delete _pwDevMap[did];
+      if (pwOverrides[did]) {
+        delete pwOverrides[did];
+        _pwSave('pw_node_overrides', pwOverrides);
+      }
+      _pwCleanupOrphanGroups();
+      renderPingWatchCanvas();
+    });
+    pwSSE.addEventListener('sensor_added', e => {
+      if (!isPingWatchPage || !_ntmVisible) return;
+      const { did, sensor } = JSON.parse(e.data);
+      const dev = _pwDevMap[did];
+      if (!dev) return;
+      (dev.sensors = dev.sensors || []).push(sensor);
+    });
+    pwSSE.addEventListener('sensor_deleted', e => {
+      if (!isPingWatchPage || !_ntmVisible) return;
+      const { did, sid } = JSON.parse(e.data);
+      const dev = _pwDevMap[did];
+      if (!dev || !dev.sensors) return;
+      dev.sensors = dev.sensors.filter(s => s.sensor_id !== sid);
+    });
   } catch(e) {}
+}
+
+// Drop pwGroupOverrides entries whose group no longer has any live devices.
+// Prevents stale positions from snapping a re-added group back to its old spot.
+function _pwCleanupOrphanGroups() {
+  const live = new Set(pwDevices.map(d => d.group || 'Default Group'));
+  let dirty = false;
+  for (const gname of Object.keys(pwGroupOverrides)) {
+    if (!live.has(gname)) { delete pwGroupOverrides[gname]; dirty = true; }
+  }
+  if (dirty) _pwSave('pw_group_overrides', pwGroupOverrides);
 }
 
 function _pwSensorThresholdUpdate(did, sid, state) {
@@ -1024,9 +1122,10 @@ async function api(method, path, body) {
 }
 
 // Fire-and-forget save for PingWatch settings.
-// Uses keepalive:true so the request survives page refresh,
-// and shows a toast on failure so errors are never silent.
-function _pwSave(key, value) {
+// Uses keepalive:true so the request survives page refresh.
+// On transport-level failure (server restart, network blip), retries once
+// after 1.5s before surfacing a toast; HTTP 4xx/5xx errors toast immediately.
+function _pwSave(key, value, _retry = false) {
   fetch('/api/settings/' + key, {
     method: 'PATCH',
     credentials: 'include',
@@ -1036,7 +1135,10 @@ function _pwSave(key, value) {
   }).then(r => {
     if (!r.ok) r.json().catch(() => ({ error: r.statusText }))
                .then(e => toast('⚠ Save failed (' + key + '): ' + (e.error || r.statusText)));
-  }).catch(e => toast('⚠ Save failed (' + key + '): ' + e.message));
+  }).catch(e => {
+    if (!_retry) setTimeout(() => _pwSave(key, value, true), 1500);
+    else         toast('⚠ Save failed (' + key + '): ' + e.message);
+  });
 }
 
 async function loadData() {
@@ -1153,6 +1255,25 @@ function _rectsOverlap(a, b, pad = 0) {
            b.x + b.w + pad <= a.x ||
            a.y + a.h + pad <= b.y ||
            b.y + b.h + pad <= a.y);
+}
+
+// Find a free position on the canvas for a group rect of size (w, h).
+// Starts at hint, sweeps right then wraps down; gap is the minimum spacing
+// between groups. Returns {x, y} (always — falls back to hint if exhausted).
+function _findFreeGroupSlot(placed, w, h, hint, gap = 60) {
+  const STEP = 40;
+  const MAX_X = 12000, MAX_Y = 12000;
+  let x = hint.x, y = hint.y;
+  while (y < MAX_Y) {
+    while (x < MAX_X) {
+      const r = { x, y, w, h };
+      if (!placed.some(o => _rectsOverlap(r, o, gap))) return { x, y };
+      x += STEP;
+    }
+    x = hint.x;
+    y += STEP;
+  }
+  return { x: hint.x, y: hint.y };
 }
 
 // Row-major scan of a group's interior for a non-colliding slot.

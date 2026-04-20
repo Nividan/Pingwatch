@@ -4,6 +4,7 @@ db/persistence.py — Device/sensor save, load, and autosave loop.
 
 import json
 import sqlite3
+import threading
 import time
 
 from core.config  import DB_PATH, LOGS_DB_PATH
@@ -12,6 +13,19 @@ from core.state   import Device, Sensor
 from db.backend   import is_pg
 from db.core      import _db_enqueue, _logs_enqueue
 import core.settings as _settings
+
+
+def _int_or_none(v):
+    """Coerce a value to int or None. Accepts None, '' → None. Everything else
+    goes through int(). Guards the save path from stray empty-string integers
+    that made it onto a Sensor attribute (PG rejects '' for INTEGER columns).
+    """
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _pg_save(state):
@@ -34,14 +48,18 @@ def _pg_save(state):
         ]
         snr_rows = [
             (s.device_id, s.sensor_id, s.name, s.stype,
-             s.host, s.port, s.url, s.interval, s.timeout,
+             s.host, _int_or_none(s.port), s.url,
+             _int_or_none(s.interval), _int_or_none(s.timeout),
              int(s.verify_ssl), s.snmp_community,
              s.snmp_oid, s.snmp_version, dev._sid_ctr,
              s.dns_query, s.dns_record_type, s.dns_server,
-             getattr(s, "http_expected_status", 0),
-             getattr(s, "fail_after", 2), getattr(s, "recover_after", 1),
-             getattr(s, "warn_ms", None), getattr(s, "crit_ms", None),
-             getattr(s, "loss_warn_pct", 0), getattr(s, "loss_crit_pct", 0),
+             _int_or_none(getattr(s, "http_expected_status", 0)) or 0,
+             _int_or_none(getattr(s, "fail_after", 2)) or 2,
+             _int_or_none(getattr(s, "recover_after", 1)) or 1,
+             _int_or_none(getattr(s, "warn_ms", None)),
+             _int_or_none(getattr(s, "crit_ms", None)),
+             _int_or_none(getattr(s, "loss_warn_pct", 0)) or 0,
+             _int_or_none(getattr(s, "loss_crit_pct", 0)) or 0,
              getattr(s, "keyword", ""), int(getattr(s, "keyword_case", False)),
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
@@ -54,7 +72,30 @@ def _pg_save(state):
              getattr(s, "vmware_metric", ""),
              int(getattr(s, "anomaly_enabled", 0) or 0),
              int(getattr(s, "anomaly_sensitivity", 2) or 2),
-             int(getattr(s, "anomaly_min_samples", 50) or 50))
+             int(getattr(s, "anomaly_min_samples", 50) or 50),
+             getattr(s, "smtp_tls", "none") or "none",
+             getattr(s, "smtp_user", ""),
+             getattr(s, "smtp_password", ""),
+             getattr(s, "smtp_from", ""),
+             getattr(s, "smtp_rcpt", ""),
+             getattr(s, "smtp_test_level", "ehlo") or "ehlo",
+             getattr(s, "ssh_user", ""),
+             getattr(s, "ssh_password", ""),
+             getattr(s, "ssh_private_key", ""),
+             getattr(s, "ssh_auth_type", "password") or "password",
+             getattr(s, "ssh_test_level", "banner") or "banner",
+             getattr(s, "sftp_user", ""),
+             getattr(s, "sftp_password", ""),
+             getattr(s, "sftp_private_key", ""),
+             getattr(s, "sftp_auth_type", "password") or "password",
+             getattr(s, "sftp_test_level", "open") or "open",
+             getattr(s, "sftp_remote_path", ""),
+             getattr(s, "sftp_expected_sha256", ""),
+             getattr(s, "radius_secret", ""),
+             getattr(s, "radius_test_level", "reachable") or "reachable",
+             getattr(s, "radius_username", ""),
+             getattr(s, "radius_password", ""),
+             getattr(s, "radius_nas_id", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -105,7 +146,12 @@ def _pg_save(state):
                     "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
                     "alerts_muted,host_override,snmp_unit,"
                     "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
-                    "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples) "
+                    "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
+                    "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
+                    "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
+                    "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
+                    "sftp_remote_path,sftp_expected_sha256,"
+                    "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -126,7 +172,23 @@ def _pg_save(state):
                     "vmware_metric=EXCLUDED.vmware_metric, "
                     "anomaly_enabled=EXCLUDED.anomaly_enabled, "
                     "anomaly_sensitivity=EXCLUDED.anomaly_sensitivity, "
-                    "anomaly_min_samples=EXCLUDED.anomaly_min_samples",
+                    "anomaly_min_samples=EXCLUDED.anomaly_min_samples, "
+                    "smtp_tls=EXCLUDED.smtp_tls, smtp_user=EXCLUDED.smtp_user, "
+                    "smtp_password=EXCLUDED.smtp_password, smtp_from=EXCLUDED.smtp_from, "
+                    "smtp_rcpt=EXCLUDED.smtp_rcpt, smtp_test_level=EXCLUDED.smtp_test_level, "
+                    "ssh_user=EXCLUDED.ssh_user, ssh_password=EXCLUDED.ssh_password, "
+                    "ssh_private_key=EXCLUDED.ssh_private_key, "
+                    "ssh_auth_type=EXCLUDED.ssh_auth_type, ssh_test_level=EXCLUDED.ssh_test_level, "
+                    "sftp_user=EXCLUDED.sftp_user, sftp_password=EXCLUDED.sftp_password, "
+                    "sftp_private_key=EXCLUDED.sftp_private_key, "
+                    "sftp_auth_type=EXCLUDED.sftp_auth_type, sftp_test_level=EXCLUDED.sftp_test_level, "
+                    "sftp_remote_path=EXCLUDED.sftp_remote_path, "
+                    "sftp_expected_sha256=EXCLUDED.sftp_expected_sha256, "
+                    "radius_secret=EXCLUDED.radius_secret, "
+                    "radius_test_level=EXCLUDED.radius_test_level, "
+                    "radius_username=EXCLUDED.radius_username, "
+                    "radius_password=EXCLUDED.radius_password, "
+                    "radius_nas_id=EXCLUDED.radius_nas_id",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -169,14 +231,18 @@ def db_save(state):
         ]
         snr_rows = [
             (s.device_id, s.sensor_id, s.name, s.stype,
-             s.host, s.port, s.url, s.interval, s.timeout,
+             s.host, _int_or_none(s.port), s.url,
+             _int_or_none(s.interval), _int_or_none(s.timeout),
              int(s.verify_ssl), s.snmp_community,
              s.snmp_oid, s.snmp_version, dev._sid_ctr,
              s.dns_query, s.dns_record_type, s.dns_server,
-             getattr(s, "http_expected_status", 0),
-             getattr(s, "fail_after", 2), getattr(s, "recover_after", 1),
-             getattr(s, "warn_ms", None), getattr(s, "crit_ms", None),
-             getattr(s, "loss_warn_pct", 0), getattr(s, "loss_crit_pct", 0),
+             _int_or_none(getattr(s, "http_expected_status", 0)) or 0,
+             _int_or_none(getattr(s, "fail_after", 2)) or 2,
+             _int_or_none(getattr(s, "recover_after", 1)) or 1,
+             _int_or_none(getattr(s, "warn_ms", None)),
+             _int_or_none(getattr(s, "crit_ms", None)),
+             _int_or_none(getattr(s, "loss_warn_pct", 0)) or 0,
+             _int_or_none(getattr(s, "loss_crit_pct", 0)) or 0,
              getattr(s, "keyword", ""), int(getattr(s, "keyword_case", False)),
              getattr(s, "banner_regex", ""),
              int(getattr(s, "alerts_muted", False)),
@@ -189,7 +255,30 @@ def db_save(state):
              getattr(s, "vmware_metric", ""),
              int(getattr(s, "anomaly_enabled", 0) or 0),
              int(getattr(s, "anomaly_sensitivity", 2) or 2),
-             int(getattr(s, "anomaly_min_samples", 50) or 50))
+             int(getattr(s, "anomaly_min_samples", 50) or 50),
+             getattr(s, "smtp_tls", "none") or "none",
+             getattr(s, "smtp_user", ""),
+             getattr(s, "smtp_password", ""),
+             getattr(s, "smtp_from", ""),
+             getattr(s, "smtp_rcpt", ""),
+             getattr(s, "smtp_test_level", "ehlo") or "ehlo",
+             getattr(s, "ssh_user", ""),
+             getattr(s, "ssh_password", ""),
+             getattr(s, "ssh_private_key", ""),
+             getattr(s, "ssh_auth_type", "password") or "password",
+             getattr(s, "ssh_test_level", "banner") or "banner",
+             getattr(s, "sftp_user", ""),
+             getattr(s, "sftp_password", ""),
+             getattr(s, "sftp_private_key", ""),
+             getattr(s, "sftp_auth_type", "password") or "password",
+             getattr(s, "sftp_test_level", "open") or "open",
+             getattr(s, "sftp_remote_path", ""),
+             getattr(s, "sftp_expected_sha256", ""),
+             getattr(s, "radius_secret", ""),
+             getattr(s, "radius_test_level", "reachable") or "reachable",
+             getattr(s, "radius_username", ""),
+             getattr(s, "radius_password", ""),
+             getattr(s, "radius_nas_id", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -219,8 +308,13 @@ def db_save(state):
             "loss_warn_pct,loss_crit_pct,keyword,keyword_case,banner_regex,"
             "alerts_muted,host_override,snmp_unit,"
             "vmware_user,vmware_password,vmware_vm_id,vmware_vm_name,vmware_metric,"
-            "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "anomaly_enabled,anomaly_sensitivity,anomaly_min_samples,"
+            "smtp_tls,smtp_user,smtp_password,smtp_from,smtp_rcpt,smtp_test_level,"
+            "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
+            "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
+            "sftp_remote_path,sftp_expected_sha256,"
+            "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -271,7 +365,30 @@ def _pg_load(state):
                 "COALESCE(vmware_metric,'') AS vmware_metric,"
                 "COALESCE(anomaly_enabled,0) AS anomaly_enabled,"
                 "COALESCE(anomaly_sensitivity,2) AS anomaly_sensitivity,"
-                "COALESCE(anomaly_min_samples,50) AS anomaly_min_samples "
+                "COALESCE(anomaly_min_samples,50) AS anomaly_min_samples,"
+                "COALESCE(smtp_tls,'none') AS smtp_tls,"
+                "COALESCE(smtp_user,'') AS smtp_user,"
+                "COALESCE(smtp_password,'') AS smtp_password,"
+                "COALESCE(smtp_from,'') AS smtp_from,"
+                "COALESCE(smtp_rcpt,'') AS smtp_rcpt,"
+                "COALESCE(smtp_test_level,'ehlo') AS smtp_test_level,"
+                "COALESCE(ssh_user,'') AS ssh_user,"
+                "COALESCE(ssh_password,'') AS ssh_password,"
+                "COALESCE(ssh_private_key,'') AS ssh_private_key,"
+                "COALESCE(ssh_auth_type,'password') AS ssh_auth_type,"
+                "COALESCE(ssh_test_level,'banner') AS ssh_test_level,"
+                "COALESCE(sftp_user,'') AS sftp_user,"
+                "COALESCE(sftp_password,'') AS sftp_password,"
+                "COALESCE(sftp_private_key,'') AS sftp_private_key,"
+                "COALESCE(sftp_auth_type,'password') AS sftp_auth_type,"
+                "COALESCE(sftp_test_level,'open') AS sftp_test_level,"
+                "COALESCE(sftp_remote_path,'') AS sftp_remote_path,"
+                "COALESCE(sftp_expected_sha256,'') AS sftp_expected_sha256,"
+                "COALESCE(radius_secret,'') AS radius_secret,"
+                "COALESCE(radius_test_level,'reachable') AS radius_test_level,"
+                "COALESCE(radius_username,'') AS radius_username,"
+                "COALESCE(radius_password,'') AS radius_password,"
+                "COALESCE(radius_nas_id,'') AS radius_nas_id "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -337,6 +454,29 @@ def _pg_load(state):
         s.anomaly_enabled      = int(row[35] or 0)
         s.anomaly_sensitivity  = int(row[36] or 2)
         s.anomaly_min_samples  = int(row[37] or 50)
+        s.smtp_tls             = row[38] or "none"
+        s.smtp_user            = row[39] or ""
+        s.smtp_password        = row[40] or ""
+        s.smtp_from            = row[41] or ""
+        s.smtp_rcpt            = row[42] or ""
+        s.smtp_test_level      = row[43] or "ehlo"
+        s.ssh_user             = row[44] or ""
+        s.ssh_password         = row[45] or ""
+        s.ssh_private_key      = row[46] or ""
+        s.ssh_auth_type        = row[47] or "password"
+        s.ssh_test_level       = row[48] or "banner"
+        s.sftp_user            = row[49] or ""
+        s.sftp_password        = row[50] or ""
+        s.sftp_private_key     = row[51] or ""
+        s.sftp_auth_type       = row[52] or "password"
+        s.sftp_test_level      = row[53] or "open"
+        s.sftp_remote_path     = row[54] or ""
+        s.sftp_expected_sha256 = row[55] or ""
+        s.radius_secret        = row[56] or ""
+        s.radius_test_level    = row[57] or "reachable"
+        s.radius_username      = row[58] or ""
+        s.radius_password      = row[59] or ""
+        s.radius_nas_id        = row[60] or ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -426,7 +566,20 @@ def db_load(state):
             "COALESCE(vmware_user,''),COALESCE(vmware_password,''),"
             "COALESCE(vmware_vm_id,''),COALESCE(vmware_vm_name,''),COALESCE(vmware_metric,''),"
             "COALESCE(anomaly_enabled,0),COALESCE(anomaly_sensitivity,2),"
-            "COALESCE(anomaly_min_samples,50) "
+            "COALESCE(anomaly_min_samples,50),"
+            "COALESCE(smtp_tls,'none'),COALESCE(smtp_user,''),"
+            "COALESCE(smtp_password,''),COALESCE(smtp_from,''),"
+            "COALESCE(smtp_rcpt,''),COALESCE(smtp_test_level,'ehlo'),"
+            "COALESCE(ssh_user,''),COALESCE(ssh_password,''),"
+            "COALESCE(ssh_private_key,''),COALESCE(ssh_auth_type,'password'),"
+            "COALESCE(ssh_test_level,'banner'),"
+            "COALESCE(sftp_user,''),COALESCE(sftp_password,''),"
+            "COALESCE(sftp_private_key,''),COALESCE(sftp_auth_type,'password'),"
+            "COALESCE(sftp_test_level,'open'),"
+            "COALESCE(sftp_remote_path,''),COALESCE(sftp_expected_sha256,''),"
+            "COALESCE(radius_secret,''),COALESCE(radius_test_level,'reachable'),"
+            "COALESCE(radius_username,''),COALESCE(radius_password,''),"
+            "COALESCE(radius_nas_id,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -471,7 +624,16 @@ def db_load(state):
          loss_warn_pct, loss_crit_pct, keyword, keyword_case, banner_regex,
          alerts_muted, host_override, snmp_unit,
          vmware_user, vmware_password, vmware_vm_id, vmware_vm_name, vmware_metric,
-         anomaly_enabled, anomaly_sensitivity, anomaly_min_samples) in srows:
+         anomaly_enabled, anomaly_sensitivity, anomaly_min_samples,
+         smtp_tls, smtp_user, smtp_password,
+         smtp_from, smtp_rcpt, smtp_test_level,
+         ssh_user, ssh_password, ssh_private_key,
+         ssh_auth_type, ssh_test_level,
+         sftp_user, sftp_password, sftp_private_key,
+         sftp_auth_type, sftp_test_level,
+         sftp_remote_path, sftp_expected_sha256,
+         radius_secret, radius_test_level,
+         radius_username, radius_password, radius_nas_id) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -500,6 +662,29 @@ def db_load(state):
         s.anomaly_enabled      = int(anomaly_enabled or 0)
         s.anomaly_sensitivity  = int(anomaly_sensitivity or 2)
         s.anomaly_min_samples  = int(anomaly_min_samples or 50)
+        s.smtp_tls             = smtp_tls or "none"
+        s.smtp_user            = smtp_user or ""
+        s.smtp_password        = smtp_password or ""
+        s.smtp_from            = smtp_from or ""
+        s.smtp_rcpt            = smtp_rcpt or ""
+        s.smtp_test_level      = smtp_test_level or "ehlo"
+        s.ssh_user             = ssh_user or ""
+        s.ssh_password         = ssh_password or ""
+        s.ssh_private_key      = ssh_private_key or ""
+        s.ssh_auth_type        = ssh_auth_type or "password"
+        s.ssh_test_level       = ssh_test_level or "banner"
+        s.sftp_user            = sftp_user or ""
+        s.sftp_password        = sftp_password or ""
+        s.sftp_private_key     = sftp_private_key or ""
+        s.sftp_auth_type       = sftp_auth_type or "password"
+        s.sftp_test_level      = sftp_test_level or "open"
+        s.sftp_remote_path     = sftp_remote_path or ""
+        s.sftp_expected_sha256 = sftp_expected_sha256 or ""
+        s.radius_secret        = radius_secret or ""
+        s.radius_test_level    = radius_test_level or "reachable"
+        s.radius_username      = radius_username or ""
+        s.radius_password      = radius_password or ""
+        s.radius_nas_id        = radius_nas_id or ""
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
@@ -568,14 +753,26 @@ def db_load(state):
 
 # ── Background autosave ──────────────────────────────────────────
 
+_autosave_stop = threading.Event()
+
+
+def stop_autosave() -> None:
+    """Signal the autosave loop to exit. Call before pg_close_pool() at shutdown
+    so the 60 s sleep doesn't land mid-save after the pool is gone (which emits
+    a spurious 'PostgreSQL pool is closed' error)."""
+    _autosave_stop.set()
+
+
 def autosave_loop(state):
     """Save state to DB every 60 s; clean old samples every ~1 hour;
     maintain PG partitions daily."""
-    import time as _time
     from db.samples import db_clean_samples
     _iter = 0
-    while True:
-        _time.sleep(60)
+    while not _autosave_stop.is_set():
+        # Interruptible wait — shutdown signals _autosave_stop so we exit
+        # before pg_close_pool() runs, avoiding 'pool is closed' errors.
+        if _autosave_stop.wait(60):
+            break
         _db_enqueue(lambda: db_save(state))
         _iter += 1
         if _iter % 60 == 0:    # every ~hour

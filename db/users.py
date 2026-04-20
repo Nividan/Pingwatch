@@ -168,8 +168,94 @@ def db_add_ldap_user(username: str, domain: str, role: str = 'viewer',
         return False
 
 
+def db_add_radius_user(username: str, domain: str = '', role: str = 'viewer',
+                       full_name: str = '', email: str = '',
+                       group_id: int | None = None) -> bool:
+    """Insert a RADIUS-authenticated user (no local password). Returns False if username exists."""
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"INSERT INTO users (username, pw_hash, role, auth_type, domain, "
+                f"full_name, email, group_id) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (username, '__radius__', role, 'radius', domain,
+                 full_name, email, group_id)
+            )
+        return True
+    except Exception as e:
+        msg = str(e).lower()
+        if "unique" not in msg and "duplicate" not in msg:
+            log.error(f"DB add RADIUS user error: {e}")
+        return False
+
+
+def db_add_sso_user(username: str, auth_type: str, external_id: str,
+                    role: str = 'viewer', full_name: str = '', email: str = '',
+                    group_id: int | None = None) -> bool:
+    """Insert a SAML or OIDC-authenticated user (JIT provisioning, no local password).
+
+    auth_type: 'saml' or 'oidc'
+    external_id: federated subject — format 'saml|<entity>|<nameid>' or 'oidc|<issuer>|<sub>'.
+    Returns False if username or external_id already exists.
+    """
+    if auth_type not in ('saml', 'oidc'):
+        log.error(f"db_add_sso_user: invalid auth_type {auth_type!r}")
+        return False
+    sentinel = '__saml__' if auth_type == 'saml' else '__oidc__'
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"INSERT INTO users (username, pw_hash, role, auth_type, "
+                f"full_name, email, group_id, external_id) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (username, sentinel, role, auth_type,
+                 full_name, email, group_id, external_id)
+            )
+        return True
+    except Exception as e:
+        msg = str(e).lower()
+        if "unique" not in msg and "duplicate" not in msg:
+            log.error(f"DB add SSO user error: {e}")
+        return False
+
+
+def db_get_user_by_external_id(external_id: str) -> dict | None:
+    """Look up a user by their federated external_id. Returns row dict or None."""
+    if not external_id:
+        return None
+    rows = db_query("main",
+                    "SELECT username, role, auth_type, full_name, email, group_id "
+                    "FROM users WHERE external_id=?",
+                    (external_id,))
+    if not rows:
+        return None
+    r = rows[0]
+    return {"username":   r["username"],
+            "role":       r["role"],
+            "auth_type":  r["auth_type"] or "local",
+            "full_name":  r["full_name"] or "",
+            "email":      r["email"]     or "",
+            "group_id":   r["group_id"]}
+
+
+def db_update_external_id(username: str, external_id: str) -> bool:
+    """Set or clear external_id on an existing user. Used when admins pre-create an SSO shell."""
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(
+                f"UPDATE users SET external_id={ph} WHERE username={ph}",
+                (external_id or None, username))
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"DB update external_id error: {e}")
+        return False
+
+
 def db_get_user_auth_type(username: str) -> str:
-    """Return 'local' or 'ldap' for username, defaulting to 'local' if not found."""
+    """Return 'local', 'ldap', 'radius', 'saml', or 'oidc' for username, defaulting to 'local'."""
     rows = db_query("main", "SELECT auth_type FROM users WHERE username=?", (username,))
     if not rows:
         return 'local'

@@ -28,16 +28,56 @@ function sensorFormHTML(dev, s=null) {
     : '';
   const curType = s?.stype || 'ping';
   const isEdit = !!s;
+  // Sensor-type catalogue. Tuple shape:
+  //   [key, name, sub, icon, category, keywords]
+  // `category` groups the sidebar; `keywords` is a free-text search index so a
+  // user typing 'web', 'mail' or 'cert' surfaces the right type without having
+  // to know the canonical name.
   const _types = [
-    ['ping','Ping','ICMP echo','◉'],['tcp','TCP Port','Port check','⇌'],
-    ['http','HTTP/S','Web response','◈'],['snmp','SNMP','OID polling','◎'],
-    ['dns','DNS','Record lookup','⬡'],['tls','TLS','Cert expiry','T'],
-    ['http_keyword','HTTP KW','Keyword check','K'],['banner','Banner','TCP banner','B'],
-    ['vmware','VMware','VM metrics','V']
+    ['ping',         'Ping',     'ICMP echo',     '◉','Network',       'icmp echo reachability latency'],
+    ['tcp',          'TCP Port', 'Port check',    '⇌','Network',       'port socket connect'],
+    ['http',         'HTTP/S',   'Web response',  '◈','Network',       'web url status response code'],
+    ['dns',          'DNS',      'Record lookup', '⬡','Network',       'resolve a aaaa mx ns ptr soa'],
+    ['snmp',         'SNMP',     'OID polling',   '◎','Monitoring',    'oid polling counter mib'],
+    ['tls',          'TLS',      'Cert expiry',   'T','Monitoring',    'certificate ssl x509 expiry'],
+    ['banner',       'Banner',   'TCP banner',    'B','Monitoring',    'greeting handshake regex'],
+    ['http_keyword', 'HTTP KW',  'Keyword check', 'K','Application',   'grep match content body'],
+    ['ssh',          'SSH',      'Secure Shell',  '⇲','Auth & Access', 'login secure shell remote'],
+    ['smtp',         'SMTP',     'Mail server',   '✉','Auth & Access', 'mail email server relay'],
+    ['radius',       'RADIUS',   'AAA auth test', 'R','Auth & Access', 'aaa authentication authorization accounting nas freeradius nps ise fortiauthenticator login 1812'],
+    ['sftp',         'SFTP',     'Secure file transfer','⇑','File Transfer','file upload download scp transfer backup'],
+    ['vmware',       'VMware',   'VM metrics',    'V','Virtualization','vsphere esxi vm hypervisor'],
   ];
-  const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">${
-    _types.map(([k,nm,sub,ico])=>`<button class="stab-nav${curType===k?' active':''}" data-t="${k}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${nm}</span><span class="snav-sub">${sub}</span></span></button>`).join('')
-  }</nav>`;
+  // Group by category, preserving order of first appearance.
+  const _catOrder = [];
+  const _byCat = {};
+  for (const t of _types) {
+    const c = t[4] || 'Other';
+    if (!_byCat[c]) { _byCat[c] = []; _catOrder.push(c); }
+    _byCat[c].push(t);
+  }
+  const _navBtn = ([k,nm,sub,ico,cat,kw]) => {
+    // data-search packs everything the filter looks at into one attribute,
+    // so _sensorTypeFilter doesn't need to reach back into _types on every
+    // keystroke. Lower-cased once at render time.
+    const hay = `${nm} ${sub} ${cat} ${kw}`.toLowerCase();
+    return `<button class="stab-nav${curType===k?' active':''}" data-t="${k}" data-search="${esc(hay)}" onclick="selType('${k}')"><span class="snav-ico">${ico}</span><span class="snav-lbl"><span>${esc(nm)}</span><span class="snav-sub">${esc(sub)}</span></span></button>`;
+  };
+  const _catGroups = _catOrder.map(c => `
+    <div class="stab-cat-group" data-cat="${esc(c)}">
+      <div class="stab-cat-hdr">${esc(c)}</div>
+      ${_byCat[c].map(_navBtn).join('')}
+    </div>`).join('');
+  const _sidebar = isEdit ? '' : `<nav class="stab-sidebar" id="sensor-sidebar">
+    <div class="stab-search-wrap">
+      <input type="text" class="stab-search" id="sensor-type-search"
+             placeholder="🔍 Filter types…" autocomplete="off"
+             oninput="_sensorTypeFilter(this.value)"
+             onkeydown="_sensorTypeKeyNav(event)">
+    </div>
+    <div class="stab-nav-list" id="sensor-nav-list">${_catGroups}</div>
+    <div class="stab-empty" id="sensor-type-empty" style="display:none">No sensor types match</div>
+  </nav>`;
   const _contentOpen = isEdit
     ? '<div style="overflow-y:auto;padding:20px;flex:1">'
     : '<div class="stab-content" style="overflow-y:auto;padding:20px">';
@@ -220,17 +260,18 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:4px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="dp-btn" type="button" onclick="discoverVMs()" id="as-vm-disc-btn">⊕ Discover VMs</button>
-        <button class="dp-btn" type="button" onclick="discoverHosts()" id="as-vmh-disc-btn">⊕ Discover Hosts</button>
+        <button class="dp-btn" type="button" onclick="discoverVMs()" id="as-vm-disc-btn">▥ Discover VMs</button>
+        <button class="dp-btn" type="button" onclick="discoverHosts()" id="as-vmh-disc-btn">▦ Discover Hosts</button>
+        <button class="dp-btn" type="button" onclick="discoverDatastores()" id="as-vmds-disc-btn">▤ Discover Datastores</button>
         <span id="as-vm-status" style="font-size:11px;color:var(--text3)"></span>
       </div>
       <div id="as-vm-list" style="display:none;margin-top:8px"></div>
     </div>
     <div class="fgrid" style="margin-top:4px">
-      <div class="fr"><label class="fl">VM / Host ID</label>
-        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123 or host-28 (from discovery)" autocomplete="off" readonly/>
+      <div class="fr"><label class="fl">VM / Host / Datastore ID</label>
+        <input type="text" id="as-vmid" value="${esc(s?.vmware_vm_id||'')}" placeholder="vm-123, host-28, or datastore-14 (from discovery)" autocomplete="off" readonly/>
         <input type="hidden" id="as-vmnm" value="${esc(s?.vmware_vm_name||'')}"/>
-        <div class="fh">Managed Object ID — use Discover VMs or Discover Hosts above</div>
+        <div class="fh">Managed Object ID — use a Discover button above</div>
       </div>
       <div class="fr"><label class="fl">Metric</label>
         <select id="as-vmmet"><option value="">— select metric —</option></select>
@@ -241,6 +282,194 @@ function sensorFormHTML(dev, s=null) {
       <label class="fl">Disk Path</label>
       <input type="text" id="as-vm-diskpath" value="${esc(s?.vmware_disk_path||'')}" placeholder="e.g. C:\\ or /" autocomplete="off"/>
       <div class="fh">Partition to monitor — leave blank for most-used disk</div>
+    </div>
+  </div>
+  <!-- SMTP -->
+  <div class="fg ${curType==='smtp'?'vis':''}" id="fg-smtp">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Mail server host</label>
+        <input type="text" id="as-smh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-smp" value="${s?.port||25}" min="1" max="65535"/>
+        <div class="fh" style="margin-top:4px">
+          <span class="pc" style="cursor:pointer" onclick="document.getElementById('as-smp').value=25;document.getElementById('as-smtls').value='none'">25 plain</span>
+          <span class="pc" style="cursor:pointer;margin-left:4px" onclick="document.getElementById('as-smp').value=587;document.getElementById('as-smtls').value='starttls'">587 STARTTLS</span>
+          <span class="pc" style="cursor:pointer;margin-left:4px" onclick="document.getElementById('as-smp').value=465;document.getElementById('as-smtls').value='ssl'">465 SSL</span>
+        </div>
+      </div>
+    </div>
+    <div class="fgrid">
+      <div class="fr"><label class="fl">TLS</label>
+        <select id="as-smtls">
+          ${['none','starttls','ssl'].map(v=>`<option value="${v}"${(s?.smtp_tls||'none')===v?' selected':''}>${v==='none'?'None (plaintext)':v==='starttls'?'STARTTLS':'SSL/TLS'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fr"><label class="fl">Test depth</label>
+        <select id="as-smlvl" onchange="_smtpLvlToggle()">
+          ${[['connect','Connect only'],['ehlo','EHLO'],['starttls','STARTTLS'],['auth','AUTH (LOGIN)'],['mailfrom','MAIL FROM round-trip']]
+            .map(([v,lbl])=>`<option value="${v}"${(s?.smtp_test_level||'ehlo')===v?' selected':''}>${lbl}</option>`).join('')}
+        </select>
+        <div class="fh">Each level runs all prior steps. MAIL FROM issues RSET — no mail is actually sent.</div>
+      </div>
+    </div>
+    <div class="fr" style="margin-top:4px">
+      <button class="dp-btn" type="button" onclick="_smtpUseSystem()">Use system SMTP</button>
+      <span class="fh" style="margin-left:8px">prefills host / port / TLS / user from alert config</span>
+    </div>
+    <div id="as-smtp-auth-row" style="display:${['auth','mailfrom'].includes(s?.smtp_test_level||'ehlo')?'':'none'}">
+      <div class="fgrid" style="margin-top:8px">
+        <div class="fr"><label class="fl">Username</label>
+          <input type="text" id="as-smu" value="${esc(s?.smtp_user||'')}" placeholder="user@example.com" autocomplete="off"/></div>
+        <div class="fr"><label class="fl">Password</label>
+          <input type="password" id="as-smpw" value="" placeholder="${s?.has_smtp_password?'(unchanged — leave blank to keep)':'SMTP password'}" autocomplete="new-password"/></div>
+      </div>
+    </div>
+    <div id="as-smtp-mail-row" style="display:${(s?.smtp_test_level||'ehlo')==='mailfrom'?'':'none'}">
+      <div class="fgrid" style="margin-top:8px">
+        <div class="fr"><label class="fl">MAIL FROM (sender)</label>
+          <input type="text" id="as-smfr" value="${esc(s?.smtp_from||'')}" placeholder="probe@example.com" autocomplete="off"/></div>
+        <div class="fr"><label class="fl">RCPT TO (recipient)</label>
+          <input type="text" id="as-smrc" value="${esc(s?.smtp_rcpt||'')}" placeholder="target@example.com" autocomplete="off"/></div>
+      </div>
+    </div>
+  </div>
+  <!-- SSH -->
+  <div class="fg ${curType==='ssh'?'vis':''}" id="fg-ssh">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Host / IP</label>
+        <input type="text" id="as-shh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-shp" value="${s?.port||22}" min="1" max="65535"/></div>
+    </div>
+    <div class="fr">
+      <label class="fl">Test depth</label>
+      <select id="as-shlvl" onchange="_sshLvlToggle()">
+        ${[['connect','Connect only (TCP)'],['banner','Banner (verify SSH + capture version)'],['auth','Auth (full login)']]
+          .map(([v,lbl])=>`<option value="${v}"${(s?.ssh_test_level||'banner')===v?' selected':''}>${lbl}</option>`).join('')}
+      </select>
+      <div class="fh">Each level runs all prior steps. Auth closes immediately after handshake — no command is executed.</div>
+    </div>
+    <div id="as-ssh-auth-row" style="display:${(s?.ssh_test_level||'banner')==='auth'?'':'none'}">
+      <div class="fr" style="margin-top:8px">
+        <label class="fl">Auth method</label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="as-shauth" value="password" ${(s?.ssh_auth_type||'password')==='password'?'checked':''} onchange="_sshLvlToggle()"/> Password
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="as-shauth" value="key" ${(s?.ssh_auth_type||'password')==='key'?'checked':''} onchange="_sshLvlToggle()"/> Private key
+          </label>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:8px">
+        <label class="fl">Username</label>
+        <input type="text" id="as-shu" value="${esc(s?.ssh_user||'')}" placeholder="root / admin / monitor" autocomplete="off"/>
+      </div>
+      <div class="fr" id="as-ssh-pw-row" style="display:${(s?.ssh_auth_type||'password')==='password'?'':'none'};margin-top:8px">
+        <label class="fl">Password</label>
+        <input type="password" id="as-shpw" value="" placeholder="${s?.has_ssh_password?'(unchanged — leave blank to keep)':'SSH password'}" autocomplete="new-password"/>
+      </div>
+      <div class="fr" id="as-ssh-key-row" style="display:${(s?.ssh_auth_type||'password')==='key'?'':'none'};margin-top:8px">
+        <label class="fl">Private key (PEM)</label>
+        <textarea id="as-shkey" rows="6" placeholder="${s?.has_ssh_private_key?'(unchanged — leave blank to keep)':'-----BEGIN OPENSSH PRIVATE KEY-----\\n...\\n-----END OPENSSH PRIVATE KEY-----'}" style="font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical" autocomplete="off"></textarea>
+        <div class="fh">Ed25519 / RSA / ECDSA supported. Passphrase-protected keys not supported in v1.</div>
+      </div>
+    </div>
+  </div>
+  <!-- SFTP -->
+  <div class="fg ${curType==='sftp'?'vis':''}" id="fg-sftp">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">Host / IP</label>
+        <input type="text" id="as-sfh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-sfp" value="${s?.port||22}" min="1" max="65535"/></div>
+    </div>
+    <div class="fr">
+      <label class="fl">Test depth</label>
+      <select id="as-sflvl" onchange="_sftpLvlToggle()">
+        ${[['open','Open SFTP subsystem (verify sftp-server is enabled)'],
+            ['list','+ List directory'],
+            ['stat','+ Stat specific file'],
+            ['checksum','+ Download + SHA256 verify (read-only)']]
+          .map(([v,lbl])=>`<option value="${v}"${(s?.sftp_test_level||'open')===v?' selected':''}>${lbl}</option>`).join('')}
+      </select>
+      <div class="fh">Each level runs all prior steps. Checksum is non-destructive — never writes or deletes on the remote.</div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Auth method</label>
+      <div style="display:flex;gap:16px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="as-sfauth" value="password" ${(s?.sftp_auth_type||'password')==='password'?'checked':''} onchange="_sftpLvlToggle()"/> Password
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="as-sfauth" value="key" ${(s?.sftp_auth_type||'password')==='key'?'checked':''} onchange="_sftpLvlToggle()"/> Private key
+        </label>
+      </div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Username</label>
+      <input type="text" id="as-sfu" value="${esc(s?.sftp_user||'')}" placeholder="backup / monitor / nive" autocomplete="off"/>
+    </div>
+    <div class="fr" id="as-sftp-pw-row" style="display:${(s?.sftp_auth_type||'password')==='password'?'':'none'};margin-top:8px">
+      <label class="fl">Password</label>
+      <input type="password" id="as-sfpw" value="" placeholder="${s?.has_sftp_password?'(unchanged — leave blank to keep)':'SFTP password'}" autocomplete="new-password"/>
+    </div>
+    <div class="fr" id="as-sftp-key-row" style="display:${(s?.sftp_auth_type||'password')==='key'?'':'none'};margin-top:8px">
+      <label class="fl">Private key (PEM)</label>
+      <textarea id="as-sfkey" rows="6" placeholder="${s?.has_sftp_private_key?'(unchanged — leave blank to keep)':'-----BEGIN OPENSSH PRIVATE KEY-----'}" style="font-family:Consolas,Monaco,monospace;font-size:11px;resize:vertical" autocomplete="off"></textarea>
+      <div class="fh">Ed25519 / RSA / ECDSA supported. Passphrase-protected keys not supported.</div>
+    </div>
+    <div class="fr" id="as-sftp-path-row" style="display:${['list','stat','checksum'].includes(s?.sftp_test_level||'open')?'':'none'};margin-top:8px">
+      <label class="fl">Remote path</label>
+      <input type="text" id="as-sfpath" value="${esc(s?.sftp_remote_path||'')}" placeholder="/backups  or  /backups/latest.tar.gz" autocomplete="off"/>
+      <div class="fh">Directory for <b>list</b>, file for <b>stat</b> / <b>checksum</b>.</div>
+    </div>
+    <div class="fr" id="as-sftp-sha-row" style="display:${(s?.sftp_test_level||'open')==='checksum'?'':'none'};margin-top:8px">
+      <label class="fl">Expected SHA256</label>
+      <input type="text" id="as-sfsha" value="${esc(s?.sftp_expected_sha256||'')}" placeholder="a1b2c3… (64 hex chars)" autocomplete="off" style="font-family:Consolas,Monaco,monospace;font-size:11px"/>
+      <div class="fh">Compute locally with <code>sha256sum</code>. Max file size: 10 MB.</div>
+    </div>
+  </div>
+  <!-- RADIUS -->
+  <div class="fg ${curType==='radius'?'vis':''}" id="fg-radius">
+    <div class="fgrid">
+      <div class="fr"><label class="fl">RADIUS server</label>
+        <input type="text" id="as-rdh" value="${esc(s?.host||defHost)}" placeholder="${hostHint}" autocomplete="off"/>
+        ${hostStatusHtml}</div>
+      <div class="fr"><label class="fl">Port</label>
+        <input type="number" id="as-rdp" value="${s?.port||1812}" min="1" max="65535"/>
+        <div class="fh">1812 = RFC 2865 authentication (default).</div>
+      </div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Shared secret</label>
+      <input type="password" id="as-rdsec" value="" placeholder="${s?.has_radius_secret?'(unchanged — leave blank to keep)':'RADIUS shared secret'}" autocomplete="new-password"/>
+      <div class="fh">The client↔server secret — not a user password. Fernet-encrypted at rest.</div>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">Test depth</label>
+      <select id="as-rdlvl" onchange="_radiusLvlToggle()">
+        ${[['reachable','Reachable (random user, any reply = up — no real creds needed)'],
+            ['auth','+ Full auth (real username + password, expect Access-Accept)']]
+          .map(([v,lbl])=>`<option value="${v}"${(s?.radius_test_level||'reachable')===v?' selected':''}>${lbl}</option>`).join('')}
+      </select>
+      <div class="fh">PAP only. 2FA challenges are flagged as failures (non-interactive probe).</div>
+    </div>
+    <div class="fr" id="as-rd-user-row" style="display:${(s?.radius_test_level||'reachable')==='auth'?'':'none'};margin-top:8px">
+      <label class="fl">Username</label>
+      <input type="text" id="as-rdu" value="${esc(s?.radius_username||'')}" placeholder="test user" autocomplete="off"/>
+    </div>
+    <div class="fr" id="as-rd-pw-row" style="display:${(s?.radius_test_level||'reachable')==='auth'?'':'none'};margin-top:8px">
+      <label class="fl">Password</label>
+      <input type="password" id="as-rdpw" value="" placeholder="${s?.has_radius_password?'(unchanged — leave blank to keep)':'RADIUS user password'}" autocomplete="new-password"/>
+    </div>
+    <div class="fr" style="margin-top:8px">
+      <label class="fl">NAS-Identifier</label>
+      <input type="text" id="as-rdnas" value="${esc(s?.radius_nas_id||'')}" placeholder="pingwatch" autocomplete="off"/>
+      <div class="fh">Optional — some servers filter or log by this attribute. Defaults to <code>pingwatch</code>.</div>
     </div>
   </div>
   <!-- Alert Thresholds -->
@@ -527,7 +756,7 @@ async function submitEditSensor(did, sid){
 function selType(t){
   document.getElementById('as-t').value=t;
   document.querySelectorAll('#sensor-sidebar .stab-nav').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
-  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
+  ['ping','tcp','http','snmp','dns','tls','http_keyword','banner','vmware','smtp','ssh','sftp','radius'].forEach(x=>document.getElementById(`fg-${x}`)?.classList.toggle('vis',x===t));
   if(t==='snmp') _snmpLoadVendors();
   if(t==='vmware') _vmwareLoadMetrics();
   if(window._snrAddMode) _applyTypeDefaults(t);
@@ -539,6 +768,55 @@ function selType(t){
     else if(t==='vmware'){const _vm=document.getElementById('as-vmmet-v')?.value||'';_wL.textContent=_vmwareThrLabel(_vm,true);_cL.textContent=_vmwareThrLabel(_vm,false);}
     else{_wL.textContent='Warn Latency (ms)';_cL.textContent='Crit Latency (ms)';}
   }
+}
+
+/* Filter the sensor-type sidebar by a free-text query. Hides any nav button
+ * whose data-search packed-haystack doesn't contain the query, and collapses
+ * category headers that have no remaining visible buttons. Cheap — pure DOM
+ * walk, no re-render. */
+function _sensorTypeFilter(q){
+  const list = document.getElementById('sensor-nav-list');
+  if(!list) return;
+  const needle = (q || '').trim().toLowerCase();
+  let totalVisible = 0;
+  list.querySelectorAll('.stab-cat-group').forEach(g => {
+    let groupVisible = 0;
+    g.querySelectorAll('.stab-nav').forEach(b => {
+      const match = !needle || (b.dataset.search || '').includes(needle);
+      b.style.display = match ? '' : 'none';
+      if(match) groupVisible++;
+    });
+    g.style.display = groupVisible ? '' : 'none';
+    totalVisible += groupVisible;
+  });
+  const empty = document.getElementById('sensor-type-empty');
+  if(empty) empty.style.display = totalVisible ? 'none' : '';
+}
+
+/* Keyboard navigation while the search input is focused.
+ *  ↑ / ↓  — move between visible (filtered) types and auto-select on the way
+ *  Enter  — commit the current selection (already selected by ↑/↓; Enter just
+ *           blurs the search so the user can tab into the form fields)
+ * Auto-selecting on arrow keys means the right-hand form panel updates live
+ * as the user scrubs through types — no extra Enter press needed. */
+function _sensorTypeKeyNav(e){
+  if(!['ArrowUp','ArrowDown','Enter'].includes(e.key)) return;
+  const visible = [...document.querySelectorAll('#sensor-nav-list .stab-nav')]
+    .filter(b => b.style.display !== 'none');
+  if(!visible.length) return;
+  if(e.key === 'Enter'){
+    e.preventDefault();
+    e.target.blur();
+    return;
+  }
+  let idx = visible.findIndex(b => b.classList.contains('active'));
+  if(idx < 0) idx = 0;
+  if(e.key === 'ArrowDown') idx = Math.min(idx + 1, visible.length - 1);
+  if(e.key === 'ArrowUp')   idx = Math.max(idx - 1, 0);
+  const t = visible[idx].dataset.t;
+  if(t) selType(t);
+  visible[idx].scrollIntoView({block:'nearest'});
+  e.preventDefault();
 }
 
 function _applyTypeDefaults(t){
@@ -935,7 +1213,10 @@ async function addSelectedIfaceSensors(){
 // ── VMware VM Discovery ──────────────────────────────────────────────────
 
 let _vmwareMetrics=null;
+let _vmwareDatastoreMetrics=null;
 let _vmSelectedMemMB=0;  // memory of currently selected VM (MB), for smart threshold defaults
+let _vmSelectedCapacityGB=0;  // capacity of currently selected datastore (GB), for smart threshold defaults
+let _vmDstoreMode=false;  // true when the metric dropdown is showing datastore metrics
 
 // Fixed per-metric defaults (used when VM RAM not available or metric isn't memory-based)
 const _VM_THR_DEFAULTS={
@@ -961,8 +1242,13 @@ function _vmwareThrAutoFill(metric, memMB){
   const ci=document.getElementById('as-cms');
   if(!wi||!ci||wi.value||ci.value) return;
   let w=null,c=null;
+  // Datastore free-space: defaults scale with discovered capacity
+  if(metric && metric.startsWith('dstore_') && _vmSelectedCapacityGB>0){
+    w=Math.round(_vmSelectedCapacityGB*0.20);
+    c=Math.round(_vmSelectedCapacityGB*0.10);
+  }
   // Memory metrics: compute from VM/host RAM
-  if(memMB>0){
+  else if(memMB>0){
     if(metric==='mem_consumed'||metric==='host_mem_consumed'){ w=Math.round(memMB*0.80); c=Math.round(memMB*0.90); }
     else if(metric==='mem_active'||metric==='host_mem_active'){ w=Math.round(memMB*0.50); c=Math.round(memMB*0.70); }
   }
@@ -974,6 +1260,7 @@ function _vmwareThrAutoFill(metric, memMB){
 function _vmwareThrLabel(metric, isWarn){
   const pfx=isWarn?'Warn':'Crit';
   if(!metric) return pfx+' Value';
+  if(metric.startsWith('dstore_')) return pfx+' (GB free — alert below)';
   const m=_allVmwareMetrics().find(x=>x.v===metric);
   const u=m?.unit||'';
   if(u==='%')       return pfx+' %';
@@ -983,6 +1270,7 @@ function _vmwareThrLabel(metric, isWarn){
   if(u==='ms')      return pfx+' ms';
   if(u==='seconds') return pfx+' seconds';
   if(u==='watt')    return pfx+' watt';
+  if(u==='GB')      return pfx+' GB';
   return pfx+' Value';
 }
 
@@ -1043,33 +1331,53 @@ let _vmwareHostMetrics=null;
 async function _vmwareLoadMetrics(){
   const sel=document.getElementById('as-vmmet');
   if(!sel) return;
+  // Detect mode from the saved metric when opening an existing sensor
+  const cur=document.getElementById('as-vmmet-v')?.value||'';
+  if(cur.startsWith('dstore_')) _vmDstoreMode=true;
+  else if(cur) _vmDstoreMode=false;
   sel.onchange=()=>_vmwareThrUpdateLabels();
-  if(sel.options.length>1){ _vmwareThrUpdateLabels(); return; }
-  if(!_vmwareMetrics||!_vmwareHostMetrics){
-    try{
-      const [vmR,hostR]=await Promise.all([fetch('/api/vmware/metrics'),fetch('/api/vmware/host-metrics')]);
-      const vmD=await vmR.json(), hostD=await hostR.json();
-      _vmwareMetrics=vmD.metrics||[];
-      _vmwareHostMetrics=hostD.metrics||[];
-    }catch(e){ return; }
+  // Always rebuild options when the mode might have flipped between opens
+  sel.innerHTML='<option value="">— select metric —</option>';
+  if(_vmDstoreMode){
+    if(!_vmwareDatastoreMetrics){
+      try{
+        const r=await fetch('/api/vmware/datastore-metrics');
+        const d=await r.json();
+        _vmwareDatastoreMetrics=d.metrics||[];
+      }catch(e){ return; }
+    }
+    const grp=document.createElement('optgroup');
+    grp.label='Datastore Metrics';
+    _vmwareDatastoreMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l;grp.appendChild(o);});
+    sel.appendChild(grp);
+  }else{
+    if(!_vmwareMetrics||!_vmwareHostMetrics){
+      try{
+        const [vmR,hostR]=await Promise.all([fetch('/api/vmware/metrics'),fetch('/api/vmware/host-metrics')]);
+        const vmD=await vmR.json(), hostD=await hostR.json();
+        _vmwareMetrics=vmD.metrics||[];
+        _vmwareHostMetrics=hostD.metrics||[];
+      }catch(e){ return; }
+    }
+    const vmGrp=document.createElement('optgroup');
+    vmGrp.label='VM Metrics';
+    _vmwareMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';vmGrp.appendChild(o);});
+    sel.appendChild(vmGrp);
+    const hostGrp=document.createElement('optgroup');
+    hostGrp.label='Host Metrics';
+    _vmwareHostMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';hostGrp.appendChild(o);});
+    sel.appendChild(hostGrp);
   }
-  const vmGrp=document.createElement('optgroup');
-  vmGrp.label='VM Metrics';
-  _vmwareMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';vmGrp.appendChild(o);});
-  sel.appendChild(vmGrp);
-  const hostGrp=document.createElement('optgroup');
-  hostGrp.label='Host Metrics';
-  _vmwareHostMetrics.forEach(m=>{const o=document.createElement('option');o.value=m.v;o.textContent=m.l+' ('+m.unit+')';hostGrp.appendChild(o);});
-  sel.appendChild(hostGrp);
-  const cur=document.getElementById('as-vmmet-v')?.value;
   if(cur) sel.value=cur;
   _vmwareThrUpdateLabels();
 }
-function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[])]; }
+function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[]),...(_vmwareDatastoreMetrics||[])]; }
 
 let _discHostMode=false;  // true when host discovery table is shown
 async function discoverVMs(){
   _discHostMode=false;
+  _vmDstoreMode=false;
+  _vmSelectedCapacityGB=0;
   const did      =window._ifaceDid;
   const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
   const username =document.getElementById('as-vmu')?.value.trim()||'';
@@ -1095,7 +1403,7 @@ async function discoverVMs(){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
     return;
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover VMs'; }
+    if(btn){ btn.disabled=false; btn.textContent='▥ Discover VMs'; }
   }
   if(r.error){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
@@ -1172,6 +1480,8 @@ async function discoverVMs(){
 
 async function discoverHosts(){
   _discHostMode=true;
+  _vmDstoreMode=false;
+  _vmSelectedCapacityGB=0;
   const did      =window._ifaceDid;
   const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
   const username =document.getElementById('as-vmu')?.value.trim()||'';
@@ -1197,7 +1507,7 @@ async function discoverHosts(){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
     return;
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover Hosts'; }
+    if(btn){ btn.disabled=false; btn.textContent='▦ Discover Hosts'; }
   }
   if(r.error){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
@@ -1271,6 +1581,134 @@ async function discoverHosts(){
   html+='</div></div>';
   listEl.innerHTML=html;
   listEl.style.display='';
+}
+
+async function discoverDatastores(){
+  _discHostMode=false;
+  _vmDstoreMode=true;
+  const did      =window._ifaceDid;
+  const host     =document.getElementById('as-vmh')?.value.trim()||S.devices[did]?.host||'';
+  const username =document.getElementById('as-vmu')?.value.trim()||'';
+  const password =document.getElementById('as-vmpw')?.value||'';
+  const port     =parseInt(document.getElementById('as-vmp')?.value)||443;
+  const vssl     =document.getElementById('as-vmssl')?.checked!==false;
+  const btn      =document.getElementById('as-vmds-disc-btn');
+  const statusEl =document.getElementById('as-vm-status');
+  const listEl   =document.getElementById('as-vm-list');
+  const dev=did?S.devices[did]:null;
+  if(!host){ toast('Enter a Host / IP first','err'); return; }
+  if(!username){ toast('Enter a Username','err'); return; }
+  if(!password && !dev?.has_vmware_password_default){ toast('Enter a Password','err'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Connecting to vCenter…'; }
+  if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  const payload={host,username,password,port,verify_ssl:vssl};
+  if(!password && did) payload.did=did;
+  let r;
+  try{
+    r=await api('POST','/api/vmware/datastores',payload);
+  }catch(e){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    return;
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='▤ Discover Datastores'; }
+  }
+  if(r.error){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=r.error; }
+    return;
+  }
+  const datastores=r.datastores||[];
+  if(!datastores.length){
+    if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No datastores found.'; }
+    return;
+  }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${datastores.length} datastore${datastores.length!==1?'s':''} discovered — click one to select`; }
+
+  // Ensure datastore metrics are loaded (for labels)
+  if(!_vmwareDatastoreMetrics){
+    try{
+      const mr=await fetch('/api/vmware/datastore-metrics');
+      const md=await mr.json();
+      _vmwareDatastoreMetrics=md.metrics||[];
+    }catch(e){}
+  }
+
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<input type="text" id="as-vm-search" placeholder="Search datastore names…" oninput="filterDatastores(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
+  html+='</div>';
+  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:320px">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:180px">Datastore</th>';
+  html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Type</th>';
+  html+='<th style="padding:5px 8px;text-align:right;white-space:nowrap">Capacity</th>';
+  html+='<th style="padding:5px 8px;text-align:right;white-space:nowrap">Free</th>';
+  html+='<th style="padding:5px 8px;text-align:right;white-space:nowrap">Free %</th>';
+  html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap">State</th>';
+  html+='<th style="padding:5px 8px"></th>';
+  html+='</tr></thead><tbody id="as-vm-tbody">';
+
+  datastores.forEach((d,i)=>{
+    const rowBg=i%2?'background:var(--bg2)':'';
+    const capStr=d.capacity_gb>=1024?(d.capacity_gb/1024).toFixed(2)+' TB':d.capacity_gb+' GB';
+    const freeStr=d.free_gb>=1024?(d.free_gb/1024).toFixed(2)+' TB':d.free_gb+' GB';
+    const freePctClr=d.free_pct<10?'var(--down)':d.free_pct<20?'var(--warn)':'var(--up)';
+    const stClr=d.accessible?'var(--up)':'var(--down)';
+    const stText=d.accessible?'accessible':'unavailable';
+    html+=`<tr style="border-top:1px solid var(--border);${rowBg}" data-ds-name="${esc(d.name)}">`;
+    html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap" title="${esc(d.name)}">${esc(d.name)}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${esc(d.type||'')}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);text-align:right;white-space:nowrap">${capStr}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text2);text-align:right;white-space:nowrap">${freeStr}</td>`;
+    html+=`<td style="padding:4px 8px;color:${freePctClr};text-align:right;white-space:nowrap">${d.free_pct}%</td>`;
+    html+=`<td style="padding:4px 8px;color:${stClr};text-align:center;white-space:nowrap">${stText}</td>`;
+    html+=`<td style="padding:4px 8px;text-align:right;white-space:nowrap"><button class="btn-p" type="button" style="font-size:11px;padding:3px 10px" onclick='selectDatastore(${JSON.stringify(d).replace(/'/g,"&#39;")})'>Select</button></td>`;
+    html+='</tr>';
+  });
+
+  html+='</tbody></table></div></div>';
+  listEl.innerHTML=html;
+  listEl.style.display='';
+}
+
+function filterDatastores(q){
+  const term=(q||'').toLowerCase();
+  document.querySelectorAll('#as-vm-tbody tr').forEach(tr=>{
+    const name=(tr.getAttribute('data-ds-name')||'').toLowerCase();
+    tr.style.display=name.includes(term)?'':'none';
+  });
+}
+
+function selectDatastore(d){
+  _vmDstoreMode=true;
+  _vmSelectedCapacityGB=d.capacity_gb||0;
+  _vmSelectedMemMB=0;
+  const oidEl=document.getElementById('as-vmid');
+  if(oidEl) oidEl.value=d.ds_id||'';
+  const nmEl=document.getElementById('as-vmnm');
+  if(nmEl) nmEl.value=d.name||'';
+  // Rebuild the metric dropdown in datastore mode, then pick the single metric
+  const metV=document.getElementById('as-vmmet-v');
+  if(metV) metV.value='dstore_free_gb';
+  _vmwareLoadMetrics().then(()=>{
+    const sel=document.getElementById('as-vmmet');
+    if(sel){ sel.value='dstore_free_gb'; }
+    _vmwareThrUpdateLabels();
+  });
+  // Prefill sensor name if blank or still the default
+  const nameEl=document.getElementById('as-n');
+  if(nameEl&&(!nameEl.value||nameEl.value.startsWith('Ping,'))){
+    nameEl.value=`${d.name} Free Space`;
+  }
+  const listEl=document.getElementById('as-vm-list');
+  if(listEl) listEl.style.display='none';
+  const statusEl=document.getElementById('as-vm-status');
+  if(statusEl){
+    statusEl.style.color='var(--up)';
+    const capStr=d.capacity_gb>=1024?(d.capacity_gb/1024).toFixed(2)+' TB':d.capacity_gb+' GB';
+    statusEl.textContent=`Selected: ${d.name} (${capStr}) — thresholds auto-filled to 20% / 10% of capacity`;
+  }
 }
 
 function toggleAllVMs(cb){
@@ -1602,6 +2040,15 @@ function collectSensorForm(did){
     host=document.getElementById('as-vmh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-vmp')?.value)||443;
     verify_ssl=document.getElementById('as-vmssl')?.checked!==false;
+  } else if(type==='smtp'){
+    host=document.getElementById('as-smh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-smp')?.value)||25;
+  } else if(type==='ssh'){
+    host=document.getElementById('as-shh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-shp')?.value)||22;
+  } else if(type==='sftp'){
+    host=document.getElementById('as-sfh')?.value.trim()||'';
+    port=parseInt(document.getElementById('as-sfp')?.value)||22;
   }
   const warn_ms      =parseInt(document.getElementById('as-wms')?.value)||null;
   const crit_ms      =parseInt(document.getElementById('as-cms')?.value)||null;
@@ -1635,7 +2082,151 @@ function collectSensorForm(did){
     if(!payload.vmware_vm_id){toast('VM ID required — use Discover VMs','err');return null;}
     if(!payload.vmware_metric){toast('Select a metric','err');return null;}
   }
+  if(type==='smtp'){
+    payload.smtp_tls        =document.getElementById('as-smtls')?.value||'none';
+    payload.smtp_test_level =document.getElementById('as-smlvl')?.value||'ehlo';
+    payload.smtp_user       =document.getElementById('as-smu')?.value.trim()||'';
+    payload.smtp_password   =document.getElementById('as-smpw')?.value||'';
+    payload.smtp_from       =document.getElementById('as-smfr')?.value.trim()||'';
+    payload.smtp_rcpt       =document.getElementById('as-smrc')?.value.trim()||'';
+    const _lvl=payload.smtp_test_level;
+    if((_lvl==='auth'||_lvl==='mailfrom')&&!payload.smtp_user){
+      toast('AUTH level requires a username','err');return null;
+    }
+    if(_lvl==='mailfrom'&&(!payload.smtp_from||!payload.smtp_rcpt)){
+      toast('MAIL FROM level requires From and To addresses','err');return null;
+    }
+  }
+  if(type==='ssh'){
+    payload.ssh_test_level = document.getElementById('as-shlvl')?.value||'banner';
+    payload.ssh_auth_type  = document.querySelector('input[name="as-shauth"]:checked')?.value||'password';
+    payload.ssh_user       = document.getElementById('as-shu')?.value.trim()||'';
+    payload.ssh_password   = document.getElementById('as-shpw')?.value||'';
+    payload.ssh_private_key= document.getElementById('as-shkey')?.value||'';
+    if(payload.ssh_test_level==='auth' && !payload.ssh_user){
+      toast('AUTH level requires a username','err');return null;
+    }
+  }
+  if(type==='sftp'){
+    payload.sftp_test_level      = document.getElementById('as-sflvl')?.value||'open';
+    payload.sftp_auth_type       = document.querySelector('input[name="as-sfauth"]:checked')?.value||'password';
+    payload.sftp_user            = document.getElementById('as-sfu')?.value.trim()||'';
+    payload.sftp_password        = document.getElementById('as-sfpw')?.value||'';
+    payload.sftp_private_key     = document.getElementById('as-sfkey')?.value||'';
+    payload.sftp_remote_path     = document.getElementById('as-sfpath')?.value.trim()||'';
+    payload.sftp_expected_sha256 = document.getElementById('as-sfsha')?.value.trim()||'';
+    if(!payload.sftp_user){
+      toast('SFTP requires a username','err');return null;
+    }
+    if(['list','stat','checksum'].includes(payload.sftp_test_level) && !payload.sftp_remote_path){
+      toast(`SFTP ${payload.sftp_test_level} level requires a remote path`,'err');return null;
+    }
+    if(payload.sftp_test_level==='checksum'){
+      if(!payload.sftp_expected_sha256){
+        toast('Checksum level requires an expected SHA256','err');return null;
+      }
+      if(!/^[a-fA-F0-9]{64}$/.test(payload.sftp_expected_sha256)){
+        toast('SHA256 must be 64 hex characters','err');return null;
+      }
+      if((payload.interval||0) < 60){
+        toast('Checksum level requires interval ≥ 60s','err');return null;
+      }
+    }
+  }
+  if(type==='radius'){
+    payload.host              = document.getElementById('as-rdh')?.value.trim()||payload.host;
+    payload.port              = parseInt(document.getElementById('as-rdp')?.value)||1812;
+    payload.radius_test_level = document.getElementById('as-rdlvl')?.value||'reachable';
+    payload.radius_secret     = document.getElementById('as-rdsec')?.value||'';
+    payload.radius_username   = document.getElementById('as-rdu')?.value.trim()||'';
+    payload.radius_password   = document.getElementById('as-rdpw')?.value||'';
+    payload.radius_nas_id     = document.getElementById('as-rdnas')?.value.trim()||'';
+    // Shared secret is required on create; on edit, blank means "keep existing"
+    const _isEdit = !window._snrAddMode;
+    if(!payload.radius_secret && !_isEdit){
+      toast('RADIUS requires a shared secret','err');return null;
+    }
+    if(payload.radius_test_level==='auth'){
+      if(!payload.radius_username){
+        toast('auth level requires a username','err');return null;
+      }
+      if(!payload.radius_password && !_isEdit){
+        toast('auth level requires a password','err');return null;
+      }
+    }
+  }
   return payload;
+}
+
+// Toggle visibility of auth + mailfrom rows when test level changes
+function _smtpLvlToggle(){
+  const lvl=document.getElementById('as-smlvl')?.value||'ehlo';
+  const authRow=document.getElementById('as-smtp-auth-row');
+  const mailRow=document.getElementById('as-smtp-mail-row');
+  if(authRow) authRow.style.display=(lvl==='auth'||lvl==='mailfrom')?'':'none';
+  if(mailRow) mailRow.style.display=(lvl==='mailfrom')?'':'none';
+}
+
+// Toggle SSH auth row (when level=auth) + password/key row (based on auth method radio)
+function _sshLvlToggle(){
+  const lvl=document.getElementById('as-shlvl')?.value||'banner';
+  const authType=document.querySelector('input[name="as-shauth"]:checked')?.value||'password';
+  const authRow=document.getElementById('as-ssh-auth-row');
+  const pwRow  =document.getElementById('as-ssh-pw-row');
+  const keyRow =document.getElementById('as-ssh-key-row');
+  if(authRow) authRow.style.display=(lvl==='auth')?'':'none';
+  if(pwRow)   pwRow.style.display  =(authType==='password')?'':'none';
+  if(keyRow)  keyRow.style.display =(authType==='key')?'':'none';
+}
+
+// Toggle SFTP conditional rows + bump interval/timeout when checksum is picked.
+// Path row appears at list/stat/checksum; SHA row only at checksum.
+function _sftpLvlToggle(){
+  const lvl=document.getElementById('as-sflvl')?.value||'open';
+  const authType=document.querySelector('input[name="as-sfauth"]:checked')?.value||'password';
+  const pwRow  =document.getElementById('as-sftp-pw-row');
+  const keyRow =document.getElementById('as-sftp-key-row');
+  const pathRow=document.getElementById('as-sftp-path-row');
+  const shaRow =document.getElementById('as-sftp-sha-row');
+  if(pwRow)   pwRow.style.display  =(authType==='password')?'':'none';
+  if(keyRow)  keyRow.style.display =(authType==='key')?'':'none';
+  if(pathRow) pathRow.style.display=(['list','stat','checksum'].includes(lvl))?'':'none';
+  if(shaRow)  shaRow.style.display =(lvl==='checksum')?'':'none';
+  // Checksum downloads bytes — default to 5min interval + 30s timeout to avoid
+  // hammering the server. Only bump if the current value is lower than the
+  // recommended floor; leave higher values alone.
+  if(lvl==='checksum'){
+    const iv=document.getElementById('as-iv');
+    const tm=document.getElementById('as-tmo');
+    if(iv && (parseInt(iv.value)||0) < 300){
+      iv.value=300;
+      iv.title='checksum level: min 60s, default 300s — avoids hammering the server with file downloads';
+    }
+    if(tm && (parseInt(tm.value)||0) < 30){ tm.value=30; }
+  }
+}
+
+function _radiusLvlToggle(){
+  const lvl=document.getElementById('as-rdlvl')?.value||'reachable';
+  const userRow=document.getElementById('as-rd-user-row');
+  const pwRow  =document.getElementById('as-rd-pw-row');
+  const show=(lvl==='auth');
+  if(userRow) userRow.style.display=show?'':'none';
+  if(pwRow)   pwRow.style.display  =show?'':'none';
+}
+
+// Prefill SMTP fields from the system alert-SMTP config (reads /api/settings)
+async function _smtpUseSystem(){
+  try{
+    const r=await api('GET','/api/settings');
+    if(!r||!r.smtp_host){ toast('No system SMTP configured yet','info');return; }
+    const h=document.getElementById('as-smh'); if(h)h.value=r.smtp_host;
+    const p=document.getElementById('as-smp'); if(p&&r.smtp_port)p.value=r.smtp_port;
+    const t=document.getElementById('as-smtls'); if(t&&r.smtp_tls)t.value=r.smtp_tls;
+    const u=document.getElementById('as-smu'); if(u&&r.smtp_user)u.value=r.smtp_user;
+    _smtpLvlToggle();
+    toast('Prefilled from system SMTP — enter password to complete','info');
+  }catch(e){ toast('Could not load system SMTP config','err'); }
 }
 
 async function submitAddSensor(did){

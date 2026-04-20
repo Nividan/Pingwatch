@@ -32,7 +32,15 @@ function msColor(ms, sensor) {
   const td = window._snrTypeDefaults?.[sensor?.stype] || {};
   const w = sensor?.warn_ms > 0 ? sensor.warn_ms : (td.warn_ms > 0 ? td.warn_ms : 0);
   const c = sensor?.crit_ms > 0 ? sensor.crit_ms : (td.crit_ms > 0 ? td.crit_ms : 0);
+  // Inverted-threshold metrics: lower value = worse (VMware datastore free-GB, TLS cert days-to-expiry)
+  const inverted = (sensor?.stype === 'vmware' && typeof sensor?.vmware_metric === 'string' && sensor.vmware_metric.startsWith('dstore_'))
+                || (sensor?.stype === 'tls');
   if (w > 0 || c > 0) {
+    if (inverted) {
+      if (c > 0 && ms <= c) return 'b';
+      if (w > 0 && ms <= w) return 'w';
+      return 'g';
+    }
     if (c > 0 && ms >= c) return 'b';
     if (w > 0 && ms >= w) return 'w';
     return 'g';

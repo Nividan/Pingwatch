@@ -10,6 +10,7 @@ ssl setting values:
   2 = StartTLS (upgrade plain connection after connect, port 389)
 """
 
+import threading as _threading
 import time as _time_mod
 
 import core.settings as _settings
@@ -18,36 +19,44 @@ from core.logger import log
 _SSL_LABELS = {0: 'none', 1: 'LDAPS', 2: 'StartTLS'}
 
 # ── In-memory connection status (mirrors smtp_alert / syslog_client pattern) ──
+# Lock added when auth_health refresh loop started running concurrently with
+# live login attempts — prevents torn reads of {ts, msg} during badge render.
 _last_ok_ts: float = 0.0
 _last_err: dict = {'ts': 0.0, 'msg': ''}
+_status_lock = _threading.Lock()
 
 
 def _record_ok() -> None:
     global _last_ok_ts
-    _last_ok_ts = _time_mod.time()
+    with _status_lock:
+        _last_ok_ts = _time_mod.time()
 
 
 def _record_err(msg: str) -> None:
     global _last_err
-    _last_err = {'ts': _time_mod.time(), 'msg': str(msg)[:200]}
+    with _status_lock:
+        _last_err = {'ts': _time_mod.time(), 'msg': str(msg)[:200]}
 
 
 def get_ldap_status() -> dict:
     """Return connection status dict for the Settings API."""
     cfg = _get_cfg()
+    with _status_lock:
+        ok_ts = _last_ok_ts
+        err = dict(_last_err)
     if not cfg.get('server'):
         state = 'unconfigured'
-    elif _last_err['ts'] and (not _last_ok_ts or _last_err['ts'] > _last_ok_ts):
+    elif err['ts'] and (not ok_ts or err['ts'] > ok_ts):
         state = 'error'
-    elif _last_ok_ts:
+    elif ok_ts:
         state = 'ok'
     else:
         state = 'configured'
     return {
         'state':        state,
-        'last_ok_ts':   _last_ok_ts or None,
-        'last_err_ts':  _last_err['ts'] or None,
-        'last_err_msg': _last_err['msg'],
+        'last_ok_ts':   ok_ts or None,
+        'last_err_ts':  err['ts'] or None,
+        'last_err_msg': err['msg'],
     }
 
 
@@ -253,8 +262,10 @@ def ldap_test_auth_user(username: str, password: str,
 
         if not svc.entries:
             svc.unbind()
-            log.warning(f"LDAP test_auth_user: user {username!r} not found — "
-                        f"base_dn={cfg['base_dn']!r} filter={search_filter!r}")
+            # Not a warning — "user isn't in this directory" is an expected answer,
+            # especially when the user may live in a different auth source (RADIUS, local).
+            log.debug(f"LDAP test_auth_user: user {username!r} not found — "
+                      f"base_dn={cfg['base_dn']!r} filter={search_filter!r}")
             return False, f"User '{username}' not found in directory"
 
         entry = svc.entries[0]
@@ -348,8 +359,16 @@ def ldap_authenticate(username: str, password: str):
                 "dn":           attrs.get("dn", ""),
             }
         else:
-            log.info(f"LDAP authenticate: FAILED for {username!r} — {msg}")
-            _record_err(msg)
+            # "User not found" is an expected outcome when the user lives in a
+            # different auth source (RADIUS, local). Treat it as DEBUG and do
+            # NOT flip the LDAP status badge to "error" — the LDAP server
+            # answered correctly, it just doesn't own this user.
+            _not_found = 'not found' in (msg or '').lower()
+            if _not_found:
+                log.debug(f"LDAP authenticate: {username!r} not in directory")
+            else:
+                log.info(f"LDAP authenticate: FAILED for {username!r} — {msg}")
+                _record_err(msg)
             return None
     except Exception as e:
         log.error(f"LDAP authenticate: unexpected error for {username!r}: {e}")

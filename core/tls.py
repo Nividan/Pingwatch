@@ -316,6 +316,72 @@ def parse_cert_info(cert_pem: str) -> dict:
         return {}
 
 
+# ── CA certificate parser ────────────────────────────────────────────────────
+
+def parse_ca_cert_info(cert_pem: str) -> dict:
+    """
+    Parse a CA certificate for the trusted-CA upload flow.
+
+    Asserts the cert is a CA (Basic Constraints CA:TRUE) and is not expired.
+    Returns dict with: id (sha256 fingerprint hex), pem (canonical PEM),
+    subject, issuer, not_before, not_after.
+
+    Raises ValueError with a user-facing message on any rejection (not a CA,
+    expired, parse failure).
+    """
+    if not cert_pem or not cert_pem.strip():
+        raise ValueError("Empty certificate")
+
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives import hashes as _hashes
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509.oid import NameOID, ExtensionOID
+
+    try:
+        cert = _x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
+    except Exception as e:
+        raise ValueError(f"Could not parse certificate: {e}")
+
+    # Must be a CA (Basic Constraints extension with CA:TRUE)
+    try:
+        bc = cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value
+        is_ca = bool(getattr(bc, "ca", False))
+    except _x509.ExtensionNotFound:
+        is_ca = False
+    if not is_ca:
+        raise ValueError("Not a CA certificate (Basic Constraints CA:FALSE or missing)")
+
+    not_after = getattr(cert, "not_valid_after_utc", None) or \
+        datetime.datetime.combine(cert.not_valid_after.date(),
+                                  datetime.time.min,
+                                  tzinfo=datetime.timezone.utc)
+    not_before = getattr(cert, "not_valid_before_utc", None) or \
+        datetime.datetime.combine(cert.not_valid_before.date(),
+                                  datetime.time.min,
+                                  tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if not_after <= now:
+        raise ValueError("Certificate is expired")
+    if not_before > now:
+        raise ValueError("Certificate is not yet valid")
+
+    def _name_str(name) -> str:
+        for attr in name:
+            if attr.oid == NameOID.COMMON_NAME:
+                return attr.value
+        parts = [f"{a.oid.dotted_string.split('.')[-1]}={a.value}" for a in name]
+        return ", ".join(parts) or "(unknown)"
+
+    fp = cert.fingerprint(_hashes.SHA256()).hex()
+    return {
+        "id":         fp,
+        "subject":    _name_str(cert.subject),
+        "issuer":     _name_str(cert.issuer),
+        "not_before": not_before.strftime("%Y-%m-%d"),
+        "not_after":  not_after.strftime("%Y-%m-%d"),
+    }
+
+
 # ── PEM canonicalisation ─────────────────────────────────────────────────────
 
 def canonicalize_cert_pem(cert_pem: str) -> str:

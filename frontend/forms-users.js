@@ -340,6 +340,8 @@ async function reloadUserTable(){
 async function openAddUser(){
   let groups=[];
   try{const gr=await api('GET','/api/user/groups');groups=gr.groups||[];}catch(_){}
+  let radiusEnabled=false;
+  try{const s=await api('GET','/api/settings');radiusEnabled=!!s.radius_enabled;}catch(_){}
   closeM('mau');
   const o=document.createElement('div'); o.className='mo'; o.id='mau';
   _overlayClose(o,()=>closeM('mau'));
@@ -354,6 +356,7 @@ async function openAddUser(){
         <select id="au-type" onchange="_auTypeChange()">
           <option value="local">Local — password stored in PingWatch</option>
           <option value="ldap">Domain — authenticated via LDAP / AD</option>
+          ${radiusEnabled?'<option value="radius">RADIUS — authenticated via RADIUS server</option>':''}
         </select>
       </div>
       <div class="fr"><label class="fl">Username</label>
@@ -367,7 +370,7 @@ async function openAddUser(){
       <div id="au-domain-field" style="display:none">
         <div class="fr"><label class="fl">Domain</label>
           <input type="text" id="au-domain" placeholder="EXAMPLE (optional)" autocomplete="off"/></div>
-        <div class="fh">Password will be verified against your LDAP / AD server at login.</div>
+        <div class="fh" id="au-domain-hint">Password will be verified against your LDAP / AD server at login.</div>
       </div>
       <div class="fr"><label class="fl">Group</label>
         <select id="au-group">
@@ -393,11 +396,16 @@ async function openAddUser(){
 }
 
 function _auTypeChange(){
-  const isLdap=document.getElementById('au-type')?.value==='ldap';
+  const t=document.getElementById('au-type')?.value||'local';
+  const remote=(t==='ldap'||t==='radius');
   const pwFields=document.getElementById('au-pw-fields');
   const domainField=document.getElementById('au-domain-field');
-  if(pwFields) pwFields.style.display=isLdap?'none':'';
-  if(domainField) domainField.style.display=isLdap?'':'none';
+  const hint=document.getElementById('au-domain-hint');
+  if(pwFields) pwFields.style.display=remote?'none':'';
+  if(domainField) domainField.style.display=remote?'':'none';
+  if(hint) hint.textContent = t==='radius'
+    ? 'Password will be verified against your RADIUS server at login.'
+    : 'Password will be verified against your LDAP / AD server at login.';
 }
 
 async function submitAddUser(){
@@ -408,7 +416,7 @@ async function submitAddUser(){
   let body={username,role,auth_type};
   const gv=document.getElementById('au-group')?.value;
   if(gv) body.group_id=parseInt(gv);
-  if(auth_type==='ldap'){
+  if(auth_type==='ldap'||auth_type==='radius'){
     body.domain=(document.getElementById('au-domain')?.value||'').trim();
   }else{
     const pw=document.getElementById('au-p')?.value||'';

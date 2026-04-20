@@ -147,17 +147,35 @@
       </table>
     </div>
   </div>
-  {% if licenses.expiring_list %}
-    <h2 style="margin-top:14pt">Expiring within 90 days</h2>
+  {% set already_expired = licenses.expiring_list | selectattr('days', 'le', 0) | list %}
+  {% set upcoming = licenses.expiring_list | rejectattr('days', 'le', 0) | list %}
+  {% if already_expired %}
+    <h2 style="margin-top:14pt">Already expired</h2>
     <table class="data compact">
-      <thead><tr><th>Device</th><th>License</th><th>Expires</th><th>Days left</th></tr></thead>
+      <thead><tr><th>Device</th><th>License</th><th>Expired on</th><th>Expired</th></tr></thead>
       <tbody>
-        {% for l in licenses.expiring_list %}
+        {% for l in already_expired %}
         <tr>
           <td>{{ l.dname }}</td>
           <td>{{ l.name }}</td>
           <td class="mono">{{ l.expires }}</td>
-          <td class="{% if l.days <= 0 %}crit{% elif l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>
+          <td class="crit">{{ (-l.days) }} day{{ 's' if (-l.days) != 1 else '' }} ago</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  {% if upcoming %}
+    <h2 style="margin-top:14pt">Expiring within 90 days</h2>
+    <table class="data compact">
+      <thead><tr><th>Device</th><th>License</th><th>Expires</th><th>Days left</th></tr></thead>
+      <tbody>
+        {% for l in upcoming %}
+        <tr>
+          <td>{{ l.dname }}</td>
+          <td>{{ l.name }}</td>
+          <td class="mono">{{ l.expires }}</td>
+          <td class="{% if l.days <= 30 %}warn{% endif %}">{{ l.days }}</td>
         </tr>
         {% endfor %}
       </tbody>

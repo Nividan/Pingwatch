@@ -594,8 +594,18 @@ function _buildEvtTable(events) {
           `</div>`
         : '';
       const resTag = flapState === 'resolved' ? `<span class="evt-res-tag">✓ Resolved</span>` : '';
+      // Reason chip — why this event did not fire an alert (current state)
+      const _dev = S.devices?.[d.did];
+      const _sen = (d.did && d.sid) ? S.sensors?.[d.did + '/' + d.sid] : null;
+      const _muted = !!(_sen?.alerts_muted || _dev?.alerts_muted);
+      const reasonLabel = _muted ? '🔕 Muted' : '○ No rule';
+      const reasonTitle = _muted
+        ? 'Alerts are muted on this ' + (_sen?.alerts_muted ? 'sensor' : 'device')
+        : 'No alert rule matched this event';
+      const reasonChip = `<span class="aev-reason-chip" title="${esc(reasonTitle)}">${reasonLabel}</span>`;
       alertCell =
         `<td class="aev-cell">` +
+          reasonChip +
           `<div class="aev-tag aev-tag-info${isActive?' aev-tag-active':''}">` +
             `<span class="aev-dot"></span>` +
             `<span class="aev-st ${stCls}">${stLabel}</span>` +

@@ -259,6 +259,34 @@ function toast(msg,type='info'){
 }
 
 // ── Auth ─────────────────────────────────────────────────────────
+function _resetLoginForm(){
+  // Scrub any mid-auth state (TOTP or RADIUS challenge prompt) so the next
+  // login attempt starts fresh. Without this, the button's onclick handler
+  // still points at the challenge-submit function after sign-out and posts
+  // credentials to the wrong endpoint.
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){ userField.disabled=false; }
+  if(passField){ passField.style.display='block'; passField.value=''; }
+  // Clean up TOTP elements
+  const totpField=document.getElementById('login-totp');
+  if(totpField) totpField.remove();
+  const rememberRow=document.getElementById('login-remember-row');
+  if(rememberRow) rememberRow.remove();
+  // Clean up RADIUS challenge elements
+  const radiusPrompt=document.getElementById('login-radius-prompt');
+  if(radiusPrompt) radiusPrompt.remove();
+  const radiusResp=document.getElementById('login-radius-resp');
+  if(radiusResp) radiusResp.remove();
+  // Restore default button + submit handler
+  const btn=document.getElementById('login-btn');
+  if(btn){
+    btn.textContent='Sign In';
+    btn.disabled=false;
+    btn.onclick=submitLogin;
+  }
+}
+
 function showLogin(msg, keepInput){
   document.getElementById('login-screen').style.display='flex';
   const errEl=document.getElementById('login-err');
@@ -266,10 +294,43 @@ function showLogin(msg, keepInput){
   errEl.textContent = msg || '';
   errEl.classList.toggle('info', !!keepInput);
   if(!keepInput){
-    document.getElementById('login-btn').disabled=false;
+    _resetLoginForm();
     setTimeout(()=>document.getElementById('login-user')?.focus(),80);
   }
+  // Populate SSO buttons (async, non-blocking — login form is usable immediately)
+  _renderSsoButtons();
 }
+
+// Fetch /api/settings (public fields only for unauthenticated callers) to
+// discover which SSO methods are enabled, then render a button per method
+// above the local username/password form. Idempotent — safe to call repeatedly.
+async function _renderSsoButtons(){
+  const container = document.getElementById('sso-methods');
+  const divider   = document.getElementById('sso-divider');
+  if(!container) return;
+  container.innerHTML = '';
+  container.style.display = 'none';
+  if(divider) divider.style.display = 'none';
+  let s;
+  try {
+    const r = await fetch('/api/settings/public_auth', {credentials: 'same-origin'});
+    if(!r.ok) return;
+    s = await r.json();
+  } catch(e) { return; }
+  const methods = [];
+  if(s.saml_enabled) methods.push({id:'saml', label: s.saml_display_name || 'Sign in with Single Sign-On', href:'/api/saml/login'});
+  if(s.oidc_enabled) methods.push({id:'oidc', label: s.oidc_display_name || 'Sign in with Single Sign-On', href:'/api/oidc/login'});
+  if(!methods.length) return;
+  const html = methods.map(m =>
+    `<a href="${m.href}" class="sso-btn" id="sso-btn-${m.id}" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;color:var(--text);text-decoration:none;font-weight:500;font-size:13px;transition:background .1s" onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='var(--bg3)'"><span style="font-size:16px">🔑</span>${_esc(m.label)}</a>`
+  ).join('');
+  container.innerHTML = html;
+  container.style.display = 'flex';
+  if(divider) divider.style.display = 'block';
+}
+
+function _esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
 function hideLogin(){
   document.getElementById('login-screen').style.display='none';
 }
@@ -292,6 +353,12 @@ async function submitLogin(){
     if(d.totp_required){
       btn.textContent='Sign In';
       _show2faPrompt(d.challenge_id, user, d.remember_hours_max||0);
+      return;
+    }
+    // RADIUS Access-Challenge: server needs a second step (token code, push confirm, etc.)
+    if(d.radius_challenge){
+      btn.textContent='Sign In';
+      _showRadiusChallengePrompt(d.challenge_id, user, d.prompt||'Additional verification required');
       return;
     }
     _loggedOut=false;
@@ -397,6 +464,96 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
 function _showLoginErr(msg){
   const err=document.getElementById('login-err');
   if(err){err.textContent=msg; err.style.display='block';}
+}
+
+// ── RADIUS Access-Challenge prompt ───────────────────────────────
+// Rendered when the RADIUS server returns Access-Challenge (typically for 2FA).
+// The server provides a human prompt ("Enter token code", "Approve push", etc.).
+// Multi-step challenges keep re-rendering with a fresh prompt until accept/reject.
+function _showRadiusChallengePrompt(challengeId, username, prompt){
+  const screen=document.getElementById('login-screen');
+  if(!screen) return;
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=''; err.style.display='none';}
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){userField.disabled=true;}
+  if(passField){passField.style.display='none';}
+
+  // Prompt label
+  let promptEl=document.getElementById('login-radius-prompt');
+  if(!promptEl){
+    promptEl=document.createElement('div');
+    promptEl.id='login-radius-prompt';
+    promptEl.style.cssText='margin-top:8px;font-size:13px;color:var(--text2);text-align:center';
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(promptEl, passField.nextSibling);}
+  }
+  promptEl.textContent=prompt||'Additional verification required';
+  promptEl.style.display='block';
+
+  // Response input (reused across multi-step challenges)
+  let respField=document.getElementById('login-radius-resp');
+  if(!respField){
+    respField=document.createElement('input');
+    respField.type='text';
+    respField.id='login-radius-resp';
+    respField.placeholder='Enter response';
+    respField.autocomplete='one-time-code';
+    respField.maxLength=64;
+    respField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    if(promptEl&&promptEl.parentNode){promptEl.parentNode.insertBefore(respField, promptEl.nextSibling);}
+  }
+  respField.style.display='block';
+  respField.value='';
+  setTimeout(()=>respField.focus(),50);
+
+  // Remove any TOTP-specific remember row if it exists (shouldn't, but be safe)
+  const rr=document.getElementById('login-remember-row');
+  if(rr) rr.remove();
+
+  const btn=document.getElementById('login-btn');
+  if(btn){btn.textContent='Verify'; btn.disabled=false;}
+  const submit=async()=>{
+    const response=(respField.value||'').trim();
+    if(!response){_showLoginErr('Enter your response'); return;}
+    btn.disabled=true; btn.textContent='Verifying…';
+    try{
+      const r=await fetch('/api/login/radius_challenge',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({challenge_id:challengeId, response})});
+      const d=await r.json();
+      if(!r.ok||d.error){
+        _showLoginErr(d.error||'Verification failed');
+        btn.disabled=false; btn.textContent='Verify';
+        return;
+      }
+      if(d.radius_challenge){
+        // Multi-step — re-render with fresh prompt and fresh challenge id
+        btn.disabled=false;
+        _showRadiusChallengePrompt(d.challenge_id, username, d.prompt||'Additional verification required');
+        return;
+      }
+      _loggedOut=false;
+      S.role=d.role||'viewer';
+      if(d.session_ttl)_sessionTtl=d.session_ttl;
+      try{
+        const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+        if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});
+      }catch(e){}
+      hideLogin();
+      try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
+      onAuthenticated(d.username);
+      // Reset login UI for next time
+      if(userField){userField.disabled=false;}
+      if(passField){passField.style.display='block';}
+      if(respField){respField.style.display='none';}
+      if(promptEl){promptEl.style.display='none';}
+    }catch(e){
+      _showLoginErr('Server error. Try again.');
+      btn.disabled=false; btn.textContent='Verify';
+    }
+  };
+  btn.onclick=submit;
+  respField.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault(); submit();} };
 }
 
 async function doLogout(){
@@ -727,9 +884,9 @@ async function _logBadgeInit() {
 function _openLogBadge() {
   _lsSet('logBadgeSeen', String(_logBadgeTotal));
   _updateLogBadge();
-  // Pre-filter to WARNING+ when opening from badge
-  if (typeof _logFilter !== 'undefined') _logFilter.level = 'WARNING';
-  openSettings('logs');
+  // Pre-filter the Logs tab to WARNING+ when opening from the badge
+  if (typeof _lvFilter !== 'undefined') _lvFilter.minLevel = 'WARNING';
+  switchMainTab('logs');
 }
 
 function _requestNotifPermission() {
@@ -977,7 +1134,13 @@ function _hbSetupSparkInteractions() {
     const up  = Math.round(best.pct / 100 * tot);
     const dt  = new Date(best.ts * 1000);
     const t   = `${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-    const nearby = _hbSparkEvents.filter(ev => Math.abs(ev.ts - best.ts) <= 900);
+    // Event filter pivot: use the timestamp UNDER THE CURSOR (not the snapped
+    // data point). With 15-min sample buckets, a real-world incident at 12:31
+    // would otherwise miss the ±15-min window when the hover snaps to 13:00.
+    // Centre the cursor on the bucket midpoint by rolling back 900s, the same
+    // offset used when drawing event dots above.
+    const tsHover = t0 + (mx / W) * win - 900;
+    const nearby = _hbSparkEvents.filter(ev => Math.abs(ev.ts - tsHover) <= 900);
     _hbSpkTip(e.clientX, e.clientY, best.pct, up, tot - up, t, nearby);
   });
   canvas.addEventListener('mouseleave', _hbSpkTipHide);
@@ -1000,13 +1163,21 @@ function _hbSpkTip(cx, cy, pct, up, down, time, events) {
     (down ? `<div class="hb-tip-row"><span style="color:var(--down)">▼</span> ${down} down</div>` : '');
   if (events && events.length) {
     html += '<div class="hb-tip-sep"></div>';
-    const shown = events.slice(0, 3);
+    // Outages first, then warnings — so a red incident never gets cropped by
+    // the slice(0,3) when it shares a window with several yellow ones.
+    const sorted = events.slice().sort((a, b) => {
+      if (a.type === b.type) return a.ts - b.ts;
+      return a.type === 'outage' ? -1 : 1;
+    });
+    const shown = sorted.slice(0, 3);
     shown.forEach(ev => {
       const ic = ev.type === 'outage' ? '▼' : '⚠';
       const c  = ev.type === 'outage' ? 'var(--down)' : 'var(--warn)';
-      html += `<div class="hb-tip-ev"><span style="color:${c}">${ic}</span> ${esc(ev.label)}</div>`;
+      const edt = new Date(ev.ts * 1000);
+      const et  = `${String(edt.getHours()).padStart(2,'0')}:${String(edt.getMinutes()).padStart(2,'0')}`;
+      html += `<div class="hb-tip-ev"><span style="color:${c}">${ic}</span> <span style="color:var(--text3)">${et}</span> ${esc(ev.label)}</div>`;
     });
-    if (events.length > 3) html += `<div class="hb-tip-ev" style="color:var(--text3)">+${events.length - 3} more</div>`;
+    if (sorted.length > 3) html += `<div class="hb-tip-ev" style="color:var(--text3)">+${sorted.length - 3} more</div>`;
   }
   tip.innerHTML = html;
   tip.style.display = '';
@@ -1225,12 +1396,14 @@ function switchMainTab(tab){
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
+  { const _lb=document.getElementById('tabLogs');    if(_lb) _lb.classList.toggle('active',tab==='logs');    }
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
   const reportsView  =document.getElementById('reportsView');
+  const logsView     =document.getElementById('logsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -1239,7 +1412,12 @@ function switchMainTab(tab){
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
   if(reportsView) reportsView.style.display='none';
+  if(logsView)    logsView.style.display   ='none';
+  // Deactivate logs polling when switching away from the Logs tab
+  if(tab!=='logs' && typeof _logsDeactivate==='function') _logsDeactivate();
   document.getElementById('devActBar').style.display='none';
+  const _devPg=document.getElementById('devPagination');
+  if(_devPg) _devPg.style.display='none';
   // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
   if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
   const _mf=document.getElementById('map-frame');
@@ -1290,6 +1468,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _rptInit==='function') _rptInit();
+  } else if(tab==='logs'){
+    if(logsView) logsView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _logsInit==='function') _logsInit();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
@@ -1297,6 +1481,7 @@ function switchMainTab(tab){
     dpanels.style.display=hasDevices?'':'none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     _refreshDevices();
+    if(typeof _renderPagination==='function') _renderPagination();
   }
 }
 
