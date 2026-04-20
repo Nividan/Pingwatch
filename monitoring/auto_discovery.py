@@ -506,6 +506,21 @@ def _scan_subnet(subnet: dict) -> dict:
         _commit_last_scan_ts(sid)
         return stats
 
+    # Pre-mute brand-new Discovery groups so freshly-found devices don't
+    # immediately page. Admin unmutes from the Edit Group modal after
+    # triage. Only the *first* time a given Discovery-<cidr> group is
+    # created: if it already exists in STATE, we leave the mute state
+    # alone (admin may have deliberately unmuted it).
+    try:
+        from core.app_state import STATE as _STATE
+        with _STATE._lock:
+            group_exists = any((d.group or "") == group
+                               for d in _STATE.devices.values())
+        if not group_exists:
+            _add_group_to_muted(group)
+    except Exception as _me:
+        log.warning(f"Auto-Discovery: could not pre-mute group {group!r}: {_me}")
+
     # Hand off to the shared bulk creator. Dedup against STATE + IPAM sync
     # happen inside create_devices_batch.
     try:
@@ -613,6 +628,35 @@ def _resolve_ptr(ip: str, dns_server: str, timeout: float = 2.5) -> str:
         return ""
     val = (r.get("value") or "").strip().rstrip(".")
     return val
+
+
+def _add_group_to_muted(group: str) -> None:
+    """Append `group` to app_settings.muted_groups if not already present.
+    Mirrors the JSON-list + 500-cap pattern used for suppressed_hosts.
+    Silent on failure — mute is a convenience, not a correctness requirement.
+    """
+    if not group:
+        return
+    raw = _settings.get("muted_groups", "") or ""
+    lst: list = []
+    if raw:
+        try:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                lst = [str(g) for g in v if isinstance(g, str)]
+        except Exception:
+            lst = []
+    if group in lst:
+        return
+    lst.append(group)
+    if len(lst) > 500:
+        lst = lst[-500:]
+    try:
+        _persist_setting("muted_groups", json.dumps(lst))
+        log.info(f"Auto-Discovery: new group {group!r} muted by default "
+                 f"(admin unmutes via Edit Group once triaged)")
+    except Exception as e:
+        log.warning(f"Auto-Discovery: failed to persist muted group: {e}")
 
 
 def _group_name_for_cidr(cidr: str) -> str:

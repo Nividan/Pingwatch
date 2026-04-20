@@ -1719,6 +1719,10 @@ async function loadAll(){
   renderFlaps();
   if(typeof _dwOnFlapEvent==='function') _dwOnFlapEvent();
 
+  // Populate the muted-group set before rendering any group headers so
+  // the 🔕 badge is painted on first pass, not after a flicker.
+  if (typeof _loadMutedGroups === 'function') { try { await _loadMutedGroups(); } catch {} }
+
   const r=await fetch('/api/devices');
   const data=await r.json();
   S._devSensors={};

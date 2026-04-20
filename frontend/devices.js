@@ -4,6 +4,42 @@ function grpId(g){ return 'grp-'+btoa(unescape(encodeURIComponent(g))).replace(/
 function gridId(g){ return 'gg-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 function cntId(g){  return 'gc-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 
+// Muted-group set — populated once at boot from /api/device-groups/muted
+// and kept in sync whenever the Edit Group modal toggles the flag. Used
+// to decorate group headers with a 🔕 badge.
+if (!window._mutedGroups) window._mutedGroups = new Set();
+
+async function _loadMutedGroups(){
+  try {
+    const r = await api('GET', '/api/device-groups/muted');
+    window._mutedGroups = new Set((r && r.groups) || []);
+  } catch { /* keep previous set on failure */ }
+}
+
+function _setGroupMutedLocal(group, muted){
+  if (!window._mutedGroups) window._mutedGroups = new Set();
+  if (muted) window._mutedGroups.add(group);
+  else       window._mutedGroups.delete(group);
+  _refreshGroupMuteBadge(group);
+}
+
+function _refreshGroupMuteBadge(group){
+  const wrap = document.getElementById(grpId(group));
+  if (!wrap) return;
+  const muted = window._mutedGroups && window._mutedGroups.has(group);
+  let badge = wrap.querySelector('.grp-mute-badge');
+  if (muted && !badge){
+    badge = document.createElement('span');
+    badge.className = 'grp-mute-badge';
+    badge.textContent = '🔕';
+    badge.title = 'Alerts muted for this group';
+    const label = wrap.querySelector('.grp-label');
+    if (label && label.parentNode) label.parentNode.insertBefore(badge, label.nextSibling);
+  } else if (!muted && badge){
+    badge.remove();
+  }
+}
+
 // Tiny origin chip shown next to the device name on cards/rows when the
 // device was auto-added by monitoring/auto_discovery.py. Empty string for
 // manually-added or bulk-imported devices.
@@ -78,6 +114,15 @@ function ensureGroupSection(group){
   label.className='grp-label';
   label.textContent=group;
 
+  // 🔕 badge when group is in the muted set (populated by _loadMutedGroups)
+  let muteBadge=null;
+  if (window._mutedGroups && window._mutedGroups.has(group)){
+    muteBadge=document.createElement('span');
+    muteBadge.className='grp-mute-badge';
+    muteBadge.textContent='🔕';
+    muteBadge.title='Alerts muted for this group';
+  }
+
   const editBtn=document.createElement('button');
   editBtn.className='grp-edit-btn rbac-operator';
   editBtn.title='Edit group settings';
@@ -97,6 +142,7 @@ function ensureGroupSection(group){
   summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
 
   hdr.appendChild(dragH); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
+  if (muteBadge) hdr.appendChild(muteBadge);
   hdr.appendChild(editBtn); hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
 
   // Grid

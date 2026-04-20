@@ -180,3 +180,8 @@ _RE_AD_APPROVE_FIRST   = re.compile(r'^/api/auto-discovery/subnet/(\d+)/approve-
 _RE_AD_ACTIVITY        = re.compile(r'^/api/auto-discovery/activity$')
 # IPAM auto-discover toggle (lives under /api/ipam/ for natural grouping)
 _RE_IPAM_AD_TOGGLE     = re.compile(r'^/api/ipam/subnet/(\d+)/auto-discover$')
+# Device-group mute (group is a string on the Device, not a row in any table,
+# so the URL carries the group name verbatim, url-encoded).
+_RE_DEV_GROUP_MUTE     = re.compile(r'^/api/device-group/([^/]+)/mute$')
+# Bulk lookup — frontend loads this once at boot to decorate group headers.
+_RE_DEV_GROUPS_MUTED   = re.compile(r'^/api/device-groups/muted$')

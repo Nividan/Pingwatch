@@ -2614,6 +2614,10 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   font-size:13px;padding:3px 6px;border-radius:4px;line-height:1;
   transition:color .15s,background .15s;}
 .grp-edit-btn:hover{color:var(--accent);background:var(--bg3);}
+/* 🔕 badge shown in the group header when alerts are muted for the group */
+.grp-mute-badge{font-size:12px;line-height:1;padding:2px 6px;border-radius:10px;
+  background:var(--bg3);border:1px solid var(--border);color:var(--warn);
+  cursor:help;user-select:none;}
 /* Group chip selector */
 .ae-grp-wrap{display:flex;flex-direction:column;gap:4px;}
 .ae-grp-chips{display:flex;flex-wrap:wrap;gap:4px;min-height:24px;}

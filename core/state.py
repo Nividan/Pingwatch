@@ -12,6 +12,28 @@ import threading
 import time
 
 
+def is_group_muted(group_name: str) -> bool:
+    """Return True if `group_name` is in the user-maintained muted list.
+
+    Backed by `app_settings.muted_groups` (JSON list of group names). Called
+    on every flap/threshold transition and alert dispatch, so kept cheap: a
+    dict lookup + cached-string JSON parse. Caller is responsible for any
+    further semantics (device status display isn't affected — mute only
+    suppresses alert/event emission, matching per-device `alerts_muted`).
+    """
+    if not group_name:
+        return False
+    import core.settings as _settings
+    raw = _settings.get("muted_groups", "") or ""
+    if not raw:
+        return False
+    try:
+        lst = json.loads(raw)
+        return isinstance(lst, list) and group_name in lst
+    except Exception:
+        return False
+
+
 class _SensorScheduler:
     """Single background thread that fires sensor probes at the right time.
 
@@ -807,7 +829,7 @@ class MonitorState:
         s.total += 1
         _ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _ts_float = time.time()
-        _muted = s.alerts_muted or dev.alerts_muted
+        _muted = s.alerts_muted or dev.alerts_muted or is_group_muted(dev.group)
 
         # ── Log sample to DB (non-blocking) ──
         _ok_cap  = result["ok"]
