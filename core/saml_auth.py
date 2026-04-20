@@ -225,16 +225,29 @@ def saml_import_metadata(source: str, text: str = "", url: str = "") -> dict:
             # trust is not the security boundary for SAML — the IdP signing cert
             # embedded in the metadata is what PingWatch pins for assertion
             # verification at login time. We still log when we had to skip.
+            import urllib.error
+            def _is_tls_err(exc: BaseException) -> bool:
+                if isinstance(exc, ssl.SSLError):
+                    return True
+                # urllib wraps SSL failures in URLError; inspect reason + message
+                if isinstance(exc, urllib.error.URLError):
+                    if isinstance(getattr(exc, "reason", None), ssl.SSLError):
+                        return True
+                    if "certificate" in str(exc).lower() or "ssl" in str(exc).lower():
+                        return True
+                return False
             try:
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     xml_bytes = resp.read()
-            except ssl.SSLError as ssl_err:
+            except Exception as fetch_err:
+                if not _is_tls_err(fetch_err):
+                    raise
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
                 with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
                     xml_bytes = resp.read()
-                log.warning(f"SAML metadata fetched with TLS verification disabled ({url}): {ssl_err}")
+                log.warning(f"SAML metadata fetched with TLS verification disabled ({url}): {fetch_err}")
             text = xml_bytes.decode("utf-8", errors="replace")
             _settings.load({"saml_metadata_url": url})
             db_save_settings({"saml_metadata_url": url})
@@ -428,6 +441,46 @@ def _xml_esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+# ── AuthnRequest signing (XML-DSig via signxml) ────────────────────
+
+def _sign_authn_request_xml(xml_str: str, request_id: str,
+                            cert_pem: str, key_pem: str) -> str:
+    """Sign a SAML AuthnRequest with the SP's RSA key (RSA-SHA256, exc-c14n).
+
+    SAML 2.0 core (section 3.2.1) requires <ds:Signature> to appear immediately
+    after <saml:Issuer> inside the AuthnRequest. signxml's enveloped signer
+    inserts the signature as the first child of the root, so we reorder
+    post-signing. IdPs that enforce strict schema ordering (FortiAuthenticator,
+    ADFS) reject unordered signatures even when the crypto is correct.
+    """
+    from lxml import etree
+    from signxml import XMLSigner
+
+    root = etree.fromstring(xml_str.encode("utf-8"))
+    signer = XMLSigner(
+        signature_algorithm="rsa-sha256",
+        digest_algorithm="sha256",
+        c14n_algorithm="http://www.w3.org/2001/10/xml-exc-c14n#",
+    )
+    signed_root = signer.sign(
+        root,
+        key=key_pem.encode("utf-8"),
+        cert=cert_pem.encode("utf-8"),
+        reference_uri="#" + request_id,
+    )
+    ns = {
+        "ds":   "http://www.w3.org/2000/09/xmldsig#",
+        "saml": "urn:oasis:names:tc:SAML:2.0:assertion",
+    }
+    sig_el    = signed_root.find("ds:Signature", ns)
+    issuer_el = signed_root.find("saml:Issuer", ns)
+    if sig_el is not None and issuer_el is not None:
+        signed_root.remove(sig_el)
+        issuer_idx = list(signed_root).index(issuer_el)
+        signed_root.insert(issuer_idx + 1, sig_el)
+    return etree.tostring(signed_root, encoding="unicode")
+
+
 # ── AuthnRequest build (SP-initiated flow) ─────────────────────────
 
 def saml_build_authn_request() -> dict:
@@ -465,6 +518,25 @@ def saml_build_authn_request() -> dict:
         f'Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"/>\n'
         f'</samlp:AuthnRequest>'
     )
+
+    if cfg["sign_authn_requests"]:
+        if not cfg["sp_cert_pem"] or not cfg["sp_key_pem"]:
+            return {"ok": False, "html": "",
+                    "message": "AuthnRequest signing enabled but SP cert/key missing — generate SP cert first"}
+        try:
+            authn_request = _sign_authn_request_xml(
+                authn_request, request_id,
+                cfg["sp_cert_pem"], cfg["sp_key_pem"],
+            )
+        except ImportError as e:
+            log.error(f"AuthnRequest signing dependency missing: {e}")
+            return {"ok": False, "html": "",
+                    "message": "signing requires signxml + lxml — pip install signxml"}
+        except Exception as e:
+            log.error(f"AuthnRequest signing failed: {e}")
+            return {"ok": False, "html": "",
+                    "message": f"AuthnRequest signing failed: {str(e)[:180]}"}
+
     saml_request_b64 = base64.b64encode(authn_request.encode("utf-8")).decode("ascii")
 
     html = (

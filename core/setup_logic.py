@@ -90,6 +90,14 @@ PACKAGES = [
         "required": False,
     },
     {
+        "import":   "signxml",
+        "name":     "signxml",
+        "install":  "signxml>=3.2",
+        "pip":      True,
+        "desc":     "SAML XML signature verification (pairs with pysaml2)",
+        "required": False,
+    },
+    {
         "import":   "authlib",
         "name":     "authlib",
         "install":  "authlib>=1.3",
