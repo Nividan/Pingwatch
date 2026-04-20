@@ -20,20 +20,38 @@ from db.core     import _db_enqueue
 
 # ── Subnet CRUD ────────────────────────────────────────────────────────────
 
+_SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
+                "COALESCE(auto_discover,0)       AS auto_discover, "
+                "COALESCE(first_scan_approved,0) AS first_scan_approved, "
+                "last_auto_scan_ts")
+
+
+def _row_to_subnet_pg(r) -> dict:
+    return {"id": r["id"], "cidr": r["cidr"], "name": r["name"],
+            "created_by": r["created_by"], "created_at": r["created_at"],
+            "auto_discover":       int(r.get("auto_discover") or 0),
+            "first_scan_approved": int(r.get("first_scan_approved") or 0),
+            "last_auto_scan_ts":   r.get("last_auto_scan_ts")}
+
+
+def _row_to_subnet_sqlite(r) -> dict:
+    return {"id": r[0], "cidr": r[1], "name": r[2],
+            "created_by": r[3], "created_at": r[4],
+            "auto_discover":       int(r[5] or 0),
+            "first_scan_approved": int(r[6] or 0),
+            "last_auto_scan_ts":   r[7]}
+
+
 def db_list_subnets() -> list:
-    """Return all subnets ordered by CIDR."""
+    """Return all subnets ordered by CIDR. Includes auto-discover fields."""
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    "SELECT id, cidr, name, created_by, created_at FROM ipam_subnets ORDER BY cidr"
+                    f"SELECT {_SUBNET_COLS} FROM ipam_subnets ORDER BY cidr"
                 )
-                return [
-                    {"id": r["id"], "cidr": r["cidr"], "name": r["name"],
-                     "created_by": r["created_by"], "created_at": r["created_at"]}
-                    for r in cur.fetchall()
-                ]
+                return [_row_to_subnet_pg(r) for r in cur.fetchall()]
         except Exception as e:
             log.error(f"IPAM list subnets error: {e}")
             return []
@@ -41,13 +59,9 @@ def db_list_subnets() -> list:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         rows = con.execute(
-            "SELECT id, cidr, name, created_by, created_at FROM ipam_subnets ORDER BY cidr"
+            f"SELECT {_SUBNET_COLS} FROM ipam_subnets ORDER BY cidr"
         ).fetchall()
-        return [
-            {"id": r[0], "cidr": r[1], "name": r[2],
-             "created_by": r[3], "created_at": r[4]}
-            for r in rows
-        ]
+        return [_row_to_subnet_sqlite(r) for r in rows]
     except Exception as e:
         log.error(f"IPAM list subnets error: {e}")
         return []
@@ -62,15 +76,14 @@ def db_get_subnet(subnet_id: int) -> dict | None:
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    "SELECT id, cidr, name, created_by, created_at FROM ipam_subnets WHERE id=%s",
+                    f"SELECT {_SUBNET_COLS} FROM ipam_subnets WHERE id=%s",
                     (subnet_id,)
                 )
                 row = cur.fetchone()
             if not row:
                 log.debug(f"IPAM get subnet: id={subnet_id} not found")
                 return None
-            return {"id": row["id"], "cidr": row["cidr"], "name": row["name"],
-                    "created_by": row["created_by"], "created_at": row["created_at"]}
+            return _row_to_subnet_pg(row)
         except Exception as e:
             log.error(f"IPAM get subnet error (id={subnet_id}): {e}")
             return None
@@ -78,17 +91,115 @@ def db_get_subnet(subnet_id: int) -> dict | None:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         row = con.execute(
-            "SELECT id, cidr, name, created_by, created_at FROM ipam_subnets WHERE id=?",
+            f"SELECT {_SUBNET_COLS} FROM ipam_subnets WHERE id=?",
             (subnet_id,)
         ).fetchone()
         if not row:
             log.debug(f"IPAM get subnet: id={subnet_id} not found")
             return None
-        return {"id": row[0], "cidr": row[1], "name": row[2],
-                "created_by": row[3], "created_at": row[4]}
+        return _row_to_subnet_sqlite(row)
     except Exception as e:
         log.error(f"IPAM get subnet error (id={subnet_id}): {e}")
         return None
+    finally:
+        con.close()
+
+
+# ── Auto-Discovery helpers (added v0.9.3) ────────────────────────────
+
+def db_set_auto_discover(subnet_id: int, enabled: bool) -> bool:
+    """Toggle the `auto_discover` flag on a subnet. Returns True on success.
+    Writes synchronously (no queue) so the caller can confirm immediately.
+    """
+    flag = 1 if enabled else 0
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "UPDATE ipam_subnets SET auto_discover=%s WHERE id=%s",
+                    (flag, subnet_id)
+                )
+            return True
+        except Exception as e:
+            log.error(f"IPAM set auto_discover error (id={subnet_id}): {e}")
+            return False
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        con.execute(
+            "UPDATE ipam_subnets SET auto_discover=? WHERE id=?",
+            (flag, subnet_id)
+        )
+        con.commit()
+        return True
+    except Exception as e:
+        log.error(f"IPAM set auto_discover error (id={subnet_id}): {e}")
+        return False
+    finally:
+        con.close()
+
+
+def db_approve_first_scan(subnet_id: int) -> bool:
+    """Set `first_scan_approved=1` on a subnet so next scan skips the cap.
+    One-shot — subsequent scans have no cap anyway.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "UPDATE ipam_subnets SET first_scan_approved=1 WHERE id=%s",
+                    (subnet_id,)
+                )
+            return True
+        except Exception as e:
+            log.error(f"IPAM approve first_scan error (id={subnet_id}): {e}")
+            return False
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        con.execute(
+            "UPDATE ipam_subnets SET first_scan_approved=1 WHERE id=?",
+            (subnet_id,)
+        )
+        con.commit()
+        return True
+    except Exception as e:
+        log.error(f"IPAM approve first_scan error (id={subnet_id}): {e}")
+        return False
+    finally:
+        con.close()
+
+
+def db_set_subnet_last_scan(subnet_id: int, ts: str) -> bool:
+    """Record the last auto-scan timestamp on a subnet. `ts` is an ISO-like
+    string; PG will coerce to TIMESTAMP, SQLite stores as TEXT.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "UPDATE ipam_subnets SET last_auto_scan_ts=%s WHERE id=%s",
+                    (ts, subnet_id)
+                )
+            return True
+        except Exception as e:
+            log.error(f"IPAM set last_auto_scan_ts error (id={subnet_id}): {e}")
+            return False
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        con.execute(
+            "UPDATE ipam_subnets SET last_auto_scan_ts=? WHERE id=?",
+            (ts, subnet_id)
+        )
+        con.commit()
+        return True
+    except Exception as e:
+        log.error(f"IPAM set last_auto_scan_ts error (id={subnet_id}): {e}")
+        return False
     finally:
         con.close()
 

@@ -261,6 +261,14 @@ def handle(h, method, path, body):
             # Auth backend background health check — interval + last-run summary
             "auth_refresh_interval_min": int(_settings.get("auth_refresh_interval_min", 60) or 60),
             "auth_refresh_last_ts":      _get_auth_refresh_last_ts(),
+            # Auto-Discovery — scheduled subnet scanning (v0.9.3+)
+            "auto_discover_enabled":         int(_settings.get("auto_discover_enabled", 0) or 0),
+            "auto_discover_paused":          int(_settings.get("auto_discover_paused",  0) or 0),
+            "auto_discover_interval_min":    int(_settings.get("auto_discover_interval_min", 60) or 60),
+            "auto_discover_first_scan_cap":  int(_settings.get("auto_discover_first_scan_cap", 100) or 100),
+            "auto_discover_alert_on_new":    int(_settings.get("auto_discover_alert_on_new", 0) or 0),
+            "auto_discover_during_maint":    (_settings.get("auto_discover_during_maint", "skip") or "skip"),
+            "auto_discover_use_ptr":         int(_settings.get("auto_discover_use_ptr", 1) or 1),
             # Group J — data rollup / retention tiers (v0.8.0)
             "retention_raw_days":    int(_settings.get("retention_raw_days", 7) or 7),
             "retention_5m_days":     int(_settings.get("retention_5m_days", 90) or 90),
@@ -342,6 +350,37 @@ def handle(h, method, path, body):
                 h._json(400, {"error": "auth_refresh_interval_min must be one of 0, 15, 30, 60, 240, 720"}); return True
             _settings.load({"auth_refresh_interval_min": _arm})
             _db_enqueue(lambda _v=_arm: db_save_settings({"auth_refresh_interval_min": _v}))
+        # ── Auto-Discovery ──────────────────────────────────────────
+        for _bool_key in ("auto_discover_enabled", "auto_discover_paused",
+                           "auto_discover_alert_on_new", "auto_discover_use_ptr"):
+            if _bool_key in body:
+                _bv = "1" if body[_bool_key] else "0"
+                _settings.load({_bool_key: _bv})
+                _db_enqueue(lambda k=_bool_key, v=_bv: db_save_settings({k: v}))
+        if "auto_discover_interval_min" in body:
+            try:
+                _ai = int(body["auto_discover_interval_min"])
+            except (ValueError, TypeError):
+                h._json(400, {"error": "auto_discover_interval_min must be an integer"}); return True
+            if _ai not in (0, 15, 30, 60, 240, 720, 1440):
+                h._json(400, {"error": "auto_discover_interval_min must be one of 0, 15, 30, 60, 240, 720, 1440"}); return True
+            _settings.load({"auto_discover_interval_min": _ai})
+            _db_enqueue(lambda _v=_ai: db_save_settings({"auto_discover_interval_min": _v}))
+        if "auto_discover_first_scan_cap" in body:
+            try:
+                _ac = int(body["auto_discover_first_scan_cap"])
+            except (ValueError, TypeError):
+                h._json(400, {"error": "auto_discover_first_scan_cap must be an integer"}); return True
+            if _ac != 0 and not (10 <= _ac <= 1000):
+                h._json(400, {"error": "auto_discover_first_scan_cap must be 0 (disabled) or 10-1000"}); return True
+            _settings.load({"auto_discover_first_scan_cap": _ac})
+            _db_enqueue(lambda _v=_ac: db_save_settings({"auto_discover_first_scan_cap": _v}))
+        if "auto_discover_during_maint" in body:
+            _am = str(body["auto_discover_during_maint"]).strip().lower()
+            if _am not in ("skip", "run"):
+                h._json(400, {"error": "auto_discover_during_maint must be 'skip' or 'run'"}); return True
+            _settings.load({"auto_discover_during_maint": _am})
+            _db_enqueue(lambda _v=_am: db_save_settings({"auto_discover_during_maint": _v}))
         if "syslog_app_log_level" in body:
             _sall = str(body["syslog_app_log_level"]).lower().strip()
             if _sall not in ("debug", "info", "warning", "error"):

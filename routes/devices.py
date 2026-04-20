@@ -404,10 +404,22 @@ def handle(h, method, path, body):
         with STATE._lock:
             dd     = STATE.devices.get(ddid)
             ddname = dd.name if dd else ddid
+            # Capture identity for Auto-Discovery suppression (see below).
+            dd_ext = (getattr(dd, "external_id", None) or "") if dd else ""
+            dd_host = (dd.host or "") if dd else ""
         # Collect sensor IDs before removing the device (for event cleanup)
         with STATE._lock:
             _sensor_ids = list(dd.sensors.keys()) if dd else []
         STATE.remove_device(ddid)
+        # Auto-Discovery: if this device was auto-added (external_id starts
+        # with "discovery:"), record its host in the suppressed-list so the
+        # next Auto-Discovery tick doesn't resurrect it.
+        if dd_ext.startswith("discovery:") and dd_host:
+            try:
+                from monitoring.auto_discovery import suppress_host
+                suppress_host(dd_host, ddname, user)
+            except Exception as _sup_err:
+                log.warning(f"Auto-Discovery suppress-host hook failed: {_sup_err}")
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _dd = ddid

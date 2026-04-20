@@ -123,28 +123,6 @@ def db_init_pg():
         pg_create_main_schema(cur)
         pg_create_logs_schema(cur)
         pg_seed_defaults(cur)
-        # Migrate: collapse email_company_name into org_name (one-shot, self-disabling).
-        # Mirrors the SQLite block in db_init() — see that comment for rationale.
-        try:
-            cur.execute("SELECT value FROM main.app_settings WHERE key=%s", ("email_company_name",))
-            _ecn_row = cur.fetchone()
-            _ecn_val = (_ecn_row[0] if _ecn_row else "") or ""
-            if _ecn_val:
-                cur.execute("SELECT value FROM main.app_settings WHERE key=%s", ("org_name",))
-                _org_row = cur.fetchone()
-                _org_val = (_org_row[0] if _org_row else "") or ""
-                if not _org_val:
-                    cur.execute(
-                        "INSERT INTO main.app_settings (key, value) VALUES (%s, %s) "
-                        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                        ("org_name", _ecn_val),
-                    )
-                    log.info(f"Migrated email_company_name → org_name (value: {_ecn_val!r})")
-                else:
-                    log.info(f"Discarded email_company_name={_ecn_val!r}; org_name={_org_val!r} already set")
-            cur.execute("DELETE FROM main.app_settings WHERE key=%s", ("email_company_name",))
-        except Exception as _mig_err:
-            log.warning(f"email_company_name → org_name migration failed (non-fatal): {_mig_err}")
         cur.close()
     log.info("PG schema init complete")
 
@@ -167,17 +145,9 @@ def db_init():
     try:
         con.execute("PRAGMA journal_mode=WAL")   # safe concurrent reads while probes write
 
-        # Detect post-split installs early (migration already ran, or fresh install
-        # that will be seeded below).  When True, skip creating the four logs tables
-        # that now live in pingwatch_logs.db.
-        _post_split = False
-        try:
-            _ps = con.execute(
-                "SELECT value FROM app_settings WHERE key='db_split_complete'"
-            ).fetchone()
-            _post_split = _ps is not None and _ps[0] == '1'
-        except Exception:
-            pass   # app_settings doesn't exist yet on a brand-new DB
+        # Logs tables (flap_log, sensor_err_log, sensor_samples, snmp_traps) live
+        # in pingwatch_logs.db — see logs_db_init() below. Main DB holds only
+        # config, devices, users, IPAM, alerts.
 
         con.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -211,70 +181,11 @@ def db_init():
                 dns_server TEXT DEFAULT '',
                 PRIMARY KEY (did, sid)
             )""")
-        if not _post_split:
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS flap_log (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts        TEXT,
-                    did       TEXT,
-                    sid       TEXT,
-                    dname     TEXT,
-                    sname     TEXT,
-                    host      TEXT,
-                    stype     TEXT,
-                    detail    TEXT,
-                    direction TEXT DEFAULT 'down',
-                    ack_state TEXT DEFAULT 'active',
-                    ack_by    TEXT DEFAULT '',
-                    ack_at    REAL DEFAULT 0
-                )""")
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS sensor_err_log (
-                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts      TEXT,
-                    did     TEXT,
-                    sid     TEXT,
-                    sname   TEXT,
-                    stype   TEXT,
-                    msg     TEXT
-                )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )""")
-        if not _post_split:
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS sensor_samples (
-                    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts    REAL    NOT NULL,
-                    did   TEXT    NOT NULL,
-                    sid   TEXT    NOT NULL,
-                    ok    INTEGER NOT NULL,
-                    ms    REAL,
-                    value TEXT
-                )""")
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_samples_ds "
-                "ON sensor_samples(did, sid, ts)"
-            )
-            # Covering index: includes ok and ms so startup history/count queries
-            # never need to touch the main-table heap pages.  Eliminates thousands
-            # of random-read I/Os and reduces startup from minutes to seconds.
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
-                "ON sensor_samples(did, sid, ts, ok, ms)"
-            )
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS snmp_traps (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts        TEXT,
-                    src_ip    TEXT,
-                    dname     TEXT,
-                    community TEXT,
-                    trap_oid  TEXT,
-                    detail    TEXT
-                )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,18 +208,6 @@ def db_init():
                     "ON dashboards(username, name)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_dashboards_user "
                     "ON dashboards(username, sort_order)")
-        # ── Migration: dashboard_widgets → dashboards ───────────────
-        try:
-            old = con.execute("SELECT username, widgets FROM dashboard_widgets").fetchall()
-            for r in old:
-                con.execute(
-                    "INSERT OR IGNORE INTO dashboards (username, name, sort_order, widgets) "
-                    "VALUES (?, 'Default', 0, ?)", (r[0], r[1]))
-            con.execute("DROP TABLE dashboard_widgets")
-            con.commit()
-            log.info("Migrated dashboard_widgets → dashboards")
-        except Exception:
-            pass  # already migrated or table never existed
         con.execute("""
             CREATE TABLE IF NOT EXISTS backup_devices (
                 did          TEXT PRIMARY KEY,
@@ -321,7 +220,7 @@ def db_init():
                 commands     TEXT    DEFAULT '["show running-config"]',
                 paging_cmd   TEXT    DEFAULT '',
                 timeout      INTEGER DEFAULT 30,
-                schedule     TEXT    DEFAULT ''
+                in_schedule  INTEGER DEFAULT 0
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS backup_runs (
@@ -408,9 +307,6 @@ def db_init():
             ("ldap_domain",         ""),
             ("ldap_timeout",        "10"),
             ("ldap_debug",          "0"),   # 0=login events only, 1=full debug trace
-            # Dual-DB split: '1' means logs tables live in pingwatch_logs.db
-            # Seeded here so fresh installs never trigger an unnecessary migration
-            ("db_split_complete",   "1"),
             # Data rollup (v0.8.0)
             ("retention_raw_days",     "7"),
             ("retention_5m_days",      "90"),
@@ -420,26 +316,6 @@ def db_init():
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
         con.commit()
-        # Migrate: bump retention_days from old default 7 → 365 (only if user never changed it)
-        con.execute("UPDATE app_settings SET value='365' WHERE key='retention_days' AND value='7'")
-        con.commit()
-        # Migrate: collapse email_company_name into org_name (one-shot, self-disabling).
-        # Branding is a single concept — topbar / browser title / TLS CSR / email header / report cover
-        # all read the same name. The DELETE removes the source row so this block becomes a no-op
-        # on every subsequent boot.
-        try:
-            _ecn = con.execute("SELECT value FROM app_settings WHERE key='email_company_name'").fetchone()
-            if _ecn and _ecn[0]:
-                _org = con.execute("SELECT value FROM app_settings WHERE key='org_name'").fetchone()
-                if not _org or not _org[0]:
-                    con.execute("INSERT OR REPLACE INTO app_settings VALUES ('org_name', ?)", (_ecn[0],))
-                    log.info(f"Migrated email_company_name → org_name (value: {_ecn[0]!r})")
-                else:
-                    log.info(f"Discarded email_company_name={_ecn[0]!r}; org_name={_org[0]!r} already set")
-            con.execute("DELETE FROM app_settings WHERE key='email_company_name'")
-            con.commit()
-        except Exception as _mig_err:
-            log.warning(f"email_company_name → org_name migration failed (non-fatal): {_mig_err}")
         # Migrations — add columns when missing (safe to run on existing DBs)
         # users table
         try:
@@ -460,13 +336,10 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
-        _flap_direction = [] if _post_split else [
-            "ALTER TABLE flap_log ADD COLUMN direction TEXT DEFAULT 'down'",
-        ]
         for stmt in [
             "ALTER TABLE devices ADD COLUMN webhook_url TEXT DEFAULT ''",
             "ALTER TABLE sensors ADD COLUMN http_expected_status INTEGER DEFAULT 0",
-        ] + _flap_direction:
+        ]:
             try:
                 con.execute(stmt)
                 con.commit()
@@ -603,14 +476,6 @@ def db_init():
             con.commit()
         except Exception:
             pass
-        # backup_devices — replace per-device schedule with global-schedule flag
-        try:
-            con.execute("ALTER TABLE backup_devices ADD COLUMN in_schedule INTEGER DEFAULT 0")
-            # Promote old per-device daily/weekly → participates in global schedule
-            con.execute("UPDATE backup_devices SET in_schedule=1 WHERE schedule IN ('daily','weekly')")
-            con.commit()
-        except Exception:
-            pass
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (
@@ -652,38 +517,6 @@ def db_init():
                 label TEXT NOT NULL,
                 color TEXT DEFAULT ''
             )""")
-        # ── snmp_traps enrichment columns (migration — skipped in post-split mode) ──
-        if not _post_split:
-            for _col in [
-                "ALTER TABLE snmp_traps ADD COLUMN vendor          TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN product_family  TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN trap_name       TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN severity        TEXT DEFAULT 'info'",
-                "ALTER TABLE snmp_traps ADD COLUMN category        TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN probable_cause  TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN recommended_action TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN raw_varbinds         TEXT DEFAULT '[]'",
-                "ALTER TABLE snmp_traps ADD COLUMN enriched             INTEGER DEFAULT 0",
-                "ALTER TABLE snmp_traps ADD COLUMN enterprise_oid       TEXT DEFAULT ''",
-                "ALTER TABLE snmp_traps ADD COLUMN generic_trap_type    INTEGER DEFAULT -1",
-                "ALTER TABLE snmp_traps ADD COLUMN enriched_varbinds    TEXT DEFAULT '[]'",
-            ]:
-                try:
-                    con.execute(_col)
-                    con.commit()
-                except Exception:
-                    pass
-        # Fast lookup indexes on snmp_traps (skipped in post-split mode)
-        if not _post_split:
-            for _idx in [
-                "CREATE INDEX IF NOT EXISTS idx_traps_src    ON snmp_traps(src_ip, ts)",
-                "CREATE INDEX IF NOT EXISTS idx_traps_vendor ON snmp_traps(vendor, ts)",
-                "CREATE INDEX IF NOT EXISTS idx_traps_oid    ON snmp_traps(trap_oid)",
-            ]:
-                try:
-                    con.execute(_idx)
-                except Exception:
-                    pass
         con.commit()
         # ── IPAM tables ───────────────────────────────────────────────
         con.execute("""
@@ -730,6 +563,17 @@ def db_init():
         ]:
             try:
                 con.execute(_dns_col)
+                con.commit()
+            except Exception:
+                pass  # column already exists
+        # Migration: Auto-Discovery columns on ipam_subnets (v0.9.3+)
+        for _ad_col in [
+            "ALTER TABLE ipam_subnets ADD COLUMN auto_discover       INTEGER DEFAULT 0",
+            "ALTER TABLE ipam_subnets ADD COLUMN first_scan_approved INTEGER DEFAULT 0",
+            "ALTER TABLE ipam_subnets ADD COLUMN last_auto_scan_ts   TEXT    DEFAULT NULL",
+        ]:
+            try:
+                con.execute(_ad_col)
                 con.commit()
             except Exception:
                 pass  # column already exists
@@ -796,21 +640,6 @@ def db_init():
             )""")
         con.commit()
         # ── Alert Profiles (PRTG-style state-trigger system) ──────────
-        # One-time cleanup of legacy condition-rule tables (idempotent)
-        for _t in ("alert_rules", "alert_rule_conditions",
-                   "alert_rule_actions", "alert_dedup"):
-            try:
-                con.execute(f"DROP TABLE IF EXISTS {_t}")
-            except Exception:
-                pass
-        # Hard-replace alert_events: rule_id/rule_name → profile_id/stage_id/profile_name.
-        # alert_events is rotational and the user has minimal history — full recreate is fine.
-        try:
-            _cols = {r[1] for r in con.execute("PRAGMA table_info(alert_events)").fetchall()}
-            if _cols and ("rule_id" in _cols or "profile_id" not in _cols):
-                con.execute("DROP TABLE alert_events")
-        except Exception:
-            pass
         con.execute("""
             CREATE TABLE IF NOT EXISTS alert_events (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1038,64 +867,6 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
-        # ── Migrate alert_profile_stages: action_id (int) → action_ids (json) ──
-        try:
-            cols = {r[1] for r in con.execute(
-                "PRAGMA table_info(alert_profile_stages)").fetchall()}
-            if 'action_ids' not in cols and 'action_id' in cols:
-                con.execute(
-                    "ALTER TABLE alert_profile_stages "
-                    "ADD COLUMN action_ids TEXT NOT NULL DEFAULT '[]'"
-                )
-                con.execute(
-                    "UPDATE alert_profile_stages "
-                    "SET action_ids = '[' || CAST(action_id AS TEXT) || ']' "
-                    "WHERE action_id IS NOT NULL"
-                )
-                con.commit()
-                log.info("DB migrate: alert_profile_stages action_id → action_ids")
-        except Exception as _e:
-            log.warning(f"DB migrate alert_profile_stages: {_e}")
-        # ── Make action_id nullable (SQLite can't ALTER COLUMN — recreate table) ──
-        try:
-            cols_info = con.execute(
-                "PRAGMA table_info(alert_profile_stages)").fetchall()
-            aid_col = next((r for r in cols_info if r[1] == 'action_id'), None)
-            if aid_col and aid_col[3] == 1:   # notnull == 1
-                con.execute(
-                    "ALTER TABLE alert_profile_stages "
-                    "RENAME TO _aps_migrate_tmp"
-                )
-                con.execute("""
-                    CREATE TABLE alert_profile_stages (
-                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                        profile_id    INTEGER NOT NULL
-                                      REFERENCES alert_profiles(id) ON DELETE CASCADE,
-                        trigger_state TEXT NOT NULL CHECK(trigger_state IN
-                                      ('down','warning','down_recovered','warning_recovered')),
-                        delay_s       INTEGER NOT NULL DEFAULT 0,
-                        repeat_min    INTEGER NOT NULL DEFAULT 0,
-                        action_ids    TEXT    NOT NULL DEFAULT '[]',
-                        action_id     INTEGER,
-                        sort_order    INTEGER NOT NULL DEFAULT 0
-                    )""")
-                con.execute(
-                    "INSERT INTO alert_profile_stages "
-                    "(id, profile_id, trigger_state, delay_s, repeat_min, "
-                    " action_ids, action_id, sort_order) "
-                    "SELECT id, profile_id, trigger_state, delay_s, repeat_min, "
-                    "       action_ids, action_id, sort_order "
-                    "FROM _aps_migrate_tmp"
-                )
-                con.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_profile_stages_profile "
-                    "ON alert_profile_stages(profile_id)"
-                )
-                con.execute("DROP TABLE _aps_migrate_tmp")
-                con.commit()
-                log.info("DB migrate: alert_profile_stages action_id made nullable")
-        except Exception as _e:
-            log.warning(f"DB migrate alert_profile_stages nullable: {_e}")
     finally:
         con.close()
     log.info("DB init: schema ready")

@@ -370,7 +370,7 @@ function _impRenderReview(){
     ${skippedHtml}
     ${errorsHtml}
     <details class="imp-help">
-      <summary>How matching &amp; modes work</summary>
+      <summary>❓ How matching &amp; modes work</summary>
       <div class="imp-help-body">
         <p><strong>Match order</strong> — for each row, PingWatch looks for an existing device by
           <code>external_id</code> first (exact), then by <code>host</code> (case-insensitive).

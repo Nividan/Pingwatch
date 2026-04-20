@@ -40,6 +40,11 @@ function _ipamRenderShell() {
       <button class="btn-sm btn-accent rbac-op" onclick="_ipamOpenAddSubnet()">＋ Add Subnet</button>
       <button class="btn-sm rbac-op" id="ipam-ren-btn" onclick="_ipamOpenRename()" disabled>✎ Rename</button>
       <button class="btn-sm rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled style="color:var(--down)">✕ Remove</button>
+      <label class="ipam-ad-toggle rbac-op" id="ipam-ad-wrap" style="display:none"
+             title="Periodically scan this subnet and auto-add new hosts as devices">
+        <input type="checkbox" id="ipam-ad-cb" onchange="_ipamToggleAutoDiscover(this.checked)"/>
+        <span>🔍 Auto-Discover</span>
+      </label>
       <button class="btn-sm rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">Refresh DNS</button>
       <div style="width:1px;height:18px;background:var(--border);margin:0 4px"></div>
       <input class="ipam-search" id="ipam-search" type="search" placeholder="🔍  Search IP, name or DNS…"
@@ -52,6 +57,41 @@ function _ipamRenderShell() {
       </div>
     </div>`;
   applyRbac();
+}
+
+// ── Auto-Discovery per-subnet toggle ──────────────────────────────────────
+function _ipamRefreshAutoDiscoverToggle(subnet) {
+  const wrap = document.getElementById('ipam-ad-wrap');
+  const cb   = document.getElementById('ipam-ad-cb');
+  if (!wrap || !cb) return;
+  wrap.style.display = '';
+  cb.checked = !!(subnet && (subnet.auto_discover | 0));
+}
+
+async function _ipamToggleAutoDiscover(enabled) {
+  if (!_ipamSelectedId) return;
+  const cb = document.getElementById('ipam-ad-cb');
+  try {
+    const r = await fetch(
+      `/api/ipam/subnet/${_ipamSelectedId}/auto-discover`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !!enabled }) }
+    );
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Toggle failed', 'err');
+      if (cb) cb.checked = !enabled;   // revert UI
+      return;
+    }
+    toast(enabled ? 'Auto-Discovery enabled on this subnet'
+                  : 'Auto-Discovery disabled on this subnet', 'ok');
+    // Refresh the cached subnet object so the flag sticks on re-select.
+    const cur = _ipamSubnets.find(s => s.id === _ipamSelectedId);
+    if (cur) cur.auto_discover = enabled ? 1 : 0;
+  } catch (e) {
+    toast('Network error', 'err');
+    if (cb) cb.checked = !enabled;
+  }
 }
 
 // ── License status cache ───────────────────────────────────────────────────
@@ -134,6 +174,8 @@ async function _ipamOnSubnetChange(idVal) {
     _ipamSelectedId = null;
     document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
     document.getElementById('ipam-ren-btn')?.setAttribute('disabled', '');
+    const adWrap = document.getElementById('ipam-ad-wrap');
+    if (adWrap) adWrap.style.display = 'none';
     _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
     return;
   }
@@ -155,6 +197,9 @@ async function _ipamOnSubnetChange(idVal) {
   // Show Refresh DNS button for operators when a subnet is selected
   const dnsBtn = document.getElementById('ipam-dns-btn');
   if (dnsBtn) dnsBtn.style.display = '';
+
+  // Reflect the subnet's auto-discover flag in the header toggle
+  _ipamRefreshAutoDiscoverToggle(subnet);
 
   // Generate all usable IPs from CIDR, merge with allocations
   const ips = _ipamExpandCidr(subnet.cidr);
