@@ -164,6 +164,11 @@ function ensureGroupSection(group){
   wrap.dataset.grpName=group;
   applyGrpDrag(wrap);
   document.getElementById('dpanels').appendChild(wrap);
+
+  // The muted-groups set may be stale (e.g. auto-discovery just muted this
+  // brand-new group server-side after the last _loadMutedGroups() fetch).
+  // Refresh asynchronously so the badge paints correctly without blocking render.
+  _loadMutedGroups().then(() => _refreshGroupMuteBadge(group));
 }
 
 function refreshGroupCounts(){
