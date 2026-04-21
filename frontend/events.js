@@ -597,10 +597,17 @@ function _buildEvtTable(events) {
       // Reason chip — why this event did not fire an alert (current state)
       const _dev = S.devices?.[d.did];
       const _sen = (d.did && d.sid) ? S.sensors?.[d.did + '/' + d.sid] : null;
-      const _muted = !!(_sen?.alerts_muted || _dev?.alerts_muted);
+      const _grp = _dev?.group || '';
+      const _grpMuted = !!(window._mutedGroups && _grp && window._mutedGroups.has(_grp));
+      const _senMuted = !!_sen?.alerts_muted;
+      const _devMuted = !!_dev?.alerts_muted;
+      const _muted = _senMuted || _devMuted || _grpMuted;
       const reasonLabel = _muted ? '🔕 Muted' : '○ No rule';
       const reasonTitle = _muted
-        ? 'Alerts are muted on this ' + (_sen?.alerts_muted ? 'sensor' : 'device')
+        ? ('Alerts are muted on this '
+           + (_senMuted ? 'sensor'
+              : _devMuted ? 'device'
+              : 'group (' + _grp + ')'))
         : 'No alert rule matched this event';
       const reasonChip = `<span class="aev-reason-chip" title="${esc(reasonTitle)}">${reasonLabel}</span>`;
       alertCell =

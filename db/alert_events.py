@@ -72,10 +72,13 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                 if existing and state == 'active':
                     # Escalate severity (never downgrade). If current row is already
                     # 'critical', keep it; otherwise adopt the incoming severity.
+                    # triggered_at is preserved — it anchors to the original fire
+                    # time so the events-tab matcher can correlate the flap with
+                    # this event row across the whole incident (stages 2/3 would
+                    # otherwise drift it outside the correlation window).
                     cur.execute(
                         """UPDATE alert_events SET
                                repeat_count = repeat_count + 1,
-                               triggered_at = %s,
                                stage_id     = %s,
                                profile_id   = %s,
                                profile_name = %s,
@@ -83,7 +86,7 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                                event_type   = CASE WHEN severity = 'critical' THEN event_type ELSE %s END,
                                detail       = %s
                            WHERE id = %s""",
-                        (now, stage_id, profile_id, profile_name,
+                        (stage_id, profile_id, profile_name,
                          severity, event_type, detail, existing['id'])
                     )
                     eid = existing['id']
@@ -127,7 +130,6 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
             con.execute(
                 """UPDATE alert_events SET
                        repeat_count = repeat_count + 1,
-                       triggered_at = ?,
                        stage_id     = ?,
                        profile_id   = ?,
                        profile_name = ?,
@@ -135,7 +137,7 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                        event_type   = ?,
                        detail       = ?
                    WHERE id = ?""",
-                (now, stage_id, profile_id, profile_name,
+                (stage_id, profile_id, profile_name,
                  new_sev, new_etyp, detail, existing['id'])
             )
             eid = existing['id']
