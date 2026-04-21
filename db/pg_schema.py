@@ -107,7 +107,9 @@ def pg_create_main_schema(cur):
             vmware_user_default      TEXT DEFAULT '',
             vmware_password_default  TEXT DEFAULT '',
             secondary_ips            TEXT DEFAULT '[]',
-            external_id              TEXT DEFAULT NULL
+            external_id              TEXT DEFAULT NULL,
+            discovered_at            DOUBLE PRECISION DEFAULT 0,
+            discovered_from_cidr     TEXT DEFAULT ''
         )""")
     # Bulk-import external_id — idempotent add for pre-existing installs.
     cur.execute("""
@@ -228,6 +230,13 @@ def pg_create_main_schema(cur):
         ("main.devices", "vmware_user_default",     "TEXT DEFAULT ''"),
         ("main.devices", "vmware_password_default", "TEXT DEFAULT ''"),
         ("main.devices", "secondary_ips",           "TEXT DEFAULT '[]'"),
+        ("main.devices", "discovered_at",           "DOUBLE PRECISION DEFAULT 0"),
+        ("main.devices", "discovered_from_cidr",    "TEXT DEFAULT ''"),
+        # Auto-Discovery (v0.9.3+)
+        ("ipam_subnets", "auto_discover",           "INTEGER DEFAULT 0"),
+        ("ipam_subnets", "first_scan_approved",     "INTEGER DEFAULT 0"),
+        ("ipam_subnets", "last_auto_scan_ts",       "TIMESTAMP DEFAULT NULL"),
+        ("ipam_subnets", "dns_server",              "TEXT DEFAULT ''"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -278,19 +287,6 @@ def pg_create_main_schema(cur):
                 "ON dashboards(username, name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_dashboards_user "
                 "ON dashboards(username, sort_order)")
-    # ── Migration: dashboard_widgets → dashboards ───────────────
-    cur.execute(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema='main' AND table_name='dashboard_widgets'")
-    if cur.fetchone():
-        cur.execute("SELECT username, widgets FROM main.dashboard_widgets")
-        old = cur.fetchall()
-        for r in old:
-            cur.execute(
-                "INSERT INTO dashboards (username, name, sort_order, widgets) "
-                "VALUES (%s, 'Default', 0, %s) ON CONFLICT (username, name) DO NOTHING",
-                (r[0], r[1]))
-        cur.execute("DROP TABLE main.dashboard_widgets")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS backup_devices (
@@ -304,7 +300,6 @@ def pg_create_main_schema(cur):
             commands     TEXT    DEFAULT '["show running-config"]',
             paging_cmd   TEXT    DEFAULT '',
             timeout      INTEGER DEFAULT 30,
-            schedule     TEXT    DEFAULT '',
             in_schedule  INTEGER DEFAULT 0
         )""")
 
@@ -377,11 +372,15 @@ def pg_create_main_schema(cur):
     # ── IPAM ─────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ipam_subnets (
-            id         SERIAL PRIMARY KEY,
-            cidr       TEXT UNIQUE NOT NULL,
-            name       TEXT DEFAULT '',
-            created_by TEXT DEFAULT '',
-            created_at DOUBLE PRECISION DEFAULT 0
+            id                  SERIAL PRIMARY KEY,
+            cidr                TEXT UNIQUE NOT NULL,
+            name                TEXT DEFAULT '',
+            created_by          TEXT DEFAULT '',
+            created_at          DOUBLE PRECISION DEFAULT 0,
+            auto_discover       INTEGER DEFAULT 0,
+            first_scan_approved INTEGER DEFAULT 0,
+            last_auto_scan_ts   TIMESTAMP DEFAULT NULL,
+            dns_server          TEXT DEFAULT ''
         )""")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ipam_subnets_cidr ON ipam_subnets(cidr)"
@@ -407,29 +406,6 @@ def pg_create_main_schema(cur):
     )
 
     # ── Alert Profiles (PRTG-style state-trigger system) ─────────────
-    # One-time cleanup of legacy condition-rule tables (idempotent)
-    for _legacy in ("alert_rules", "alert_rule_conditions",
-                    "alert_rule_actions", "alert_dedup"):
-        try:
-            cur.execute("SAVEPOINT _drop_legacy")
-            cur.execute(f"DROP TABLE IF EXISTS {_legacy} CASCADE")
-            cur.execute("RELEASE SAVEPOINT _drop_legacy")
-        except Exception:
-            cur.execute("ROLLBACK TO SAVEPOINT _drop_legacy")
-    # Hard-replace alert_events if it still has the legacy rule_id column
-    try:
-        cur.execute("SAVEPOINT _replace_events")
-        cur.execute("""
-            SELECT 1 FROM information_schema.columns
-             WHERE table_schema = current_schema()
-               AND table_name = 'alert_events'
-               AND column_name = 'rule_id'
-        """)
-        if cur.fetchone():
-            cur.execute("DROP TABLE alert_events")
-        cur.execute("RELEASE SAVEPOINT _replace_events")
-    except Exception:
-        cur.execute("ROLLBACK TO SAVEPOINT _replace_events")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_events (
             id           SERIAL PRIMARY KEY,
@@ -493,35 +469,6 @@ def pg_create_main_schema(cur):
         "CREATE INDEX IF NOT EXISTS idx_profile_stages_profile "
         "ON alert_profile_stages(profile_id)"
     )
-    # Migrate action_id (int) → action_ids (json) for existing installs
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_schema='main' AND table_name='alert_profile_stages'
-                  AND column_name='action_ids'
-            ) THEN
-                ALTER TABLE alert_profile_stages ADD COLUMN action_ids TEXT NOT NULL DEFAULT '[]';
-                UPDATE alert_profile_stages
-                   SET action_ids = '['||action_id::text||']'
-                 WHERE action_id IS NOT NULL;
-            END IF;
-        END $$
-    """)
-    # Drop NOT NULL from action_id so new inserts (which omit it) succeed
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_schema='main' AND table_name='alert_profile_stages'
-                  AND column_name='action_id' AND is_nullable = 'NO'
-            ) THEN
-                ALTER TABLE alert_profile_stages ALTER COLUMN action_id DROP NOT NULL;
-            END IF;
-        END $$
-    """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_profile_state (
             sig            TEXT PRIMARY KEY,
@@ -975,7 +922,6 @@ def pg_seed_defaults(cur):
         ("ldap_domain",         ""),
         ("ldap_timeout",        "10"),
         ("ldap_debug",          "0"),
-        ("db_split_complete",   "1"),
         ("retention_raw_days",     "7"),
         ("retention_5m_days",      "90"),
         ("retention_1h_days",      "1095"),

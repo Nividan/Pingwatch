@@ -280,10 +280,9 @@ def _suggest_sensors(ip: str, hostname: str, ports: list) -> list:
             out.append({"stype": "http", "name": f"HTTP {port}", "port": port,
                         "url": f"http://{ip}:{port}", "enabled": False})
         elif st == "tls":
-            out.append({"stype": "tls", "name": f"TLS {port}", "port": port,
-                        "enabled": False})
             out.append({"stype": "http", "name": f"HTTPS {port}", "port": port,
-                        "url": f"https://{ip}:{port}", "enabled": False})
+                        "url": f"https://{ip}:{port}", "verify_ssl": False,
+                        "enabled": False})
         elif port == 161:
             out.append({"stype": "snmp", "name": "SNMP sysUpTime", "port": 161,
                         "enabled": False})

@@ -279,10 +279,15 @@ def evaluate_and_fire(dev, sensor) -> None:
     label = f"{getattr(dev, 'name', did)}/{getattr(sensor, 'name', sid)}"
     is_failing = bool(sensor._down_since_ts) or sensor._threshold_state in ("crit", "warn")
 
-    if sensor.alerts_muted or getattr(dev, "alerts_muted", False):
+    from core.state import is_group_muted
+    _grp = getattr(dev, "group", "") or ""
+    _grp_muted = is_group_muted(_grp)
+    if sensor.alerts_muted or getattr(dev, "alerts_muted", False) or _grp_muted:
         if is_failing:
             _diag_log(sensor, label, f"no dispatch — alerts muted "
-                      f"(sensor={sensor.alerts_muted}, device={getattr(dev, 'alerts_muted', False)})")
+                      f"(sensor={sensor.alerts_muted}, "
+                      f"device={getattr(dev, 'alerts_muted', False)}, "
+                      f"group={_grp_muted})")
         return
 
     profile = resolve_profile_for_sensor(dev, sensor)

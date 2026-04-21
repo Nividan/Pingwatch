@@ -1335,6 +1335,92 @@ function _buildSettingsTab_backup(sr) {
     </div>`;
 }
 
+function _buildSettingsTab_autoDiscovery(sr) {
+  const enabled    = !!(sr.auto_discover_enabled | 0);
+  const paused     = !!(sr.auto_discover_paused | 0);
+  const alertNew   = !!(sr.auto_discover_alert_on_new | 0);
+  const usePtr     = !!((sr.auto_discover_use_ptr ?? 1) | 0);
+  const intv       = Number.isFinite(sr.auto_discover_interval_min) ? sr.auto_discover_interval_min : 60;
+  const cap        = Number.isFinite(sr.auto_discover_first_scan_cap) ? sr.auto_discover_first_scan_cap : 100;
+  const maint      = sr.auto_discover_during_maint || 'skip';
+  return `<div class="mbdy stab-fade" id="stab-auto-discovery" style="display:none;overflow-y:auto;flex:1">
+    <div style="margin-bottom:12px">
+      <div style="font-size:13px;font-weight:600;color:var(--text2)">📡 Auto-Discovery</div>
+      <div style="font-size:12px;color:var(--text3);margin-top:2px">
+        Periodically scan IPAM subnets flagged <em>Auto-Discover</em> and auto-add new hosts as devices.
+        New devices land in group <code>Discovery-&lt;CIDR&gt;</code> with a ping sensor plus any services
+        detected by the <a href="javascript:void(0)" onclick="switchSettingsTab('networking')" style="color:var(--accent)">Port Scanner</a> config.
+      </div>
+    </div>
+
+    <div class="disc-strip">
+      <div class="disc-strip-row">
+        <label><input type="checkbox" id="disc-enabled"  ${enabled ?'checked':''}/> Enabled</label>
+        <label><input type="checkbox" id="disc-paused"   ${paused  ?'checked':''}/> Pause (skip scans but keep daemon alive)</label>
+        <label><input type="checkbox" id="disc-alert-new" ${alertNew?'checked':''}/> Alert on new device</label>
+        <label><input type="checkbox" id="disc-use-ptr"  ${usePtr  ?'checked':''}/> Reverse-DNS naming</label>
+      </div>
+      <div class="disc-strip-row">
+        <label>Interval
+          <select id="disc-interval">
+            <option value="15"    ${intv===15?'selected':''}>15 min</option>
+            <option value="30"    ${intv===30?'selected':''}>30 min</option>
+            <option value="60"    ${intv===60?'selected':''}>1 hour</option>
+            <option value="240"   ${intv===240?'selected':''}>4 hours</option>
+            <option value="720"   ${intv===720?'selected':''}>12 hours</option>
+            <option value="1440"  ${intv===1440?'selected':''}>24 hours</option>
+            <option value="4320"  ${intv===4320?'selected':''}>3 days</option>
+            <option value="10080" ${intv===10080?'selected':''}>7 days</option>
+          </select>
+        </label>
+        <label>First-scan cap
+          <input type="number" id="disc-cap" value="${cap}" min="0" max="1000" title="Max devices a subnet's FIRST scan can create. 0 = disabled."/>
+        </label>
+        <label>During maintenance
+          <select id="disc-maint">
+            <option value="skip" ${maint==='skip'?'selected':''}>Skip scan</option>
+            <option value="run"  ${maint==='run' ?'selected':''}>Run scan anyway</option>
+          </select>
+        </label>
+        <button class="btn-s" onclick="triggerAutoDiscoveryNow()" title="Run a scan pass right now">🔄 Run now</button>
+      </div>
+      <div class="disc-lastrun" id="disc-lastrun">Last run: <strong>—</strong></div>
+    </div>
+
+    <div class="disc-sup-hd">Suppressed hosts</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
+      Hosts that were auto-added and later manually deleted. Auto-Discovery will not re-add them.
+      Remove an entry here to allow re-discovery.
+    </div>
+    <div id="disc-sup-wrap"><div class="disc-sup-empty">Loading…</div></div>
+
+    <div class="disc-sup-hd" style="margin-top:18px">Recent activity</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
+      Scheduler ticks, cap hits, subnet toggles, and admin actions. Sourced from the audit log.
+    </div>
+    <div id="disc-activity-wrap"><div class="disc-sup-empty">Loading…</div></div>
+
+    <details class="imp-help" style="margin-top:14px">
+      <summary>❓ How Auto-Discovery works</summary>
+      <div class="imp-help-body">
+        <p>Enable <strong>Auto-Discover</strong> on an IPAM subnet (IPAM tab → select subnet → header toggle).
+          Every interval tick, the daemon runs the existing Subnet Discovery scanner on each enabled subnet,
+          then passes any new hosts through the shared bulk creator so dedup, sensor field validation, and
+          IPAM allocation sync work exactly like the manual flow.</p>
+        <p><strong>First-scan cap</strong> — the first time a subnet is scanned, if it would create more
+          than the cap, the scan is aborted and the subnet is flagged. Admins then click
+          <em>Approve first scan</em> on the IPAM tab to override once. Subsequent scans have no cap.</p>
+        <p><strong>Suppressed hosts</strong> — if an admin manually deletes an auto-added device,
+          its host lands in the list above so it isn't resurrected on the next tick. Remove it from the
+          list to allow re-discovery.</p>
+        <p><strong>Maintenance windows</strong> — when any window is active, ticks are skipped by default
+          (change the <em>During maintenance</em> dropdown to <em>Run scan anyway</em> if you want them to proceed,
+          though the alert engine still suppresses notifications).</p>
+      </div>
+    </details>
+  </div>`;
+}
+
 function _buildSettingsTab_alertRules() {
   return `<div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr">
@@ -1405,6 +1491,7 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
       <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">🔐 Certificates</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
+      <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">📡 Auto-Discovery</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
     </nav>
     <div class="stab-content">
@@ -1418,6 +1505,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_networking(sr, tr)}
     ${_buildSettingsTab_certificates(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
+    ${_buildSettingsTab_autoDiscovery(sr)}
     ${_buildSettingsTab_alertRules()}
     <div class="mft" id="stab-footer-general">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -1459,6 +1547,10 @@ async function openSettings(initialTab){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveBackupScheduleSettings()">Save Config Backup</button>
     </div>
+    <div class="mft" id="stab-footer-auto-discovery" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="saveAutoDiscoverySettings()">Save Auto-Discovery</button>
+    </div>
     <div class="mft" id="stab-footer-alert-rules" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
@@ -1475,7 +1567,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','reports','sensors','networking','certificates','backup','alert-rules'];
+  const tabs = ['general','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -1509,13 +1601,14 @@ function switchSettingsTab(tab){
           nextEl.classList.remove('stab-out');
           setTimeout(() => {
             _stabSwitching = false;
-            if (tab === 'sensors')      loadSensorsDefaultsTab();
-            if (tab === 'backup')       _loadBackupScheduleSettings();
-            if (tab === 'database')     _loadDbBackupSettings();
-            if (tab === 'alert-rules')  { _alertingLoadRules(); _alertingLoadMaint(); }
-            if (tab === 'groups')       _groupsLoad();
-            if (tab === 'integrations') _loadIntegrationsStatus();
-            if (tab === 'certificates') _loadTrustedCAs();
+            if (tab === 'sensors')        loadSensorsDefaultsTab();
+            if (tab === 'backup')         _loadBackupScheduleSettings();
+            if (tab === 'database')       _loadDbBackupSettings();
+            if (tab === 'alert-rules')    { _alertingLoadRules(); _alertingLoadMaint(); }
+            if (tab === 'groups')         _groupsLoad();
+            if (tab === 'integrations')   _loadIntegrationsStatus();
+            if (tab === 'certificates')   _loadTrustedCAs();
+            if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
           }, 220);
         });
       });
@@ -1524,14 +1617,15 @@ function switchSettingsTab(tab){
     nextEl.style.display = '';
     document.getElementById(`stab-footer-${tab}`).style.display = '';
     _stabSwitching = false;
-    if (tab === 'sensors')     loadSensorsDefaultsTab();
-    if (tab === 'backup')      _loadBackupScheduleSettings();
-    if (tab === 'database')    _loadDbBackupSettings();
-    if (tab === 'alert-rules') _alertingLoadRules();
-    if (tab === 'maint')        _alertingLoadMaint();
-    if (tab === 'groups')       _groupsLoad();
-    if (tab === 'integrations') _loadIntegrationsStatus();
-    if (tab === 'certificates') _loadTrustedCAs();
+    if (tab === 'sensors')       loadSensorsDefaultsTab();
+    if (tab === 'backup')        _loadBackupScheduleSettings();
+    if (tab === 'database')      _loadDbBackupSettings();
+    if (tab === 'alert-rules')   _alertingLoadRules();
+    if (tab === 'maint')         _alertingLoadMaint();
+    if (tab === 'groups')        _groupsLoad();
+    if (tab === 'integrations')  _loadIntegrationsStatus();
+    if (tab === 'certificates')  _loadTrustedCAs();
+    if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
   }
 }
 
@@ -3440,5 +3534,169 @@ async function _submitUserProfile(username, isAdmin){
     toast('Failed to save profile','err');
   }finally{
     if(btn){btn.disabled=false;btn.textContent='Save';}
+  }
+}
+
+// ── Auto-Discovery settings tab ────────────────────────────────────
+async function _loadAutoDiscoveryStatus() {
+  try {
+    const r = await api('GET', '/api/auto-discovery/status');
+    _renderAutoDiscoveryLastRun(r);
+    _renderAutoDiscoverySuppressed(r.suppressed_hosts || []);
+  } catch (e) {
+    const lr = document.getElementById('disc-lastrun');
+    if (lr) lr.innerHTML = '<span style="color:var(--down)">Failed to load status</span>';
+  }
+  // Activity pane — independent of /status so one endpoint failure doesn't
+  // break the other.
+  try {
+    const a = await api('GET', '/api/auto-discovery/activity');
+    _renderAutoDiscoveryActivity(a.entries || []);
+  } catch {
+    const w = document.getElementById('disc-activity-wrap');
+    if (w) w.innerHTML = '<div class="disc-sup-empty" style="color:var(--down)">Failed to load activity</div>';
+  }
+}
+
+// Map raw audit action strings to friendly labels for the activity pane.
+const _AD_ACTION_LABELS = {
+  auto_discovery_tick:                 '🔄 Scheduler tick',
+  auto_discovery_run_now:              '▶ Run now',
+  auto_discovery_cap_hit:              '⚠ First-scan cap hit',
+  auto_discovery_approve_first_scan:   '✓ First-scan approved',
+  auto_discovery_unsuppress:           '↺ Host unsuppressed',
+  ipam_subnet_edit:                    '✎ Subnet edited',
+  ipam_auto_discover_toggle:           '🔍 Auto-Discover toggled',
+};
+
+function _renderAutoDiscoveryActivity(entries) {
+  const wrap = document.getElementById('disc-activity-wrap');
+  if (!wrap) return;
+  if (!entries.length) {
+    wrap.innerHTML = '<div class="disc-sup-empty">No activity yet.</div>';
+    return;
+  }
+  const rows = entries.map(e => {
+    let when = '';
+    try { when = new Date(parseFloat(e.ts) * 1000).toLocaleString(); } catch {}
+    const lbl = _AD_ACTION_LABELS[e.action] || esc(e.action);
+    const tgt = e.target ? `<span class="disc-act-target">${esc(e.target)}</span>` : '';
+    const det = e.detail ? `<span class="disc-act-detail">${esc(e.detail)}</span>` : '';
+    const who = (e.actor && e.actor !== 'system') ? `<span class="disc-act-actor">${esc(e.actor)}</span>` : '';
+    return `<tr>
+      <td class="disc-act-when">${esc(when)}</td>
+      <td class="disc-act-label">${lbl}</td>
+      <td>${tgt}${det ? ' — ' : ''}${det}</td>
+      <td>${who}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<table class="disc-sup-tbl disc-act-tbl">
+    <thead><tr><th>When</th><th>Event</th><th>Details</th><th>Actor</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function _renderAutoDiscoveryLastRun(st) {
+  const lr = document.getElementById('disc-lastrun');
+  if (!lr) return;
+  const stats = st.last_run_stats || {};
+  if (!st.last_run_ts) {
+    lr.innerHTML = 'Last run: <strong>never</strong>' +
+      (st.currently_running ? ' <span style="color:var(--accent)">· running now</span>' : '');
+    return;
+  }
+  let when = '—';
+  try {
+    const d = new Date(parseFloat(st.last_run_ts) * 1000);
+    when = d.toLocaleString();
+  } catch {}
+  const parts = [
+    `Last run: <strong>${esc(when)}</strong>`,
+    `<strong>${stats.subnets_scanned|0}</strong> subnets`,
+    `<strong>${stats.devices_added|0}</strong> added`,
+    `<strong>${stats.devices_suppressed|0}</strong> suppressed`,
+  ];
+  if ((stats.first_scan_cap_hits|0) > 0)
+    parts.push(`<strong style="color:var(--warn)">${stats.first_scan_cap_hits|0}</strong> cap hits`);
+  if ((stats.errors|0) > 0)
+    parts.push(`<strong style="color:var(--down)">${stats.errors|0}</strong> errors`);
+  if (st.currently_running)
+    parts.push('<span style="color:var(--accent)">running now</span>');
+  lr.innerHTML = parts.join(' · ');
+}
+
+function _renderAutoDiscoverySuppressed(entries) {
+  const wrap = document.getElementById('disc-sup-wrap');
+  if (!wrap) return;
+  if (!entries || !entries.length) {
+    wrap.innerHTML = '<div class="disc-sup-empty">No suppressed hosts.</div>';
+    return;
+  }
+  const rows = entries.map(e => {
+    const when = e.suppressed_at
+      ? new Date(parseFloat(e.suppressed_at) * 1000).toLocaleString()
+      : '';
+    return `<tr>
+      <td>${esc(e.host || '')}</td>
+      <td>${esc(e.name || '')}</td>
+      <td>${esc(e.suppressed_by || '')}</td>
+      <td>${esc(when)}</td>
+      <td><button class="btn-s rbac-admin" onclick="_unsuppressAdHost('${esc(e.host || '').replace(/'/g,'&#39;')}')">Remove</button></td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<table class="disc-sup-tbl">
+    <thead><tr><th>Host</th><th>Name</th><th>Suppressed by</th><th>When</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function _unsuppressAdHost(host) {
+  if (!host) return;
+  try {
+    const r = await fetch(`/api/auto-discovery/suppressed/${encodeURIComponent(host)}/remove`,
+                          { method: 'POST' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Remove failed', 'err');
+      return;
+    }
+    toast('Host removed from suppressed list', 'ok');
+    _loadAutoDiscoveryStatus();
+  } catch {
+    toast('Network error', 'err');
+  }
+}
+
+async function saveAutoDiscoverySettings() {
+  const body = {
+    auto_discover_enabled:        document.getElementById('disc-enabled')?.checked ? 1 : 0,
+    auto_discover_paused:         document.getElementById('disc-paused')?.checked ? 1 : 0,
+    auto_discover_alert_on_new:   document.getElementById('disc-alert-new')?.checked ? 1 : 0,
+    auto_discover_use_ptr:        document.getElementById('disc-use-ptr')?.checked ? 1 : 0,
+    auto_discover_interval_min:   parseInt(document.getElementById('disc-interval')?.value || '60', 10),
+    auto_discover_first_scan_cap: parseInt(document.getElementById('disc-cap')?.value || '100', 10),
+    auto_discover_during_maint:   document.getElementById('disc-maint')?.value || 'skip',
+  };
+  try {
+    await api('PATCH', '/api/settings', body);
+    toast('Auto-Discovery settings saved', 'ok');
+    _loadAutoDiscoveryStatus();
+  } catch (e) {
+    toast('Save failed', 'err');
+  }
+}
+
+async function triggerAutoDiscoveryNow() {
+  try {
+    const r = await fetch('/api/auto-discovery/run-now', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      toast(d.already_running ? 'Auto-Discovery is already running' : 'Auto-Discovery triggered', 'ok');
+      setTimeout(_loadAutoDiscoveryStatus, 1500);
+    } else {
+      toast(d.error || 'Trigger failed', 'err');
+    }
+  } catch {
+    toast('Network error', 'err');
   }
 }

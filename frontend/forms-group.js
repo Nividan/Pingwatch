@@ -30,6 +30,17 @@ async function openEditGroup(groupName) {
           </div>
         </div>
 
+        <div class="alrt-section">
+          <div class="alrt-section-hdr">Alerts</div>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="eg-muted"/>
+            <span>🔕 Mute alerts for this group</span>
+          </label>
+          <div class="fh" style="margin-top:4px">
+            Suppresses alert dispatch and flap events for every device and sensor in this
+            group. Probes still run and device cards still reflect their real status.
+          </div>
+        </div>
 
       </div>
       <div class="mft">
@@ -41,6 +52,20 @@ async function openEditGroup(groupName) {
 
   // Async-load the resolved alert profile + override status
   _loadGroupProfileSection(groupName);
+  // Async-load the current mute state (default: unchecked until it lands)
+  _loadGroupMuteState(groupName);
+}
+
+async function _loadGroupMuteState(groupName){
+  const box = document.getElementById('eg-muted');
+  if (!box) return;
+  try {
+    const r = await api('GET', '/api/device-group/' + encodeURIComponent(groupName) + '/mute');
+    box.checked = !!(r && r.muted);
+    box.dataset.initial = box.checked ? '1' : '0';
+  } catch {
+    // Silent — default unchecked is fine
+  }
 }
 
 async function _loadGroupProfileSection(groupName) {
@@ -87,7 +112,31 @@ async function _loadGroupProfileSection(groupName) {
 async function saveEditGroup(oldName) {
   const newName = (document.getElementById('eg-name')?.value || '').trim();
   if (!newName) { toast('Group name cannot be empty', 'err'); return; }
-  if (newName === oldName) { closeM('meg'); return; }
+
+  // Persist mute-state change first so it applies regardless of rename outcome.
+  const muteBox = document.getElementById('eg-muted');
+  if (muteBox && muteBox.dataset.initial !== undefined) {
+    const want = muteBox.checked;
+    const had  = muteBox.dataset.initial === '1';
+    if (want !== had) {
+      // Key on the pre-rename name; if renaming too, we re-post below.
+      try {
+        await api('POST',
+          '/api/device-group/' + encodeURIComponent(oldName) + '/mute',
+          { muted: want });
+        if (typeof _setGroupMutedLocal === 'function') _setGroupMutedLocal(oldName, want);
+      } catch (e) {
+        toast('Mute save failed: ' + (e.message || e), 'err');
+        return;
+      }
+    }
+  }
+
+  if (newName === oldName) {
+    toast('Saved', 'ok');
+    closeM('meg');
+    return;
+  }
 
   // Reuse the rename pipeline (PATCH every device + DOM patch)
   try {
@@ -97,6 +146,23 @@ async function saveEditGroup(oldName) {
     for (const d of devs) {
       d.group = newName;
       await api('PATCH', '/api/device/' + d.device_id, { group: newName });
+    }
+
+    // If the group was muted, re-apply the mute under the new name (the
+    // mute list keys on the name string, which just changed).
+    if (muteBox && muteBox.checked) {
+      try {
+        await api('POST',
+          '/api/device-group/' + encodeURIComponent(oldName) + '/mute',
+          { muted: false });
+        await api('POST',
+          '/api/device-group/' + encodeURIComponent(newName) + '/mute',
+          { muted: true });
+        if (typeof _setGroupMutedLocal === 'function') {
+          _setGroupMutedLocal(oldName, false);
+          _setGroupMutedLocal(newName, true);
+        }
+      } catch { /* non-fatal; admin can re-toggle */ }
     }
     // DOM patch (mirrors devices.js renameGroup)
     const wrap = document.getElementById(grpId(oldName));

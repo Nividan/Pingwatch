@@ -50,7 +50,6 @@ def _profile_row(row) -> dict:
 
 def _stage_row(row) -> dict:
     r = dict(row) if not isinstance(row, dict) else row
-    # Parse action_ids JSON; fall back to legacy action_id column if needed
     action_ids = []
     raw = r.get("action_ids")
     if raw:
@@ -59,10 +58,6 @@ def _stage_row(row) -> dict:
             action_ids = [int(x) for x in parsed if x]
         except Exception:
             pass
-    if not action_ids:
-        old = r.get("action_id")
-        if old:
-            action_ids = [int(old)]
     return {
         "id":            r["id"],
         "profile_id":    r["profile_id"],

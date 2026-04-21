@@ -23,7 +23,8 @@ from core.config import (
     _RE_DEVICE, _RE_DEVICE_ACTION, _RE_DEVICE_LOGS, _RE_DEVICE_SIP,
     _RE_SENSOR, _RE_SENSOR_ACTION, _RE_SENSOR_ITEM,
     _RE_SENSOR_HISTORY, _RE_SENSOR_SUMMARY, _RE_DEVICE_SCAN,
-    _RE_SENSOR_LOGS, _RE_AVAILABILITY,
+    _RE_SENSOR_LOGS, _RE_AVAILABILITY, _RE_DEV_GROUP_MUTE,
+    _RE_DEV_GROUPS_MUTED,
 )
 from db     import (
     _db_enqueue, db_save, db_log_audit,
@@ -404,10 +405,22 @@ def handle(h, method, path, body):
         with STATE._lock:
             dd     = STATE.devices.get(ddid)
             ddname = dd.name if dd else ddid
+            # Capture identity for Auto-Discovery suppression (see below).
+            dd_ext = (getattr(dd, "external_id", None) or "") if dd else ""
+            dd_host = (dd.host or "") if dd else ""
         # Collect sensor IDs before removing the device (for event cleanup)
         with STATE._lock:
             _sensor_ids = list(dd.sensors.keys()) if dd else []
         STATE.remove_device(ddid)
+        # Auto-Discovery: if this device was auto-added (external_id starts
+        # with "discovery:"), record its host in the suppressed-list so the
+        # next Auto-Discovery tick doesn't resurrect it.
+        if dd_ext.startswith("discovery:") and dd_host:
+            try:
+                from monitoring.auto_discovery import suppress_host
+                suppress_host(dd_host, ddname, user)
+            except Exception as _sup_err:
+                log.warning(f"Auto-Discovery suppress-host hook failed: {_sup_err}")
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _dd = ddid
@@ -848,5 +861,90 @@ def handle(h, method, path, body):
             h._json(400, {'error': 'bad param'}); return True
         h._json(200, {'availability': db_load_availability(minutes)})
         return True
+
+    # ── GET /api/device-groups/muted ──────────────────────────────────
+    # Bulk list of currently-muted group names. Loaded once at page boot
+    # so every group header can be decorated without N round-trips.
+    if _RE_DEV_GROUPS_MUTED.match(path) and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        import core.settings as _settings
+        import json as _json
+        raw = _settings.get("muted_groups", "") or ""
+        lst: list = []
+        if raw:
+            try:
+                v = _json.loads(raw)
+                if isinstance(v, list):
+                    lst = [str(g) for g in v if isinstance(g, str)]
+            except Exception:
+                lst = []
+        h._json(200, {"groups": lst})
+        return True
+
+    # ── /api/device-group/<name>/mute (GET viewer, POST operator) ─────
+    # Group mute = suppress alert dispatch + flap events for every device in
+    # the named group. Matches per-device `alerts_muted` semantics; probes
+    # still run, device cards still reflect real status. Stored as a JSON
+    # list in app_settings.muted_groups so no schema change is required —
+    # device groups are just strings on Device, not a separate table.
+    m = _RE_DEV_GROUP_MUTE.match(path)
+    if m:
+        from urllib.parse import unquote
+        group_name = unquote(m.group(1) or "").strip()
+        if not group_name:
+            h._json(400, {"error": "group name required"}); return True
+
+        def _read_muted_list() -> list:
+            import core.settings as _settings
+            import json as _json
+            raw = _settings.get("muted_groups", "") or ""
+            if not raw:
+                return []
+            try:
+                v = _json.loads(raw)
+                return v if isinstance(v, list) else []
+            except Exception:
+                return []
+
+        if method == "GET":
+            user, _ = h._require("viewer")
+            if not user: return True
+            h._json(200, {"group": group_name,
+                          "muted": group_name in _read_muted_list()})
+            return True
+
+        if method == "POST":
+            user, _ = h._require("operator")
+            if not user: return True
+            want = bool(body.get("muted")) if isinstance(body, dict) else False
+            lst = _read_muted_list()
+            changed = False
+            if want and group_name not in lst:
+                lst.append(group_name); changed = True
+            elif (not want) and group_name in lst:
+                lst = [g for g in lst if g != group_name]; changed = True
+
+            if changed:
+                import core.settings as _settings
+                import json as _json
+                from db import db_save_settings
+                payload = _json.dumps(lst)
+                _settings.load({"muted_groups": payload})
+                _db_enqueue(lambda _v=payload: db_save_settings({"muted_groups": _v}))
+                try:
+                    db_log_audit(user, h.client_address[0],
+                                 "device_group_mute",
+                                 group_name, "1" if want else "0")
+                except Exception:
+                    pass
+                # Invalidate cached device status for every device in the
+                # group so the UI's refresh picks up the mute-driven change.
+                with STATE._lock:
+                    for _dev in STATE.devices.values():
+                        if (_dev.group or "") == group_name:
+                            _dev.invalidate_status()
+            h._json(200, {"ok": True, "muted": want, "group": group_name})
+            return True
 
     return False

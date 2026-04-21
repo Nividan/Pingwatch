@@ -217,6 +217,18 @@ def create_devices_batch(devices: list, default_group: str = "Imported") -> dict
                         v = item.get(fld)
                         if v not in (None, ""):
                             setattr(dev, fld, str(v))
+                    # Auto-Discovery breadcrumb — set only when the caller
+                    # passed both fields. Manual / Bulk-Import leave them at
+                    # their Device() defaults (0.0 / "").
+                    d_at = item.get("discovered_at")
+                    if d_at:
+                        try:
+                            dev.discovered_at = float(d_at)
+                        except (TypeError, ValueError):
+                            pass
+                    d_cidr = item.get("discovered_from_cidr")
+                    if d_cidr:
+                        dev.discovered_from_cidr = str(d_cidr)[:64]
 
             # Sensors
             sensor_sids = _create_sensors_for_device(did, item.get("sensors") or [])
