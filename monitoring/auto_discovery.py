@@ -287,8 +287,8 @@ def _tick() -> None:
 
         t0 = time.time()
         totals = {
-            "subnets_scanned": 0, "devices_added": 0, "devices_suppressed": 0,
-            "first_scan_cap_hits": 0, "errors": 0,
+            "subnets_scanned": 0, "hosts_found": 0, "devices_added": 0,
+            "devices_suppressed": 0, "first_scan_cap_hits": 0, "errors": 0,
         }
         for subnet in subnets:
             if _stop.is_set():
@@ -296,6 +296,7 @@ def _tick() -> None:
             try:
                 stats = _scan_subnet(subnet)
                 totals["subnets_scanned"]     += 1
+                totals["hosts_found"]         += stats.get("found", 0)
                 totals["devices_added"]       += stats.get("added", 0)
                 totals["devices_suppressed"]  += stats.get("suppressed", 0)
                 totals["first_scan_cap_hits"] += (1 if stats.get("cap_hit") else 0)
@@ -319,6 +320,7 @@ def _tick() -> None:
                 "system", "",
                 "auto_discovery_tick",
                 f"subnets={totals['subnets_scanned']} "
+                f"found={totals['hosts_found']} "
                 f"added={totals['devices_added']} "
                 f"suppressed={totals['devices_suppressed']} "
                 f"cap_hits={totals['first_scan_cap_hits']} "
@@ -331,6 +333,7 @@ def _tick() -> None:
         if totals["devices_added"] or totals["errors"] or totals["first_scan_cap_hits"]:
             log.info(
                 f"Auto-Discovery tick: subnets={totals['subnets_scanned']} "
+                f"found={totals['hosts_found']} "
                 f"added={totals['devices_added']} "
                 f"suppressed={totals['devices_suppressed']} "
                 f"cap_hits={totals['first_scan_cap_hits']} "
@@ -340,7 +343,8 @@ def _tick() -> None:
         else:
             log.debug(
                 f"Auto-Discovery tick: {totals['subnets_scanned']} subnets, "
-                f"no new devices ({duration:.1f}s)"
+                f"found={totals['hosts_found']} new hosts, "
+                f"none added ({duration:.1f}s)"
             )
     finally:
         _currently_running = False
@@ -412,7 +416,7 @@ def _scan_subnet(subnet: dict) -> dict:
 
     cidr = (subnet.get("cidr") or "").strip()
     sid  = subnet.get("id")
-    stats = {"added": 0, "suppressed": 0, "cap_hit": False, "errors": 0}
+    stats = {"added": 0, "found": 0, "suppressed": 0, "cap_hit": False, "errors": 0}
     if not cidr:
         return stats
 
@@ -451,6 +455,7 @@ def _scan_subnet(subnet: dict) -> dict:
 
     # Filter results: drop suppressed hosts.
     raw_results = st.get("results") or []
+    stats["found"] = len(raw_results)
     allowed_results, skipped = _filter_suppressed(raw_results)
     stats["suppressed"] = skipped
 
