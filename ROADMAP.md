@@ -7,7 +7,7 @@ Completed work lives in [CHANGELOG.md](CHANGELOG.md). This file tracks planned w
 ## 🔴 High Priority
 
 **Backend**
-- **Auto-Discovery with Sensor Templates** — named sensor bundles ("Web Server", "Domain Controller") stored in `app_settings`; per-row template picker in the discovery result grid
+- **Sensor Templates** — named sensor bundles ("Web Server", "Domain Controller") stored in `app_settings`; per-row template picker in the Subnet Discovery result grid and Auto-Discovery sensor policy; Auto-Discovery can consume templates once they exist
 
 ---
 

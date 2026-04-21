@@ -44,6 +44,7 @@ Browser / Desktop GUI
         ├── monitoring/           ← Probes, alerting, topology, subnet discovery, license checking
         │   ├── probes.py              ← Sensor engine
         │   ├── subnet_discovery.py    ← Subnet scan engine (liveness, enrichment, dup detection)
+        │   ├── auto_discovery.py      ← Scheduled auto-discovery daemon (periodic subnet scan + auto-add)
         │   ├── alert_profile_engine.py ← PRTG-style profile evaluator (cascade, stage timing, dispatch)
         │   ├── alert_dispatchers.py   ← Reusable action dispatchers (email, webhook, syslog, browser)
         │   ├── smtp_alert.py          ← SMTP helper and email rendering
@@ -125,6 +126,7 @@ pingwatch/
 ├── monitoring/
 │   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner, SMTP, SSH, SFTP, RADIUS)
 │   ├── subnet_discovery.py      ← Subnet scan engine (liveness + enrichment + duplicate detection)
+│   ├── auto_discovery.py        ← Scheduled auto-discovery daemon: periodic subnet scan, auto-add via create_devices_batch, suppressed-hosts list, first-scan cap, maintenance-window check
 │   ├── alert_profile_engine.py  ← PRTG-style profile evaluator (cascade resolution, stage timing, dispatch hook)
 │   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
 │   ├── smtp_alert.py            ← SMTP connection helper and email rendering (used by alert_dispatchers)
@@ -199,6 +201,7 @@ pingwatch/
 │   ├── radius.py           ← RADIUS settings, test connection, test auth, attribute mappings
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
 │   ├── discovery.py        ← Subnet discovery scan + bulk device add
+│   ├── auto_discovery.py   ← Auto-discovery run-now, status, suppressed-host remove, first-scan approve
 │   ├── licenses.py         ← Device license CRUD + expiration check trigger
 │   └── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
 │
@@ -364,6 +367,17 @@ Interval read via `_get_interval_min()` from `auth_refresh_interval_min` setting
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
 
+### `monitoring/auto_discovery.py`
+Scheduled subnet-scanning daemon. Wraps the existing `subnet_discovery` pipeline and funnels results through `create_devices_batch` — no new scanner, no new dedup logic.
+
+**Public API:** `start_loop()`, `stop_loop()`, `trigger_run_now()`, `get_last_run_status()`.
+
+**`_tick()`** — acquires `_tick_lock` (prevents race with `trigger_run_now`); reads `auto_discover_enabled` and `auto_discover_paused`; checks `db_active_windows()` and `auto_discover_during_maint`; iterates IPAM subnets with `auto_discover=1` in `subnet_id` order; calls `_scan_subnet(cidr)` for each; accumulates totals; writes one `auto_discovery_tick` audit entry; updates `auto_discover_last_ts`.
+
+**`_scan_subnet(cidr)`** — calls `subnet_discovery.start_scan(cidr, skip_monitored=True, mode="full")`, polls until done, filters results through `_filter_suppressed()`, applies `_apply_first_scan_cap()` on the subnet's first scan (if `first_scan_approved=0` and live count > cap, aborts with an audit entry and returns `{status:"cap_hit"}`), builds device specs via `_build_device_specs()` (uses `_suggest_sensors()` for sensor guessing, reverse-DNS name via `auto_discover_use_ptr`), calls `create_devices_batch(specs, default_group=f"Discovery-{safe_cidr}")`, updates `subnets.last_auto_scan_ts`, optionally logs alert events (`auto_discover_alert_on_new`). Returns per-subnet stats `{found, added, suppressed, errors}`.
+
+**Thread lifecycle** — mirrors `backup/scheduler.py` and `core/auth_health.py`: `_stop` event for shutdown, `_wake` event for `trigger_run_now()`; loop body: `if enabled and not paused: _tick(); _stop.wait(interval_seconds)`. `stop_loop()` sets both events and joins; called from `server.py` shutdown alongside `stop_auth_refresh_loop`.
+
 ### `monitoring/subnet_discovery.py`
 Subnet discovery scan engine. Exposes `start_scan(cidr, skip_monitored, mode)`, `get_scan(scan_id)`, and `cancel_scan(scan_id)` as the public API. Scans run in a dedicated `ThreadPoolExecutor(64)` (`_SCAN_EXECUTOR`) isolated from `STATE._executor` so large scans cannot starve existing sensor probes.
 
@@ -477,8 +491,9 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 | `radius.py` | `/api/radius/settings`, `/api/radius/test_connection`, `/api/radius/test_auth`, `/api/radius/test_auth_challenge`, `/api/radius/attribute_mappings` |
 | `saml.py` | `/api/saml/login`, `/api/saml/acs`, `/api/saml/metadata`, `/api/saml/settings`, `/api/saml/metadata/import`, `/api/saml/sp_cert/generate`, `/api/saml/test` |
 | `oidc.py` | `/api/oidc/login`, `/api/oidc/callback`, `/api/oidc/settings`, `/api/oidc/discovery/refresh`, `/api/oidc/test` |
-| `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
+| `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}`, `/api/ipam/subnet/{id}/auto-discover` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
+| `auto_discovery.py` | `/api/auto-discovery/run-now`, `/api/auto-discovery/status`, `/api/auto-discovery/suppressed/{host}/remove`, `/api/auto-discovery/subnet/{id}/approve-first-scan` |
 | `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
 | `reports.py` | `/api/reports/templates`, `/api/reports/template`, `/api/reports/template/{id}`, `/api/reports/schedules`, `/api/reports/schedule`, `/api/reports/schedule/{id}`, `/api/reports/history`, `/api/reports/history/{id}`, `/api/reports/history/{id}/download`, `/api/reports/history/{id}/csv`, `/api/reports/history/bulk-delete`, `/api/reports/run`, `/api/reports/preview`, `/api/reports/test-send` |
 
@@ -568,6 +583,15 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `db_backup_remote_pass_enc` | str | Fernet-encrypted remote password |
 | `db_backup_remote_path` | str | Remote destination directory |
 | `db_backup_remote_share` | str | SMB share name (SMB only) |
+| `auto_discover_enabled` | `"1"` / `"0"` | Master on/off for the auto-discovery daemon (default `"0"` — disabled after upgrade) |
+| `auto_discover_paused` | `"1"` / `"0"` | Emergency pause: daemon keeps running but all scan ticks are skipped |
+| `auto_discover_interval_min` | integer string | Scan interval in minutes; allow-list 15/30/60/240/720/1440 (default `"60"`) |
+| `auto_discover_first_scan_cap` | integer string | Max devices to create on a subnet's first scan (default `"100"`; `"0"` disables the cap) |
+| `auto_discover_alert_on_new` | `"1"` / `"0"` | Emit one `alert_events` row (`event_type="device_auto_added"`) per new host (default `"0"`) |
+| `auto_discover_during_maint` | `"skip"` / `"run"` | Behaviour when an active maintenance window covers the tick time (default `"skip"`) |
+| `auto_discover_use_ptr` | `"1"` / `"0"` | Use reverse-DNS PTR record as device name; falls back to bare IP when absent (default `"1"`) |
+| `auto_discover_last_ts` | ISO-8601 string | Timestamp of the last successful tick (set by daemon; read by UI "Last run" indicator) |
+| `auto_discover_suppressed_hosts` | JSON list | `[{host, name, suppressed_at, suppressed_by}, …]`; FIFO-pruned at 500 entries; populated when an auto-discovered device is deleted |
 
 ---
 
