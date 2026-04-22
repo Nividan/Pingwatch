@@ -4101,6 +4101,11 @@ const _DIAG_HC_SPEC = [
   { key:'dns',       label:'DNS',       statusKey:null,             endpoint:'/api/diagnostics/test/dns',    method:'POST' },
 ];
 
+// Transient per-session test results for backends that have no persisted
+// status badge in app_settings (SMTP / Syslog / DB Backup / NTP / DNS).
+// Keyed by spec.key, cleared when the modal closes (module reload on open).
+const _diagHcTransient = {};
+
 async function _diagLoadHealthChecks() {
   const el = document.getElementById('diag-hc-body');
   if (!el) return;
@@ -4120,7 +4125,15 @@ function _diagRenderHcRow(spec, st) {
     else if (st.last_err_ts)                   when = _diagAgo(st.last_err_ts);
     msg = st.last_err_msg || '';
   } else {
-    when = 'on-demand';
+    // No persisted status — fall back to the transient result from this session.
+    const t = _diagHcTransient[spec.key];
+    if (t) {
+      badge = t.ok ? 'ok' : 'error';
+      when  = _diagAgo(t.ts);
+      msg   = t.msg || '';
+    } else {
+      when = 'on-demand';
+    }
   }
   return `
     <div class="diag-hc-row" id="diag-hc-${spec.key}">
@@ -4130,6 +4143,22 @@ function _diagRenderHcRow(spec, st) {
       <span class="diag-hc-msg">${esc(msg)}</span>
       <button class="btn-s" onclick="_diagHcRunOne('${esc(spec.key)}')">Test</button>
     </div>`;
+}
+
+function _diagHcRecord(spec, d, ok, errMsg) {
+  // Persisted backends refresh via /api/settings — nothing to cache here.
+  if (spec.statusKey) return;
+  const msg = ok
+    ? _diagHcSuccessMsg(spec.key, d)
+    : (errMsg || (d && (d.error || d.msg)) || 'failed');
+  _diagHcTransient[spec.key] = { ok, msg, ts: Math.floor(Date.now() / 1000) };
+}
+
+function _diagHcSuccessMsg(key, d) {
+  if (!d) return '';
+  if (key === 'ntp')      return `drift ${(d.drift_s>=0?'+':'') + (d.drift_s||0)}s · stratum ${d.stratum||'?'}`;
+  if (key === 'dns')      return `${(d.addresses||[]).slice(0,2).join(', ') || '?'} (${d.latency_ms||0}ms)`;
+  return '';
 }
 
 async function _diagHcRunOne(key) {
@@ -4143,15 +4172,13 @@ async function _diagHcRunOne(key) {
   try {
     const d = await api(spec.method, spec.endpoint, {});
     const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
+    _diagHcRecord(spec, d, ok, null);
     toast(`${spec.label}: ${ok ? 'OK' : (d.error || d.msg || 'failed')}`, ok ? 'ok' : 'err');
-    // Refresh the row so status badge reflects the new result.
     await _diagLoadHealthChecks();
   } catch (e) {
+    _diagHcRecord(spec, null, false, e.message || 'failed');
     toast(`${spec.label}: ${e.message || 'failed'}`, 'err');
-    if (row) {
-      const btn = row.querySelector('button');
-      if (btn) { btn.disabled = false; btn.textContent = 'Test'; }
-    }
+    await _diagLoadHealthChecks();
   }
 }
 
@@ -4161,8 +4188,12 @@ async function _diagTestAll() {
     try {
       const d = await api(spec.method, spec.endpoint, {});
       const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
+      _diagHcRecord(spec, d, ok, null);
       if (ok) pass++; else fail++;
-    } catch { fail++; }
+    } catch (e) {
+      _diagHcRecord(spec, null, false, e.message || 'failed');
+      fail++;
+    }
   }
   toast(`Test All: ${pass} ok · ${fail} failed`, fail === 0 ? 'ok' : 'err');
   _diagLoadHealthChecks();

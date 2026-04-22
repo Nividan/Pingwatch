@@ -4,6 +4,44 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## 🔧 Diagnostics tab — operator & support console
+
+- New dedicated **🔧 Diagnostics** tab in Settings consolidating seven operator/support panels in one place. Replaces the scattered "Debug Mode in Retention + auth badges in Integrations + no way to see sample-buffer pressure" status quo
+- **System Overview** — version / uptime / Python + platform / hostname / CPU+RAM+disk (via psutil) / worker count / scheduler heap depth / SSE listener count / sample-buffer fill / DB writer queue depth / per-DB on-disk size. One `GET /api/diagnostics/snapshot` round-trip; manual ↻ Refresh button
+- **Database Health** — per-table row counts for `sensor_samples`, `flap_log`, `sensor_err_log`, `snmp_traps`, `audit_log`, `alert_events`, `devices`, `sensors`, `users`; per-table on-disk size (PG only, via `pg_total_relation_size()`); last VACUUM timestamp; **Run VACUUM** and **Backup DB now** buttons
+- **Health Checks** — consolidated test panel for LDAP / RADIUS / SAML / OIDC / SMTP / Syslog / DB Backup remote / **NTP** / **DNS resolver** with status badge + last-checked + per-row Test button + master **Test All**. Additive — existing Test buttons in the Integrations / SMTP / etc. panels stay where they are
+- **Probe from Server** — interactive ping / TCP / HTTP / DNS / TLS debug tool ("why can't PingWatch see 10.0.0.5?") that wraps `monitoring/probes.py` verbatim. Admin-only; no SSRF restrictions because probing internal targets is the whole point
+- **Recent Errors** — two-pane feed: last 50 ERROR+ lines from `pingwatch.log` and last 50 rows from `sensor_err_log`, newest first
+- **Maintenance** — Debug Mode toggle (moved here from Retention) + one-shot buttons: Refresh OIDC discovery, Refresh all auth backends, Run auto-discovery now, Force VACUUM, Clear caches. Each action writes a `diagnostics_*` audit entry
+- **Support Bundle** — one-click **Download diagnostics bundle (.zip)** containing logs (current file, tail-capped at 10 MB), `snapshot.json`, `db_stats.json`, `recent_errors.json`, `settings_sanitized.json`, and a `manifest.json` documenting the redaction policy. Deny-list sanitizer scrubs any key matching `*_enc` / `*secret*` / `*_pass*` / `fernet_key` / `*cert_pem*` / `*key_pem*` / `webhook_*` / `*token*` / `*client_secret*`, and a self-defence value scan replaces `-----BEGIN` and `gAAAAA` markers even if a key slipped through
+- **NTP check** — inline SNTP v4 client (no new dep; ~30 lines of `socket` + `struct` per RFC 5905) queries the configured `ntp_server` (default `pool.ntp.org`) and reports local-vs-server drift. Thresholds: ok < 5 s, warn 5–60 s, error > 60 s or invalid stratum. Intended to pair with a planned Networking-tab `ntp_server` setting
+- **DNS resolver check** — resolves `diag_dns_test_host` (default `pingwatch.mokedbs.com`) against the system resolver, or against a custom resolver when `dns_server` is configured. Uses `dnspython` (already a dep)
+- **8 new endpoints** (all admin-only, all audit-logged): `GET /api/diagnostics/snapshot`, `GET /api/diagnostics/db-stats`, `GET /api/diagnostics/recent-errors`, `POST /api/diagnostics/probe`, `POST /api/diagnostics/action/{vacuum|clear-caches|refresh-auth}`, `POST /api/diagnostics/test/ntp`, `POST /api/diagnostics/test/dns`, `GET /api/diagnostics/bundle`
+- **Runtime-snapshot helper** added to `core/state.py::MonitorState.get_runtime_snapshot()` — cheap read-only peek at scheduler heap / tombstones / SSE list / executor max. Used by the snapshot endpoint and the support bundle
+- **Debug Mode relocated** — removed from the Retention tab's old Diagnostics block; now lives in Maintenance on the new Diagnostics tab. Same `_saveDebugMode()` immediate-save handler, no setting-key change
+- **Files** — **NEW** [routes/diagnostics.py](Pingwatch/routes/diagnostics.py); [core/config.py](Pingwatch/core/config.py) (8 new route regexes); [core/state.py](Pingwatch/core/state.py) (`get_runtime_snapshot()`); [server.py](Pingwatch/server.py) (module registration in GET + POST dispatch); [frontend/forms-settings.js](Pingwatch/frontend/forms-settings.js) (sidebar button + tab body + ~400 lines of section renderers + tab-init hook; removed Diagnostics block from Retention); [frontend/style.css](Pingwatch/frontend/style.css) (`.diag-card`, `.diag-badge-*`, probe tool + recent-errors grid; responsive collapse under 800 px)
+
+---
+
+## Auto-Discovery activity polish — bounded scroll, timeout audit, large-subnet warning
+
+- **Recent activity pane** bounded to a 320 px scroll pocket with sticky header so the Save / Close buttons stay visible on systems with months of scheduler ticks
+- **Filter bar** — event-type dropdown (seeded from `_AD_ACTION_LABELS`), actor substring match, free-text search against target + detail; 150 ms debounce on the text inputs; Clear button; `Showing N of M` counter
+- **Scan-timeout audit trail** — when a subnet's scan exceeds `auto_discover_scan_deadline_s` (default 300 s), an `auto_discovery_scan_timeout` audit row is written **only on the first timeout in a streak** (cleared on the next successful scan). Prevents a /16 timing out every tick from drowning the audit log; the log warning now also tells the admin what to do ("raise `auto_discover_scan_deadline_s` in Settings → Retention or split the subnet"). New `⏱ Scan timed out` label in the activity pane's event-type dropdown
+- **IPAM edit modal — large-subnet warning** — when Auto-Discover is enabled on an IPv4 prefix ≤ /20 (4096+ hosts), a warn-themed block appears with the host count and suggests raising the scan deadline or splitting the subnet. Catches the silent-failure footgun at configuration time instead of after-the-fact
+- **Files** — [monitoring/auto_discovery.py](Pingwatch/monitoring/auto_discovery.py) (`_subnet_timeout_flag` streak state, audit emit, improved log msg); [frontend/forms-settings.js](Pingwatch/frontend/forms-settings.js) (filter bar markup + `_adAct*` state/renderers + new label); [frontend/style.css](Pingwatch/frontend/style.css) (`#disc-activity-wrap`, `.disc-act-filter`, sticky `thead`); [frontend/ipam.js](Pingwatch/frontend/ipam.js) (`#ipam-ad-size-warn` block + `_syncConfirm()` toggle)
+
+---
+
+## Event log LRU — never evict acknowledged flaps
+
+- **Bug:** long-lived ACKed events (e.g. a FortiGate "Expired license" flap 613 days old) could be silently deleted by the `flap_log` trim query when background sensor churn pushed the row count past `max_flap_entries`. Events ACKed but not resolved represent known-but-monitored conditions — losing them broke the ACK → auto-clear workflow
+- **Fix:** the trim-on-insert `DELETE` query in `db/events.py::db_log_flap()` now only considers rows with `ack_state='resolved'` — both for the `WHERE` and for the inner `LIMIT` subquery. Active + acknowledged flaps are kept indefinitely; only fully resolved history is bounded by the cap
+- **Default bump** — `max_flap_entries` default lifted 500 → 2000 to match the broader Retention-tab defaults landed in the Retention settings refresh
+- **Files** — [db/events.py](Pingwatch/db/events.py) (dual-backend trim query rewrite)
+
+---
+
 ## Retention & Performance settings tab
 
 - New dedicated **🗃️ Retention** tab in Settings — consolidates deployment-sizing knobs that previously lived scattered across General (Data Retention, Event & History Limits, Debug Mode) and newly exposes log-file rotation, the audit DB cap, and six per-feature performance tunables that used to be hardcoded

@@ -203,7 +203,8 @@ pingwatch/
 │   ├── discovery.py        ← Subnet discovery scan + bulk device add
 │   ├── auto_discovery.py   ← Auto-discovery run-now, status, suppressed-host remove, first-scan approve
 │   ├── licenses.py         ← Device license CRUD + expiration check trigger
-│   └── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
+│   ├── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
+│   └── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -498,6 +499,7 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 | `auto_discovery.py` | `/api/auto-discovery/run-now`, `/api/auto-discovery/status`, `/api/auto-discovery/suppressed/{host}/remove`, `/api/auto-discovery/subnet/{id}/approve-first-scan` |
 | `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
 | `reports.py` | `/api/reports/templates`, `/api/reports/template`, `/api/reports/template/{id}`, `/api/reports/schedules`, `/api/reports/schedule`, `/api/reports/schedule/{id}`, `/api/reports/history`, `/api/reports/history/{id}`, `/api/reports/history/{id}/download`, `/api/reports/history/{id}/csv`, `/api/reports/history/bulk-delete`, `/api/reports/run`, `/api/reports/preview`, `/api/reports/test-send` |
+| `diagnostics.py` | `/api/diagnostics/snapshot`, `/api/diagnostics/db-stats`, `/api/diagnostics/recent-errors`, `/api/diagnostics/probe`, `/api/diagnostics/action/{vacuum\|clear-caches\|refresh-auth}`, `/api/diagnostics/test/ntp`, `/api/diagnostics/test/dns`, `/api/diagnostics/bundle` |
 
 ---
 

@@ -310,12 +310,15 @@ def _get_db_stats() -> dict:
                 with pg_cursor(schema) as cur:
                     cur.execute(f'SELECT COUNT(*)::bigint AS n FROM "{tbl}"')
                     n = int(cur.fetchone()["n"])
+                    # pg_partition_tree returns parent + all child partitions
+                    # for a partitioned table (e.g. sensor_samples), or just
+                    # the one table itself when not partitioned. Summing across
+                    # the tree reports the real on-disk footprint — pg_total_
+                    # relation_size on the parent alone is 0 for partitioned.
                     cur.execute(
-                        "SELECT COALESCE(pg_total_relation_size(c.oid), 0)::bigint AS sz "
-                        "FROM pg_catalog.pg_class c "
-                        "JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace "
-                        "WHERE ns.nspname = %s AND c.relname = %s",
-                        (schema, tbl),
+                        "SELECT COALESCE(SUM(pg_total_relation_size(relid)), 0)::bigint AS sz "
+                        "FROM pg_catalog.pg_partition_tree(%s::regclass)",
+                        (f'{schema}.{tbl}',),
                     )
                     row = cur.fetchone()
                     sz = int(row["sz"]) if row else 0
