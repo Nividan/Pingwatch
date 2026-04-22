@@ -103,14 +103,14 @@ function _buildSettingsTab_general(sr) {
         <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Events shown</label>
-            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||20}" min="5" max="200" style="max-width:100px"/>
+            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||50}" min="5" max="200" style="max-width:100px"/>
             <div class="fh">Max events shown in Events tab</div></div>
           <div class="fr"><label class="fl">Events in DB</label>
-            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||500}" min="50" max="10000" style="max-width:100px"/>
+            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
             <div class="fh">Max flap entries kept in database</div></div>
         </div>
         <div class="fr" style="margin-top:6px"><label class="fl">SNMP Traps in DB</label>
-          <input type="number" id="st-trap-db" value="${sr.max_trap_entries||500}" min="50" max="10000" style="max-width:100px"/>
+          <input type="number" id="st-trap-db" value="${sr.max_trap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
           <div class="fh">Max SNMP trap entries kept in database</div></div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">

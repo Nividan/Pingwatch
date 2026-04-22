@@ -183,9 +183,9 @@ def handle(h, method, path, body):
             "snr_fail_after":    int(_settings.get("snr_fail_after",    2)),
             "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
             # Group B — event & history limits
-            "max_flaps_display": int(_settings.get("max_flaps_display", 20)),
-            "max_flap_entries":  int(_settings.get("max_flap_entries",  500)),
-            "max_trap_entries":  int(_settings.get("max_trap_entries",  500)),
+            "max_flaps_display": int(_settings.get("max_flaps_display", 50)),
+            "max_flap_entries":  int(_settings.get("max_flap_entries",  2000)),
+            "max_trap_entries":  int(_settings.get("max_trap_entries",  2000)),
             # Group C — security
             "login_fail_max":        int(_settings.get("login_fail_max",        5)),
             "login_fail_window":     int(_settings.get("login_fail_window",     60)),

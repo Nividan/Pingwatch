@@ -1672,7 +1672,7 @@ async function loadAll(){
   // Fetch settings early to configure globals
   try {
     const _sr = await (await fetch('/api/settings')).json();
-    MAX_FLAPS = _sr.max_flaps_display || 20;
+    MAX_FLAPS = _sr.max_flaps_display || 50;
     window._lGood = _sr.latency_good_ms || 100;
     window._lWarn = _sr.latency_warn_ms || 300;
     window._snrDef = {
