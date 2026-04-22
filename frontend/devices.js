@@ -191,6 +191,33 @@ function toggleGroup(group){
   _updateGrpSummary(group);
 }
 
+function _collapseAllGroups(){
+  const groups=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.group).filter(Boolean);
+  const set=new Set(groups);
+  groups.forEach(group=>{
+    const grid=document.getElementById(gridId(group));
+    const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+    if(!grid) return;
+    grid.classList.add('collapsed');
+    if(arr){arr.classList.remove('open');arr.title='Expand';}
+    _updateGrpSummary(group);
+  });
+  _lsSet('pw-grp-collapsed',[...set]);
+}
+
+function _expandAllGroups(){
+  const groups=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.group).filter(Boolean);
+  groups.forEach(group=>{
+    const grid=document.getElementById(gridId(group));
+    const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+    if(!grid) return;
+    grid.classList.remove('collapsed');
+    if(arr){arr.classList.add('open');arr.title='Collapse';}
+    _updateGrpSummary(group);
+  });
+  _lsSet('pw-grp-collapsed',[]);
+}
+
 function _updateGrpSummary(group){
   const gid=gridId(group).replace('gg-','');
   const el=document.getElementById('gsum-'+gid);
