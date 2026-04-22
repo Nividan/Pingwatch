@@ -412,7 +412,7 @@ function _ensureVmGrp(did,s){
       <div class="vm-grp-nm">${esc(vmName)}</div>
       <div class="vm-grp-dot" id="vgdot-${did}-${sfx}"></div>
       <div class="vm-grp-cnt" id="vgcnt-${did}-${sfx}">0 metrics</div>
-      <button class="dp-btn vm-add-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add another metric for this VM">+ Metric</button>
+      <button class="dp-btn vm-add-btn" style="font-size:11px;padding:2px 8px;margin-left:8px" title="Add or remove metrics for this VM">✎ Edit</button>
       <button class="dp-btn vm-mute-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" id="vgmute-${did}-${sfx}" title="Mute alerts for all metrics">🔕 Mute</button>
       <button class="dp-btn d vm-del-btn" style="font-size:11px;padding:2px 8px;margin-left:4px" title="Remove all metrics for this VM">✕ Remove</button>
     </div>
@@ -423,7 +423,7 @@ function _ensureVmGrp(did,s){
   });
   grp.querySelector('.vm-add-btn').addEventListener('click',e=>{
     e.stopPropagation();
-    openAddVmMetric(did,vmid,vmName);
+    openEditVmMetrics(did,vmid,vmName,_isHost);
   });
   grp.querySelector('.vm-mute-btn').addEventListener('click',e=>{
     e.stopPropagation();
@@ -480,6 +480,220 @@ function openAddVmMetric(did,vmid,vmName){
     // Pre-fill sensor name prefix so auto-name works
     window._vmGrpPrefillName=vmName||vmid;
   },80);
+}
+
+
+// ── ✎ Edit metrics modal (per-VM add/remove) ──────────────────────
+//
+// Lets the operator toggle the set of monitored metrics for a single VM
+// (or host) without leaving the device card. Pre-checks every metric that
+// already has a sensor on this VM; ticks/unticks generate add/remove
+// pending operations applied on Save. Connection details (host, port, user,
+// verify_ssl, interval, timeout) are inherited from any existing sensor on
+// the same VM — we just need the password once if the user is *adding*
+// new metrics.
+
+async function openEditVmMetrics(did, vmid, vmName, isHost){
+  const allMetrics = (typeof _allVmwareMetrics === 'function')
+    ? _allVmwareMetrics() : (_vmwareMetrics || []);
+  if (!allMetrics.length) {
+    toast('VMware metric catalogue not loaded yet — open Add Sensor once to populate it', 'err');
+    return;
+  }
+
+  // Existing sensors on this VM, indexed by metric key.
+  const existing = Object.values(S.sensors||{}).filter(s =>
+    s.device_id === did && s.stype === 'vmware' && s.vmware_vm_id === vmid
+  );
+  const byMetric = {};
+  for (const s of existing) byMetric[s.vmware_metric] = s;
+
+  // Filter the catalogue to host_* or non-host_* depending on the group.
+  const visible = allMetrics.filter(m => {
+    const isHostMetric = (m.v || '').startsWith('host_');
+    return isHost ? isHostMetric : !isHostMetric;
+  });
+
+  // Group by category for the layout (cpu / mem / disk / datastore / net / sys).
+  const _GROUP_LABEL = {cpu:'CPU', mem:'Memory', disk:'Disk',
+                       datastore:'Datastore', net:'Network', sys:'System'};
+  const groups = {};
+  for (const m of visible) {
+    const g = m.group || 'other';
+    (groups[g] = groups[g] || []).push(m);
+  }
+
+  // Connection params from any existing sensor (all metrics share creds).
+  const ref = existing[0] || {};
+  const refHost = ref.host || S.devices[did]?.host || '';
+  const refPort = ref.port || 443;
+  const refUser = ref.vmware_user || '';
+  const refVssl = ref.verify_ssl !== 0;
+  const refInterval = ref.interval || 60;
+  const refTimeout  = ref.timeout || 10;
+
+  closeM('vm-edit-modal');
+  const o = document.createElement('div');
+  o.className = 'mo';  o.id = 'vm-edit-modal';
+  _overlayClose(o, () => closeM('vm-edit-modal'));
+
+  const groupHTML = Object.keys(groups).sort().map(g => `
+    <div class="vme-grp">
+      <div class="vme-grp-hd">${esc(_GROUP_LABEL[g] || g)}</div>
+      <div class="vme-grp-body">
+        ${groups[g].map(m => {
+          const sensor = byMetric[m.v];
+          const monitored = !!sensor;
+          const sid = sensor ? sensor.sensor_id : '';
+          return `
+            <label class="vme-row">
+              <input type="checkbox" data-metric="${esc(m.v)}" data-sid="${esc(sid)}"
+                     ${monitored?'checked':''}/>
+              <span class="vme-row-lbl">${esc(m.l)}</span>
+              <span class="vme-row-unit">${esc(m.unit||'')}</span>
+            </label>`;
+        }).join('')}
+      </div>
+    </div>`).join('');
+
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,640px);max-height:85vh;display:flex;flex-direction:column">
+      <div class="mhd">
+        <div class="mttl">✎ Edit metrics — ${esc(vmName||vmid)}</div>
+        <button class="mclose" onclick="closeM('vm-edit-modal')">✕</button>
+      </div>
+      <div class="mbdy" style="overflow-y:auto;flex:1;gap:14px">
+        <div class="fh">
+          Tick metrics to monitor; untick to stop monitoring (sensor will be removed).
+          Connection settings (host, user, interval) are inherited from existing sensors
+          on this VM.
+        </div>
+        <div id="vme-grid">${groupHTML}</div>
+        <div id="vme-pwd-block" style="display:none;border-top:1px solid var(--border);padding-top:12px">
+          <div class="fl" style="margin-bottom:6px">vCenter / ESXi password</div>
+          <input type="password" id="vme-pwd" placeholder="Required to add new metrics" autocomplete="new-password" style="max-width:320px"/>
+          <div class="fh" style="margin-top:4px">
+            User: <strong>${esc(refUser||'(unset)')}</strong> · Host: <strong>${esc(refHost)}:${refPort}</strong>
+          </div>
+        </div>
+        <div id="vme-summary" class="fh" style="font-style:italic"></div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('vm-edit-modal')">Cancel</button>
+        <button class="btn-p" id="vme-save-btn" onclick="_vmEditSave('${esc(did)}','${esc(vmid)}',${isHost?1:0})">Save Changes</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+
+  // Stash connection params + original state on the modal so save can read them.
+  o._vmEdit = {
+    did, vmid, vmName, isHost,
+    refHost, refPort, refUser, refVssl, refInterval, refTimeout,
+    byMetric,
+  };
+
+  // Live-update summary + show/hide password block as ticks change.
+  const updateSummary = () => {
+    const cbs = o.querySelectorAll('input[type=checkbox][data-metric]');
+    let adds = 0, removes = 0;
+    cbs.forEach(cb => {
+      const wasOn = !!byMetric[cb.dataset.metric];
+      if (cb.checked && !wasOn) adds++;
+      else if (!cb.checked && wasOn) removes++;
+    });
+    const sum = document.getElementById('vme-summary');
+    if (sum) {
+      if (adds === 0 && removes === 0) sum.textContent = 'No pending changes.';
+      else sum.textContent = `Pending: ${adds>0?`+${adds} add`:''}${adds>0&&removes>0?', ':''}${removes>0?`−${removes} remove`:''}.`;
+    }
+    const pwBlock = document.getElementById('vme-pwd-block');
+    if (pwBlock) pwBlock.style.display = (adds > 0 && refUser) ? '' : 'none';
+  };
+  o.querySelectorAll('input[type=checkbox][data-metric]').forEach(cb => {
+    cb.addEventListener('change', updateSummary);
+  });
+  updateSummary();
+}
+
+async function _vmEditSave(did, vmid, isHost){
+  const o = document.getElementById('vm-edit-modal');
+  if (!o || !o._vmEdit) return;
+  const ctx = o._vmEdit;
+  const cbs = o.querySelectorAll('input[type=checkbox][data-metric]');
+
+  const toAdd = [], toRemove = [];
+  cbs.forEach(cb => {
+    const metric = cb.dataset.metric;
+    const sid    = cb.dataset.sid;
+    const wasOn  = !!ctx.byMetric[metric];
+    if (cb.checked && !wasOn) toAdd.push(metric);
+    else if (!cb.checked && wasOn && sid) toRemove.push({metric, sid});
+  });
+
+  if (toAdd.length === 0 && toRemove.length === 0) {
+    closeM('vm-edit-modal');
+    toast('No changes to apply', 'info');
+    return;
+  }
+
+  // Need creds for adds. If the user previously left vmware_user blank
+  // (e.g. anonymous host), allow empty user but still ask for password.
+  let pwd = '';
+  if (toAdd.length > 0) {
+    pwd = (document.getElementById('vme-pwd')?.value || '').trim();
+    if (!pwd) {
+      toast('Password required to add new metrics', 'err');
+      return;
+    }
+  }
+
+  const btn = document.getElementById('vme-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  let okAdd = 0, failAdd = 0, okDel = 0, failDel = 0;
+
+  // Removals first (cheap; no creds needed).
+  for (const r of toRemove) {
+    try {
+      await delSensor(did, r.sid);
+      okDel++;
+    } catch (e) { failDel++; }
+  }
+
+  // Additions: clone connection params from the reference sensor.
+  for (const metric of toAdd) {
+    const meta = (typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[]))
+      .find(m => m.v === metric) || {};
+    const sname = `${ctx.vmName} ${meta.l || metric}`;
+    try {
+      await api('POST', `/api/device/${did}/sensor`, {
+        name:           sname,
+        type:           'vmware',
+        host:           ctx.refHost,
+        port:           ctx.refPort,
+        interval:       ctx.refInterval,
+        timeout:        ctx.refTimeout,
+        verify_ssl:     ctx.refVssl,
+        vmware_user:    ctx.refUser,
+        vmware_password: pwd,
+        vmware_vm_id:   ctx.vmid,
+        vmware_vm_name: ctx.vmName,
+        vmware_metric:  metric,
+      });
+      okAdd++;
+    } catch (e) {
+      failAdd++;
+    }
+  }
+
+  closeM('vm-edit-modal');
+
+  const parts = [];
+  if (okAdd)   parts.push(`+${okAdd}`);
+  if (okDel)   parts.push(`−${okDel}`);
+  if (failAdd) parts.push(`${failAdd} add failed`);
+  if (failDel) parts.push(`${failDel} remove failed`);
+  toast(`Metrics updated: ${parts.join(' · ')}`, (failAdd+failDel)===0 ? 'ok' : 'err');
 }
 
 function vmRowHTML(s){
