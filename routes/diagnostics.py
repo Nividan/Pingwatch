@@ -787,6 +787,11 @@ _SECRET_KEY_SUBSTRINGS = (
     "fernet_key", "cert_pem", "key_pem", "private_key",
     "webhook_", "token", "api_key", "smtp_pass",
     "radius_secret", "client_secret",
+    # Cert/metadata containers whose key name doesn't include "_pem" but whose
+    # value embeds PEM blocks or base64 cert material:
+    "metadata_xml",   # saml_metadata_xml — IdP metadata with inline <X509Certificate>
+    "trusted_ca",     # trusted_ca_certs — CA bundle
+    "csr_pem",        # tls_csr_pem, csr_pem — certificate signing requests
 )
 
 # Value-level markers that indicate a raw secret slipped through the key
