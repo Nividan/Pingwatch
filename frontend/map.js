@@ -435,17 +435,36 @@ function calcPwLayout(devices) {
   // Orphan pre-pass — if a device's group changed, its pinned (x,y) from
   // pwOverrides now points into the *old* group's location. Drop those
   // stale coords so Phase 3's auto-grow path places the device inside
-  // its current group.
+  // its current group. A pinned node is flagged as orphan when either:
+  //   (1) its centre falls outside its assigned group's rect, or
+  //   (2) its centre ALSO falls inside another group's rect — this
+  //       catches stale coords when two group rects overlap, where
+  //       test (1) alone passes because the point is in both rects.
+  const groupRects = {};
+  for (const { gname } of decorated) {
+    const g = pwGroupOverrides[gname];
+    if (g && g.x != null && g.y != null) {
+      groupRects[gname] = { x: g.x, y: g.y, w: g.w ?? 0, h: g.h ?? 0 };
+    }
+  }
   for (const { gname, devs } of decorated) {
-    const govr = pwGroupOverrides[gname];
-    if (!govr || govr.x == null || govr.y == null) continue;
-    const groupRect = { x: govr.x, y: govr.y,
-                        w: govr.w ?? 0, h: govr.h ?? 0 };
+    const myRect = groupRects[gname];
+    if (!myRect) continue;
     for (const dev of devs) {
       const ovr = pwOverrides[dev.device_id];
       if (ovr == null || ovr.x == null || ovr.y == null) continue;
       const nt = ovr.node_type || pwDeviceType(dev);
-      if (!_nodeInsideGroup(ovr, nt, groupRect)) {
+      let orphan = !_nodeInsideGroup(ovr, nt, myRect);
+      if (!orphan) {
+        for (const other in groupRects) {
+          if (other === gname) continue;
+          if (_nodeInsideGroup(ovr, nt, groupRects[other])) {
+            orphan = true;
+            break;
+          }
+        }
+      }
+      if (orphan) {
         delete ovr.x;
         delete ovr.y;
         if (Object.keys(ovr).length === 0) delete pwOverrides[dev.device_id];
