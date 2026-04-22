@@ -410,7 +410,7 @@ function calcPwLayout(devices) {
   for (const d of fixed) {
     const govr = pwGroupOverrides[d.gname];
     const gw = govr.w ?? d.w, gh = govr.h ?? d.h;
-    placedRects.push({ x: govr.x, y: govr.y, w: gw, h: gh });
+    placedRects.push({ gname: d.gname, x: govr.x, y: govr.y, w: gw, h: gh });
   }
 
   // 3) Phase 2 — un-positioned groups: anchor next to the existing layout
@@ -429,7 +429,29 @@ function calcPwLayout(devices) {
     pwGroupOverrides[d.gname] = { ...(pwGroupOverrides[d.gname] || {}),
                                    x: pos.x, y: pos.y, w: d.w, h: d.h };
     _pwGroupDirty = true;
-    placedRects.push({ x: pos.x, y: pos.y, w: d.w, h: d.h });
+    placedRects.push({ gname: d.gname, x: pos.x, y: pos.y, w: d.w, h: d.h });
+  }
+
+  // Orphan pre-pass — if a device's group changed, its pinned (x,y) from
+  // pwOverrides now points into the *old* group's location. Drop those
+  // stale coords so Phase 3's auto-grow path places the device inside
+  // its current group.
+  for (const { gname, devs } of decorated) {
+    const govr = pwGroupOverrides[gname];
+    if (!govr || govr.x == null || govr.y == null) continue;
+    const groupRect = { x: govr.x, y: govr.y,
+                        w: govr.w ?? 0, h: govr.h ?? 0 };
+    for (const dev of devs) {
+      const ovr = pwOverrides[dev.device_id];
+      if (ovr == null || ovr.x == null || ovr.y == null) continue;
+      const nt = ovr.node_type || pwDeviceType(dev);
+      if (!_nodeInsideGroup(ovr, nt, groupRect)) {
+        delete ovr.x;
+        delete ovr.y;
+        if (Object.keys(ovr).length === 0) delete pwOverrides[dev.device_id];
+        _pwNodeDirty = true;
+      }
+    }
   }
 
   // 4) Render every group + its devices using the resolved positions.
@@ -494,12 +516,56 @@ function calcPwLayout(devices) {
           groupRect.h = Math.max(groupRect.h, neededH);
           groupRect.w = neededW;
           pwGroupOverrides[gname] = { ...(pwGroupOverrides[gname] || govr),
-                                      x: gax, y: gay,
+                                      x: groupRect.x, y: groupRect.y,
                                       w: groupRect.w, h: groupRect.h };
           _pwGroupDirty = true;
           // Patch the syntheticGroups entry so this render reflects the new size
           const sg = syntheticGroups[syntheticGroups.length - 1];
           if (sg && sg.name === gname) { sg.w = groupRect.w; sg.h = groupRect.h; }
+
+          // Keep placedRects coherent for later iterations' overlap checks
+          const myIdx = placedRects.findIndex(r => r.gname === gname);
+          if (myIdx >= 0) {
+            placedRects[myIdx].w = groupRect.w;
+            placedRects[myIdx].h = groupRect.h;
+          }
+
+          // Post-grow overlap resolution: if the grown group now collides
+          // with any sibling, teleport it to a free slot and translate its
+          // children by the same (dx, dy) so they follow along.
+          const siblings = placedRects.filter(r => r.gname !== gname);
+          if (siblings.some(r => _rectsOverlap(groupRect, r, 60))) {
+            const np = _findFreeGroupSlot(siblings, groupRect.w, groupRect.h,
+                                          { x: groupRect.x, y: groupRect.y });
+            const dx = np.x - groupRect.x, dy = np.y - groupRect.y;
+            if (dx !== 0 || dy !== 0) {
+              groupRect.x = np.x; groupRect.y = np.y;
+              pwGroupOverrides[gname].x = np.x;
+              pwGroupOverrides[gname].y = np.y;
+              if (sg && sg.name === gname) { sg.x = np.x; sg.y = np.y; }
+              if (myIdx >= 0) {
+                placedRects[myIdx].x = np.x;
+                placedRects[myIdx].y = np.y;
+              }
+              // Translate every already-placed child of this group
+              const devIds = new Set(devs.map(d => d.device_id));
+              for (const did of devIds) {
+                const ovr2 = pwOverrides[did];
+                if (ovr2 && ovr2.x != null && ovr2.y != null) {
+                  ovr2.x += dx; ovr2.y += dy;
+                }
+              }
+              for (const o of occupied) { o.x += dx; o.y += dy; }
+              for (const sn of syntheticNodes) {
+                if (sn._pwDid != null && devIds.has(sn._pwDid)) {
+                  sn.x += dx; sn.y += dy;
+                }
+              }
+              // Current `pos` was computed from the pre-move groupRect
+              pos.x += dx; pos.y += dy;
+              _pwNodeDirty = true;
+            }
+          }
         }
 
         pwOverrides[dev.device_id] = { ...(pwOverrides[dev.device_id] || {}),
@@ -1253,6 +1319,20 @@ function _rectsOverlap(a, b, pad = 0) {
            b.x + b.w + pad <= a.x ||
            a.y + a.h + pad <= b.y ||
            b.y + b.h + pad <= a.y);
+}
+
+// Is this pinned node's centre still inside its assigned group's box?
+// Title bar (28px) excluded at the top; 4px tolerance on every edge so
+// small user-drag overhangs don't flag the node as orphaned.
+function _nodeInsideGroup(ovr, nodeType, groupRect) {
+  const s  = nsize(nodeType, null) || { w: 170, h: 95 };
+  const cx = ovr.x + s.w / 2;
+  const cy = ovr.y + s.h / 2;
+  const TITLE_H = 28, PAD = 4;
+  return cx >= groupRect.x + PAD
+      && cx <= groupRect.x + groupRect.w - PAD
+      && cy >= groupRect.y + TITLE_H + PAD
+      && cy <= groupRect.y + groupRect.h - PAD;
 }
 
 // Find a free position on the canvas for a group rect of size (w, h).
