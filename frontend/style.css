@@ -3041,5 +3041,16 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .disc-act-target{color:var(--text2);font-family:ui-monospace,Consolas,monospace;font-size:11px;}
 .disc-act-detail{color:var(--text3);font-size:11px;}
 .disc-act-actor{color:var(--accent);font-size:11px;}
+#disc-activity-wrap{max-height:320px;overflow-y:auto;
+  border:1px solid var(--border2);border-radius:4px;background:var(--bg2);}
+#disc-activity-wrap .disc-sup-tbl thead th{position:sticky;top:0;z-index:1;}
+.disc-act-filter{display:flex;gap:8px;align-items:center;
+  margin:6px 0;font-size:12px;flex-wrap:wrap;}
+.disc-act-filter select,.disc-act-filter input{
+  background:var(--bg3);border:1px solid var(--border2);color:var(--text);
+  font-size:12px;padding:4px 6px;border-radius:3px;}
+.disc-act-filter input{min-width:140px;}
+.disc-act-filter .disc-act-count{margin-left:auto;color:var(--text3);font-size:11px;}
+.disc-act-filter .btn-s{padding:3px 8px;font-size:11px;}
 
 .evt-dtl-label{font-size:11px;color:var(--text3);width:76px;flex-shrink:0;font-weight:600;}

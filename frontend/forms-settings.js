@@ -1398,6 +1398,13 @@ function _buildSettingsTab_autoDiscovery(sr) {
     <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
       Scheduler ticks, cap hits, subnet toggles, and admin actions. Sourced from the audit log.
     </div>
+    <div class="disc-act-filter">
+      <select id="disc-act-f-type"><option value="">All events</option></select>
+      <input id="disc-act-f-actor" type="text" placeholder="Actor…" autocomplete="off"/>
+      <input id="disc-act-f-q" type="text" placeholder="Search target / detail…" autocomplete="off"/>
+      <button class="btn-s" onclick="_adActClear()">Clear</button>
+      <span class="disc-act-count" id="disc-act-count"></span>
+    </div>
     <div id="disc-activity-wrap"><div class="disc-sup-empty">Loading…</div></div>
 
     <details class="imp-help" style="margin-top:14px">
@@ -3569,14 +3576,98 @@ const _AD_ACTION_LABELS = {
   ipam_auto_discover_toggle:           '🔍 Auto-Discover toggled',
 };
 
+let _adActRows = [];
+let _adActFilter = { action: '', actor: '', q: '' };
+let _adActDebounce = null;
+
 function _renderAutoDiscoveryActivity(entries) {
+  _adActRows = Array.isArray(entries) ? entries : [];
+  // Fresh session — DOM was re-built when the modal opened, so the filter
+  // state from last time no longer matches the (empty) input fields.
+  _adActFilter = { action: '', actor: '', q: '' };
+  _adActSeedTypeDropdown();
+  _adActWire();
+  _adActApply();
+}
+
+function _adActSeedTypeDropdown() {
+  const sel = document.getElementById('disc-act-f-type');
+  if (!sel || sel.dataset.seeded === '1') return;
+  const seen = new Set();
+  _adActRows.forEach(e => seen.add(e.action));
+  // Preserve the catalogue order from _AD_ACTION_LABELS, then any unknown actions.
+  const keys = Object.keys(_AD_ACTION_LABELS).filter(k => seen.has(k))
+    .concat([...seen].filter(k => !(k in _AD_ACTION_LABELS)));
+  const frag = document.createDocumentFragment();
+  keys.forEach(k => {
+    const opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = _AD_ACTION_LABELS[k] || k;
+    frag.appendChild(opt);
+  });
+  sel.appendChild(frag);
+  sel.dataset.seeded = '1';
+}
+
+function _adActWire() {
+  const sel = document.getElementById('disc-act-f-type');
+  const actor = document.getElementById('disc-act-f-actor');
+  const q = document.getElementById('disc-act-f-q');
+  if (!sel || sel.dataset.wired === '1') return;
+  sel.addEventListener('change', () => {
+    _adActFilter.action = sel.value || '';
+    _adActApply();
+  });
+  const onText = () => {
+    clearTimeout(_adActDebounce);
+    _adActDebounce = setTimeout(() => {
+      _adActFilter.actor = (actor.value || '').trim().toLowerCase();
+      _adActFilter.q     = (q.value || '').trim().toLowerCase();
+      _adActApply();
+    }, 150);
+  };
+  actor.addEventListener('input', onText);
+  q.addEventListener('input', onText);
+  sel.dataset.wired = '1';
+}
+
+function _adActClear() {
+  _adActFilter = { action: '', actor: '', q: '' };
+  const sel = document.getElementById('disc-act-f-type');
+  const actor = document.getElementById('disc-act-f-actor');
+  const q = document.getElementById('disc-act-f-q');
+  if (sel) sel.value = '';
+  if (actor) actor.value = '';
+  if (q) q.value = '';
+  _adActApply();
+}
+
+function _adActApply() {
   const wrap = document.getElementById('disc-activity-wrap');
+  const cnt  = document.getElementById('disc-act-count');
   if (!wrap) return;
-  if (!entries.length) {
+  const total = _adActRows.length;
+  if (!total) {
     wrap.innerHTML = '<div class="disc-sup-empty">No activity yet.</div>';
+    if (cnt) cnt.textContent = '';
     return;
   }
-  const rows = entries.map(e => {
+  const f = _adActFilter;
+  const filtered = _adActRows.filter(e => {
+    if (f.action && e.action !== f.action) return false;
+    if (f.actor && !(e.actor || '').toLowerCase().includes(f.actor)) return false;
+    if (f.q) {
+      const hay = ((e.target || '') + ' ' + (e.detail || '')).toLowerCase();
+      if (!hay.includes(f.q)) return false;
+    }
+    return true;
+  });
+  if (cnt) cnt.textContent = `Showing ${filtered.length} of ${total}`;
+  if (!filtered.length) {
+    wrap.innerHTML = '<div class="disc-sup-empty" style="padding:12px">No activity matches the current filters.</div>';
+    return;
+  }
+  const rows = filtered.map(e => {
     let when = '';
     try { when = new Date(parseFloat(e.ts) * 1000).toLocaleString(); } catch {}
     const lbl = _AD_ACTION_LABELS[e.action] || esc(e.action);
