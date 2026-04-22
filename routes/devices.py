@@ -127,6 +127,124 @@ def handle(h, method, path, body):
         h._json(200, {"devices": STATE.all_devices()})
         return True
 
+    # ── /api/devices/bulk POST — bulk actions across many devices ─
+    if path == "/api/devices/bulk" and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        dids = body.get("device_ids") or []
+        action = body.get("action")
+        if not isinstance(dids, list) or not dids or len(dids) > 1000:
+            h._json(400, {"error": "device_ids required (1-1000)"}); return True
+        if action not in ("move", "start", "stop", "delete"):
+            h._json(400, {"error": "invalid action"}); return True
+
+        target_group = None
+        if action == "move":
+            target_group = (body.get("group") or "").strip()
+            if not target_group or len(target_group) > 80:
+                h._json(400, {"error": "group required (1-80 chars)"}); return True
+
+        results = []
+        applied = 0
+        # Phase 1 — collect valid device references under the lock.
+        with STATE._lock:
+            valid_dids = []
+            for did in dids:
+                if not isinstance(did, str):
+                    results.append({"did": str(did), "ok": False, "reason": "invalid_id"})
+                    continue
+                if did not in STATE.devices:
+                    results.append({"did": did, "ok": False, "reason": "not_found"})
+                    continue
+                valid_dids.append(did)
+
+        # Phase 2 — apply the action. Done outside the lock for start/stop/delete
+        # because those helpers acquire the lock internally and have broadcast +
+        # persistence side effects.
+        if action == "move":
+            with STATE._lock:
+                for did in valid_dids:
+                    dev = STATE.devices.get(did)
+                    if dev:
+                        dev.group = target_group
+                        applied += 1
+                        results.append({"did": did, "ok": True})
+            _db_enqueue(lambda: db_save(STATE))
+            # Broadcast once so open tabs refresh grouping without reloading.
+            STATE._broadcast("devices_bulk_updated", {"action": "move", "group": target_group, "dids": valid_dids})
+
+        elif action == "start":
+            for did in valid_dids:
+                try:
+                    STATE.start_device(did)
+                    applied += 1
+                    results.append({"did": did, "ok": True})
+                except Exception:
+                    log.exception(f"bulk start failed on {did}")
+                    results.append({"did": did, "ok": False, "reason": "error"})
+            _db_enqueue(lambda: db_save(STATE))
+
+        elif action == "stop":
+            for did in valid_dids:
+                try:
+                    STATE.stop_device(did)
+                    applied += 1
+                    results.append({"did": did, "ok": True})
+                except Exception:
+                    log.exception(f"bulk stop failed on {did}")
+                    results.append({"did": did, "ok": False, "reason": "error"})
+            _db_enqueue(lambda: db_save(STATE))
+
+        elif action == "delete":
+            # Replicate the single-device DELETE path's side effects per device.
+            for did in valid_dids:
+                try:
+                    with STATE._lock:
+                        dd = STATE.devices.get(did)
+                        if not dd:
+                            results.append({"did": did, "ok": False, "reason": "not_found"})
+                            continue
+                        ddname = dd.name or did
+                        dd_ext = (getattr(dd, "external_id", None) or "")
+                        dd_host = dd.host or ""
+                        _sensor_ids = list(dd.sensors.keys())
+                    STATE.remove_device(did)
+                    if dd_ext.startswith("discovery:") and dd_host:
+                        try:
+                            from monitoring.auto_discovery import suppress_host
+                            suppress_host(dd_host, ddname, user)
+                        except Exception as _sup_err:
+                            log.warning(f"Auto-Discovery suppress-host hook failed: {_sup_err}")
+                    _cap_did = did
+                    _db_enqueue(lambda _d=_cap_did: ipam_sync_device_delete(_d))
+                    _db_enqueue(lambda _d=_cap_did: topo_prune_pw_links(_d))
+                    for _sid in _sensor_ids:
+                        _db_enqueue(lambda _d=_cap_did, _s=_sid: db_resolve_events_by_sensor(_d, _s))
+                        _db_enqueue(lambda _d=_cap_did, _s=_sid: db_resolve_flaps_by_sensor(_d, _s))
+                        _db_enqueue(lambda _d=_cap_did, _s=_sid: db_clear_stage_state_for_sensor(_d, _s))
+                    STATE._broadcast("device_deleted", {"did": did})
+                    applied += 1
+                    results.append({"did": did, "ok": True})
+                except Exception:
+                    log.exception(f"bulk delete failed on {did}")
+                    results.append({"did": did, "ok": False, "reason": "error"})
+            _db_enqueue(lambda: db_save(STATE))
+            _db_enqueue(_maybe_resize_executor)
+
+        detail = f"{applied} device(s)"
+        if target_group:
+            detail += f" → {target_group}"
+        db_log_audit(user, h.client_address[0], f"bulk_{action}", detail)
+
+        h._json(200, {
+            "ok": True,
+            "action": action,
+            "applied": applied,
+            "failed": len(dids) - applied,
+            "results": results,
+        })
+        return True
+
     # ── /api/start / /api/stop POST ──────────────────────────────
     if path == "/api/start" and method == "POST":
         user, role = h._require("operator")

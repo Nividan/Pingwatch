@@ -2376,7 +2376,7 @@ window.addEventListener('mousemove', e => { doMMPan(e); doGroupDrag(e); doLinkDr
 window.addEventListener('mouseup',   e => { endMMPan(e); endGroupDrag(e); endLinkDraw(e); endRubberBand(e); endDrag(e); });
 window.addEventListener('touchmove', e => { if(dragNode){e.preventDefault();doDrag(e);} }, {passive:false});
 window.addEventListener('touchend', endDrag);
-svg.addEventListener('click', e => { if (!e.shiftKey) { multiSelect.clear(); } deselect(); });
+svg.addEventListener('click', e => { if (!e.shiftKey) { multiSelect.clear(); renderNodes(); } deselect(); });
 
 // Canvas pan (left or middle) + Shift+left rubber-band
 svg.addEventListener('mousedown', e => {

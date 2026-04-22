@@ -277,6 +277,7 @@
         <button class="vt-btn" onclick="_collapseAllGroups()" title="Collapse all groups">&#x229F;</button>
         <button class="vt-btn" onclick="_expandAllGroups()"  title="Expand all groups">&#x229E;</button>
       </div>
+      <button id="btnSelectMode" class="btn-sm rbac-op" onclick="_toggleSelectMode()" title="Multi-select devices for bulk actions">&#x2611; Select</button>
       <div class="dev-act-sep"></div>
       <div class="dev-pills">
         <button class="dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="pill-ct">0</span></button>
@@ -326,6 +327,27 @@
     </div>
     <div id="dpanels" style="display:none"></div>
     <div id="devPagination" style="display:none"></div>
+    <div id="bulkBar" class="bulk-bar" style="display:none">
+      <div class="bulk-bar-info">
+        <span class="bulk-bar-count" id="bulkBarCount">0 selected</span>
+        <span class="bulk-bar-hidden" id="bulkBarHidden"></span>
+        <button class="btn-s" onclick="_clearSelection()" title="Clear selection">Clear</button>
+        <button class="btn-s" onclick="_exitSelectMode()" title="Exit select mode">&#x2715; Exit</button>
+      </div>
+      <div class="bulk-bar-actions">
+        <div class="bulk-move">
+          <label for="bulkGroupInput">Move to group:</label>
+          <input list="bulkGroupList" id="bulkGroupInput" autocomplete="off" placeholder="Pick or type new…"/>
+          <datalist id="bulkGroupList"></datalist>
+          <button class="btn-p" onclick="_bulkApplyMove()">Apply</button>
+        </div>
+        <div class="bulk-ops">
+          <button class="btn-s" onclick="_bulkAction('start')" title="Resume monitoring for selected devices">&#x25B6; Resume</button>
+          <button class="btn-s" onclick="_bulkAction('stop')" title="Pause monitoring for selected devices">&#x23F8; Pause</button>
+          <button class="btn-s bulk-danger" onclick="_bulkDeleteConfirm()" title="Delete selected devices">&#x2715; Delete</button>
+        </div>
+      </div>
+    </div>
     <!-- Backups view -->
     <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
       <div id="bk-toolbar">

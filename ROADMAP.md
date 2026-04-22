@@ -33,7 +33,7 @@ Completed work lives in [CHANGELOG.md](CHANGELOG.md). This file tracks planned w
 - Compact mode
 - Accessible contrast mode
 - Spacing / alignment cleanup
-- **Bulk operations** — pause/resume/delete/move N sensors with checkboxes
+- **Bulk sensor operations** — pause/resume/delete N sensors with checkboxes (device-level bulk shipped; sensor-level is its own feature)
 - **Keyboard shortcuts** — `g d` → devices, `g e` → events, `/` → focus search
 - **Favorites** — star a sensor; pinned at top of device card
 - **IPv6 dashboards** — IPAM UI currently assumes IPv4

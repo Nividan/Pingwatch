@@ -477,7 +477,7 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 |--------|-----------|
 | `auth.py` | `/api/login`, `/api/login/totp`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile`, `/api/me/totp/setup`, `/api/me/totp/verify`, `/api/me/totp/disable`, `/api/me/totp/remember-hours`, `/api/me/trusted-devices`, `/api/me/trusted-devices/{id}`, `/api/users/{u}/totp/reset` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
-| `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
+| `devices.py` | `/api/devices`, `/api/devices/bulk`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats`, `/api/anomaly/bulk-enable` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
@@ -654,6 +654,7 @@ The frontend is served as static files — no build step.
 | `GET` | `/api/devices/{did}` | Get device detail |
 | `PATCH` | `/api/devices/{did}` | Update device |
 | `DELETE` | `/api/devices/{did}` | Delete device |
+| `POST` | `/api/devices/bulk` | Bulk action across up to 1000 devices `{device_ids:[], action:"move"\|"start"\|"stop"\|"delete", group?:"…"}` → `{ok, applied, failed, results:[{did, ok, reason?}]}`; one audit entry per call; operator role |
 | `GET` | `/api/sensors/{did}` | List sensors for a device |
 | `POST` | `/api/sensors/{did}` | Add a sensor |
 | `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor (accepts `anomaly_enabled`, `anomaly_sensitivity`, `anomaly_min_samples`) |

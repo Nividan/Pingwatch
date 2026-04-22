@@ -4,6 +4,23 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## Bulk device multi-select (Devices tab)
+
+- Motivation: Auto-Discovery drops new hosts into an auto-muted `Discovery-<cidr>` group. Promoting them one-at-a-time to real production groups (or bulk-pausing / bulk-deleting lab noise) was 15–100 modal round-trips per scan. Shipping a multi-select workflow removes that friction
+- **☑ Select toggle in the Devices toolbar** — operator+ only (`rbac-op`). Clicking flips `body.pw-select-mode`; all CSS conditionals key off that one class, so the feature adds zero visual noise in the default browsing state
+- **Per-card + per-group-header checkboxes** — `.dc-sel-cb` absolutely-positioned top-left on each device card (grid + list view), `.grp-sel-cb` inline in the group header next to the drag handle. Group-header checkbox has tri-state visuals (empty / checked / partial dash) matching OS file-manager conventions
+- **Bulk-action bar** — sticky footer that appears when ≥1 device is selected. Shows `N selected`, `(M hidden by filter)` when any ticked cards are filter-hidden, Clear + Exit buttons, a group-name combobox (free-text + `<datalist>` populated from existing groups), and Resume / Pause / Delete buttons. Delete is the only action that prompts for confirmation
+- **Shift-click range select** — DOM-order range between the last clicked card and the current one. Spans filter-hidden cards intentionally (file-manager semantics)
+- **Collapsed-group select-all** — group-header checkbox selects every device in the group, including ones hidden by a collapsed grid. Uses `S.devices` (not DOM) as the source of truth
+- **Keyboard shortcuts** — `Ctrl+A` (or `Cmd+A`) selects every visible card on the Devices tab (respects both the status-pill filter and the search box); auto-turns select mode on if it wasn't. `Esc` exits select mode. Both gate on `activeMainTab==='devices'` and never fire while typing in an input
+- **One backend endpoint for all four actions** — `POST /api/devices/bulk` takes `{device_ids:[…], action:"move"|"start"|"stop"|"delete", group?:"…"}`. Validates `device_ids` length (1–1000), `action` enum, and `group` length (1–80 chars, required only for `move`). Returns `{ok, applied, failed, results:[{did, ok, reason?}]}` so partial failures are surfaced to the UI
+- **Per-action implementation** — `move` updates `dev.group` under `STATE._lock` + fires one `db_save` + one `devices_bulk_updated` SSE broadcast. `start` / `stop` call existing `STATE.start_device` / `stop_device` (outside the lock — those helpers acquire it internally). `delete` replicates the full single-device DELETE path per device: IPAM sync, `topo_prune_pw_links`, event/flap resolution, Auto-Discovery `suppress_host()` for `discovery:*` devices, `STATE._broadcast('device_deleted')`. Writes ONE audit entry per bulk call (`bulk_move` / `bulk_start` / `bulk_stop` / `bulk_delete`) instead of N — keeps the audit tab readable on large-batch ops
+- **Mute auto-propagation** — moving a device from a muted `Discovery-*` group to an unmuted production group immediately restores alerting, because `is_group_muted(dev.group)` is already evaluated at probe/alert time against the device's current group (`core/state.py:832`, `monitoring/alert_profile_engine.py:284`). Zero extra code on the bulk path
+- **Empty-group cleanup** — optimistic client-side `pruneEmptyGroups()` call after a bulk-move runs — the emptied `Discovery-*` group section disappears from the UI without a page refresh
+- **Files** — [routes/devices.py](Pingwatch/routes/devices.py) (new `/api/devices/bulk` handler, ~120 lines); [frontend/index.html](Pingwatch/frontend/index.html) (☑ Select toolbar button + `#bulkBar` footer); [frontend/devices.js](Pingwatch/frontend/devices.js) (multi-select state, `_toggleSelectMode`, `_cardClick`, `_toggleCard`, `_toggleGroupSel`, `_rangeSelect`, `_refreshCardSelVisual`, `_refreshGroupSelVisual`, `_updateBulkBar`, `_bulkApplyMove`, `_bulkAction`, `_bulkDeleteConfirm`, `cardHTML` + `listRowHTML` + `ensureGroupSection` extensions, Ctrl+A/Esc hooks); [frontend/style.css](Pingwatch/frontend/style.css) (`.bulk-bar`, `.dc-sel-cb`, `.grp-sel-cb`, `body.pw-select-mode`, `.dc.selected`)
+
+---
+
 ## SAML 2.0 + OIDC Enterprise SSO
 
 - Federated SSO alongside local / LDAP / RADIUS — admins paste IdP metadata (or a discovery URL), generate an SP signing cert from the UI, hand the SP metadata XML to the IdP admin, and the whole org signs in via the enterprise IdP. Tested with FortiAuthenticator; protocol-compliant for Okta, Entra ID, Keycloak, ADFS, OneLogin, PingFederate
