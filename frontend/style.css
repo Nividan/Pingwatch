@@ -3047,9 +3047,10 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .disc-act-filter{display:flex;gap:8px;align-items:center;
   margin:6px 0;font-size:12px;flex-wrap:wrap;}
 .disc-act-filter select,.disc-act-filter input{
-  background:var(--bg3);border:1px solid var(--border2);color:var(--text);
-  font-size:12px;padding:4px 6px;border-radius:3px;}
-.disc-act-filter input{min-width:140px;}
+  width:auto;background:var(--bg3);border:1px solid var(--border2);color:var(--text);
+  font-size:12px;padding:4px 6px;border-radius:3px;box-sizing:border-box;}
+.disc-act-filter select{max-width:160px;flex-shrink:0;}
+.disc-act-filter input{flex:1;min-width:100px;max-width:200px;}
 .disc-act-filter .disc-act-count{margin-left:auto;color:var(--text3);font-size:11px;}
 .disc-act-filter .btn-s{padding:3px 8px;font-size:11px;}
 
