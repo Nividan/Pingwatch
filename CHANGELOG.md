@@ -4,6 +4,44 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## Retention & Performance settings tab
+
+- New dedicated **🗃️ Retention** tab in Settings — consolidates deployment-sizing knobs that previously lived scattered across General (Data Retention, Event & History Limits, Debug Mode) and newly exposes log-file rotation, the audit DB cap, and six per-feature performance tunables that used to be hardcoded
+- **Five sections** — Database Retention (raw / 5-min / 1-hour tier days), Event & Trap Limits (UI display cap + DB caps for flaps/traps/audit), Log Files (size + backup count per log file; ⚠ Restart required badge next to the heading), Performance & Limits (SMTP/PG timeouts, auto-discovery scan deadline, SFTP checksum cap, import payload cap — all live-apply), Diagnostics (Debug Mode toggle)
+- **Default bumps for fresh installs** — `max_flaps_display` 20→50, `max_flap_entries` 500→2000, `max_trap_entries` 500→2000; audit DB cap raised from a hardcoded `LIMIT 2000` to a configurable `audit_trim_cap` defaulting to 50 000. Existing installs keep their current values (seed defaults use `INSERT OR IGNORE` / `ON CONFLICT DO NOTHING`)
+- **Audit log file retention** — switched from `RotatingFileHandler` (5 MB × 5 backups) to `TimedRotatingFileHandler(when="midnight", backupCount=365)` for compliance-friendly daily rotation with 1 year of history
+- **Main app log file** — `pingwatch.log` backup count raised 5 → 14 (~30 days worst-case coverage at 10 MB each, 140 MB total cap)
+- **Live handler swap on startup** — new `core/logger.py::reconfigure_from_settings()` called from `server.py` right after the settings cache loads; for each of the four file handlers (`_fh` / `_sh` / `_ah` / `_bkh`) creates a fresh handler with the user-configured sizes/retention, swaps it in, and closes the old one. No-op when values match import-time defaults so clean startups don't churn file handles
+- **Parameterised hardcoded constants** that previously required source edits — `smtp_timeout_s` (monitoring/smtp_alert.py), `pg_statement_timeout_s` + `pg_pool_acquire_timeout_s` (db/pg_pool.py), `auto_discover_scan_deadline_s` (monitoring/auto_discovery.py), `sftp_checksum_max_mb` (monitoring/probes.py), `import_max_payload_mb` (routes/imports.py). All read from the settings cache at call time — changes apply live without restart
+- **14 new `app_settings` keys** — 8 for log rotation + audit cap (restart-required for the 7 rotation knobs; `audit_trim_cap` is live), 6 for per-feature tunables (all live)
+- **Validation bounds in `PATCH /api/settings`** — every new key has a min/max clamp so a typo can't set `log_main_max_mb=-1` or `smtp_timeout_s=86400`
+- **Files** — [db/core.py](Pingwatch/db/core.py) + [db/pg_schema.py](Pingwatch/db/pg_schema.py) (14 new seed defaults); [routes/settings.py](Pingwatch/routes/settings.py) (GET + PATCH plumbing with bounded validators); [db/audit.py](Pingwatch/db/audit.py) (trim cap read from `audit_trim_cap`); [core/logger.py](Pingwatch/core/logger.py) (`TimedRotatingFileHandler` for audit + `reconfigure_from_settings()`); [server.py](Pingwatch/server.py) (calls reconfigure after settings load); [monitoring/smtp_alert.py](Pingwatch/monitoring/smtp_alert.py) + [db/pg_pool.py](Pingwatch/db/pg_pool.py) + [monitoring/auto_discovery.py](Pingwatch/monitoring/auto_discovery.py) + [monitoring/probes.py](Pingwatch/monitoring/probes.py) + [routes/imports.py](Pingwatch/routes/imports.py) (parameterised reads); [frontend/forms-settings.js](Pingwatch/frontend/forms-settings.js) (new `_buildSettingsTab_retention` + `_saveRetention` handler; removed Data Retention / Event & History Limits / Logging sections from General)
+
+---
+
+## PBKDF2 cost upgrade (200k → 600k) with transparent hash migration
+
+- **Security:** raised PBKDF2-SHA256 iteration count from 200 000 to 600 000 to match the OWASP 2023 minimum for PBKDF2-SHA256. Not exposed as a user setting — letting admins weaken it is a footgun
+- **Self-describing hash format** — stored hashes are now `"iters:salt:hex"` instead of `"salt:hex"`. Future cost bumps won't require another migration because `_verify_pw()` reads the iteration count from the stored value
+- **Backwards-compatible verify** — legacy 2-part `"salt:hex"` entries continue to verify at 200k. No forced password reset; no lockouts after upgrade
+- **Transparent upgrade on login** — new `_maybe_rehash(username, password, stored)` in `core/auth.py`: after a successful `_verify_pw()` in the local-login path, if the stored hash is legacy-format or below the current iteration target, the password is re-hashed at 600k and the `users.pw_hash` row is UPDATE'd. Failures are non-fatal — login still proceeds, next login retries the upgrade
+- **Scope** — local auth only. LDAP / RADIUS / SAML / OIDC don't store passwords locally (pw_hash is `__ldap__` / `__radius__` / `__saml__` / `__oidc__`) so they're unaffected
+- **Files** — [core/auth.py](Pingwatch/core/auth.py) — new `_PBKDF2_ITERATIONS` / `_PBKDF2_LEGACY_ITERATIONS` constants, `_hash_pw()` emits 3-part format, `_verify_pw()` handles both 2-part and 3-part, `_needs_rehash()` + `_maybe_rehash()` hooked into `auth_login()`
+
+---
+
+## NTM live map — group-change orphan fix
+
+- **Bug:** after changing a device's group from Edit Device, the device occasionally rendered outside every group rect on the NTM live map. Reload-after-change reproduced it; affected layouts had two overlapping group rects
+- **Cause #1 — `fetch({keepalive:true})` 64 KB in-flight cap** — `PATCH /api/settings/pw_node_overrides` + `pw_group_overrides` bodies piled up and silently stayed "Pending" forever (visible as multiple 0.0 KB pending requests in DevTools → Network). Fix: removed `keepalive: true` from `_pwSave`
+- **Cause #2 — stale override coordinates** — when a device's group changed, its persisted `(x, y)` (relative to its old group rect) would land outside the new group rect, or fall inside a sibling group when two rects overlapped
+- **Orphan pre-pass** — new `_nodeInsideGroup(ovr, nodeType, groupRect)` helper; inserted a pass in `calcPwLayout()` between group-building and slot-precompute: for every device, if its centre is outside its own group's rect OR inside any other group's rect, delete `ovr.x / ovr.y` so the Phase-3 placer re-slots it fresh into the correct group
+- **Auto-grow now persists the moved origin** — when a group auto-grows to fit newly-added children, the `pwGroupOverrides` write uses the grown rect's actual `(x, y)` instead of the original pre-grow anchor, so a subsequent re-render doesn't snap the grown rect back to its smaller size
+- **Post-grow overlap resolution** — after auto-grow, if the grown rect overlaps a sibling group, `_findFreeGroupSlot()` teleports the whole group and every child device's override gets translated by the same `(dx, dy)` so intra-group layout is preserved
+- **Files** — [frontend/map.js](Pingwatch/frontend/map.js) — removed `keepalive: true` from `_pwSave`; added `_nodeInsideGroup`; added orphan pre-pass; auto-grow persistence fix; post-grow overlap resolution; tagged `placedRects` entries with `gname` so sibling rects can be iterated
+
+---
+
 ## Bulk device multi-select (Devices tab)
 
 - Motivation: Auto-Discovery drops new hosts into an auto-muted `Discovery-<cidr>` group. Promoting them one-at-a-time to real production groups (or bulk-pausing / bulk-deleting lab noise) was 15–100 modal round-trips per scan. Shipping a multi-select workflow removes that friction

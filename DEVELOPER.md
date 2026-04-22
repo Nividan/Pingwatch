@@ -218,7 +218,7 @@ pingwatch/
     ├── backups.js          ← Backup table, config viewer, diff, rollback
     ├── forms-device.js     ← Add/edit device form
     ├── forms-sensor.js     ← Add/edit sensor form
-    ├── forms-settings.js   ← Settings modal (10 tabs)
+    ├── forms-settings.js   ← Settings modal (13 tabs — General, Retention, Users, Groups, Integrations, Database, Reports, Sensors, Networking, Certificates, Config Backup, Auto-Discovery, Alert Profiles)
     ├── forms-users.js      ← User management
     ├── forms-ldap.js       ← LDAP/AD settings modal
     ├── forms-radius.js     ← RADIUS settings modal, attribute mapping table, test auth dialog
@@ -270,7 +270,9 @@ Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_
 Server-side input validation helpers used by route handlers before persisting user-supplied values. Functions: `validate_port(v)`, `validate_host(v)`, `validate_interval(v)`, `validate_timeout(v)`, `validate_name(v, max_len)`. Each returns `(value, None)` on success or `(None, "error message")` on failure.
 
 ### `core/auth.py`
-Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for `auth_type='ldap'` users and to `core/radius_auth.py` for `auth_type='radius'` users.
+Authentication and session management. PBKDF2-SHA256 password hashing (600 000 iterations, OWASP 2023 minimum), RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for `auth_type='ldap'` users and to `core/radius_auth.py` for `auth_type='radius'` users.
+
+Hashes are stored as `"iters:salt:hex"` (self-describing, so future cost bumps don't require a migration). Legacy 2-part `"salt:hex"` entries still verify at 200k. On successful local login, `_maybe_rehash()` transparently re-hashes any below-target stored value at the current iteration count — failures are non-fatal so the login still proceeds.
 
 `radius_login_phase1(username, password)` starts a RADIUS login: on `Access-Accept` it calls `_radius_post_auth()` to resolve group/role from returned attributes, auto-provision the user if needed, and issue a session (skipping the built-in TOTP check when the RADIUS server itself issued an `Access-Challenge`). On `Access-Challenge` it stores the challenge in `_RADIUS_LOGIN_CTX` (120 s TTL) and returns `{radius_challenge: true, challenge_id, prompt}`. `radius_login_phase2(challenge_id, response)` continues the flow.
 
@@ -559,6 +561,17 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `report_footer_text` | text | Custom text shown in the PDF report footer (e.g. "Confidential — Internal Use Only") |
 | `report_brand_color` | `"#rrggbb"` | Accent colour used in the report cover page and headings (defaults to `#2f81f7`) |
 | `report_retention_days` | integer string | How many days to keep report history rows + PDF/CSV files on disk (default `"365"`) |
+| `audit_trim_cap` | integer string | Max `audit_log` rows kept; trimmed on each audit write (default `"50000"`; range 1 000–1 000 000) — Retention tab, live |
+| `log_main_max_mb` / `log_main_backups` | integer string | `pingwatch.log` rotation — size per file in MB (default `"10"`) and number of rotated backups kept (default `"14"`) — Retention tab, restart-required |
+| `log_sensors_max_mb` / `log_sensors_backups` | integer string | `pingwatchsensors.log` rotation — MB (default `"20"`) and backup count (default `"5"`) — restart-required |
+| `log_audit_days` | integer string | Daily-rotated `pingwatchaudit.log` — days of history kept (default `"365"`) — restart-required |
+| `log_backup_max_mb` / `log_backup_backups` | integer string | `pingwatchbackup.log` rotation — MB (default `"5"`) and backup count (default `"5"`) — restart-required |
+| `smtp_timeout_s` | integer string | SMTP socket timeout used by `monitoring/smtp_alert.py::_connect()` (default `"10"`, range 2–120) — live |
+| `pg_statement_timeout_s` | integer string | PostgreSQL `SET statement_timeout` applied to every pooled connection (default `"30"`, range 5–600) — live |
+| `pg_pool_acquire_timeout_s` | integer string | Max wait for a free pooled PG connection before `pg_conn()` raises (default `"30"`, range 5–120) — live |
+| `auto_discover_scan_deadline_s` | integer string | Max wall-clock per subnet scan in `auto_discovery._scan_subnet()` (default `"300"`, range 30–3600) — live |
+| `sftp_checksum_max_mb` | integer string | Largest file the SFTP `checksum` probe level will hash (default `"10"`, range 1–500) — live |
+| `import_max_payload_mb` | integer string | Body cap for `/api/import/*` endpoints (default `"8"`, range 1–100) — live |
 | `radius_enabled` | `"1"` / `"0"` | RADIUS authentication master toggle |
 | `radius_server` | str | Primary RADIUS host |
 | `radius_port` | integer string | Primary RADIUS port (default `"1812"`) |

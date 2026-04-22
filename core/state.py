@@ -568,6 +568,30 @@ class MonitorState:
         # to their cached _resolved_profile_ver to know when to re-resolve.
         self._profile_cache_ver = 0
 
+    def get_runtime_snapshot(self) -> dict:
+        """Cheap read-only snapshot for the Diagnostics tab. No locks held
+        beyond brief peeks — values are best-effort.
+        """
+        try:
+            heap_len = len(self._scheduler._heap)
+            tomb_len = len(self._scheduler._tombstones)
+        except Exception:
+            heap_len = tomb_len = 0
+        try:
+            sse_count = len(self._sse)
+        except Exception:
+            sse_count = 0
+        try:
+            worker_max = self._executor._max_workers
+        except Exception:
+            worker_max = 0
+        return {
+            "scheduler_heap":       heap_len,
+            "scheduler_tombstones": tomb_len,
+            "sse_listeners":        sse_count,
+            "worker_max":           worker_max,
+        }
+
     def _next_did(self):
         self._did_ctr += 1
         return f"d{self._did_ctr}"

@@ -3054,4 +3054,68 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .disc-act-filter .disc-act-count{margin-left:auto;color:var(--text3);font-size:11px;}
 .disc-act-filter .btn-s{padding:3px 8px;font-size:11px;}
 
+/* ── 🔧 Diagnostics tab ── */
+.diag-card{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;
+  margin-bottom:14px;}
+.diag-card-hd{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;border-bottom:1px solid var(--border2);
+  font-weight:600;font-size:13px;color:var(--text2);}
+.diag-card-hd .btn-s{padding:3px 10px;font-size:11px;}
+.diag-card-body{padding:10px 14px;font-size:12px;}
+.diag-card-actions{padding:8px 14px 12px;display:flex;gap:8px;flex-wrap:wrap;
+  border-top:1px solid var(--border2);}
+.diag-card-actions .btn-s{font-size:11px;padding:5px 10px;}
+.diag-stat-row{display:flex;gap:12px;padding:4px 0;}
+.diag-stat-k{color:var(--text3);width:110px;flex-shrink:0;font-size:11px;text-transform:uppercase;letter-spacing:.5px;}
+.diag-stat-v{color:var(--text);flex:1;}
+.diag-muted{color:var(--text3);}
+.diag-tbl{width:100%;margin-top:8px;border-collapse:collapse;font-size:12px;}
+.diag-tbl th{text-align:left;color:var(--text3);font-weight:500;padding:4px 8px;
+  border-bottom:1px solid var(--border2);font-size:11px;text-transform:uppercase;}
+.diag-tbl td{padding:4px 8px;border-bottom:1px solid var(--border);}
+.diag-tbl tr:last-child td{border-bottom:none;}
+
+/* status badges — reuse semantic colours from the main palette */
+.diag-badge{display:inline-block;width:10px;text-align:center;font-size:16px;line-height:1;}
+.diag-badge-ok{color:var(--up);}
+.diag-badge-configured{color:var(--warn);}
+.diag-badge-warn{color:var(--warn);}
+.diag-badge-error{color:var(--down);}
+.diag-badge-unconfigured,.diag-badge-unknown{color:var(--text3);}
+
+.diag-hc-row{display:grid;grid-template-columns:24px 90px 110px 1fr auto;gap:10px;
+  align-items:center;padding:6px 0;border-bottom:1px solid var(--border);}
+.diag-hc-row:last-child{border-bottom:none;}
+.diag-hc-label{font-weight:600;color:var(--text);}
+.diag-hc-when{color:var(--text3);font-size:11px;}
+.diag-hc-msg{color:var(--text3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.diag-hc-row .btn-s{padding:3px 10px;font-size:11px;}
+
+/* Probe-from-Server tool */
+.diag-probe-tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--border2);}
+.diag-probe-tab{background:transparent;border:none;padding:6px 14px;cursor:pointer;
+  color:var(--text2);font-size:12px;border-bottom:2px solid transparent;}
+.diag-probe-tab:hover{color:var(--text);}
+.diag-probe-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.diag-probe-inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+.diag-probe-inputs label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text3);}
+.diag-probe-inputs input,.diag-probe-inputs select{width:auto;font-size:12px;padding:4px 8px;min-width:200px;}
+.diag-probe-result{background:var(--bg);border:1px solid var(--border2);border-radius:4px;
+  padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  max-height:240px;overflow:auto;margin-top:10px;white-space:pre-wrap;color:var(--text2);}
+
+/* Recent errors grid */
+.diag-err-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:10px 14px;}
+.diag-err-sub{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+.diag-err-list{max-height:240px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);
+  border-radius:4px;padding:6px;font-size:11px;font-family:ui-monospace,Consolas,monospace;}
+.diag-err-line{padding:3px 4px;border-bottom:1px solid var(--border);color:var(--text2);
+  word-break:break-word;}
+.diag-err-line:last-child{border-bottom:none;}
+@media (max-width:800px){
+  .diag-err-grid{grid-template-columns:1fr;}
+  .diag-hc-row{grid-template-columns:24px 1fr auto;}
+  .diag-hc-when,.diag-hc-msg{display:none;}
+}
+
 .evt-dtl-label{font-size:11px;color:var(--text3);width:76px;flex-shrink:0;font-weight:600;}

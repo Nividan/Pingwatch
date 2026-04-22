@@ -219,14 +219,6 @@ function _buildSettingsTab_retention(sr) {
             <div class="fh">Max body accepted by /api/import/* endpoints (default: 8)</div></div>
         </div>
       </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Diagnostics</div>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
-          <span style="font-size:12px">Debug Mode</span>
-        </label>
-        <div class="fh" style="margin-top:6px">Enable verbose debug logging. When off, only INFO and above is written to log files. Applies live. View logs in the <a href="javascript:void(0)" onclick="closeM('mset');switchMainTab('logs')" style="color:var(--accent)">Logs</a> tab.</div>
-      </div>
     </div>`;
 }
 
@@ -1564,6 +1556,7 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
       <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">📡 Auto-Discovery</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
+      <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">🔧 Diagnostics</button>
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}
@@ -1579,6 +1572,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_backup(sr)}
     ${_buildSettingsTab_autoDiscovery(sr)}
     ${_buildSettingsTab_alertRules()}
+    ${_buildSettingsTab_diagnostics(sr)}
     <div class="mft" id="stab-footer-general">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
@@ -1630,6 +1624,9 @@ async function openSettings(initialTab){
     <div class="mft" id="stab-footer-alert-rules" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
+    <div class="mft" id="stab-footer-diagnostics" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
     </div><!-- /stab-content -->
     </div><!-- /stab-layout -->
   </div>`;
@@ -1643,7 +1640,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules'];
+  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules','diagnostics'];
 
   // Find currently visible tab
   let cur = null;
@@ -1685,6 +1682,7 @@ function switchSettingsTab(tab){
             if (tab === 'integrations')   _loadIntegrationsStatus();
             if (tab === 'certificates')   _loadTrustedCAs();
             if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
+            if (tab === 'diagnostics')    _diagOnTabShown();
           }, 220);
         });
       });
@@ -1702,6 +1700,7 @@ function switchSettingsTab(tab){
     if (tab === 'integrations')  _loadIntegrationsStatus();
     if (tab === 'certificates')  _loadTrustedCAs();
     if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
+    if (tab === 'diagnostics')    _diagOnTabShown();
   }
 }
 
@@ -3900,4 +3899,447 @@ async function triggerAutoDiscoveryNow() {
   } catch {
     toast('Network error', 'err');
   }
+}
+
+
+// ── 🔧 Diagnostics tab ──────────────────────────────────────────────
+
+function _buildSettingsTab_diagnostics(sr) {
+  const dbg = sr && sr.debug_mode ? 'checked' : '';
+  return `<div class="mbdy stab-fade" id="stab-diagnostics" style="display:none;overflow-y:auto;flex:1">
+
+    <!-- ── 1. System Overview ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ System Overview</span>
+        <button class="btn-s diag-refresh" onclick="_diagLoadOverview()">↻ Refresh</button>
+      </div>
+      <div id="diag-overview-body" class="diag-card-body">Loading…</div>
+    </div>
+
+    <!-- ── 2. Database Health ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ Database Health</span>
+        <button class="btn-s diag-refresh" onclick="_diagLoadDbStats()">↻ Refresh</button>
+      </div>
+      <div id="diag-db-body" class="diag-card-body">Loading…</div>
+      <div class="diag-card-actions">
+        <button class="btn-s" onclick="_diagAction('vacuum','Running VACUUM…')">Run VACUUM</button>
+        <button class="btn-s" onclick="_diagBackupNow()">Backup DB now</button>
+      </div>
+    </div>
+
+    <!-- ── 3. Health Checks ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ Health Checks</span>
+        <button class="btn-s" onclick="_diagTestAll()">Test All</button>
+      </div>
+      <div id="diag-hc-body" class="diag-card-body">Loading…</div>
+    </div>
+
+    <!-- ── 4. Probe from Server ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd"><span>▸ Probe from Server</span></div>
+      <div class="diag-card-body">
+        <div class="diag-probe-tabs">
+          <button class="diag-probe-tab active" data-ptype="ping"  onclick="_diagProbeSwitch('ping')">Ping</button>
+          <button class="diag-probe-tab"        data-ptype="tcp"   onclick="_diagProbeSwitch('tcp')">TCP</button>
+          <button class="diag-probe-tab"        data-ptype="http"  onclick="_diagProbeSwitch('http')">HTTP</button>
+          <button class="diag-probe-tab"        data-ptype="dns"   onclick="_diagProbeSwitch('dns')">DNS</button>
+          <button class="diag-probe-tab"        data-ptype="tls"   onclick="_diagProbeSwitch('tls')">TLS</button>
+        </div>
+        <div class="diag-probe-inputs" id="diag-probe-inputs"></div>
+        <div style="margin-top:8px">
+          <button class="btn-p" onclick="_diagRunProbe()">Run Probe</button>
+        </div>
+        <pre id="diag-probe-result" class="diag-probe-result"></pre>
+      </div>
+    </div>
+
+    <!-- ── 5. Recent Errors ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ Recent Errors</span>
+        <button class="btn-s diag-refresh" onclick="_diagLoadErrors()">↻ Refresh</button>
+      </div>
+      <div class="diag-err-grid">
+        <div>
+          <div class="diag-err-sub">App log (ERROR+)</div>
+          <div id="diag-err-app" class="diag-err-list">Loading…</div>
+        </div>
+        <div>
+          <div class="diag-err-sub">Sensor errors</div>
+          <div id="diag-err-sens" class="diag-err-list">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 6. Maintenance ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd"><span>▸ Maintenance</span></div>
+      <div class="diag-card-body">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;margin-bottom:10px">
+          <input type="checkbox" id="st-debug-mode" ${dbg} onchange="_saveDebugMode(this)"/>
+          <span style="font-size:12px"><strong>Debug Mode</strong> — verbose logging (applies live)</span>
+        </label>
+        <div class="diag-card-actions">
+          <button class="btn-s" onclick="_diagRefreshOidc()">Refresh OIDC discovery</button>
+          <button class="btn-s" onclick="_diagAction('refresh-auth','Refreshing auth backends…')">Refresh all auth</button>
+          <button class="btn-s" onclick="_diagRunAutoDiscovery()">Run auto-discovery now</button>
+          <button class="btn-s" onclick="_diagAction('clear-caches','Clearing caches…')">Clear caches</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 7. Support Bundle ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd"><span>▸ Support Bundle</span></div>
+      <div class="diag-card-body">
+        <div class="fh" style="margin-bottom:10px">
+          Download a sanitized ZIP of logs (last 10MB each), system snapshot, DB stats,
+          recent errors, and app settings. Secrets (passwords, keys, tokens, certs) are
+          redacted. Attach this to bug reports.
+        </div>
+        <button class="btn-p" onclick="_diagDownloadBundle()">⬇ Download diagnostics bundle</button>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+
+// ── Tab-init + per-section loaders ─────────────────────────────────
+
+function _diagOnTabShown() {
+  _diagLoadOverview();
+  _diagLoadDbStats();
+  _diagLoadHealthChecks();
+  _diagLoadErrors();
+  _diagProbeSwitch('ping');
+}
+
+async function _diagLoadOverview() {
+  const el = document.getElementById('diag-overview-body');
+  if (!el) return;
+  el.textContent = 'Loading…';
+  try {
+    const d = await api('GET', '/api/diagnostics/snapshot');
+    el.innerHTML = _diagRenderOverview(d);
+  } catch (e) {
+    el.textContent = 'Failed to load system overview.';
+  }
+}
+
+function _diagRenderOverview(d) {
+  const fmtB = _diagFmtBytes;
+  const upt = _diagFmtDuration(d.uptime_s || 0);
+  const perf = d.perf && d.perf.available ? d.perf : null;
+  const rt = d.runtime || {};
+  const sb = d.sample_buffer || {};
+  const perfLine = perf
+    ? `CPU ${perf.cpu_pct}% · RAM ${perf.ram_pct}% (${fmtB(perf.ram_used)} / ${fmtB(perf.ram_total)}) · Disk ${perf.disk_pct}% free ${fmtB(perf.disk_total - perf.disk_used)}`
+    : '<span class="diag-muted">psutil not installed — hardware stats unavailable</span>';
+  return `
+    <div class="diag-stat-row"><span class="diag-stat-k">Version</span>
+      <span class="diag-stat-v">PingWatch ${esc(d.version||'?')} "${esc(d.version_name||'')}"</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Uptime</span>
+      <span class="diag-stat-v">${upt}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Runtime</span>
+      <span class="diag-stat-v">Python ${esc(d.python_version||'?')} · ${esc(d.platform||'?')} · ${esc(d.hostname||'')}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Hardware</span>
+      <span class="diag-stat-v">${perfLine}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Monitoring</span>
+      <span class="diag-stat-v">${d.devices||0} devices · ${d.sensors||0} sensors · ${rt.worker_max||0} workers · scheduler heap ${rt.scheduler_heap||0} (${rt.scheduler_tombstones||0} tomb)</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Buffers</span>
+      <span class="diag-stat-v">Sample buffer ${sb.buf_len||0}/${sb.buf_cap||0} · DB queue main=${rt.db_writer_main_pending||0} logs=${rt.db_writer_logs_pending||0} · SSE listeners ${rt.sse_listeners||0}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Storage</span>
+      <span class="diag-stat-v">${esc(d.db_backend||'?')} · main ${fmtB(d.db_size_bytes||0)} · logs ${fmtB(d.logs_db_size_bytes||0)} · log files ${fmtB(d.log_size_bytes||0)}</span></div>`;
+}
+
+async function _diagLoadDbStats() {
+  const el = document.getElementById('diag-db-body');
+  if (!el) return;
+  el.textContent = 'Loading…';
+  try {
+    const d = await api('GET', '/api/diagnostics/db-stats');
+    el.innerHTML = _diagRenderDbStats(d);
+  } catch (e) {
+    el.textContent = 'Failed to load DB stats.';
+  }
+}
+
+function _diagRenderDbStats(d) {
+  const fmtB = _diagFmtBytes;
+  const last = d.last_vacuum_ts ? new Date(d.last_vacuum_ts * 1000).toLocaleString() : 'never';
+  const rows = (d.tables || []).map(t => {
+    const n   = (t.rows >= 0) ? t.rows.toLocaleString() : '—';
+    const sz  = (t.size_bytes >= 0) ? fmtB(t.size_bytes) : '—';
+    return `<tr><td>${esc(t.schema)}.${esc(t.table)}</td><td style="text-align:right">${n}</td><td style="text-align:right">${sz}</td></tr>`;
+  }).join('');
+  return `
+    <div class="diag-stat-row"><span class="diag-stat-k">Backend</span>
+      <span class="diag-stat-v">${esc(d.backend||'?')} · main ${fmtB(d.main_size_bytes||0)} · logs ${fmtB(d.logs_size_bytes||0)}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Last VACUUM</span>
+      <span class="diag-stat-v">${esc(last)}</span></div>
+    <table class="diag-tbl"><thead><tr><th>Table</th><th style="text-align:right">Rows</th><th style="text-align:right">Size</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+}
+
+// ── Health Checks ──────────────────────────────────────────────────
+
+const _DIAG_HC_SPEC = [
+  { key:'ldap',      label:'LDAP',      statusKey:'ldap_status',    endpoint:'/api/ldap/test_connection',    method:'POST' },
+  { key:'radius',    label:'RADIUS',    statusKey:'radius_status',  endpoint:'/api/radius/test_connection',  method:'POST' },
+  { key:'saml',      label:'SAML',      statusKey:'saml_status',    endpoint:'/api/saml/test',               method:'POST' },
+  { key:'oidc',      label:'OIDC',      statusKey:'oidc_status',    endpoint:'/api/oidc/test',               method:'POST' },
+  { key:'smtp',      label:'SMTP',      statusKey:null,             endpoint:'/api/settings/smtp_test',      method:'POST' },
+  { key:'syslog',    label:'Syslog',    statusKey:null,             endpoint:'/api/settings/syslog_test',    method:'POST' },
+  { key:'dbbackup',  label:'DB Backup', statusKey:null,             endpoint:'/api/db/backup/test-remote',   method:'POST' },
+  { key:'ntp',       label:'NTP',       statusKey:null,             endpoint:'/api/diagnostics/test/ntp',    method:'POST' },
+  { key:'dns',       label:'DNS',       statusKey:null,             endpoint:'/api/diagnostics/test/dns',    method:'POST' },
+];
+
+async function _diagLoadHealthChecks() {
+  const el = document.getElementById('diag-hc-body');
+  if (!el) return;
+  let sr = {};
+  try { sr = await api('GET', '/api/settings'); } catch {}
+  el.innerHTML = _DIAG_HC_SPEC.map(s => {
+    const st = s.statusKey ? (sr[s.statusKey] || {}) : null;
+    return _diagRenderHcRow(s, st);
+  }).join('');
+}
+
+function _diagRenderHcRow(spec, st) {
+  let badge = 'unknown', when = '—', msg = '';
+  if (st) {
+    badge = st.state || 'unknown';
+    if (st.last_ok_ts && badge === 'ok')      when = _diagAgo(st.last_ok_ts);
+    else if (st.last_err_ts)                   when = _diagAgo(st.last_err_ts);
+    msg = st.last_err_msg || '';
+  } else {
+    when = 'on-demand';
+  }
+  return `
+    <div class="diag-hc-row" id="diag-hc-${spec.key}">
+      <span class="diag-badge diag-badge-${esc(badge)}" title="${esc(badge)}">●</span>
+      <span class="diag-hc-label">${esc(spec.label)}</span>
+      <span class="diag-hc-when">${esc(when)}</span>
+      <span class="diag-hc-msg">${esc(msg)}</span>
+      <button class="btn-s" onclick="_diagHcRunOne('${esc(spec.key)}')">Test</button>
+    </div>`;
+}
+
+async function _diagHcRunOne(key) {
+  const spec = _DIAG_HC_SPEC.find(s => s.key === key);
+  if (!spec) return;
+  const row = document.getElementById(`diag-hc-${spec.key}`);
+  if (row) {
+    const btn = row.querySelector('button');
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  }
+  try {
+    const d = await api(spec.method, spec.endpoint, {});
+    const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
+    toast(`${spec.label}: ${ok ? 'OK' : (d.error || d.msg || 'failed')}`, ok ? 'ok' : 'err');
+    // Refresh the row so status badge reflects the new result.
+    await _diagLoadHealthChecks();
+  } catch (e) {
+    toast(`${spec.label}: ${e.message || 'failed'}`, 'err');
+    if (row) {
+      const btn = row.querySelector('button');
+      if (btn) { btn.disabled = false; btn.textContent = 'Test'; }
+    }
+  }
+}
+
+async function _diagTestAll() {
+  let pass = 0, fail = 0;
+  for (const spec of _DIAG_HC_SPEC) {
+    try {
+      const d = await api(spec.method, spec.endpoint, {});
+      const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
+      if (ok) pass++; else fail++;
+    } catch { fail++; }
+  }
+  toast(`Test All: ${pass} ok · ${fail} failed`, fail === 0 ? 'ok' : 'err');
+  _diagLoadHealthChecks();
+}
+
+// ── Probe-from-Server ──────────────────────────────────────────────
+
+let _diagProbeType = 'ping';
+
+function _diagProbeSwitch(ptype) {
+  _diagProbeType = ptype;
+  document.querySelectorAll('.diag-probe-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.ptype === ptype);
+  });
+  const box = document.getElementById('diag-probe-inputs');
+  if (!box) return;
+  const inputs = {
+    ping: `<label>Host <input id="diag-pp-target" placeholder="8.8.8.8 or hostname" autocomplete="off"/></label>`,
+    tcp:  `<label>Host <input id="diag-pp-target" placeholder="host.example.com" autocomplete="off"/></label>
+           <label>Port <input id="diag-pp-port" type="number" min="1" max="65535" value="443" style="max-width:90px"/></label>`,
+    http: `<label>URL <input id="diag-pp-target" placeholder="https://example.com" autocomplete="off"/></label>
+           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="diag-pp-verify" checked/> Verify SSL</label>`,
+    dns:  `<label>Host <input id="diag-pp-target" placeholder="example.com" autocomplete="off"/></label>
+           <label>Type <select id="diag-pp-rtype"><option>A</option><option>AAAA</option><option>MX</option><option>TXT</option><option>NS</option><option>CNAME</option><option>PTR</option><option>SOA</option></select></label>
+           <label>Server <input id="diag-pp-dns-srv" placeholder="optional — empty = system resolver" style="min-width:200px"/></label>`,
+    tls:  `<label>Host <input id="diag-pp-target" placeholder="host.example.com" autocomplete="off"/></label>
+           <label>Port <input id="diag-pp-port" type="number" min="1" max="65535" value="443" style="max-width:90px"/></label>`,
+  };
+  box.innerHTML = inputs[ptype] || '';
+  const r = document.getElementById('diag-probe-result');
+  if (r) r.textContent = '';
+}
+
+async function _diagRunProbe() {
+  const target = (document.getElementById('diag-pp-target')?.value || '').trim();
+  if (!target) { toast('Target is required', 'err'); return; }
+  const body = { type: _diagProbeType, target };
+  if (_diagProbeType === 'tcp' || _diagProbeType === 'tls') {
+    body.port = parseInt(document.getElementById('diag-pp-port')?.value || '0', 10);
+  }
+  if (_diagProbeType === 'http') {
+    body.verify_ssl = !!document.getElementById('diag-pp-verify')?.checked;
+  }
+  if (_diagProbeType === 'dns') {
+    body.record_type = document.getElementById('diag-pp-rtype')?.value || 'A';
+    const srv = (document.getElementById('diag-pp-dns-srv')?.value || '').trim();
+    if (srv) body.dns_server = srv;
+    body.query = target;
+  }
+  const r = document.getElementById('diag-probe-result');
+  if (r) r.textContent = 'Running…';
+  try {
+    const d = await api('POST', '/api/diagnostics/probe', body);
+    if (r) r.textContent = JSON.stringify(d, null, 2);
+  } catch (e) {
+    if (r) r.textContent = 'Error: ' + (e.message || 'probe failed');
+  }
+}
+
+// ── Recent Errors ──────────────────────────────────────────────────
+
+async function _diagLoadErrors() {
+  const appEl  = document.getElementById('diag-err-app');
+  const sensEl = document.getElementById('diag-err-sens');
+  if (appEl) appEl.textContent = 'Loading…';
+  if (sensEl) sensEl.textContent = 'Loading…';
+  try {
+    const [a, s] = await Promise.all([
+      api('GET', '/api/diagnostics/recent-errors?source=app&limit=50'),
+      api('GET', '/api/diagnostics/recent-errors?source=sensors&limit=50'),
+    ]);
+    if (appEl) {
+      const lines = (a.entries || []);
+      appEl.innerHTML = lines.length
+        ? lines.map(l => `<div class="diag-err-line">${esc(l)}</div>`).join('')
+        : '<span class="diag-muted">No app errors.</span>';
+    }
+    if (sensEl) {
+      const rows = (s.entries || []);
+      sensEl.innerHTML = rows.length
+        ? rows.map(r => {
+            const when = r.ts ? new Date(r.ts * 1000).toLocaleString() : '';
+            return `<div class="diag-err-line"><span class="diag-muted">${esc(when)}</span> ${esc(r.sname||'')} <span class="diag-muted">[${esc(r.stype||'')}]</span> ${esc(r.msg||'')}</div>`;
+          }).join('')
+        : '<span class="diag-muted">No sensor errors.</span>';
+    }
+  } catch (e) {
+    if (appEl)  appEl.textContent  = 'Failed to load.';
+    if (sensEl) sensEl.textContent = 'Failed to load.';
+  }
+}
+
+// ── Maintenance actions ────────────────────────────────────────────
+
+async function _diagAction(name, pendingMsg) {
+  toast(pendingMsg || 'Running…', 'ok');
+  try {
+    const d = await api('POST', `/api/diagnostics/action/${name}`, {});
+    if (d.ok) {
+      toast(`${name}: ok${d.elapsed_ms != null ? ' (' + d.elapsed_ms + 'ms)' : ''}`, 'ok');
+      if (name === 'vacuum') _diagLoadDbStats();
+    } else {
+      toast(`${name}: ${d.error || 'failed'}`, 'err');
+    }
+  } catch (e) {
+    toast(`${name}: ${e.message || 'failed'}`, 'err');
+  }
+}
+
+async function _diagRefreshOidc() {
+  try {
+    await api('POST', '/api/oidc/discovery/refresh', {});
+    toast('OIDC discovery refreshed', 'ok');
+  } catch (e) {
+    toast('OIDC refresh: ' + (e.message || 'failed'), 'err');
+  }
+}
+
+async function _diagRunAutoDiscovery() {
+  try {
+    const r = await fetch('/api/auto-discovery/run-now', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) toast(d.already_running ? 'Auto-Discovery already running' : 'Auto-Discovery triggered', 'ok');
+    else toast(d.error || 'Trigger failed', 'err');
+  } catch { toast('Network error', 'err'); }
+}
+
+async function _diagBackupNow() {
+  try {
+    await api('POST', '/api/db/backup/run', {});
+    toast('DB backup triggered', 'ok');
+  } catch (e) {
+    toast('Backup: ' + (e.message || 'failed'), 'err');
+  }
+}
+
+// ── Support bundle ─────────────────────────────────────────────────
+
+function _diagDownloadBundle() {
+  // Use a hidden anchor so the browser treats it as a file download and picks
+  // up the Content-Disposition filename from the response.
+  const a = document.createElement('a');
+  a.href = '/api/diagnostics/bundle';
+  a.download = '';  // filename comes from server
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 0);
+  toast('Building diagnostics bundle…', 'ok');
+}
+
+// ── Formatting helpers ─────────────────────────────────────────────
+
+function _diagFmtBytes(b) {
+  if (b == null || !isFinite(b)) return '?';
+  if (b < 1024) return b + ' B';
+  const units = ['KB','MB','GB','TB'];
+  let n = b / 1024, i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n >= 10 ? 0 : 1) + ' ' + units[i];
+}
+
+function _diagFmtDuration(s) {
+  s = Math.max(0, Math.floor(s));
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600);  s -= h * 3600;
+  const m = Math.floor(s / 60);    s -= m * 60;
+  if (d) return `${d}d ${h}h ${m}m`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function _diagAgo(tsSec) {
+  if (!tsSec) return '—';
+  const diff = Math.max(0, Math.floor(Date.now() / 1000 - tsSec));
+  if (diff < 60)     return `${diff}s ago`;
+  if (diff < 3600)   return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400)  return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
 }
