@@ -196,6 +196,30 @@ function _buildSettingsTab_retention(sr) {
         </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Performance &amp; Limits</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Timeouts, caps and limits tuned to deployment size. All apply live.</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">SMTP connection timeout (s)</label>
+            <input type="number" id="st-smtp-timeout" value="${sr.smtp_timeout_s||10}" min="2" max="120" style="max-width:100px"/>
+            <div class="fh">How long to wait for the mail server to respond (default: 10)</div></div>
+          <div class="fr"><label class="fl">PG statement timeout (s)</label>
+            <input type="number" id="st-pg-stmt" value="${sr.pg_statement_timeout_s||30}" min="5" max="600" style="max-width:100px"/>
+            <div class="fh">PostgreSQL query timeout; raise for long analytics/export (default: 30)</div></div>
+          <div class="fr"><label class="fl">PG pool acquire (s)</label>
+            <input type="number" id="st-pg-pool" value="${sr.pg_pool_acquire_timeout_s||30}" min="5" max="120" style="max-width:100px"/>
+            <div class="fh">Max wait for a free pooled connection; lower for fail-fast (default: 30)</div></div>
+          <div class="fr"><label class="fl">Auto-Discovery scan deadline (s)</label>
+            <input type="number" id="st-scan-deadline" value="${sr.auto_discover_scan_deadline_s||300}" min="30" max="3600" style="max-width:100px"/>
+            <div class="fh">Max wall-clock per subnet scan; raise for /20 and larger (default: 300)</div></div>
+          <div class="fr"><label class="fl">SFTP checksum cap (MB)</label>
+            <input type="number" id="st-sftp-cap" value="${sr.sftp_checksum_max_mb||10}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Largest file an SFTP-checksum probe will hash (default: 10)</div></div>
+          <div class="fr"><label class="fl">Bulk-import max size (MB)</label>
+            <input type="number" id="st-import-cap" value="${sr.import_max_payload_mb||8}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Max body accepted by /api/import/* endpoints (default: 8)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Diagnostics</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
           <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
@@ -2449,6 +2473,13 @@ async function _saveRetention() {
     ['st-log-audit-days', 'log_audit_days',        7,       3650],
     ['st-log-bkup-mb',    'log_backup_max_mb',     1,        500],
     ['st-log-bkup-bk',    'log_backup_backups',    1,        100],
+    // Performance & Limits
+    ['st-smtp-timeout',   'smtp_timeout_s',                 2,     120],
+    ['st-pg-stmt',        'pg_statement_timeout_s',         5,     600],
+    ['st-pg-pool',        'pg_pool_acquire_timeout_s',      5,     120],
+    ['st-scan-deadline',  'auto_discover_scan_deadline_s', 30,    3600],
+    ['st-sftp-cap',       'sftp_checksum_max_mb',           1,     500],
+    ['st-import-cap',     'import_max_payload_mb',          1,     100],
   ];
   for (const [id, key, lo, hi] of pairs) {
     const el = document.getElementById(id);

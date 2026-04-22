@@ -21,19 +21,85 @@ _SESSIONS: dict      = {}   # token -> {username, expires}
 _SESSIONS_LOCK       = threading.Lock()
 
 
-def _hash_pw(password: str, salt: str = None) -> str:
+# PBKDF2-SHA256 cost. 600k matches the OWASP 2023 minimum; existing hashes
+# (stored as "salt:hex") were produced at 200k and are still verifiable, then
+# transparently upgraded on next successful login (see _maybe_rehash).
+_PBKDF2_ITERATIONS        = 600_000
+_PBKDF2_LEGACY_ITERATIONS = 200_000
+
+
+def _hash_pw(password: str, salt: str = None, iters: int = None) -> str:
+    """Return "iters:salt:hex" — new format includes iteration count so future
+    cost bumps don't lock anyone out."""
     if salt is None:
         salt = secrets.token_hex(16)
-    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000)
-    return f"{salt}:{key.hex()}"
+    if iters is None:
+        iters = _PBKDF2_ITERATIONS
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iters)
+    return f"{iters}:{salt}:{key.hex()}"
 
 
 def _verify_pw(password: str, stored: str) -> bool:
+    """Constant-time verify that handles both legacy ("salt:hex") and new
+    ("iters:salt:hex") stored formats."""
     try:
-        salt, _ = stored.split(":", 1)
-        return secrets.compare_digest(stored, _hash_pw(password, salt))
+        parts = stored.split(":")
+        if len(parts) == 2:
+            salt, stored_hex = parts
+            expected_hex = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), salt.encode(),
+                _PBKDF2_LEGACY_ITERATIONS
+            ).hex()
+            return secrets.compare_digest(stored_hex, expected_hex)
+        if len(parts) == 3:
+            iters_s, salt, stored_hex = parts
+            iters = int(iters_s)
+            expected_hex = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), salt.encode(), iters
+            ).hex()
+            return secrets.compare_digest(stored_hex, expected_hex)
     except Exception:
-        return False
+        pass
+    return False
+
+
+def _needs_rehash(stored: str) -> bool:
+    """True if the stored hash is below the current iteration target."""
+    try:
+        parts = stored.split(":")
+        if len(parts) == 2:
+            return True
+        if len(parts) == 3:
+            return int(parts[0]) < _PBKDF2_ITERATIONS
+    except Exception:
+        pass
+    return False
+
+
+def _maybe_rehash(username: str, password: str, stored: str) -> None:
+    """Transparently upgrade a user's password hash to current iterations
+    after a successful verify. Failures here are non-fatal — we just miss the
+    upgrade for this session."""
+    if not _needs_rehash(stored):
+        return
+    try:
+        new_hash = _hash_pw(password)
+        from db.backend import is_pg
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            with pg_cursor("main") as cur:
+                cur.execute("UPDATE users SET pw_hash=%s WHERE username=%s",
+                            (new_hash, username))
+        else:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            try:
+                con.execute("UPDATE users SET pw_hash=? WHERE username=?",
+                            (new_hash, username))
+                con.commit()
+            finally:
+                con.close()
+    except Exception as e:
+        log.warning(f"Password hash upgrade failed for {username!r}: {e}")
 
 
 def _strip_domain(username: str) -> str:
@@ -221,6 +287,7 @@ def auth_login(username: str, password: str):
         else:
             if not _verify_pw(password, pw_hash):
                 return None
+            _maybe_rehash(clean, password, pw_hash)
 
         return _create_session(clean, _role)
 

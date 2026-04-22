@@ -935,6 +935,13 @@ def pg_seed_defaults(cur):
         ("log_audit_days",         "365"),
         ("log_backup_max_mb",      "5"),
         ("log_backup_backups",     "5"),
+        # Tunables surfaced in per-feature tabs
+        ("smtp_timeout_s",                 "10"),
+        ("pg_statement_timeout_s",         "30"),
+        ("pg_pool_acquire_timeout_s",      "30"),
+        ("auto_discover_scan_deadline_s", "300"),
+        ("sftp_checksum_max_mb",           "10"),
+        ("import_max_payload_mb",          "8"),
     ]
     for k, v in _defaults:
         cur.execute(

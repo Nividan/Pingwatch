@@ -286,6 +286,13 @@ def handle(h, method, path, body):
             "log_audit_days":      int(_settings.get("log_audit_days",      365)   or 365),
             "log_backup_max_mb":   int(_settings.get("log_backup_max_mb",   5)     or 5),
             "log_backup_backups":  int(_settings.get("log_backup_backups",  5)     or 5),
+            # Group M — per-feature tunables (SMTP / DB / Auto-Discovery / Sensors / Import)
+            "smtp_timeout_s":                int(_settings.get("smtp_timeout_s",                10)  or 10),
+            "pg_statement_timeout_s":        int(_settings.get("pg_statement_timeout_s",        30)  or 30),
+            "pg_pool_acquire_timeout_s":     int(_settings.get("pg_pool_acquire_timeout_s",     30)  or 30),
+            "auto_discover_scan_deadline_s": int(_settings.get("auto_discover_scan_deadline_s", 300) or 300),
+            "sftp_checksum_max_mb":          int(_settings.get("sftp_checksum_max_mb",          10)  or 10),
+            "import_max_payload_mb":         int(_settings.get("import_max_payload_mb",         8)   or 8),
         })
         return True
 
@@ -520,6 +527,13 @@ def handle(h, method, path, body):
             ("log_audit_days",      7,    3650),
             ("log_backup_max_mb",   1,    500),
             ("log_backup_backups",  1,    100),
+            # Per-feature tunables
+            ("smtp_timeout_s",                 2,    120),
+            ("pg_statement_timeout_s",         5,    600),
+            ("pg_pool_acquire_timeout_s",      5,    120),
+            ("auto_discover_scan_deadline_s", 30,   3600),
+            ("sftp_checksum_max_mb",           1,    500),
+            ("import_max_payload_mb",          1,    100),
         ]:
             if _k in body:
                 try:

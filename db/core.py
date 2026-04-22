@@ -321,6 +321,13 @@ def db_init():
             ("log_audit_days",         "365"),
             ("log_backup_max_mb",      "5"),
             ("log_backup_backups",     "5"),
+            # Tunables surfaced in per-feature tabs (SMTP/DB/Auto-Discovery/Sensors/Import)
+            ("smtp_timeout_s",                 "10"),
+            ("pg_statement_timeout_s",         "30"),
+            ("pg_pool_acquire_timeout_s",      "30"),
+            ("auto_discover_scan_deadline_s", "300"),
+            ("sftp_checksum_max_mb",           "10"),
+            ("import_max_payload_mb",          "8"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))

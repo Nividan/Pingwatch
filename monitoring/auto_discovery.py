@@ -402,8 +402,18 @@ def _inside_maintenance_window() -> bool:
 # Max wall-clock we'll spend waiting for a subnet scan to finish.
 # Manual-Discovery full-mode on a /24 is typically under 60s; padding to 5min
 # handles slow /22s + network latency while preventing runaway loops.
+# The deadline is user-tunable via setting `auto_discover_scan_deadline_s`
+# (bounded 30..3600); this constant is the fallback when the setting is missing.
 _SCAN_WAIT_DEADLINE_S = 300.0
 _SCAN_POLL_INTERVAL_S = 1.5
+
+
+def _scan_deadline_s() -> float:
+    try:
+        import core.settings as _s
+        return float(max(30, min(3600, int(_s.get("auto_discover_scan_deadline_s", 300) or 300))))
+    except Exception:
+        return _SCAN_WAIT_DEADLINE_S
 
 
 def _scan_subnet(subnet: dict) -> dict:
@@ -427,7 +437,8 @@ def _scan_subnet(subnet: dict) -> dict:
         return stats
 
     # Wait for the scan to finish (or deadline / shutdown).
-    deadline = time.time() + _SCAN_WAIT_DEADLINE_S
+    _dl = _scan_deadline_s()
+    deadline = time.time() + _dl
     while time.time() < deadline:
         if _stop.is_set():
             log.info(f"Auto-Discovery: abandoning in-flight scan {scan_id} "
@@ -444,7 +455,7 @@ def _scan_subnet(subnet: dict) -> dict:
         time.sleep(_SCAN_POLL_INTERVAL_S)
     else:
         log.warning(f"Auto-Discovery: scan {scan_id} on {cidr} exceeded "
-                    f"{_SCAN_WAIT_DEADLINE_S}s deadline — moving on")
+                    f"{_dl}s deadline — moving on")
         stats["errors"] = 1
         return stats
 

@@ -630,10 +630,15 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
 
 def _connect(host, port, tls, user, password):
     """Return an authenticated smtplib connection or raise."""
+    import core.settings as _s
+    try:
+        _to = max(2, min(120, int(_s.get("smtp_timeout_s", 10) or 10)))
+    except (TypeError, ValueError):
+        _to = 10
     if tls == 'ssl':
-        srv = smtplib.SMTP_SSL(host, int(port), timeout=10)
+        srv = smtplib.SMTP_SSL(host, int(port), timeout=_to)
     else:
-        srv = smtplib.SMTP(host, int(port), timeout=10)
+        srv = smtplib.SMTP(host, int(port), timeout=_to)
         if tls == 'starttls':
             try:
                 srv.starttls()
