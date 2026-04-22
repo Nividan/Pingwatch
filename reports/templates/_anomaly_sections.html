@@ -90,11 +90,11 @@
           <td>{{ r.dname }}</td>
           <td>{{ r.sname }}</td>
           <td class="mono">{{ r.stype }}</td>
-          <td class="mono">{{ r.mean_ms }} ms</td>
-          <td class="mono">{{ r.stddev_ms }} ms</td>
+          <td class="mono nowrap">{{ r.mean_ms }}&nbsp;ms</td>
+          <td class="mono nowrap">{{ r.stddev_ms }}&nbsp;ms</td>
           <td>{{ r.samples }}</td>
           <td class="mono">{{ {1:'strict',2:'balanced',3:'relaxed'}[r.sensitivity] | default(r.sensitivity) }}</td>
-          <td>{% if r.age_days is not none %}{{ r.age_days }} d{% else %}—{% endif %}</td>
+          <td class="nowrap">{% if r.age_days is not none %}{{ r.age_days }}&nbsp;d{% else %}—{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

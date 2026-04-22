@@ -958,13 +958,17 @@ async function delSensor(did,sid){
 }
 
 // ── Inline confirm (window.confirm is blocked on remote HTTP) ────
-function _pwConfirm(msg, onYes, yesLabel='Remove'){
+// opts: {danger:true, html:false}  danger=false → primary (non-destructive); html=true → msg is trusted HTML
+function _pwConfirm(msg, onYes, yesLabel='Remove', opts={}){
+  const danger = opts.danger !== false;
+  const body   = opts.html ? msg : esc(msg);
+  const yesCls = danger ? 'btn-danger' : 'btn-p';
   const ov=document.createElement('div');
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
-  ov.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:22px 26px;max-width:340px;text-align:center">
-    <p style="color:var(--text);margin:0 0 16px;font-size:14px">${esc(msg)}</p>
+  ov.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:22px 26px;max-width:380px;text-align:center">
+    <div style="color:var(--text);margin:0 0 16px;font-size:14px;line-height:1.5">${body}</div>
     <div style="display:flex;gap:10px;justify-content:center">
-      <button class="btn-danger" id="_pwc-yes">${esc(yesLabel)}</button>
+      <button class="${yesCls}" id="_pwc-yes">${esc(yesLabel)}</button>
       <button class="dp-btn" id="_pwc-no">Cancel</button>
     </div></div>`;
   document.body.appendChild(ov);

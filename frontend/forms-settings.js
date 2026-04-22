@@ -262,12 +262,16 @@ function _buildSettingsTab_users(sr, ur) {
 }
 
 async function _anomBulkEnable(){
-  if(!confirm('Enable anomaly detection on all supported sensors (ping, tcp, http, dns, http_keyword, banner)?\n\nEach gets a fresh cold-start window — no alerts fire for the first 24 hours.')) return;
-  try{
-    const r=await api('POST','/api/anomaly/bulk-enable',{});
-    if(r&&r.error){toast(r.error,'err');return;}
-    toast(`Enabled on ${r.enabled} sensor(s); skipped ${r.skipped}`,'ok');
-  }catch(e){toast('Bulk enable failed','err');}
+  const msg = `Enable anomaly detection on all supported sensors<br>
+    <span style="color:var(--text3);font-size:12px">(ping, tcp, http, dns, http_keyword, banner)</span>?
+    <br><br><span style="color:var(--text3);font-size:12px">Each gets a fresh cold-start window — no alerts fire for the first 24 hours.</span>`;
+  _pwConfirm(msg, async () => {
+    try{
+      const r=await api('POST','/api/anomaly/bulk-enable',{});
+      if(r&&r.error){toast(r.error,'err');return;}
+      toast(`Enabled on ${r.enabled} sensor(s); skipped ${r.skipped}`,'ok');
+    }catch(e){toast('Bulk enable failed','err');}
+  }, 'Enable', {danger:false, html:true});
 }
 
 function _buildSettingsTab_groups() {
