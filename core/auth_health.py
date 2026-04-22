@@ -362,8 +362,14 @@ def _refresh_ldap() -> None:
 
 def _refresh_radius() -> None:
     # Config-only by design (no network probe — phantom auth events in the
-    # RADIUS server logs are intrusive for a 1-per-hour poll).
-    _check_radius_config()
+    # RADIUS server logs are intrusive for a 1-per-hour poll). Matches SAML's
+    # refresh semantic: green badge means "local config is valid".
+    if not int(_settings.get("radius_enabled", 0) or 0):
+        return
+    from core import radius_auth
+    if _check_radius_config() is True:
+        radius_auth._record_ok()
+        log.debug("RADIUS refresh: config valid")
 
 
 def _refresh_saml() -> None:
