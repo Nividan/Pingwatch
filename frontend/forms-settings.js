@@ -4097,9 +4097,15 @@ const _DIAG_HC_SPEC = [
   { key:'smtp',      label:'SMTP',      statusKey:null,             endpoint:'/api/settings/smtp_test',      method:'POST' },
   { key:'syslog',    label:'Syslog',    statusKey:null,             endpoint:'/api/settings/syslog_test',    method:'POST' },
   { key:'dbbackup',  label:'DB Backup', statusKey:null,             endpoint:'/api/db/backup/test-remote',   method:'POST' },
-  { key:'ntp',       label:'NTP',       statusKey:null,             endpoint:'/api/diagnostics/test/ntp',    method:'POST' },
-  { key:'dns',       label:'DNS',       statusKey:null,             endpoint:'/api/diagnostics/test/dns',    method:'POST' },
+  { key:'ntp',       label:'NTP',       statusKey:null,             endpoint:'/api/diagnostics/test/ntp',    method:'POST',
+    override:{ param:'server', prompt:'NTP server to test (leave blank to use default):' } },
+  { key:'dns',       label:'DNS',       statusKey:null,             endpoint:'/api/diagnostics/test/dns',    method:'POST',
+    override:{ param:'host',   prompt:'DNS host to resolve (leave blank to use default):' } },
 ];
+
+// Per-key ad-hoc overrides from the "⚙" button. Not persisted — just
+// lets an admin try a different NTP/DNS target without saving settings.
+const _diagHcOverride = {};
 
 // Transient per-session test results for backends that have no persisted
 // status badge in app_settings (SMTP / Syslog / DB Backup / NTP / DNS).
@@ -4135,14 +4141,32 @@ function _diagRenderHcRow(spec, st) {
       when = 'on-demand';
     }
   }
+  const ovr = _diagHcOverride[spec.key];
+  const ovrHint = ovr ? `<span class="diag-hc-ovr" title="Override — click ⚙ to reset">→ ${esc(ovr)}</span>` : '';
+  const ovrBtn = spec.override
+    ? `<button class="btn-s diag-hc-ovr-btn" onclick="_diagHcSetOverride('${esc(spec.key)}')" title="Set test override">⚙</button>`
+    : '';
   return `
     <div class="diag-hc-row" id="diag-hc-${spec.key}">
       <span class="diag-badge diag-badge-${esc(badge)}" title="${esc(badge)}">●</span>
-      <span class="diag-hc-label">${esc(spec.label)}</span>
+      <span class="diag-hc-label">${esc(spec.label)}${ovrHint}</span>
       <span class="diag-hc-when">${esc(when)}</span>
       <span class="diag-hc-msg">${esc(msg)}</span>
+      ${ovrBtn}
       <button class="btn-s" onclick="_diagHcRunOne('${esc(spec.key)}')">Test</button>
     </div>`;
+}
+
+function _diagHcSetOverride(key) {
+  const spec = _DIAG_HC_SPEC.find(s => s.key === key);
+  if (!spec || !spec.override) return;
+  const current = _diagHcOverride[key] || '';
+  const val = window.prompt(spec.override.prompt, current);
+  if (val === null) return;  // cancel
+  const trimmed = val.trim();
+  if (trimmed) _diagHcOverride[key] = trimmed;
+  else delete _diagHcOverride[key];
+  _diagLoadHealthChecks();
 }
 
 function _diagHcRecord(spec, d, ok, errMsg) {
@@ -4165,16 +4189,22 @@ function _diagHcSuccessMsg(key, d) {
   return '';
 }
 
+function _diagHcBody(spec) {
+  const ovr = _diagHcOverride[spec.key];
+  if (!ovr || !spec.override) return {};
+  return { [spec.override.param]: ovr };
+}
+
 async function _diagHcRunOne(key) {
   const spec = _DIAG_HC_SPEC.find(s => s.key === key);
   if (!spec) return;
   const row = document.getElementById(`diag-hc-${spec.key}`);
   if (row) {
-    const btn = row.querySelector('button');
+    const btn = row.querySelector('button:last-child');
     if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
   }
   try {
-    const d = await api(spec.method, spec.endpoint, {});
+    const d = await api(spec.method, spec.endpoint, _diagHcBody(spec));
     const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
     _diagHcRecord(spec, d, ok, null);
     toast(`${spec.label}: ${ok ? 'OK' : (d.error || d.msg || 'failed')}`, ok ? 'ok' : 'err');
@@ -4190,7 +4220,7 @@ async function _diagTestAll() {
   let pass = 0, fail = 0;
   for (const spec of _DIAG_HC_SPEC) {
     try {
-      const d = await api(spec.method, spec.endpoint, {});
+      const d = await api(spec.method, spec.endpoint, _diagHcBody(spec));
       const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
       _diagHcRecord(spec, d, ok, null);
       if (ok) pass++; else fail++;

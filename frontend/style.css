@@ -3083,13 +3083,17 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .diag-badge-error{color:var(--down);}
 .diag-badge-unconfigured,.diag-badge-unknown{color:var(--text3);}
 
-.diag-hc-row{display:grid;grid-template-columns:24px 90px 110px 1fr auto;gap:10px;
+.diag-hc-row{display:grid;grid-template-columns:24px 1fr 110px 2fr auto auto;gap:10px;
   align-items:center;padding:6px 0;border-bottom:1px solid var(--border);}
 .diag-hc-row:last-child{border-bottom:none;}
 .diag-hc-label{font-weight:600;color:var(--text);}
+.diag-hc-ovr{margin-left:6px;font-weight:400;font-size:11px;color:var(--accent);
+  font-family:ui-monospace,Consolas,monospace;}
 .diag-hc-when{color:var(--text3);font-size:11px;}
 .diag-hc-msg{color:var(--text3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .diag-hc-row .btn-s{padding:3px 10px;font-size:11px;}
+.diag-hc-ovr-btn{min-width:0;padding:3px 7px !important;font-size:12px;opacity:.7;}
+.diag-hc-ovr-btn:hover{opacity:1;}
 
 /* Probe-from-Server tool */
 .diag-probe-tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--border2);}
@@ -3097,9 +3101,24 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   color:var(--text2);font-size:12px;border-bottom:2px solid transparent;}
 .diag-probe-tab:hover{color:var(--text);}
 .diag-probe-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
-.diag-probe-inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
-.diag-probe-inputs label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text3);}
-.diag-probe-inputs input,.diag-probe-inputs select{width:auto;font-size:12px;padding:4px 8px;min-width:200px;}
+.diag-probe-inputs{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;
+  margin-bottom:4px;}
+.diag-probe-inputs label{display:flex;flex-direction:column;gap:5px;
+  font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;
+  font-weight:500;}
+.diag-probe-inputs input,.diag-probe-inputs select{
+  width:auto;background:var(--bg3);border:1px solid var(--border2);color:var(--text);
+  font-family:'Exo 2',sans-serif;font-size:13px;padding:6px 10px;border-radius:4px;
+  outline:none;transition:border-color .15s,box-shadow .15s;box-sizing:border-box;
+  min-width:260px;text-transform:none;letter-spacing:normal;}
+.diag-probe-inputs input:focus,.diag-probe-inputs select:focus{
+  border-color:var(--accent);box-shadow:0 0 0 3px rgba(47,129,247,.15);}
+.diag-probe-inputs input[type=number]{min-width:90px;max-width:110px;}
+.diag-probe-inputs input[type=checkbox]{min-width:0;width:14px;height:14px;
+  accent-color:var(--accent);}
+.diag-probe-inputs label:has(input[type=checkbox]){
+  flex-direction:row;align-items:center;gap:6px;
+  text-transform:none;letter-spacing:normal;font-size:12px;color:var(--text2);}
 .diag-probe-result{background:var(--bg);border:1px solid var(--border2);border-radius:4px;
   padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:11px;
   max-height:240px;overflow:auto;margin-top:10px;white-space:pre-wrap;color:var(--text2);}
@@ -3114,7 +3133,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .diag-err-line:last-child{border-bottom:none;}
 @media (max-width:800px){
   .diag-err-grid{grid-template-columns:1fr;}
-  .diag-hc-row{grid-template-columns:24px 1fr auto;}
+  .diag-hc-row{grid-template-columns:24px 1fr auto auto;}
   .diag-hc-when,.diag-hc-msg{display:none;}
 }
 
