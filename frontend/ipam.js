@@ -668,6 +668,10 @@ function _ipamOpenEdit() {
               Got it — Enable Auto-Discovery
             </button>
           </div>
+          <div id="ipam-ad-size-warn" class="ipam-ad-confirm" style="display:none;border-color:var(--warn-border);background:var(--warn-bg)">
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px">⏱ Large subnet — scan may exceed deadline</div>
+            <div class="fh" id="ipam-ad-size-warn-msg"></div>
+          </div>
           <div class="fr">
             <label class="fl">DNS server <span class="fh" style="margin-left:6px">(optional)</span></label>
             <input type="text" id="ipam-edit-dns" value="${esc(sub.dns_server||'')}"
@@ -694,7 +698,24 @@ function _ipamOpenEdit() {
   const adCb      = o.querySelector('#ipam-edit-ad');
   const adConfirm = o.querySelector('#ipam-ad-confirm');
   const adConfBtn = o.querySelector('#ipam-ad-confirm-btn');
+  const adSizeWarn = o.querySelector('#ipam-ad-size-warn');
+  const adSizeMsg  = o.querySelector('#ipam-ad-size-warn-msg');
   const saveBtn   = o.querySelector('#ipam-edit-save');
+
+  // Threshold: /20 = 4096 hosts. Default 300s deadline starts to feel tight
+  // around here; /16 will almost certainly time out on real networks.
+  const _SIZE_WARN_PREFIX = 20;
+  const prefix = parseInt(String(sub.cidr || '').split('/')[1], 10);
+  const isV4   = !String(sub.cidr || '').includes(':');
+  const showSizeWarn = isV4 && Number.isFinite(prefix) && prefix <= _SIZE_WARN_PREFIX;
+  if (showSizeWarn && adSizeMsg) {
+    const hosts = Math.pow(2, 32 - prefix);
+    adSizeMsg.textContent =
+      `This subnet has ${hosts.toLocaleString()} addresses. The default scan ` +
+      `deadline (5 min) may not be enough — scans that exceed it are abandoned ` +
+      `and no devices are added. Consider raising auto_discover_scan_deadline_s ` +
+      `in Settings → Retention, or splitting this into smaller blocks (e.g. /24s).`;
+  }
 
   function _syncConfirm() {
     const checked = adCb.checked;
@@ -707,9 +728,14 @@ function _ipamOpenEdit() {
       o.dataset.adApprove = '0';
       if (saveBtn) saveBtn.disabled = true;
     }
+    if (adSizeWarn) {
+      adSizeWarn.style.display = (checked && showSizeWarn) ? 'flex' : 'none';
+    }
   }
 
   if (adCb) adCb.addEventListener('change', _syncConfirm);
+  // Initial sync — show warning if AD is already on for a large subnet.
+  _syncConfirm();
 
   if (adConfBtn) {
     adConfBtn.addEventListener('click', () => {

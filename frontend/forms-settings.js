@@ -3679,6 +3679,7 @@ const _AD_ACTION_LABELS = {
   auto_discovery_tick:                 '🔄 Scheduler tick',
   auto_discovery_run_now:              '▶ Run now',
   auto_discovery_cap_hit:              '⚠ First-scan cap hit',
+  auto_discovery_scan_timeout:         '⏱ Scan timed out',
   auto_discovery_approve_first_scan:   '✓ First-scan approved',
   auto_discovery_unsuppress:           '↺ Host unsuppressed',
   ipam_subnet_edit:                    '✎ Subnet edited',

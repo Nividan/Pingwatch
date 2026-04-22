@@ -72,6 +72,12 @@ _thread_lock = threading.Lock()
 # Serializes tick execution so run-now can't race the scheduler.
 _tick_lock   = threading.Lock()
 
+# Per-subnet "previous scan timed out" flag. Used to suppress repeat audit
+# entries when a subnet keeps timing out every tick (e.g. /16 with default
+# 5-min deadline). One audit row per failure streak; cleared on success.
+# Single-threaded access (only mutated from the auto-discovery thread).
+_subnet_timeout_flag: dict[int, bool] = {}
+
 # Last-run stats for the settings-UI status endpoint.
 _last_run_stats: dict = {
     "subnets_scanned":    0,
@@ -455,14 +461,33 @@ def _scan_subnet(subnet: dict) -> dict:
         time.sleep(_SCAN_POLL_INTERVAL_S)
     else:
         log.warning(f"Auto-Discovery: scan {scan_id} on {cidr} exceeded "
-                    f"{_dl}s deadline — moving on")
+                    f"{_dl}s deadline — raise auto_discover_scan_deadline_s "
+                    f"in Settings → Retention or split the subnet into smaller blocks")
         stats["errors"] = 1
+        # Audit entry on the first timeout in a streak. Suppresses repeats so a
+        # /16 timing out every tick doesn't drown the audit log.
+        if sid is not None and not _subnet_timeout_flag.get(sid):
+            _subnet_timeout_flag[sid] = True
+            try:
+                db_log_audit(
+                    "system", "",
+                    "auto_discovery_scan_timeout",
+                    f"cidr={cidr} deadline={int(_dl)}s — raise "
+                    f"auto_discover_scan_deadline_s or split the subnet"
+                )
+            except Exception:
+                pass
         return stats
 
     if state != "done":
         log.warning(f"Auto-Discovery: scan on {cidr} ended in state {state!r}")
         stats["errors"] = 1
         return stats
+
+    # Reached "done" — clear any prior timeout flag so a future timeout streak
+    # gets its own audit entry.
+    if sid is not None:
+        _subnet_timeout_flag.pop(sid, None)
 
     # Filter results: drop suppressed hosts.
     raw_results = st.get("results") or []
