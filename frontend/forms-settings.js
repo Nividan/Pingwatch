@@ -1036,7 +1036,7 @@ function _buildSettingsTab_sensors(sr) {
   return `<div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
         <div class="fl" style="margin-bottom:6px">Global Defaults</div>
-        <div class="fh" style="margin-bottom:10px">Applied to <b>new sensors only</b> — existing sensors keep their stored values. Override per type below.</div>
+        <div class="fh" style="margin-bottom:10px">Fallback values for <b>new sensors</b> — Interval/Timeout are used only when a type below leaves them blank. Fail/Recover apply to all types. Existing sensors keep their stored values.</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Interval (s)</label>
             <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
@@ -1085,7 +1085,7 @@ function _buildSettingsTab_sensors(sr) {
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
-        <div class="fh" style="margin-bottom:10px">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
+        <div class="fh" style="margin-bottom:10px">Fallback colour breakpoints — used only for sensors with no warn/crit configured (sensor-level or per-type). Rarely hit once types above are set.</div>
         <div class="fgrid">
           <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
             <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
@@ -1604,6 +1604,7 @@ async function openSettings(initialTab){
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-s" onclick="resetSensorTypeDefaults()">Reset to Defaults</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
     <div class="mft" id="stab-footer-networking" style="display:none">
@@ -2138,8 +2139,8 @@ async function submitInstallSigned(){
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
 
-const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:2000, ssh:1500, sftp:2000, radius:500};
-const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:5000, ssh:4000, sftp:5000, radius:2000};
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:500,  ssh:1500, sftp:500,  radius:500};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:1500, ssh:4000, sftp:1500, radius:2000};
 
 const _SDR_META = {
   ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},
@@ -2231,7 +2232,7 @@ async function loadSensorsDefaultsTab(){
     const d   = td[t] || {};
     const cnt = typeCounts[t];
     const iv  = d.interval      != null ? d.interval      : (window._snrDef?.interval||5);
-    const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||4);
+    const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||3);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
     const cm  = d.crit_ms  != null ? d.crit_ms  : (_SDR_CRIT_DEF[t] || '');
     const warnUnit = t==='tls'?'days':t==='snmp'?'val':'ms';
@@ -2261,6 +2262,21 @@ function _scanPortsReset(){
   document.querySelectorAll('.st-scan-port').forEach(cb => { cb.checked = true; });
   const el = document.getElementById('st-scan-custom');
   if(el) el.value = '';
+}
+
+async function resetSensorTypeDefaults(){
+  if (!confirm('Reset all sensor type defaults to built-in values?\n\nClick Save Sensor Defaults afterwards to apply.')) return;
+  const defaults = { vmware: {interval: 60, timeout: 10} };
+  for (const t of Object.keys(_SDR_WARN_DEF)) {
+    defaults[t] = {
+      interval: 5,
+      timeout:  3,
+      warn_ms:  _SDR_WARN_DEF[t],
+      crit_ms:  _SDR_CRIT_DEF[t],
+    };
+  }
+  window._snrTypeDefaults = defaults;
+  await loadSensorsDefaultsTab();
 }
 
 async function saveSensorTypeDefaults(){
