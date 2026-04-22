@@ -278,7 +278,8 @@ def _suggest_sensors(ip: str, hostname: str, ports: list) -> list:
         seen_keys.add((st, port))
         if st == "http":
             out.append({"stype": "http", "name": f"HTTP {port}", "port": port,
-                        "url": f"http://{ip}:{port}", "enabled": False})
+                        "url": f"http://{ip}:{port}", "verify_ssl": False,
+                        "enabled": False})
         elif st == "tls":
             out.append({"stype": "http", "name": f"HTTPS {port}", "port": port,
                         "url": f"https://{ip}:{port}", "verify_ssl": False,

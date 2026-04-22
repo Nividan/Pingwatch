@@ -1122,7 +1122,6 @@ async function api(method, path, body) {
 }
 
 // Fire-and-forget save for PingWatch settings.
-// Uses keepalive:true so the request survives page refresh.
 // On transport-level failure (server restart, network blip), retries once
 // after 1.5s before surfacing a toast; HTTP 4xx/5xx errors toast immediately.
 function _pwSave(key, value, _retry = false) {
@@ -1131,7 +1130,6 @@ function _pwSave(key, value, _retry = false) {
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
-    keepalive: true,
   }).then(r => {
     if (!r.ok) r.json().catch(() => ({ error: r.statusText }))
                .then(e => toast('⚠ Save failed (' + key + '): ' + (e.error || r.statusText)));
