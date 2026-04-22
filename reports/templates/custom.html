@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_anomaly_sections.html" as anom %}
 
 {% block content %}
 
@@ -690,6 +691,26 @@
     <p class="muted">No devices configured.</p>
   {% endif %}
 </section>
+{% endif %}
+
+<!-- ── Anomaly Detection sections (each independently selectable) ── -->
+{% if "anom_overview" in meta.sections %}
+{{ anom.anom_overview(anom_overview) }}
+{% endif %}
+{% if "anom_baseline_table" in meta.sections %}
+{{ anom.anom_baseline_table(anom_baselines) }}
+{% endif %}
+{% if "anom_fires_log" in meta.sections %}
+{{ anom.anom_fires_log(anom_fires) }}
+{% endif %}
+{% if "anom_fires_top" in meta.sections %}
+{{ anom.anom_fires_top(anom_fires_top) }}
+{% endif %}
+{% if "anom_vs_threshold" in meta.sections %}
+{{ anom.anom_vs_threshold(anom_vs_threshold) }}
+{% endif %}
+{% if "anom_recommendations" in meta.sections %}
+{{ anom.anom_recommendations(anom_recommendations) }}
 {% endif %}
 
 <!-- ── Recent admin activity ─────────────────────────────────────── -->

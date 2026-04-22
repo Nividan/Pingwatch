@@ -1338,6 +1338,222 @@ def _inventory_users() -> dict:
     return out
 
 
+# ── Anomaly Detection sections ─────────────────────────────────────────
+#
+# Six section computations powering the dedicated `anomaly` report kind
+# (and the matching opt-in checkboxes in the Custom builder). All read
+# from the existing `sensor_anomaly_baselines` table + `sensors` table +
+# `flap_log` rows with `direction='anomaly_warn'`. No new tables, no new
+# settings, no new API endpoints — pure aggregation of data PingWatch
+# already collects.
+
+# Probe types that can have anomaly detection enabled. Mirrors
+# monitoring/anomaly.py SUPPORTED_STYPES — duplicated here so the report
+# layer doesn't import from monitoring.
+_ANOMALY_ELIGIBLE_STYPES = {"ping", "tcp", "http", "dns", "http_keyword", "banner"}
+
+
+def _anom_overview() -> dict:
+    """Coverage stats: master switch state, per-stype enabled/eligible counts."""
+    from core.app_state import STATE
+    master = bool(int(_cfg("anomaly_global_enabled", 1) or 0))
+    auto_new = bool(int(_cfg("anomaly_default_new_sensors", 0) or 0))
+    cold_start_h = int(_cfg("anomaly_cold_start_hours", 24) or 0)
+
+    by_stype: dict = {}
+    total_sensors = 0
+    eligible_total = 0
+    enabled_total  = 0
+    with STATE._lock:
+        for dev in STATE.devices.values():
+            for s in dev.sensors.values():
+                total_sensors += 1
+                stype = getattr(s, "stype", "") or ""
+                eligible = stype in _ANOMALY_ELIGIBLE_STYPES
+                enabled  = bool(int(getattr(s, "anomaly_enabled", 0) or 0))
+                if eligible:
+                    eligible_total += 1
+                    if enabled:
+                        enabled_total += 1
+                row = by_stype.setdefault(stype, {"stype": stype, "total": 0,
+                                                   "eligible": 0, "enabled": 0})
+                row["total"] += 1
+                if eligible: row["eligible"] += 1
+                if enabled:  row["enabled"]  += 1
+
+    coverage_pct = round(100.0 * enabled_total / eligible_total, 1) if eligible_total else None
+    by_stype_rows = sorted(by_stype.values(), key=lambda r: (-r["eligible"], r["stype"]))
+    return {
+        "master_enabled":   master,
+        "auto_new_sensors": auto_new,
+        "cold_start_hours": cold_start_h,
+        "total_sensors":    total_sensors,
+        "eligible_total":   eligible_total,
+        "enabled_total":    enabled_total,
+        "disabled_eligible": eligible_total - enabled_total,
+        "coverage_pct":     coverage_pct,
+        "by_stype":         by_stype_rows,
+        "supported_stypes": sorted(_ANOMALY_ELIGIBLE_STYPES),
+    }
+
+
+def _anom_baseline_table(limit: int = 50) -> list:
+    """Top N sensors by sample_count from sensor_anomaly_baselines.
+
+    Returns a learning-state snapshot per sensor — mean, std-dev, sample
+    count, age-of-baseline (since enabled_since), sensitivity, and joined
+    device/sensor names (resolved via STATE so we don't query the main DB).
+    """
+    from core.app_state import STATE
+    rows: list = []
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT did, sid, mean_ms, var_ms, sample_count, "
+                    "enabled_since, updated_at "
+                    "FROM sensor_anomaly_baselines "
+                    "ORDER BY sample_count DESC NULLS LAST LIMIT %s",
+                    (int(limit),)
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            log.error(f"reports.data anomaly baselines PG error: {e}")
+    else:
+        from core.config import DB_PATH
+        con = None
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            cur = con.execute(
+                "SELECT did, sid, mean_ms, var_ms, sample_count, "
+                "enabled_since, updated_at "
+                "FROM sensor_anomaly_baselines "
+                "ORDER BY sample_count DESC LIMIT ?",
+                (int(limit),)
+            )
+            for r in cur.fetchall():
+                rows.append({"did": r[0], "sid": r[1], "mean_ms": r[2],
+                             "var_ms": r[3], "sample_count": r[4],
+                             "enabled_since": r[5], "updated_at": r[6]})
+        except Exception as e:
+            log.error(f"reports.data anomaly baselines SQLite error: {e}")
+        finally:
+            if con: con.close()
+
+    # Resolve names + sensitivity from STATE.
+    name_idx: dict = {}
+    sens_idx: dict = {}
+    with STATE._lock:
+        for dev in STATE.devices.values():
+            for s in dev.sensors.values():
+                key = (dev.device_id, s.sensor_id)
+                name_idx[key] = (dev.name, s.name, getattr(s, "stype", ""))
+                sens_idx[key] = int(getattr(s, "anomaly_sensitivity", 2) or 2)
+
+    now = time.time()
+    out: list = []
+    for r in rows:
+        key = (r.get("did"), r.get("sid"))
+        dname, sname, stype = name_idx.get(key, ("(deleted)", "(deleted)", ""))
+        var = r.get("var_ms") or 0
+        std = (var ** 0.5) if var and var > 0 else 0.0
+        enabled_since = r.get("enabled_since") or 0
+        age_days = ((now - enabled_since) / 86400.0) if enabled_since else None
+        out.append({
+            "did":         r.get("did"),
+            "sid":         r.get("sid"),
+            "dname":       dname,
+            "sname":       sname,
+            "stype":       stype,
+            "mean_ms":     round(r.get("mean_ms") or 0, 2),
+            "stddev_ms":   round(std, 2),
+            "samples":     int(r.get("sample_count") or 0),
+            "sensitivity": sens_idx.get(key, 2),
+            "age_days":    round(age_days, 1) if age_days is not None else None,
+        })
+    return out
+
+
+def _anom_fires_log(flaps: list) -> list:
+    """All anomaly_warn flaps in the report period, oldest first.
+    Filters from the already-loaded flap list — no extra DB hit.
+    """
+    return [f for f in flaps if (f.get("direction") or "").lower() == "anomaly_warn"]
+
+
+def _anom_fires_top(anom_fires: list, n: int = 10) -> list:
+    """Top N sensors ranked by number of anomaly fires in the period."""
+    counts: dict = {}
+    for f in anom_fires:
+        key = (f.get("did"), f.get("sid"))
+        if key[0] is None: continue
+        counts.setdefault(key, {"did": key[0], "sid": key[1],
+                                 "dname": f.get("dname") or "",
+                                 "sname": f.get("sname") or "",
+                                 "stype": f.get("stype") or "",
+                                 "count": 0,
+                                 "last_ts": 0.0})
+        counts[key]["count"] += 1
+        ts = f.get("ts") or 0
+        if ts > counts[key]["last_ts"]:
+            counts[key]["last_ts"] = ts
+    rows = sorted(counts.values(), key=lambda r: (-r["count"], -r["last_ts"]))
+    return rows[:max(1, int(n))]
+
+
+def _anom_vs_threshold(flaps: list) -> dict:
+    """Donut data: how many WARN events came from anomaly vs static threshold.
+    CRIT events are always threshold (anomaly only fires warn) — exclude them
+    so the donut answers "of the warns, what was the source?".
+    """
+    anom = thr = 0
+    for f in flaps:
+        d = (f.get("direction") or "").lower()
+        if d == "anomaly_warn":   anom += 1
+        elif d == "threshold_warn": thr += 1
+    total = anom + thr
+    return {
+        "anomaly_warn":   anom,
+        "threshold_warn": thr,
+        "total":          total,
+        "anomaly_pct":    round(100.0 * anom / total, 1) if total else None,
+    }
+
+
+def _anom_recommendations(limit: int = 50) -> list:
+    """Sensors that are eligible for anomaly detection but don't have it
+    enabled. Sorted by stype, then device name. Capped at `limit` for
+    readability — the count is what matters for the operator narrative.
+    """
+    from core.app_state import STATE
+    out: list = []
+    with STATE._lock:
+        for dev in STATE.devices.values():
+            for s in dev.sensors.values():
+                stype = getattr(s, "stype", "") or ""
+                if stype not in _ANOMALY_ELIGIBLE_STYPES:
+                    continue
+                if int(getattr(s, "anomaly_enabled", 0) or 0):
+                    continue
+                out.append({
+                    "did":   dev.device_id,
+                    "sid":   s.sensor_id,
+                    "dname": dev.name,
+                    "sname": s.name,
+                    "stype": stype,
+                    "host":  getattr(dev, "host", ""),
+                })
+    out.sort(key=lambda r: (r["stype"], (r["dname"] or "").lower(),
+                            (r["sname"] or "").lower()))
+    return {
+        "total":   len(out),
+        "shown":   min(limit, len(out)),
+        "limit":   int(limit),
+        "rows":    out[:int(limit)],
+    }
+
+
 # ── Public entrypoint ──────────────────────────────────────────────────
 
 def build_report_context(kind: str,
@@ -1543,6 +1759,41 @@ def build_report_context(kind: str,
     else:
         ctx["maint_windows"] = []
 
+    # ── Anomaly Detection sections ────────────────────────────────────
+    # Computed for kind='anomaly' (always all six) or for individual
+    # checkboxes ticked in the Custom builder. Each block is independent
+    # so a user can pick just the recommendations table if that's all
+    # they care about.
+    is_anomaly_kind = (kind == "anomaly")
+    def want_anom(name: str) -> bool:
+        return is_anomaly_kind or (is_custom and name in sections)
+
+    if want_anom("anom_overview"):
+        ctx["anom_overview"] = _anom_overview()
+    if want_anom("anom_baseline_table"):
+        bl_n = int(opts.get("anom_baseline_top_n", 50)) if is_custom else 50
+        ctx["anom_baselines"] = _anom_baseline_table(limit=bl_n)
+    # Fires log + top-N + vs-threshold all derive from the in-period flap list
+    # we already loaded as `clean_flaps`. If flaps weren't loaded (custom user
+    # only ticked anomaly sections without any incident sections), reload.
+    _need_anom_fires = (want_anom("anom_fires_log") or want_anom("anom_fires_top")
+                        or want_anom("anom_vs_threshold"))
+    if _need_anom_fires and not need_flaps:
+        clean_flaps = _flaps_in_window(start_ts, end_ts)
+        clean_flaps, _ = _classify_config_issues(
+            _filter_flaps_by_severity(clean_flaps, severity_min)
+        )
+    if want_anom("anom_fires_log"):
+        ctx["anom_fires"] = _anom_fires_log(clean_flaps)
+    if want_anom("anom_fires_top"):
+        top_n = int(opts.get("anom_top_n", 10)) if is_custom else 10
+        ctx["anom_fires_top"] = _anom_fires_top(_anom_fires_log(clean_flaps), top_n)
+    if want_anom("anom_vs_threshold"):
+        ctx["anom_vs_threshold"] = _anom_vs_threshold(clean_flaps)
+    if want_anom("anom_recommendations"):
+        rec_lim = int(opts.get("anom_rec_limit", 50)) if is_custom else 50
+        ctx["anom_recommendations"] = _anom_recommendations(limit=rec_lim)
+
     # ── Compare-to-previous-period (Δ) ─────────────────────────────
     # Only compute for windowed report kinds where it actually means something.
     _custom_wants_compare = is_custom and bool(sections & (_AVAIL_SECS | _INC_SECS))
@@ -1587,5 +1838,6 @@ def _default_title(kind: str) -> str:
         "executive": "Network Monitoring Report — Executive Summary",
         "technical": "Network Monitoring Report — Technical / Operations",
         "inventory": "Network Inventory & Compliance Report",
+        "anomaly":   "Anomaly Detection Report",
         "custom":    "Network Monitoring Report",
     }.get(kind, "Network Monitoring Report")

@@ -233,3 +233,94 @@ def latency_percentile_bar(latency: list, n: int = 10) -> str:
     except Exception as e:
         log.error(f"reports.charts latency_percentile_bar error: {e}")
         return ""
+
+
+
+# ── Anomaly Detection charts ───────────────────────────────────────────
+
+def anomaly_vs_threshold_donut(split: dict) -> str:
+    """
+    Donut: of all WARN-severity events in the period, how many came from
+    the learned-anomaly engine vs static thresholds.
+    split — {'anomaly_warn': N, 'threshold_warn': N, 'total': N}
+    """
+    if not split or not split.get("total"):
+        return ""
+    try:
+        anom = split.get("anomaly_warn", 0)
+        thr  = split.get("threshold_warn", 0)
+        labels, values, colors = [], [], []
+        if anom:
+            labels.append("Anomaly")
+            values.append(anom)
+            colors.append(_PRINT_ACC)
+        if thr:
+            labels.append("Threshold")
+            values.append(thr)
+            colors.append(_PRINT_WARN)
+        fig, ax = plt.subplots(figsize=(3.2, 3.2))
+        ax.set_facecolor(_PRINT_BG)
+        wedges, _texts = ax.pie(
+            values, colors=colors, startangle=90,
+            wedgeprops=dict(width=0.38, edgecolor=_PRINT_BG, linewidth=2),
+        )
+        ax.text(0, 0.05, str(split.get("total", 0)),
+                ha="center", va="center", fontsize=22, color=_PRINT_FG, fontweight="bold")
+        ax.text(0, -0.18, "warnings", ha="center", va="center",
+                fontsize=9, color=_PRINT_MUTED)
+        ax.legend(wedges, labels, loc="upper center",
+                  bbox_to_anchor=(0.5, 0.05), ncol=len(labels),
+                  frameon=False, fontsize=8, labelcolor=_PRINT_FG)
+        ax.set_title("WARN source split", fontsize=10, loc="center", pad=4,
+                     color=_PRINT_FG)
+        return _encode(fig)
+    except Exception as e:
+        log.error(f"reports.charts anomaly_vs_threshold_donut error: {e}")
+        return ""
+
+
+def anomaly_fires_timeline(anom_fires: list, start_ts: float, end_ts: float) -> str:
+    """
+    Bar chart: count of anomaly_warn events per bucket over the report
+    window. Bucket size adapts to window length so we always end up with
+    ~30-50 bars (readable; not a pixel-soup wall).
+    """
+    if not anom_fires or not start_ts or end_ts <= start_ts:
+        return ""
+    try:
+        window = end_ts - start_ts
+        # Pick a bucket so we end up with ~30-50 bars in any window.
+        if window <= 86400 * 2:           bucket = 3600          # hourly for ≤2d
+        elif window <= 86400 * 14:        bucket = 86400 // 4    # 6h for ≤2w
+        elif window <= 86400 * 60:        bucket = 86400         # daily for ≤2mo
+        elif window <= 86400 * 200:       bucket = 86400 * 3     # 3-day for ≤7mo
+        else:                             bucket = 86400 * 7     # weekly otherwise
+
+        n_buckets = int((window // bucket) + 1)
+        counts = [0] * n_buckets
+        for f in anom_fires:
+            ts = f.get("ts") or 0
+            if ts < start_ts or ts >= end_ts:
+                continue
+            idx = int((ts - start_ts) // bucket)
+            if 0 <= idx < n_buckets:
+                counts[idx] += 1
+        xs = [datetime.datetime.fromtimestamp(start_ts + i * bucket)
+              for i in range(n_buckets)]
+
+        fig, ax = plt.subplots(figsize=(8, 2.4))
+        _style_axes(ax)
+        # Width proportional to bucket so bars sit shoulder-to-shoulder
+        width_days = bucket / 86400.0 * 0.85
+        ax.bar(xs, counts, width=width_days, color=_PRINT_ACC, edgecolor="none")
+        ax.set_ylabel("Anomaly fires")
+        ax.set_title(f"Anomaly fires over time ({len(anom_fires)} total)",
+                     fontsize=10, loc="left", pad=8)
+        import matplotlib.dates as _mdates
+        _loc = _mdates.AutoDateLocator(maxticks=7)
+        ax.xaxis.set_major_locator(_loc)
+        ax.xaxis.set_major_formatter(_mdates.ConciseDateFormatter(_loc))
+        return _encode(fig)
+    except Exception as e:
+        log.error(f"reports.charts anomaly_fires_timeline error: {e}")
+        return ""
