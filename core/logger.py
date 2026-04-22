@@ -148,6 +148,83 @@ def set_debug_mode(enabled: bool):
         log.info(f"Debug mode {'enabled' if enabled else 'disabled'}")
 
 
+# ── Runtime handler swap from app_settings ───────────────────────────────
+def reconfigure_from_settings():
+    """Re-instantiate file handlers using user-configured sizes/counts.
+
+    Called once by server.py after core.settings.load() has populated the
+    in-memory cache from app_settings. Values out of range fall back to the
+    import-time defaults. No-op when the configured values match what's
+    already running, so normal startups don't churn file handles.
+    """
+    global _fh, _sh, _ah, _bkh
+    try:
+        import core.settings as _settings_mod
+    except Exception:
+        return
+
+    def _int(key, default, lo, hi):
+        try:
+            v = int(_settings_mod.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, v))
+
+    def _swap_size(logger_obj, old_handler, path, max_mb, backups):
+        new_h = RotatingFileHandler(
+            path, maxBytes=max_mb * 1_000_000,
+            backupCount=backups, encoding="utf-8"
+        )
+        new_h.setFormatter(_fmt)
+        new_h.setLevel(old_handler.level)
+        logger_obj.addHandler(new_h)
+        try:
+            logger_obj.removeHandler(old_handler)
+            old_handler.close()
+        except Exception:
+            pass
+        return new_h
+
+    def _swap_time(logger_obj, old_handler, path, days):
+        new_h = TimedRotatingFileHandler(
+            path, when="midnight", interval=1,
+            backupCount=days, encoding="utf-8"
+        )
+        new_h.setFormatter(_fmt)
+        new_h.setLevel(old_handler.level)
+        logger_obj.addHandler(new_h)
+        try:
+            logger_obj.removeHandler(old_handler)
+            old_handler.close()
+        except Exception:
+            pass
+        return new_h
+
+    # Bounds match the validators in routes/settings.py
+    main_mb  = _int("log_main_max_mb",    10,  1, 500)
+    main_bk  = _int("log_main_backups",   14,  1, 100)
+    sens_mb  = _int("log_sensors_max_mb", 20,  1, 500)
+    sens_bk  = _int("log_sensors_backups", 5,  1, 100)
+    audit_dy = _int("log_audit_days",    365,  7, 3650)
+    bkup_mb  = _int("log_backup_max_mb",   5,  1, 500)
+    bkup_bk  = _int("log_backup_backups",  5,  1, 100)
+
+    if _fh.maxBytes != main_mb * 1_000_000 or _fh.backupCount != main_bk:
+        _fh = _swap_size(log, _fh, _LOG_PATH, main_mb, main_bk)
+    if _sh.maxBytes != sens_mb * 1_000_000 or _sh.backupCount != sens_bk:
+        _sh = _swap_size(log_sensors, _sh,
+                         os.path.join(_LOG_DIR, "pingwatchsensors.log"),
+                         sens_mb, sens_bk)
+    if _ah.backupCount != audit_dy:
+        _ah = _swap_time(log_audit, _ah,
+                         os.path.join(_LOG_DIR, "pingwatchaudit.log"),
+                         audit_dy)
+    if _bkh.maxBytes != bkup_mb * 1_000_000 or _bkh.backupCount != bkup_bk:
+        _bkh = _swap_size(log_backup, _bkh,
+                          os.path.join(_LOG_DIR, "pingwatchbackup.log"),
+                          bkup_mb, bkup_bk)
+
+
 # ── Public map consumed by the log-viewer API (/api/logs/{key}) ───────────
 LOG_FILES = {
     'app':     _LOG_PATH,

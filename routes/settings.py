@@ -277,6 +277,15 @@ def handle(h, method, path, body):
             "max_workers_executor_effective": _get_effective_workers(),
             # Group K — debug mode
             "debug_mode": int(_settings.get("debug_mode", 0) or 0),
+            # Group L — Retention tab: audit DB cap + log-file rotation
+            "audit_trim_cap":      int(_settings.get("audit_trim_cap",      50000) or 50000),
+            "log_main_max_mb":     int(_settings.get("log_main_max_mb",     10)    or 10),
+            "log_main_backups":    int(_settings.get("log_main_backups",    14)    or 14),
+            "log_sensors_max_mb":  int(_settings.get("log_sensors_max_mb",  20)    or 20),
+            "log_sensors_backups": int(_settings.get("log_sensors_backups", 5)     or 5),
+            "log_audit_days":      int(_settings.get("log_audit_days",      365)   or 365),
+            "log_backup_max_mb":   int(_settings.get("log_backup_max_mb",   5)     or 5),
+            "log_backup_backups":  int(_settings.get("log_backup_backups",  5)     or 5),
         })
         return True
 
@@ -493,6 +502,24 @@ def handle(h, method, path, body):
             ("retention_raw_days", 1, 365),
             ("retention_5m_days",  7, 1825),
             ("retention_1h_days",  30, 3650),
+        ]:
+            if _k in body:
+                try:
+                    _v = max(_min, min(_max, int(body[_k])))
+                except (ValueError, TypeError):
+                    h._json(400, {"error": f"{_k} must be an integer"}); return True
+                _settings.load({_k: _v})
+                _db_enqueue(lambda _k=_k, _v=_v: db_save_settings({_k: str(_v)}))
+        # Retention tab — audit DB cap + log-file rotation knobs
+        for _k, _min, _max in [
+            ("audit_trim_cap",      1000, 1_000_000),
+            ("log_main_max_mb",     1,    500),
+            ("log_main_backups",    1,    100),
+            ("log_sensors_max_mb",  1,    500),
+            ("log_sensors_backups", 1,    100),
+            ("log_audit_days",      7,    3650),
+            ("log_backup_max_mb",   1,    500),
+            ("log_backup_backups",  1,    100),
         ]:
             if _k in body:
                 try:

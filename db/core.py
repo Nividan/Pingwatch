@@ -312,6 +312,15 @@ def db_init():
             ("retention_5m_days",      "90"),
             ("retention_1h_days",      "1095"),
             ("max_workers_executor",   "64"),
+            # Retention tab — audit DB cap + log-file rotation
+            ("audit_trim_cap",         "50000"),
+            ("log_main_max_mb",        "10"),
+            ("log_main_backups",       "14"),
+            ("log_sensors_max_mb",     "20"),
+            ("log_sensors_backups",    "5"),
+            ("log_audit_days",         "365"),
+            ("log_backup_max_mb",      "5"),
+            ("log_backup_backups",     "5"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))

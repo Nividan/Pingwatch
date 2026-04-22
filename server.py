@@ -634,6 +634,13 @@ def main():
     from core.logger import set_debug_mode as _set_dbg
     _set_dbg(int(_settings.get("debug_mode", 0) or 0) == 1)
 
+    # Swap log-file handlers to user-configured sizes/retention (Retention tab)
+    try:
+        from core.logger import reconfigure_from_settings as _reconf_logs
+        _reconf_logs()
+    except Exception as _e:
+        log.warning(f"Log handler reconfigure failed: {_e}")
+
     # Auth backend config sanity pass — populates status badges for LDAP /
     # RADIUS / SAML / OIDC before the HTTP listener is up. Fast + local-only:
     # no network calls, no heavy crypto. Failures are logged; the hourly

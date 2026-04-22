@@ -81,37 +81,9 @@ function _buildSettingsTab_general(sr) {
         <div id="st-ttl-hint" style="font-size:11px;color:var(--text3);margin-top:5px">Current: ${_fmtTtl(sr.session_ttl||86400)} — takes effect on next login</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Data Retention</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Raw Samples (days)</label>
-            <input type="number" id="st-ret-raw" value="${sr.retention_raw_days||7}" min="1" max="365" style="max-width:100px"/>
-            <div style="font-size:11px;color:var(--text3);margin-top:3px">Full-resolution probe data (default: 7)</div></div>
-          <div class="fr"><label class="fl">5-Min Aggregates (days)</label>
-            <input type="number" id="st-ret-5m" value="${sr.retention_5m_days||90}" min="7" max="1825" style="max-width:100px"/>
-            <div style="font-size:11px;color:var(--text3);margin-top:3px">5-minute rollups (default: 90)</div></div>
-          <div class="fr"><label class="fl">Hourly Aggregates (days)</label>
-            <input type="number" id="st-ret-1h" value="${sr.retention_1h_days||1095}" min="30" max="3650" style="max-width:120px"/>
-            <div style="font-size:11px;color:var(--text3);margin-top:3px">Hourly rollups for long-term history (default: 1095 / 3 years)</div></div>
-        </div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <label class="fl">Probe Workers</label>
         <input type="number" id="st-mw" value="${sr.max_workers_executor||''}" min="4" max="512" placeholder="Auto" style="max-width:100px"/>
         <div style="font-size:11px;color:var(--text3);margin-top:5px">Leave blank for auto-scaling (currently: ${sr.max_workers_executor_effective||64} workers). Set 4–512 to override.</div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Events shown</label>
-            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||50}" min="5" max="200" style="max-width:100px"/>
-            <div class="fh">Max events shown in Events tab</div></div>
-          <div class="fr"><label class="fl">Events in DB</label>
-            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
-            <div class="fh">Max flap entries kept in database</div></div>
-        </div>
-        <div class="fr" style="margin-top:6px"><label class="fl">SNMP Traps in DB</label>
-          <input type="number" id="st-trap-db" value="${sr.max_trap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
-          <div class="fh">Max SNMP trap entries kept in database</div></div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Appearance</div>
@@ -150,14 +122,6 @@ function _buildSettingsTab_general(sr) {
         </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Logging</div>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
-          <span style="font-size:12px">Debug Mode</span>
-        </label>
-        <div class="fh" style="margin-top:6px">Enable verbose debug logging. When off, only INFO and above is written to log files. View logs in the <a href="javascript:void(0)" onclick="closeM('mset');switchMainTab('logs')" style="color:var(--accent)">Logs</a> tab.</div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Server Controls</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="serverRestart()">&#x21BA; Restart Server</button>
@@ -167,6 +131,81 @@ function _buildSettingsTab_general(sr) {
       </div>
     </div>`;
 }
+
+function _buildSettingsTab_retention(sr) {
+  return `<div class="mbdy stab-fade" id="stab-retention" style="display:none;overflow-y:auto;flex:1">
+      <div class="fr">
+        <div class="fl" style="margin-bottom:10px">Database Retention</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Raw Samples (days)</label>
+            <input type="number" id="st-ret-raw" value="${sr.retention_raw_days||7}" min="1" max="365" style="max-width:100px"/>
+            <div class="fh">Full-resolution probe data (default: 7)</div></div>
+          <div class="fr"><label class="fl">5-Min Aggregates (days)</label>
+            <input type="number" id="st-ret-5m" value="${sr.retention_5m_days||90}" min="7" max="1825" style="max-width:100px"/>
+            <div class="fh">5-minute rollups (default: 90)</div></div>
+          <div class="fr"><label class="fl">Hourly Aggregates (days)</label>
+            <input type="number" id="st-ret-1h" value="${sr.retention_1h_days||1095}" min="30" max="3650" style="max-width:120px"/>
+            <div class="fh">Hourly rollups for long-term history (default: 1095 / 3 years)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Event &amp; Trap Limits</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Events shown in UI</label>
+            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||50}" min="5" max="200" style="max-width:100px"/>
+            <div class="fh">Max events rendered in the Events tab (default: 50)</div></div>
+          <div class="fr"><label class="fl">Events kept in DB</label>
+            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
+            <div class="fh">Max resolved flap entries kept before oldest are trimmed (default: 2000)</div></div>
+          <div class="fr"><label class="fl">SNMP Traps kept in DB</label>
+            <input type="number" id="st-trap-db" value="${sr.max_trap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
+            <div class="fh">Max SNMP trap entries kept (default: 2000)</div></div>
+          <div class="fr"><label class="fl">Audit entries kept in DB</label>
+            <input type="number" id="st-audit-cap" value="${sr.audit_trim_cap||50000}" min="1000" max="1000000" step="1000" style="max-width:120px"/>
+            <div class="fh">Max audit_log rows kept; trimmed on each audit write (default: 50 000)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px;display:flex;align-items:center;gap:10px">
+          <span>Log Files</span>
+          <span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:10px;background:rgba(240,165,0,.12);color:var(--warn);border:1px solid rgba(240,165,0,.35)">⚠ Restart required</span>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Changes to size-based rotation and audit retention apply after the next server restart.</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">pingwatch.log — size (MB)</label>
+            <input type="number" id="st-log-main-mb" value="${sr.log_main_max_mb||10}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Rotate main application log at this size (default: 10 MB)</div></div>
+          <div class="fr"><label class="fl">pingwatch.log — backups</label>
+            <input type="number" id="st-log-main-bk" value="${sr.log_main_backups||14}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Rotated copies kept (default: 14)</div></div>
+          <div class="fr"><label class="fl">pingwatchsensors.log — size (MB)</label>
+            <input type="number" id="st-log-sens-mb" value="${sr.log_sensors_max_mb||20}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Rotate sensor activity log at this size (default: 20 MB)</div></div>
+          <div class="fr"><label class="fl">pingwatchsensors.log — backups</label>
+            <input type="number" id="st-log-sens-bk" value="${sr.log_sensors_backups||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Rotated copies kept (default: 5)</div></div>
+          <div class="fr"><label class="fl">pingwatchaudit.log — days kept</label>
+            <input type="number" id="st-log-audit-days" value="${sr.log_audit_days||365}" min="7" max="3650" style="max-width:120px"/>
+            <div class="fh">Daily rotation; keep this many days of history (default: 365)</div></div>
+          <div class="fr"><label class="fl">pingwatchbackup.log — size (MB)</label>
+            <input type="number" id="st-log-bkup-mb" value="${sr.log_backup_max_mb||5}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Rotate device-backup log at this size (default: 5 MB)</div></div>
+          <div class="fr"><label class="fl">pingwatchbackup.log — backups</label>
+            <input type="number" id="st-log-bkup-bk" value="${sr.log_backup_backups||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Rotated copies kept (default: 5)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Diagnostics</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
+          <span style="font-size:12px">Debug Mode</span>
+        </label>
+        <div class="fh" style="margin-top:6px">Enable verbose debug logging. When off, only INFO and above is written to log files. Applies live. View logs in the <a href="javascript:void(0)" onclick="closeM('mset');switchMainTab('logs')" style="color:var(--accent)">Logs</a> tab.</div>
+      </div>
+    </div>`;
+}
+
 
 function _buildSettingsTab_users(sr, ur) {
   return `<div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px;overflow-y:auto;flex:1">
@@ -1489,6 +1528,7 @@ async function openSettings(initialTab){
     <div class="stab-layout">
     <nav class="stab-sidebar">
       <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
+      <button class="stab-nav" id="stab-btn-retention" onclick="switchSettingsTab('retention')">🗃️ Retention</button>
       <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
       <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
@@ -1503,6 +1543,7 @@ async function openSettings(initialTab){
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}
+    ${_buildSettingsTab_retention(sr)}
     ${_buildSettingsTab_users(sr, ur)}
     ${_buildSettingsTab_groups()}
     ${_buildSettingsTab_integrations(sr)}
@@ -1517,6 +1558,10 @@ async function openSettings(initialTab){
     <div class="mft" id="stab-footer-general">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
+    </div>
+    <div class="mft" id="stab-footer-retention" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="_saveRetention()">Save Retention</button>
     </div>
     <div class="mft" id="stab-footer-users" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -1574,7 +1619,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules'];
+  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules'];
 
   // Find currently visible tab
   let cur = null;
@@ -2336,22 +2381,9 @@ async function saveSettings(){
   const btn=[...document.querySelectorAll('[onclick="saveSettings()"]')].find(el=>el.offsetParent!==null);
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const body={session_ttl:ttl};
-  // Data rollup retention tiers (v0.8.0)
-  const retRaw=parseInt(document.getElementById('st-ret-raw')?.value);
-  const ret5m =parseInt(document.getElementById('st-ret-5m')?.value);
-  const ret1h =parseInt(document.getElementById('st-ret-1h')?.value);
-  if(retRaw>=1)  body.retention_raw_days=retRaw;
-  if(ret5m>=7)   body.retention_5m_days=ret5m;
-  if(ret1h>=30)  body.retention_1h_days=ret1h;
   const mwRaw=document.getElementById('st-mw')?.value?.trim();
   const mw=mwRaw ? parseInt(mwRaw) : 0;
   body.max_workers_executor = (mw>=4) ? mw : 0;  // 0 = auto
-  const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
-  const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
-  const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);
-  if(flapDisp>=5)  body.max_flaps_display=flapDisp;
-  if(flapDb>=50)   body.max_flap_entries=flapDb;
-  if(trapDb>=50)   body.max_trap_entries=trapDb;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
   // Report fields live in their own tab (saveReportSettings) and the unified branding
   // name is already collected as `org_name` above. Don't send them here.
@@ -2370,7 +2402,6 @@ async function saveSettings(){
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
   Object.assign(body,smtp);
-  body.debug_mode=document.getElementById('st-debug-mode')?.checked?1:0;
   let r;
   try{
     r=await api('PATCH','/api/settings',body);
@@ -2386,7 +2417,6 @@ async function saveSettings(){
     if(hint) hint.textContent=`Current: ${_fmtTtl(body.session_ttl)} — takes effect on next login`;
     if(typeof _sessionTtl!=='undefined') _sessionTtl=body.session_ttl;
   }
-  if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
   if('org_name' in body){
     window._snrDef=window._snrDef||{};
     const el=document.getElementById('tbVer');
@@ -2400,6 +2430,54 @@ async function _saveDebugMode(cb) {
   const r = await api('PATCH', '/api/settings', { debug_mode: cb.checked ? 1 : 0 });
   if (!r.ok) { toast('Failed to save debug mode', 'err'); cb.checked = !cb.checked; return; }
   toast(cb.checked ? 'Debug mode enabled' : 'Debug mode disabled', 'ok');
+}
+
+async function _saveRetention() {
+  const body = {};
+  const pairs = [
+    ['st-ret-raw',        'retention_raw_days',    1,        365],
+    ['st-ret-5m',         'retention_5m_days',     7,       1825],
+    ['st-ret-1h',         'retention_1h_days',    30,       3650],
+    ['st-flap-disp',      'max_flaps_display',     5,        200],
+    ['st-flap-db',        'max_flap_entries',     50,      10000],
+    ['st-trap-db',        'max_trap_entries',     50,      10000],
+    ['st-audit-cap',      'audit_trim_cap',     1000,    1000000],
+    ['st-log-main-mb',    'log_main_max_mb',       1,        500],
+    ['st-log-main-bk',    'log_main_backups',      1,        100],
+    ['st-log-sens-mb',    'log_sensors_max_mb',    1,        500],
+    ['st-log-sens-bk',    'log_sensors_backups',   1,        100],
+    ['st-log-audit-days', 'log_audit_days',        7,       3650],
+    ['st-log-bkup-mb',    'log_backup_max_mb',     1,        500],
+    ['st-log-bkup-bk',    'log_backup_backups',    1,        100],
+  ];
+  for (const [id, key, lo, hi] of pairs) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const v = parseInt(el.value);
+    if (!Number.isFinite(v)) continue;
+    if (v < lo || v > hi) {
+      toast(`${key} must be between ${lo} and ${hi}`, 'err');
+      return;
+    }
+    body[key] = v;
+  }
+  const btn = document.querySelector('#stab-footer-retention .btn-p');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  let r;
+  try {
+    r = await api('PATCH', '/api/settings', body);
+  } catch (e) {
+    toast('Failed to save retention settings', 'err');
+    return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Retention'; }
+  }
+  if (!r || !r.ok) { toast('Failed to save retention settings', 'err'); return; }
+  if (body.max_flaps_display) MAX_FLAPS = body.max_flaps_display;
+  const touchedLogFiles = Object.keys(body).some(k => k.startsWith('log_'));
+  toast(touchedLogFiles
+    ? 'Saved — restart the server for log-rotation changes to take effect'
+    : 'Retention settings saved', 'ok');
 }
 
 async function saveSecuritySettings(){
