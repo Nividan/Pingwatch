@@ -310,15 +310,19 @@ def _get_db_stats() -> dict:
                 with pg_cursor(schema) as cur:
                     cur.execute(f'SELECT COUNT(*)::bigint AS n FROM "{tbl}"')
                     n = int(cur.fetchone()["n"])
-                    # pg_partition_tree returns parent + all child partitions
-                    # for a partitioned table (e.g. sensor_samples), or just
-                    # the one table itself when not partitioned. Summing across
-                    # the tree reports the real on-disk footprint — pg_total_
-                    # relation_size on the parent alone is 0 for partitioned.
+                    # Size query must handle both cases:
+                    #   - partitioned table (sensor_samples): parent is empty,
+                    #     real data lives in month-named child partitions
+                    #   - regular table: just its own pg_total_relation_size
+                    # Direct sum = self + children-via-pg_inherits. Works for
+                    # both; pg_partition_tree returns NULL on non-partitioned
+                    # tables, which is why the previous query reported 0 B.
                     cur.execute(
-                        "SELECT COALESCE(SUM(pg_total_relation_size(relid)), 0)::bigint AS sz "
-                        "FROM pg_catalog.pg_partition_tree(%s::regclass)",
-                        (f'{schema}.{tbl}',),
+                        "SELECT (pg_total_relation_size(%s::regclass) + "
+                        "COALESCE((SELECT SUM(pg_total_relation_size(i.inhrelid)) "
+                        "          FROM pg_catalog.pg_inherits i "
+                        "          WHERE i.inhparent = %s::regclass), 0))::bigint AS sz",
+                        (f'{schema}.{tbl}', f'{schema}.{tbl}'),
                     )
                     row = cur.fetchone()
                     sz = int(row["sz"]) if row else 0

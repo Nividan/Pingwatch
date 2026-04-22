@@ -4156,8 +4156,12 @@ function _diagHcRecord(spec, d, ok, errMsg) {
 
 function _diagHcSuccessMsg(key, d) {
   if (!d) return '';
-  if (key === 'ntp')      return `drift ${(d.drift_s>=0?'+':'') + (d.drift_s||0)}s · stratum ${d.stratum||'?'}`;
-  if (key === 'dns')      return `${(d.addresses||[]).slice(0,2).join(', ') || '?'} (${d.latency_ms||0}ms)`;
+  if (key === 'ntp')      return `${d.server||'?'} · drift ${(d.drift_s>=0?'+':'') + (d.drift_s||0)}s · stratum ${d.stratum||'?'}`;
+  if (key === 'dns') {
+    const addrs = (d.addresses||[]).slice(0,2).join(', ') || '?';
+    const via   = d.resolver_used || 'system';
+    return `${d.host||'?'} → ${addrs} via ${via} (${d.latency_ms||0}ms)`;
+  }
   return '';
 }
 
