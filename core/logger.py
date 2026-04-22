@@ -25,7 +25,7 @@ sensor-specific events.
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
 _ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOG_DIR = os.path.join(_ROOT, "logs")
@@ -40,8 +40,8 @@ _fmt = logging.Formatter(
 log = logging.getLogger("pingwatch")
 log.setLevel(logging.DEBUG)
 
-# ── Rotating file handler (10 MB × 5 backups) — INFO by default ───────────
-_fh = RotatingFileHandler(_LOG_PATH, maxBytes=10_000_000, backupCount=5, encoding="utf-8")
+# ── Rotating file handler (10 MB × 14 backups) — INFO by default ──────────
+_fh = RotatingFileHandler(_LOG_PATH, maxBytes=10_000_000, backupCount=14, encoding="utf-8")
 _fh.setFormatter(_fmt)
 _fh.setLevel(logging.INFO)
 log.addHandler(_fh)
@@ -66,12 +66,15 @@ _sh.setFormatter(_fmt)
 log_sensors.addHandler(_sh)
 
 # ── Audit logger → logs/pingwatchaudit.log ────────────────────────────────
+# Compliance-oriented retention: daily rotation, 365 days kept. Audit is
+# low-volume enough that size-based rotation would give unpredictable
+# coverage; time-based rotation guarantees ~1 year of history.
 log_audit = logging.getLogger("pingwatch.audit")
 log_audit.setLevel(logging.INFO)
 log_audit.propagate = False     # don't bubble up to the main pingwatch logger
-_ah = RotatingFileHandler(
+_ah = TimedRotatingFileHandler(
     os.path.join(_LOG_DIR, "pingwatchaudit.log"),
-    maxBytes=10_000_000, backupCount=10, encoding="utf-8"
+    when="midnight", interval=1, backupCount=365, encoding="utf-8"
 )
 _ah.setFormatter(_fmt)
 log_audit.addHandler(_ah)

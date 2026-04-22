@@ -10,7 +10,7 @@ from db.helpers import db_query, db_cursor
 
 
 def db_log_audit(actor: str, ip: str, action: str, target: str = '', detail: str = ''):
-    """Append one audit entry; trim to last 2000 rows."""
+    """Append one audit entry; trim to last 50000 rows."""
     _t = f" -> {target}" if target else ""
     _d = f" | {detail}" if detail else ""
     log_audit.info(f"{actor} [{ip}] {action}{_t}{_d}")
@@ -25,7 +25,7 @@ def db_log_audit(actor: str, ip: str, action: str, target: str = '', detail: str
                 (time.time(), actor, ip, action, target, detail)
             )
             cur.execute("DELETE FROM audit_log WHERE id NOT IN "
-                        "(SELECT id FROM audit_log ORDER BY ts DESC LIMIT 2000)")
+                        "(SELECT id FROM audit_log ORDER BY ts DESC LIMIT 50000)")
     _db_enqueue(_write)
 
 
