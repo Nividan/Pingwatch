@@ -4,6 +4,12 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v0.9.6
+
+_New changes go here._
+
+---
+
 ## v0.9.5 — Quiet Hours
 
 ### 🧩 VMware Edit Metrics, verify_ssl, and log-badge regressions
