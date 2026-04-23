@@ -959,7 +959,7 @@ def handle(h, method, path, body):
         _h = host or "unknown"
         if stype == "vmware" and not vssl and _h not in _vmware_ssl_warned:
             _vmware_ssl_warned.add(_h)
-            log.warning("VMware sensor created without SSL verification for %s — enable Verify SSL for production use", _h)
+            log.warning("VMware: sensor on %s has Verify SSL disabled — enable for production use", _h)
         with STATE._lock:
             _sdev = STATE.devices.get(did)
             _spayload = _sdev.sensors[sid].to_dict() if _sdev and sid in _sdev.sensors else None
