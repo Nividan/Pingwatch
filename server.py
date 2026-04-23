@@ -651,6 +651,57 @@ def main():
     except Exception as _e:
         log.warning(f"Auth boot sanity pass crashed: {_e}")
 
+    # Auto-scale probe executor + PG pool BEFORE db_load(STATE) so that when
+    # db_load schedules probes, they run on a correctly-sized executor against
+    # a correctly-sized pool. Count sensors with a cheap COUNT(*) from the DB
+    # (STATE.devices is still empty at this point — tables exist because
+    # db_init ran earlier). Doing the pool close+reopen here is safe because
+    # no probes are scheduled yet — if we waited until after db_load the
+    # close() would race in-flight probe/alert-profile queries and raise
+    # "cursor already closed".
+    import concurrent.futures as _cf
+    _sensor_count = 0
+    try:
+        if is_pg():
+            from db.pg_pool import pg_cursor as _pg_cursor
+            with _pg_cursor("main") as _cur:
+                _cur.execute("SELECT COUNT(*) AS c FROM sensors")
+                _row = _cur.fetchone()
+                _sensor_count = int(_row["c"]) if _row else 0
+        else:
+            import sqlite3 as _sq
+            _con = _sq.connect(DB_PATH)
+            try:
+                _sensor_count = _con.execute("SELECT COUNT(*) FROM sensors").fetchone()[0]
+            finally:
+                _con.close()
+    except Exception as _e:
+        log.warning(f"Sensor count probe failed, using default executor size: {_e}")
+
+    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
+    _mw = _mw_override if _mw_override >= 4 else max(64, min(512, _sensor_count // 4 or 64))
+    if _mw != 64:
+        STATE._executor = _cf.ThreadPoolExecutor(max_workers=_mw, thread_name_prefix='pw-sensor')
+        STATE._scheduler._executor = STATE._executor
+    log.info(f"Probe executor: {_mw} workers ({'manual' if _mw_override >= 4 else 'auto'}, {_sensor_count} sensors)")
+
+    if is_pg():
+        try:
+            from db.backend import get_config as _get_cfg
+            from db.pg_pool import pg_close_pool, pg_init_pool, get_pool_max
+            _cfg = _get_cfg()
+            _pool_override_cfg = int(_cfg.get("pg_pool_max", 0) or 0)
+            if _pool_override_cfg <= 0:
+                _pool_target = max(30, min(150, _mw // 4 + 20))
+                if _pool_target != get_pool_max():
+                    pg_close_pool()
+                    pg_init_pool(max_override=_pool_target)
+                log.info(f"PG pool: {_pool_target} connections (auto, {_mw} workers)")
+            else:
+                log.info(f"PG pool: {_pool_override_cfg} connections (pg_pool_max in pingwatch.conf)")
+        except Exception as _e:
+            log.warning(f"PG pool auto-scale failed (keeping current pool): {_e}")
+
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))
     if is_pg():
@@ -756,48 +807,6 @@ def main():
     db_load(STATE)
     app_state.ready = True
     log.info(f"State loaded in {time.time()-_t0:.2f}s — {len(STATE.devices)} device(s)")
-
-    # Auto-scale probe executor + PG pool NOW — must run after db_load(STATE)
-    # because before it STATE.devices is empty and the count lands at 0,
-    # pinning the executor to 64 workers and the pool to 36 connections
-    # regardless of real sensor count.
-    #
-    # Probe executor: 1 worker per 4 sensors, clamped [64, 512]. Manual
-    # override: set max_workers_executor to 4-512 in settings; 0 = auto.
-    import concurrent.futures as _cf
-    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
-    _sensor_count = sum(len(d.sensors) for d in STATE.devices.values())
-    _mw = _mw_override if _mw_override >= 4 else max(64, min(512, _sensor_count // 4 or 64))
-    if _mw != 64:
-        _old_exec = STATE._executor
-        STATE._executor = _cf.ThreadPoolExecutor(max_workers=_mw, thread_name_prefix='pw-sensor')
-        STATE._scheduler._executor = STATE._executor
-        try: _old_exec.shutdown(wait=False)
-        except Exception: pass
-    log.info(f"Probe executor: {_mw} workers ({'manual' if _mw_override >= 4 else 'auto'}, {_sensor_count} sensors)")
-
-    # PG pool sized to executor pressure: max(30, min(150, workers//4 + 20)).
-    # Examples: 64 workers → 36 conns, 256 → 84, 512 → 148. Explicit
-    # pg_pool_max in pingwatch.conf wins. No live-resize on ThreadedConnectionPool,
-    # so close+reopen; brief because no probes have scheduled yet (start_probe_loop
-    # runs further below).
-    if is_pg():
-        try:
-            from db.backend import get_config as _get_cfg
-            from db.pg_pool import pg_close_pool, pg_init_pool, get_pool_max
-            _cfg = _get_cfg()
-            _pool_override_cfg = int(_cfg.get("pg_pool_max", 0) or 0)
-            if _pool_override_cfg <= 0:
-                _pool_target = max(30, min(150, _mw // 4 + 20))
-                if _pool_target != get_pool_max():
-                    pg_close_pool()
-                    pg_init_pool(max_override=_pool_target)
-                log.info(f"PG pool: {_pool_target} connections (auto, {_mw} workers)")
-            else:
-                log.info(f"PG pool: {_pool_override_cfg} connections (pg_pool_max in pingwatch.conf)")
-        except Exception as _e:
-            log.warning(f"PG pool auto-scale failed (keeping current pool): {_e}")
-
     threading.Thread(target=autosave_loop, args=(STATE,), daemon=True).start()
     from snmp.receiver import trap_receiver_loop
     threading.Thread(
