@@ -544,7 +544,8 @@ function _updateGrpSummary(group){
 
 function _devSnrSummaryHtml(did){
   const dev=S.devices[did];
-  const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
+  const _keys=S._devSensors?.[did]||new Set();
+  const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   if(!snrs.length) return '';
   let ok=0,warn=0,down=0;
   snrs.forEach(s=>{
@@ -708,7 +709,8 @@ function renderDp(dev){
 
 function sSnrPreview(did){
   // return up to 3 sensor preview rows for the card, respecting saved drag order
-  const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
+  const _keys=S._devSensors?.[did]||new Set();
+  const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   if(!snrs.length) return '<div class="dc-more" style="padding:6px 0">No sensors yet</div>';
   const _ord=_lsGet(`pw_snr_order_${did}`,[]);
   if(_ord.length){
@@ -806,7 +808,8 @@ function cardHTML(dev){
 
 function listRowHTML(dev){
   const st=dev.device_id ? (dev.status||'unknown') : 'unknown';
-  const snrs=Object.values(S.sensors).filter(s=>s.device_id===dev.device_id);
+  const _keys=S._devSensors?.[dev.device_id]||new Set();
+  const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   // Apply saved sensor drag order (same as sSnrPreview)
   const _ord=_lsGet(`pw_snr_order_${dev.device_id}`,[]);
   if(_ord.length){

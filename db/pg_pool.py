@@ -26,14 +26,24 @@ class PoolClosedError(Exception):
     pass
 
 
-def pg_init_pool():
-    """Create the connection pool using settings from db.backend config."""
-    global _pool, _pool_sema
+_pool_max = 0  # effective maxconn of the live pool (read by server.py auto-scale)
+
+
+def pg_init_pool(max_override: int = 0):
+    """Create the connection pool using settings from db.backend config.
+
+    `max_override` > 0 forces that pool size regardless of `pg_pool_max` in
+    pingwatch.conf — used by server.py to auto-scale the pool post-load
+    once the sensor count (and therefore executor size) is known.
+    Explicit `pg_pool_max` in the config still wins over the auto-scale
+    path (server.py checks the config before calling with override).
+    """
+    global _pool, _pool_sema, _pool_closed, _pool_max
     import psycopg2.pool
     from db.backend import get_config
 
     cfg = get_config()
-    maxconn = cfg.get("pg_pool_max", 30)
+    maxconn = int(max_override) if max_override and max_override > 0 else int(cfg.get("pg_pool_max", 30))
     _pool = psycopg2.pool.ThreadedConnectionPool(
         minconn=cfg.get("pg_pool_min", 2),
         maxconn=maxconn,
@@ -44,11 +54,18 @@ def pg_init_pool():
         password=cfg["pg_password"],
     )
     _pool_sema = threading.Semaphore(maxconn)
+    _pool_closed = False
+    _pool_max = maxconn
     log.info(
         "PostgreSQL pool ready: %s:%s/%s (min=%d max=%d)",
         cfg["pg_host"], cfg["pg_port"], cfg["pg_database"],
         cfg.get("pg_pool_min", 2), maxconn,
     )
+
+
+def get_pool_max() -> int:
+    """Return the effective maxconn of the current pool (0 if uninitialised)."""
+    return _pool_max
 
 
 def pg_close_pool():

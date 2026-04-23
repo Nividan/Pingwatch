@@ -32,6 +32,16 @@ _SAMPLE_BUF_WARN_HI   = int(_SAMPLE_BUF_MAX * 0.8)
 _SAMPLE_BUF_WARN_LO   = int(_SAMPLE_BUF_MAX * 0.5)
 _sample_highwater_armed = True  # True when we're allowed to fire the next warning
 
+# Flush observability — surfaces DB contention in Diagnostics.
+_last_flush_ms    = 0         # wall-clock ms of most recent flush
+_last_flush_rows  = 0         # row count of most recent flush
+_last_flush_ts    = 0.0       # monotonic ts of most recent flush completion
+
+# Retention trim batching — bounds DELETE runtime so the flush loop
+# can't be blocked for seconds by a mass cleanup on a large rollup table.
+_TRIM_BATCH   = 10_000
+_TRIM_YIELD_S = 0.05
+
 
 def db_buffer_sample(did, sid, ok, ms, value, ts):
     """Append one probe result to the in-memory buffer (thread-safe, no I/O).
@@ -87,39 +97,54 @@ def db_sample_buffer_stats() -> dict:
             "buf_cap":           _SAMPLE_BUF_MAX,
             "total_dropped":     _sample_drops_total,
             "dropped_last_5min": len(_sample_drops_window),
+            "last_flush_ms":     _last_flush_ms,
+            "last_flush_rows":   _last_flush_rows,
         }
 
 
 def _do_insert_samples(rows):
     """Write a batch of sample rows (called on the writer thread)."""
-    if is_pg():
-        from db.pg_pool import pg_conn
-        import psycopg2.extras
+    global _last_flush_ms, _last_flush_rows, _last_flush_ts
+    t0 = time.monotonic()
+    try:
+        if is_pg():
+            from db.pg_pool import pg_conn
+            import psycopg2.extras
+            try:
+                with pg_conn("logs") as con:
+                    psycopg2.extras.execute_values(
+                        con.cursor(),
+                        "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES %s",
+                        rows,
+                        page_size=1000,
+                    )
+            except Exception as e:
+                log.error(f"DB flush samples error: {e}")
+            return
+        # SQLite
+        con = None
         try:
-            with pg_conn("logs") as con:
-                psycopg2.extras.execute_values(
-                    con.cursor(),
-                    "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES %s",
-                    rows,
-                    page_size=1000,
-                )
+            con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+            con.executemany(
+                "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES (?,?,?,?,?,?)",
+                rows,
+            )
+            con.commit()
         except Exception as e:
             log.error(f"DB flush samples error: {e}")
-        return
-    # SQLite
-    con = None
-    try:
-        con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
-        con.executemany(
-            "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES (?,?,?,?,?,?)",
-            rows,
-        )
-        con.commit()
-    except Exception as e:
-        log.error(f"DB flush samples error: {e}")
+        finally:
+            if con:
+                con.close()
     finally:
-        if con:
-            con.close()
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        _last_flush_ms   = elapsed_ms
+        _last_flush_rows = len(rows)
+        _last_flush_ts   = time.monotonic()
+        if elapsed_ms > 2000:
+            log.warning(
+                f"Sample flush slow: {elapsed_ms} ms for {len(rows)} rows "
+                f"(>2s indicates DB contention — check retention trim, vacuum, or pool saturation)"
+            )
 
 
 def db_flush_samples():
@@ -475,8 +500,31 @@ def db_clean_samples(retention_days=None):
         _clean_sqlite(cutoff_raw, cutoff_5m, cutoff_1h)
 
 
+def _bounded_delete_pg(con, cur, table, cutoff):
+    """Delete rows in batches of _TRIM_BATCH; commit between batches so locks
+    release and concurrent sample inserts can proceed. Returns total deleted."""
+    from psycopg2 import sql as _pgsql
+    query = _pgsql.SQL(
+        "DELETE FROM {tbl} WHERE ctid IN "
+        "(SELECT ctid FROM {tbl} WHERE ts < %s LIMIT %s)"
+    ).format(tbl=_pgsql.Identifier(table))
+    total = 0
+    while True:
+        cur.execute(query, (cutoff, _TRIM_BATCH))
+        deleted = cur.rowcount or 0
+        if deleted <= 0:
+            break
+        total += deleted
+        con.commit()
+        log.debug(f"{table} trim: {deleted} rows (total={total})")
+        if deleted < _TRIM_BATCH:
+            break
+        time.sleep(_TRIM_YIELD_S)
+    return total
+
+
 def _clean_pg(cutoff_raw, cutoff_5m, cutoff_1h):
-    """PG cleanup — drops whole partitions when possible, else DELETE."""
+    """PG cleanup — drops whole partitions when possible, else bounded DELETE."""
     from db.pg_pool import pg_conn
     from psycopg2 import sql as _pgsql
     try:
@@ -516,22 +564,40 @@ def _clean_pg(cutoff_raw, cutoff_5m, cutoff_1h):
             except Exception as e:
                 log.warning(f"Partition cleanup: {e}")
 
-            # Fallback DELETE for non-partitioned or partial partitions
-            cur.execute(
-                "DELETE FROM sensor_samples WHERE ts < %s", (cutoff_raw,)
-            )
-
-            # ── Rollup tables ──────────────────────────────────────────
-            cur.execute(
-                "DELETE FROM sensor_samples_5m WHERE ts < %s", (cutoff_5m,)
-            )
-            cur.execute(
-                "DELETE FROM sensor_samples_1h WHERE ts < %s", (cutoff_1h,)
-            )
+            # Fallback bounded DELETE for non-partitioned or partial partitions.
+            n_raw = _bounded_delete_pg(con, cur, "sensor_samples",    cutoff_raw)
+            n_5m  = _bounded_delete_pg(con, cur, "sensor_samples_5m", cutoff_5m)
+            n_1h  = _bounded_delete_pg(con, cur, "sensor_samples_1h", cutoff_1h)
             cur.close()
-        log.debug("PG sample cleanup complete")
+        if n_raw or n_5m or n_1h:
+            log.info(f"PG sample cleanup: raw={n_raw} 5m={n_5m} 1h={n_1h}")
+        else:
+            log.debug("PG sample cleanup complete (nothing to trim)")
     except Exception as e:
         log.error(f"DB clean samples error: {e}")
+
+
+def _bounded_delete_sqlite(con, table, cutoff):
+    """Delete rows in batches of _TRIM_BATCH; commit between batches so the
+    sample-flush loop can grab the write lock. Returns total deleted.
+    Table names are hardcoded constants (sensor_samples, _5m, _1h)."""
+    total = 0
+    while True:
+        cur = con.execute(
+            f"DELETE FROM {table} WHERE rowid IN "
+            f"(SELECT rowid FROM {table} WHERE ts < ? LIMIT ?)",
+            (cutoff, _TRIM_BATCH),
+        )
+        deleted = cur.rowcount or 0
+        if deleted <= 0:
+            break
+        total += deleted
+        con.commit()
+        log.debug(f"{table} trim: {deleted} rows (total={total})")
+        if deleted < _TRIM_BATCH:
+            break
+        time.sleep(_TRIM_YIELD_S)
+    return total
 
 
 def _clean_sqlite(cutoff_raw, cutoff_5m, cutoff_1h):
@@ -539,11 +605,13 @@ def _clean_sqlite(cutoff_raw, cutoff_5m, cutoff_1h):
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
-        con.execute("DELETE FROM sensor_samples WHERE ts < ?", (cutoff_raw,))
-        con.execute("DELETE FROM sensor_samples_5m WHERE ts < ?", (cutoff_5m,))
-        con.execute("DELETE FROM sensor_samples_1h WHERE ts < ?", (cutoff_1h,))
-        con.commit()
-        log.debug("DB sample cleanup complete")
+        n_raw = _bounded_delete_sqlite(con, "sensor_samples",    cutoff_raw)
+        n_5m  = _bounded_delete_sqlite(con, "sensor_samples_5m", cutoff_5m)
+        n_1h  = _bounded_delete_sqlite(con, "sensor_samples_1h", cutoff_1h)
+        if n_raw or n_5m or n_1h:
+            log.info(f"DB sample cleanup: raw={n_raw} 5m={n_5m} 1h={n_1h}")
+        else:
+            log.debug("DB sample cleanup complete (nothing to trim)")
     except Exception as e:
         log.error(f"DB clean samples error: {e}")
         if "malformed" in str(e).lower():

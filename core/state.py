@@ -621,11 +621,20 @@ class MonitorState:
             worker_max = self._executor._max_workers
         except Exception:
             worker_max = 0
+        flush_ms = flush_rows = 0
+        try:
+            from db.samples import _last_flush_ms, _last_flush_rows
+            flush_ms   = _last_flush_ms
+            flush_rows = _last_flush_rows
+        except Exception:
+            pass
         return {
             "scheduler_heap":       heap_len,
             "scheduler_tombstones": tomb_len,
             "sse_listeners":        sse_count,
             "worker_max":           worker_max,
+            "last_flush_ms":        flush_ms,
+            "last_flush_rows":      flush_rows,
         }
 
     def _next_did(self):
@@ -1223,7 +1232,8 @@ class MonitorState:
             s._stopped.set()
 
     def subscribe(self):
-        q = queue.Queue(maxsize=300)
+        # Queue sized for 5k-sensor bursts: ~200 events/s × 5s buffer = 1000 msgs.
+        q = queue.Queue(maxsize=1000)
         with self._lock:
             if len(self._sse) >= 200:
                 oldest = self._sse.pop(0)
@@ -1302,7 +1312,13 @@ class MonitorState:
             self._fanout(events)
 
     def _fanout(self, events):
-        """Actual subscriber fan-out. Runs on the broadcaster thread."""
+        """Actual subscriber fan-out. Runs on the broadcaster thread.
+
+        Each subscriber gets at most a 20 ms grace window on a full queue
+        before eviction — absorbs brief GC / network hiccups without stalling
+        the broadcaster. At 200 subscribers this bounds worst-case fan-out
+        to ~4 s (only if every subscriber is saturated at once).
+        """
         msgs = [f"event: {ev}\ndata: {json.dumps(dt)}\n\n" for ev, dt in events]
         with self._lock:
             subscribers = list(self._sse)
@@ -1310,7 +1326,12 @@ class MonitorState:
         for q in subscribers:
             try:
                 for msg in msgs:
-                    q.put_nowait(msg)
+                    try:
+                        q.put_nowait(msg)
+                    except queue.Full:
+                        # Slow subscriber: give it one short grace window before
+                        # evicting. If still full, it's not keeping up — drop it.
+                        q.put(msg, timeout=0.02)
             except queue.Full:
                 dead.append(q)
         if dead:
@@ -1319,6 +1340,10 @@ class MonitorState:
                     try: self._sse.remove(d)
                     except ValueError: pass
                     self._sse_registered.pop(d, None)
+            log_sensors.warning(
+                "SSE back-pressure: evicted %d slow subscriber(s) "
+                "(queue full after 20ms grace)", len(dead)
+            )
         # Forward alert-category events to remote syslog (best-effort, non-blocking)
         for ev, dt in events:
             if ev in self._SYSLOG_EVENTS:

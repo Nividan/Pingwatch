@@ -1332,15 +1332,30 @@ async function _dwRefreshEventCount(wid) {
 }
 
 // ── Widget: Packet Loss ───────────────────────────────────────────
+// Packet-loss leaderboard cache — a full O(sensors) scan + sort per widget per
+// SSE batch is wasteful for a UI that doesn't need 4 Hz freshness. 5 s TTL
+// keyed by (threshold, limit) so widgets with different configs don't collide.
+const _plCache  = new Map();
+const _PL_TTL_MS = 5000;
+function _plLossySensors(threshold, limit) {
+  const key = `${threshold}:${limit}`;
+  const now = Date.now();
+  const hit = _plCache.get(key);
+  if (hit && now - hit.ts < _PL_TTL_MS) return hit.lossy;
+  const lossy = Object.values(S.sensors)
+    .filter(s => s.stype === 'ping' && s.loss_pct != null && s.loss_pct >= threshold)
+    .sort((a, b) => b.loss_pct - a.loss_pct)
+    .slice(0, limit);
+  _plCache.set(key, {ts: now, lossy});
+  return lossy;
+}
+
 function _dwRefreshPacketLoss(wid, cfg) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
   const limit     = Number(cfg?.limit)     || 10;
   const threshold = Number(cfg?.threshold) || 1;
-  const lossy = Object.values(S.sensors)
-    .filter(s => s.stype === 'ping' && s.loss_pct != null && s.loss_pct >= threshold)
-    .sort((a, b) => b.loss_pct - a.loss_pct)
-    .slice(0, limit);
+  const lossy = _plLossySensors(threshold, limit);
   if (!lossy.length) {
     body.innerHTML = '<div class="dw-pl-ok">✓ No packet loss</div>';
     return;
