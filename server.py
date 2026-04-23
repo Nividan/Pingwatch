@@ -651,42 +651,6 @@ def main():
     except Exception as _e:
         log.warning(f"Auth boot sanity pass crashed: {_e}")
 
-    # Auto-scale probe executor: 1 worker per 4 sensors, clamped [64, 512].
-    # Manual override: set max_workers_executor to 4-512 in settings.
-    # Setting it to 0 (or blank in UI) returns to auto mode.
-    import concurrent.futures as _cf
-    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
-    _sensor_count = sum(len(d.sensors) for d in STATE.devices.values())
-    _mw = _mw_override if _mw_override >= 4 else max(64, min(512, _sensor_count // 4 or 64))
-    if _mw != 64:
-        STATE._executor = _cf.ThreadPoolExecutor(max_workers=_mw, thread_name_prefix='pw-sensor')
-        STATE._scheduler._executor = STATE._executor
-    log.info(f"Probe executor: {_mw} workers ({'manual' if _mw_override >= 4 else 'auto'}, {_sensor_count} sensors)")
-
-    # Auto-scale PG pool to match executor pressure. Formula reserves 20 conns
-    # for HTTP/scheduler/SSE/background on top of roughly-one-per-4-workers for
-    # the probe pool. Examples: 64 workers → 36 conns, 256 → 84, 512 → 148.
-    # An explicit pg_pool_max in pingwatch.conf wins — we skip auto-scale when
-    # the operator has pinned the value themselves. No live-resize API on
-    # ThreadedConnectionPool, so we close+reopen; safe here because no HTTP
-    # is bound yet and no in-flight queries exist.
-    if is_pg():
-        try:
-            from db.backend import get_config as _get_cfg
-            from db.pg_pool import pg_close_pool, pg_init_pool, get_pool_max
-            _cfg = _get_cfg()
-            _pool_override_cfg = int(_cfg.get("pg_pool_max", 0) or 0)
-            if _pool_override_cfg <= 0:
-                _pool_target = max(30, min(150, _mw // 4 + 20))
-                if _pool_target != get_pool_max():
-                    pg_close_pool()
-                    pg_init_pool(max_override=_pool_target)
-                log.info(f"PG pool: {_pool_target} connections (auto, {_mw} workers)")
-            else:
-                log.info(f"PG pool: {_pool_override_cfg} connections (pg_pool_max in pingwatch.conf)")
-        except Exception as _e:
-            log.warning(f"PG pool auto-scale failed (keeping current pool): {_e}")
-
     app_state.effective_port      = int(_settings.get("http_port",  PORT))
     app_state.effective_snmp_port = int(_settings.get("snmp_port",  162))
     if is_pg():
@@ -792,6 +756,48 @@ def main():
     db_load(STATE)
     app_state.ready = True
     log.info(f"State loaded in {time.time()-_t0:.2f}s — {len(STATE.devices)} device(s)")
+
+    # Auto-scale probe executor + PG pool NOW — must run after db_load(STATE)
+    # because before it STATE.devices is empty and the count lands at 0,
+    # pinning the executor to 64 workers and the pool to 36 connections
+    # regardless of real sensor count.
+    #
+    # Probe executor: 1 worker per 4 sensors, clamped [64, 512]. Manual
+    # override: set max_workers_executor to 4-512 in settings; 0 = auto.
+    import concurrent.futures as _cf
+    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
+    _sensor_count = sum(len(d.sensors) for d in STATE.devices.values())
+    _mw = _mw_override if _mw_override >= 4 else max(64, min(512, _sensor_count // 4 or 64))
+    if _mw != 64:
+        _old_exec = STATE._executor
+        STATE._executor = _cf.ThreadPoolExecutor(max_workers=_mw, thread_name_prefix='pw-sensor')
+        STATE._scheduler._executor = STATE._executor
+        try: _old_exec.shutdown(wait=False)
+        except Exception: pass
+    log.info(f"Probe executor: {_mw} workers ({'manual' if _mw_override >= 4 else 'auto'}, {_sensor_count} sensors)")
+
+    # PG pool sized to executor pressure: max(30, min(150, workers//4 + 20)).
+    # Examples: 64 workers → 36 conns, 256 → 84, 512 → 148. Explicit
+    # pg_pool_max in pingwatch.conf wins. No live-resize on ThreadedConnectionPool,
+    # so close+reopen; brief because no probes have scheduled yet (start_probe_loop
+    # runs further below).
+    if is_pg():
+        try:
+            from db.backend import get_config as _get_cfg
+            from db.pg_pool import pg_close_pool, pg_init_pool, get_pool_max
+            _cfg = _get_cfg()
+            _pool_override_cfg = int(_cfg.get("pg_pool_max", 0) or 0)
+            if _pool_override_cfg <= 0:
+                _pool_target = max(30, min(150, _mw // 4 + 20))
+                if _pool_target != get_pool_max():
+                    pg_close_pool()
+                    pg_init_pool(max_override=_pool_target)
+                log.info(f"PG pool: {_pool_target} connections (auto, {_mw} workers)")
+            else:
+                log.info(f"PG pool: {_pool_override_cfg} connections (pg_pool_max in pingwatch.conf)")
+        except Exception as _e:
+            log.warning(f"PG pool auto-scale failed (keeping current pool): {_e}")
+
     threading.Thread(target=autosave_loop, args=(STATE,), daemon=True).start()
     from snmp.receiver import trap_receiver_loop
     threading.Thread(

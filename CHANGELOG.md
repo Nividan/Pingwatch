@@ -6,7 +6,21 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ## v0.9.6
 
-_New changes go here._
+### 🔢 5k-sensor scale pass
+
+Targeted backend + frontend patches to take PingWatch from ~1–2k comfortable to 5k on a single production PG instance. No architectural rewrite — thread-based probe dispatch stays, frontend stays DOM-full.
+
+**Backend**
+- **Bounded retention trim** — [db/samples.py](Pingwatch/db/samples.py) — `DELETE … LIMIT 10 000` loop (via `ctid`/`rowid`) with commit between batches and a 50 ms yield, so the unpaged `DELETE FROM sensor_samples WHERE ts < ?` can no longer lock the table for seconds and spill the 50k sample buffer. Applies to both PG and SQLite, all three tiers (`sensor_samples`, `_5m`, `_1h`)
+- **SSE broadcaster back-pressure** — [core/state.py](Pingwatch/core/state.py) — per-subscriber queue bumped 300 → 1000 for 5k-scale bursts; `put_nowait` now falls back to a 20 ms grace `put(timeout=0.02)` before eviction (absorbs brief GC/network hiccups), and evictions are logged at WARN for operator visibility
+- **Profile invalidation debounce** — [routes/alert_profiles.py](Pingwatch/routes/alert_profiles.py) — `_invalidate()` now uses a 5 s `threading.Timer` to coalesce rapid bumps of `_profile_cache_ver`; a burst of N profile edits collapses into one 5k-sensor re-resolve storm instead of N
+- **PG pool auto-scale** — [db/pg_pool.py](Pingwatch/db/pg_pool.py) + [server.py](Pingwatch/server.py) — `pg_init_pool(max_override=…)` + post-load reopen mirrors the probe-executor auto-scale pattern. Formula `max(30, min(150, workers // 4 + 20))` — 64 workers → 36 conns, 256 → 84, 512 → 148. Explicit `pg_pool_max` in `pingwatch.conf` still wins; new `get_pool_max()` helper exposes the live size
+- **Sample-flush duration observability** — [db/samples.py](Pingwatch/db/samples.py) + [core/state.py](Pingwatch/core/state.py) — each flush tracked in `_last_flush_ms` / `_last_flush_rows`; WARN log when a flush exceeds 2 s (indicates DB contention); surfaced in `get_runtime_snapshot()` so the Diagnostics tab shows it
+
+**Frontend**
+- **O(n) → O(1) sensor lookups in Devices tab** — [frontend/devices.js](Pingwatch/frontend/devices.js) — `listRowHTML()`, `_devSnrSummaryHtml()`, and `sSnrPreview()` switched from `Object.values(S.sensors).filter(s => s.device_id === did)` to the pre-maintained `S._devSensors[did]` Set. At 500 devices × 5k sensors this collapses ~5M comparisons per SSE batch into ~5k
+- **Packet-loss widget memoization** — [frontend/dashboard.js](Pingwatch/frontend/dashboard.js) — `_dwRefreshPacketLoss()` now goes through a 5 s TTL cache keyed by `(threshold, limit)` so the O(sensors) filter + sort doesn't run on every 250 ms SSE batch
+- **Health-bar pill throttle** — [frontend/app.js](Pingwatch/frontend/app.js) — `updatePills()` now throttled to 1 Hz (leading + trailing edge) instead of firing on every 250 ms SSE batch; visual pills don't need 4 Hz updates
 
 ---
 
