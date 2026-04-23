@@ -1353,11 +1353,13 @@ async function _iipAlertResolve(id) {
 }
 
 function _iipOpenDevice(did) {
+  if (did === '_system') return;  // synthetic did for system certs — nothing to open
   _closeEvtDetail();
   switchMainTab('devices');
   if (did && typeof openDevWin === 'function') openDevWin(did);
 }
 function _iipOpenHistory(did, sid) {
+  if (did === '_system') return;
   _closeEvtDetail();
   switchMainTab('devices');
   if (did && sid && typeof openDetail === 'function') openDetail(did, sid, 'history');

@@ -23,6 +23,7 @@ _SSL_LABELS = {0: 'none', 1: 'LDAPS', 2: 'StartTLS'}
 # live login attempts — prevents torn reads of {ts, msg} during badge render.
 _last_ok_ts: float = 0.0
 _last_err: dict = {'ts': 0.0, 'msg': ''}
+_last_warn: dict = {'ts': 0.0, 'msg': ''}
 _status_lock = _threading.Lock()
 
 
@@ -38,25 +39,36 @@ def _record_err(msg: str) -> None:
         _last_err = {'ts': _time_mod.time(), 'msg': str(msg)[:200]}
 
 
+def _record_warn(msg: str) -> None:
+    global _last_warn
+    with _status_lock:
+        _last_warn = {'ts': _time_mod.time(), 'msg': str(msg)[:200]}
+
+
 def get_ldap_status() -> dict:
     """Return connection status dict for the Settings API."""
     cfg = _get_cfg()
     with _status_lock:
         ok_ts = _last_ok_ts
-        err = dict(_last_err)
+        err  = dict(_last_err)
+        warn = dict(_last_warn)
     if not cfg.get('server'):
         state = 'unconfigured'
     elif err['ts'] and (not ok_ts or err['ts'] > ok_ts):
         state = 'error'
+    elif warn['ts'] and warn['ts'] > (ok_ts or 0) and warn['ts'] > (err['ts'] or 0):
+        state = 'warning'
     elif ok_ts:
         state = 'ok'
     else:
         state = 'configured'
     return {
-        'state':        state,
-        'last_ok_ts':   ok_ts or None,
-        'last_err_ts':  err['ts'] or None,
-        'last_err_msg': err['msg'],
+        'state':         state,
+        'last_ok_ts':    ok_ts or None,
+        'last_err_ts':   err['ts'] or None,
+        'last_err_msg':  err['msg'],
+        'last_warn_ts':  warn['ts'] or None,
+        'last_warn_msg': warn['msg'],
     }
 
 

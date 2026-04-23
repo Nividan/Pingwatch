@@ -2996,8 +2996,8 @@ function _timeAgo(ts) {
 function _renderIntegStatus(id, status) {
   const el = document.getElementById(`${id}-status-bar`);
   if (!el) return;
-  const icons   = {ok:'🟢', error:'⚠️', unconfigured:'🔴', configured:'🟡'};
-  const labels  = {ok:'Connected', error:'Misconfigured', unconfigured:'Not configured', configured:'Configured'};
+  const icons   = {ok:'🟢', warning:'🟡', error:'⚠️', unconfigured:'🔴', configured:'🟡'};
+  const labels  = {ok:'Connected', warning:'Cert near expiry', error:'Misconfigured', unconfigured:'Not configured', configured:'Configured'};
   const icon    = icons[status.state]  || '🔴';
   const label   = labels[status.state] || status.state;
   const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
@@ -3022,12 +3022,16 @@ function _renderIntegStatus(id, status) {
   }
   const errHtml = errMsg
     ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(errMsg)}</div>` : '';
+  const warnMsg = (status.state === 'warning' && status.last_warn_msg) ? status.last_warn_msg : '';
+  const warnHtml = warnMsg
+    ? `<div style="font-size:11px;color:var(--warn);margin-top:3px">${esc(warnMsg)}</div>` : '';
   el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
     <span style="font-size:16px;line-height:1.3">${icon}</span>
     <div>
       <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
       <span style="font-size:11px;color:var(--text3);margin-left:10px">${lastLabel}: ${lastOk}</span>
       ${extraLineHtml}
+      ${warnHtml}
       ${errHtml}
     </div>
   </div>`;

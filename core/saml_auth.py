@@ -35,6 +35,7 @@ from core.logger import log
 
 _last_ok_ts: float | None = None
 _last_err: dict = {}
+_last_warn: dict = {}
 
 _last_ok_lock = threading.Lock()
 
@@ -51,23 +52,35 @@ def _record_err(msg: str) -> None:
         _last_err = {"ts": time.time(), "msg": (msg or "")[:300]}
 
 
+def _record_warn(msg: str) -> None:
+    global _last_warn
+    with _last_ok_lock:
+        _last_warn = {"ts": time.time(), "msg": (msg or "")[:300]}
+
+
 def get_saml_status() -> dict:
     enabled = int(_settings.get("saml_enabled", 0) or 0)
     idp     = (_settings.get("saml_idp_sso_url", "") or "").strip()
     sp_cert = (_settings.get("saml_sp_cert_pem", "") or "").strip()
+    err_ts  = _last_err.get("ts") if _last_err else None
+    warn_ts = _last_warn.get("ts") if _last_warn else None
     if not enabled or not idp or not sp_cert:
         state = "unconfigured"
-    elif _last_err and (not _last_ok_ts or _last_err["ts"] > _last_ok_ts):
+    elif err_ts and (not _last_ok_ts or err_ts > _last_ok_ts):
         state = "error"
+    elif warn_ts and warn_ts > (_last_ok_ts or 0) and warn_ts > (err_ts or 0):
+        state = "warning"
     elif _last_ok_ts:
         state = "ok"
     else:
         state = "configured"
     return {
-        "state":        state,
-        "last_ok_ts":   _last_ok_ts,
-        "last_err_ts":  _last_err.get("ts") if _last_err else None,
-        "last_err_msg": _last_err.get("msg", "") if _last_err else "",
+        "state":         state,
+        "last_ok_ts":    _last_ok_ts,
+        "last_err_ts":   err_ts,
+        "last_err_msg":  _last_err.get("msg", "") if _last_err else "",
+        "last_warn_ts":  warn_ts,
+        "last_warn_msg": _last_warn.get("msg", "") if _last_warn else "",
     }
 
 

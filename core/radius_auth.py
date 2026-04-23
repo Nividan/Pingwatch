@@ -69,6 +69,7 @@ ATTRIBUTE Message-Authenticator  80 octets
 
 _last_ok_ts: float | None = None
 _last_err:   dict = {}   # {"ts": float, "msg": str}
+_last_warn:  dict = {}   # {"ts": float, "msg": str}
 # Lock added when auth_health refresh loop started running concurrently with
 # live login attempts — prevents torn reads of {ts, msg} during badge render.
 _status_lock = threading.Lock()
@@ -90,6 +91,12 @@ def _record_err(msg: str) -> None:
         _last_err = {"ts": time.time(), "msg": (msg or "")[:200]}
 
 
+def _record_warn(msg: str) -> None:
+    global _last_warn
+    with _status_lock:
+        _last_warn = {"ts": time.time(), "msg": (msg or "")[:200]}
+
+
 def _radius_dbg(msg: str) -> None:
     """Emit a debug log when radius_debug or the general debug_mode is on."""
     if int(_settings.get('radius_debug', 0) or 0) or int(_settings.get('debug_mode', 0) or 0):
@@ -97,25 +104,32 @@ def _radius_dbg(msg: str) -> None:
 
 
 def get_radius_status() -> dict:
-    """Return {state, last_ok_ts, last_err_ts, last_err_msg} for the badge."""
+    """Return {state, last_ok_ts, last_err_ts, last_err_msg, last_warn_ts, last_warn_msg}."""
     enabled = int(_settings.get("radius_enabled", 0) or 0)
     server = (_settings.get("radius_server", "") or "").strip()
     with _status_lock:
         ok_ts = _last_ok_ts
-        err = dict(_last_err) if _last_err else {}
+        err  = dict(_last_err)  if _last_err  else {}
+        warn = dict(_last_warn) if _last_warn else {}
+    err_ts  = err.get("ts")  if err  else None
+    warn_ts = warn.get("ts") if warn else None
     if not enabled or not server:
         state = "unconfigured"
-    elif err and (not ok_ts or err["ts"] > ok_ts):
+    elif err_ts and (not ok_ts or err_ts > ok_ts):
         state = "error"
+    elif warn_ts and warn_ts > (ok_ts or 0) and warn_ts > (err_ts or 0):
+        state = "warning"
     elif ok_ts:
         state = "ok"
     else:
         state = "configured"
     return {
-        "state":        state,
-        "last_ok_ts":   ok_ts,
-        "last_err_ts":  err.get("ts") if err else None,
-        "last_err_msg": err.get("msg", "") if err else "",
+        "state":         state,
+        "last_ok_ts":    ok_ts,
+        "last_err_ts":   err_ts,
+        "last_err_msg":  err.get("msg", "")  if err  else "",
+        "last_warn_ts":  warn_ts,
+        "last_warn_msg": warn.get("msg", "") if warn else "",
     }
 
 
