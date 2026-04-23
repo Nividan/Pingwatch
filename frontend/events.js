@@ -632,32 +632,88 @@ function _buildEvtGroupCard(g) {
   return row;
 }
 
+// Short variant of _groupLabel() that omits the device name — used in table
+// mode where the device has its own column and repeating it in the label
+// would read as noise.
+function _groupLabelShort(g) {
+  const dir = g._direction || (g.events[0]?._direction) || (g.events[0]?.direction) || '';
+  if (g._groupType === 'flap') {
+    return `${esc(g.sname || '')} flapped ${g.events.length}×`;
+  }
+  const uniqSids = new Set(g.events.map(m => m.sid)).size;
+  const dirWord = (dir === 'recovered' || dir === 'threshold_ok') ? 'recovered'
+               : (dir === 'down' || dir === 'threshold')          ? 'went down'
+               : dir;
+  return `${uniqSids} sensor${uniqSids === 1 ? '' : 's'} ${dirWord}`;
+}
+
 function _buildEvtGroupTableRow(g) {
+  // Render the group as TWO sibling rows: a column-aligned summary row that
+  // matches the 8-column layout of regular events, and a hidden detail row
+  // (colspan=8) with the nested events table that reveals on click. This
+  // keeps the eye-scan rhythm consistent — severity/time/device line up in
+  // the same columns whether the row is a single event or a collapsed group.
+  const frag = document.createDocumentFragment();
   const sev = _groupSeverity(g);
-  const label = _groupLabel(g);
-  const dispTime = g.ts ? (typeof fmtTs === 'function' ? fmtTs(g.ts) : g.ts) : '';
-  const tr = document.createElement('tr');
-  tr.className = 'evt-group-row';
-  const td = document.createElement('td');
-  td.colSpan = 8;
-  td.style.padding = '0';
-  const det = document.createElement('details');
-  det.className = 'evt-group';
-  det.innerHTML =
-    `<summary class="evt-group-summary">` +
+  const shortLabel = _groupLabelShort(g);
+
+  // Span — how long the burst lasted across all member events
+  const memberTs = g.events.map(x => new Date(x.ts).getTime()).filter(t => isFinite(t));
+  const spanSec = memberTs.length >= 2
+    ? Math.max(...memberTs) - Math.min(...memberTs)
+    : 0;
+  const spanStr = spanSec > 0 ? _fmtDuration(spanSec / 1000) : '—';
+
+  const [date, time] = (g.ts || '').split(' ');
+  const dispTime = g.ts
+    ? (typeof fmtTs === 'function' ? fmtTs(g.ts) : (g.ts.split('T')[1] || time || g.ts))
+    : (time || '');
+  const dispDate = g.ts ? (g.ts.split('T')[0] || date || '') : (date || '');
+
+  // ── Summary row (same 8 columns as a regular event row) ──
+  const sumRow = document.createElement('tr');
+  sumRow.className = 'evt-group-sum-row';
+  sumRow.style.cursor = 'pointer';
+  sumRow.innerHTML =
+    `<td class="evt-group-sev-cell">` +
+      `<span class="evt-group-chevron">▸</span>` +
       `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev] || sev.toUpperCase()}</span>` +
-      `<span class="evt-group-label">${label}</span>` +
-      `<span class="evt-group-count">${g.events.length} events</span>` +
-      `<span class="evt-time">${dispTime}</span>` +
-    `</summary>`;
-  // Build the inner events as a nested table (reuses _buildEvtTable but strips
-  // the wrapping <div>). Cheap: renders one table per group, expanded lazily.
+    `</td>` +
+    `<td class="evt-td-time">${dispTime}<br><span style="color:var(--text3);font-size:10px">${dispDate}</span></td>` +
+    `<td>${esc(g.dname || '')}</td>` +
+    `<td class="evt-group-label">${shortLabel}</td>` +
+    `<td>&mdash;</td>` +
+    `<td style="color:var(--text3)">Burst of related events — click to expand</td>` +
+    `<td class="evt-td-dur">${spanStr}</td>` +
+    `<td><span class="evt-group-count">${g.events.length} events</span></td>`;
+
+  // ── Detail row (hidden by default; nested inner table on expand) ──
+  const detRow = document.createElement('tr');
+  detRow.className = 'evt-group-det-row';
+  detRow.style.display = 'none';
+  const detTd = document.createElement('td');
+  detTd.colSpan = 8;
+  detTd.style.padding = '0';
   const inner = _buildEvtTable(g.events);
   inner.classList.add('evt-group-inner-table');
-  det.appendChild(inner);
-  td.appendChild(det);
-  tr.appendChild(td);
-  return tr;
+  detTd.appendChild(inner);
+  detRow.appendChild(detTd);
+
+  // Toggle on summary-row click — don't fire if the user clicked a button
+  // inside the row (e.g. ACK / Resolve on an individual inner event).
+  let expanded = false;
+  sumRow.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, input')) return;
+    expanded = !expanded;
+    detRow.style.display = expanded ? '' : 'none';
+    sumRow.classList.toggle('evt-group-open', expanded);
+    const chev = sumRow.querySelector('.evt-group-chevron');
+    if (chev) chev.textContent = expanded ? '▾' : '▸';
+  });
+
+  frag.appendChild(sumRow);
+  frag.appendChild(detRow);
+  return frag;
 }
 
 // ── Card builder ──────────────────────────────────────────────────
