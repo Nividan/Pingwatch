@@ -560,7 +560,11 @@ async function openEditVmMetrics(did, vmid, vmName, isHost){
   const ref = existing[0] || {};
   const refHost = ref.host || S.devices[did]?.host || '';
   const refPort = ref.port || 443;
-  const refUser = ref.vmware_user || '';
+  const refUser = ref.vmware_user || S.devices[did]?.vmware_user_default || '';
+  // If the device has a default VMware password stored, the backend will use
+  // it when POST /api/device/:did/sensor comes in without a password. Detect
+  // that here so we don't pester the user for a password they already saved.
+  const hasDevPw = !!S.devices[did]?.has_vmware_password_default;
   // Use truthy/falsy, not `!== 0`: backend sends JSON boolean `false`, and
   // `false !== 0` is `true` under strict inequality (different types) — which
   // would silently flip verify_ssl to true on any metric added via this modal.
@@ -606,8 +610,8 @@ async function openEditVmMetrics(did, vmid, vmName, isHost){
         </div>
         <div id="vme-grid">${groupHTML}</div>
         <div id="vme-pwd-block" style="display:none;border-top:1px solid var(--border);padding-top:12px">
-          <div class="fl" style="margin-bottom:6px">vCenter / ESXi password</div>
-          <input type="password" id="vme-pwd" placeholder="Required to add new metrics" autocomplete="new-password" style="max-width:320px"/>
+          <div class="fl" style="margin-bottom:6px">vCenter / ESXi password${hasDevPw?' <span style="color:var(--text3);font-weight:400">(optional — device default will be used if blank)</span>':''}</div>
+          <input type="password" id="vme-pwd" placeholder="${hasDevPw?'Leave blank to use device default':'Required to add new metrics'}" autocomplete="new-password" style="max-width:320px"/>
           <div class="fh" style="margin-top:4px">
             User: <strong>${esc(refUser||'(unset)')}</strong> · Host: <strong>${esc(refHost)}:${refPort}</strong>
           </div>
@@ -625,7 +629,7 @@ async function openEditVmMetrics(did, vmid, vmName, isHost){
   o._vmEdit = {
     did, vmid, vmName, isHost,
     refHost, refPort, refUser, refVssl, refInterval, refTimeout,
-    byMetric,
+    byMetric, hasDevPw,
   };
 
   // Live-update summary + show/hide password block as ticks change.
@@ -672,12 +676,13 @@ async function _vmEditSave(did, vmid, isHost){
     return;
   }
 
-  // Need creds for adds. If the user previously left vmware_user blank
-  // (e.g. anonymous host), allow empty user but still ask for password.
+  // Need creds for adds. If the device has a default vmware password the
+  // backend will fall back to it when the POST body omits `vmware_password`,
+  // so a blank field is fine. Otherwise demand one.
   let pwd = '';
   if (toAdd.length > 0) {
     pwd = (document.getElementById('vme-pwd')?.value || '').trim();
-    if (!pwd) {
+    if (!pwd && !ctx.hasDevPw) {
       toast('Password required to add new metrics', 'err');
       return;
     }
