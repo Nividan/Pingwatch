@@ -320,8 +320,25 @@ def _drain_all() -> None:
 
 
 def shutdown() -> None:
-    """Stop the flusher and drain remaining items. Safe to call multiple times."""
+    """Stop the flusher and drain remaining items. Safe to call multiple times.
+
+    Asynchronous: just signals the daemon flusher, which drains on its next
+    wakeup. Used by the atexit handler as a last-chance safety net.
+    """
     _SHUTDOWN.set()
+
+
+def shutdown_sync() -> None:
+    """Synchronously drain all pending alerts. Call from main() shutdown path
+    BEFORE tearing down the DB pool — otherwise the atexit-triggered async
+    drain runs after pg_close_pool() and every dispatch call fails with
+    'PostgreSQL pool is closed'. Safe to call multiple times (drain pops
+    under _QUEUE_LOCK so a subsequent atexit drain is a no-op)."""
+    _SHUTDOWN.set()
+    try:
+        _drain_all()
+    except Exception as e:
+        log.error(f"alert_batcher: shutdown_sync drain error: {e}")
 
 
 # Register atexit so pending batches don't vanish when the process stops.

@@ -992,6 +992,14 @@ def main():
         STATE._executor.shutdown(wait=True)
     except Exception as e:
         log.warning(f"executor final drain failed: {e}")
+    # Drain pending alert batches synchronously — otherwise alert_batcher's
+    # atexit hook runs after pg_close_pool() and every dispatch raises
+    # "PostgreSQL pool is closed".
+    try:
+        from monitoring.alert_batcher import shutdown_sync as _drain_alerts
+        _drain_alerts()
+    except Exception as e:
+        log.warning(f"alert_batcher drain failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()

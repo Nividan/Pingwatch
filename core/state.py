@@ -886,8 +886,19 @@ class MonitorState:
 
         dev = self.devices.get(did)   # re-fetch (unprotected, Device is stable)
         # Hard timeout guard: if s.probe() hangs (misbehaving stack, stuck DNS/TLS),
-        # run it on an orphan daemon thread and abandon it after timeout+3s so the
-        # worker returns to the pool instead of staying pinned.
+        # run it on an orphan daemon thread and abandon it after a generous
+        # upper bound so the worker returns to the pool instead of staying pinned.
+        # Per-stype ceilings cover the worst well-behaved case for each probe:
+        #   - VMware:  SmartConnect caps at 60s (vmware/client.py), add metric fetch
+        #   - SMTP:    5-stage probe (connect/EHLO/STARTTLS/AUTH/MAILFROM) × timeout
+        #   - SSH/SFTP: paramiko auth + optional file stat/checksum can run long
+        # For fast probes (ping/tcp/http/dns/snmp/tls/banner/radius), their own
+        # internal timeouts finish long before the cap — it only triggers when
+        # the stack is truly stuck.
+        _PROBE_HARD_CAP_S = {
+            "vmware": 90, "smtp": 60, "ssh": 45, "sftp": 60,
+        }
+        _cap = max((s.timeout or 5) + 3, _PROBE_HARD_CAP_S.get(s.stype, 15))
         _probe_result = [None]
         def _probe_runner():
             try:
@@ -899,9 +910,10 @@ class MonitorState:
         _pt = threading.Thread(target=_probe_runner, daemon=True,
                                name=f"pw-probe-{did}-{sid}")
         _pt.start()
-        _pt.join(timeout=(s.timeout or 5) + 3)
+        _pt.join(timeout=_cap)
         if _probe_result[0] is None:
-            log_sensors.warning(f"Probe hard-timeout: {dev.name if dev else did}/{s.name} "
+            log_sensors.warning(f"Probe hard-timeout ({_cap}s): "
+                                f"{dev.name if dev else did}/{s.name} "
                                 f"({s.host}) — worker released, orphan thread continues")
             result = {"ok": False, "ms": None,
                       "detail": "Probe exceeded hard timeout", "value": None}
