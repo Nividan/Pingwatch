@@ -270,6 +270,8 @@ In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe 
 
 **Webhook dispatcher queue.** Flap-down webhooks go through module-level `_enqueue_webhook(url, payload)` which drops onto `_WEBHOOK_Q: queue.Queue(maxsize=100)` and a single lazily-started `pw-webhook` dispatcher thread. `_send_webhook()` itself remains the worker (SSRF guard + 5 s `urlopen` timeout); the queue caps concurrency during flap storms so one slow webhook endpoint can't fork hundreds of daemon threads. Saturation is observable (`Webhook queue full (cap=100), dropping event for ...` WARN).
 
+**Shutdown ordering.** `server.py::main()` calls `STATE._executor.shutdown(wait=False)` early to let other teardown (writer drain, scheduler stops) run in parallel, then a final `shutdown(wait=True)` barrier immediately before `pg_close_pool()`. Without the second barrier, a probe that had cleared its `s.running` guard could still run through the alert-engine path (e.g. `db_get_stage_state`) and hit the pool mid-close with `InterfaceError: cursor already closed`. The alert batcher needs the same ordering: its `shutdown()` is async (signals an event; drain happens on the flusher thread or via atexit), so `monitoring.alert_batcher.shutdown_sync()` was added to drain in-process *before* the pool close. Both calls are idempotent — subsequent atexit runs are no-ops.
+
 ### `core/constants.py`
 Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
 
