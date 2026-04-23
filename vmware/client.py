@@ -268,6 +268,40 @@ def _invalidate_session(host, user):
 # PropertyCollector helper — one SOAP call for N objects × M properties
 # ---------------------------------------------------------------------------
 
+def _fetch_single_object_props(si, obj_moref, property_paths):
+    """Fetch properties for ONE ManagedObject in a single SOAP call.
+
+    Used on the hot probe path where we have a MoRef (VM/Host/Datastore)
+    and need several of its properties. Replaces the classic pyVmomi
+    anti-pattern of `obj.property_a; obj.property_b; obj.property_c` which
+    issues one SOAP round-trip per property access.
+
+    Returns a dict of {path: value}. If the object doesn't exist, or the
+    PropertyCollector query fails, returns {}. Individual property-fetch
+    errors (e.g. NoPermission on one field) silently drop that key — use
+    `.get(path, default)` when reading.
+    """
+    _, _, vim, vmodl = _require_pyvmomi()
+    obj_spec = vmodl.query.PropertyCollector.ObjectSpec(obj=obj_moref, skip=False)
+    prop_spec = vmodl.query.PropertyCollector.PropertySpec(
+        type=type(obj_moref), pathSet=list(property_paths), all=False
+    )
+    filter_spec = vmodl.query.PropertyCollector.FilterSpec(
+        objectSet=[obj_spec], propSet=[prop_spec]
+    )
+    try:
+        results = si.content.propertyCollector.RetrieveContents([filter_spec]) or []
+    except Exception as e:
+        # Don't escalate — caller reads {} as "object not found" and returns a
+        # clean error. A real connection drop will be caught by the session
+        # layer on the next probe.
+        log.debug(f"_fetch_single_object_props({obj_moref}) failed: {e}")
+        return {}
+    if not results:
+        return {}
+    return {dp.name: dp.val for dp in (results[0].propSet or [])}
+
+
 def _collect_properties(si, view_obj, obj_type, property_paths):
     """Bulk-fetch properties for every object in `view_obj` in ONE SOAP call.
 
@@ -686,32 +720,29 @@ def vmware_probe(host, user, password, vm_id, metric,
     # Datastore metric branch
     # ══════════════════════════════════════════════════════════════════
     if is_datastore:
-        ds_moref = None
+        # Build a client-side proxy to the datastore by its MoID — no SOAP
+        # round-trip, no view enumeration. Replaces the previous pattern of
+        # listing EVERY datastore in vCenter and scanning for a matching moId.
         try:
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.Datastore], recursive=True
-            )
-            for ds in view.view:
-                if ds._moId == vm_id:
-                    ds_moref = ds
-                    break
-            view.Destroy()
-        except Exception:
-            pass
+            ds_moref = vim.Datastore(vm_id, si._stub)
+        except Exception as e:
+            log.debug(f"vmware_probe: invalid datastore ID {vm_id}: {e}")
+            return {"ok": False, "ms": None, "detail": f"Invalid datastore ID: {vm_id}"}
 
-        if ds_moref is None:
+        props = _fetch_single_object_props(si, ds_moref, [
+            'summary.name',
+            'summary.capacity',
+            'summary.freeSpace',
+            'summary.accessible',
+        ])
+        if not props:
             return {"ok": False, "ms": None,
                     "detail": f"Datastore {vm_id} not found"}
 
-        try:
-            summary   = ds_moref.summary
-            ds_name   = summary.name or ds_moref.name or "datastore"
-            cap_bytes = int(summary.capacity or 0)
-            free_bytes = int(summary.freeSpace or 0)
-            accessible = bool(summary.accessible)
-        except Exception:
-            return {"ok": False, "ms": None,
-                    "detail": "Could not read datastore summary"}
+        ds_name    = props.get('summary.name') or "datastore"
+        cap_bytes  = int(props.get('summary.capacity') or 0)
+        free_bytes = int(props.get('summary.freeSpace') or 0)
+        accessible = bool(props.get('summary.accessible'))
 
         if not accessible:
             return {"ok": False, "ms": None,
@@ -730,47 +761,31 @@ def vmware_probe(host, user, password, vm_id, metric,
     # ESXi host metric branch
     # ══════════════════════════════════════════════════════════════════
     if is_host:
-        host_moref = None
-        num_pcpu = 1
+        # Direct MoRef — skip the view enumeration that used to scan every
+        # HostSystem in vCenter on each probe.
         try:
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.HostSystem], recursive=True
-            )
-            for h in view.view:
-                if h._moId == vm_id:
-                    host_moref = h
-                    hw = h.summary.hardware if h.summary else None
-                    if hw:
-                        num_pcpu = hw.numCpuPkgs or 1
-                    break
-            view.Destroy()
-        except Exception:
-            pass
+            host_moref = vim.HostSystem(vm_id, si._stub)
+        except Exception as e:
+            log.debug(f"vmware_probe: invalid host ID {vm_id}: {e}")
+            return {"ok": False, "ms": None, "detail": f"Invalid host ID: {vm_id}"}
 
-        if host_moref is None:
-            return {"ok": False, "ms": None,
-                    "detail": f"Host {vm_id} not found"}
+        # All HOST_METRICS keys are prefixed `host_` and backed by a perf
+        # counter. We need the connection state as a guard and num_pcpu for
+        # the ready_pct math — fetched in ONE SOAP call.
+        # (The "on" power-state metric for hosts flows through the VM branch
+        # below and falls back to HostSystem there — see T9 in the test.)
+        props = _fetch_single_object_props(si, host_moref, [
+            'runtime.connectionState',
+            'summary.hardware.numCpuPkgs',
+        ])
+        if not props:
+            return {"ok": False, "ms": None, "detail": f"Host {vm_id} not found"}
 
-        # Power state metric — return before connection guard
-        if metric == "on":
-            try:
-                power = str(host_moref.runtime.powerState) if host_moref.runtime else "unknown"
-            except Exception:
-                power = "unknown"
-            is_on = (power == "poweredOn")
-            return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
-                    "detail": f"Power State: {power}",
-                    "value": power}
-
-        # Connection state guard
-        try:
-            conn_state = str(host_moref.runtime.connectionState) if host_moref.runtime else "unknown"
-        except Exception:
-            conn_state = "unknown"
-
+        conn_state = str(props.get('runtime.connectionState') or "unknown")
         if conn_state != "connected":
-            return {"ok": False, "ms": None,
-                    "detail": f"Host {conn_state}"}
+            return {"ok": False, "ms": None, "detail": f"Host {conn_state}"}
+
+        num_pcpu = int(props.get('summary.hardware.numCpuPkgs') or 1)
 
         data = _query_all_metrics(si, host_moref, HOST_METRICS, num_pcpu)
 
@@ -787,58 +802,52 @@ def vmware_probe(host, user, password, vm_id, metric,
                 "value": str(val)}
 
     # ══════════════════════════════════════════════════════════════════
-    # VM metric branch (existing logic)
+    # VM metric branch
     # ══════════════════════════════════════════════════════════════════
-    vm_moref = None
-    num_cpu = 1
-    memory_mb = 0
-    try:
-        view = content.viewManager.CreateContainerView(
-            content.rootFolder, [vim.VirtualMachine], recursive=True
-        )
-        for vm in view.view:
-            if vm._moId == vm_id:
-                vm_moref = vm
-                if vm.config and vm.config.hardware:
-                    num_cpu = vm.config.hardware.numCPU or 1
-                    memory_mb = vm.config.hardware.memoryMB or 0
-                break
-        view.Destroy()
-    except Exception:
-        pass
 
-    if vm_moref is None:
-        # "on" (Power State) is valid for hosts too — try HostSystem fallback
-        if metric == "on":
-            host_moref = None
-            try:
-                view = content.viewManager.CreateContainerView(
-                    content.rootFolder, [vim.HostSystem], recursive=True
-                )
-                for h in view.view:
-                    if h._moId == vm_id:
-                        host_moref = h
-                        break
-                view.Destroy()
-            except Exception:
-                pass
-            if host_moref is not None:
-                try:
-                    power = str(host_moref.runtime.powerState) if host_moref.runtime else "unknown"
-                except Exception:
-                    power = "unknown"
-                is_on = (power == "poweredOn")
-                return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
-                        "detail": f"Power State: {power}",
-                        "value": power}
-        return {"ok": False, "ms": None,
-                "detail": f"VM {vm_id} not found"}
-
-    # Power state — used both as a guard and as the "on" metric value
+    # Build a client-side VM proxy — no SOAP round-trip, no view enumeration.
+    # Replaces the previous pattern which listed EVERY VM in vCenter and
+    # scanned for the matching moId on every single probe cycle (~5+ SOAP
+    # calls per probe × 105 sensors every 60s).
     try:
-        power_state = str(vm_moref.runtime.powerState) if vm_moref.runtime else "unknown"
-    except Exception:
-        power_state = "unknown"
+        vm_moref = vim.VirtualMachine(vm_id, si._stub)
+    except Exception as e:
+        log.debug(f"vmware_probe: invalid VM ID {vm_id}: {e}")
+        return {"ok": False, "ms": None, "detail": f"Invalid VM ID: {vm_id}"}
+
+    # Pick the property set we need:
+    #   - always: runtime.powerState (guard + "on" metric value)
+    #   - perf-counter metrics: + config.hardware.numCPU (ready_pct math)
+    #                           + config.hardware.memoryMB (future memory-% use)
+    #   - disk_used_pct:         + guest.disk (list of GuestDiskInfo)
+    needed = ['runtime.powerState']
+    if metric != "on":
+        needed.extend(['config.hardware.numCPU', 'config.hardware.memoryMB'])
+        if metric == "disk_used_pct":
+            needed.append('guest.disk')
+
+    props = _fetch_single_object_props(si, vm_moref, needed)
+
+    # "on" is shared between VM and Host sensor types — if the VM lookup
+    # came up empty, fall back to a HostSystem proxy before giving up.
+    if not props and metric == "on":
+        try:
+            host_moref = vim.HostSystem(vm_id, si._stub)
+        except Exception:
+            return {"ok": False, "ms": None, "detail": f"Object {vm_id} not found"}
+        host_props = _fetch_single_object_props(si, host_moref, ['runtime.powerState'])
+        if not host_props:
+            return {"ok": False, "ms": None, "detail": f"VM or Host {vm_id} not found"}
+        power = str(host_props.get('runtime.powerState') or "unknown")
+        is_on = (power == "poweredOn")
+        return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
+                "detail": f"Power State: {power}",
+                "value": power}
+
+    if not props:
+        return {"ok": False, "ms": None, "detail": f"VM {vm_id} not found"}
+
+    power_state = str(props.get('runtime.powerState') or "unknown")
 
     # "on" metric: just report power state, no perf counters needed
     if metric == "on":
@@ -850,12 +859,14 @@ def vmware_probe(host, user, password, vm_id, metric,
     if power_state != "poweredOn":
         return {"ok": False, "ms": None, "detail": "VM powered off"}
 
-    # ── Disk used % — reads guest.disk (requires VMware Tools) ───────────
+    num_cpu   = int(props.get('config.hardware.numCPU') or 1)
+    # memory_mb retained for future metrics that need total VM memory
+    # (e.g. mem_consumed_pct would divide mem.consumed.average / memory_mb)
+    _memory_mb = int(props.get('config.hardware.memoryMB') or 0)
+
+    # ── Disk used % — uses guest.disk fetched above (requires VMware Tools) ─
     if metric == "disk_used_pct":
-        try:
-            disks = (vm_moref.guest.disk or []) if vm_moref.guest else []
-        except Exception:
-            disks = []
+        disks = props.get('guest.disk') or []
         if not disks:
             return {"ok": False, "ms": None,
                     "detail": "No disk info — VMware Tools must be installed and running"}
@@ -879,7 +890,7 @@ def vmware_probe(host, user, password, vm_id, metric,
                 "detail": f"Disk {target.diskPath}: {pct}% used",
                 "value": str(pct)}
 
-    # Query all metrics (cached for other sensors targeting same VM)
+    # Query all perf-counter metrics (cached for other sensors targeting same VM)
     data = _query_all_metrics(si, vm_moref, VM_METRICS, num_cpu)
 
     with _metric_cache_lock:
