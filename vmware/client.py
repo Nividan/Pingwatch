@@ -265,6 +265,56 @@ def _invalidate_session(host, user):
 
 
 # ---------------------------------------------------------------------------
+# PropertyCollector helper — one SOAP call for N objects × M properties
+# ---------------------------------------------------------------------------
+
+def _collect_properties(si, view_obj, obj_type, property_paths):
+    """Bulk-fetch properties for every object in `view_obj` in ONE SOAP call.
+
+    pyVmomi's idiomatic `for obj in view.view: obj.property` pattern issues
+    one SOAP round-trip **per property access**. For a 100-VM inventory
+    that's 500+ round-trips; PRTG-style tools do the same enumeration in
+    one call using PropertyCollector. This helper wraps that pattern.
+
+    Returns a list of dicts. Each dict keys:
+      - '_moId'  — the managed object reference id (e.g. 'vm-123')
+      - '<path>' — the requested property path, value as returned by
+                   vCenter (may be a primitive, enum, list, or MoRef)
+
+    Properties that vCenter couldn't return for a specific object are
+    simply absent from that object's dict — use `.get(path, default)`.
+    """
+    _, _, vim, vmodl = _require_pyvmomi()
+
+    traversal = vmodl.query.PropertyCollector.TraversalSpec(
+        name='traverseContainer',
+        type=vim.view.ContainerView,
+        path='view',
+        skip=False,
+    )
+    obj_spec = vmodl.query.PropertyCollector.ObjectSpec(
+        obj=view_obj, skip=True, selectSet=[traversal]
+    )
+    prop_spec = vmodl.query.PropertyCollector.PropertySpec(
+        type=obj_type, pathSet=list(property_paths), all=False
+    )
+    filter_spec = vmodl.query.PropertyCollector.FilterSpec(
+        objectSet=[obj_spec], propSet=[prop_spec]
+    )
+
+    pc = si.content.propertyCollector
+    results = pc.RetrieveContents([filter_spec]) or []
+
+    rows = []
+    for oc in results:
+        row = {'_moId': oc.obj._moId}
+        for dp in (oc.propSet or []):
+            row[dp.name] = dp.val
+        rows.append(row)
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # VM discovery
 # ---------------------------------------------------------------------------
 
@@ -287,29 +337,53 @@ def vmware_discover_vms(host, user, password, port=443, verify_ssl=False):
         log.debug(f"VMware discover VMs: session ok ({host})")
         content = si.RetrieveContent()
         log.debug(f"VMware discover VMs: content retrieved ({host})")
-        view = content.viewManager.CreateContainerView(
+
+        # Prefetch host MoRef→name map so we can populate host_name without a
+        # per-VM round-trip. One SOAP call for all ESXi hosts.
+        host_view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.HostSystem], recursive=True
+        )
+        try:
+            host_rows = _collect_properties(si, host_view, vim.HostSystem, ['name'])
+        finally:
+            host_view.Destroy()
+        host_name_by_id = {r['_moId']: (r.get('name') or '') for r in host_rows}
+        log.debug(f"VMware discover VMs: host map built "
+                  f"({len(host_name_by_id)} hosts) ({host})")
+
+        # Fetch every VM with all the fields we need in ONE SOAP call — replaces
+        # the naive `for vm in view.view: vm.config; vm.runtime; …` pattern which
+        # would issue 5+ round-trips per VM.
+        vm_view = content.viewManager.CreateContainerView(
             content.rootFolder, [vim.VirtualMachine], recursive=True
         )
-        log.debug(f"VMware discover VMs: view created ({host})")
-        out = []
         try:
-            for vm in view.view:
-                try:
-                    cfg = vm.config
-                    rt  = vm.runtime
-                    out.append({
-                        "vm_id":       vm._moId,
-                        "name":        vm.name or "",
-                        "power_state": str(rt.powerState) if rt else "unknown",
-                        "guest_os":    (cfg.guestFullName or cfg.guestId or "") if cfg else "",
-                        "num_cpu":     cfg.hardware.numCPU if cfg and cfg.hardware else 0,
-                        "memory_mb":   cfg.hardware.memoryMB if cfg and cfg.hardware else 0,
-                        "host_name":   (rt.host.name if rt and rt.host else ""),
-                    })
-                except Exception:
-                    continue  # skip VMs we can't read
+            rows = _collect_properties(si, vm_view, vim.VirtualMachine, [
+                'name',
+                'runtime.powerState',
+                'runtime.host',
+                'config.guestFullName',
+                'config.guestId',
+                'config.hardware.numCPU',
+                'config.hardware.memoryMB',
+            ])
         finally:
-            view.Destroy()
+            vm_view.Destroy()
+        log.debug(f"VMware discover VMs: batch fetched {len(rows)} VMs ({host})")
+
+        out = []
+        for r in rows:
+            host_ref = r.get('runtime.host')
+            host_id  = host_ref._moId if host_ref is not None else ''
+            out.append({
+                "vm_id":       r['_moId'],
+                "name":        r.get('name') or "",
+                "power_state": str(r.get('runtime.powerState') or "unknown"),
+                "guest_os":    (r.get('config.guestFullName') or r.get('config.guestId') or ""),
+                "num_cpu":     int(r.get('config.hardware.numCPU') or 0),
+                "memory_mb":   int(r.get('config.hardware.memoryMB') or 0),
+                "host_name":   host_name_by_id.get(host_id, ""),
+            })
         return out
 
     try:
@@ -349,32 +423,40 @@ def vmware_discover_hosts(host, user, password, port=443, verify_ssl=False):
         log.debug(f"VMware discover Hosts: session ok ({host})")
         content = si.RetrieveContent()
         log.debug(f"VMware discover Hosts: content retrieved ({host})")
+
         view = content.viewManager.CreateContainerView(
             content.rootFolder, [vim.HostSystem], recursive=True
         )
-        log.debug(f"VMware discover Hosts: view created ({host})")
-        out = []
         try:
-            for h in view.view:
-                try:
-                    rt  = h.runtime
-                    hw  = h.summary.hardware if h.summary else None
-                    cfg = h.summary.config   if h.summary else None
-                    out.append({
-                        "host_id":          h._moId,
-                        "name":             h.name or "",
-                        "connection_state": str(rt.connectionState) if rt else "unknown",
-                        "cpu_model":        hw.cpuModel if hw else "",
-                        "cpu_count":        hw.numCpuPkgs if hw else 0,
-                        "cpu_cores":        hw.numCpuCores if hw else 0,
-                        "memory_mb":        int(hw.memorySize / (1024 * 1024)) if hw and hw.memorySize else 0,
-                        "num_vms":          len(h.vm) if h.vm else 0,
-                        "version":          (cfg.product.fullName if cfg and cfg.product else ""),
-                    })
-                except Exception:
-                    continue
+            rows = _collect_properties(si, view, vim.HostSystem, [
+                'name',
+                'runtime.connectionState',
+                'summary.hardware.cpuModel',
+                'summary.hardware.numCpuPkgs',
+                'summary.hardware.numCpuCores',
+                'summary.hardware.memorySize',
+                'summary.config.product.fullName',
+                'vm',   # ArrayOfManagedObjectReference — len() gives num_vms
+            ])
         finally:
             view.Destroy()
+        log.debug(f"VMware discover Hosts: batch fetched {len(rows)} hosts ({host})")
+
+        out = []
+        for r in rows:
+            mem_bytes = int(r.get('summary.hardware.memorySize') or 0)
+            vm_list = r.get('vm') or []
+            out.append({
+                "host_id":          r['_moId'],
+                "name":             r.get('name') or "",
+                "connection_state": str(r.get('runtime.connectionState') or "unknown"),
+                "cpu_model":        r.get('summary.hardware.cpuModel') or "",
+                "cpu_count":        int(r.get('summary.hardware.numCpuPkgs') or 0),
+                "cpu_cores":        int(r.get('summary.hardware.numCpuCores') or 0),
+                "memory_mb":        int(mem_bytes / (1024 * 1024)) if mem_bytes else 0,
+                "num_vms":          len(vm_list),
+                "version":          r.get('summary.config.product.fullName') or "",
+            })
         return out
 
     try:
@@ -414,32 +496,37 @@ def vmware_discover_datastores(host, user, password, port=443, verify_ssl=False)
         log.debug(f"VMware discover Datastores: session ok ({host})")
         content = si.RetrieveContent()
         log.debug(f"VMware discover Datastores: content retrieved ({host})")
+
         view = content.viewManager.CreateContainerView(
             content.rootFolder, [vim.Datastore], recursive=True
         )
-        log.debug(f"VMware discover Datastores: view created ({host})")
-        out = []
         try:
-            for ds in view.view:
-                try:
-                    summary = ds.summary
-                    capacity = int(summary.capacity or 0)
-                    free     = int(summary.freeSpace or 0)
-                    out.append({
-                        "ds_id":           ds._moId,
-                        "name":            summary.name or ds.name or "",
-                        "type":            summary.type or "",
-                        "capacity_bytes":  capacity,
-                        "free_bytes":      free,
-                        "capacity_gb":     round(capacity / 1024 ** 3, 1),
-                        "free_gb":         round(free / 1024 ** 3, 1),
-                        "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
-                        "accessible":      bool(summary.accessible),
-                    })
-                except Exception:
-                    continue  # skip datastores we can't read
+            rows = _collect_properties(si, view, vim.Datastore, [
+                'summary.name',
+                'summary.type',
+                'summary.capacity',
+                'summary.freeSpace',
+                'summary.accessible',
+            ])
         finally:
             view.Destroy()
+        log.debug(f"VMware discover Datastores: batch fetched {len(rows)} datastores ({host})")
+
+        out = []
+        for r in rows:
+            capacity = int(r.get('summary.capacity') or 0)
+            free     = int(r.get('summary.freeSpace') or 0)
+            out.append({
+                "ds_id":           r['_moId'],
+                "name":            r.get('summary.name') or "",
+                "type":            r.get('summary.type') or "",
+                "capacity_bytes":  capacity,
+                "free_bytes":      free,
+                "capacity_gb":     round(capacity / 1024 ** 3, 1),
+                "free_gb":         round(free / 1024 ** 3, 1),
+                "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
+                "accessible":      bool(r.get('summary.accessible')),
+            })
         return out
 
     try:
