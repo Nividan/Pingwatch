@@ -579,7 +579,12 @@ function _atCfgHtml(atype, cfg) {
           <option value="PUT"  ${cfg.method === 'PUT'  ? 'selected' : ''}>PUT</option>
         </select></div>
       <div class="fr"><label class="fl">Body template (optional, JSON or text)</label>
-        <textarea id="at-body" rows="4" placeholder='{"text":"{dname}/{sname} {event_type}"}'>${esc(cfg.body || '')}</textarea></div>`;
+        <textarea id="at-body" rows="4" placeholder='{"text":"{dname}/{sname} {event_type}"}'>${esc(cfg.body || '')}</textarea></div>
+      <div class="fr"><label class="fl" title="When notification batching is enabled, batch-aware receivers get one POST containing an array of alerts instead of N separate POSTs. Leave off if your receiver expects one alert per request (most Slack/Teams/generic hooks).">Batch-aware receiver</label>
+        <label style="display:flex;align-items:center;gap:8px;padding-top:6px">
+          <input type="checkbox" id="at-batch-aware" ${cfg.batch_aware ? 'checked' : ''}/>
+          <span style="font-size:12px;color:var(--text3)">Receiver can handle batched payloads (&#123; count, alerts: [...] &#125;)</span>
+        </label></div>`;
   }
   if (atype === 'syslog') {
     return `
@@ -631,6 +636,7 @@ async function _alertingSaveTemplate() {
     cfg.method = document.getElementById('at-method')?.value || 'POST';
     const body = (document.getElementById('at-body')?.value || '').trim();
     if (body) cfg.body = body;
+    if (document.getElementById('at-batch-aware')?.checked) cfg.batch_aware = true;
   } else if (atype === 'syslog') {
     const host = (document.getElementById('at-host')?.value || '').trim();
     if (host) cfg.host = host;

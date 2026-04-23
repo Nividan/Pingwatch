@@ -2504,6 +2504,23 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .evt-td-time{font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap;}
 .evt-td-dur{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3);white-space:nowrap;}
 
+/* ── Collapse view: grouped flapping / outage events ───────────── */
+.evt-collapse-tog{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer;padding:0 8px;white-space:nowrap;}
+.evt-collapse-tog input{margin:0;cursor:pointer;}
+.evt-group{border:none;}
+.evt-group > summary{list-style:none;padding:10px 24px;cursor:pointer;display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,rgba(56,139,253,.06),transparent 60%);border-bottom:1px solid rgba(255,255,255,.04);transition:background .15s;user-select:none;}
+.evt-group > summary::-webkit-details-marker{display:none;}
+.evt-group > summary::before{content:'▸';color:var(--text3);font-size:10px;margin-right:2px;transition:transform .15s;display:inline-block;}
+.evt-group[open] > summary::before{transform:rotate(90deg);}
+.evt-group > summary:hover{background:linear-gradient(90deg,rgba(56,139,253,.1),transparent 60%);}
+.evt-group-label{flex:1;font-size:13px;font-weight:600;color:var(--text);min-width:0;}
+.evt-group-count{font-size:11px;color:var(--text3);padding:2px 8px;border:1px solid var(--border);border-radius:10px;background:var(--bg3);white-space:nowrap;}
+.evt-group-detail{padding:0 0 0 24px;background:var(--bg);border-left:2px solid rgba(56,139,253,.25);}
+.evt-group-inner-card{padding-left:20px !important;border-bottom:1px solid rgba(255,255,255,.03) !important;}
+.evt-group-inner-table{width:calc(100% - 24px) !important;margin:0 0 0 24px !important;font-size:11px;background:var(--bg);border-left:2px solid rgba(56,139,253,.25);}
+.evt-group-inner-table th{background:rgba(0,0,0,.15) !important;}
+.evt-group-row > td{padding:0 !important;background:transparent !important;}
+
 /* Detail modal (legacy, kept for other references) */
 .evt-modal-inner{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;width:440px;max-width:92vw;box-shadow:0 8px 40px rgba(0,0,0,.6);}
 .evt-modal-hdr{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;}

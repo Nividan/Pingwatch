@@ -249,6 +249,9 @@
             <option value="">All Categories</option>
           </select>
           <input id="evtFSearch" type="search" placeholder="🔎 Search events…" oninput="_onEvtFilterChange()" class="evt-search">
+          <label class="evt-collapse-tog" title="Group related flapping/outage events into single expandable rows">
+            <input id="evtFCollapse" type="checkbox" onchange="_onEvtCollapseToggle()"> <span>Collapse related</span>
+          </label>
           <button class="evt-clear-btn" onclick="_clearEvtFilters()">✕ Clear</button>
         </div>
         <div id="evtList"><div class="evt-empty">No events recorded yet.</div></div>

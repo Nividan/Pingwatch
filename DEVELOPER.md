@@ -47,6 +47,7 @@ Browser / Desktop GUI
         │   ├── auto_discovery.py      ← Scheduled auto-discovery daemon (periodic subnet scan + auto-add)
         │   ├── alert_profile_engine.py ← PRTG-style profile evaluator (cascade, stage timing, dispatch)
         │   ├── alert_dispatchers.py   ← Reusable action dispatchers (email, webhook, syslog, browser)
+        │   ├── alert_batcher.py       ← Singleton + daemon flusher: combines bursts of email/webhook alerts
         │   ├── smtp_alert.py          ← SMTP helper and email rendering
         │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
         │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
@@ -128,8 +129,9 @@ pingwatch/
 │   ├── subnet_discovery.py      ← Subnet scan engine (liveness + enrichment + duplicate detection)
 │   ├── auto_discovery.py        ← Scheduled auto-discovery daemon: periodic subnet scan, auto-add via create_devices_batch, suppressed-hosts list, first-scan cap, maintenance-window check
 │   ├── alert_profile_engine.py  ← PRTG-style profile evaluator (cascade resolution, stage timing, dispatch hook)
-│   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
-│   ├── smtp_alert.py            ← SMTP connection helper and email rendering (used by alert_dispatchers)
+│   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check; batched variants
+│   ├── alert_batcher.py         ← Cross-sensor notification batching: singleton + daemon flusher; fail-safe passthrough on any error
+│   ├── smtp_alert.py            ← SMTP connection helper and email rendering (single + batched templates)
 │   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
 │   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
 │   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
@@ -428,8 +430,26 @@ When anomaly causes the `_threshold_state` transition to `"warn"`, the sensor se
 ### `monitoring/alert_dispatchers.py`
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
+The unified `dispatch(atype, cfg, ctx)` router tries the `alert_batcher` first for email and webhook; on any batcher error it falls straight through to the per-event dispatcher (see `alert_batcher.py` for the fail-safe invariant). Syslog and browser always go direct — batching them would corrupt discrete log events / low-spam user pings. Two batched-flavour dispatchers — `dispatch_email_batch(cfg, batch_ctx)` and `dispatch_webhook_batch(cfg, batch_ctx)` — are called by the batcher when ≥2 items accumulated in a bucket before flush. `dispatch_webhook_batch` sends a single POST whose body is `{count, severity_counts, severity_label, window_start_ts, window_end_ts, alerts: [...]}` with `X-PingWatch-Batch: 1`; receivers opt in per template via `cfg["batch_aware"]=true`.
+
+### `monitoring/alert_batcher.py`
+Cross-sensor notification batching for email and webhook channels. A singleton with three in-memory primitives: `_QUEUES: dict[bucket_key, list[QueueItem]]` (bucket key = `(channel, dest_key, severity)`), `_FLUSHER_STARTED` flag, and `_SHUTDOWN` `threading.Event`.
+
+- **Entry points** — `try_enqueue_email(cfg, ctx)` and `try_enqueue_webhook(cfg, ctx)` return **True** if the item was queued or **False** if the caller should immediately dispatch. Every enqueue is wrapped in try/except so a bug here can never silence alerts (top-level `dispatch()` falls through on False/exception).
+- **Destination keys** — `_email_dest_key(cfg)` resolves recipients via the existing `_resolve_email_recipients()` helper, sorts them, and appends the subject template so two profiles emailing the same address with different subject templates don't share a bucket. `_webhook_dest_key(cfg)` is just the URL.
+- **Settings re-read on every enqueue** — `alert_batch_enabled` / `alert_batch_window_s` / `alert_batch_max_size` read from `core.settings.get()` on each call. Live PATCH takes effect without restart. If settings fail to read, batcher fails closed to "disabled" (passthrough).
+- **Flusher** — lazy-started daemon thread that ticks every 5 seconds. Per-bucket flush condition: `len(items) >= max_size OR (now - items[0].ts) >= window`. Under lock, snapshot the to-flush list + pop from `_QUEUES`; dispatch outside the lock so a slow SMTP server doesn't stall enqueue.
+- **Single vs batch** — buckets that flush with exactly one item route through `_dispatch_single()` which calls the original per-event dispatcher (preserves pre-0.9.5 format). Multi-item buckets call `_dispatch_batch()` which invokes `dispatch_email_batch` / `dispatch_webhook_batch`.
+- **Last-resort fallback** — if a batched send raises, `_fallback_individual()` tries each item one-by-one. "Spam" > "silently dropped alerts".
+- **Shutdown** — `shutdown()` sets `_SHUTDOWN`; the flusher loop exits its wait and calls `_drain_all()` which synchronously flushes every remaining bucket. Registered via `atexit.register()` so graceful process exit drains; unclean crashes lose in-flight batches (events still live in `alert_events` / `flap_log`).
+- **Observability** — `get_stats()` returns `{buckets, queued_items, oldest_age_s, flusher_alive}` for future Diagnostics-tab wiring.
+
+Recoveries batch symmetrically with downs (same `(channel, dest, severity)` bucket keyed by `severity='recovery'`) — 12 downs → 1 email, 12 recoveries → 1 email. No separate "recovery-immediate" knob; the delay-s gate on the profile stage already filters transient blips before they reach the batcher.
+
 ### `monitoring/smtp_alert.py`
 SMTP connection helper and professional HTML email rendering. `_smtp_connect()` manages the server connection and TLS/auth handshake. The email template uses a PRTG-inspired layout: hero logo section (up to 2 MB, centered, company name below), colored status banner with timestamp, sensor breadcrumb path (Group > Device > Sensor), severity-tinted detail callout box, and a 4-section stats grid (Sensor Details, Performance, Thresholds, Statistics). Section builders (`_html_logo_section`, `_html_status_banner`, `_html_breadcrumb`, `_html_detail_box`, `_html_stats_grid`, `_html_footer`) compose the final HTML. Subject line uses configured company name. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Used by `alert_dispatchers._dispatch_email`.
+
+**Batched template.** `_build_batch_html(batch_ctx)` + `send_rule_email_batch(to_addrs, subject_tpl, batch_ctx)` render a multi-event email (760 px wide, vs 580 px for single-alert) for notification batching. Top banner shows `N alerts (X critical, Y warning)` in the worst-severity colour; body is a striped table sorted critical → warning → info → recovery with per-row severity pill, device, sensor, event type, truncated detail (180 chars), and local-timezone timestamp. Plain-text fallback included.
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.

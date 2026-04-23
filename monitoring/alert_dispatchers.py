@@ -169,6 +169,20 @@ def dispatch_email(cfg: dict, ctx: dict) -> None:
                     ctx)
 
 
+def dispatch_email_batch(cfg: dict, batch_ctx: dict) -> None:
+    """Flush a batched email — called by alert_batcher when 2+ items bucketed."""
+    from monitoring.smtp_alert import send_rule_email_batch
+
+    emails = _resolve_email_recipients(cfg)
+    if not emails:
+        log.warning("alert_dispatchers: batched email has no recipients — skipped")
+        return
+
+    send_rule_email_batch(",".join(sorted(emails)),
+                          str(cfg.get("subject") or "").strip(),
+                          batch_ctx)
+
+
 # ── Webhook dispatcher ───────────────────────────────────────────
 
 def dispatch_webhook(cfg: dict, ctx: dict) -> None:
@@ -213,6 +227,59 @@ def dispatch_webhook(cfg: dict, ctx: dict) -> None:
         log.error(f"alert_dispatchers: webhook {url} HTTP {e.code}: {e.reason}")
     except Exception as e:
         log.error(f"alert_dispatchers: webhook {url} error: {e}")
+
+
+def dispatch_webhook_batch(cfg: dict, batch_ctx: dict) -> None:
+    """HTTP POST/PUT a batched webhook payload.
+
+    Only invoked when cfg['batch_aware'] is True — receiver has opted in to
+    the array payload shape:
+        { "count": 12, "severity_counts": {...}, "alerts": [ctx, ctx, ...] }
+    """
+    url = str(cfg.get("url") or "").strip()
+    if not url:
+        log.warning("alert_dispatchers: batched webhook action has no URL — skipped")
+        return
+    if not is_safe_url(url):
+        log.error(f"alert_dispatchers: batched webhook URL blocked (SSRF guard): {url!r}")
+        return
+
+    method   = str(cfg.get("method") or "POST").strip().upper()
+    # Convert batch_ctx to JSON-safe shape — each alert ctx already contains
+    # primitive-ish values, but enforce str-coercion for anything unusual.
+    payload = {
+        "count":           int(batch_ctx.get("count") or 0),
+        "severity_counts": batch_ctx.get("severity_counts") or {},
+        "severity_label":  batch_ctx.get("severity_label") or "",
+        "window_start_ts": batch_ctx.get("window_start_ts"),
+        "window_end_ts":   batch_ctx.get("window_end_ts"),
+        "alerts": [
+            {k: (v if isinstance(v, (int, float, bool)) or v is None else str(v))
+             for k, v in a.items()}
+            for a in (batch_ctx.get("alerts") or [])
+        ],
+    }
+    payload_bytes = json.dumps(payload).encode("utf-8")
+
+    headers = {"Content-Type": "application/json",
+               "User-Agent":   "PingWatch-AlertEngine/2.0",
+               "X-PingWatch-Batch": "1"}
+    extra = cfg.get("headers") or {}
+    if isinstance(extra, dict):
+        headers.update(extra)
+
+    req = urllib.request.Request(url, data=payload_bytes, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+        log.info(f"alert_dispatchers: batched webhook {method} {url} "
+                 f"→ {status} ({payload['count']} alerts)")
+    except urllib.error.HTTPError as e:
+        log.error(f"alert_dispatchers: batched webhook {url} HTTP {e.code}: {e.reason}")
+        raise
+    except Exception as e:
+        log.error(f"alert_dispatchers: batched webhook {url} error: {e}")
+        raise
 
 
 # ── Syslog dispatcher ────────────────────────────────────────────
@@ -302,11 +369,37 @@ _DISPATCHERS = {
 
 
 def dispatch(atype: str, cfg: dict, ctx: dict) -> None:
-    """Dispatch one action by type. Logs unknown types and swallows errors."""
+    """Dispatch one action by type.
+
+    Email and webhook actions pass through the alert_batcher first — if the
+    batcher accepts them, they're held briefly and sent as part of a combined
+    notification. If the batcher refuses (disabled, webhook receiver not
+    batch-aware, or any internal error), we fall straight through to the
+    existing per-event dispatchers.
+
+    **Safety invariant:** no matter what happens inside the batcher, this
+    function must attempt the per-event send. A bug in batching cannot
+    silence alerts.
+    """
     fn = _DISPATCHERS.get(atype)
     if not fn:
         log.debug(f"alert_dispatchers: unsupported action type {atype!r}")
         return
+    # Try to enqueue email / webhook actions first. Any error → fall through.
+    if atype == "email":
+        try:
+            from monitoring.alert_batcher import try_enqueue_email
+            if try_enqueue_email(cfg, ctx):
+                return
+        except Exception as e:
+            log.warning(f"alert_dispatchers: batcher (email) errored, sending immediately: {e}")
+    elif atype == "webhook":
+        try:
+            from monitoring.alert_batcher import try_enqueue_webhook
+            if try_enqueue_webhook(cfg, ctx):
+                return
+        except Exception as e:
+            log.warning(f"alert_dispatchers: batcher (webhook) errored, sending immediately: {e}")
     try:
         fn(cfg, ctx)
     except Exception as e:

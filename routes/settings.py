@@ -293,6 +293,12 @@ def handle(h, method, path, body):
             "auto_discover_scan_deadline_s": int(_settings.get("auto_discover_scan_deadline_s", 300) or 300),
             "sftp_checksum_max_mb":          int(_settings.get("sftp_checksum_max_mb",          10)  or 10),
             "import_max_payload_mb":         int(_settings.get("import_max_payload_mb",         8)   or 8),
+            # Alert notification batching — collapses bursts of email/webhook
+            # alerts into a single combined notification per recipient+severity.
+            # Does NOT affect syslog, browser SSE, or internal event records.
+            "alert_batch_enabled":  str(_settings.get("alert_batch_enabled", "1")).strip() == "1",
+            "alert_batch_window_s": int(_settings.get("alert_batch_window_s", 60) or 60),
+            "alert_batch_max_size": int(_settings.get("alert_batch_max_size", 20) or 20),
         })
         return True
 
@@ -534,6 +540,9 @@ def handle(h, method, path, body):
             ("auto_discover_scan_deadline_s", 30,   3600),
             ("sftp_checksum_max_mb",           1,    500),
             ("import_max_payload_mb",          1,    100),
+            # Alert batching — window 5s-1h, max size 2-500
+            ("alert_batch_window_s",           5,    3600),
+            ("alert_batch_max_size",           2,    500),
         ]:
             if _k in body:
                 try:
@@ -557,6 +566,10 @@ def handle(h, method, path, body):
             _db_enqueue(lambda _v=_dm: db_save_settings({"debug_mode": _v}))
             from core.logger import set_debug_mode
             set_debug_mode(_dm == "1")
+        if "alert_batch_enabled" in body:
+            _abe = "1" if body["alert_batch_enabled"] else "0"
+            _settings.load({"alert_batch_enabled": _abe})
+            _db_enqueue(lambda _v=_abe: db_save_settings({"alert_batch_enabled": _v}))
         _changes = '; '.join(
             f"{k}: {_old_vals.get(k, '')} → {'***' if k in _MASKED_KEYS else str(body[k])}"
             for k in body

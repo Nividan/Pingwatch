@@ -377,6 +377,125 @@ function _applyEvtFilters() {
 // ── View mode ─────────────────────────────────────────────────────
 let _evtViewMode = (()=>{ try{ return localStorage.getItem('pw_evt_view')||'table'; }catch{ return 'table'; } })();
 
+// ── Collapse view (groups related flapping/outage events) ─────────
+let _evtCollapseEnabled = (()=>{
+  try { return localStorage.getItem('pw_evt_collapse') !== '0'; }   // default on
+  catch { return true; }
+})();
+const _EVT_COLLAPSE_WINDOW_MS = 30000;   // 30s proximity window
+const _EVT_COLLAPSE_MIN       = 3;       // min events per group
+
+function _onEvtCollapseToggle() {
+  const cb = document.getElementById('evtFCollapse');
+  _evtCollapseEnabled = !!cb?.checked;
+  try { localStorage.setItem('pw_evt_collapse', _evtCollapseEnabled ? '1' : '0'); } catch(_) {}
+  _renderEvtView();
+}
+
+function _collapseEvents(events) {
+  // Input is ordered newest-first. Walk once; for each unclaimed event, try
+  // to find (a) same-sensor flapping or (b) device-wide outage siblings
+  // within the 30-second window. Traps and events missing did/sid always
+  // stay as individual rows.
+  const result = [];
+  const used   = new Set();
+  for (let i = 0; i < events.length; i++) {
+    if (used.has(i)) continue;
+    const e = events[i];
+    const dir = e._direction || e.direction || '';
+    if (!e.did || !e.sid || dir === 'trap') { result.push(e); continue; }
+    const eTs = new Date(e.ts).getTime();
+    if (!isFinite(eTs)) { result.push(e); continue; }
+
+    // (a) Same-sensor flapping — same (did, sid) regardless of direction
+    const sensorIdx = [i];
+    for (let j = i + 1; j < events.length; j++) {
+      if (used.has(j)) continue;
+      const x = events[j];
+      const xDir = x._direction || x.direction || '';
+      if (xDir === 'trap') continue;
+      if (x.did !== e.did || x.sid !== e.sid) continue;
+      const xTs = new Date(x.ts).getTime();
+      if (!isFinite(xTs) || Math.abs(eTs - xTs) > _EVT_COLLAPSE_WINDOW_MS) continue;
+      sensorIdx.push(j);
+    }
+    if (sensorIdx.length >= _EVT_COLLAPSE_MIN) {
+      const members = sensorIdx.map(idx => events[idx]);
+      result.push({
+        _group: true, _groupType: 'flap',
+        events: members,
+        did: e.did, sid: e.sid,
+        dname: e.dname, sname: e.sname,
+        host: e.host, stype: e.stype,
+        ts: members[0].ts,
+      });
+      sensorIdx.forEach(idx => used.add(idx));
+      continue;
+    }
+
+    // (b) Device outage — same (did, direction), ≥3 distinct sensors in window
+    const deviceIdx = [i];
+    const seenSids  = new Set([e.sid]);
+    for (let j = i + 1; j < events.length; j++) {
+      if (used.has(j)) continue;
+      const x = events[j];
+      const xDir = x._direction || x.direction || '';
+      if (xDir === 'trap') continue;
+      if (x.did !== e.did || xDir !== dir) continue;
+      const xTs = new Date(x.ts).getTime();
+      if (!isFinite(xTs) || Math.abs(eTs - xTs) > _EVT_COLLAPSE_WINDOW_MS) continue;
+      deviceIdx.push(j);
+      seenSids.add(x.sid);
+    }
+    if (seenSids.size >= _EVT_COLLAPSE_MIN) {
+      const members = deviceIdx.map(idx => events[idx]);
+      result.push({
+        _group: true, _groupType: 'device',
+        events: members,
+        did: e.did, dname: e.dname,
+        _direction: dir,
+        ts: members[0].ts,
+      });
+      deviceIdx.forEach(idx => used.add(idx));
+      continue;
+    }
+
+    result.push(e);
+  }
+  return result;
+}
+
+function _groupSeverity(g) {
+  // Worst severity among members wins
+  let worst = 'info';
+  const rank = { critical: 0, warning: 1, recovery: 2, info: 3 };
+  for (const m of g.events) {
+    const s = evtSeverity(m);
+    if (rank[s] < rank[worst]) worst = s;
+  }
+  return worst;
+}
+
+function _groupLabel(g) {
+  const dir = g._direction || (g.events[0]?._direction) || (g.events[0]?.direction) || '';
+  const tsStart = g.events.map(x => new Date(x.ts).getTime()).filter(t => isFinite(t));
+  const span = tsStart.length >= 2
+    ? Math.max(...tsStart) - Math.min(...tsStart)
+    : 0;
+  const spanStr = span > 0 ? _fmtDuration(span / 1000) : '';
+  if (g._groupType === 'flap') {
+    return `${esc(g.dname || '')}/${esc(g.sname || '')} flapped ${g.events.length}×` +
+           (spanStr ? ` in ${spanStr}` : '');
+  }
+  // device outage
+  const uniqSids = new Set(g.events.map(m => m.sid)).size;
+  const dirWord = (dir === 'recovered' || dir === 'threshold_ok') ? 'recovered'
+               : (dir === 'down' || dir === 'threshold')          ? 'went down'
+               : dir;
+  return `${esc(g.dname || '')}: ${uniqSids} sensor${uniqSids === 1 ? '' : 's'} ${dirWord}` +
+         (spanStr ? ` within ${spanStr}` : '');
+}
+
 function _setEvtViewMode(mode) {
   _evtViewMode = mode;
   try { localStorage.setItem('pw_evt_view', mode); } catch(_) {}
@@ -484,6 +603,63 @@ function _clearEvtFilters() {
   _renderEvtView();
 }
 
+// ── Group renderers (collapse view) ───────────────────────────────
+function _buildEvtGroupCard(g) {
+  const sev = _groupSeverity(g);
+  const label = _groupLabel(g);
+  const dispTime = g.ts ? (typeof fmtTs === 'function' ? fmtTs(g.ts) : g.ts) : '';
+  const inner = g.events.map(m => {
+    const c = _buildEvtCard(m);
+    c.classList.add('evt-group-inner-card');
+    return c;
+  });
+  const row = document.createElement('div');
+  row.className = 'evt-row evt-group-card';
+  const det = document.createElement('details');
+  det.className = 'evt-group';
+  det.innerHTML =
+    `<summary class="evt-group-summary">` +
+      `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev] || sev.toUpperCase()}</span>` +
+      `<span class="evt-group-label">${label}</span>` +
+      `<span class="evt-group-count">${g.events.length} events</span>` +
+      `<span class="evt-time">${dispTime}</span>` +
+    `</summary>`;
+  const wrap = document.createElement('div');
+  wrap.className = 'evt-group-detail';
+  inner.forEach(c => wrap.appendChild(c));
+  det.appendChild(wrap);
+  row.appendChild(det);
+  return row;
+}
+
+function _buildEvtGroupTableRow(g) {
+  const sev = _groupSeverity(g);
+  const label = _groupLabel(g);
+  const dispTime = g.ts ? (typeof fmtTs === 'function' ? fmtTs(g.ts) : g.ts) : '';
+  const tr = document.createElement('tr');
+  tr.className = 'evt-group-row';
+  const td = document.createElement('td');
+  td.colSpan = 8;
+  td.style.padding = '0';
+  const det = document.createElement('details');
+  det.className = 'evt-group';
+  det.innerHTML =
+    `<summary class="evt-group-summary">` +
+      `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev] || sev.toUpperCase()}</span>` +
+      `<span class="evt-group-label">${label}</span>` +
+      `<span class="evt-group-count">${g.events.length} events</span>` +
+      `<span class="evt-time">${dispTime}</span>` +
+    `</summary>`;
+  // Build the inner events as a nested table (reuses _buildEvtTable but strips
+  // the wrapping <div>). Cheap: renders one table per group, expanded lazily.
+  const inner = _buildEvtTable(g.events);
+  inner.classList.add('evt-group-inner-table');
+  det.appendChild(inner);
+  td.appendChild(det);
+  tr.appendChild(td);
+  return tr;
+}
+
 // ── Card builder ──────────────────────────────────────────────────
 function _buildEvtCard(d) {
   const sev  = evtSeverity(d);
@@ -533,6 +709,11 @@ function _buildEvtTable(events) {
     '</tr></thead>';
   const tbody = document.createElement('tbody');
   events.forEach(d => {
+    // Collapsed groups get a single full-width row with a <details> expander.
+    if (d && d._group) {
+      tbody.appendChild(_buildEvtGroupTableRow(d));
+      return;
+    }
     const sev  = evtSeverity(d);
     const icon = evtIcon(d);
     const isTrap = d._direction === 'trap';
@@ -678,11 +859,26 @@ function _renderEvtView() {
   const resolveBtn = document.querySelector('.evt-resolve-all-btn');
   if (resolveBtn) resolveBtn.style.display = (_evtInnerTab === 'active') ? '' : 'none';
 
-  const events = _applyEvtFilters();
+  let events = _applyEvtFilters();
 
-  // Update result count
+  // Collapse related-event groups before rendering. Single-pass preprocessor
+  // that bundles same-sensor flapping and device-wide outages (≥3 events
+  // within 30s). Off → flat list as before.
+  const rawCount = events.length;
+  if (_evtCollapseEnabled) events = _collapseEvents(events);
+  const _cb = document.getElementById('evtFCollapse');
+  if (_cb && _cb.checked !== _evtCollapseEnabled) _cb.checked = _evtCollapseEnabled;
+
+  // Update result count — show event total, plus group count if collapsed
   const countEl = document.getElementById('evtCount');
-  if (countEl) countEl.textContent = events.length + ' event' + (events.length===1?'':'s');
+  if (countEl) {
+    if (_evtCollapseEnabled && events.length < rawCount) {
+      const groups = events.filter(e => e && e._group).length;
+      countEl.textContent = `${rawCount} event${rawCount===1?'':'s'} · ${groups} group${groups===1?'':'s'}`;
+    } else {
+      countEl.textContent = rawCount + ' event' + (rawCount===1?'':'s');
+    }
+  }
 
   // Update view mode buttons
   document.getElementById('evtBtnCard')?.classList.toggle('active', _evtViewMode==='card');
@@ -697,7 +893,10 @@ function _renderEvtView() {
   if (_evtViewMode === 'table') {
     list.appendChild(_buildEvtTable(events));
   } else {
-    events.forEach(d => list.appendChild(_buildEvtCard(d)));
+    events.forEach(d => {
+      if (d && d._group) list.appendChild(_buildEvtGroupCard(d));
+      else               list.appendChild(_buildEvtCard(d));
+    });
   }
 }
 

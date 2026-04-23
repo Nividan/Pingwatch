@@ -4,6 +4,32 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## 📬 Alert batching + UI event collapse (v0.9.5 "Quiet Hours")
+
+- **Problem:** when a switch dies, 12 sensors behind it all page at once — 12 emails, 12 webhook POSTs, 12 rows in the activity feed. Alert-storm fatigue is the #1 way operators stop trusting monitoring
+- **Backend — notification batching.** New `monitoring/alert_batcher.py` singleton holds outbound email + webhook alerts for a short window and emits one combined notification per `(channel, destination, severity)` bucket. A burst of 12 downs → 1 batched "12 alerts (12 critical)" email. 12 recoveries → 1 batched recovery email. **Symmetric by design** — batching both sides means the spam doesn't shift from downs to recoveries
+- **3 settings** in Settings → Alert Profiles → Notification Batching:
+  - `alert_batch_enabled` (bool, default **on**) — master switch; off = pre-0.9.5 behaviour, immediate per-event sends
+  - `alert_batch_window_s` (int, default **60**, range 5–3600) — how long to hold the first alert before flushing
+  - `alert_batch_max_size` (int, default **20**, range 2–500) — flush early when a bucket fills
+- **Fail-safe routing.** `alert_dispatchers.dispatch()` tries to enqueue email/webhook; on any batcher error (disabled, internal fault, enqueue failure) it falls straight through to the existing per-event sender. A bug in batching cannot silence alerts — same invariant as the existing `try/except` around `_DISPATCHERS[atype]`
+- **Webhook batching is opt-in per template** via the new **Batch-aware receiver** checkbox in the webhook action-template editor. Default off — Slack/Teams/generic hooks expect one alert per POST and would break on array payloads. When on, the receiver gets `POST {count, severity_counts, severity_label, window_start_ts, window_end_ts, alerts: [ctx, ctx, ...]}` with an `X-PingWatch-Batch: 1` header
+- **Syslog and browser SSE never batch** — syslog wants discrete RFC 5424 events downstream; browser is low-spam and user-visible. Both flow through `dispatch()` unchanged
+- **Event records are never collapsed.** `alert_events`, `flap_log`, `sensor_err_log` keep one row per event regardless of batching — forensics and audit stay granular
+- **Batched email template** — `send_rule_email_batch()` renders a wider layout (760 px) with severity-breakdown banner (`12 alerts (10 critical, 2 warning)`), intro blurb explaining why it's a digest, and a striped table sorted critical → warning → info → recovery. Per-row: severity pill, device, sensor, event type, truncated detail (180 chars), local-timezone timestamp. Plain-text fallback included for text-only clients
+- **Frontend — UI event collapse.** New `Collapse related` filter-bar toggle in Events view (default on, persisted in `localStorage['pw_evt_collapse']`) folds ≥3 related events within a 30-second window into one expandable `<details>` row:
+  - **Same-sensor flapping** — `sensor-X flapped 5× in 28s`
+  - **Device outage** — `switch-A: 5 sensors went down within 22s`
+  - Traps stay individual (one-shot events, not a burst)
+  - Group rows show worst-severity pill + label + count badge + time; click the chevron to expand into the inner event list
+  - Works in both card and table view modes; uses native `<details>/<summary>` — zero custom JS for the expand/collapse
+- **Persistence across restart** — in-memory queue, not persisted. On graceful shutdown an `atexit` handler drains pending buckets synchronously. Unclean crashes lose any in-flight batches (documented limitation); the un-batched events are already in `alert_events` / `flap_log` for recovery
+- **6-scenario smoke test (isolated)** — batching disabled → passthrough; 3-event burst → 1 batched email; webhook without `batch_aware` → immediate; webhook with `batch_aware` → 1 batched POST; 5 events → max-size early flush; solo event → per-event format (unchanged). All green
+- **Version bump** `0.9.3 → 0.9.5` · version name `"Autonomous Discovery" → "Quiet Hours"`
+- **Files** — **NEW** [monitoring/alert_batcher.py](Pingwatch/monitoring/alert_batcher.py) (singleton + daemon flusher + atexit drain); [monitoring/alert_dispatchers.py](Pingwatch/monitoring/alert_dispatchers.py) (router now tries batcher-then-fallback for email/webhook; `dispatch_email_batch` + `dispatch_webhook_batch`); [monitoring/smtp_alert.py](Pingwatch/monitoring/smtp_alert.py) (`_build_batch_html` + `send_rule_email_batch`); [routes/settings.py](Pingwatch/routes/settings.py) (3 new settings in GET; int loop + explicit bool handler in PATCH); [frontend/forms-settings.js](Pingwatch/frontend/forms-settings.js) (new "Notification Batching" card at top of Alert Profiles tab + `_saveAlertBatching()` + footer Save button); [frontend/alerting.js](Pingwatch/frontend/alerting.js) (`Batch-aware receiver` checkbox on webhook editor); [frontend/events.js](Pingwatch/frontend/events.js) (`_collapseEvents` + `_buildEvtGroupCard` + `_buildEvtGroupTableRow` + `_onEvtCollapseToggle` + toggle sync); [frontend/index.html](Pingwatch/frontend/index.html) (Collapse-related checkbox in filter bar); [frontend/style.css](Pingwatch/frontend/style.css) (`.evt-group*` styles + `.evt-collapse-tog`); [core/app_state.py](Pingwatch/core/app_state.py) (version bump)
+
+---
+
 ## 🔧 Diagnostics tab — operator & support console
 
 - New dedicated **🔧 Diagnostics** tab in Settings consolidating seven operator/support panels in one place. Replaces the scattered "Debug Mode in Retention + auth badges in Integrations + no way to see sample-buffer pressure" status quo
