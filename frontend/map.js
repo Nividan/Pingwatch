@@ -5071,6 +5071,7 @@ document.addEventListener('fullscreenchange', () => {
 
 // Reload pages when PingWatch parent signals tab switch
 window.addEventListener('message', e => {
+  if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'pw_reload_pages') {
     loadPages().then(() => {
       if (isPingWatchPage) switchToPingWatchPage();

@@ -167,8 +167,19 @@ async function _alertingTplDelete(id, name) {
 // PROFILE EDITOR modal — PRTG-style 6-stage table
 // ═══════════════════════════════════════════════════════════════
 
-async function openProfileEditor(id, scopeDefaults = null) {
+// Cleanup wrapper: close the profile modal AND any open template picker
+// dropdown + its document-level click listener. Without this, closing the
+// modal while the picker is open leaves #_ap_picker_dd orphaned on body
+// and the capture-phase click listener registered on document.
+function _apCloseProfModal() {
+  document.getElementById('_ap_picker_dd')?.remove();
+  try { document.removeEventListener('click', _apPickerOutside, true); } catch (_) {}
+  _apCurrentPicker = null;
   closeM('alrt-prof-modal');
+}
+
+async function openProfileEditor(id, scopeDefaults = null) {
+  _apCloseProfModal();
   // Make sure templates are loaded for the picker
   if (!_alertTemplates.length) {
     try {
@@ -222,13 +233,13 @@ async function openProfileEditor(id, scopeDefaults = null) {
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'alrt-prof-modal';
-  _overlayClose(o, () => closeM('alrt-prof-modal'));
+  _overlayClose(o, () => _apCloseProfModal());
 
   o.innerHTML = `
     <div class="mbox alrt-editor-box">
       <div class="mhd">
         <div class="mttl">${prof ? '✏ Edit Alert Profile' : '＋ New Alert Profile'}</div>
-        <button class="mclose" onclick="closeM('alrt-prof-modal')">&#x2715;</button>
+        <button class="mclose" onclick="_apCloseProfModal()">&#x2715;</button>
       </div>
       <div class="mbdy alrt-editor-body">
         <div class="alrt-row3">
@@ -309,7 +320,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
       </div>
       <div class="mft">
         ${prof ? `<button class="btn-s alrt-del-btn" onclick="_alertingProfDelete(${prof.id},'${esc(prof.name).replace(/'/g, "&#39;")}')">Delete</button>` : ''}
-        <button class="btn-s" onclick="closeM('alrt-prof-modal')">Cancel</button>
+        <button class="btn-s" onclick="_apCloseProfModal()">Cancel</button>
         <button class="btn-p" id="ap-save-btn" onclick="_alertingSaveProfile()">Save Profile</button>
       </div>
     </div>`;
@@ -441,7 +452,7 @@ async function _alertingSaveProfile() {
   try {
     await api(method, path, payload);
     toast(isNew ? `Profile "${name}" created` : `Profile "${name}" updated`, 'ok');
-    closeM('alrt-prof-modal');
+    _apCloseProfModal();
     _alertingLoadProfiles();
   } catch (e) {
     toast(e.message || 'Save failed', 'err');

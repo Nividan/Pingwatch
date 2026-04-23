@@ -478,6 +478,7 @@ def db_clean_samples(retention_days=None):
 def _clean_pg(cutoff_raw, cutoff_5m, cutoff_1h):
     """PG cleanup — drops whole partitions when possible, else DELETE."""
     from db.pg_pool import pg_conn
+    from psycopg2 import sql as _pgsql
     try:
         with pg_conn("logs") as con:
             cur = con.cursor()
@@ -505,7 +506,9 @@ def _clean_pg(cutoff_raw, cutoff_5m, cutoff_1h):
                         if len(parts) == 2:
                             upper = float(parts[1].strip().strip("() "))
                             if upper <= cutoff_raw:
-                                cur.execute(f"DROP TABLE IF EXISTS {part[1]}")
+                                cur.execute(_pgsql.SQL(
+                                    "DROP TABLE IF EXISTS {}"
+                                ).format(_pgsql.Identifier(part[1])))
                                 log.info(f"Dropped expired partition {part[1]}")
                                 continue
                     except (ValueError, IndexError):
