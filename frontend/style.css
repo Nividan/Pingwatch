@@ -2509,9 +2509,11 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .evt-collapse-tog input{margin:0;cursor:pointer;}
 
 /* Table-mode: summary row matches the 8-column regular row layout so the
-   eye doesn't have to re-orient. Left accent bar + subtle tint marks it
-   as a collapsible burst without breaking column alignment. */
-.evt-group-sum-row > td{background:linear-gradient(90deg,rgba(56,139,253,.07),transparent 40%);border-left:2px solid rgba(56,139,253,.45);transition:background .15s;}
+   eye doesn't have to re-orient. Gradient tint + chevron + count badge
+   mark it as a collapsible burst — no left accent bar, which would
+   duplicate information that the severity pill and count badge already
+   carry, and add visual noise to a dense table. */
+.evt-group-sum-row > td{background:linear-gradient(90deg,rgba(56,139,253,.07),transparent 40%);transition:background .15s;}
 .evt-group-sum-row:hover > td{background:linear-gradient(90deg,rgba(56,139,253,.14),transparent 40%);}
 .evt-group-sum-row.evt-group-open > td{background:linear-gradient(90deg,rgba(56,139,253,.12),transparent 40%);border-bottom:1px solid rgba(56,139,253,.25);}
 .evt-group-sev-cell{white-space:nowrap;}
@@ -2519,7 +2521,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .evt-group-sum-row:hover .evt-group-chevron{color:var(--accent);}
 .evt-group-label{font-size:13px;font-weight:600;color:var(--text);}
 .evt-group-count{font-size:11px;color:var(--accent);padding:2px 8px;border:1px solid rgba(56,139,253,.35);border-radius:10px;background:rgba(56,139,253,.08);white-space:nowrap;font-weight:600;}
-.evt-group-det-row > td{padding:0 !important;background:rgba(56,139,253,.03);border-left:2px solid rgba(56,139,253,.45);}
+.evt-group-det-row > td{padding:0 !important;background:rgba(56,139,253,.03);}
 .evt-group-inner-table{width:100% !important;font-size:11px;}
 .evt-group-inner-table thead{display:none;}   /* parent table already shows the header — no need to repeat */
 .evt-group-inner-table tbody tr td{padding-left:32px !important;}   /* indent inner events so they clearly belong to the group */
@@ -2527,7 +2529,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 
 /* Card-mode grouping — still uses <details> since cards aren't columnar */
 .evt-group{border:none;}
-.evt-group > summary{list-style:none;padding:10px 24px;cursor:pointer;display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,rgba(56,139,253,.06),transparent 60%);border-bottom:1px solid rgba(255,255,255,.04);border-left:2px solid rgba(56,139,253,.45);transition:background .15s;user-select:none;}
+.evt-group > summary{list-style:none;padding:10px 24px;cursor:pointer;display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,rgba(56,139,253,.06),transparent 60%);border-bottom:1px solid rgba(255,255,255,.04);transition:background .15s;user-select:none;}
 .evt-group > summary::-webkit-details-marker{display:none;}
 .evt-group > summary::before{content:'▸';color:var(--text3);font-size:10px;margin-right:2px;transition:transform .15s;display:inline-block;}
 .evt-group[open] > summary::before{transform:rotate(90deg);}
