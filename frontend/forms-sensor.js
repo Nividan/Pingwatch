@@ -1373,6 +1373,25 @@ async function _vmwareLoadMetrics(){
 }
 function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[]),...(_vmwareDatastoreMetrics||[])]; }
 
+// Fetch the three VMware metric catalogues if any are missing. Callers outside
+// the Add-Sensor flow (e.g. the per-VM Edit Metrics modal in sensors.js) need
+// this — without it, a user who opens Edit before ever opening Add Sensor sees
+// an empty catalogue and an error toast. Safe to call repeatedly: already-loaded
+// arrays are kept as-is.
+async function _ensureVmwareCatalogue() {
+  const tasks = [];
+  if (!_vmwareMetrics) tasks.push(
+    fetch('/api/vmware/metrics').then(r => r.json()).then(d => { _vmwareMetrics = d.metrics || []; })
+  );
+  if (!_vmwareHostMetrics) tasks.push(
+    fetch('/api/vmware/host-metrics').then(r => r.json()).then(d => { _vmwareHostMetrics = d.metrics || []; })
+  );
+  if (!_vmwareDatastoreMetrics) tasks.push(
+    fetch('/api/vmware/datastore-metrics').then(r => r.json()).then(d => { _vmwareDatastoreMetrics = d.metrics || []; })
+  );
+  if (tasks.length) await Promise.all(tasks);
+}
+
 let _discHostMode=false;  // true when host discovery table is shown
 // POST with a client-side ceiling — the global `api()` helper has no timeout,
 // and vCenter discovery can legitimately take 10–120s. Without a ceiling the

@@ -494,10 +494,19 @@ function openAddVmMetric(did,vmid,vmName){
 // new metrics.
 
 async function openEditVmMetrics(did, vmid, vmName, isHost){
+  // Lazily load the VMware metric catalogue if it hasn't been fetched yet
+  // (happens when the user clicks Edit before ever opening Add Sensor).
+  if (typeof _ensureVmwareCatalogue === 'function') {
+    try { await _ensureVmwareCatalogue(); }
+    catch (e) {
+      toast('Failed to load VMware metric catalogue', 'err');
+      return;
+    }
+  }
   const allMetrics = (typeof _allVmwareMetrics === 'function')
     ? _allVmwareMetrics() : (_vmwareMetrics || []);
   if (!allMetrics.length) {
-    toast('VMware metric catalogue not loaded yet — open Add Sensor once to populate it', 'err');
+    toast('VMware metric catalogue is empty — check /api/vmware/* endpoints', 'err');
     return;
   }
 
