@@ -381,6 +381,16 @@ def evaluate_and_fire(dev, sensor) -> None:
             # mid-incident and cause the next stage to insert a fresh row.
             if current_state != "ok":
                 continue
+            # Fast path: a sensor that has never fired in this process run
+            # cannot have a prior state to recover from. Skip the per-stage
+            # `db_get_stage_state` reads entirely. `_alert_has_fired` is set
+            # True inside _fire() and cleared after post-recovery cleanup, so
+            # it correctly tracks "does this sensor have live stage history".
+            # Without this short-circuit, every healthy sensor runs N DB
+            # queries on every probe cycle — at 5k sensors with a pool of 36,
+            # that's how sample-flush starved and tripped the slow-flush WARN.
+            if not getattr(sensor, "_alert_has_fired", False):
+                continue
             # Did any state-stage of the matching trigger fire previously?
             if not _had_prior_fire(stages, target_state, sid_key, did, sid,
                                    db_get_stage_state):
