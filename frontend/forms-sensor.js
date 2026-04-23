@@ -1374,6 +1374,40 @@ async function _vmwareLoadMetrics(){
 function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[]),...(_vmwareDatastoreMetrics||[])]; }
 
 let _discHostMode=false;  // true when host discovery table is shown
+// POST with a client-side ceiling — the global `api()` helper has no timeout,
+// and vCenter discovery can legitimately take 10–120s. Without a ceiling the
+// button would sit on "Connecting to vCenter…" forever if the backend hung.
+// Backend discover timeout is 120s; we set 150s here so the server's clean
+// ConnectionError surfaces first, then AbortController kicks in as a last
+// resort. Throws an Error with `.code === 'timeout'` on abort so the caller
+// can show a specific message.
+async function _vmApiTimed(method, path, body, timeoutMs){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const o = {method, headers:{'Content-Type':'application/json'}, signal: ctrl.signal};
+    if (body) o.body = JSON.stringify(body);
+    const r = await fetch(path, o);
+    if (r.status === 401) { if (!_loggedOut) showLogin('Session expired. Please sign in again.'); return {}; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({error: r.statusText}));
+      const e = new Error(err.error || r.statusText);
+      e.code = 'http';
+      throw e;
+    }
+    return await r.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      const te = new Error('Request timed out');
+      te.code = 'timeout';
+      throw te;
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function discoverVMs(){
   _discHostMode=false;
   _vmDstoreMode=false;
@@ -1398,9 +1432,14 @@ async function discoverVMs(){
   if(!password && did) payload.did=did;
   let r;
   try{
-    r=await api('POST','/api/vmware/vms',payload);
+    r=await _vmApiTimed('POST','/api/vmware/vms',payload,150000);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    if(statusEl){
+      statusEl.style.color='var(--down)';
+      statusEl.textContent = e.code==='timeout'
+        ? 'Timed out after 150s — vCenter is slow or overloaded'
+        : (e.message || 'Request failed');
+    }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='▥ Discover VMs'; }
@@ -1502,9 +1541,14 @@ async function discoverHosts(){
   if(!password && did) payload.did=did;
   let r;
   try{
-    r=await api('POST','/api/vmware/hosts',payload);
+    r=await _vmApiTimed('POST','/api/vmware/hosts',payload,150000);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    if(statusEl){
+      statusEl.style.color='var(--down)';
+      statusEl.textContent = e.code==='timeout'
+        ? 'Timed out after 150s — vCenter is slow or overloaded'
+        : (e.message || 'Request failed');
+    }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='▦ Discover Hosts'; }
@@ -1606,9 +1650,14 @@ async function discoverDatastores(){
   if(!password && did) payload.did=did;
   let r;
   try{
-    r=await api('POST','/api/vmware/datastores',payload);
+    r=await _vmApiTimed('POST','/api/vmware/datastores',payload,150000);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    if(statusEl){
+      statusEl.style.color='var(--down)';
+      statusEl.textContent = e.code==='timeout'
+        ? 'Timed out after 150s — vCenter is slow or overloaded'
+        : (e.message || 'Request failed');
+    }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='▤ Discover Datastores'; }

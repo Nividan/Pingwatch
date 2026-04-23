@@ -612,9 +612,10 @@ function _buildEvtGroupCard(g) {
   const sev       = _groupSeverity(g);
   const shortLbl  = _groupLabelShort(g);
 
-  const memberTs  = g.events.map(x => new Date(x.ts).getTime()).filter(t => isFinite(t));
-  const spanSec   = memberTs.length >= 2 ? (Math.max(...memberTs) - Math.min(...memberTs)) / 1000 : 0;
-  const spanStr   = spanSec > 0 ? _fmtDuration(spanSec) : null;
+  // Duration pill = longest member-event outage (not burst-window). The
+  // burst-window info now lives inside `shortLbl` ("... within 4s").
+  const { secs: maxDurSec } = _groupMaxDuration(g);
+  const spanStr = maxDurSec > 0 ? _fmtDuration(maxDurSec) : null;
 
   const [date, time] = (g.ts || '').split(' ');
   const dispTime = g.ts
@@ -662,17 +663,45 @@ function _buildEvtGroupCard(g) {
 
 // Short variant of _groupLabel() that omits the device name — used in table
 // mode where the device has its own column and repeating it in the label
-// would read as noise.
+// would read as noise. Includes the burst-window span ("within 4s") as
+// secondary context so the reader still knows these events arrived close
+// together — the Duration column now carries the max outage instead.
 function _groupLabelShort(g) {
   const dir = g._direction || (g.events[0]?._direction) || (g.events[0]?.direction) || '';
+  const memberTs = g.events.map(x => new Date(x.ts).getTime()).filter(t => isFinite(t));
+  const burstSec = memberTs.length >= 2
+    ? (Math.max(...memberTs) - Math.min(...memberTs)) / 1000
+    : 0;
+  const burstStr = burstSec > 0 ? _fmtDuration(burstSec) : '';
   if (g._groupType === 'flap') {
-    return `${esc(g.sname || '')} flapped ${g.events.length}×`;
+    return `${esc(g.sname || '')} flapped ${g.events.length}×` +
+           (burstStr ? ` in ${burstStr}` : '');
   }
   const uniqSids = new Set(g.events.map(m => m.sid)).size;
   const dirWord = (dir === 'recovered' || dir === 'threshold_ok') ? 'recovered'
                : (dir === 'down' || dir === 'threshold')          ? 'went down'
                : dir;
-  return `${uniqSids} sensor${uniqSids === 1 ? '' : 's'} ${dirWord}`;
+  return `${uniqSids} sensor${uniqSids === 1 ? '' : 's'} ${dirWord}` +
+         (burstStr ? ` within ${burstStr}` : '');
+}
+
+// Max outage duration across all member events — what the Duration column
+// in the group row should show. Delegates to the same _iipGetDuration()
+// helper regular rows use, so resolved / acked / live semantics stay
+// consistent. Returns {secs, live}: if any member is live, the group is
+// live (longest ongoing outage). Otherwise max of finalised durations.
+function _groupMaxDuration(g) {
+  let maxSec = 0;
+  let anyLive = false;
+  for (const m of g.events) {
+    try {
+      const ae = _matchAlertEvt(m);
+      const { secs, live } = _iipGetDuration(m, ae);
+      if (secs > maxSec) maxSec = secs;
+      if (live) anyLive = true;
+    } catch (_) {}
+  }
+  return { secs: maxSec, live: anyLive };
 }
 
 function _buildEvtGroupTableRow(g) {
@@ -685,12 +714,11 @@ function _buildEvtGroupTableRow(g) {
   const sev = _groupSeverity(g);
   const shortLabel = _groupLabelShort(g);
 
-  // Span — how long the burst lasted across all member events
-  const memberTs = g.events.map(x => new Date(x.ts).getTime()).filter(t => isFinite(t));
-  const spanSec = memberTs.length >= 2
-    ? Math.max(...memberTs) - Math.min(...memberTs)
-    : 0;
-  const spanStr = spanSec > 0 ? _fmtDuration(spanSec / 1000) : '—';
+  // Duration column — show the longest outage across member events
+  // (what Duration means on regular rows). The burst ts-span has moved
+  // into the label line ("within 4s") so it's still visible.
+  const { secs: maxDurSec } = _groupMaxDuration(g);
+  const spanStr = maxDurSec > 0 ? _fmtDuration(maxDurSec) : '—';
 
   const [date, time] = (g.ts || '').split(' ');
   const dispTime = g.ts
