@@ -115,7 +115,7 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-        <input type="checkbox" id="as-vssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        <input type="checkbox" id="as-vssl" ${s && !s.verify_ssl ? '' : 'checked'} style="width:auto;cursor:pointer"/>
         Verify SSL certificate
       </label>
       <div class="fh">Uncheck to ignore self-signed / expired certs</div>
@@ -214,7 +214,7 @@ function sensorFormHTML(dev, s=null) {
       <input type="text" id="as-kww" value="${esc(s?.keyword||'')}" placeholder="Expected text in response body" autocomplete="off"/></div>
     <div class="fr" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-        <input type="checkbox" id="as-kwssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        <input type="checkbox" id="as-kwssl" ${s && !s.verify_ssl ? '' : 'checked'} style="width:auto;cursor:pointer"/>
         Verify SSL certificate
       </label>
     </div>
@@ -254,7 +254,7 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-        <input type="checkbox" id="as-vmssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        <input type="checkbox" id="as-vmssl" ${s && !s.verify_ssl ? '' : 'checked'} style="width:auto;cursor:pointer"/>
         Verify SSL certificate
       </label>
     </div>

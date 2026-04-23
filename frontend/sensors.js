@@ -392,6 +392,18 @@ function _vmNameFromSensor(s){
   return s.name||s.vmware_vm_id;
 }
 
+// Is this VM group a host-level group? Checks ALL sensors for this VM rather
+// than just the one triggering the _ensureVmGrp call — render order isn't
+// guaranteed, and picking host-ness from the first-rendered sensor means a
+// single VM-style metric (e.g. `on`) on a host can mislabel the whole group
+// as VM, breaking the Edit Metrics filter.
+function _vmGrpIsHost(did, vmid) {
+  return Object.values(S.sensors || {}).some(s =>
+    s.device_id === did && s.stype === 'vmware' &&
+    s.vmware_vm_id === vmid &&
+    (s.vmware_metric || '').startsWith('host_'));
+}
+
 function _ensureVmGrp(did,s){
   const vmid=s.vmware_vm_id; if(!vmid) return;
   const sfx=_vmGrpSfx(vmid);
@@ -404,7 +416,7 @@ function _ensureVmGrp(did,s){
   grp.className='vm-grp stl-enter';
   grp.id=`vmgrp-${did}-${sfx}`;
   grp.dataset.vmid=vmid; grp.dataset.did=did;
-  const _isHost=!!(s.vmware_metric&&s.vmware_metric.startsWith('host_'));
+  const _isHost=_vmGrpIsHost(did, vmid);
   grp.innerHTML=`
     <div class="vm-grp-hdr">
       <div class="vm-grp-arr${collapsed?'':' open'}">▶</div>
@@ -517,8 +529,20 @@ async function openEditVmMetrics(did, vmid, vmName, isHost){
   const byMetric = {};
   for (const s of existing) byMetric[s.vmware_metric] = s;
 
-  // Filter the catalogue to host_* or non-host_* depending on the group.
+  // Trust the data over the caller's flag: if any sensor on this VM uses a
+  // host_* metric, treat the group as a host group. Avoids a mislabel when
+  // the caller derived isHost from a single (possibly VM-style) sensor.
+  if (existing.length) {
+    isHost = existing.some(s => (s.vmware_metric || '').startsWith('host_'));
+  }
+
+  // Filter the catalogue to host_* or non-host_* depending on the group —
+  // but ALWAYS include metrics that are already monitored on this VM, so a
+  // mixed entity (e.g. a host with a stray `on` sensor) shows every existing
+  // checkbox correctly ticked. Adding a new metric is still scoped to the
+  // category so users don't accidentally attach VM metrics to a host.
   const visible = allMetrics.filter(m => {
+    if (byMetric[m.v]) return true;
     const isHostMetric = (m.v || '').startsWith('host_');
     return isHost ? isHostMetric : !isHostMetric;
   });
@@ -537,7 +561,10 @@ async function openEditVmMetrics(did, vmid, vmName, isHost){
   const refHost = ref.host || S.devices[did]?.host || '';
   const refPort = ref.port || 443;
   const refUser = ref.vmware_user || '';
-  const refVssl = ref.verify_ssl !== 0;
+  // Use truthy/falsy, not `!== 0`: backend sends JSON boolean `false`, and
+  // `false !== 0` is `true` under strict inequality (different types) — which
+  // would silently flip verify_ssl to true on any metric added via this modal.
+  const refVssl = !!ref.verify_ssl;
   const refInterval = ref.interval || 60;
   const refTimeout  = ref.timeout || 10;
 
