@@ -72,6 +72,12 @@ _thread_lock = threading.Lock()
 # Serializes tick execution so run-now can't race the scheduler.
 _tick_lock   = threading.Lock()
 
+# Per-subnet "previous scan timed out" flag. Used to suppress repeat audit
+# entries when a subnet keeps timing out every tick (e.g. /16 with default
+# 5-min deadline). One audit row per failure streak; cleared on success.
+# Single-threaded access (only mutated from the auto-discovery thread).
+_subnet_timeout_flag: dict[int, bool] = {}
+
 # Last-run stats for the settings-UI status endpoint.
 _last_run_stats: dict = {
     "subnets_scanned":    0,
@@ -402,8 +408,18 @@ def _inside_maintenance_window() -> bool:
 # Max wall-clock we'll spend waiting for a subnet scan to finish.
 # Manual-Discovery full-mode on a /24 is typically under 60s; padding to 5min
 # handles slow /22s + network latency while preventing runaway loops.
+# The deadline is user-tunable via setting `auto_discover_scan_deadline_s`
+# (bounded 30..3600); this constant is the fallback when the setting is missing.
 _SCAN_WAIT_DEADLINE_S = 300.0
 _SCAN_POLL_INTERVAL_S = 1.5
+
+
+def _scan_deadline_s() -> float:
+    try:
+        import core.settings as _s
+        return float(max(30, min(3600, int(_s.get("auto_discover_scan_deadline_s", 300) or 300))))
+    except Exception:
+        return _SCAN_WAIT_DEADLINE_S
 
 
 def _scan_subnet(subnet: dict) -> dict:
@@ -427,7 +443,8 @@ def _scan_subnet(subnet: dict) -> dict:
         return stats
 
     # Wait for the scan to finish (or deadline / shutdown).
-    deadline = time.time() + _SCAN_WAIT_DEADLINE_S
+    _dl = _scan_deadline_s()
+    deadline = time.time() + _dl
     while time.time() < deadline:
         if _stop.is_set():
             log.info(f"Auto-Discovery: abandoning in-flight scan {scan_id} "
@@ -444,14 +461,33 @@ def _scan_subnet(subnet: dict) -> dict:
         time.sleep(_SCAN_POLL_INTERVAL_S)
     else:
         log.warning(f"Auto-Discovery: scan {scan_id} on {cidr} exceeded "
-                    f"{_SCAN_WAIT_DEADLINE_S}s deadline — moving on")
+                    f"{_dl}s deadline — raise auto_discover_scan_deadline_s "
+                    f"in Settings → Retention or split the subnet into smaller blocks")
         stats["errors"] = 1
+        # Audit entry on the first timeout in a streak. Suppresses repeats so a
+        # /16 timing out every tick doesn't drown the audit log.
+        if sid is not None and not _subnet_timeout_flag.get(sid):
+            _subnet_timeout_flag[sid] = True
+            try:
+                db_log_audit(
+                    "system", "",
+                    "auto_discovery_scan_timeout",
+                    f"cidr={cidr} deadline={int(_dl)}s — raise "
+                    f"auto_discover_scan_deadline_s or split the subnet"
+                )
+            except Exception:
+                pass
         return stats
 
     if state != "done":
         log.warning(f"Auto-Discovery: scan on {cidr} ended in state {state!r}")
         stats["errors"] = 1
         return stats
+
+    # Reached "done" — clear any prior timeout flag so a future timeout streak
+    # gets its own audit entry.
+    if sid is not None:
+        _subnet_timeout_flag.pop(sid, None)
 
     # Filter results: drop suppressed hosts.
     raw_results = st.get("results") or []

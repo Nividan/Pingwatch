@@ -115,7 +115,7 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-        <input type="checkbox" id="as-vssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        <input type="checkbox" id="as-vssl" ${s && !s.verify_ssl ? '' : 'checked'} style="width:auto;cursor:pointer"/>
         Verify SSL certificate
       </label>
       <div class="fh">Uncheck to ignore self-signed / expired certs</div>
@@ -214,7 +214,7 @@ function sensorFormHTML(dev, s=null) {
       <input type="text" id="as-kww" value="${esc(s?.keyword||'')}" placeholder="Expected text in response body" autocomplete="off"/></div>
     <div class="fr" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-        <input type="checkbox" id="as-kwssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        <input type="checkbox" id="as-kwssl" ${s && !s.verify_ssl ? '' : 'checked'} style="width:auto;cursor:pointer"/>
         Verify SSL certificate
       </label>
     </div>
@@ -254,7 +254,7 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
-        <input type="checkbox" id="as-vmssl" ${s?.verify_ssl===false?'':'checked'} style="width:auto;cursor:pointer"/>
+        <input type="checkbox" id="as-vmssl" ${s && !s.verify_ssl ? '' : 'checked'} style="width:auto;cursor:pointer"/>
         Verify SSL certificate
       </label>
     </div>
@@ -1373,7 +1373,60 @@ async function _vmwareLoadMetrics(){
 }
 function _allVmwareMetrics(){ return [...(_vmwareMetrics||[]),...(_vmwareHostMetrics||[]),...(_vmwareDatastoreMetrics||[])]; }
 
+// Fetch the three VMware metric catalogues if any are missing. Callers outside
+// the Add-Sensor flow (e.g. the per-VM Edit Metrics modal in sensors.js) need
+// this — without it, a user who opens Edit before ever opening Add Sensor sees
+// an empty catalogue and an error toast. Safe to call repeatedly: already-loaded
+// arrays are kept as-is.
+async function _ensureVmwareCatalogue() {
+  const tasks = [];
+  if (!_vmwareMetrics) tasks.push(
+    fetch('/api/vmware/metrics').then(r => r.json()).then(d => { _vmwareMetrics = d.metrics || []; })
+  );
+  if (!_vmwareHostMetrics) tasks.push(
+    fetch('/api/vmware/host-metrics').then(r => r.json()).then(d => { _vmwareHostMetrics = d.metrics || []; })
+  );
+  if (!_vmwareDatastoreMetrics) tasks.push(
+    fetch('/api/vmware/datastore-metrics').then(r => r.json()).then(d => { _vmwareDatastoreMetrics = d.metrics || []; })
+  );
+  if (tasks.length) await Promise.all(tasks);
+}
+
 let _discHostMode=false;  // true when host discovery table is shown
+// POST with a client-side ceiling — the global `api()` helper has no timeout,
+// and vCenter discovery can legitimately take 10–120s. Without a ceiling the
+// button would sit on "Connecting to vCenter…" forever if the backend hung.
+// Backend discover timeout is 120s; we set 150s here so the server's clean
+// ConnectionError surfaces first, then AbortController kicks in as a last
+// resort. Throws an Error with `.code === 'timeout'` on abort so the caller
+// can show a specific message.
+async function _vmApiTimed(method, path, body, timeoutMs){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const o = {method, headers:{'Content-Type':'application/json'}, signal: ctrl.signal};
+    if (body) o.body = JSON.stringify(body);
+    const r = await fetch(path, o);
+    if (r.status === 401) { if (!_loggedOut) showLogin('Session expired. Please sign in again.'); return {}; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({error: r.statusText}));
+      const e = new Error(err.error || r.statusText);
+      e.code = 'http';
+      throw e;
+    }
+    return await r.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      const te = new Error('Request timed out');
+      te.code = 'timeout';
+      throw te;
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function discoverVMs(){
   _discHostMode=false;
   _vmDstoreMode=false;
@@ -1398,9 +1451,14 @@ async function discoverVMs(){
   if(!password && did) payload.did=did;
   let r;
   try{
-    r=await api('POST','/api/vmware/vms',payload);
+    r=await _vmApiTimed('POST','/api/vmware/vms',payload,150000);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    if(statusEl){
+      statusEl.style.color='var(--down)';
+      statusEl.textContent = e.code==='timeout'
+        ? 'Timed out after 150s — vCenter is slow or overloaded'
+        : (e.message || 'Request failed');
+    }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='▥ Discover VMs'; }
@@ -1502,9 +1560,14 @@ async function discoverHosts(){
   if(!password && did) payload.did=did;
   let r;
   try{
-    r=await api('POST','/api/vmware/hosts',payload);
+    r=await _vmApiTimed('POST','/api/vmware/hosts',payload,150000);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    if(statusEl){
+      statusEl.style.color='var(--down)';
+      statusEl.textContent = e.code==='timeout'
+        ? 'Timed out after 150s — vCenter is slow or overloaded'
+        : (e.message || 'Request failed');
+    }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='▦ Discover Hosts'; }
@@ -1606,9 +1669,14 @@ async function discoverDatastores(){
   if(!password && did) payload.did=did;
   let r;
   try{
-    r=await api('POST','/api/vmware/datastores',payload);
+    r=await _vmApiTimed('POST','/api/vmware/datastores',payload,150000);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    if(statusEl){
+      statusEl.style.color='var(--down)';
+      statusEl.textContent = e.code==='timeout'
+        ? 'Timed out after 150s — vCenter is slow or overloaded'
+        : (e.message || 'Request failed');
+    }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='▤ Discover Datastores'; }

@@ -325,6 +325,14 @@ def _attach_charts(ctx: dict) -> dict:
     )
     if "latency" in ctx:
         c["latency_bar"] = charts.latency_percentile_bar(ctx["latency"], 10)
+    # Anomaly Detection charts — only built when their data section is present.
+    if "anom_vs_threshold" in ctx:
+        c["anom_vs_threshold_donut"] = charts.anomaly_vs_threshold_donut(ctx["anom_vs_threshold"])
+    if "anom_fires" in ctx:
+        c["anom_fires_timeline"] = charts.anomaly_fires_timeline(
+            ctx["anom_fires"],
+            ctx["period"]["start_ts"], ctx["period"]["end_ts"]
+        )
     ctx["charts"] = c
     return ctx
 

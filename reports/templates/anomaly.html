@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "_anomaly_sections.html" as anom with context %}
+
+{% block content %}
+
+<section class="section">
+  <p>
+    This report summarizes the state of the learned-baseline anomaly detection
+    feature across the estate over the last <strong>{{ period.days }} days</strong>.
+    Use it to (a) see which sensors are using anomaly detection, (b) audit
+    anomaly fires in the period, and (c) identify sensors that should have
+    it turned on.
+  </p>
+</section>
+
+{{ anom.anom_overview(anom_overview) }}
+{{ anom.anom_baseline_table(anom_baselines) }}
+{{ anom.anom_fires_log(anom_fires) }}
+{{ anom.anom_fires_top(anom_fires_top) }}
+{{ anom.anom_vs_threshold(anom_vs_threshold) }}
+{{ anom.anom_recommendations(anom_recommendations) }}
+
+{% endblock %}

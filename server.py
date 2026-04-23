@@ -393,8 +393,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, auto_discovery as _ad_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ad_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ad_mod, _diag_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -419,8 +419,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -633,6 +633,13 @@ def main():
     # Apply debug mode from saved settings
     from core.logger import set_debug_mode as _set_dbg
     _set_dbg(int(_settings.get("debug_mode", 0) or 0) == 1)
+
+    # Swap log-file handlers to user-configured sizes/retention (Retention tab)
+    try:
+        from core.logger import reconfigure_from_settings as _reconf_logs
+        _reconf_logs()
+    except Exception as _e:
+        log.warning(f"Log handler reconfigure failed: {_e}")
 
     # Auth backend config sanity pass — populates status badges for LDAP /
     # RADIUS / SAML / OIDC before the HTTP listener is up. Fast + local-only:
@@ -975,6 +982,24 @@ def main():
         stop_backup_scheduler()
     except Exception as e:
         log.warning(f"stop backup scheduler failed: {e}")
+    # Final drain of probe workers BEFORE closing the PG pool. The earlier
+    # `STATE._executor.shutdown(wait=False)` lets the rest of shutdown run in
+    # parallel, but a probe that cleared its `s.running` check continues
+    # through the alert-engine path (e.g. db_get_stage_state on alert_profile_state).
+    # Closing the pool while such a query is mid-flight raises
+    # "InterfaceError: cursor already closed".
+    try:
+        STATE._executor.shutdown(wait=True)
+    except Exception as e:
+        log.warning(f"executor final drain failed: {e}")
+    # Drain pending alert batches synchronously — otherwise alert_batcher's
+    # atexit hook runs after pg_close_pool() and every dispatch raises
+    # "PostgreSQL pool is closed".
+    try:
+        from monitoring.alert_batcher import shutdown_sync as _drain_alerts
+        _drain_alerts()
+    except Exception as e:
+        log.warning(f"alert_batcher drain failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()

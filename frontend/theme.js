@@ -54,7 +54,7 @@
     try {
       const f = document.getElementById('map-frame');
       if (f && f.contentWindow) {
-        f.contentWindow.postMessage({ type: 'theme', value: next }, '*');
+        f.contentWindow.postMessage({ type: 'theme', value: next }, window.location.origin);
       }
     } catch (_) {}
 

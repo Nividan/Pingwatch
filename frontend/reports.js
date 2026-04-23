@@ -56,6 +56,17 @@ const _RPT_SECTIONS = [
     {id:'device_health',      label:'Device health scores',
       opt:{key:'health_top_n', def:25, values:[[10,'Top 10'],[25,'Top 25'],[0,'All devices']]}},
   ]},
+  {label:'Anomaly Detection', items:[
+    {id:'anom_overview',          label:'Coverage overview (master switch, eligible vs enabled)'},
+    {id:'anom_baseline_table',    label:'Baseline learning state',
+      opt:{key:'anom_baseline_top_n', def:50, values:[[25,'Top 25'],[50,'Top 50'],[100,'Top 100']]}},
+    {id:'anom_fires_log',         label:'Anomaly fires log (timeline + table)'},
+    {id:'anom_fires_top',         label:'Top sensors by anomaly fires',
+      opt:{key:'anom_top_n', def:10, values:[[5,'Top 5'],[10,'Top 10'],[25,'Top 25']]}},
+    {id:'anom_vs_threshold',      label:'Warning source split (anomaly vs threshold)'},
+    {id:'anom_recommendations',   label:'Eligible-but-disabled sensors',
+      opt:{key:'anom_rec_limit', def:50, values:[[25,'Top 25'],[50,'Top 50'],[100,'Top 100'],[500,'Up to 500']]}},
+  ]},
 ];
 
 /* ── Presets that mirror the three fixed kinds ───────────────────
@@ -71,6 +82,8 @@ const _RPT_PRESETS = {
          'major_incidents','incident_log','sensor_config_issues','maint_windows'],
   inv:  ['estate_overview','backup_coverage','ipam','licenses','tls_expiring',
          'device_inventory','audit_log'],
+  anom: ['anom_overview','anom_baseline_table','anom_fires_log',
+         'anom_fires_top','anom_vs_threshold','anom_recommendations'],
 };
 
 function _rptBuildSectionsHtml(cfg){
@@ -334,6 +347,7 @@ async function _rptRenderTemplates(){
             <button class="rpt-btn rpt-btn-primary" onclick="_rptEditTemplate(null,'executive')">+ Executive Summary</button>
             <button class="rpt-btn" onclick="_rptEditTemplate(null,'technical')">+ Technical / Ops</button>
             <button class="rpt-btn" onclick="_rptEditTemplate(null,'inventory')">+ Inventory &amp; Compliance</button>
+            <button class="rpt-btn" onclick="_rptEditTemplate(null,'anomaly')">+ Anomaly Detection</button>
           </div>
         </div>`;
       return;
@@ -373,6 +387,7 @@ function _rptEditTemplate(tid, presetKind){
       executive: 'Executive Summary',
       technical: 'Technical / Operations',
       inventory: 'Inventory & Compliance',
+      anomaly:   'Anomaly Detection',
       custom:    'Custom Report',
     }[presetKind] || '';
     let t = {name:_presetName, kind: presetKind||'executive', description:'', config_json:{period:'last_month'}};
@@ -417,6 +432,7 @@ function _rptEditTemplate(tid, presetKind){
                 <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('exec')">Executive</button>
                 <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('tech')">Technical</button>
                 <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('inv')">Inventory</button>
+                <button type="button" class="rpt-preset-btn" onclick="_rptSecPreset('anom')">Anomaly</button>
                 <span class="rpt-preset-sep"></span>
                 <button type="button" class="rpt-preset-btn ghost" onclick="_rptSecPreset('all')">All</button>
                 <button type="button" class="rpt-preset-btn ghost" onclick="_rptSecPreset('none')">Clear</button>
@@ -439,6 +455,7 @@ function _rptEditTemplate(tid, presetKind){
                   <option value="executive" ${t.kind==='executive'?'selected':''}>Executive Summary (high-level)</option>
                   <option value="technical" ${t.kind==='technical'?'selected':''}>Technical / Operations (detailed)</option>
                   <option value="inventory" ${t.kind==='inventory'?'selected':''}>Inventory &amp; Compliance (devices, backups, IPAM, licenses)</option>
+                  <option value="anomaly"   ${t.kind==='anomaly'  ?'selected':''}>Anomaly Detection (coverage, fires, recommendations)</option>
                   <option value="custom"    ${t.kind==='custom'?'selected':''}>Custom — pick your own sections</option>
                 </select>
               </div>

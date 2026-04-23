@@ -34,6 +34,7 @@ from core.logger import log
 
 _last_ok_ts: float | None = None
 _last_err: dict = {}
+_last_warn: dict = {}
 
 _status_lock = threading.Lock()
 
@@ -50,27 +51,39 @@ def _record_err(msg: str) -> None:
         _last_err = {"ts": time.time(), "msg": (msg or "")[:300]}
 
 
+def _record_warn(msg: str) -> None:
+    global _last_warn
+    with _status_lock:
+        _last_warn = {"ts": time.time(), "msg": (msg or "")[:300]}
+
+
 def get_oidc_status() -> dict:
     enabled = int(_settings.get("oidc_enabled", 0) or 0)
     issuer  = (_settings.get("oidc_issuer_url", "") or "").strip()
     client  = (_settings.get("oidc_client_id", "") or "").strip()
     secret  = (_settings.get("oidc_client_secret_enc", "") or "").strip()
     cache   = (_settings.get("oidc_discovery_cache", "") or "").strip()
+    err_ts  = _last_err.get("ts") if _last_err else None
+    warn_ts = _last_warn.get("ts") if _last_warn else None
     if not enabled or not issuer or not client or not secret:
         state = "unconfigured"
     elif not cache:
         state = "configured"
-    elif _last_err and (not _last_ok_ts or _last_err["ts"] > _last_ok_ts):
+    elif err_ts and (not _last_ok_ts or err_ts > _last_ok_ts):
         state = "error"
+    elif warn_ts and warn_ts > (_last_ok_ts or 0) and warn_ts > (err_ts or 0):
+        state = "warning"
     elif _last_ok_ts:
         state = "ok"
     else:
         state = "configured"
     return {
-        "state":        state,
-        "last_ok_ts":   _last_ok_ts,
-        "last_err_ts":  _last_err.get("ts") if _last_err else None,
-        "last_err_msg": _last_err.get("msg", "") if _last_err else "",
+        "state":         state,
+        "last_ok_ts":    _last_ok_ts,
+        "last_err_ts":   err_ts,
+        "last_err_msg":  _last_err.get("msg", "") if _last_err else "",
+        "last_warn_ts":  warn_ts,
+        "last_warn_msg": _last_warn.get("msg", "") if _last_warn else "",
     }
 
 

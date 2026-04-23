@@ -180,6 +180,15 @@ _RE_AD_APPROVE_FIRST   = re.compile(r'^/api/auto-discovery/subnet/(\d+)/approve-
 _RE_AD_ACTIVITY        = re.compile(r'^/api/auto-discovery/activity$')
 # IPAM auto-discover toggle (lives under /api/ipam/ for natural grouping)
 _RE_IPAM_AD_TOGGLE     = re.compile(r'^/api/ipam/subnet/(\d+)/auto-discover$')
+# Diagnostics
+_RE_DIAG_SNAPSHOT      = re.compile(r'^/api/diagnostics/snapshot$')
+_RE_DIAG_DB_STATS      = re.compile(r'^/api/diagnostics/db-stats$')
+_RE_DIAG_RECENT_ERRS   = re.compile(r'^/api/diagnostics/recent-errors$')
+_RE_DIAG_PROBE         = re.compile(r'^/api/diagnostics/probe$')
+_RE_DIAG_ACTION        = re.compile(r'^/api/diagnostics/action/([a-z0-9_-]+)$')
+_RE_DIAG_TEST_NTP      = re.compile(r'^/api/diagnostics/test/ntp$')
+_RE_DIAG_TEST_DNS      = re.compile(r'^/api/diagnostics/test/dns$')
+_RE_DIAG_BUNDLE        = re.compile(r'^/api/diagnostics/bundle$')
 # Device-group mute (group is a string on the Device, not a row in any table,
 # so the URL carries the group name verbatim, url-encoded).
 _RE_DEV_GROUP_MUTE     = re.compile(r'^/api/device-group/([^/]+)/mute$')

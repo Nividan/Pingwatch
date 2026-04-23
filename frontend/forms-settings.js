@@ -81,37 +81,9 @@ function _buildSettingsTab_general(sr) {
         <div id="st-ttl-hint" style="font-size:11px;color:var(--text3);margin-top:5px">Current: ${_fmtTtl(sr.session_ttl||86400)} — takes effect on next login</div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Data Retention</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Raw Samples (days)</label>
-            <input type="number" id="st-ret-raw" value="${sr.retention_raw_days||7}" min="1" max="365" style="max-width:100px"/>
-            <div style="font-size:11px;color:var(--text3);margin-top:3px">Full-resolution probe data (default: 7)</div></div>
-          <div class="fr"><label class="fl">5-Min Aggregates (days)</label>
-            <input type="number" id="st-ret-5m" value="${sr.retention_5m_days||90}" min="7" max="1825" style="max-width:100px"/>
-            <div style="font-size:11px;color:var(--text3);margin-top:3px">5-minute rollups (default: 90)</div></div>
-          <div class="fr"><label class="fl">Hourly Aggregates (days)</label>
-            <input type="number" id="st-ret-1h" value="${sr.retention_1h_days||1095}" min="30" max="3650" style="max-width:120px"/>
-            <div style="font-size:11px;color:var(--text3);margin-top:3px">Hourly rollups for long-term history (default: 1095 / 3 years)</div></div>
-        </div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <label class="fl">Probe Workers</label>
         <input type="number" id="st-mw" value="${sr.max_workers_executor||''}" min="4" max="512" placeholder="Auto" style="max-width:100px"/>
         <div style="font-size:11px;color:var(--text3);margin-top:5px">Leave blank for auto-scaling (currently: ${sr.max_workers_executor_effective||64} workers). Set 4–512 to override.</div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Event &amp; History Limits</div>
-        <div class="fgrid">
-          <div class="fr"><label class="fl">Events shown</label>
-            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||20}" min="5" max="200" style="max-width:100px"/>
-            <div class="fh">Max events shown in Events tab</div></div>
-          <div class="fr"><label class="fl">Events in DB</label>
-            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||500}" min="50" max="10000" style="max-width:100px"/>
-            <div class="fh">Max flap entries kept in database</div></div>
-        </div>
-        <div class="fr" style="margin-top:6px"><label class="fl">SNMP Traps in DB</label>
-          <input type="number" id="st-trap-db" value="${sr.max_trap_entries||500}" min="50" max="10000" style="max-width:100px"/>
-          <div class="fh">Max SNMP trap entries kept in database</div></div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Appearance</div>
@@ -150,14 +122,6 @@ function _buildSettingsTab_general(sr) {
         </div>
       </div>
       <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="fl" style="margin-bottom:10px">Logging</div>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-          <input type="checkbox" id="st-debug-mode" ${sr.debug_mode?'checked':''} onchange="_saveDebugMode(this)"/>
-          <span style="font-size:12px">Debug Mode</span>
-        </label>
-        <div class="fh" style="margin-top:6px">Enable verbose debug logging. When off, only INFO and above is written to log files. View logs in the <a href="javascript:void(0)" onclick="closeM('mset');switchMainTab('logs')" style="color:var(--accent)">Logs</a> tab.</div>
-      </div>
-      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:10px">Server Controls</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn-p" style="font-size:12px;padding:7px 16px" onclick="serverRestart()">&#x21BA; Restart Server</button>
@@ -167,6 +131,97 @@ function _buildSettingsTab_general(sr) {
       </div>
     </div>`;
 }
+
+function _buildSettingsTab_retention(sr) {
+  return `<div class="mbdy stab-fade" id="stab-retention" style="display:none;overflow-y:auto;flex:1">
+      <div class="fr">
+        <div class="fl" style="margin-bottom:10px">Database Retention</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Raw Samples (days)</label>
+            <input type="number" id="st-ret-raw" value="${sr.retention_raw_days||7}" min="1" max="365" style="max-width:100px"/>
+            <div class="fh">Full-resolution probe data (default: 7)</div></div>
+          <div class="fr"><label class="fl">5-Min Aggregates (days)</label>
+            <input type="number" id="st-ret-5m" value="${sr.retention_5m_days||90}" min="7" max="1825" style="max-width:100px"/>
+            <div class="fh">5-minute rollups (default: 90)</div></div>
+          <div class="fr"><label class="fl">Hourly Aggregates (days)</label>
+            <input type="number" id="st-ret-1h" value="${sr.retention_1h_days||1095}" min="30" max="3650" style="max-width:120px"/>
+            <div class="fh">Hourly rollups for long-term history (default: 1095 / 3 years)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Event &amp; Trap Limits</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">Events shown in UI</label>
+            <input type="number" id="st-flap-disp" value="${sr.max_flaps_display||50}" min="5" max="200" style="max-width:100px"/>
+            <div class="fh">Max events rendered in the Events tab (default: 50)</div></div>
+          <div class="fr"><label class="fl">Events kept in DB</label>
+            <input type="number" id="st-flap-db" value="${sr.max_flap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
+            <div class="fh">Max resolved flap entries kept before oldest are trimmed (default: 2000)</div></div>
+          <div class="fr"><label class="fl">SNMP Traps kept in DB</label>
+            <input type="number" id="st-trap-db" value="${sr.max_trap_entries||2000}" min="50" max="10000" style="max-width:100px"/>
+            <div class="fh">Max SNMP trap entries kept (default: 2000)</div></div>
+          <div class="fr"><label class="fl">Audit entries kept in DB</label>
+            <input type="number" id="st-audit-cap" value="${sr.audit_trim_cap||50000}" min="1000" max="1000000" step="1000" style="max-width:120px"/>
+            <div class="fh">Max audit_log rows kept; trimmed on each audit write (default: 50 000)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px;display:flex;align-items:center;gap:10px">
+          <span>Log Files</span>
+          <span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:10px;background:rgba(240,165,0,.12);color:var(--warn);border:1px solid rgba(240,165,0,.35)">⚠ Restart required</span>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Changes to size-based rotation and audit retention apply after the next server restart.</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">pingwatch.log — size (MB)</label>
+            <input type="number" id="st-log-main-mb" value="${sr.log_main_max_mb||10}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Rotate main application log at this size (default: 10 MB)</div></div>
+          <div class="fr"><label class="fl">pingwatch.log — backups</label>
+            <input type="number" id="st-log-main-bk" value="${sr.log_main_backups||14}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Rotated copies kept (default: 14)</div></div>
+          <div class="fr"><label class="fl">pingwatchsensors.log — size (MB)</label>
+            <input type="number" id="st-log-sens-mb" value="${sr.log_sensors_max_mb||20}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Rotate sensor activity log at this size (default: 20 MB)</div></div>
+          <div class="fr"><label class="fl">pingwatchsensors.log — backups</label>
+            <input type="number" id="st-log-sens-bk" value="${sr.log_sensors_backups||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Rotated copies kept (default: 5)</div></div>
+          <div class="fr"><label class="fl">pingwatchaudit.log — days kept</label>
+            <input type="number" id="st-log-audit-days" value="${sr.log_audit_days||365}" min="7" max="3650" style="max-width:120px"/>
+            <div class="fh">Daily rotation; keep this many days of history (default: 365)</div></div>
+          <div class="fr"><label class="fl">pingwatchbackup.log — size (MB)</label>
+            <input type="number" id="st-log-bkup-mb" value="${sr.log_backup_max_mb||5}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Rotate device-backup log at this size (default: 5 MB)</div></div>
+          <div class="fr"><label class="fl">pingwatchbackup.log — backups</label>
+            <input type="number" id="st-log-bkup-bk" value="${sr.log_backup_backups||5}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Rotated copies kept (default: 5)</div></div>
+        </div>
+      </div>
+      <div class="fr" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:10px">Performance &amp; Limits</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Timeouts, caps and limits tuned to deployment size. All apply live.</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">SMTP connection timeout (s)</label>
+            <input type="number" id="st-smtp-timeout" value="${sr.smtp_timeout_s||10}" min="2" max="120" style="max-width:100px"/>
+            <div class="fh">How long to wait for the mail server to respond (default: 10)</div></div>
+          <div class="fr"><label class="fl">PG statement timeout (s)</label>
+            <input type="number" id="st-pg-stmt" value="${sr.pg_statement_timeout_s||30}" min="5" max="600" style="max-width:100px"/>
+            <div class="fh">PostgreSQL query timeout; raise for long analytics/export (default: 30)</div></div>
+          <div class="fr"><label class="fl">PG pool acquire (s)</label>
+            <input type="number" id="st-pg-pool" value="${sr.pg_pool_acquire_timeout_s||30}" min="5" max="120" style="max-width:100px"/>
+            <div class="fh">Max wait for a free pooled connection; lower for fail-fast (default: 30)</div></div>
+          <div class="fr"><label class="fl">Auto-Discovery scan deadline (s)</label>
+            <input type="number" id="st-scan-deadline" value="${sr.auto_discover_scan_deadline_s||300}" min="30" max="3600" style="max-width:100px"/>
+            <div class="fh">Max wall-clock per subnet scan; raise for /20 and larger (default: 300)</div></div>
+          <div class="fr"><label class="fl">SFTP checksum cap (MB)</label>
+            <input type="number" id="st-sftp-cap" value="${sr.sftp_checksum_max_mb||10}" min="1" max="500" style="max-width:100px"/>
+            <div class="fh">Largest file an SFTP-checksum probe will hash (default: 10)</div></div>
+          <div class="fr"><label class="fl">Bulk-import max size (MB)</label>
+            <input type="number" id="st-import-cap" value="${sr.import_max_payload_mb||8}" min="1" max="100" style="max-width:100px"/>
+            <div class="fh">Max body accepted by /api/import/* endpoints (default: 8)</div></div>
+        </div>
+      </div>
+    </div>`;
+}
+
 
 function _buildSettingsTab_users(sr, ur) {
   return `<div class="mbdy stab-fade" id="stab-users" style="display:none;padding-top:8px;overflow-y:auto;flex:1">
@@ -207,12 +262,16 @@ function _buildSettingsTab_users(sr, ur) {
 }
 
 async function _anomBulkEnable(){
-  if(!confirm('Enable anomaly detection on all supported sensors (ping, tcp, http, dns, http_keyword, banner)?\n\nEach gets a fresh cold-start window — no alerts fire for the first 24 hours.')) return;
-  try{
-    const r=await api('POST','/api/anomaly/bulk-enable',{});
-    if(r&&r.error){toast(r.error,'err');return;}
-    toast(`Enabled on ${r.enabled} sensor(s); skipped ${r.skipped}`,'ok');
-  }catch(e){toast('Bulk enable failed','err');}
+  const msg = `Enable anomaly detection on all supported sensors<br>
+    <span style="color:var(--text3);font-size:12px">(ping, tcp, http, dns, http_keyword, banner)</span>?
+    <br><br><span style="color:var(--text3);font-size:12px">Each gets a fresh cold-start window — no alerts fire for the first 24 hours.</span>`;
+  _pwConfirm(msg, async () => {
+    try{
+      const r=await api('POST','/api/anomaly/bulk-enable',{});
+      if(r&&r.error){toast(r.error,'err');return;}
+      toast(`Enabled on ${r.enabled} sensor(s); skipped ${r.skipped}`,'ok');
+    }catch(e){toast('Bulk enable failed','err');}
+  }, 'Enable', {danger:false, html:true});
 }
 
 function _buildSettingsTab_groups() {
@@ -981,7 +1040,7 @@ function _buildSettingsTab_sensors(sr) {
   return `<div class="mbdy stab-fade" id="stab-sensors" style="display:none;overflow-y:auto;flex:1">
       <div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--border)">
         <div class="fl" style="margin-bottom:6px">Global Defaults</div>
-        <div class="fh" style="margin-bottom:10px">Applied to <b>new sensors only</b> — existing sensors keep their stored values. Override per type below.</div>
+        <div class="fh" style="margin-bottom:10px">Fallback values for <b>new sensors</b> — Interval/Timeout are used only when a type below leaves them blank. Fail/Recover apply to all types. Existing sensors keep their stored values.</div>
         <div class="fgrid">
           <div class="fr"><label class="fl">Interval (s)</label>
             <input type="number" id="st-snr-iv" value="${sr.snr_interval||5}" min="1" max="300" style="max-width:100px"/></div>
@@ -1030,7 +1089,7 @@ function _buildSettingsTab_sensors(sr) {
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
-        <div class="fh" style="margin-bottom:10px">Sensor tiles and sparklines use these breakpoints to colour-code latency</div>
+        <div class="fh" style="margin-bottom:10px">Fallback colour breakpoints — used only for sensors with no warn/crit configured (sensor-level or per-type). Rarely hit once types above are set.</div>
         <div class="fgrid">
           <div class="fr"><label class="fl" style="color:var(--up)">Good (green) &lt; (ms)</label>
             <input type="number" id="st-lgood" value="${sr.latency_good_ms||100}" min="1" max="10000" style="max-width:100px"/></div>
@@ -1398,6 +1457,13 @@ function _buildSettingsTab_autoDiscovery(sr) {
     <div style="font-size:11px;color:var(--text3);margin-bottom:6px">
       Scheduler ticks, cap hits, subnet toggles, and admin actions. Sourced from the audit log.
     </div>
+    <div class="disc-act-filter">
+      <select id="disc-act-f-type"><option value="">All events</option></select>
+      <input id="disc-act-f-actor" type="text" placeholder="Actor…" autocomplete="off"/>
+      <input id="disc-act-f-q" type="text" placeholder="Search target / detail…" autocomplete="off"/>
+      <button class="btn-s" onclick="_adActClear()">Clear</button>
+      <span class="disc-act-count" id="disc-act-count"></span>
+    </div>
     <div id="disc-activity-wrap"><div class="disc-sup-empty">Loading…</div></div>
 
     <details class="imp-help" style="margin-top:14px">
@@ -1421,8 +1487,41 @@ function _buildSettingsTab_autoDiscovery(sr) {
   </div>`;
 }
 
-function _buildSettingsTab_alertRules() {
+function _buildSettingsTab_alertRules(sr) {
+  sr = sr || {};
+  const abEnabled = sr.alert_batch_enabled !== false;    // default on
+  const abWindow  = sr.alert_batch_window_s || 60;
+  const abMax     = sr.alert_batch_max_size || 20;
   return `<div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
+      <div class="alrt-panel-hdr">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text2)">📬 Notification Batching</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">When a burst of alerts fires at the same time (e.g. a switch dies and 12 sensors behind it page), send one combined email/webhook instead of N separate ones. Syslog and browser notifications are unaffected. Every event is still recorded individually in PingWatch.</div>
+        </div>
+      </div>
+      <div class="fgroup" style="padding:12px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:20px">
+        <div class="fr">
+          <label class="fl">Enable batching</label>
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="st-ab-enabled" ${abEnabled ? 'checked' : ''}/>
+            <span style="font-size:12px;color:var(--text3)">When off, email and webhook alerts fire immediately as in earlier versions.</span>
+          </label>
+        </div>
+        <div class="fr">
+          <label class="fl" title="Hold the first alert in a bucket this long before flushing. Tune based on your typical alert-storm duration.">Batch window (seconds)</label>
+          <input type="number" id="st-ab-window" min="5" max="3600" value="${abWindow}" style="width:110px"/>
+          <span style="font-size:11px;color:var(--text3);margin-left:8px">5–3600s · default 60</span>
+        </div>
+        <div class="fr">
+          <label class="fl" title="Flush early when a bucket reaches this many events — useful for very large bursts.">Max batch size</label>
+          <input type="number" id="st-ab-max" min="2" max="500" value="${abMax}" style="width:110px"/>
+          <span style="font-size:11px;color:var(--text3);margin-left:8px">2–500 · default 20</span>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;padding-top:8px;border-top:1px dashed var(--border)">
+          ℹ️ Down and recovery notifications are batched symmetrically: 12 sensors down → 1 down email; 12 recovered → 1 recovery email. Webhook batching is opt-in per action template — see the <strong>Batch-aware receiver</strong> checkbox in the webhook template editor.
+        </div>
+      </div>
+
       <div class="alrt-panel-hdr">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text2)">📋 Alert Profiles</div>
@@ -1482,6 +1581,7 @@ async function openSettings(initialTab){
     <div class="stab-layout">
     <nav class="stab-sidebar">
       <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
+      <button class="stab-nav" id="stab-btn-retention" onclick="switchSettingsTab('retention')">🗃️ Retention</button>
       <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
       <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
@@ -1493,9 +1593,11 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
       <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">📡 Auto-Discovery</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
+      <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">🔧 Diagnostics</button>
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}
+    ${_buildSettingsTab_retention(sr)}
     ${_buildSettingsTab_users(sr, ur)}
     ${_buildSettingsTab_groups()}
     ${_buildSettingsTab_integrations(sr)}
@@ -1506,10 +1608,15 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_certificates(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
     ${_buildSettingsTab_autoDiscovery(sr)}
-    ${_buildSettingsTab_alertRules()}
+    ${_buildSettingsTab_alertRules(sr)}
+    ${_buildSettingsTab_diagnostics(sr)}
     <div class="mft" id="stab-footer-general">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
+    </div>
+    <div class="mft" id="stab-footer-retention" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="_saveRetention()">Save Retention</button>
     </div>
     <div class="mft" id="stab-footer-users" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -1534,6 +1641,7 @@ async function openSettings(initialTab){
     </div>
     <div class="mft" id="stab-footer-sensors" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-s" onclick="resetSensorTypeDefaults()">Reset to Defaults</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
     <div class="mft" id="stab-footer-networking" style="display:none">
@@ -1553,6 +1661,10 @@ async function openSettings(initialTab){
     </div>
     <div class="mft" id="stab-footer-alert-rules" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-p" onclick="_saveAlertBatching()">Save Batching</button>
+    </div>
+    <div class="mft" id="stab-footer-diagnostics" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
     </div><!-- /stab-content -->
     </div><!-- /stab-layout -->
@@ -1567,7 +1679,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules'];
+  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules','diagnostics'];
 
   // Find currently visible tab
   let cur = null;
@@ -1609,6 +1721,7 @@ function switchSettingsTab(tab){
             if (tab === 'integrations')   _loadIntegrationsStatus();
             if (tab === 'certificates')   _loadTrustedCAs();
             if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
+            if (tab === 'diagnostics')    _diagOnTabShown();
           }, 220);
         });
       });
@@ -1626,6 +1739,7 @@ function switchSettingsTab(tab){
     if (tab === 'integrations')  _loadIntegrationsStatus();
     if (tab === 'certificates')  _loadTrustedCAs();
     if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
+    if (tab === 'diagnostics')    _diagOnTabShown();
   }
 }
 
@@ -2063,8 +2177,8 @@ async function submitInstallSigned(){
 
 // ── Per-type sensor defaults tab ──────────────────────────────────────────
 
-const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:2000, ssh:1500, sftp:2000, radius:500};
-const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:5000, ssh:4000, sftp:5000, radius:2000};
+const _SDR_WARN_DEF = {ping:200,  tcp:300,  http:500,  snmp:1000, dns:200,  tls:30,   http_keyword:500,  banner:300,  smtp:500,  ssh:1500, sftp:500,  radius:500};
+const _SDR_CRIT_DEF = {ping:500,  tcp:1000, http:1500, snmp:3000, dns:500,  tls:7,    http_keyword:1500, banner:1000, smtp:1500, ssh:4000, sftp:1500, radius:2000};
 
 const _SDR_META = {
   ping:         {ico:'📡', label:'Ping',         desc:'ICMP round-trip latency & loss'},
@@ -2156,7 +2270,7 @@ async function loadSensorsDefaultsTab(){
     const d   = td[t] || {};
     const cnt = typeCounts[t];
     const iv  = d.interval      != null ? d.interval      : (window._snrDef?.interval||5);
-    const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||4);
+    const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||3);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
     const cm  = d.crit_ms  != null ? d.crit_ms  : (_SDR_CRIT_DEF[t] || '');
     const warnUnit = t==='tls'?'days':t==='snmp'?'val':'ms';
@@ -2186,6 +2300,21 @@ function _scanPortsReset(){
   document.querySelectorAll('.st-scan-port').forEach(cb => { cb.checked = true; });
   const el = document.getElementById('st-scan-custom');
   if(el) el.value = '';
+}
+
+async function resetSensorTypeDefaults(){
+  if (!confirm('Reset all sensor type defaults to built-in values?\n\nClick Save Sensor Defaults afterwards to apply.')) return;
+  const defaults = { vmware: {interval: 60, timeout: 10} };
+  for (const t of Object.keys(_SDR_WARN_DEF)) {
+    defaults[t] = {
+      interval: 5,
+      timeout:  3,
+      warn_ms:  _SDR_WARN_DEF[t],
+      crit_ms:  _SDR_CRIT_DEF[t],
+    };
+  }
+  window._snrTypeDefaults = defaults;
+  await loadSensorsDefaultsTab();
 }
 
 async function saveSensorTypeDefaults(){
@@ -2329,22 +2458,9 @@ async function saveSettings(){
   const btn=[...document.querySelectorAll('[onclick="saveSettings()"]')].find(el=>el.offsetParent!==null);
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const body={session_ttl:ttl};
-  // Data rollup retention tiers (v0.8.0)
-  const retRaw=parseInt(document.getElementById('st-ret-raw')?.value);
-  const ret5m =parseInt(document.getElementById('st-ret-5m')?.value);
-  const ret1h =parseInt(document.getElementById('st-ret-1h')?.value);
-  if(retRaw>=1)  body.retention_raw_days=retRaw;
-  if(ret5m>=7)   body.retention_5m_days=ret5m;
-  if(ret1h>=30)  body.retention_1h_days=ret1h;
   const mwRaw=document.getElementById('st-mw')?.value?.trim();
   const mw=mwRaw ? parseInt(mwRaw) : 0;
   body.max_workers_executor = (mw>=4) ? mw : 0;  // 0 = auto
-  const flapDisp=parseInt(document.getElementById('st-flap-disp')?.value);
-  const flapDb  =parseInt(document.getElementById('st-flap-db')?.value);
-  const trapDb  =parseInt(document.getElementById('st-trap-db')?.value);
-  if(flapDisp>=5)  body.max_flaps_display=flapDisp;
-  if(flapDb>=50)   body.max_flap_entries=flapDb;
-  if(trapDb>=50)   body.max_trap_entries=trapDb;
   body.org_name=(document.getElementById('st-orgname')?.value||'').trim();
   // Report fields live in their own tab (saveReportSettings) and the unified branding
   // name is already collected as `org_name` above. Don't send them here.
@@ -2363,7 +2479,6 @@ async function saveSettings(){
   const pw=document.getElementById('st-smtp-pass')?.value||'';
   if(pw) smtp.smtp_pass=pw;
   Object.assign(body,smtp);
-  body.debug_mode=document.getElementById('st-debug-mode')?.checked?1:0;
   let r;
   try{
     r=await api('PATCH','/api/settings',body);
@@ -2379,7 +2494,6 @@ async function saveSettings(){
     if(hint) hint.textContent=`Current: ${_fmtTtl(body.session_ttl)} — takes effect on next login`;
     if(typeof _sessionTtl!=='undefined') _sessionTtl=body.session_ttl;
   }
-  if(body.max_flaps_display) MAX_FLAPS=body.max_flaps_display;
   if('org_name' in body){
     window._snrDef=window._snrDef||{};
     const el=document.getElementById('tbVer');
@@ -2393,6 +2507,91 @@ async function _saveDebugMode(cb) {
   const r = await api('PATCH', '/api/settings', { debug_mode: cb.checked ? 1 : 0 });
   if (!r.ok) { toast('Failed to save debug mode', 'err'); cb.checked = !cb.checked; return; }
   toast(cb.checked ? 'Debug mode enabled' : 'Debug mode disabled', 'ok');
+}
+
+async function _saveAlertBatching() {
+  const enabled = document.getElementById('st-ab-enabled')?.checked ? 1 : 0;
+  const winRaw = parseInt(document.getElementById('st-ab-window')?.value);
+  const maxRaw = parseInt(document.getElementById('st-ab-max')?.value);
+  if (!Number.isFinite(winRaw) || winRaw < 5 || winRaw > 3600) {
+    toast('Batch window must be 5 - 3600 seconds', 'err'); return;
+  }
+  if (!Number.isFinite(maxRaw) || maxRaw < 2 || maxRaw > 500) {
+    toast('Max batch size must be 2 - 500', 'err'); return;
+  }
+  const body = {
+    alert_batch_enabled: enabled,
+    alert_batch_window_s: winRaw,
+    alert_batch_max_size: maxRaw,
+  };
+  const btn = document.querySelector('#stab-footer-alert-rules .btn-p');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  let r;
+  try {
+    r = await api('PATCH', '/api/settings', body);
+  } catch (e) {
+    toast('Failed to save batching settings', 'err');
+    return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Batching'; }
+  }
+  if (!r || !r.ok) { toast('Failed to save batching settings', 'err'); return; }
+  toast('Notification batching saved', 'ok');
+}
+
+async function _saveRetention() {
+  const body = {};
+  const pairs = [
+    ['st-ret-raw',        'retention_raw_days',    1,        365],
+    ['st-ret-5m',         'retention_5m_days',     7,       1825],
+    ['st-ret-1h',         'retention_1h_days',    30,       3650],
+    ['st-flap-disp',      'max_flaps_display',     5,        200],
+    ['st-flap-db',        'max_flap_entries',     50,      10000],
+    ['st-trap-db',        'max_trap_entries',     50,      10000],
+    ['st-audit-cap',      'audit_trim_cap',     1000,    1000000],
+    ['st-log-main-mb',    'log_main_max_mb',       1,        500],
+    ['st-log-main-bk',    'log_main_backups',      1,        100],
+    ['st-log-sens-mb',    'log_sensors_max_mb',    1,        500],
+    ['st-log-sens-bk',    'log_sensors_backups',   1,        100],
+    ['st-log-audit-days', 'log_audit_days',        7,       3650],
+    ['st-log-bkup-mb',    'log_backup_max_mb',     1,        500],
+    ['st-log-bkup-bk',    'log_backup_backups',    1,        100],
+    // Performance & Limits
+    ['st-smtp-timeout',   'smtp_timeout_s',                 2,     120],
+    ['st-pg-stmt',        'pg_statement_timeout_s',         5,     600],
+    ['st-pg-pool',        'pg_pool_acquire_timeout_s',      5,     120],
+    ['st-scan-deadline',  'auto_discover_scan_deadline_s', 30,    3600],
+    ['st-sftp-cap',       'sftp_checksum_max_mb',           1,     500],
+    ['st-import-cap',     'import_max_payload_mb',          1,     100],
+  ];
+  for (const [id, key, lo, hi] of pairs) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const v = parseInt(el.value);
+    if (!Number.isFinite(v)) continue;
+    if (v < lo || v > hi) {
+      toast(`${key} must be between ${lo} and ${hi}`, 'err');
+      return;
+    }
+    body[key] = v;
+  }
+  const btn = document.querySelector('#stab-footer-retention .btn-p');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  let r;
+  try {
+    r = await api('PATCH', '/api/settings', body);
+  } catch (e) {
+    toast('Failed to save retention settings', 'err');
+    return;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Retention'; }
+  }
+  if (!r || !r.ok) { toast('Failed to save retention settings', 'err'); return; }
+  if (body.max_flaps_display) MAX_FLAPS = body.max_flaps_display;
+  const touchedLogFiles = Object.keys(body).some(k => k.startsWith('log_'));
+  toast(touchedLogFiles
+    ? 'Saved — restart the server for log-rotation changes to take effect'
+    : 'Retention settings saved', 'ok');
 }
 
 async function saveSecuritySettings(){
@@ -2797,8 +2996,8 @@ function _timeAgo(ts) {
 function _renderIntegStatus(id, status) {
   const el = document.getElementById(`${id}-status-bar`);
   if (!el) return;
-  const icons   = {ok:'🟢', error:'⚠️', unconfigured:'🔴', configured:'🟡'};
-  const labels  = {ok:'Connected', error:'Misconfigured', unconfigured:'Not configured', configured:'Configured'};
+  const icons   = {ok:'🟢', warning:'🟡', error:'⚠️', unconfigured:'🔴', configured:'🟡'};
+  const labels  = {ok:'Connected', warning:'Cert near expiry', error:'Misconfigured', unconfigured:'Not configured', configured:'Configured'};
   const icon    = icons[status.state]  || '🔴';
   const label   = labels[status.state] || status.state;
   const lastOk  = status.last_ok_ts ? _timeAgo(status.last_ok_ts) : 'Never';
@@ -2823,12 +3022,16 @@ function _renderIntegStatus(id, status) {
   }
   const errHtml = errMsg
     ? `<div style="font-size:11px;color:var(--down);margin-top:3px">${esc(errMsg)}</div>` : '';
+  const warnMsg = (status.state === 'warning' && status.last_warn_msg) ? status.last_warn_msg : '';
+  const warnHtml = warnMsg
+    ? `<div style="font-size:11px;color:var(--warn);margin-top:3px">${esc(warnMsg)}</div>` : '';
   el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px">
     <span style="font-size:16px;line-height:1.3">${icon}</span>
     <div>
       <span style="font-size:12px;font-weight:600;color:var(--text2)">${label}</span>
       <span style="font-size:11px;color:var(--text3);margin-left:10px">${lastLabel}: ${lastOk}</span>
       ${extraLineHtml}
+      ${warnHtml}
       ${errHtml}
     </div>
   </div>`;
@@ -3563,20 +3766,105 @@ const _AD_ACTION_LABELS = {
   auto_discovery_tick:                 '🔄 Scheduler tick',
   auto_discovery_run_now:              '▶ Run now',
   auto_discovery_cap_hit:              '⚠ First-scan cap hit',
+  auto_discovery_scan_timeout:         '⏱ Scan timed out',
   auto_discovery_approve_first_scan:   '✓ First-scan approved',
   auto_discovery_unsuppress:           '↺ Host unsuppressed',
   ipam_subnet_edit:                    '✎ Subnet edited',
   ipam_auto_discover_toggle:           '🔍 Auto-Discover toggled',
 };
 
+let _adActRows = [];
+let _adActFilter = { action: '', actor: '', q: '' };
+let _adActDebounce = null;
+
 function _renderAutoDiscoveryActivity(entries) {
+  _adActRows = Array.isArray(entries) ? entries : [];
+  // Fresh session — DOM was re-built when the modal opened, so the filter
+  // state from last time no longer matches the (empty) input fields.
+  _adActFilter = { action: '', actor: '', q: '' };
+  _adActSeedTypeDropdown();
+  _adActWire();
+  _adActApply();
+}
+
+function _adActSeedTypeDropdown() {
+  const sel = document.getElementById('disc-act-f-type');
+  if (!sel || sel.dataset.seeded === '1') return;
+  const seen = new Set();
+  _adActRows.forEach(e => seen.add(e.action));
+  // Preserve the catalogue order from _AD_ACTION_LABELS, then any unknown actions.
+  const keys = Object.keys(_AD_ACTION_LABELS).filter(k => seen.has(k))
+    .concat([...seen].filter(k => !(k in _AD_ACTION_LABELS)));
+  const frag = document.createDocumentFragment();
+  keys.forEach(k => {
+    const opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = _AD_ACTION_LABELS[k] || k;
+    frag.appendChild(opt);
+  });
+  sel.appendChild(frag);
+  sel.dataset.seeded = '1';
+}
+
+function _adActWire() {
+  const sel = document.getElementById('disc-act-f-type');
+  const actor = document.getElementById('disc-act-f-actor');
+  const q = document.getElementById('disc-act-f-q');
+  if (!sel || sel.dataset.wired === '1') return;
+  sel.addEventListener('change', () => {
+    _adActFilter.action = sel.value || '';
+    _adActApply();
+  });
+  const onText = () => {
+    clearTimeout(_adActDebounce);
+    _adActDebounce = setTimeout(() => {
+      _adActFilter.actor = (actor.value || '').trim().toLowerCase();
+      _adActFilter.q     = (q.value || '').trim().toLowerCase();
+      _adActApply();
+    }, 150);
+  };
+  actor.addEventListener('input', onText);
+  q.addEventListener('input', onText);
+  sel.dataset.wired = '1';
+}
+
+function _adActClear() {
+  _adActFilter = { action: '', actor: '', q: '' };
+  const sel = document.getElementById('disc-act-f-type');
+  const actor = document.getElementById('disc-act-f-actor');
+  const q = document.getElementById('disc-act-f-q');
+  if (sel) sel.value = '';
+  if (actor) actor.value = '';
+  if (q) q.value = '';
+  _adActApply();
+}
+
+function _adActApply() {
   const wrap = document.getElementById('disc-activity-wrap');
+  const cnt  = document.getElementById('disc-act-count');
   if (!wrap) return;
-  if (!entries.length) {
+  const total = _adActRows.length;
+  if (!total) {
     wrap.innerHTML = '<div class="disc-sup-empty">No activity yet.</div>';
+    if (cnt) cnt.textContent = '';
     return;
   }
-  const rows = entries.map(e => {
+  const f = _adActFilter;
+  const filtered = _adActRows.filter(e => {
+    if (f.action && e.action !== f.action) return false;
+    if (f.actor && !(e.actor || '').toLowerCase().includes(f.actor)) return false;
+    if (f.q) {
+      const hay = ((e.target || '') + ' ' + (e.detail || '')).toLowerCase();
+      if (!hay.includes(f.q)) return false;
+    }
+    return true;
+  });
+  if (cnt) cnt.textContent = `Showing ${filtered.length} of ${total}`;
+  if (!filtered.length) {
+    wrap.innerHTML = '<div class="disc-sup-empty" style="padding:12px">No activity matches the current filters.</div>';
+    return;
+  }
+  const rows = filtered.map(e => {
     let when = '';
     try { when = new Date(parseFloat(e.ts) * 1000).toLocaleString(); } catch {}
     const lbl = _AD_ACTION_LABELS[e.action] || esc(e.action);
@@ -3699,4 +3987,512 @@ async function triggerAutoDiscoveryNow() {
   } catch {
     toast('Network error', 'err');
   }
+}
+
+
+// ── 🔧 Diagnostics tab ──────────────────────────────────────────────
+
+function _buildSettingsTab_diagnostics(sr) {
+  const dbg = sr && sr.debug_mode ? 'checked' : '';
+  return `<div class="mbdy stab-fade" id="stab-diagnostics" style="display:none;overflow-y:auto;flex:1">
+
+    <!-- ── 1. System Overview ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ System Overview</span>
+        <button class="btn-s diag-refresh" onclick="_diagLoadOverview()">↻ Refresh</button>
+      </div>
+      <div id="diag-overview-body" class="diag-card-body">Loading…</div>
+    </div>
+
+    <!-- ── 2. Database Health ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ Database Health</span>
+        <button class="btn-s diag-refresh" onclick="_diagLoadDbStats()">↻ Refresh</button>
+      </div>
+      <div id="diag-db-body" class="diag-card-body">Loading…</div>
+      <div class="diag-card-actions">
+        <button class="btn-s" onclick="_diagAction('vacuum','Running VACUUM…')">Run VACUUM</button>
+        <button class="btn-s" onclick="_diagBackupNow()">Backup DB now</button>
+      </div>
+    </div>
+
+    <!-- ── 3. Health Checks ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ Health Checks</span>
+        <button class="btn-s" onclick="_diagTestAll()">Test All</button>
+      </div>
+      <div id="diag-hc-body" class="diag-card-body">Loading…</div>
+    </div>
+
+    <!-- ── 4. Probe from Server ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd"><span>▸ Probe from Server</span></div>
+      <div class="diag-card-body">
+        <div class="diag-probe-tabs">
+          <button class="diag-probe-tab active" data-ptype="ping"  onclick="_diagProbeSwitch('ping')">Ping</button>
+          <button class="diag-probe-tab"        data-ptype="tcp"   onclick="_diagProbeSwitch('tcp')">TCP</button>
+          <button class="diag-probe-tab"        data-ptype="http"  onclick="_diagProbeSwitch('http')">HTTP</button>
+          <button class="diag-probe-tab"        data-ptype="dns"   onclick="_diagProbeSwitch('dns')">DNS</button>
+          <button class="diag-probe-tab"        data-ptype="tls"   onclick="_diagProbeSwitch('tls')">TLS</button>
+        </div>
+        <div class="diag-probe-inputs" id="diag-probe-inputs"></div>
+        <div style="margin-top:8px">
+          <button class="btn-p" onclick="_diagRunProbe()">Run Probe</button>
+        </div>
+        <pre id="diag-probe-result" class="diag-probe-result"></pre>
+      </div>
+    </div>
+
+    <!-- ── 5. Recent Errors ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd">
+        <span>▸ Recent Errors</span>
+        <button class="btn-s diag-refresh" onclick="_diagLoadErrors()">↻ Refresh</button>
+      </div>
+      <div class="diag-err-grid">
+        <div>
+          <div class="diag-err-sub">App log (ERROR+)</div>
+          <div id="diag-err-app" class="diag-err-list">Loading…</div>
+        </div>
+        <div>
+          <div class="diag-err-sub">Sensor errors</div>
+          <div id="diag-err-sens" class="diag-err-list">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 6. Maintenance ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd"><span>▸ Maintenance</span></div>
+      <div class="diag-card-body">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;margin-bottom:10px">
+          <input type="checkbox" id="st-debug-mode" ${dbg} onchange="_saveDebugMode(this)"/>
+          <span style="font-size:12px"><strong>Debug Mode</strong> — verbose logging (applies live)</span>
+        </label>
+        <div class="diag-card-actions">
+          <button class="btn-s" onclick="_diagRefreshOidc()">Refresh OIDC discovery</button>
+          <button class="btn-s" onclick="_diagAction('refresh-auth','Refreshing auth backends…')">Refresh all auth</button>
+          <button class="btn-s" onclick="_diagRunAutoDiscovery()">Run auto-discovery now</button>
+          <button class="btn-s" onclick="_diagAction('clear-caches','Clearing caches…')">Clear caches</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 7. Support Bundle ── -->
+    <div class="diag-card">
+      <div class="diag-card-hd"><span>▸ Support Bundle</span></div>
+      <div class="diag-card-body">
+        <div class="fh" style="margin-bottom:10px">
+          Download a sanitized ZIP of logs (last 10MB each), system snapshot, DB stats,
+          recent errors, and app settings. Secrets (passwords, keys, tokens, certs) are
+          redacted. Attach this to bug reports.
+        </div>
+        <button class="btn-p" onclick="_diagDownloadBundle()">⬇ Download diagnostics bundle</button>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+
+// ── Tab-init + per-section loaders ─────────────────────────────────
+
+function _diagOnTabShown() {
+  _diagLoadOverview();
+  _diagLoadDbStats();
+  _diagLoadHealthChecks();
+  _diagLoadErrors();
+  _diagProbeSwitch('ping');
+}
+
+async function _diagLoadOverview() {
+  const el = document.getElementById('diag-overview-body');
+  if (!el) return;
+  el.textContent = 'Loading…';
+  try {
+    const d = await api('GET', '/api/diagnostics/snapshot');
+    el.innerHTML = _diagRenderOverview(d);
+  } catch (e) {
+    el.textContent = 'Failed to load system overview.';
+  }
+}
+
+function _diagRenderOverview(d) {
+  const fmtB = _diagFmtBytes;
+  const upt = _diagFmtDuration(d.uptime_s || 0);
+  const perf = d.perf && d.perf.available ? d.perf : null;
+  const rt = d.runtime || {};
+  const sb = d.sample_buffer || {};
+  const perfLine = perf
+    ? `CPU ${perf.cpu_pct}% · RAM ${perf.ram_pct}% (${fmtB(perf.ram_used)} / ${fmtB(perf.ram_total)}) · Disk ${perf.disk_pct}% free ${fmtB(perf.disk_total - perf.disk_used)}`
+    : '<span class="diag-muted">psutil not installed — hardware stats unavailable</span>';
+  return `
+    <div class="diag-stat-row"><span class="diag-stat-k">Version</span>
+      <span class="diag-stat-v">PingWatch ${esc(d.version||'?')} "${esc(d.version_name||'')}"</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Uptime</span>
+      <span class="diag-stat-v">${upt}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Runtime</span>
+      <span class="diag-stat-v">Python ${esc(d.python_version||'?')} · ${esc(d.platform||'?')} · ${esc(d.hostname||'')}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Hardware</span>
+      <span class="diag-stat-v">${perfLine}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Monitoring</span>
+      <span class="diag-stat-v">${d.devices||0} devices · ${d.sensors||0} sensors · ${rt.worker_max||0} workers · scheduler heap ${rt.scheduler_heap||0} (${rt.scheduler_tombstones||0} tomb)</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Buffers</span>
+      <span class="diag-stat-v">Sample buffer ${sb.buf_len||0}/${sb.buf_cap||0} · DB queue main=${rt.db_writer_main_pending||0} logs=${rt.db_writer_logs_pending||0} · SSE listeners ${rt.sse_listeners||0}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Storage</span>
+      <span class="diag-stat-v">${esc(d.db_backend||'?')} · main ${fmtB(d.db_size_bytes||0)} · logs ${fmtB(d.logs_db_size_bytes||0)} · log files ${fmtB(d.log_size_bytes||0)}</span></div>`;
+}
+
+async function _diagLoadDbStats() {
+  const el = document.getElementById('diag-db-body');
+  if (!el) return;
+  el.textContent = 'Loading…';
+  try {
+    const d = await api('GET', '/api/diagnostics/db-stats');
+    el.innerHTML = _diagRenderDbStats(d);
+  } catch (e) {
+    el.textContent = 'Failed to load DB stats.';
+  }
+}
+
+function _diagRenderDbStats(d) {
+  const fmtB = _diagFmtBytes;
+  const last = d.last_vacuum_ts ? new Date(d.last_vacuum_ts * 1000).toLocaleString() : 'never';
+  const rows = (d.tables || []).map(t => {
+    const n   = (t.rows >= 0) ? t.rows.toLocaleString() : '—';
+    const sz  = (t.size_bytes >= 0) ? fmtB(t.size_bytes) : '—';
+    return `<tr><td>${esc(t.schema)}.${esc(t.table)}</td><td style="text-align:right">${n}</td><td style="text-align:right">${sz}</td></tr>`;
+  }).join('');
+  return `
+    <div class="diag-stat-row"><span class="diag-stat-k">Backend</span>
+      <span class="diag-stat-v">${esc(d.backend||'?')} · main ${fmtB(d.main_size_bytes||0)} · logs ${fmtB(d.logs_size_bytes||0)}</span></div>
+    <div class="diag-stat-row"><span class="diag-stat-k">Last VACUUM</span>
+      <span class="diag-stat-v">${esc(last)}</span></div>
+    <table class="diag-tbl"><thead><tr><th>Table</th><th style="text-align:right">Rows</th><th style="text-align:right">Size</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+}
+
+// ── Health Checks ──────────────────────────────────────────────────
+
+const _DIAG_HC_SPEC = [
+  { key:'ldap',      label:'LDAP',      statusKey:'ldap_status',    endpoint:'/api/ldap/test_connection',    method:'POST' },
+  { key:'radius',    label:'RADIUS',    statusKey:'radius_status',  endpoint:'/api/radius/test_connection',  method:'POST' },
+  { key:'saml',      label:'SAML',      statusKey:'saml_status',    endpoint:'/api/saml/test',               method:'POST' },
+  { key:'oidc',      label:'OIDC',      statusKey:'oidc_status',    endpoint:'/api/oidc/test',               method:'POST' },
+  { key:'smtp',      label:'SMTP',      statusKey:null,             endpoint:'/api/settings/smtp_test',      method:'POST' },
+  { key:'syslog',    label:'Syslog',    statusKey:null,             endpoint:'/api/settings/syslog_test',    method:'POST' },
+  { key:'dbbackup',  label:'DB Backup', statusKey:null,             endpoint:'/api/db/backup/test-remote',   method:'POST' },
+  { key:'ntp',       label:'NTP',       statusKey:null,             endpoint:'/api/diagnostics/test/ntp',    method:'POST',
+    override:{ param:'server', prompt:'NTP server to test (leave blank to use default):' } },
+  { key:'dns',       label:'DNS',       statusKey:null,             endpoint:'/api/diagnostics/test/dns',    method:'POST',
+    override:{ param:'host',   prompt:'DNS host to resolve (leave blank to use default):' } },
+];
+
+// Per-key ad-hoc overrides from the "⚙" button. Not persisted — just
+// lets an admin try a different NTP/DNS target without saving settings.
+const _diagHcOverride = {};
+
+// Transient per-session test results for backends that have no persisted
+// status badge in app_settings (SMTP / Syslog / DB Backup / NTP / DNS).
+// Keyed by spec.key, cleared when the modal closes (module reload on open).
+const _diagHcTransient = {};
+
+async function _diagLoadHealthChecks() {
+  const el = document.getElementById('diag-hc-body');
+  if (!el) return;
+  let sr = {};
+  try { sr = await api('GET', '/api/settings'); } catch {}
+  el.innerHTML = _DIAG_HC_SPEC.map(s => {
+    const st = s.statusKey ? (sr[s.statusKey] || {}) : null;
+    return _diagRenderHcRow(s, st);
+  }).join('');
+}
+
+function _diagRenderHcRow(spec, st) {
+  let badge = 'unknown', when = '—', msg = '';
+  if (st) {
+    badge = st.state || 'unknown';
+    if (st.last_ok_ts && badge === 'ok')      when = _diagAgo(st.last_ok_ts);
+    else if (st.last_err_ts)                   when = _diagAgo(st.last_err_ts);
+    msg = st.last_err_msg || '';
+  } else {
+    // No persisted status — fall back to the transient result from this session.
+    const t = _diagHcTransient[spec.key];
+    if (t) {
+      badge = t.ok ? 'ok' : 'error';
+      when  = _diagAgo(t.ts);
+      msg   = t.msg || '';
+    } else {
+      when = 'on-demand';
+    }
+  }
+  const ovr = _diagHcOverride[spec.key];
+  const ovrHint = ovr ? `<span class="diag-hc-ovr" title="Override — click ⚙ to reset">→ ${esc(ovr)}</span>` : '';
+  const ovrBtn = spec.override
+    ? `<button class="btn-s diag-hc-ovr-btn" onclick="_diagHcSetOverride('${esc(spec.key)}')" title="Set test override">⚙</button>`
+    : '';
+  return `
+    <div class="diag-hc-row" id="diag-hc-${spec.key}">
+      <span class="diag-badge diag-badge-${esc(badge)}" title="${esc(badge)}">●</span>
+      <span class="diag-hc-label">${esc(spec.label)}${ovrHint}</span>
+      <span class="diag-hc-when">${esc(when)}</span>
+      <span class="diag-hc-msg">${esc(msg)}</span>
+      ${ovrBtn}
+      <button class="btn-s" onclick="_diagHcRunOne('${esc(spec.key)}')">Test</button>
+    </div>`;
+}
+
+function _diagHcSetOverride(key) {
+  const spec = _DIAG_HC_SPEC.find(s => s.key === key);
+  if (!spec || !spec.override) return;
+  const current = _diagHcOverride[key] || '';
+  const val = window.prompt(spec.override.prompt, current);
+  if (val === null) return;  // cancel
+  const trimmed = val.trim();
+  if (trimmed) _diagHcOverride[key] = trimmed;
+  else delete _diagHcOverride[key];
+  _diagLoadHealthChecks();
+}
+
+function _diagHcRecord(spec, d, ok, errMsg) {
+  // Persisted backends refresh via /api/settings — nothing to cache here.
+  if (spec.statusKey) return;
+  const msg = ok
+    ? _diagHcSuccessMsg(spec.key, d)
+    : (errMsg || (d && (d.error || d.msg)) || 'failed');
+  _diagHcTransient[spec.key] = { ok, msg, ts: Math.floor(Date.now() / 1000) };
+}
+
+function _diagHcSuccessMsg(key, d) {
+  if (!d) return '';
+  if (key === 'ntp')      return `${d.server||'?'} · drift ${(d.drift_s>=0?'+':'') + (d.drift_s||0)}s · stratum ${d.stratum||'?'}`;
+  if (key === 'dns') {
+    const addrs = (d.addresses||[]).slice(0,2).join(', ') || '?';
+    const via   = d.resolver_used || 'system';
+    return `${d.host||'?'} → ${addrs} via ${via} (${d.latency_ms||0}ms)`;
+  }
+  return '';
+}
+
+function _diagHcBody(spec) {
+  const ovr = _diagHcOverride[spec.key];
+  if (!ovr || !spec.override) return {};
+  return { [spec.override.param]: ovr };
+}
+
+async function _diagHcRunOne(key) {
+  const spec = _DIAG_HC_SPEC.find(s => s.key === key);
+  if (!spec) return;
+  const row = document.getElementById(`diag-hc-${spec.key}`);
+  if (row) {
+    const btn = row.querySelector('button:last-child');
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  }
+  try {
+    const d = await api(spec.method, spec.endpoint, _diagHcBody(spec));
+    const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
+    _diagHcRecord(spec, d, ok, null);
+    toast(`${spec.label}: ${ok ? 'OK' : (d.error || d.msg || 'failed')}`, ok ? 'ok' : 'err');
+    await _diagLoadHealthChecks();
+  } catch (e) {
+    _diagHcRecord(spec, null, false, e.message || 'failed');
+    toast(`${spec.label}: ${e.message || 'failed'}`, 'err');
+    await _diagLoadHealthChecks();
+  }
+}
+
+async function _diagTestAll() {
+  let pass = 0, fail = 0;
+  for (const spec of _DIAG_HC_SPEC) {
+    try {
+      const d = await api(spec.method, spec.endpoint, _diagHcBody(spec));
+      const ok = d && (d.ok === true || d.success === true || d.state === 'ok');
+      _diagHcRecord(spec, d, ok, null);
+      if (ok) pass++; else fail++;
+    } catch (e) {
+      _diagHcRecord(spec, null, false, e.message || 'failed');
+      fail++;
+    }
+  }
+  toast(`Test All: ${pass} ok · ${fail} failed`, fail === 0 ? 'ok' : 'err');
+  _diagLoadHealthChecks();
+}
+
+// ── Probe-from-Server ──────────────────────────────────────────────
+
+let _diagProbeType = 'ping';
+
+function _diagProbeSwitch(ptype) {
+  _diagProbeType = ptype;
+  document.querySelectorAll('.diag-probe-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.ptype === ptype);
+  });
+  const box = document.getElementById('diag-probe-inputs');
+  if (!box) return;
+  const inputs = {
+    ping: `<label>Host <input id="diag-pp-target" placeholder="8.8.8.8 or hostname" autocomplete="off"/></label>`,
+    tcp:  `<label>Host <input id="diag-pp-target" placeholder="host.example.com" autocomplete="off"/></label>
+           <label>Port <input id="diag-pp-port" type="number" min="1" max="65535" value="443" style="max-width:90px"/></label>`,
+    http: `<label>URL <input id="diag-pp-target" placeholder="https://example.com" autocomplete="off"/></label>
+           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="diag-pp-verify" checked/> Verify SSL</label>`,
+    dns:  `<label>Host <input id="diag-pp-target" placeholder="example.com" autocomplete="off"/></label>
+           <label>Type <select id="diag-pp-rtype"><option>A</option><option>AAAA</option><option>MX</option><option>TXT</option><option>NS</option><option>CNAME</option><option>PTR</option><option>SOA</option></select></label>
+           <label>Server <input id="diag-pp-dns-srv" placeholder="optional — empty = system resolver" style="min-width:200px"/></label>`,
+    tls:  `<label>Host <input id="diag-pp-target" placeholder="host.example.com" autocomplete="off"/></label>
+           <label>Port <input id="diag-pp-port" type="number" min="1" max="65535" value="443" style="max-width:90px"/></label>`,
+  };
+  box.innerHTML = inputs[ptype] || '';
+  const r = document.getElementById('diag-probe-result');
+  if (r) r.textContent = '';
+}
+
+async function _diagRunProbe() {
+  const target = (document.getElementById('diag-pp-target')?.value || '').trim();
+  if (!target) { toast('Target is required', 'err'); return; }
+  const body = { type: _diagProbeType, target };
+  if (_diagProbeType === 'tcp' || _diagProbeType === 'tls') {
+    body.port = parseInt(document.getElementById('diag-pp-port')?.value || '0', 10);
+  }
+  if (_diagProbeType === 'http') {
+    body.verify_ssl = !!document.getElementById('diag-pp-verify')?.checked;
+  }
+  if (_diagProbeType === 'dns') {
+    body.record_type = document.getElementById('diag-pp-rtype')?.value || 'A';
+    const srv = (document.getElementById('diag-pp-dns-srv')?.value || '').trim();
+    if (srv) body.dns_server = srv;
+    body.query = target;
+  }
+  const r = document.getElementById('diag-probe-result');
+  if (r) r.textContent = 'Running…';
+  try {
+    const d = await api('POST', '/api/diagnostics/probe', body);
+    if (r) r.textContent = JSON.stringify(d, null, 2);
+  } catch (e) {
+    if (r) r.textContent = 'Error: ' + (e.message || 'probe failed');
+  }
+}
+
+// ── Recent Errors ──────────────────────────────────────────────────
+
+async function _diagLoadErrors() {
+  const appEl  = document.getElementById('diag-err-app');
+  const sensEl = document.getElementById('diag-err-sens');
+  if (appEl) appEl.textContent = 'Loading…';
+  if (sensEl) sensEl.textContent = 'Loading…';
+  try {
+    const [a, s] = await Promise.all([
+      api('GET', '/api/diagnostics/recent-errors?source=app&limit=50'),
+      api('GET', '/api/diagnostics/recent-errors?source=sensors&limit=50'),
+    ]);
+    if (appEl) {
+      const lines = (a.entries || []);
+      appEl.innerHTML = lines.length
+        ? lines.map(l => `<div class="diag-err-line">${esc(l)}</div>`).join('')
+        : '<span class="diag-muted">No app errors.</span>';
+    }
+    if (sensEl) {
+      const rows = (s.entries || []);
+      sensEl.innerHTML = rows.length
+        ? rows.map(r => {
+            const when = r.ts ? new Date(r.ts * 1000).toLocaleString() : '';
+            return `<div class="diag-err-line"><span class="diag-muted">${esc(when)}</span> ${esc(r.sname||'')} <span class="diag-muted">[${esc(r.stype||'')}]</span> ${esc(r.msg||'')}</div>`;
+          }).join('')
+        : '<span class="diag-muted">No sensor errors.</span>';
+    }
+  } catch (e) {
+    if (appEl)  appEl.textContent  = 'Failed to load.';
+    if (sensEl) sensEl.textContent = 'Failed to load.';
+  }
+}
+
+// ── Maintenance actions ────────────────────────────────────────────
+
+async function _diagAction(name, pendingMsg) {
+  toast(pendingMsg || 'Running…', 'ok');
+  try {
+    const d = await api('POST', `/api/diagnostics/action/${name}`, {});
+    if (d.ok) {
+      toast(`${name}: ok${d.elapsed_ms != null ? ' (' + d.elapsed_ms + 'ms)' : ''}`, 'ok');
+      if (name === 'vacuum') _diagLoadDbStats();
+    } else {
+      toast(`${name}: ${d.error || 'failed'}`, 'err');
+    }
+  } catch (e) {
+    toast(`${name}: ${e.message || 'failed'}`, 'err');
+  }
+}
+
+async function _diagRefreshOidc() {
+  try {
+    await api('POST', '/api/oidc/discovery/refresh', {});
+    toast('OIDC discovery refreshed', 'ok');
+  } catch (e) {
+    toast('OIDC refresh: ' + (e.message || 'failed'), 'err');
+  }
+}
+
+async function _diagRunAutoDiscovery() {
+  try {
+    const r = await fetch('/api/auto-discovery/run-now', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) toast(d.already_running ? 'Auto-Discovery already running' : 'Auto-Discovery triggered', 'ok');
+    else toast(d.error || 'Trigger failed', 'err');
+  } catch { toast('Network error', 'err'); }
+}
+
+async function _diagBackupNow() {
+  try {
+    await api('POST', '/api/db/backup/run', {});
+    toast('DB backup triggered', 'ok');
+  } catch (e) {
+    toast('Backup: ' + (e.message || 'failed'), 'err');
+  }
+}
+
+// ── Support bundle ─────────────────────────────────────────────────
+
+function _diagDownloadBundle() {
+  // Use a hidden anchor so the browser treats it as a file download and picks
+  // up the Content-Disposition filename from the response.
+  const a = document.createElement('a');
+  a.href = '/api/diagnostics/bundle';
+  a.download = '';  // filename comes from server
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 0);
+  toast('Building diagnostics bundle…', 'ok');
+}
+
+// ── Formatting helpers ─────────────────────────────────────────────
+
+function _diagFmtBytes(b) {
+  if (b == null || !isFinite(b)) return '?';
+  if (b < 1024) return b + ' B';
+  const units = ['KB','MB','GB','TB'];
+  let n = b / 1024, i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n >= 10 ? 0 : 1) + ' ' + units[i];
+}
+
+function _diagFmtDuration(s) {
+  s = Math.max(0, Math.floor(s));
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600);  s -= h * 3600;
+  const m = Math.floor(s / 60);    s -= m * 60;
+  if (d) return `${d}d ${h}h ${m}m`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function _diagAgo(tsSec) {
+  if (!tsSec) return '—';
+  const diff = Math.max(0, Math.floor(Date.now() / 1000 - tsSec));
+  if (diff < 60)     return `${diff}s ago`;
+  if (diff < 3600)   return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400)  return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
 }

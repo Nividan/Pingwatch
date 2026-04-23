@@ -630,10 +630,15 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
 
 def _connect(host, port, tls, user, password):
     """Return an authenticated smtplib connection or raise."""
+    import core.settings as _s
+    try:
+        _to = max(2, min(120, int(_s.get("smtp_timeout_s", 10) or 10)))
+    except (TypeError, ValueError):
+        _to = 10
     if tls == 'ssl':
-        srv = smtplib.SMTP_SSL(host, int(port), timeout=10)
+        srv = smtplib.SMTP_SSL(host, int(port), timeout=_to)
     else:
-        srv = smtplib.SMTP(host, int(port), timeout=10)
+        srv = smtplib.SMTP(host, int(port), timeout=_to)
         if tls == 'starttls':
             try:
                 srv.starttls()
@@ -799,6 +804,218 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
             log.error(f"Rule alert SMTP failed (host={host}:{port}): {e}")
             _last_error[host] = (err_str, now)
         global _last_err; _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
+    finally:
+        if srv:
+            try: srv.quit()
+            except Exception: pass
+
+
+def _build_batch_html(batch_ctx: dict, logo: bool = True,
+                      company: str = 'PingWatch') -> str:
+    """Render a multi-event alert email.
+
+    One email replaces N individual alerts when a burst of failures fires
+    within the batching window. Top summary banner shows count + severity
+    breakdown; body is a table — one row per event, sorted critical→warning
+    →info→recovery.
+    """
+    alerts = batch_ctx.get('alerts') or []
+    count  = len(alerts)
+    counts = batch_ctx.get('severity_counts') or {}
+    # Pick the banner colour from the worst severity present — a batch with
+    # any critical reads as critical; otherwise warning; etc.
+    if counts.get('critical'):
+        banner_sev, banner_event = 'critical', 'down'
+    elif counts.get('warning'):
+        banner_sev, banner_event = 'warning', 'threshold_warning'
+    elif counts.get('recovery'):
+        banner_sev, banner_event = 'recovery', 'recovered'
+    else:
+        banner_sev, banner_event = 'info', 'info'
+    color, emoji, _lbl = _status_style(banner_event, banner_sev)
+    # Header label is "N alerts" — "12 alerts (10 critical, 2 warning)"
+    bits = []
+    if counts.get('critical'): bits.append(f"{counts['critical']} critical")
+    if counts.get('warning'):  bits.append(f"{counts['warning']} warning")
+    if counts.get('recovery'): bits.append(f"{counts['recovery']} recovered")
+    if counts.get('info'):     bits.append(f"{counts['info']} info")
+    label_detail = f" ({', '.join(bits)})" if bits else ''
+    header_label = f"{count} alert{'s' if count != 1 else ''}{label_detail}"
+    _co = _safe(company) if company else 'PingWatch'
+    ts_str = _fmt_ts(datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"))
+
+    logo_s   = _html_logo_section(logo, _co)
+    # Banner: same structure as single-alert banner so email clients render it
+    # consistently — just with the count header in place of label.
+    banner_s = (
+        f'<tr><td style="background:{color};padding:18px 24px" bgcolor="{color}">'
+        f'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+        f'<td style="color:#ffffff;font-size:22px;font-weight:700">'
+        f'<span style="font-size:26px;vertical-align:middle">{emoji}</span>'
+        f'&nbsp; {_safe(header_label)}</td>'
+        f'<td align="right" style="color:rgba(255,255,255,.8);font-size:12px;'
+        f'vertical-align:middle">{ts_str}</td>'
+        f'</tr></table></td></tr>'
+    )
+    # Intro blurb — explain why this is a digest, not an individual alert.
+    intro = (
+        f'<tr><td style="padding:16px 24px 4px;color:#666;font-size:12px">'
+        f'A burst of alerts fired within the batching window. Below is the '
+        f'full list — each event is still recorded individually in PingWatch '
+        f'for audit and history. Review the event list in the web UI for '
+        f'full detail.'
+        f'</td></tr>'
+    )
+    # Rank severities for sort order — critical worst → recovery best/last.
+    _SEV_RANK = {'critical': 0, 'warning': 1, 'info': 2, 'recovery': 3}
+    sorted_alerts = sorted(
+        alerts, key=lambda c: (_SEV_RANK.get((c.get('severity') or 'info').lower(), 2),
+                               c.get('ts') or '')
+    )
+    rows_html = (
+        '<tr>'
+        '<th style="padding:8px 10px;background:#f0f0f0;color:#555;'
+        'font-size:11px;text-align:left;border-bottom:1px solid #ddd">Severity</th>'
+        '<th style="padding:8px 10px;background:#f0f0f0;color:#555;'
+        'font-size:11px;text-align:left;border-bottom:1px solid #ddd">Device</th>'
+        '<th style="padding:8px 10px;background:#f0f0f0;color:#555;'
+        'font-size:11px;text-align:left;border-bottom:1px solid #ddd">Sensor</th>'
+        '<th style="padding:8px 10px;background:#f0f0f0;color:#555;'
+        'font-size:11px;text-align:left;border-bottom:1px solid #ddd">Event</th>'
+        '<th style="padding:8px 10px;background:#f0f0f0;color:#555;'
+        'font-size:11px;text-align:left;border-bottom:1px solid #ddd">Detail</th>'
+        '<th style="padding:8px 10px;background:#f0f0f0;color:#555;'
+        'font-size:11px;text-align:left;border-bottom:1px solid #ddd">Time</th>'
+        '</tr>'
+    )
+    _SEV_CELL = {
+        'critical': ('#c0392b', 'CRIT'),
+        'warning':  ('#d68910', 'WARN'),
+        'recovery': ('#1a7a4a', ' OK '),
+        'info':     ('#2c6fad', 'INFO'),
+    }
+    for i, c in enumerate(sorted_alerts):
+        bg = '#ffffff' if i % 2 == 0 else '#fafafa'
+        sev = (c.get('severity') or 'info').lower()
+        sv_color, sv_label = _SEV_CELL.get(sev, _SEV_CELL['info'])
+        rows_html += (
+            f'<tr style="background:{bg}">'
+            f'<td style="padding:8px 10px;font-size:11px;border-bottom:1px solid #f0f0f0">'
+            f'<span style="display:inline-block;padding:2px 6px;border-radius:3px;'
+            f'background:{sv_color};color:#fff;font-weight:700;font-size:10px;'
+            f'letter-spacing:.3px">{sv_label}</span></td>'
+            f'<td style="padding:8px 10px;font-size:12px;color:#222;'
+            f'border-bottom:1px solid #f0f0f0">{_safe(c.get("dname", ""))}</td>'
+            f'<td style="padding:8px 10px;font-size:12px;color:#222;'
+            f'border-bottom:1px solid #f0f0f0">{_safe(c.get("sname", ""))}</td>'
+            f'<td style="padding:8px 10px;font-size:12px;color:#555;'
+            f'border-bottom:1px solid #f0f0f0">{_safe(c.get("event_type", ""))}</td>'
+            f'<td style="padding:8px 10px;font-size:12px;color:#555;'
+            f'border-bottom:1px solid #f0f0f0;word-break:break-word">'
+            f'{_safe((c.get("detail") or "")[:180])}</td>'
+            f'<td style="padding:8px 10px;font-size:11px;color:#888;'
+            f'border-bottom:1px solid #f0f0f0;white-space:nowrap">'
+            f'{_fmt_ts(c.get("ts", ""))}</td>'
+            f'</tr>'
+        )
+    table_s = (
+        f'<tr><td style="padding:8px 24px 16px">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" '
+        f'style="border:1px solid #e0e0e0;border-radius:4px;overflow:hidden">'
+        f'{rows_html}</table></td></tr>'
+    )
+    footer_s = _html_footer(_co)
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,Helvetica,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f0f0;padding:32px 0">
+<tr><td align="center">
+<table width="760" cellpadding="0" cellspacing="0"
+       style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.12)">
+  {logo_s}
+  {banner_s}
+  {intro}
+  {table_s}
+  {footer_s}
+</table>
+</td></tr>
+</table>
+</body></html>"""
+
+
+def send_rule_email_batch(to_addrs: str, subject_tpl: str, batch_ctx: dict):
+    """Send a batched alert email covering multiple events.
+
+    Called from monitoring/alert_batcher.py when a bucket flushes with 2+ items.
+    Subject defaults to "[<org>] 12 alerts (10 critical, 2 warning)" when the
+    template is blank; otherwise the template is formatted against the *first*
+    event's ctx (so `{dname}` etc. still resolve to something sensible).
+    """
+    from db.backups import decrypt_pw as _dec_pw
+    host      = _cfg('smtp_host', '')
+    port      = _cfg('smtp_port', 587)
+    tls       = _cfg('smtp_tls',  'starttls')
+    user      = _cfg('smtp_user', '')
+    password  = _dec_pw(_cfg('smtp_pass', ''))
+    from_addr = _cfg('smtp_from', '')
+    if not (host and from_addr and to_addrs.strip()):
+        log.warning("Batched alert email skipped — SMTP not configured")
+        return
+
+    count  = int(batch_ctx.get('count') or 0)
+    alerts = batch_ctx.get('alerts') or []
+    sev_label = batch_ctx.get('severity_label') or ''
+
+    _logo    = str(_cfg('email_logo', '1')) == '1'
+    _company = _cfg('org_name', '') or 'PingWatch'
+
+    if subject_tpl:
+        # Allow the template to reference first-event fields so custom subjects
+        # still resolve, but always prepend the count summary for clarity.
+        def _fmt(tpl):
+            try:
+                first = alerts[0] if alerts else {}
+                return tpl.format(**{k: _safe(str(v)) for k, v in first.items()})
+            except (KeyError, ValueError):
+                return tpl
+        subject = f"[{_safe(_company)}] {count} alerts: {_fmt(subject_tpl)}"
+    else:
+        subject = f"[{_safe(_company)}] {count} alerts" + (f" ({sev_label})" if sev_label else "")
+
+    # Plain-text body — one compact line per alert for text-only mail clients.
+    lines = [f"{count} alert(s){' (' + sev_label + ')' if sev_label else ''}\n"]
+    for c in alerts:
+        lines.append(
+            f"  [{(c.get('severity') or 'info').upper():<8}] "
+            f"{_safe(c.get('dname', ''))}/{_safe(c.get('sname', ''))} "
+            f"— {_safe(c.get('event_type', ''))} "
+            f"— {_safe((c.get('detail') or '')[:120])} "
+            f"@ {_fmt_ts(c.get('ts', ''))}"
+        )
+    body = '\n'.join(lines)
+    html = _build_batch_html(batch_ctx, logo=_logo, company=_company)
+
+    recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
+    srv = None
+    try:
+        srv = _connect(host, port, tls, user, password)
+        for rcpt in recipients:
+            srv.sendmail(from_addr, [rcpt],
+                         _build_msg(subject, body, from_addr, rcpt, html, logo=_logo).as_string())
+        srv.quit(); srv = None
+        _last_error.pop(host, None)
+        global _last_ok_ts; _last_ok_ts = time.time()
+        log.info(f"Batched alert email sent to {to_addrs}: {subject[:80]} ({count} events)")
+    except Exception as e:
+        err_str = str(e)
+        now = time.monotonic()
+        last_err, last_ts = _last_error.get(host, (None, 0))
+        if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
+            log.error(f"Batched alert SMTP failed (host={host}:{port}): {e}")
+            _last_error[host] = (err_str, now)
+        global _last_err; _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
+        # Re-raise so alert_batcher._fallback_individual() can try per-event sends.
+        raise
     finally:
         if srv:
             try: srv.quit()

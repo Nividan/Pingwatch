@@ -145,10 +145,15 @@ def db_log_flap(flap):
                      flap.get("stype", ""), flap.get("detail", ""),
                      flap.get("direction", "down"))
                 )
-                _flap_limit = max(50, int(_settings.get('max_flap_entries', 500)))
+                _flap_limit = max(50, int(_settings.get('max_flap_entries', 2000)))
+                # LRU trim resolved entries only — never evict active/acknowledged
+                # rows (ACK means "keep visible until resolved"; licenses rarely
+                # transition so their single crit flap would otherwise get
+                # silently purged once 500 newer flaps pile up).
                 cur.execute(
-                    "DELETE FROM flap_log WHERE id NOT IN "
-                    "(SELECT id FROM flap_log ORDER BY id DESC LIMIT %s)",
+                    "DELETE FROM flap_log WHERE ack_state='resolved' AND id NOT IN "
+                    "(SELECT id FROM flap_log WHERE ack_state='resolved' "
+                    "ORDER BY id DESC LIMIT %s)",
                     (_flap_limit,)
                 )
         except Exception as e:
@@ -166,10 +171,12 @@ def db_log_flap(flap):
              flap.get("stype", ""), flap.get("detail", ""),
              flap.get("direction", "down"))
         )
-        _flap_limit = max(50, int(_settings.get('max_flap_entries', 500)))
+        _flap_limit = max(50, int(_settings.get('max_flap_entries', 2000)))
+        # LRU trim resolved entries only — see PG branch above for rationale.
         con.execute(
-            "DELETE FROM flap_log WHERE id NOT IN "
-            "(SELECT id FROM flap_log ORDER BY id DESC LIMIT ?)",
+            "DELETE FROM flap_log WHERE ack_state='resolved' AND id NOT IN "
+            "(SELECT id FROM flap_log WHERE ack_state='resolved' "
+            "ORDER BY id DESC LIMIT ?)",
             (_flap_limit,)
         )
         con.commit()
@@ -578,7 +585,7 @@ def db_log_trap(t):
                     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     _vals
                 )
-                _trap_limit = max(50, int(_settings.get('max_trap_entries', 500)))
+                _trap_limit = max(50, int(_settings.get('max_trap_entries', 2000)))
                 cur.execute(
                     "DELETE FROM snmp_traps WHERE id NOT IN "
                     "(SELECT id FROM snmp_traps ORDER BY id DESC LIMIT %s)",
@@ -600,7 +607,7 @@ def db_log_trap(t):
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             _vals
         )
-        _trap_limit = max(50, int(_settings.get('max_trap_entries', 500)))
+        _trap_limit = max(50, int(_settings.get('max_trap_entries', 2000)))
         con.execute(
             "DELETE FROM snmp_traps WHERE id NOT IN "
             "(SELECT id FROM snmp_traps ORDER BY id DESC LIMIT ?)",

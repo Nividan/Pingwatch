@@ -109,7 +109,8 @@ def handle(h, method, path, body):
             try:
                 cert_pem = load_der_cert(base64.b64decode(cert_b64))
             except Exception as e:
-                h._json(400, {"error": f"Invalid certificate file: {e}"})
+                log.warning(f"TLS install: load_der_cert failed: {e}")
+                h._json(400, {"error": "Invalid certificate file"})
                 return True
 
         if not cert_pem or not key_pem:
@@ -124,7 +125,8 @@ def handle(h, method, path, body):
             cert_pem = canonicalize_cert_pem(cert_pem)
             key_pem  = canonicalize_key_pem(key_pem)
         except ValueError as e:
-            h._json(400, {"error": str(e)})
+            log.warning(f"TLS install: cert/key canonicalise failed: {e}")
+            h._json(400, {"error": "Certificate or key format invalid"})
             return True
 
         err = validate_cert_key_pair(cert_pem, key_pem)
@@ -163,7 +165,7 @@ def handle(h, method, path, body):
             cert_pem, key_pem = generate_self_signed_cert(org_name, hostname, extra_sans=extra_sans)
         except Exception as e:
             log.error(f"TLS cert generation failed: {e}", exc_info=True)
-            h._json(500, {"error": f"Certificate generation failed: {e}"})
+            h._json(500, {"error": "Certificate generation failed"})
             return True
 
         key_enc = encrypt_pw(key_pem)
@@ -209,7 +211,8 @@ def handle(h, method, path, body):
             cert_pem = canonicalize_cert_pem(cert_pem)
             key_pem  = canonicalize_key_pem(key_pem)
         except ValueError as e:
-            h._json(400, {"error": str(e)})
+            log.warning(f"TLS install: PFX parse failed: {e}")
+            h._json(400, {"error": "PFX parse failed (check password and file)"})
             return True
 
         err = validate_cert_key_pair(cert_pem, key_pem)
@@ -302,7 +305,8 @@ def handle(h, method, path, body):
             try:
                 cert_pem = load_der_cert(base64.b64decode(cert_b64))
             except Exception as e:
-                h._json(400, {"error": f"Invalid certificate file: {e}"})
+                log.warning(f"TLS install-signed: load_der_cert failed: {e}")
+                h._json(400, {"error": "Invalid certificate file"})
                 return True
 
         if not cert_pem:
@@ -313,7 +317,8 @@ def handle(h, method, path, body):
         try:
             cert_pem = canonicalize_cert_pem(cert_pem)
         except ValueError as e:
-            h._json(400, {"error": str(e)})
+            log.warning(f"TLS install-signed: canonicalize_cert_pem failed: {e}")
+            h._json(400, {"error": "Certificate format invalid"})
             return True
 
         # Retrieve stored private key (generated during CSR)
@@ -330,7 +335,8 @@ def handle(h, method, path, body):
         try:
             key_pem = canonicalize_key_pem(key_pem)
         except ValueError as e:
-            h._json(400, {"error": f"Stored private key is invalid: {e}"})
+            log.error(f"TLS install-signed: stored key canonicalise failed: {e}")
+            h._json(400, {"error": "Stored private key is invalid"})
             return True
 
         # Validate certificate matches the stored key
@@ -375,7 +381,8 @@ def handle(h, method, path, body):
             try:
                 pem = load_der_cert(base64.b64decode(cert_b64))
             except Exception as e:
-                h._json(400, {"error": f"Invalid certificate file: {e}"})
+                log.warning(f"TLS CA upload: load_der_cert failed: {e}")
+                h._json(400, {"error": "Invalid certificate file"})
                 return True
 
         if not pem:
@@ -386,13 +393,15 @@ def handle(h, method, path, body):
         try:
             pem = canonicalize_cert_pem(pem)
         except ValueError as e:
-            h._json(400, {"error": str(e)})
+            log.warning(f"TLS CA upload: canonicalize_cert_pem failed: {e}")
+            h._json(400, {"error": "Certificate format invalid"})
             return True
 
         try:
             info = parse_ca_cert_info(pem)
         except ValueError as e:
-            h._json(400, {"error": str(e)})
+            log.warning(f"TLS CA upload: parse_ca_cert_info failed: {e}")
+            h._json(400, {"error": "CA certificate could not be parsed"})
             return True
 
         cas = _load_ca_list()

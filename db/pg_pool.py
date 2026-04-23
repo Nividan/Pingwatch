@@ -113,7 +113,13 @@ def pg_conn(schema="main"):
     # with AttributeError when _pool is None.
     if _pool_closed or _pool is None:
         raise PoolClosedError("PostgreSQL pool is closed")
-    if not _pool_sema.acquire(timeout=30):
+    try:
+        import core.settings as _s
+        _acq_to = max(5, min(120, int(_s.get("pg_pool_acquire_timeout_s", 30) or 30)))
+        _stmt_to = max(5, min(600, int(_s.get("pg_statement_timeout_s", 30) or 30)))
+    except Exception:
+        _acq_to, _stmt_to = 30, 30
+    if not _pool_sema.acquire(timeout=_acq_to):
         raise Exception("connection pool timeout")
     con = None
     try:
@@ -131,7 +137,7 @@ def pg_conn(schema="main"):
             con = _pool.getconn()
         cur = con.cursor()
         cur.execute("SET search_path TO %s, public", (schema,))
-        cur.execute("SET statement_timeout TO '30s'")
+        cur.execute(f"SET statement_timeout TO '{_stmt_to}s'")
         cur.close()
         yield con
         con.commit()

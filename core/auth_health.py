@@ -59,6 +59,13 @@ def boot_sanity_pass() -> dict:
         except Exception as e:
             log.error(f"Auth boot check for {name} crashed: {e}")
             results[name] = False
+    # Seed cert-expiry alert state from current cert days so admins get
+    # notified immediately after boot if a cert is already near expiry.
+    if results.get("saml"):
+        try:
+            _dispatch_saml_cert_alerts()
+        except Exception as e:
+            log.warning(f"cert_alert: boot dispatch failed: {e}")
     elapsed_ms = int((time.time() - t0) * 1000)
     enabled = [k for k, v in results.items() if v is not None]
     if enabled:
@@ -162,8 +169,10 @@ def _check_saml_config() -> bool | None:
                 log.error(msg)
                 return False
             if days < 30:
-                log.warning(f"SAML IdP cert expires in {days} days "
-                            f"(valid until {info.get('not_after', '?')})")
+                msg = (f"SAML IdP cert expires in {days} days "
+                       f"(valid until {info.get('not_after', '?')})")
+                saml_auth._record_warn(msg)
+                log.warning(msg)
         except Exception as e:
             msg = f"SAML IdP cert could not be parsed: {e}"
             saml_auth._record_err(msg)
@@ -172,11 +181,17 @@ def _check_saml_config() -> bool | None:
     if sp_cert:
         try:
             info = parse_cert_info(sp_cert)
-            if int(info.get("days_left", 0)) <= 0:
+            days = int(info.get("days_left", 0))
+            if days <= 0:
                 msg = "SAML SP cert has expired — re-generate from Settings"
                 saml_auth._record_err(msg)
                 log.error(msg)
                 return False
+            if days < 30:
+                msg = (f"SAML SP cert expires in {days} days "
+                       f"(valid until {info.get('not_after', '?')})")
+                saml_auth._record_warn(msg)
+                log.warning(msg)
         except Exception as e:
             msg = f"SAML SP cert could not be parsed: {e}"
             saml_auth._record_err(msg)
@@ -362,8 +377,14 @@ def _refresh_ldap() -> None:
 
 def _refresh_radius() -> None:
     # Config-only by design (no network probe — phantom auth events in the
-    # RADIUS server logs are intrusive for a 1-per-hour poll).
-    _check_radius_config()
+    # RADIUS server logs are intrusive for a 1-per-hour poll). Matches SAML's
+    # refresh semantic: green badge means "local config is valid".
+    if not int(_settings.get("radius_enabled", 0) or 0):
+        return
+    from core import radius_auth
+    if _check_radius_config() is True:
+        radius_auth._record_ok()
+        log.debug("RADIUS refresh: config valid")
 
 
 def _refresh_saml() -> None:
@@ -377,6 +398,28 @@ def _refresh_saml() -> None:
     if ok is True:
         saml_auth._record_ok()
         log.debug("SAML refresh: certs valid")
+    _dispatch_saml_cert_alerts()
+
+
+def _dispatch_saml_cert_alerts() -> None:
+    """Re-parse SAML certs and feed day counts to cert_alert_checker so that
+    threshold crossings emit alert events. Safe to call even when the config
+    check failed — alerts are independent of overall ok/err state."""
+    from monitoring.cert_alert_checker import check_cert
+    from core.tls import parse_cert_info
+    for side, pem_key in (("idp", "saml_idp_cert_pem"),
+                          ("sp",  "saml_sp_cert_pem")):
+        pem = (_settings.get(pem_key, "") or "").strip()
+        if not pem:
+            continue
+        try:
+            info = parse_cert_info(pem)
+            check_cert(("saml", side),
+                       int(info.get("days_left", 0)),
+                       info.get("not_after", "?"),
+                       f"SAML {side.upper()} cert")
+        except Exception as e:
+            log.warning(f"cert_alert: failed to re-parse SAML {side} cert: {e}")
 
 
 def _refresh_oidc() -> None:

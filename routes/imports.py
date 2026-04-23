@@ -42,9 +42,20 @@ _VALID_MODES   = {"add_only", "add_update", "replace"}
 # Soft cap on the request body. The HTTP layer already enforces a
 # global limit, but parsers can be slow on huge inputs — keep imports
 # under a reasonable ceiling so the UI stays responsive.
-_MAX_PAYLOAD_BYTES   = 8 * 1024 * 1024     # 8 MB raw text/file
+# Fallback used only when settings cache isn't loaded; real cap is
+# `import_max_payload_mb` (bounded 1..100).
+_MAX_PAYLOAD_BYTES_DEFAULT = 8 * 1024 * 1024
 _MAX_DEVICES_PARSED  = 5000                # past this we hint "split the file"
 _MAX_DEVICES_APPLIED = 1000                # per /apply call
+
+
+def _max_payload_bytes() -> int:
+    try:
+        import core.settings as _s
+        mb = max(1, min(100, int(_s.get("import_max_payload_mb", 8) or 8)))
+        return mb * 1024 * 1024
+    except Exception:
+        return _MAX_PAYLOAD_BYTES_DEFAULT
 
 
 def handle(h, method, path, body):
@@ -191,9 +202,11 @@ def _decode_payload(body, default_filename: str = "upload"
     b64  = body.get("b64")
     filename = str(body.get("filename") or default_filename)
 
+    _cap = _max_payload_bytes()
+    _cap_mb = _cap // (1024 * 1024)
     if isinstance(text, str) and text:
-        if len(text.encode("utf-8", errors="ignore")) > _MAX_PAYLOAD_BYTES:
-            return None, filename, "payload too large (max 8 MB)"
+        if len(text.encode("utf-8", errors="ignore")) > _cap:
+            return None, filename, f"payload too large (max {_cap_mb} MB)"
         return text, filename, None
 
     if isinstance(b64, str) and b64:
@@ -201,8 +214,8 @@ def _decode_payload(body, default_filename: str = "upload"
             raw = base64.b64decode(b64, validate=False)
         except Exception:
             return None, filename, "b64 decode failed"
-        if len(raw) > _MAX_PAYLOAD_BYTES:
-            return None, filename, "payload too large (max 8 MB)"
+        if len(raw) > _cap:
+            return None, filename, f"payload too large (max {_cap_mb} MB)"
         return raw, filename, None
 
     return None, filename, "request body needs 'text' or 'b64'"

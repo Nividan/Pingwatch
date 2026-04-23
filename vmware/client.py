@@ -5,9 +5,84 @@ Uses pyvmomi (optional dependency).  Session and metric results are cached to
 minimise API calls when many sensors target the same vCenter / VM.
 """
 
+import socket
 import ssl
 import time
 import threading
+from contextlib import contextmanager
+
+from core.logger import log
+
+# Every SOAP call during discover (RetrieveContent, CreateContainerView, lazy
+# property reads on view.view iteration) happens under the process-global
+# default socket timeout. Without a bound, one slow vCenter property read
+# can park the discover thread for tens of minutes. 120s is generous for a
+# large estate (~500 VMs) under moderate vCenter load; if legitimate calls
+# hit it, an admin can raise it via a future setting.
+_DISCOVER_TIMEOUT_S = 120
+
+# Health-check timeout for cached-session revival. Must be short: if a
+# cached session's underlying connection is dead, we want to fail fast and
+# reconnect — not wait 60s for the default SmartConnect timeout.
+_HEALTH_CHECK_TIMEOUT_S = 5
+
+
+@contextmanager
+def _socket_timeout(seconds: float):
+    """Temporarily set the default socket timeout for every socket opened
+    inside the block. Restores the previous default in a finally so nested
+    users (e.g. discover-inside-polling) don't leak the override.
+
+    Caveat: only affects *newly-created* sockets. pyVmomi keeps an HTTPS
+    connection pool; sockets opened before this block ignore the change.
+    For a true hard cap, use `_run_with_timeout` below.
+    """
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(seconds)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
+def _run_with_timeout(label: str, fn, timeout_s: float):
+    """Run `fn()` in a daemon thread and raise ConnectionError if it doesn't
+    finish within `timeout_s` seconds.
+
+    Why this is needed: pyVmomi's SOAP stub maintains a persistent HTTPS
+    connection pool. Sockets in that pool inherit the default socket timeout
+    at the moment they were created — which for us is None (infinite) before
+    the first SmartConnect. `socket.setdefaulttimeout()` changes made inside
+    our discover function don't retroactively apply to those pooled sockets,
+    so `RetrieveContent()` / property iteration can still hang indefinitely.
+    Thread.join() is the only reliable hard cap without forking pyVmomi.
+
+    The daemon thread keeps running after timeout — it can't be forcibly
+    killed in Python. That's acceptable for a rare admin-invoked operation:
+    the stuck thread eventually returns (or dies with the process), and the
+    cached session is invalidated on exception so the next click starts
+    fresh rather than reusing the zombie.
+    """
+    result = {"val": None, "err": None, "done": False}
+
+    def _worker():
+        try:
+            result["val"] = fn()
+        except BaseException as e:
+            result["err"] = e
+        finally:
+            result["done"] = True
+
+    th = threading.Thread(target=_worker, daemon=True, name=f"pw-vmdisc-{label}")
+    th.start()
+    th.join(timeout=timeout_s)
+    if not result["done"]:
+        raise ConnectionError(
+            f"{label} timed out after {timeout_s}s — vCenter is slow or overloaded"
+        )
+    if result["err"] is not None:
+        raise result["err"]
+    return result["val"]
 
 # ---------------------------------------------------------------------------
 # Lazy import helper — pyvmomi is optional
@@ -140,9 +215,11 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
         if key in _sessions:
             si, expiry = _sessions[key]
             if now < expiry:
-                # Quick health check
+                # Quick health check — bounded so a dead cached session doesn't
+                # block discover for 60+s waiting on a TCP RST.
                 try:
-                    si.CurrentTime()
+                    with _socket_timeout(_HEALTH_CHECK_TIMEOUT_S):
+                        si.CurrentTime()
                     return si
                 except Exception:
                     # Session stale — reconnect below
@@ -154,14 +231,12 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
 
     # Create new connection (outside lock — may block on network)
     ctx = _make_ssl_ctx(verify_ssl)
-    import socket
-    _prev_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(60)          # cap SmartConnect at 60s
     try:
-        si = SmartConnect(
-            host=host, user=user, pwd=password,
-            port=int(port), sslContext=ctx
-        )
+        with _socket_timeout(60):          # cap SmartConnect at 60s
+            si = SmartConnect(
+                host=host, user=user, pwd=password,
+                port=int(port), sslContext=ctx
+            )
     except Exception as e:
         err = str(e)
         if "incorrect user name or password" in err.lower() or "InvalidLogin" in err:
@@ -171,8 +246,6 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
         if isinstance(e, socket.timeout) or "timed out" in err.lower():
             raise ConnectionError("Connection timed out (60s) — check vCenter/ESXi host is reachable")
         raise ConnectionError(f"Connection failed: {err}")
-    finally:
-        socket.setdefaulttimeout(_prev_timeout)
 
     with _sessions_lock:
         _sessions[key] = (si, now + _SESSION_TTL)
@@ -192,6 +265,90 @@ def _invalidate_session(host, user):
 
 
 # ---------------------------------------------------------------------------
+# PropertyCollector helper — one SOAP call for N objects × M properties
+# ---------------------------------------------------------------------------
+
+def _fetch_single_object_props(si, obj_moref, property_paths):
+    """Fetch properties for ONE ManagedObject in a single SOAP call.
+
+    Used on the hot probe path where we have a MoRef (VM/Host/Datastore)
+    and need several of its properties. Replaces the classic pyVmomi
+    anti-pattern of `obj.property_a; obj.property_b; obj.property_c` which
+    issues one SOAP round-trip per property access.
+
+    Returns a dict of {path: value}. If the object doesn't exist, or the
+    PropertyCollector query fails, returns {}. Individual property-fetch
+    errors (e.g. NoPermission on one field) silently drop that key — use
+    `.get(path, default)` when reading.
+    """
+    _, _, vim, vmodl = _require_pyvmomi()
+    obj_spec = vmodl.query.PropertyCollector.ObjectSpec(obj=obj_moref, skip=False)
+    prop_spec = vmodl.query.PropertyCollector.PropertySpec(
+        type=type(obj_moref), pathSet=list(property_paths), all=False
+    )
+    filter_spec = vmodl.query.PropertyCollector.FilterSpec(
+        objectSet=[obj_spec], propSet=[prop_spec]
+    )
+    try:
+        results = si.content.propertyCollector.RetrieveContents([filter_spec]) or []
+    except Exception as e:
+        # Don't escalate — caller reads {} as "object not found" and returns a
+        # clean error. A real connection drop will be caught by the session
+        # layer on the next probe.
+        log.debug(f"_fetch_single_object_props({obj_moref}) failed: {e}")
+        return {}
+    if not results:
+        return {}
+    return {dp.name: dp.val for dp in (results[0].propSet or [])}
+
+
+def _collect_properties(si, view_obj, obj_type, property_paths):
+    """Bulk-fetch properties for every object in `view_obj` in ONE SOAP call.
+
+    pyVmomi's idiomatic `for obj in view.view: obj.property` pattern issues
+    one SOAP round-trip **per property access**. For a 100-VM inventory
+    that's 500+ round-trips; PRTG-style tools do the same enumeration in
+    one call using PropertyCollector. This helper wraps that pattern.
+
+    Returns a list of dicts. Each dict keys:
+      - '_moId'  — the managed object reference id (e.g. 'vm-123')
+      - '<path>' — the requested property path, value as returned by
+                   vCenter (may be a primitive, enum, list, or MoRef)
+
+    Properties that vCenter couldn't return for a specific object are
+    simply absent from that object's dict — use `.get(path, default)`.
+    """
+    _, _, vim, vmodl = _require_pyvmomi()
+
+    traversal = vmodl.query.PropertyCollector.TraversalSpec(
+        name='traverseContainer',
+        type=vim.view.ContainerView,
+        path='view',
+        skip=False,
+    )
+    obj_spec = vmodl.query.PropertyCollector.ObjectSpec(
+        obj=view_obj, skip=True, selectSet=[traversal]
+    )
+    prop_spec = vmodl.query.PropertyCollector.PropertySpec(
+        type=obj_type, pathSet=list(property_paths), all=False
+    )
+    filter_spec = vmodl.query.PropertyCollector.FilterSpec(
+        objectSet=[obj_spec], propSet=[prop_spec]
+    )
+
+    pc = si.content.propertyCollector
+    results = pc.RetrieveContents([filter_spec]) or []
+
+    rows = []
+    for oc in results:
+        row = {'_moId': oc.obj._moId}
+        for dp in (oc.propSet or []):
+            row[dp.name] = dp.val
+        rows.append(row)
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # VM discovery
 # ---------------------------------------------------------------------------
 
@@ -202,39 +359,79 @@ def vmware_discover_vms(host, user, password, port=443, verify_ssl=False):
     """
     _, _, vim, _ = _require_pyvmomi()
 
-    try:
+    t0 = time.monotonic()
+    # Force-fresh session — a zombie from a previously-hung discover click
+    # can linger in the cache with a dead underlying socket. Revive cleanly.
+    _invalidate_session(host, user)
+    log.info(f"VMware discover VMs: starting ({host})")
+
+    def _do():
+        log.debug(f"VMware discover VMs: connecting ({host})")
         si = _get_session(host, user, password, port, verify_ssl)
-    except (PermissionError, ConnectionError):
+        log.debug(f"VMware discover VMs: session ok ({host})")
+        content = si.RetrieveContent()
+        log.debug(f"VMware discover VMs: content retrieved ({host})")
+
+        # Prefetch host MoRef→name map so we can populate host_name without a
+        # per-VM round-trip. One SOAP call for all ESXi hosts.
+        host_view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.HostSystem], recursive=True
+        )
+        try:
+            host_rows = _collect_properties(si, host_view, vim.HostSystem, ['name'])
+        finally:
+            host_view.Destroy()
+        host_name_by_id = {r['_moId']: (r.get('name') or '') for r in host_rows}
+        log.debug(f"VMware discover VMs: host map built "
+                  f"({len(host_name_by_id)} hosts) ({host})")
+
+        # Fetch every VM with all the fields we need in ONE SOAP call — replaces
+        # the naive `for vm in view.view: vm.config; vm.runtime; …` pattern which
+        # would issue 5+ round-trips per VM.
+        vm_view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.VirtualMachine], recursive=True
+        )
+        try:
+            rows = _collect_properties(si, vm_view, vim.VirtualMachine, [
+                'name',
+                'runtime.powerState',
+                'runtime.host',
+                'config.guestFullName',
+                'config.guestId',
+                'config.hardware.numCPU',
+                'config.hardware.memoryMB',
+            ])
+        finally:
+            vm_view.Destroy()
+        log.debug(f"VMware discover VMs: batch fetched {len(rows)} VMs ({host})")
+
+        out = []
+        for r in rows:
+            host_ref = r.get('runtime.host')
+            host_id  = host_ref._moId if host_ref is not None else ''
+            out.append({
+                "vm_id":       r['_moId'],
+                "name":        r.get('name') or "",
+                "power_state": str(r.get('runtime.powerState') or "unknown"),
+                "guest_os":    (r.get('config.guestFullName') or r.get('config.guestId') or ""),
+                "num_cpu":     int(r.get('config.hardware.numCPU') or 0),
+                "memory_mb":   int(r.get('config.hardware.memoryMB') or 0),
+                "host_name":   host_name_by_id.get(host_id, ""),
+            })
+        return out
+
+    try:
+        vms = _run_with_timeout("discover-VMs", _do, _DISCOVER_TIMEOUT_S)
+    except ConnectionError as e:
+        log.warning(f"VMware discover VMs: {e} ({host})")
+        _invalidate_session(host, user)   # session may be zombied — don't reuse
+        raise
+    except (PermissionError,):
         _invalidate_session(host, user)
         raise
 
-    content = si.RetrieveContent()
-    container = content.rootFolder
-    view = content.viewManager.CreateContainerView(
-        container, [vim.VirtualMachine], recursive=True
-    )
-
-    vms = []
-    try:
-        for vm in view.view:
-            try:
-                cfg = vm.config
-                rt  = vm.runtime
-                vms.append({
-                    "vm_id":       vm._moId,
-                    "name":        vm.name or "",
-                    "power_state": str(rt.powerState) if rt else "unknown",
-                    "guest_os":    (cfg.guestFullName or cfg.guestId or "") if cfg else "",
-                    "num_cpu":     cfg.hardware.numCPU if cfg and cfg.hardware else 0,
-                    "memory_mb":   cfg.hardware.memoryMB if cfg and cfg.hardware else 0,
-                    "host_name":   (rt.host.name if rt and rt.host else ""),
-                })
-            except Exception:
-                continue  # skip VMs we can't read
-    finally:
-        view.Destroy()
-
     vms.sort(key=lambda v: v["name"].lower())
+    log.info(f"VMware discover VMs: found {len(vms)} in {(time.monotonic()-t0)*1000:.0f}ms ({host})")
     return vms
 
 
@@ -250,41 +447,64 @@ def vmware_discover_hosts(host, user, password, port=443, verify_ssl=False):
     """
     _, _, vim, _ = _require_pyvmomi()
 
-    try:
+    t0 = time.monotonic()
+    _invalidate_session(host, user)   # force-fresh — see rationale in vmware_discover_vms
+    log.info(f"VMware discover Hosts: starting ({host})")
+
+    def _do():
+        log.debug(f"VMware discover Hosts: connecting ({host})")
         si = _get_session(host, user, password, port, verify_ssl)
-    except (PermissionError, ConnectionError):
+        log.debug(f"VMware discover Hosts: session ok ({host})")
+        content = si.RetrieveContent()
+        log.debug(f"VMware discover Hosts: content retrieved ({host})")
+
+        view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.HostSystem], recursive=True
+        )
+        try:
+            rows = _collect_properties(si, view, vim.HostSystem, [
+                'name',
+                'runtime.connectionState',
+                'summary.hardware.cpuModel',
+                'summary.hardware.numCpuPkgs',
+                'summary.hardware.numCpuCores',
+                'summary.hardware.memorySize',
+                'summary.config.product.fullName',
+                'vm',   # ArrayOfManagedObjectReference — len() gives num_vms
+            ])
+        finally:
+            view.Destroy()
+        log.debug(f"VMware discover Hosts: batch fetched {len(rows)} hosts ({host})")
+
+        out = []
+        for r in rows:
+            mem_bytes = int(r.get('summary.hardware.memorySize') or 0)
+            vm_list = r.get('vm') or []
+            out.append({
+                "host_id":          r['_moId'],
+                "name":             r.get('name') or "",
+                "connection_state": str(r.get('runtime.connectionState') or "unknown"),
+                "cpu_model":        r.get('summary.hardware.cpuModel') or "",
+                "cpu_count":        int(r.get('summary.hardware.numCpuPkgs') or 0),
+                "cpu_cores":        int(r.get('summary.hardware.numCpuCores') or 0),
+                "memory_mb":        int(mem_bytes / (1024 * 1024)) if mem_bytes else 0,
+                "num_vms":          len(vm_list),
+                "version":          r.get('summary.config.product.fullName') or "",
+            })
+        return out
+
+    try:
+        hosts = _run_with_timeout("discover-Hosts", _do, _DISCOVER_TIMEOUT_S)
+    except ConnectionError as e:
+        log.warning(f"VMware discover Hosts: {e} ({host})")
+        _invalidate_session(host, user)
+        raise
+    except (PermissionError,):
         _invalidate_session(host, user)
         raise
 
-    content = si.RetrieveContent()
-    view = content.viewManager.CreateContainerView(
-        content.rootFolder, [vim.HostSystem], recursive=True
-    )
-
-    hosts = []
-    try:
-        for h in view.view:
-            try:
-                rt  = h.runtime
-                hw  = h.summary.hardware if h.summary else None
-                cfg = h.summary.config   if h.summary else None
-                hosts.append({
-                    "host_id":          h._moId,
-                    "name":             h.name or "",
-                    "connection_state": str(rt.connectionState) if rt else "unknown",
-                    "cpu_model":        hw.cpuModel if hw else "",
-                    "cpu_count":        hw.numCpuPkgs if hw else 0,
-                    "cpu_cores":        hw.numCpuCores if hw else 0,
-                    "memory_mb":        int(hw.memorySize / (1024 * 1024)) if hw and hw.memorySize else 0,
-                    "num_vms":          len(h.vm) if h.vm else 0,
-                    "version":          (cfg.product.fullName if cfg and cfg.product else ""),
-                })
-            except Exception:
-                continue
-    finally:
-        view.Destroy()
-
     hosts.sort(key=lambda x: x["name"].lower())
+    log.info(f"VMware discover Hosts: found {len(hosts)} in {(time.monotonic()-t0)*1000:.0f}ms ({host})")
     return hosts
 
 
@@ -300,41 +520,61 @@ def vmware_discover_datastores(host, user, password, port=443, verify_ssl=False)
     """
     _, _, vim, _ = _require_pyvmomi()
 
-    try:
+    t0 = time.monotonic()
+    _invalidate_session(host, user)   # force-fresh — see rationale in vmware_discover_vms
+    log.info(f"VMware discover Datastores: starting ({host})")
+
+    def _do():
+        log.debug(f"VMware discover Datastores: connecting ({host})")
         si = _get_session(host, user, password, port, verify_ssl)
-    except (PermissionError, ConnectionError):
+        log.debug(f"VMware discover Datastores: session ok ({host})")
+        content = si.RetrieveContent()
+        log.debug(f"VMware discover Datastores: content retrieved ({host})")
+
+        view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.Datastore], recursive=True
+        )
+        try:
+            rows = _collect_properties(si, view, vim.Datastore, [
+                'summary.name',
+                'summary.type',
+                'summary.capacity',
+                'summary.freeSpace',
+                'summary.accessible',
+            ])
+        finally:
+            view.Destroy()
+        log.debug(f"VMware discover Datastores: batch fetched {len(rows)} datastores ({host})")
+
+        out = []
+        for r in rows:
+            capacity = int(r.get('summary.capacity') or 0)
+            free     = int(r.get('summary.freeSpace') or 0)
+            out.append({
+                "ds_id":           r['_moId'],
+                "name":            r.get('summary.name') or "",
+                "type":            r.get('summary.type') or "",
+                "capacity_bytes":  capacity,
+                "free_bytes":      free,
+                "capacity_gb":     round(capacity / 1024 ** 3, 1),
+                "free_gb":         round(free / 1024 ** 3, 1),
+                "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
+                "accessible":      bool(r.get('summary.accessible')),
+            })
+        return out
+
+    try:
+        datastores = _run_with_timeout("discover-Datastores", _do, _DISCOVER_TIMEOUT_S)
+    except ConnectionError as e:
+        log.warning(f"VMware discover Datastores: {e} ({host})")
+        _invalidate_session(host, user)
+        raise
+    except (PermissionError,):
         _invalidate_session(host, user)
         raise
 
-    content = si.RetrieveContent()
-    view = content.viewManager.CreateContainerView(
-        content.rootFolder, [vim.Datastore], recursive=True
-    )
-
-    datastores = []
-    try:
-        for ds in view.view:
-            try:
-                summary = ds.summary
-                capacity = int(summary.capacity or 0)
-                free     = int(summary.freeSpace or 0)
-                datastores.append({
-                    "ds_id":           ds._moId,
-                    "name":            summary.name or ds.name or "",
-                    "type":            summary.type or "",
-                    "capacity_bytes":  capacity,
-                    "free_bytes":      free,
-                    "capacity_gb":     round(capacity / 1024 ** 3, 1),
-                    "free_gb":         round(free / 1024 ** 3, 1),
-                    "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
-                    "accessible":      bool(summary.accessible),
-                })
-            except Exception:
-                continue  # skip datastores we can't read
-    finally:
-        view.Destroy()
-
     datastores.sort(key=lambda d: d["name"].lower())
+    log.info(f"VMware discover Datastores: found {len(datastores)} in {(time.monotonic()-t0)*1000:.0f}ms ({host})")
     return datastores
 
 
@@ -480,32 +720,29 @@ def vmware_probe(host, user, password, vm_id, metric,
     # Datastore metric branch
     # ══════════════════════════════════════════════════════════════════
     if is_datastore:
-        ds_moref = None
+        # Build a client-side proxy to the datastore by its MoID — no SOAP
+        # round-trip, no view enumeration. Replaces the previous pattern of
+        # listing EVERY datastore in vCenter and scanning for a matching moId.
         try:
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.Datastore], recursive=True
-            )
-            for ds in view.view:
-                if ds._moId == vm_id:
-                    ds_moref = ds
-                    break
-            view.Destroy()
-        except Exception:
-            pass
+            ds_moref = vim.Datastore(vm_id, si._stub)
+        except Exception as e:
+            log.debug(f"vmware_probe: invalid datastore ID {vm_id}: {e}")
+            return {"ok": False, "ms": None, "detail": f"Invalid datastore ID: {vm_id}"}
 
-        if ds_moref is None:
+        props = _fetch_single_object_props(si, ds_moref, [
+            'summary.name',
+            'summary.capacity',
+            'summary.freeSpace',
+            'summary.accessible',
+        ])
+        if not props:
             return {"ok": False, "ms": None,
                     "detail": f"Datastore {vm_id} not found"}
 
-        try:
-            summary   = ds_moref.summary
-            ds_name   = summary.name or ds_moref.name or "datastore"
-            cap_bytes = int(summary.capacity or 0)
-            free_bytes = int(summary.freeSpace or 0)
-            accessible = bool(summary.accessible)
-        except Exception:
-            return {"ok": False, "ms": None,
-                    "detail": "Could not read datastore summary"}
+        ds_name    = props.get('summary.name') or "datastore"
+        cap_bytes  = int(props.get('summary.capacity') or 0)
+        free_bytes = int(props.get('summary.freeSpace') or 0)
+        accessible = bool(props.get('summary.accessible'))
 
         if not accessible:
             return {"ok": False, "ms": None,
@@ -524,47 +761,31 @@ def vmware_probe(host, user, password, vm_id, metric,
     # ESXi host metric branch
     # ══════════════════════════════════════════════════════════════════
     if is_host:
-        host_moref = None
-        num_pcpu = 1
+        # Direct MoRef — skip the view enumeration that used to scan every
+        # HostSystem in vCenter on each probe.
         try:
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.HostSystem], recursive=True
-            )
-            for h in view.view:
-                if h._moId == vm_id:
-                    host_moref = h
-                    hw = h.summary.hardware if h.summary else None
-                    if hw:
-                        num_pcpu = hw.numCpuPkgs or 1
-                    break
-            view.Destroy()
-        except Exception:
-            pass
+            host_moref = vim.HostSystem(vm_id, si._stub)
+        except Exception as e:
+            log.debug(f"vmware_probe: invalid host ID {vm_id}: {e}")
+            return {"ok": False, "ms": None, "detail": f"Invalid host ID: {vm_id}"}
 
-        if host_moref is None:
-            return {"ok": False, "ms": None,
-                    "detail": f"Host {vm_id} not found"}
+        # All HOST_METRICS keys are prefixed `host_` and backed by a perf
+        # counter. We need the connection state as a guard and num_pcpu for
+        # the ready_pct math — fetched in ONE SOAP call.
+        # (The "on" power-state metric for hosts flows through the VM branch
+        # below and falls back to HostSystem there — see T9 in the test.)
+        props = _fetch_single_object_props(si, host_moref, [
+            'runtime.connectionState',
+            'summary.hardware.numCpuPkgs',
+        ])
+        if not props:
+            return {"ok": False, "ms": None, "detail": f"Host {vm_id} not found"}
 
-        # Power state metric — return before connection guard
-        if metric == "on":
-            try:
-                power = str(host_moref.runtime.powerState) if host_moref.runtime else "unknown"
-            except Exception:
-                power = "unknown"
-            is_on = (power == "poweredOn")
-            return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
-                    "detail": f"Power State: {power}",
-                    "value": power}
-
-        # Connection state guard
-        try:
-            conn_state = str(host_moref.runtime.connectionState) if host_moref.runtime else "unknown"
-        except Exception:
-            conn_state = "unknown"
-
+        conn_state = str(props.get('runtime.connectionState') or "unknown")
         if conn_state != "connected":
-            return {"ok": False, "ms": None,
-                    "detail": f"Host {conn_state}"}
+            return {"ok": False, "ms": None, "detail": f"Host {conn_state}"}
+
+        num_pcpu = int(props.get('summary.hardware.numCpuPkgs') or 1)
 
         data = _query_all_metrics(si, host_moref, HOST_METRICS, num_pcpu)
 
@@ -581,58 +802,52 @@ def vmware_probe(host, user, password, vm_id, metric,
                 "value": str(val)}
 
     # ══════════════════════════════════════════════════════════════════
-    # VM metric branch (existing logic)
+    # VM metric branch
     # ══════════════════════════════════════════════════════════════════
-    vm_moref = None
-    num_cpu = 1
-    memory_mb = 0
-    try:
-        view = content.viewManager.CreateContainerView(
-            content.rootFolder, [vim.VirtualMachine], recursive=True
-        )
-        for vm in view.view:
-            if vm._moId == vm_id:
-                vm_moref = vm
-                if vm.config and vm.config.hardware:
-                    num_cpu = vm.config.hardware.numCPU or 1
-                    memory_mb = vm.config.hardware.memoryMB or 0
-                break
-        view.Destroy()
-    except Exception:
-        pass
 
-    if vm_moref is None:
-        # "on" (Power State) is valid for hosts too — try HostSystem fallback
-        if metric == "on":
-            host_moref = None
-            try:
-                view = content.viewManager.CreateContainerView(
-                    content.rootFolder, [vim.HostSystem], recursive=True
-                )
-                for h in view.view:
-                    if h._moId == vm_id:
-                        host_moref = h
-                        break
-                view.Destroy()
-            except Exception:
-                pass
-            if host_moref is not None:
-                try:
-                    power = str(host_moref.runtime.powerState) if host_moref.runtime else "unknown"
-                except Exception:
-                    power = "unknown"
-                is_on = (power == "poweredOn")
-                return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
-                        "detail": f"Power State: {power}",
-                        "value": power}
-        return {"ok": False, "ms": None,
-                "detail": f"VM {vm_id} not found"}
-
-    # Power state — used both as a guard and as the "on" metric value
+    # Build a client-side VM proxy — no SOAP round-trip, no view enumeration.
+    # Replaces the previous pattern which listed EVERY VM in vCenter and
+    # scanned for the matching moId on every single probe cycle (~5+ SOAP
+    # calls per probe × 105 sensors every 60s).
     try:
-        power_state = str(vm_moref.runtime.powerState) if vm_moref.runtime else "unknown"
-    except Exception:
-        power_state = "unknown"
+        vm_moref = vim.VirtualMachine(vm_id, si._stub)
+    except Exception as e:
+        log.debug(f"vmware_probe: invalid VM ID {vm_id}: {e}")
+        return {"ok": False, "ms": None, "detail": f"Invalid VM ID: {vm_id}"}
+
+    # Pick the property set we need:
+    #   - always: runtime.powerState (guard + "on" metric value)
+    #   - perf-counter metrics: + config.hardware.numCPU (ready_pct math)
+    #                           + config.hardware.memoryMB (future memory-% use)
+    #   - disk_used_pct:         + guest.disk (list of GuestDiskInfo)
+    needed = ['runtime.powerState']
+    if metric != "on":
+        needed.extend(['config.hardware.numCPU', 'config.hardware.memoryMB'])
+        if metric == "disk_used_pct":
+            needed.append('guest.disk')
+
+    props = _fetch_single_object_props(si, vm_moref, needed)
+
+    # "on" is shared between VM and Host sensor types — if the VM lookup
+    # came up empty, fall back to a HostSystem proxy before giving up.
+    if not props and metric == "on":
+        try:
+            host_moref = vim.HostSystem(vm_id, si._stub)
+        except Exception:
+            return {"ok": False, "ms": None, "detail": f"Object {vm_id} not found"}
+        host_props = _fetch_single_object_props(si, host_moref, ['runtime.powerState'])
+        if not host_props:
+            return {"ok": False, "ms": None, "detail": f"VM or Host {vm_id} not found"}
+        power = str(host_props.get('runtime.powerState') or "unknown")
+        is_on = (power == "poweredOn")
+        return {"ok": is_on, "ms": 1.0 if is_on else 0.0,
+                "detail": f"Power State: {power}",
+                "value": power}
+
+    if not props:
+        return {"ok": False, "ms": None, "detail": f"VM {vm_id} not found"}
+
+    power_state = str(props.get('runtime.powerState') or "unknown")
 
     # "on" metric: just report power state, no perf counters needed
     if metric == "on":
@@ -644,12 +859,14 @@ def vmware_probe(host, user, password, vm_id, metric,
     if power_state != "poweredOn":
         return {"ok": False, "ms": None, "detail": "VM powered off"}
 
-    # ── Disk used % — reads guest.disk (requires VMware Tools) ───────────
+    num_cpu   = int(props.get('config.hardware.numCPU') or 1)
+    # memory_mb retained for future metrics that need total VM memory
+    # (e.g. mem_consumed_pct would divide mem.consumed.average / memory_mb)
+    _memory_mb = int(props.get('config.hardware.memoryMB') or 0)
+
+    # ── Disk used % — uses guest.disk fetched above (requires VMware Tools) ─
     if metric == "disk_used_pct":
-        try:
-            disks = (vm_moref.guest.disk or []) if vm_moref.guest else []
-        except Exception:
-            disks = []
+        disks = props.get('guest.disk') or []
         if not disks:
             return {"ok": False, "ms": None,
                     "detail": "No disk info — VMware Tools must be installed and running"}
@@ -673,7 +890,7 @@ def vmware_probe(host, user, password, vm_id, metric,
                 "detail": f"Disk {target.diskPath}: {pct}% used",
                 "value": str(pct)}
 
-    # Query all metrics (cached for other sensors targeting same VM)
+    # Query all perf-counter metrics (cached for other sensors targeting same VM)
     data = _query_all_metrics(si, vm_moref, VM_METRICS, num_cpu)
 
     with _metric_cache_lock:

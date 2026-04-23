@@ -879,9 +879,9 @@ def pg_seed_defaults(cur):
         ("snr_timeout",        "4"),
         ("snr_fail_after",     "2"),
         ("snr_recover_after",  "1"),
-        ("max_flaps_display",  "20"),
-        ("max_flap_entries",   "500"),
-        ("max_trap_entries",   "500"),
+        ("max_flaps_display",  "50"),
+        ("max_flap_entries",   "2000"),
+        ("max_trap_entries",   "2000"),
         ("login_fail_max",     "5"),
         ("login_fail_window",  "60"),
         ("org_name",           ""),
@@ -926,6 +926,22 @@ def pg_seed_defaults(cur):
         ("retention_5m_days",      "90"),
         ("retention_1h_days",      "1095"),
         ("max_workers_executor",   "64"),
+        # Retention tab — audit DB cap + log-file rotation
+        ("audit_trim_cap",         "50000"),
+        ("log_main_max_mb",        "10"),
+        ("log_main_backups",       "14"),
+        ("log_sensors_max_mb",     "20"),
+        ("log_sensors_backups",    "5"),
+        ("log_audit_days",         "365"),
+        ("log_backup_max_mb",      "5"),
+        ("log_backup_backups",     "5"),
+        # Tunables surfaced in per-feature tabs
+        ("smtp_timeout_s",                 "10"),
+        ("pg_statement_timeout_s",         "30"),
+        ("pg_pool_acquire_timeout_s",      "30"),
+        ("auto_discover_scan_deadline_s", "300"),
+        ("sftp_checksum_max_mb",           "10"),
+        ("import_max_payload_mb",          "8"),
     ]
     for k, v in _defaults:
         cur.execute(

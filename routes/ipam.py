@@ -32,6 +32,7 @@ from db import (
     db_delete_subnet,
     db_set_auto_discover,
     db_update_subnet,
+    db_approve_first_scan,
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
@@ -193,6 +194,11 @@ def handle(h, method, path, body):
                 h._json(500, {'error': 'update failed'}); return True
             db_log_audit(user, h.client_address[0], 'ipam_subnet_edit',
                          f"{sub['cidr']} — {'; '.join(audit_parts)}")
+
+        if body.get('approve_first_scan'):
+            db_approve_first_scan(subnet_id)
+            db_log_audit(user, h.client_address[0], 'auto_discovery_approve_first_scan',
+                         sub.get('cidr', ''))
 
         h._json(200, {'ok': True, 'updated': list(updates.keys())})
         return True

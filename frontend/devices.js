@@ -56,6 +56,14 @@ function _renderAutoDiscoveryChip(dev){
 // ── View mode (grid / list) ─────────────────────────────────────
 let _devView = localStorage.getItem('pw-dev-view') || 'grid';
 
+// ── Multi-select state ──────────────────────────────────────────
+// _selectMode is a UI toggle (the ☑ Select button). When on, cards and
+// group headers show checkboxes and clicks toggle selection rather than
+// opening the device detail window.
+let _selectMode = false;
+let _selectedDids = new Set();
+let _lastClickedDid = null;
+
 function _setView(mode){
   _devView = mode;
   localStorage.setItem('pw-dev-view', mode);
@@ -80,6 +88,292 @@ function _restoreViewToggle(){
   _initDevCtxMenu();
 }
 
+// ══════════════════ MULTI-SELECT (bulk device ops) ══════════════════
+
+function _toggleSelectMode(){
+  _selectMode = !_selectMode;
+  document.body.classList.toggle('pw-select-mode', _selectMode);
+  document.getElementById('btnSelectMode')?.classList.toggle('active', _selectMode);
+  if (!_selectMode){
+    _selectedDids.clear();
+    _lastClickedDid = null;
+    _refreshAllCardSelVisuals();
+    _refreshAllGroupSelVisuals();
+    _updateBulkBar();
+  } else {
+    _updateBulkBar();
+  }
+}
+
+function _exitSelectMode(){
+  if (_selectMode) _toggleSelectMode();
+}
+
+function _clearSelection(){
+  _selectedDids.clear();
+  _lastClickedDid = null;
+  _refreshAllCardSelVisuals();
+  _refreshAllGroupSelVisuals();
+  _updateBulkBar();
+}
+
+// Click on a card — the router between "open device" and "toggle select".
+function _cardClick(ev, did){
+  if (!_selectMode){
+    openDevWin(did);
+    return;
+  }
+  ev.stopPropagation();
+  if (ev.shiftKey && _lastClickedDid){
+    _rangeSelect(_lastClickedDid, did);
+  } else {
+    _toggleCardId(did);
+    _lastClickedDid = did;
+  }
+}
+
+// Click on the checkbox overlay (either on a card or a list row).
+function _toggleCard(ev, did){
+  // Ensure select mode is active — ticking a checkbox in non-select mode
+  // turns it on. This is a UX nicety: users can discover the feature by
+  // clicking the barely-visible checkbox area.
+  if (!_selectMode){
+    _selectMode = true;
+    document.body.classList.add('pw-select-mode');
+    document.getElementById('btnSelectMode')?.classList.add('active');
+  }
+  if (ev && ev.shiftKey && _lastClickedDid){
+    _rangeSelect(_lastClickedDid, did);
+  } else {
+    _toggleCardId(did);
+    _lastClickedDid = did;
+  }
+}
+
+function _toggleCardId(did){
+  if (_selectedDids.has(did)) _selectedDids.delete(did);
+  else                        _selectedDids.add(did);
+  _refreshCardSelVisual(did);
+  const dev = S.devices[did];
+  if (dev) _refreshGroupSelVisual(dev.group || 'Default Group');
+  _updateBulkBar();
+}
+
+function _rangeSelect(fromDid, toDid){
+  // DOM order is the source of truth. Walk .dc elements (both visible and
+  // hidden by filter — shift-click spans through filtered items too).
+  const cards = [...document.querySelectorAll('.dc:not(.dc-add)')];
+  const ids   = cards.map(c => c.id.replace('dp-',''));
+  const i = ids.indexOf(fromDid);
+  const j = ids.indexOf(toDid);
+  if (i < 0 || j < 0){
+    _toggleCardId(toDid);
+    return;
+  }
+  const [lo, hi] = i <= j ? [i, j] : [j, i];
+  const groups = new Set();
+  for (let k = lo; k <= hi; k++){
+    _selectedDids.add(ids[k]);
+    _refreshCardSelVisual(ids[k]);
+    const dev = S.devices[ids[k]];
+    if (dev) groups.add(dev.group || 'Default Group');
+  }
+  groups.forEach(g => _refreshGroupSelVisual(g));
+  _updateBulkBar();
+  _lastClickedDid = toDid;
+}
+
+function _toggleGroupSel(group){
+  const dids = _didsInGroup(group);
+  if (dids.length === 0) return;
+  // Tri-state: if all are selected, unselect all; else select all (including
+  // currently-unselected).
+  const allSelected = dids.every(d => _selectedDids.has(d));
+  dids.forEach(d => {
+    if (allSelected) _selectedDids.delete(d);
+    else             _selectedDids.add(d);
+    _refreshCardSelVisual(d);
+  });
+  _refreshGroupSelVisual(group);
+  _updateBulkBar();
+}
+
+function _didsInGroup(group){
+  // Group-by-string on S.devices — the DOM grid may filter-hide some cards
+  // but group-header select-all still selects the whole group, matching
+  // file-manager semantics.
+  const out = [];
+  Object.values(S.devices).forEach(d => {
+    const g = d.group || 'Default Group';
+    if (g === group) out.push(d.device_id);
+  });
+  return out;
+}
+
+function _refreshCardSelVisual(did){
+  const card = document.getElementById('dp-'+did);
+  const row  = document.getElementById('dpl-'+did);
+  const isSel = _selectedDids.has(did);
+  [card, row].forEach(el => {
+    if (!el) return;
+    el.classList.toggle('selected', isSel);
+    const cb = el.querySelector('.dc-sel-cb');
+    if (cb) cb.classList.toggle('checked', isSel);
+  });
+}
+
+function _refreshAllCardSelVisuals(){
+  document.querySelectorAll('.dc:not(.dc-add)').forEach(c => {
+    const did = c.id.replace('dp-','');
+    const isSel = _selectedDids.has(did);
+    c.classList.toggle('selected', isSel);
+    const cb = c.querySelector('.dc-sel-cb');
+    if (cb) cb.classList.toggle('checked', isSel);
+  });
+  document.querySelectorAll('.dc-list-row').forEach(r => {
+    const did = r.id.replace('dpl-','');
+    const isSel = _selectedDids.has(did);
+    r.classList.toggle('selected', isSel);
+    const cb = r.querySelector('.dc-sel-cb');
+    if (cb) cb.classList.toggle('checked', isSel);
+  });
+}
+
+function _refreshGroupSelVisual(group){
+  const wrap = document.getElementById(grpId(group));
+  if (!wrap) return;
+  const cb = wrap.querySelector('.grp-sel-cb');
+  if (!cb) return;
+  const dids = _didsInGroup(group);
+  const sel  = dids.filter(d => _selectedDids.has(d)).length;
+  cb.classList.remove('checked','partial');
+  if (sel === 0)                  { /* empty */ }
+  else if (sel === dids.length)   cb.classList.add('checked');
+  else                            cb.classList.add('partial');
+}
+
+function _refreshAllGroupSelVisuals(){
+  document.querySelectorAll('.grp-sel-cb').forEach(cb => {
+    const g = cb.dataset.group;
+    if (g) _refreshGroupSelVisual(g);
+  });
+}
+
+function _updateBulkBar(){
+  const bar = document.getElementById('bulkBar');
+  if (!bar) return;
+  const n = _selectedDids.size;
+  if (!_selectMode || n === 0){
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = '';
+  document.getElementById('bulkBarCount').textContent = `${n} selected`;
+  // Count selected devices that are hidden by the current filter.
+  const hidden = [..._selectedDids].filter(did => {
+    const el = document.getElementById('dp-'+did) || document.getElementById('dpl-'+did);
+    return el && el.style.display === 'none';
+  }).length;
+  const hEl = document.getElementById('bulkBarHidden');
+  hEl.textContent = hidden > 0 ? `(${hidden} hidden by filter)` : '';
+  // Refresh the datalist of existing groups each time the bar updates.
+  const list = document.getElementById('bulkGroupList');
+  if (list){
+    const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
+    list.innerHTML = groups.map(g => `<option value="${esc(g)}"></option>`).join('');
+  }
+}
+
+async function _bulkApplyMove(){
+  const input = document.getElementById('bulkGroupInput');
+  const target = (input?.value || '').trim();
+  if (!target){ toast('Enter a group name','err'); return; }
+  if (target.length > 80){ toast('Group name too long (max 80)','err'); return; }
+  const dids = [..._selectedDids];
+  if (!dids.length) return;
+  try {
+    const r = await api('POST','/api/devices/bulk',{device_ids:dids, action:'move', group:target});
+    if (!r || !r.ok){ toast('Bulk move failed','err'); return; }
+    // Clear selection first so re-rendered cards don't redraw the tick.
+    _clearSelection();
+    // Optimistic update — update local state and re-parent the cards so
+    // the user sees the move instantly (server SSE would also do this
+    // eventually, but with a visible lag).
+    dids.forEach(d => {
+      const dev = S.devices[d];
+      if (!dev) return;
+      dev.group = target;
+      renderDp(dev);
+    });
+    pruneEmptyGroups();
+    if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
+    else              toast(`${r.applied} device(s) moved to "${target}"`,'ok');
+    if (input) input.value = '';
+  } catch {
+    toast('Network error','err');
+  }
+}
+
+async function _bulkAction(action){
+  const dids = [..._selectedDids];
+  if (!dids.length) return;
+  try {
+    const r = await api('POST','/api/devices/bulk',{device_ids:dids, action:action});
+    if (!r || !r.ok){ toast('Bulk action failed','err'); return; }
+    const verb = action==='start' ? 'resumed' : (action==='stop' ? 'paused' : action);
+    if (r.failed > 0) toast(`${r.applied} of ${dids.length} ${verb} (${r.failed} failed)`,'warn');
+    else              toast(`${r.applied} device(s) ${verb}`,'ok');
+    _clearSelection();
+  } catch {
+    toast('Network error','err');
+  }
+}
+
+function _bulkDeleteConfirm(){
+  const n = _selectedDids.size;
+  if (!n) return;
+  closeM('mbulk-del');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'mbulk-del';
+  _overlayClose(o, () => closeM('mbulk-del'));
+  o.innerHTML = `
+  <div class="mbox" style="max-width:440px">
+    <div class="mhd">
+      <div class="mttl">Delete ${n} device${n===1?'':'s'}?</div>
+      <button class="mclose" onclick="closeM('mbulk-del')">&#x2715;</button>
+    </div>
+    <div class="mbdy">
+      <div class="fh" style="line-height:1.5">
+        This will permanently delete the selected device${n===1?'':'s'}, all their
+        sensors, history, and active events.<br/><br/>
+        Auto-discovered devices will be added to the suppressed-hosts list so
+        they won't be re-added by the next Auto-Discovery tick.
+      </div>
+    </div>
+    <div class="mft">
+      <button class="btn-s" onclick="closeM('mbulk-del')">Cancel</button>
+      <button class="btn-p" style="background:var(--down);border-color:var(--down)"
+              onclick="_bulkDeleteConfirmed()">Delete ${n}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+async function _bulkDeleteConfirmed(){
+  closeM('mbulk-del');
+  const dids = [..._selectedDids];
+  if (!dids.length) return;
+  try {
+    const r = await api('POST','/api/devices/bulk',{device_ids:dids, action:'delete'});
+    if (!r || !r.ok){ toast('Bulk delete failed','err'); return; }
+    if (r.failed > 0) toast(`${r.applied} of ${dids.length} deleted (${r.failed} failed)`,'warn');
+    else              toast(`${r.applied} device(s) deleted`,'ok');
+    _clearSelection();
+  } catch {
+    toast('Network error','err');
+  }
+}
+
 // _lsGet / _lsSet moved to forms-utils.js (canonical location)
 
 function ensureGroupSection(group){
@@ -100,6 +394,15 @@ function ensureGroupSection(group){
   const dragH=document.createElement('div');
   dragH.className='grp-drag-handle'; dragH.textContent='⠿'; dragH.title='Drag to reorder groups';
   dragH.addEventListener('mousedown',()=>{ _grpDragOK=true; });
+
+  const grpCb=document.createElement('div');
+  grpCb.className='grp-sel-cb';
+  grpCb.title='Select all in this group';
+  grpCb.dataset.group=group;
+  grpCb.addEventListener('click',function(e){
+    e.stopPropagation();
+    _toggleGroupSel(group);
+  });
 
   const line1=document.createElement('div');
   line1.className='grp-line'; line1.style.cssText='max-width:40px;flex:0 0 40px';
@@ -141,7 +444,7 @@ function ensureGroupSection(group){
   const summary=document.createElement('span');
   summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
 
-  hdr.appendChild(dragH); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
+  hdr.appendChild(dragH); hdr.appendChild(grpCb); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
   if (muteBadge) hdr.appendChild(muteBadge);
   hdr.appendChild(editBtn); hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
 
@@ -189,6 +492,33 @@ function toggleGroup(group){
   if(nowCol) set.add(group); else set.delete(group);
   _lsSet('pw-grp-collapsed', [...set]);
   _updateGrpSummary(group);
+}
+
+function _collapseAllGroups(){
+  const groups=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.group).filter(Boolean);
+  const set=new Set(groups);
+  groups.forEach(group=>{
+    const grid=document.getElementById(gridId(group));
+    const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+    if(!grid) return;
+    grid.classList.add('collapsed');
+    if(arr){arr.classList.remove('open');arr.title='Expand';}
+    _updateGrpSummary(group);
+  });
+  _lsSet('pw-grp-collapsed',[...set]);
+}
+
+function _expandAllGroups(){
+  const groups=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.group).filter(Boolean);
+  groups.forEach(group=>{
+    const grid=document.getElementById(gridId(group));
+    const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+    if(!grid) return;
+    grid.classList.remove('collapsed');
+    if(arr){arr.classList.add('open');arr.title='Collapse';}
+    _updateGrpSummary(group);
+  });
+  _lsSet('pw-grp-collapsed',[]);
 }
 
 function _updateGrpSummary(group){
@@ -451,8 +781,11 @@ function cardHTML(dev){
   const st=dev.status||'unknown';
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
   const adChip = _renderAutoDiscoveryChip(dev);
+  const selCls = _selectedDids.has(dev.device_id) ? ' selected' : '';
+  const cbCls  = _selectedDids.has(dev.device_id) ? 'dc-sel-cb checked' : 'dc-sel-cb';
   return `
-  <div class="dc ${st}" id="dp-${dev.device_id}" onclick="openDevWin('${dev.device_id}')">
+  <div class="dc ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+    <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
     <div class="dc-bar ${st}" id="dcbar-${dev.device_id}"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
     <div class="dc-body">
@@ -507,7 +840,10 @@ function listRowHTML(dev){
     </span>`;
   });
   if(snrs.length>5) snrHtml+=`<span class="dlr-more">+${snrs.length-5}</span>`;
-  return `<div class="dc-list-row ${st}" id="dpl-${dev.device_id}" onclick="openDevWin('${dev.device_id}')">
+  const selCls = _selectedDids.has(dev.device_id) ? ' selected' : '';
+  const cbCls  = _selectedDids.has(dev.device_id) ? 'dc-sel-cb checked' : 'dc-sel-cb';
+  return `<div class="dc-list-row ${st}${selCls}" id="dpl-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+    <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
     <div class="dlr-dot"></div>
     <div class="dlr-name">${esc(dev.name)}</div>
     <div class="dlr-host">${esc(dev.host)}</div>
@@ -1111,6 +1447,8 @@ function _applyDevFilter(query){
   });
   _devPage=0;
   _renderPage();
+  // Bulk-bar "hidden by filter" counter depends on card visibility.
+  if (_selectMode) _updateBulkBar();
 }
 
 function _renderPage(){
@@ -1201,6 +1539,33 @@ document.addEventListener('keydown', e=>{
   if((e.ctrlKey||e.metaKey)&&e.key==='f'&&activeMainTab==='devices'){
     const inp=document.getElementById('devSearch');
     if(inp){ e.preventDefault(); inp.focus(); inp.select(); }
+  }
+  // Ctrl+A (or Cmd+A) — select all visible devices on the Devices tab.
+  // Only fires when not typing into an input/textarea/search box. Pressing
+  // it turns select mode on automatically if it wasn't already.
+  const isInput = e.target && (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.isContentEditable);
+  if((e.ctrlKey||e.metaKey)&&e.key==='a'&&activeMainTab==='devices'&&!isInput){
+    e.preventDefault();
+    if (!_selectMode){
+      _selectMode = true;
+      document.body.classList.add('pw-select-mode');
+      document.getElementById('btnSelectMode')?.classList.add('active');
+    }
+    // Select every currently-visible card (respects status-pill + search filter).
+    document.querySelectorAll('.dc:not(.dc-add)').forEach(c => {
+      if (c.style.display === 'none') return;
+      const did = c.id.replace('dp-','');
+      _selectedDids.add(did);
+    });
+    _refreshAllCardSelVisuals();
+    _refreshAllGroupSelVisuals();
+    _updateBulkBar();
+  }
+  // Esc — exit select mode. Only on Devices tab and only when no modal is
+  // open (modals have their own Esc close handlers that we shouldn't steal).
+  if(e.key==='Escape'&&activeMainTab==='devices'&&!isInput&&_selectMode){
+    const anyModal = document.querySelector('.mo');
+    if (!anyModal) _exitSelectMode();
   }
 });
 

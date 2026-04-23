@@ -619,12 +619,13 @@ function _ipamOpenEdit() {
   if (!sub) return;
   closeM('ipam-edit-modal');
 
-  const adChecked    = !!(sub.auto_discover | 0);
-  const firstPending = !!(sub.auto_discover | 0) && !(sub.first_scan_approved | 0) && !sub.last_auto_scan_ts;
-  const lastScanStr  = sub.last_auto_scan_ts || '—';
+  const adChecked   = !!(sub.auto_discover | 0);
+  const alreadyHadFirstScan = !!(sub.first_scan_approved | 0) || !!sub.last_auto_scan_ts;
+  const lastScanStr = sub.last_auto_scan_ts || '—';
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'ipam-edit-modal';
+  o.dataset.adApprove = '0';
   _overlayClose(o, () => closeM('ipam-edit-modal'));
   o.innerHTML = `
     <div class="mbox" style="width:min(95vw,520px)">
@@ -659,6 +660,18 @@ function _ipamOpenEdit() {
             plus any services the Port Scanner detects. Global cadence + safety rails
             live in Settings → 📡 Auto-Discovery.
           </div>
+          <div id="ipam-ad-confirm" class="ipam-ad-confirm" style="display:${(!adChecked || alreadyHadFirstScan)?'none':'flex'}">
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px">⚠ First-scan cap applies</div>
+            <div class="fh">Up to the configured cap of new devices will be auto-added on the first scan.
+            Hosts you later delete won't be re-added automatically.</div>
+            <button class="btn-p" id="ipam-ad-confirm-btn" style="margin-top:8px;align-self:flex-start">
+              Got it — Enable Auto-Discovery
+            </button>
+          </div>
+          <div id="ipam-ad-size-warn" class="ipam-ad-confirm" style="display:none;border-color:var(--warn-border);background:var(--warn-bg)">
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px">⏱ Large subnet — scan may exceed deadline</div>
+            <div class="fh" id="ipam-ad-size-warn-msg"></div>
+          </div>
           <div class="fr">
             <label class="fl">DNS server <span class="fh" style="margin-left:6px">(optional)</span></label>
             <input type="text" id="ipam-edit-dns" value="${esc(sub.dns_server||'')}"
@@ -671,11 +684,6 @@ function _ipamOpenEdit() {
           </div>
           <div class="ipam-edit-meta">
             Last auto-scan: <strong>${esc(String(lastScanStr))}</strong>
-            ${firstPending ? `<div style="margin-top:6px">
-              <span style="color:var(--warn)">⚠ First-scan pending</span> —
-              <button class="btn-s" onclick="_ipamApproveFirstScan()">Approve first scan</button>
-              <div class="fh" style="margin-top:4px">Overrides the first-scan cap once for this subnet.</div>
-            </div>` : ''}
           </div>
         </div>
 
@@ -686,6 +694,60 @@ function _ipamOpenEdit() {
       </div>
     </div>`;
   document.body.appendChild(o);
+
+  const adCb      = o.querySelector('#ipam-edit-ad');
+  const adConfirm = o.querySelector('#ipam-ad-confirm');
+  const adConfBtn = o.querySelector('#ipam-ad-confirm-btn');
+  const adSizeWarn = o.querySelector('#ipam-ad-size-warn');
+  const adSizeMsg  = o.querySelector('#ipam-ad-size-warn-msg');
+  const saveBtn   = o.querySelector('#ipam-edit-save');
+
+  // Threshold: /20 = 4096 hosts. Default 300s deadline starts to feel tight
+  // around here; /16 will almost certainly time out on real networks.
+  const _SIZE_WARN_PREFIX = 20;
+  const prefix = parseInt(String(sub.cidr || '').split('/')[1], 10);
+  const isV4   = !String(sub.cidr || '').includes(':');
+  const showSizeWarn = isV4 && Number.isFinite(prefix) && prefix <= _SIZE_WARN_PREFIX;
+  if (showSizeWarn && adSizeMsg) {
+    const hosts = Math.pow(2, 32 - prefix);
+    adSizeMsg.textContent =
+      `This subnet has ${hosts.toLocaleString()} addresses. The default scan ` +
+      `deadline (5 min) may not be enough — scans that exceed it are abandoned ` +
+      `and no devices are added. Consider raising auto_discover_scan_deadline_s ` +
+      `in Settings → Retention, or splitting this into smaller blocks (e.g. /24s).`;
+  }
+
+  function _syncConfirm() {
+    const checked = adCb.checked;
+    if (!checked || alreadyHadFirstScan) {
+      adConfirm.style.display = 'none';
+      o.dataset.adApprove = '0';
+      if (saveBtn) saveBtn.disabled = false;
+    } else {
+      adConfirm.style.display = 'flex';
+      o.dataset.adApprove = '0';
+      if (saveBtn) saveBtn.disabled = true;
+    }
+    if (adSizeWarn) {
+      adSizeWarn.style.display = (checked && showSizeWarn) ? 'flex' : 'none';
+    }
+  }
+
+  if (adCb) adCb.addEventListener('change', _syncConfirm);
+  // Initial sync — show warning if AD is already on for a large subnet.
+  _syncConfirm();
+
+  if (adConfBtn) {
+    adConfBtn.addEventListener('click', () => {
+      o.dataset.adApprove = '1';
+      adConfirm.style.display = 'none';
+      if (saveBtn) saveBtn.disabled = false;
+    });
+  }
+
+  // Pre-migration state: auto_discover already on but cap never approved — gate save
+  if (adChecked && !alreadyHadFirstScan && saveBtn) saveBtn.disabled = true;
+
   const inp = o.querySelector('#ipam-edit-name');
   if (inp) {
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') _ipamSaveEdit(); });
@@ -700,11 +762,13 @@ async function _ipamSaveEdit() {
   const btn = document.getElementById('ipam-edit-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
+  const modal = document.getElementById('ipam-edit-modal');
   const body = {
     name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
     auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
     dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
   };
+  if (modal?.dataset.adApprove === '1') body.approve_first_scan = 1;
 
   try {
     const r = await fetch(`/api/ipam/subnets/${_ipamSelectedId}`, {
@@ -728,25 +792,6 @@ async function _ipamSaveEdit() {
   }
 }
 
-async function _ipamApproveFirstScan() {
-  if (!_ipamSelectedId) return;
-  try {
-    const r = await fetch(
-      `/api/auto-discovery/subnet/${_ipamSelectedId}/approve-first-scan`,
-      { method: 'POST' }
-    );
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      toast(d.error || 'Approve failed', 'err');
-      return;
-    }
-    toast('First scan approved — next tick will ignore the cap', 'ok');
-    closeM('ipam-edit-modal');
-    await _ipamLoadSubnets();
-  } catch {
-    toast('Network error', 'err');
-  }
-}
 
 // ── Remove subnet ──────────────────────────────────────────────────────────
 function _ipamRemoveSubnet() {

@@ -48,7 +48,7 @@ _RE_PREVIEW       = re.compile(r"^/api/reports/preview$")
 _RE_TEST_SEND     = re.compile(r"^/api/reports/test-send$")
 
 
-_VALID_KINDS   = {"executive", "technical", "inventory", "custom"}
+_VALID_KINDS   = {"executive", "technical", "inventory", "anomaly", "custom"}
 _VALID_FREQS   = {"daily", "weekly", "monthly", "quarterly"}
 _VALID_PERIODS = {"last_7d", "last_30d", "last_90d", "last_month",
                   "last_quarter", "last_year", "month_to_date"}

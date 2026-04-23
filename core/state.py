@@ -553,6 +553,42 @@ def _send_webhook(url: str, payload: dict):
         log.warning(f"Webhook failed ({url}): {e}")
 
 
+# ── Webhook dispatcher queue ──────────────────────────────────────────
+# Flap events used to spawn a fresh daemon thread per dispatch. During a
+# flap storm (e.g. uplink drop, many sensors going DOWN together) that
+# pattern could accumulate hundreds of threads. A single dispatcher thread
+# + bounded queue caps concurrency and makes overload observable.
+_WEBHOOK_Q: "queue.Queue" = queue.Queue(maxsize=100)
+_WEBHOOK_DISPATCHER_STARTED = False
+_WEBHOOK_LOCK = threading.Lock()
+
+
+def _webhook_dispatcher_loop():
+    from core.logger import log as _log
+    while True:
+        url, payload = _WEBHOOK_Q.get()
+        try:
+            _send_webhook(url, payload)
+        except Exception as _e:
+            _log.warning(f"Webhook dispatcher error: {_e}")
+
+
+def _enqueue_webhook(url: str, payload: dict):
+    """Enqueue a flap event for webhook delivery. When saturated (queue full),
+    drops the new event and logs a WARN so operators can see overload."""
+    global _WEBHOOK_DISPATCHER_STARTED
+    from core.logger import log as _log
+    with _WEBHOOK_LOCK:
+        if not _WEBHOOK_DISPATCHER_STARTED:
+            threading.Thread(target=_webhook_dispatcher_loop, daemon=True,
+                             name="pw-webhook").start()
+            _WEBHOOK_DISPATCHER_STARTED = True
+    try:
+        _WEBHOOK_Q.put_nowait((url, payload))
+    except queue.Full:
+        _log.warning(f"Webhook queue full (cap=100), dropping event for {url}")
+
+
 class MonitorState:
     def __init__(self):
         self._lock            = threading.RLock()
@@ -567,6 +603,30 @@ class MonitorState:
         # Bumped on every alert profile/template write — sensors compare this
         # to their cached _resolved_profile_ver to know when to re-resolve.
         self._profile_cache_ver = 0
+
+    def get_runtime_snapshot(self) -> dict:
+        """Cheap read-only snapshot for the Diagnostics tab. No locks held
+        beyond brief peeks — values are best-effort.
+        """
+        try:
+            heap_len = len(self._scheduler._heap)
+            tomb_len = len(self._scheduler._tombstones)
+        except Exception:
+            heap_len = tomb_len = 0
+        try:
+            sse_count = len(self._sse)
+        except Exception:
+            sse_count = 0
+        try:
+            worker_max = self._executor._max_workers
+        except Exception:
+            worker_max = 0
+        return {
+            "scheduler_heap":       heap_len,
+            "scheduler_tombstones": tomb_len,
+            "sse_listeners":        sse_count,
+            "worker_max":           worker_max,
+        }
 
     def _next_did(self):
         self._did_ctr += 1
@@ -825,7 +885,40 @@ class MonitorState:
                                      "msg": f"[START] {s.name} on {s.host}", "type": "info"})
 
         dev = self.devices.get(did)   # re-fetch (unprotected, Device is stable)
-        result = s.probe()
+        # Hard timeout guard: if s.probe() hangs (misbehaving stack, stuck DNS/TLS),
+        # run it on an orphan daemon thread and abandon it after a generous
+        # upper bound so the worker returns to the pool instead of staying pinned.
+        # Per-stype ceilings cover the worst well-behaved case for each probe:
+        #   - VMware:  SmartConnect caps at 60s (vmware/client.py), add metric fetch
+        #   - SMTP:    5-stage probe (connect/EHLO/STARTTLS/AUTH/MAILFROM) × timeout
+        #   - SSH/SFTP: paramiko auth + optional file stat/checksum can run long
+        # For fast probes (ping/tcp/http/dns/snmp/tls/banner/radius), their own
+        # internal timeouts finish long before the cap — it only triggers when
+        # the stack is truly stuck.
+        _PROBE_HARD_CAP_S = {
+            "vmware": 90, "smtp": 60, "ssh": 45, "sftp": 60,
+        }
+        _cap = max((s.timeout or 5) + 3, _PROBE_HARD_CAP_S.get(s.stype, 15))
+        _probe_result = [None]
+        def _probe_runner():
+            try:
+                _probe_result[0] = s.probe()
+            except Exception as _pe:
+                _probe_result[0] = {"ok": False, "ms": None,
+                                    "detail": f"probe crashed: {type(_pe).__name__}",
+                                    "value": None}
+        _pt = threading.Thread(target=_probe_runner, daemon=True,
+                               name=f"pw-probe-{did}-{sid}")
+        _pt.start()
+        _pt.join(timeout=_cap)
+        if _probe_result[0] is None:
+            log_sensors.warning(f"Probe hard-timeout ({_cap}s): "
+                                f"{dev.name if dev else did}/{s.name} "
+                                f"({s.host}) — worker released, orphan thread continues")
+            result = {"ok": False, "ms": None,
+                      "detail": "Probe exceeded hard timeout", "value": None}
+        else:
+            result = _probe_result[0]
         s.total += 1
         _ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _ts_float = time.time()
@@ -947,12 +1040,7 @@ class MonitorState:
                     _flap_cap = dict(flap_data)
                     _db_enqueue(lambda: db_log_flap(_flap_cap))
                     if dev.webhook_url:
-                        wh_url = dev.webhook_url
-                        threading.Thread(
-                            target=_send_webhook,
-                            args=(wh_url, _flap_cap),
-                            daemon=True,
-                        ).start()
+                        _enqueue_webhook(dev.webhook_url, _flap_cap)
                 s._alerted_down    = True
                 s._down_since_ts   = time.time()
 

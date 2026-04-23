@@ -667,7 +667,16 @@ def _decode_resp(msg) -> str:
 
 
 _SFTP_LEVELS = ("open", "list", "stat", "checksum")
-_SFTP_CHECKSUM_MAX_BYTES = 10 * 1024 * 1024   # 10 MB hard cap
+_SFTP_CHECKSUM_MAX_BYTES = 10 * 1024 * 1024   # 10 MB hard cap (fallback — overridden by setting `sftp_checksum_max_mb`)
+
+
+def _sftp_cap_bytes() -> int:
+    try:
+        import core.settings as _s
+        mb = max(1, min(500, int(_s.get("sftp_checksum_max_mb", 10) or 10)))
+        return mb * 1024 * 1024
+    except Exception:
+        return _SFTP_CHECKSUM_MAX_BYTES
 
 
 def _fmt_bytes(n: int) -> str:
@@ -770,14 +779,15 @@ def probe_sftp(host, port=22, user="", password="", private_key="",
                     "detail": f"stat {remote_path}: {_fmt_bytes(size)} ({ms}ms)",
                     "value": str(size)}
 
-        # Level 3: checksum (stream SHA256, cap at 10 MB)
+        # Level 3: checksum (stream SHA256, cap per setting)
+        _cap = _sftp_cap_bytes()
         try:
             # Pre-flight: fail fast if stat says the file is over the cap
             try:
                 st = sftp.stat(remote_path)
-                if int(getattr(st, "st_size", 0) or 0) > _SFTP_CHECKSUM_MAX_BYTES:
+                if int(getattr(st, "st_size", 0) or 0) > _cap:
                     return {"ok": False, "ms": None,
-                            "detail": f"checksum: file exceeds {_fmt_bytes(_SFTP_CHECKSUM_MAX_BYTES)} cap"}
+                            "detail": f"checksum: file exceeds {_fmt_bytes(_cap)} cap"}
             except IOError as e:
                 return {"ok": False, "ms": None,
                         "detail": f"checksum/stat: {str(e)[:100]}"}
@@ -789,9 +799,9 @@ def probe_sftp(host, port=22, user="", password="", private_key="",
                     if not chunk:
                         break
                     total += len(chunk)
-                    if total > _SFTP_CHECKSUM_MAX_BYTES:
+                    if total > _cap:
                         return {"ok": False, "ms": None,
-                                "detail": f"checksum: file exceeds {_fmt_bytes(_SFTP_CHECKSUM_MAX_BYTES)} cap"}
+                                "detail": f"checksum: file exceeds {_fmt_bytes(_cap)} cap"}
                     h.update(chunk)
         except IOError as e:
             return {"ok": False, "ms": None,

@@ -437,11 +437,13 @@ def handle(h, method, path, body):
             from vmware import vmware_discover_vms
             _vms = vmware_discover_vms(_host, _user, _pw, port=_port, verify_ssl=_vssl)
         except RuntimeError as e:
-            h._json(503, {"error": str(e)}); return True
+            log.warning(f"VMware discover RuntimeError for {_host}: {e}")
+            h._json(503, {"error": "VMware connection failed"}); return True
         except PermissionError:
             h._json(401, {"error": "Authentication failed"}); return True
         except ConnectionError as e:
-            h._json(502, {"error": str(e)}); return True
+            log.warning(f"VMware discover ConnectionError for {_host}: {e}")
+            h._json(502, {"error": "Cannot connect to vCenter"}); return True
         except Exception as e:
             log.error(f"VMware discovery error: {e}")
             h._json(500, {"error": "VMware connection failed"}); return True

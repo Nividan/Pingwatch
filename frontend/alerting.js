@@ -167,8 +167,19 @@ async function _alertingTplDelete(id, name) {
 // PROFILE EDITOR modal — PRTG-style 6-stage table
 // ═══════════════════════════════════════════════════════════════
 
-async function openProfileEditor(id, scopeDefaults = null) {
+// Cleanup wrapper: close the profile modal AND any open template picker
+// dropdown + its document-level click listener. Without this, closing the
+// modal while the picker is open leaves #_ap_picker_dd orphaned on body
+// and the capture-phase click listener registered on document.
+function _apCloseProfModal() {
+  document.getElementById('_ap_picker_dd')?.remove();
+  try { document.removeEventListener('click', _apPickerOutside, true); } catch (_) {}
+  _apCurrentPicker = null;
   closeM('alrt-prof-modal');
+}
+
+async function openProfileEditor(id, scopeDefaults = null) {
+  _apCloseProfModal();
   // Make sure templates are loaded for the picker
   if (!_alertTemplates.length) {
     try {
@@ -222,13 +233,13 @@ async function openProfileEditor(id, scopeDefaults = null) {
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'alrt-prof-modal';
-  _overlayClose(o, () => closeM('alrt-prof-modal'));
+  _overlayClose(o, () => _apCloseProfModal());
 
   o.innerHTML = `
     <div class="mbox alrt-editor-box">
       <div class="mhd">
         <div class="mttl">${prof ? '✏ Edit Alert Profile' : '＋ New Alert Profile'}</div>
-        <button class="mclose" onclick="closeM('alrt-prof-modal')">&#x2715;</button>
+        <button class="mclose" onclick="_apCloseProfModal()">&#x2715;</button>
       </div>
       <div class="mbdy alrt-editor-body">
         <div class="alrt-row3">
@@ -309,7 +320,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
       </div>
       <div class="mft">
         ${prof ? `<button class="btn-s alrt-del-btn" onclick="_alertingProfDelete(${prof.id},'${esc(prof.name).replace(/'/g, "&#39;")}')">Delete</button>` : ''}
-        <button class="btn-s" onclick="closeM('alrt-prof-modal')">Cancel</button>
+        <button class="btn-s" onclick="_apCloseProfModal()">Cancel</button>
         <button class="btn-p" id="ap-save-btn" onclick="_alertingSaveProfile()">Save Profile</button>
       </div>
     </div>`;
@@ -441,7 +452,7 @@ async function _alertingSaveProfile() {
   try {
     await api(method, path, payload);
     toast(isNew ? `Profile "${name}" created` : `Profile "${name}" updated`, 'ok');
-    closeM('alrt-prof-modal');
+    _apCloseProfModal();
     _alertingLoadProfiles();
   } catch (e) {
     toast(e.message || 'Save failed', 'err');
@@ -579,7 +590,12 @@ function _atCfgHtml(atype, cfg) {
           <option value="PUT"  ${cfg.method === 'PUT'  ? 'selected' : ''}>PUT</option>
         </select></div>
       <div class="fr"><label class="fl">Body template (optional, JSON or text)</label>
-        <textarea id="at-body" rows="4" placeholder='{"text":"{dname}/{sname} {event_type}"}'>${esc(cfg.body || '')}</textarea></div>`;
+        <textarea id="at-body" rows="4" placeholder='{"text":"{dname}/{sname} {event_type}"}'>${esc(cfg.body || '')}</textarea></div>
+      <div class="fr"><label class="fl" title="When notification batching is enabled, batch-aware receivers get one POST containing an array of alerts instead of N separate POSTs. Leave off if your receiver expects one alert per request (most Slack/Teams/generic hooks).">Batch-aware receiver</label>
+        <label style="display:flex;align-items:center;gap:8px;padding-top:6px">
+          <input type="checkbox" id="at-batch-aware" ${cfg.batch_aware ? 'checked' : ''}/>
+          <span style="font-size:12px;color:var(--text3)">Receiver can handle batched payloads (&#123; count, alerts: [...] &#125;)</span>
+        </label></div>`;
   }
   if (atype === 'syslog') {
     return `
@@ -631,6 +647,7 @@ async function _alertingSaveTemplate() {
     cfg.method = document.getElementById('at-method')?.value || 'POST';
     const body = (document.getElementById('at-body')?.value || '').trim();
     if (body) cfg.body = body;
+    if (document.getElementById('at-batch-aware')?.checked) cfg.batch_aware = true;
   } else if (atype === 'syslog') {
     const host = (document.getElementById('at-host')?.value || '').trim();
     if (host) cfg.host = host;

@@ -183,9 +183,9 @@ def handle(h, method, path, body):
             "snr_fail_after":    int(_settings.get("snr_fail_after",    2)),
             "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
             # Group B — event & history limits
-            "max_flaps_display": int(_settings.get("max_flaps_display", 20)),
-            "max_flap_entries":  int(_settings.get("max_flap_entries",  500)),
-            "max_trap_entries":  int(_settings.get("max_trap_entries",  500)),
+            "max_flaps_display": int(_settings.get("max_flaps_display", 50)),
+            "max_flap_entries":  int(_settings.get("max_flap_entries",  2000)),
+            "max_trap_entries":  int(_settings.get("max_trap_entries",  2000)),
             # Group C — security
             "login_fail_max":        int(_settings.get("login_fail_max",        5)),
             "login_fail_window":     int(_settings.get("login_fail_window",     60)),
@@ -277,6 +277,28 @@ def handle(h, method, path, body):
             "max_workers_executor_effective": _get_effective_workers(),
             # Group K — debug mode
             "debug_mode": int(_settings.get("debug_mode", 0) or 0),
+            # Group L — Retention tab: audit DB cap + log-file rotation
+            "audit_trim_cap":      int(_settings.get("audit_trim_cap",      50000) or 50000),
+            "log_main_max_mb":     int(_settings.get("log_main_max_mb",     10)    or 10),
+            "log_main_backups":    int(_settings.get("log_main_backups",    14)    or 14),
+            "log_sensors_max_mb":  int(_settings.get("log_sensors_max_mb",  20)    or 20),
+            "log_sensors_backups": int(_settings.get("log_sensors_backups", 5)     or 5),
+            "log_audit_days":      int(_settings.get("log_audit_days",      365)   or 365),
+            "log_backup_max_mb":   int(_settings.get("log_backup_max_mb",   5)     or 5),
+            "log_backup_backups":  int(_settings.get("log_backup_backups",  5)     or 5),
+            # Group M — per-feature tunables (SMTP / DB / Auto-Discovery / Sensors / Import)
+            "smtp_timeout_s":                int(_settings.get("smtp_timeout_s",                10)  or 10),
+            "pg_statement_timeout_s":        int(_settings.get("pg_statement_timeout_s",        30)  or 30),
+            "pg_pool_acquire_timeout_s":     int(_settings.get("pg_pool_acquire_timeout_s",     30)  or 30),
+            "auto_discover_scan_deadline_s": int(_settings.get("auto_discover_scan_deadline_s", 300) or 300),
+            "sftp_checksum_max_mb":          int(_settings.get("sftp_checksum_max_mb",          10)  or 10),
+            "import_max_payload_mb":         int(_settings.get("import_max_payload_mb",         8)   or 8),
+            # Alert notification batching — collapses bursts of email/webhook
+            # alerts into a single combined notification per recipient+severity.
+            # Does NOT affect syslog, browser SSE, or internal event records.
+            "alert_batch_enabled":  str(_settings.get("alert_batch_enabled", "1")).strip() == "1",
+            "alert_batch_window_s": int(_settings.get("alert_batch_window_s", 60) or 60),
+            "alert_batch_max_size": int(_settings.get("alert_batch_max_size", 20) or 20),
         })
         return True
 
@@ -501,6 +523,34 @@ def handle(h, method, path, body):
                     h._json(400, {"error": f"{_k} must be an integer"}); return True
                 _settings.load({_k: _v})
                 _db_enqueue(lambda _k=_k, _v=_v: db_save_settings({_k: str(_v)}))
+        # Retention tab — audit DB cap + log-file rotation knobs
+        for _k, _min, _max in [
+            ("audit_trim_cap",      1000, 1_000_000),
+            ("log_main_max_mb",     1,    500),
+            ("log_main_backups",    1,    100),
+            ("log_sensors_max_mb",  1,    500),
+            ("log_sensors_backups", 1,    100),
+            ("log_audit_days",      7,    3650),
+            ("log_backup_max_mb",   1,    500),
+            ("log_backup_backups",  1,    100),
+            # Per-feature tunables
+            ("smtp_timeout_s",                 2,    120),
+            ("pg_statement_timeout_s",         5,    600),
+            ("pg_pool_acquire_timeout_s",      5,    120),
+            ("auto_discover_scan_deadline_s", 30,   3600),
+            ("sftp_checksum_max_mb",           1,    500),
+            ("import_max_payload_mb",          1,    100),
+            # Alert batching — window 5s-1h, max size 2-500
+            ("alert_batch_window_s",           5,    3600),
+            ("alert_batch_max_size",           2,    500),
+        ]:
+            if _k in body:
+                try:
+                    _v = max(_min, min(_max, int(body[_k])))
+                except (ValueError, TypeError):
+                    h._json(400, {"error": f"{_k} must be an integer"}); return True
+                _settings.load({_k: _v})
+                _db_enqueue(lambda _k=_k, _v=_v: db_save_settings({_k: str(_v)}))
         if "max_workers_executor" in body:
             try:
                 _mw_raw = int(body["max_workers_executor"])
@@ -516,6 +566,10 @@ def handle(h, method, path, body):
             _db_enqueue(lambda _v=_dm: db_save_settings({"debug_mode": _v}))
             from core.logger import set_debug_mode
             set_debug_mode(_dm == "1")
+        if "alert_batch_enabled" in body:
+            _abe = "1" if body["alert_batch_enabled"] else "0"
+            _settings.load({"alert_batch_enabled": _abe})
+            _db_enqueue(lambda _v=_abe: db_save_settings({"alert_batch_enabled": _v}))
         _changes = '; '.join(
             f"{k}: {_old_vals.get(k, '')} → {'***' if k in _MASKED_KEYS else str(body[k])}"
             for k in body

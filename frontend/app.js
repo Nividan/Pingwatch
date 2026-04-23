@@ -973,6 +973,12 @@ async function _logBadgeInit() {
     if (!r.ok) return;
     const d = await r.json();
     _logBadgeTotal = d.total || 0;
+    // Server counter resets to 0 on every process restart, but localStorage
+    // `logBadgeSeen` persists. If the saved `seen` exceeds the fresh total,
+    // the badge would be permanently stuck at 0 unseen. Detect the restart
+    // (seen > total) and reset the watermark so new warnings show up again.
+    const seen = parseInt(_lsGet('logBadgeSeen') || '0', 10);
+    if (seen > _logBadgeTotal) _lsSet('logBadgeSeen', '0');
     _updateLogBadge();
   } catch (_) {}
 }
@@ -1570,6 +1576,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _logsInit==='function') _logsInit();
+    // Mark the "new log entries" badge as seen — the user is now looking at
+    // the Logs tab, so anything pending is being read. Without this, the
+    // badge only cleared when the user clicked the badge itself (not when
+    // navigating to the tab via the sidebar).
+    _lsSet('logBadgeSeen', String(_logBadgeTotal));
+    _updateLogBadge();
   } else {
     const hasDevices=Object.keys(S.devices).length>0;
     document.getElementById('devActBar').style.display='';
@@ -1672,7 +1684,7 @@ async function loadAll(){
   // Fetch settings early to configure globals
   try {
     const _sr = await (await fetch('/api/settings')).json();
-    MAX_FLAPS = _sr.max_flaps_display || 20;
+    MAX_FLAPS = _sr.max_flaps_display || 50;
     window._lGood = _sr.latency_good_ms || 100;
     window._lWarn = _sr.latency_warn_ms || 300;
     window._snrDef = {

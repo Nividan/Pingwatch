@@ -44,8 +44,10 @@ Browser / Desktop GUI
         ├── monitoring/           ← Probes, alerting, topology, subnet discovery, license checking
         │   ├── probes.py              ← Sensor engine
         │   ├── subnet_discovery.py    ← Subnet scan engine (liveness, enrichment, dup detection)
+        │   ├── auto_discovery.py      ← Scheduled auto-discovery daemon (periodic subnet scan + auto-add)
         │   ├── alert_profile_engine.py ← PRTG-style profile evaluator (cascade, stage timing, dispatch)
         │   ├── alert_dispatchers.py   ← Reusable action dispatchers (email, webhook, syslog, browser)
+        │   ├── alert_batcher.py       ← Singleton + daemon flusher: combines bursts of email/webhook alerts
         │   ├── smtp_alert.py          ← SMTP helper and email rendering
         │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
         │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
@@ -125,9 +127,11 @@ pingwatch/
 ├── monitoring/
 │   ├── probes.py                ← All sensor probe types (ICMP, HTTP, TCP, TLS, SNMP, DNS, Banner, SMTP, SSH, SFTP, RADIUS)
 │   ├── subnet_discovery.py      ← Subnet scan engine (liveness + enrichment + duplicate detection)
+│   ├── auto_discovery.py        ← Scheduled auto-discovery daemon: periodic subnet scan, auto-add via create_devices_batch, suppressed-hosts list, first-scan cap, maintenance-window check
 │   ├── alert_profile_engine.py  ← PRTG-style profile evaluator (cascade resolution, stage timing, dispatch hook)
-│   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check
-│   ├── smtp_alert.py            ← SMTP connection helper and email rendering (used by alert_dispatchers)
+│   ├── alert_dispatchers.py     ← Reusable action dispatchers (email, webhook, syslog, browser push); SSRF guard; maintenance-window check; batched variants
+│   ├── alert_batcher.py         ← Cross-sensor notification batching: singleton + daemon flusher; fail-safe passthrough on any error
+│   ├── smtp_alert.py            ← SMTP connection helper and email rendering (single + batched templates)
 │   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
 │   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
 │   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
@@ -199,8 +203,10 @@ pingwatch/
 │   ├── radius.py           ← RADIUS settings, test connection, test auth, attribute mappings
 │   ├── ipam.py             ← IPAM subnet & IP allocation API
 │   ├── discovery.py        ← Subnet discovery scan + bulk device add
+│   ├── auto_discovery.py   ← Auto-discovery run-now, status, suppressed-host remove, first-scan approve
 │   ├── licenses.py         ← Device license CRUD + expiration check trigger
-│   └── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
+│   ├── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
+│   └── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -215,7 +221,7 @@ pingwatch/
     ├── backups.js          ← Backup table, config viewer, diff, rollback
     ├── forms-device.js     ← Add/edit device form
     ├── forms-sensor.js     ← Add/edit sensor form
-    ├── forms-settings.js   ← Settings modal (10 tabs)
+    ├── forms-settings.js   ← Settings modal (13 tabs — General, Retention, Users, Groups, Integrations, Database, Reports, Sensors, Networking, Certificates, Config Backup, Auto-Discovery, Alert Profiles)
     ├── forms-users.js      ← User management
     ├── forms-ldap.js       ← LDAP/AD settings modal
     ├── forms-radius.js     ← RADIUS settings modal, attribute mapping table, test auth dialog
@@ -260,6 +266,12 @@ In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe 
 
 `Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. Only active (running, non-muted) sensors contribute — stopped sensors are excluded so a fully-stopped device shows `"unknown"` (gray) rather than `"down"`. `stop_device()` broadcasts an SSE `device_status` event immediately after stopping all sensors and auto-resolves open flap events via `db_resolve_flaps_by_sensor()` so the Events tab clears without manual intervention.
 
+**Probe hard-timeout guard.** `_run_once()` does not call `s.probe()` directly — it spawns a daemon thread (`pw-probe-{did}-{sid}`) and `join()`s with a `(s.timeout or 5) + 3` ceiling. If the join times out, the worker returns to the executor pool immediately with `{"ok": False, "detail": "Probe exceeded hard timeout"}` and emits a `log_sensors.warning(...)`; the orphan probe thread continues until its own internal socket/DNS timeout fires. This bounds the damage a misbehaving probe stack (stuck TLS read, hung DNS resolution) can do to the fixed 64-worker pool.
+
+**Webhook dispatcher queue.** Flap-down webhooks go through module-level `_enqueue_webhook(url, payload)` which drops onto `_WEBHOOK_Q: queue.Queue(maxsize=100)` and a single lazily-started `pw-webhook` dispatcher thread. `_send_webhook()` itself remains the worker (SSRF guard + 5 s `urlopen` timeout); the queue caps concurrency during flap storms so one slow webhook endpoint can't fork hundreds of daemon threads. Saturation is observable (`Webhook queue full (cap=100), dropping event for ...` WARN).
+
+**Shutdown ordering.** `server.py::main()` calls `STATE._executor.shutdown(wait=False)` early to let other teardown (writer drain, scheduler stops) run in parallel, then a final `shutdown(wait=True)` barrier immediately before `pg_close_pool()`. Without the second barrier, a probe that had cleared its `s.running` guard could still run through the alert-engine path (e.g. `db_get_stage_state`) and hit the pool mid-close with `InterfaceError: cursor already closed`. The alert batcher needs the same ordering: its `shutdown()` is async (signals an event; drain happens on the flusher thread or via atexit), so `monitoring.alert_batcher.shutdown_sync()` was added to drain in-process *before* the pool close. Both calls are idempotent — subsequent atexit runs are no-ops.
+
 ### `core/constants.py`
 Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
 
@@ -267,7 +279,9 @@ Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_
 Server-side input validation helpers used by route handlers before persisting user-supplied values. Functions: `validate_port(v)`, `validate_host(v)`, `validate_interval(v)`, `validate_timeout(v)`, `validate_name(v, max_len)`. Each returns `(value, None)` on success or `(None, "error message")` on failure.
 
 ### `core/auth.py`
-Authentication and session management. PBKDF2-SHA256 password hashing, RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for `auth_type='ldap'` users and to `core/radius_auth.py` for `auth_type='radius'` users.
+Authentication and session management. PBKDF2-SHA256 password hashing (600 000 iterations, OWASP 2023 minimum), RBAC roles (`viewer` / `operator` / `admin`), session store, domain-prefix stripping. Branches to `core/ldap_auth.py` for `auth_type='ldap'` users and to `core/radius_auth.py` for `auth_type='radius'` users.
+
+Hashes are stored as `"iters:salt:hex"` (self-describing, so future cost bumps don't require a migration). Legacy 2-part `"salt:hex"` entries still verify at 200k. On successful local login, `_maybe_rehash()` transparently re-hashes any below-target stored value at the current iteration count — failures are non-fatal so the login still proceeds.
 
 `radius_login_phase1(username, password)` starts a RADIUS login: on `Access-Accept` it calls `_radius_post_auth()` to resolve group/role from returned attributes, auto-provision the user if needed, and issue a session (skipping the built-in TOTP check when the RADIUS server itself issued an `Access-Challenge`). On `Access-Challenge` it stores the challenge in `_RADIUS_LOGIN_CTX` (120 s TTL) and returns `{radius_challenge: true, challenge_id, prompt}`. `radius_login_phase2(challenge_id, response)` continues the flow.
 
@@ -364,6 +378,17 @@ Interval read via `_get_interval_min()` from `auth_refresh_interval_min` setting
 ### `core/tls.py`
 TLS certificate management. RSA-2048 self-signed certificate generation (full X.509 subject + custom SANs), certificate discovery (DB → `certs/` → auto-generate), SSL context construction, expiry warnings (30-day threshold).
 
+### `monitoring/auto_discovery.py`
+Scheduled subnet-scanning daemon. Wraps the existing `subnet_discovery` pipeline and funnels results through `create_devices_batch` — no new scanner, no new dedup logic.
+
+**Public API:** `start_loop()`, `stop_loop()`, `trigger_run_now()`, `get_last_run_status()`.
+
+**`_tick()`** — acquires `_tick_lock` (prevents race with `trigger_run_now`); reads `auto_discover_enabled` and `auto_discover_paused`; checks `db_active_windows()` and `auto_discover_during_maint`; iterates IPAM subnets with `auto_discover=1` in `subnet_id` order; calls `_scan_subnet(cidr)` for each; accumulates totals; writes one `auto_discovery_tick` audit entry; updates `auto_discover_last_ts`.
+
+**`_scan_subnet(cidr)`** — calls `subnet_discovery.start_scan(cidr, skip_monitored=True, mode="full")`, polls until done, filters results through `_filter_suppressed()`, applies `_apply_first_scan_cap()` on the subnet's first scan (if `first_scan_approved=0` and live count > cap, aborts with an audit entry and returns `{status:"cap_hit"}`), builds device specs via `_build_device_specs()` (uses `_suggest_sensors()` for sensor guessing, reverse-DNS name via `auto_discover_use_ptr`), calls `create_devices_batch(specs, default_group=f"Discovery-{safe_cidr}")`, updates `subnets.last_auto_scan_ts`, optionally logs alert events (`auto_discover_alert_on_new`). Returns per-subnet stats `{found, added, suppressed, errors}`.
+
+**Thread lifecycle** — mirrors `backup/scheduler.py` and `core/auth_health.py`: `_stop` event for shutdown, `_wake` event for `trigger_run_now()`; loop body: `if enabled and not paused: _tick(); _stop.wait(interval_seconds)`. `stop_loop()` sets both events and joins; called from `server.py` shutdown alongside `stop_auth_refresh_loop`.
+
 ### `monitoring/subnet_discovery.py`
 Subnet discovery scan engine. Exposes `start_scan(cidr, skip_monitored, mode)`, `get_scan(scan_id)`, and `cancel_scan(scan_id)` as the public API. Scans run in a dedicated `ThreadPoolExecutor(64)` (`_SCAN_EXECUTOR`) isolated from `STATE._executor` so large scans cannot starve existing sensor probes.
 
@@ -411,8 +436,26 @@ When anomaly causes the `_threshold_state` transition to `"warn"`, the sensor se
 ### `monitoring/alert_dispatchers.py`
 Reusable action dispatchers extracted from the legacy rules engine: `_dispatch_email`, `_dispatch_webhook`, `_dispatch_syslog`, `_dispatch_browser`. Called by `alert_profile_engine._fire()` after building the standard `ctx` dict. Also houses `check_maintenance(ctx)` (maintenance-window suppression) and `_is_private_ip()` (SSRF guard for webhook targets).
 
+The unified `dispatch(atype, cfg, ctx)` router tries the `alert_batcher` first for email and webhook; on any batcher error it falls straight through to the per-event dispatcher (see `alert_batcher.py` for the fail-safe invariant). Syslog and browser always go direct — batching them would corrupt discrete log events / low-spam user pings. Two batched-flavour dispatchers — `dispatch_email_batch(cfg, batch_ctx)` and `dispatch_webhook_batch(cfg, batch_ctx)` — are called by the batcher when ≥2 items accumulated in a bucket before flush. `dispatch_webhook_batch` sends a single POST whose body is `{count, severity_counts, severity_label, window_start_ts, window_end_ts, alerts: [...]}` with `X-PingWatch-Batch: 1`; receivers opt in per template via `cfg["batch_aware"]=true`.
+
+### `monitoring/alert_batcher.py`
+Cross-sensor notification batching for email and webhook channels. A singleton with three in-memory primitives: `_QUEUES: dict[bucket_key, list[QueueItem]]` (bucket key = `(channel, dest_key, severity)`), `_FLUSHER_STARTED` flag, and `_SHUTDOWN` `threading.Event`.
+
+- **Entry points** — `try_enqueue_email(cfg, ctx)` and `try_enqueue_webhook(cfg, ctx)` return **True** if the item was queued or **False** if the caller should immediately dispatch. Every enqueue is wrapped in try/except so a bug here can never silence alerts (top-level `dispatch()` falls through on False/exception).
+- **Destination keys** — `_email_dest_key(cfg)` resolves recipients via the existing `_resolve_email_recipients()` helper, sorts them, and appends the subject template so two profiles emailing the same address with different subject templates don't share a bucket. `_webhook_dest_key(cfg)` is just the URL.
+- **Settings re-read on every enqueue** — `alert_batch_enabled` / `alert_batch_window_s` / `alert_batch_max_size` read from `core.settings.get()` on each call. Live PATCH takes effect without restart. If settings fail to read, batcher fails closed to "disabled" (passthrough).
+- **Flusher** — lazy-started daemon thread that ticks every 5 seconds. Per-bucket flush condition: `len(items) >= max_size OR (now - items[0].ts) >= window`. Under lock, snapshot the to-flush list + pop from `_QUEUES`; dispatch outside the lock so a slow SMTP server doesn't stall enqueue.
+- **Single vs batch** — buckets that flush with exactly one item route through `_dispatch_single()` which calls the original per-event dispatcher (preserves pre-0.9.5 format). Multi-item buckets call `_dispatch_batch()` which invokes `dispatch_email_batch` / `dispatch_webhook_batch`.
+- **Last-resort fallback** — if a batched send raises, `_fallback_individual()` tries each item one-by-one. "Spam" > "silently dropped alerts".
+- **Shutdown** — `shutdown()` sets `_SHUTDOWN`; the flusher loop exits its wait and calls `_drain_all()` which synchronously flushes every remaining bucket. Registered via `atexit.register()` so graceful process exit drains; unclean crashes lose in-flight batches (events still live in `alert_events` / `flap_log`).
+- **Observability** — `get_stats()` returns `{buckets, queued_items, oldest_age_s, flusher_alive}` for future Diagnostics-tab wiring.
+
+Recoveries batch symmetrically with downs (same `(channel, dest, severity)` bucket keyed by `severity='recovery'`) — 12 downs → 1 email, 12 recoveries → 1 email. No separate "recovery-immediate" knob; the delay-s gate on the profile stage already filters transient blips before they reach the batcher.
+
 ### `monitoring/smtp_alert.py`
 SMTP connection helper and professional HTML email rendering. `_smtp_connect()` manages the server connection and TLS/auth handshake. The email template uses a PRTG-inspired layout: hero logo section (up to 2 MB, centered, company name below), colored status banner with timestamp, sensor breadcrumb path (Group > Device > Sensor), severity-tinted detail callout box, and a 4-section stats grid (Sensor Details, Performance, Thresholds, Statistics). Section builders (`_html_logo_section`, `_html_status_banner`, `_html_breadcrumb`, `_html_detail_box`, `_html_stats_grid`, `_html_footer`) compose the final HTML. Subject line uses configured company name. Rate-limits repeated SMTP failure logs (5-minute suppression per host). Used by `alert_dispatchers._dispatch_email`.
+
+**Batched template.** `_build_batch_html(batch_ctx)` + `send_rule_email_batch(to_addrs, subject_tpl, batch_ctx)` render a multi-event email (760 px wide, vs 580 px for single-alert) for notification batching. Top banner shows `N alerts (X critical, Y warning)` in the worst-severity colour; body is a striped table sorted critical → warning → info → recovery with per-row severity pill, device, sensor, event type, truncated detail (180 chars), and local-timezone timestamp. Plain-text fallback included.
 
 ### `monitoring/syslog_client.py`
 Non-blocking RFC 5424 forwarder. Daemon queue thread with 500-entry bounded queue — monitor threads never block. Settings re-read on every send; no restart needed to reconfigure.
@@ -463,7 +506,7 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 |--------|-----------|
 | `auth.py` | `/api/login`, `/api/login/totp`, `/api/logout`, `/api/me`, `/api/users`, `/api/me/password`, `/api/me/profile`, `/api/me/theme`, `/api/users/{u}/profile`, `/api/me/totp/setup`, `/api/me/totp/verify`, `/api/me/totp/disable`, `/api/me/totp/remember-hours`, `/api/me/trusted-devices`, `/api/me/trusted-devices/{id}`, `/api/users/{u}/totp/reset` |
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
-| `devices.py` | `/api/devices`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
+| `devices.py` | `/api/devices`, `/api/devices/bulk`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
 | `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats`, `/api/anomaly/bulk-enable` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
@@ -477,10 +520,12 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 | `radius.py` | `/api/radius/settings`, `/api/radius/test_connection`, `/api/radius/test_auth`, `/api/radius/test_auth_challenge`, `/api/radius/attribute_mappings` |
 | `saml.py` | `/api/saml/login`, `/api/saml/acs`, `/api/saml/metadata`, `/api/saml/settings`, `/api/saml/metadata/import`, `/api/saml/sp_cert/generate`, `/api/saml/test` |
 | `oidc.py` | `/api/oidc/login`, `/api/oidc/callback`, `/api/oidc/settings`, `/api/oidc/discovery/refresh`, `/api/oidc/test` |
-| `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}` |
+| `ipam.py` | `/api/ipam/subnets`, `/api/ipam/subnets/{id}`, `/api/ipam/subnets/{id}/ips`, `/api/ipam/ips/{subnet_id}/{ip}`, `/api/ipam/subnet/{id}/auto-discover` |
 | `discovery.py` | `/api/discovery/scan`, `/api/discovery/scan/{id}`, `/api/discovery/bulk-add` |
+| `auto_discovery.py` | `/api/auto-discovery/run-now`, `/api/auto-discovery/status`, `/api/auto-discovery/suppressed/{host}/remove`, `/api/auto-discovery/subnet/{id}/approve-first-scan` |
 | `licenses.py` | `/api/device/{did}/licenses`, `/api/license/{id}`, `/api/licenses`, `/api/licenses/summary`, `/api/licenses/check` |
 | `reports.py` | `/api/reports/templates`, `/api/reports/template`, `/api/reports/template/{id}`, `/api/reports/schedules`, `/api/reports/schedule`, `/api/reports/schedule/{id}`, `/api/reports/history`, `/api/reports/history/{id}`, `/api/reports/history/{id}/download`, `/api/reports/history/{id}/csv`, `/api/reports/history/bulk-delete`, `/api/reports/run`, `/api/reports/preview`, `/api/reports/test-send` |
+| `diagnostics.py` | `/api/diagnostics/snapshot`, `/api/diagnostics/db-stats`, `/api/diagnostics/recent-errors`, `/api/diagnostics/probe`, `/api/diagnostics/action/{vacuum\|clear-caches\|refresh-auth}`, `/api/diagnostics/test/ntp`, `/api/diagnostics/test/dns`, `/api/diagnostics/bundle` |
 
 ---
 
@@ -544,6 +589,17 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `report_footer_text` | text | Custom text shown in the PDF report footer (e.g. "Confidential — Internal Use Only") |
 | `report_brand_color` | `"#rrggbb"` | Accent colour used in the report cover page and headings (defaults to `#2f81f7`) |
 | `report_retention_days` | integer string | How many days to keep report history rows + PDF/CSV files on disk (default `"365"`) |
+| `audit_trim_cap` | integer string | Max `audit_log` rows kept; trimmed on each audit write (default `"50000"`; range 1 000–1 000 000) — Retention tab, live |
+| `log_main_max_mb` / `log_main_backups` | integer string | `pingwatch.log` rotation — size per file in MB (default `"10"`) and number of rotated backups kept (default `"14"`) — Retention tab, restart-required |
+| `log_sensors_max_mb` / `log_sensors_backups` | integer string | `pingwatchsensors.log` rotation — MB (default `"20"`) and backup count (default `"5"`) — restart-required |
+| `log_audit_days` | integer string | Daily-rotated `pingwatchaudit.log` — days of history kept (default `"365"`) — restart-required |
+| `log_backup_max_mb` / `log_backup_backups` | integer string | `pingwatchbackup.log` rotation — MB (default `"5"`) and backup count (default `"5"`) — restart-required |
+| `smtp_timeout_s` | integer string | SMTP socket timeout used by `monitoring/smtp_alert.py::_connect()` (default `"10"`, range 2–120) — live |
+| `pg_statement_timeout_s` | integer string | PostgreSQL `SET statement_timeout` applied to every pooled connection (default `"30"`, range 5–600) — live |
+| `pg_pool_acquire_timeout_s` | integer string | Max wait for a free pooled PG connection before `pg_conn()` raises (default `"30"`, range 5–120) — live |
+| `auto_discover_scan_deadline_s` | integer string | Max wall-clock per subnet scan in `auto_discovery._scan_subnet()` (default `"300"`, range 30–3600) — live |
+| `sftp_checksum_max_mb` | integer string | Largest file the SFTP `checksum` probe level will hash (default `"10"`, range 1–500) — live |
+| `import_max_payload_mb` | integer string | Body cap for `/api/import/*` endpoints (default `"8"`, range 1–100) — live |
 | `radius_enabled` | `"1"` / `"0"` | RADIUS authentication master toggle |
 | `radius_server` | str | Primary RADIUS host |
 | `radius_port` | integer string | Primary RADIUS port (default `"1812"`) |
@@ -568,6 +624,15 @@ Settings are stored as plain key/value TEXT rows. The in-memory cache (`core/set
 | `db_backup_remote_pass_enc` | str | Fernet-encrypted remote password |
 | `db_backup_remote_path` | str | Remote destination directory |
 | `db_backup_remote_share` | str | SMB share name (SMB only) |
+| `auto_discover_enabled` | `"1"` / `"0"` | Master on/off for the auto-discovery daemon (default `"0"` — disabled after upgrade) |
+| `auto_discover_paused` | `"1"` / `"0"` | Emergency pause: daemon keeps running but all scan ticks are skipped |
+| `auto_discover_interval_min` | integer string | Scan interval in minutes; allow-list 15/30/60/240/720/1440 (default `"60"`) |
+| `auto_discover_first_scan_cap` | integer string | Max devices to create on a subnet's first scan (default `"100"`; `"0"` disables the cap) |
+| `auto_discover_alert_on_new` | `"1"` / `"0"` | Emit one `alert_events` row (`event_type="device_auto_added"`) per new host (default `"0"`) |
+| `auto_discover_during_maint` | `"skip"` / `"run"` | Behaviour when an active maintenance window covers the tick time (default `"skip"`) |
+| `auto_discover_use_ptr` | `"1"` / `"0"` | Use reverse-DNS PTR record as device name; falls back to bare IP when absent (default `"1"`) |
+| `auto_discover_last_ts` | ISO-8601 string | Timestamp of the last successful tick (set by daemon; read by UI "Last run" indicator) |
+| `auto_discover_suppressed_hosts` | JSON list | `[{host, name, suppressed_at, suppressed_by}, …]`; FIFO-pruned at 500 entries; populated when an auto-discovered device is deleted |
 
 ---
 
@@ -630,6 +695,7 @@ The frontend is served as static files — no build step.
 | `GET` | `/api/devices/{did}` | Get device detail |
 | `PATCH` | `/api/devices/{did}` | Update device |
 | `DELETE` | `/api/devices/{did}` | Delete device |
+| `POST` | `/api/devices/bulk` | Bulk action across up to 1000 devices `{device_ids:[], action:"move"\|"start"\|"stop"\|"delete", group?:"…"}` → `{ok, applied, failed, results:[{did, ok, reason?}]}`; one audit entry per call; operator role |
 | `GET` | `/api/sensors/{did}` | List sensors for a device |
 | `POST` | `/api/sensors/{did}` | Add a sensor |
 | `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor (accepts `anomaly_enabled`, `anomaly_sensitivity`, `anomaly_min_samples`) |

@@ -1,0 +1,234 @@
+{# Anomaly Detection report sections — shared by anomaly.html and custom.html.
+
+   Each macro renders one section. They're standalone so the Custom report
+   can include any subset; the dedicated Anomaly report includes all six.
+
+   All macros assume `period`, `meta`, `inventory`, `charts` are in scope
+   (provided by the Jinja2 environment / build_report_context).
+#}
+
+{# ── 1. Coverage overview ───────────────────────────────────────────── #}
+{% macro anom_overview(o) %}
+<section class="section">
+  <h1>Anomaly detection coverage</h1>
+  <div class="two-col">
+    <div class="col">
+      <table class="kv">
+        <tr>
+          <th>Master switch</th>
+          <td class="{% if o.master_enabled %}up{% else %}crit{% endif %}">
+            {% if o.master_enabled %}● Enabled{% else %}○ Disabled (system-wide){% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Auto-enable on new sensors</th>
+          <td>{% if o.auto_new_sensors %}On{% else %}Off{% endif %}</td>
+        </tr>
+        <tr>
+          <th>Cold-start window</th>
+          <td>{{ o.cold_start_hours }} h before fires can trigger</td>
+        </tr>
+        <tr>
+          <th>Total sensors</th>
+          <td>{{ o.total_sensors }}</td>
+        </tr>
+        <tr>
+          <th>Eligible for anomaly detection</th>
+          <td>{{ o.eligible_total }}</td>
+        </tr>
+        <tr>
+          <th>Currently enabled</th>
+          <td class="up">{{ o.enabled_total }}</td>
+        </tr>
+        <tr>
+          <th>Eligible but disabled</th>
+          <td class="{% if o.disabled_eligible %}warn{% endif %}">{{ o.disabled_eligible }}</td>
+        </tr>
+        <tr>
+          <th>Coverage</th>
+          <td>{% if o.coverage_pct is not none %}<strong>{{ o.coverage_pct }}%</strong>{% else %}—{% endif %}</td>
+        </tr>
+      </table>
+    </div>
+    <div class="col">
+      <table class="data compact">
+        <thead><tr><th>Sensor type</th><th>Total</th><th>Eligible</th><th>Enabled</th></tr></thead>
+        <tbody>
+          {% for r in o.by_stype %}
+          <tr>
+            <td class="mono">{{ r.stype or '—' }}</td>
+            <td>{{ r.total }}</td>
+            <td>{{ r.eligible }}</td>
+            <td class="{% if r.enabled %}up{% else %}muted{% endif %}">{{ r.enabled }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted small">Eligible probe types: {{ o.supported_stypes | join(', ') }}.</p>
+    </div>
+  </div>
+</section>
+{% endmacro %}
+
+
+{# ── 2. Baseline learning state ─────────────────────────────────────── #}
+{% macro anom_baseline_table(rows) %}
+<section class="section">
+  <h1>Baseline learning state</h1>
+  {% if rows %}
+    <p class="muted small">Top {{ rows | length }} sensors by sample count. Std-dev is the EWMA learned variability — higher means more "normal" fluctuation, so anomaly threshold sits further out.</p>
+    <table class="data compact">
+      <thead>
+        <tr>
+          <th>Device</th><th>Sensor</th><th>Type</th>
+          <th>Mean</th><th>Std-dev</th><th>Samples</th><th>Sensitivity</th><th>Age</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.dname }}</td>
+          <td>{{ r.sname }}</td>
+          <td class="mono">{{ r.stype }}</td>
+          <td class="mono nowrap">{{ r.mean_ms }}&nbsp;ms</td>
+          <td class="mono nowrap">{{ r.stddev_ms }}&nbsp;ms</td>
+          <td>{{ r.samples }}</td>
+          <td class="mono">{{ {1:'strict',2:'balanced',3:'relaxed'}[r.sensitivity] | default(r.sensitivity) }}</td>
+          <td class="nowrap">{% if r.age_days is not none %}{{ r.age_days }}&nbsp;d{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No baselines learned yet — enable anomaly detection on a few sensors and let them collect samples.</p>
+  {% endif %}
+</section>
+{% endmacro %}
+
+
+{# ── 3. Anomaly fires log ───────────────────────────────────────────── #}
+{% macro anom_fires_log(fires) %}
+<section class="section">
+  <h1>Anomaly fires in this period</h1>
+  {% if charts.anom_fires_timeline %}
+    <img class="chart" src="{{ charts.anom_fires_timeline }}" alt="Anomaly fires timeline">
+  {% endif %}
+  {% if fires %}
+    <p class="muted small">{{ fires | length }} anomaly_warn event(s) over {{ period.days }} days.</p>
+    <table class="data compact">
+      <thead><tr><th>When</th><th>Device</th><th>Sensor</th><th>Type</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for f in fires %}
+        <tr>
+          <td class="mono">{{ f.ts | datefmt('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ f.dname }}</td>
+          <td>{{ f.sname }}</td>
+          <td class="mono">{{ f.stype }}</td>
+          <td class="muted small">{{ f.detail or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No anomaly fires recorded in this period — quiet network, or anomaly detection isn't enabled on enough sensors.</p>
+  {% endif %}
+</section>
+{% endmacro %}
+
+
+{# ── 4. Top noisy anomaly sensors ───────────────────────────────────── #}
+{% macro anom_fires_top(rows) %}
+<section class="section">
+  <h1>Top sensors by anomaly fires</h1>
+  {% if rows %}
+    <p class="muted small">If a sensor here fires repeatedly without operator action, consider lowering its sensitivity (strict→balanced→relaxed) or disabling anomaly on that sensor.</p>
+    <table class="data compact">
+      <thead><tr><th>Device</th><th>Sensor</th><th>Type</th><th>Fires</th><th>Last fired</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.dname }}</td>
+          <td>{{ r.sname }}</td>
+          <td class="mono">{{ r.stype }}</td>
+          <td class="warn">{{ r.count }}</td>
+          <td class="mono">{{ r.last_ts | datefmt('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No anomaly fires to rank.</p>
+  {% endif %}
+</section>
+{% endmacro %}
+
+
+{# ── 5. Anomaly vs threshold donut ──────────────────────────────────── #}
+{% macro anom_vs_threshold(split) %}
+<section class="section">
+  <h1>Warning source split</h1>
+  <div class="two-col two-col-chart">
+    <div class="col">
+      <table class="kv">
+        <tr>
+          <th>Warnings from anomaly engine</th>
+          <td>{{ split.anomaly_warn }}</td>
+        </tr>
+        <tr>
+          <th>Warnings from static threshold</th>
+          <td>{{ split.threshold_warn }}</td>
+        </tr>
+        <tr>
+          <th>Total warnings</th>
+          <td><strong>{{ split.total }}</strong></td>
+        </tr>
+        <tr>
+          <th>Anomaly contribution</th>
+          <td>{% if split.anomaly_pct is not none %}{{ split.anomaly_pct }}%{% else %}—{% endif %}</td>
+        </tr>
+      </table>
+      <p class="muted small">Critical events are excluded from this split — anomaly detection only ever fires WARN.</p>
+    </div>
+    <div class="col chart-col">
+      {% if charts.anom_vs_threshold_donut %}
+        <img class="chart" src="{{ charts.anom_vs_threshold_donut }}" alt="Anomaly vs threshold donut">
+      {% else %}
+        <p class="muted">Not enough warning events to chart.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endmacro %}
+
+
+{# ── 6. Recommendations ─────────────────────────────────────────────── #}
+{% macro anom_recommendations(rec) %}
+<section class="section">
+  <h1>Recommendations — sensors eligible but not enabled</h1>
+  {% if rec.total %}
+    <p>
+      <strong>{{ rec.total }}</strong> sensor(s) are eligible for anomaly detection
+      (probe types: ping/tcp/http/dns/http_keyword/banner) but don't have it enabled.
+      Enabling anomaly on these will catch slow degradations that static thresholds miss.
+      {% if rec.shown < rec.total %}
+        Showing the first {{ rec.shown }}; the full set is in the Settings → Sensors view.
+      {% endif %}
+    </p>
+    <table class="data compact">
+      <thead><tr><th>Device</th><th>Host</th><th>Sensor</th><th>Type</th></tr></thead>
+      <tbody>
+        {% for r in rec.rows %}
+        <tr>
+          <td>{{ r.dname }}</td>
+          <td class="mono">{{ r.host }}</td>
+          <td>{{ r.sname }}</td>
+          <td class="mono">{{ r.stype }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">All eligible sensors already have anomaly detection enabled. ✅</p>
+  {% endif %}
+</section>
+{% endmacro %}
