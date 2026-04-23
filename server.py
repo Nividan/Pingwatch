@@ -982,6 +982,16 @@ def main():
         stop_backup_scheduler()
     except Exception as e:
         log.warning(f"stop backup scheduler failed: {e}")
+    # Final drain of probe workers BEFORE closing the PG pool. The earlier
+    # `STATE._executor.shutdown(wait=False)` lets the rest of shutdown run in
+    # parallel, but a probe that cleared its `s.running` check continues
+    # through the alert-engine path (e.g. db_get_stage_state on alert_profile_state).
+    # Closing the pool while such a query is mid-flight raises
+    # "InterfaceError: cursor already closed".
+    try:
+        STATE._executor.shutdown(wait=True)
+    except Exception as e:
+        log.warning(f"executor final drain failed: {e}")
     if is_pg():
         from db.pg_pool import pg_close_pool
         pg_close_pool()
