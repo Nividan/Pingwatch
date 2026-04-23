@@ -266,6 +266,10 @@ In-memory runtime state. Holds all `Device` and `Sensor` objects, manages probe 
 
 `Device.status` property evaluates sensor states in priority order: any `alive=False` → `"down"`, any `_threshold_state="crit"` → `"down"`, any `_threshold_state="warn"` → `"warn"`, all `alive=True` → `"up"`. Only active (running, non-muted) sensors contribute — stopped sensors are excluded so a fully-stopped device shows `"unknown"` (gray) rather than `"down"`. `stop_device()` broadcasts an SSE `device_status` event immediately after stopping all sensors and auto-resolves open flap events via `db_resolve_flaps_by_sensor()` so the Events tab clears without manual intervention.
 
+**Probe hard-timeout guard.** `_run_once()` does not call `s.probe()` directly — it spawns a daemon thread (`pw-probe-{did}-{sid}`) and `join()`s with a `(s.timeout or 5) + 3` ceiling. If the join times out, the worker returns to the executor pool immediately with `{"ok": False, "detail": "Probe exceeded hard timeout"}` and emits a `log_sensors.warning(...)`; the orphan probe thread continues until its own internal socket/DNS timeout fires. This bounds the damage a misbehaving probe stack (stuck TLS read, hung DNS resolution) can do to the fixed 64-worker pool.
+
+**Webhook dispatcher queue.** Flap-down webhooks go through module-level `_enqueue_webhook(url, payload)` which drops onto `_WEBHOOK_Q: queue.Queue(maxsize=100)` and a single lazily-started `pw-webhook` dispatcher thread. `_send_webhook()` itself remains the worker (SSRF guard + 5 s `urlopen` timeout); the queue caps concurrency during flap storms so one slow webhook endpoint can't fork hundreds of daemon threads. Saturation is observable (`Webhook queue full (cap=100), dropping event for ...` WARN).
+
 ### `core/constants.py`
 Centralised probe and server constants: `PORT_MIN` / `PORT_MAX`, `PROBE_DEFAULT_INTERVAL`, `PROBE_DEFAULT_TIMEOUT`, `SENSOR_HISTORY_SIZE` (80 samples), `HISTORY_DEFAULT_MINUTES`, `SESSION_TTL_DEFAULT_SEC`. Import from here instead of scattering magic numbers across modules.
 
