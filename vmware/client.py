@@ -31,13 +31,58 @@ _HEALTH_CHECK_TIMEOUT_S = 5
 def _socket_timeout(seconds: float):
     """Temporarily set the default socket timeout for every socket opened
     inside the block. Restores the previous default in a finally so nested
-    users (e.g. discover-inside-polling) don't leak the override."""
+    users (e.g. discover-inside-polling) don't leak the override.
+
+    Caveat: only affects *newly-created* sockets. pyVmomi keeps an HTTPS
+    connection pool; sockets opened before this block ignore the change.
+    For a true hard cap, use `_run_with_timeout` below.
+    """
     prev = socket.getdefaulttimeout()
     socket.setdefaulttimeout(seconds)
     try:
         yield
     finally:
         socket.setdefaulttimeout(prev)
+
+
+def _run_with_timeout(label: str, fn, timeout_s: float):
+    """Run `fn()` in a daemon thread and raise ConnectionError if it doesn't
+    finish within `timeout_s` seconds.
+
+    Why this is needed: pyVmomi's SOAP stub maintains a persistent HTTPS
+    connection pool. Sockets in that pool inherit the default socket timeout
+    at the moment they were created — which for us is None (infinite) before
+    the first SmartConnect. `socket.setdefaulttimeout()` changes made inside
+    our discover function don't retroactively apply to those pooled sockets,
+    so `RetrieveContent()` / property iteration can still hang indefinitely.
+    Thread.join() is the only reliable hard cap without forking pyVmomi.
+
+    The daemon thread keeps running after timeout — it can't be forcibly
+    killed in Python. That's acceptable for a rare admin-invoked operation:
+    the stuck thread eventually returns (or dies with the process), and the
+    cached session is invalidated on exception so the next click starts
+    fresh rather than reusing the zombie.
+    """
+    result = {"val": None, "err": None, "done": False}
+
+    def _worker():
+        try:
+            result["val"] = fn()
+        except BaseException as e:
+            result["err"] = e
+        finally:
+            result["done"] = True
+
+    th = threading.Thread(target=_worker, daemon=True, name=f"pw-vmdisc-{label}")
+    th.start()
+    th.join(timeout=timeout_s)
+    if not result["done"]:
+        raise ConnectionError(
+            f"{label} timed out after {timeout_s}s — vCenter is slow or overloaded"
+        )
+    if result["err"] is not None:
+        raise result["err"]
+    return result["val"]
 
 # ---------------------------------------------------------------------------
 # Lazy import helper — pyvmomi is optional
@@ -231,43 +276,51 @@ def vmware_discover_vms(host, user, password, port=443, verify_ssl=False):
     _, _, vim, _ = _require_pyvmomi()
 
     t0 = time.monotonic()
+    # Force-fresh session — a zombie from a previously-hung discover click
+    # can linger in the cache with a dead underlying socket. Revive cleanly.
+    _invalidate_session(host, user)
     log.info(f"VMware discover VMs: starting ({host})")
-    try:
-        try:
-            si = _get_session(host, user, password, port, verify_ssl)
-        except (PermissionError, ConnectionError):
-            _invalidate_session(host, user)
-            raise
 
-        with _socket_timeout(_DISCOVER_TIMEOUT_S):
-            content = si.RetrieveContent()
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.VirtualMachine], recursive=True
-            )
-            vms = []
-            try:
-                for vm in view.view:
-                    try:
-                        cfg = vm.config
-                        rt  = vm.runtime
-                        vms.append({
-                            "vm_id":       vm._moId,
-                            "name":        vm.name or "",
-                            "power_state": str(rt.powerState) if rt else "unknown",
-                            "guest_os":    (cfg.guestFullName or cfg.guestId or "") if cfg else "",
-                            "num_cpu":     cfg.hardware.numCPU if cfg and cfg.hardware else 0,
-                            "memory_mb":   cfg.hardware.memoryMB if cfg and cfg.hardware else 0,
-                            "host_name":   (rt.host.name if rt and rt.host else ""),
-                        })
-                    except Exception:
-                        continue  # skip VMs we can't read
-            finally:
-                view.Destroy()
-    except socket.timeout:
-        log.warning(f"VMware discover VMs timed out after {_DISCOVER_TIMEOUT_S}s ({host})")
-        raise ConnectionError(
-            f"VM discovery timed out after {_DISCOVER_TIMEOUT_S}s — vCenter is slow or overloaded"
+    def _do():
+        log.debug(f"VMware discover VMs: connecting ({host})")
+        si = _get_session(host, user, password, port, verify_ssl)
+        log.debug(f"VMware discover VMs: session ok ({host})")
+        content = si.RetrieveContent()
+        log.debug(f"VMware discover VMs: content retrieved ({host})")
+        view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.VirtualMachine], recursive=True
         )
+        log.debug(f"VMware discover VMs: view created ({host})")
+        out = []
+        try:
+            for vm in view.view:
+                try:
+                    cfg = vm.config
+                    rt  = vm.runtime
+                    out.append({
+                        "vm_id":       vm._moId,
+                        "name":        vm.name or "",
+                        "power_state": str(rt.powerState) if rt else "unknown",
+                        "guest_os":    (cfg.guestFullName or cfg.guestId or "") if cfg else "",
+                        "num_cpu":     cfg.hardware.numCPU if cfg and cfg.hardware else 0,
+                        "memory_mb":   cfg.hardware.memoryMB if cfg and cfg.hardware else 0,
+                        "host_name":   (rt.host.name if rt and rt.host else ""),
+                    })
+                except Exception:
+                    continue  # skip VMs we can't read
+        finally:
+            view.Destroy()
+        return out
+
+    try:
+        vms = _run_with_timeout("discover-VMs", _do, _DISCOVER_TIMEOUT_S)
+    except ConnectionError as e:
+        log.warning(f"VMware discover VMs: {e} ({host})")
+        _invalidate_session(host, user)   # session may be zombied — don't reuse
+        raise
+    except (PermissionError,):
+        _invalidate_session(host, user)
+        raise
 
     vms.sort(key=lambda v: v["name"].lower())
     log.info(f"VMware discover VMs: found {len(vms)} in {(time.monotonic()-t0)*1000:.0f}ms ({host})")
@@ -287,46 +340,52 @@ def vmware_discover_hosts(host, user, password, port=443, verify_ssl=False):
     _, _, vim, _ = _require_pyvmomi()
 
     t0 = time.monotonic()
+    _invalidate_session(host, user)   # force-fresh — see rationale in vmware_discover_vms
     log.info(f"VMware discover Hosts: starting ({host})")
-    try:
-        try:
-            si = _get_session(host, user, password, port, verify_ssl)
-        except (PermissionError, ConnectionError):
-            _invalidate_session(host, user)
-            raise
 
-        with _socket_timeout(_DISCOVER_TIMEOUT_S):
-            content = si.RetrieveContent()
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.HostSystem], recursive=True
-            )
-            hosts = []
-            try:
-                for h in view.view:
-                    try:
-                        rt  = h.runtime
-                        hw  = h.summary.hardware if h.summary else None
-                        cfg = h.summary.config   if h.summary else None
-                        hosts.append({
-                            "host_id":          h._moId,
-                            "name":             h.name or "",
-                            "connection_state": str(rt.connectionState) if rt else "unknown",
-                            "cpu_model":        hw.cpuModel if hw else "",
-                            "cpu_count":        hw.numCpuPkgs if hw else 0,
-                            "cpu_cores":        hw.numCpuCores if hw else 0,
-                            "memory_mb":        int(hw.memorySize / (1024 * 1024)) if hw and hw.memorySize else 0,
-                            "num_vms":          len(h.vm) if h.vm else 0,
-                            "version":          (cfg.product.fullName if cfg and cfg.product else ""),
-                        })
-                    except Exception:
-                        continue
-            finally:
-                view.Destroy()
-    except socket.timeout:
-        log.warning(f"VMware discover Hosts timed out after {_DISCOVER_TIMEOUT_S}s ({host})")
-        raise ConnectionError(
-            f"Host discovery timed out after {_DISCOVER_TIMEOUT_S}s — vCenter is slow or overloaded"
+    def _do():
+        log.debug(f"VMware discover Hosts: connecting ({host})")
+        si = _get_session(host, user, password, port, verify_ssl)
+        log.debug(f"VMware discover Hosts: session ok ({host})")
+        content = si.RetrieveContent()
+        log.debug(f"VMware discover Hosts: content retrieved ({host})")
+        view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.HostSystem], recursive=True
         )
+        log.debug(f"VMware discover Hosts: view created ({host})")
+        out = []
+        try:
+            for h in view.view:
+                try:
+                    rt  = h.runtime
+                    hw  = h.summary.hardware if h.summary else None
+                    cfg = h.summary.config   if h.summary else None
+                    out.append({
+                        "host_id":          h._moId,
+                        "name":             h.name or "",
+                        "connection_state": str(rt.connectionState) if rt else "unknown",
+                        "cpu_model":        hw.cpuModel if hw else "",
+                        "cpu_count":        hw.numCpuPkgs if hw else 0,
+                        "cpu_cores":        hw.numCpuCores if hw else 0,
+                        "memory_mb":        int(hw.memorySize / (1024 * 1024)) if hw and hw.memorySize else 0,
+                        "num_vms":          len(h.vm) if h.vm else 0,
+                        "version":          (cfg.product.fullName if cfg and cfg.product else ""),
+                    })
+                except Exception:
+                    continue
+        finally:
+            view.Destroy()
+        return out
+
+    try:
+        hosts = _run_with_timeout("discover-Hosts", _do, _DISCOVER_TIMEOUT_S)
+    except ConnectionError as e:
+        log.warning(f"VMware discover Hosts: {e} ({host})")
+        _invalidate_session(host, user)
+        raise
+    except (PermissionError,):
+        _invalidate_session(host, user)
+        raise
 
     hosts.sort(key=lambda x: x["name"].lower())
     log.info(f"VMware discover Hosts: found {len(hosts)} in {(time.monotonic()-t0)*1000:.0f}ms ({host})")
@@ -346,46 +405,52 @@ def vmware_discover_datastores(host, user, password, port=443, verify_ssl=False)
     _, _, vim, _ = _require_pyvmomi()
 
     t0 = time.monotonic()
+    _invalidate_session(host, user)   # force-fresh — see rationale in vmware_discover_vms
     log.info(f"VMware discover Datastores: starting ({host})")
-    try:
-        try:
-            si = _get_session(host, user, password, port, verify_ssl)
-        except (PermissionError, ConnectionError):
-            _invalidate_session(host, user)
-            raise
 
-        with _socket_timeout(_DISCOVER_TIMEOUT_S):
-            content = si.RetrieveContent()
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder, [vim.Datastore], recursive=True
-            )
-            datastores = []
-            try:
-                for ds in view.view:
-                    try:
-                        summary = ds.summary
-                        capacity = int(summary.capacity or 0)
-                        free     = int(summary.freeSpace or 0)
-                        datastores.append({
-                            "ds_id":           ds._moId,
-                            "name":            summary.name or ds.name or "",
-                            "type":            summary.type or "",
-                            "capacity_bytes":  capacity,
-                            "free_bytes":      free,
-                            "capacity_gb":     round(capacity / 1024 ** 3, 1),
-                            "free_gb":         round(free / 1024 ** 3, 1),
-                            "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
-                            "accessible":      bool(summary.accessible),
-                        })
-                    except Exception:
-                        continue  # skip datastores we can't read
-            finally:
-                view.Destroy()
-    except socket.timeout:
-        log.warning(f"VMware discover Datastores timed out after {_DISCOVER_TIMEOUT_S}s ({host})")
-        raise ConnectionError(
-            f"Datastore discovery timed out after {_DISCOVER_TIMEOUT_S}s — vCenter is slow or overloaded"
+    def _do():
+        log.debug(f"VMware discover Datastores: connecting ({host})")
+        si = _get_session(host, user, password, port, verify_ssl)
+        log.debug(f"VMware discover Datastores: session ok ({host})")
+        content = si.RetrieveContent()
+        log.debug(f"VMware discover Datastores: content retrieved ({host})")
+        view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.Datastore], recursive=True
         )
+        log.debug(f"VMware discover Datastores: view created ({host})")
+        out = []
+        try:
+            for ds in view.view:
+                try:
+                    summary = ds.summary
+                    capacity = int(summary.capacity or 0)
+                    free     = int(summary.freeSpace or 0)
+                    out.append({
+                        "ds_id":           ds._moId,
+                        "name":            summary.name or ds.name or "",
+                        "type":            summary.type or "",
+                        "capacity_bytes":  capacity,
+                        "free_bytes":      free,
+                        "capacity_gb":     round(capacity / 1024 ** 3, 1),
+                        "free_gb":         round(free / 1024 ** 3, 1),
+                        "free_pct":        round((free / capacity) * 100, 1) if capacity else 0.0,
+                        "accessible":      bool(summary.accessible),
+                    })
+                except Exception:
+                    continue  # skip datastores we can't read
+        finally:
+            view.Destroy()
+        return out
+
+    try:
+        datastores = _run_with_timeout("discover-Datastores", _do, _DISCOVER_TIMEOUT_S)
+    except ConnectionError as e:
+        log.warning(f"VMware discover Datastores: {e} ({host})")
+        _invalidate_session(host, user)
+        raise
+    except (PermissionError,):
+        _invalidate_session(host, user)
+        raise
 
     datastores.sort(key=lambda d: d["name"].lower())
     log.info(f"VMware discover Datastores: found {len(datastores)} in {(time.monotonic()-t0)*1000:.0f}ms ({host})")
