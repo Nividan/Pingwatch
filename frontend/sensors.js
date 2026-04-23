@@ -392,16 +392,31 @@ function _vmNameFromSensor(s){
   return s.name||s.vmware_vm_id;
 }
 
-// Is this VM group a host-level group? Checks ALL sensors for this VM rather
-// than just the one triggering the _ensureVmGrp call — render order isn't
-// guaranteed, and picking host-ness from the first-rendered sensor means a
-// single VM-style metric (e.g. `on`) on a host can mislabel the whole group
-// as VM, breaking the Edit Metrics filter.
+// Entity type from VMware MoID prefix — authoritative.
+//   vm-*        → 'vm'        (VM_METRICS)
+//   host-*      → 'host'      (HOST_METRICS)
+//   datastore-* → 'datastore' (DATASTORE_METRICS)
+// The prefix is stable across vCenter versions and is what vmware/client.py
+// uses internally to dispatch probes, so driving UI off it matches backend
+// behaviour and can't produce cross-category nonsense like a datastore
+// metric attached to a VM MoID.
+function _vmEntityType(vmid) {
+  if (!vmid) return 'vm';
+  if (vmid.startsWith('host-')) return 'host';
+  if (vmid.startsWith('datastore-')) return 'datastore';
+  return 'vm';
+}
+
+function _metricCategory(metricKey) {
+  const v = metricKey || '';
+  if (v.startsWith('host_')) return 'host';
+  if (v.startsWith('dstore_')) return 'datastore';
+  return 'vm';
+}
+
+// Back-compat helper used by the card header — true when the MoID is a host.
 function _vmGrpIsHost(did, vmid) {
-  return Object.values(S.sensors || {}).some(s =>
-    s.device_id === did && s.stype === 'vmware' &&
-    s.vmware_vm_id === vmid &&
-    (s.vmware_metric || '').startsWith('host_'));
+  return _vmEntityType(vmid) === 'host';
 }
 
 function _ensureVmGrp(did,s){
@@ -529,22 +544,18 @@ async function openEditVmMetrics(did, vmid, vmName, isHost){
   const byMetric = {};
   for (const s of existing) byMetric[s.vmware_metric] = s;
 
-  // Trust the data over the caller's flag: if any sensor on this VM uses a
-  // host_* metric, treat the group as a host group. Avoids a mislabel when
-  // the caller derived isHost from a single (possibly VM-style) sensor.
-  if (existing.length) {
-    isHost = existing.some(s => (s.vmware_metric || '').startsWith('host_'));
-  }
+  // Entity type from the MoID prefix — vm-*, host-*, or datastore-*.
+  // Keep isHost in sync for the rest of the modal (button onclick, etc.).
+  const entityType = _vmEntityType(vmid);
+  isHost = entityType === 'host';
 
-  // Filter the catalogue to host_* or non-host_* depending on the group —
-  // but ALWAYS include metrics that are already monitored on this VM, so a
-  // mixed entity (e.g. a host with a stray `on` sensor) shows every existing
-  // checkbox correctly ticked. Adding a new metric is still scoped to the
-  // category so users don't accidentally attach VM metrics to a host.
+  // Filter the catalogue to the entity's category — avoids offering (for
+  // example) datastore metrics on a VM MoID, which would probe-fail with
+  // "Datastore vm-X not found". Any metric already monitored on this VM is
+  // always kept in the list so the checkbox shows its true on/off state.
   const visible = allMetrics.filter(m => {
     if (byMetric[m.v]) return true;
-    const isHostMetric = (m.v || '').startsWith('host_');
-    return isHost ? isHostMetric : !isHostMetric;
+    return _metricCategory(m.v) === entityType;
   });
 
   // Group by category for the layout (cpu / mem / disk / datastore / net / sys).
