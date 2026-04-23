@@ -605,25 +605,53 @@ function _clearEvtFilters() {
 
 // ── Group renderers (collapse view) ───────────────────────────────
 function _buildEvtGroupCard(g) {
-  const sev = _groupSeverity(g);
-  const label = _groupLabel(g);
-  const dispTime = g.ts ? (typeof fmtTs === 'function' ? fmtTs(g.ts) : g.ts) : '';
+  // Card mode: the group summary must replicate the exact visual rhythm of a
+  // regular card (top row · host · detail · date) so it reads as "a card
+  // that happens to expand" rather than a differently-shaped banner slot in
+  // between normal cards.
+  const sev       = _groupSeverity(g);
+  const shortLbl  = _groupLabelShort(g);
+
+  const memberTs  = g.events.map(x => new Date(x.ts).getTime()).filter(t => isFinite(t));
+  const spanSec   = memberTs.length >= 2 ? (Math.max(...memberTs) - Math.min(...memberTs)) / 1000 : 0;
+  const spanStr   = spanSec > 0 ? _fmtDuration(spanSec) : null;
+
+  const [date, time] = (g.ts || '').split(' ');
+  const dispTime = g.ts
+    ? (typeof fmtTs === 'function' ? fmtTs(g.ts) : (g.ts.split('T')[1] || time || g.ts))
+    : (time || '');
+  const dispDate = g.ts ? (g.ts.split('T')[0] || date || '') : (date || '');
+
+  const uniqSids = new Set(g.events.map(m => m.sid)).size;
+  const hostLine = g._groupType === 'flap'
+    ? (esc(g.host || ''))
+    : `${uniqSids} sensor${uniqSids === 1 ? '' : 's'} on ${esc(g.dname || '')}`;
+
   const inner = g.events.map(m => {
     const c = _buildEvtCard(m);
     c.classList.add('evt-group-inner-card');
     return c;
   });
+
   const row = document.createElement('div');
   row.className = 'evt-row evt-group-card';
   const det = document.createElement('details');
   det.className = 'evt-group';
-  det.innerHTML =
-    `<summary class="evt-group-summary">` +
+  const summary = document.createElement('summary');
+  summary.className = 'evt-group-summary';
+  summary.innerHTML =
+    '<div class="evt-top">' +
+      `<span class="evt-group-chevron">▸</span>` +
       `<span class="evt-sev-badge ${sev}">${_SEV_LABEL[sev] || sev.toUpperCase()}</span>` +
-      `<span class="evt-group-label">${label}</span>` +
+      `<div class="evt-name">${esc(g.dname || '')} · ${shortLbl}</div>` +
       `<span class="evt-group-count">${g.events.length} events</span>` +
-      `<span class="evt-time">${dispTime}</span>` +
-    `</summary>`;
+      (spanStr ? `<span class="evt-dur">${spanStr}</span>` : '') +
+      `<div class="evt-time">${dispTime}</div>` +
+    '</div>' +
+    `<div class="evt-host">${hostLine}</div>` +
+    `<div class="evt-detail">Burst of related events — click to expand</div>` +
+    `<div class="evt-time" style="padding-left:16px;font-size:12px;color:var(--text2)">${dispDate}</div>`;
+  det.appendChild(summary);
   const wrap = document.createElement('div');
   wrap.className = 'evt-group-detail';
   inner.forEach(c => wrap.appendChild(c));

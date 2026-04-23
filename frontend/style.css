@@ -2508,34 +2508,40 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .evt-collapse-tog{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer;padding:0 8px;white-space:nowrap;}
 .evt-collapse-tog input{margin:0;cursor:pointer;}
 
-/* Table-mode: summary row matches the 8-column regular row layout so the
-   eye doesn't have to re-orient. Gradient tint + chevron + count badge
-   mark it as a collapsible burst — no left accent bar, which would
-   duplicate information that the severity pill and count badge already
-   carry, and add visual noise to a dense table. */
-.evt-group-sum-row > td{background:linear-gradient(90deg,rgba(56,139,253,.07),transparent 40%);transition:background .15s;}
-.evt-group-sum-row:hover > td{background:linear-gradient(90deg,rgba(56,139,253,.14),transparent 40%);}
-.evt-group-sum-row.evt-group-open > td{background:linear-gradient(90deg,rgba(56,139,253,.12),transparent 40%);border-bottom:1px solid rgba(56,139,253,.25);}
+/* Table-mode: summary row matches the 8-column regular row layout and
+   looks identical to a regular row at rest — only the chevron and the
+   accent-coloured count badge say "this is a collapsible group". A
+   background tint would add a visible gradient band at the fade edge
+   and break the table's even rhythm. When expanded, a thin accent
+   underline separates it from the detail rows beneath. */
+.evt-group-sum-row{transition:background .15s;}
+.evt-group-sum-row:hover > td{background:rgba(255,255,255,.03);}
+.evt-group-sum-row.evt-group-open > td{border-bottom:1px solid rgba(56,139,253,.25);}
 .evt-group-sev-cell{white-space:nowrap;}
-.evt-group-chevron{color:var(--text3);font-size:11px;margin-right:6px;display:inline-block;user-select:none;transition:color .15s;}
-.evt-group-sum-row:hover .evt-group-chevron{color:var(--accent);}
+.evt-group-chevron{color:var(--text3);font-size:11px;margin-right:6px;display:inline-block;user-select:none;transition:transform .15s,color .15s;}
+.evt-group-sum-row:hover .evt-group-chevron,.evt-group:hover .evt-group-chevron{color:var(--accent);}
+.evt-group[open] > summary .evt-group-chevron{transform:rotate(90deg);color:var(--accent);}
 .evt-group-label{font-size:13px;font-weight:600;color:var(--text);}
 .evt-group-count{font-size:11px;color:var(--accent);padding:2px 8px;border:1px solid rgba(56,139,253,.35);border-radius:10px;background:rgba(56,139,253,.08);white-space:nowrap;font-weight:600;}
-.evt-group-det-row > td{padding:0 !important;background:rgba(56,139,253,.03);}
+.evt-group-det-row > td{padding:0 !important;}
 .evt-group-inner-table{width:100% !important;font-size:11px;}
 .evt-group-inner-table thead{display:none;}   /* parent table already shows the header — no need to repeat */
 .evt-group-inner-table tbody tr td{padding-left:32px !important;}   /* indent inner events so they clearly belong to the group */
 .evt-group-inner-table tbody tr:last-child td{border-bottom:none;}
 
-/* Card-mode grouping — still uses <details> since cards aren't columnar */
+/* Card-mode grouping — <details>/<summary> wrapper, but the summary replicates
+   the exact 4-line rhythm of _buildEvtCard (top · host · detail · date) so
+   it blends with the surrounding cards and only the chevron + count badge
+   mark it as expandable. */
 .evt-group{border:none;}
-.evt-group > summary{list-style:none;padding:10px 24px;cursor:pointer;display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,rgba(56,139,253,.06),transparent 60%);border-bottom:1px solid rgba(255,255,255,.04);transition:background .15s;user-select:none;}
+.evt-group > summary{list-style:none;padding:0;cursor:pointer;display:block;user-select:none;}
 .evt-group > summary::-webkit-details-marker{display:none;}
-.evt-group > summary::before{content:'▸';color:var(--text3);font-size:10px;margin-right:2px;transition:transform .15s;display:inline-block;}
-.evt-group[open] > summary::before{transform:rotate(90deg);}
-.evt-group > summary:hover{background:linear-gradient(90deg,rgba(56,139,253,.1),transparent 60%);}
-.evt-group-detail{padding:0 0 0 24px;background:var(--bg);border-left:2px solid rgba(56,139,253,.25);}
-.evt-group-inner-card{padding-left:20px !important;border-bottom:1px solid rgba(255,255,255,.03) !important;}
+.evt-group > summary:hover{background:rgba(255,255,255,.03);}
+.evt-group-card{padding:0 !important;}   /* the inner summary supplies its own 12/24 padding */
+.evt-group-card > details > summary{padding:12px 24px;}
+.evt-group[open] .evt-group-chevron{color:var(--accent);}
+.evt-group-detail{padding:0;}
+.evt-group-inner-card{padding-left:44px !important;border-bottom:1px solid rgba(255,255,255,.03) !important;}
 
 /* Detail modal (legacy, kept for other references) */
 .evt-modal-inner{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;width:440px;max-width:92vw;box-shadow:0 8px 40px rgba(0,0,0,.6);}
