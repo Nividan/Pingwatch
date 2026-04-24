@@ -1237,23 +1237,26 @@ function updateIfaceSelCount(){
   const cbs=[...document.querySelectorAll('.as-iface-cb')];
   const checked=cbs.filter(c=>c.checked);
   const n=checked.length;
+  console.log(`[updateIfaceSelCount] n=${n} interfaces checked`);
   let totalSensors=0;
   checked.forEach(cb=>{
     const idx=cb.dataset.idx;
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
     if(wrap){
-      // Check for metric checkboxes in the wrap (normal case)
+      // Count checked metrics in wrap (dropdown closed)
       let metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
-      // If dropdown was teleported to body, find it there
-      if(metCbs.length===0 && _ifaceRowMetPickerOpen){
-        const openDrop=_ifaceRowMetPickerOpen;
-        if(openDrop._ownerWrap===wrap){
-          metCbs=[...openDrop.querySelectorAll('input[value]:checked')];
+      // Also check if this wrap's dropdown is open in the body
+      if(_ifaceRowMetPickerOpen && _ifaceRowMetPickerOpen._ownerWrap){
+        const ownerIdx=_ifaceRowMetPickerOpen._ownerWrap?.dataset?.idx;
+        if(ownerIdx===idx){
+          metCbs=[..._ifaceRowMetPickerOpen.querySelectorAll('input[value]:checked')];
         }
       }
       totalSensors+=metCbs.length;
+      console.log(`  idx=${idx}: found ${metCbs.length} metrics`);
     }
   });
+  console.log(`[updateIfaceSelCount] totalSensors=${totalSensors}`);
   const el=document.getElementById('as-iface-sel-count');
   if(el) el.textContent=n?`${n} of ${cbs.length} selected${totalSensors?` · ${totalSensors} sensor${totalSensors>1?'s':''}`:''}`:'0 selected';
   const all=document.getElementById('as-iface-all');
@@ -1262,7 +1265,9 @@ function updateIfaceSelCount(){
   if(addBtn) addBtn.textContent=(n===1&&totalSensors===1)?'Apply to Form':'Add Selected as Sensors';
   // When exactly 1 interface+1 metric is selected, sync the OID and snmp_unit fields
   const oidEl=document.getElementById('as-oid');
+  console.log(`[updateIfaceSelCount] oidEl=${!!oidEl}, n=${n}, totalSensors=${totalSensors}, condition=${!!(oidEl && n===1 && totalSensors===1)}`);
   if(oidEl && n===1 && totalSensors===1){
+    console.log(`[updateIfaceSelCount] Updating OID field...`);
     const cb=checked[0];
     const idx=parseInt(cb.dataset.idx);
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
