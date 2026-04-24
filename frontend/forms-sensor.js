@@ -1242,7 +1242,15 @@ function updateIfaceSelCount(){
     const idx=cb.dataset.idx;
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
     if(wrap){
-      const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      // Check for metric checkboxes in the wrap (normal case)
+      let metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      // If dropdown was teleported to body, find it there
+      if(metCbs.length===0 && _ifaceRowMetPickerOpen){
+        const openDrop=_ifaceRowMetPickerOpen;
+        if(openDrop._ownerWrap===wrap){
+          metCbs=[...openDrop.querySelectorAll('input[value]:checked')];
+        }
+      }
       totalSensors+=metCbs.length;
     }
   });
