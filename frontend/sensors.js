@@ -1217,7 +1217,15 @@ function _enumForOid(oid) {
 function _snmpTileValue(s) {
   if (s.alive === false) return 'FAIL';
   if (s.last_value == null || s.last_value === '') return '—';
-  const cat = _snmpCategory(s.snmp_unit, s.snmp_type);
+  // Counter sensors: backend populates last_rate (bytes/errors/packets per sec)
+  // and last_value already carries the formatted rate string ("184.4 Kbps").
+  // Prefer last_rate → _fmtRateDisplay so sensors with blank snmp_unit still
+  // get Kbps/Mbps suffixing instead of falling through to gauge_numeric and
+  // being stripped down to a bare number.
+  if (s.last_rate != null) {
+    return _fmtRateDisplay(s.last_rate, s.snmp_unit || 'bytes');
+  }
+  const cat = _snmpCategory(s.snmp_unit, s.snmp_type, s.snmp_oid);
   // Enum-first resolution (defensive): if the sensor has a parseable legend
   // OR its OID matches a well-known IF-MIB / UPS-MIB enum, prefer labeled
   // output.  Catches the "Auto-detect" case where snmp_unit is blank but
