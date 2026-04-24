@@ -1258,16 +1258,18 @@ function updateIfaceSelCount(){
     const cb=checked[0];
     const idx=parseInt(cb.dataset.idx);
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
-    const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
-    if(metCbs.length===1){
-      const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCbs[0].value);
-      if(metric && !isNaN(idx)){
-        oidEl.value=metric.oid+idx;
-        const ifaceName=cb.dataset.name||('interface '+idx);
-        const unitEl=document.getElementById('as-oid-unit2');
-        if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
-        const sunitEl=document.getElementById('as-snmp-unit');
-        if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+    if(wrap){
+      const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      if(metCbs.length===1){
+        const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCbs[0].value);
+        if(metric && !isNaN(idx)){
+          oidEl.value=metric.oid+idx;
+          const ifaceName=cb.dataset.name||('interface '+idx);
+          const unitEl=document.getElementById('as-oid-unit2');
+          if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
+          const sunitEl=document.getElementById('as-snmp-unit');
+          if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+        }
       }
     }
   }
@@ -1284,6 +1286,7 @@ async function addSelectedIfaceSensors(){
     const cb=checked[0];
     const idx=cb.dataset.idx;
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    if(!wrap){toast('Interface not found in modal','err');return;}
     const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
     if(!metCbs.length){toast('Choose a metric for the selected interface','err');return;}
     if(metCbs.length>1){toast('Select exactly one metric to apply to the form','err');return;}
