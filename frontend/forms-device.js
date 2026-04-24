@@ -19,12 +19,11 @@ function openAddDevice(){
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
           <div class="fgrid">
-            <div class="fr"><label class="fl">SNMP Community</label>
+            <div class="fr" id="ad-snmp-comm-row"><label class="fl">SNMP Community</label>
               <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
               <select id="ad-snmp-ver" onchange="_adSnmpVerChange()">
-                <option value="">— any —</option>
-                <option value="2c">v2c</option>
+                <option value="2c" selected>v2c</option>
                 <option value="1">v1</option>
                 <option value="3">v3</option>
               </select></div>
@@ -230,12 +229,11 @@ function openEditDevice(did){
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
           <div class="fgrid">
-            <div class="fr"><label class="fl">SNMP Community</label>
+            <div class="fr" id="ed-snmp-comm-row" style="${dev.snmp_version_default==='3'?'display:none':''};"><label class="fl">SNMP Community</label>
               <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
               <select id="ed-snmp-ver" onchange="_edSnmpVerChange()">
-                <option value="" ${!dev.snmp_version_default?'selected':''}>— any —</option>
-                <option value="2c" ${dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
+                <option value="2c" ${!dev.snmp_version_default || dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
                 <option value="1"  ${dev.snmp_version_default==='1'?'selected':''}>v1</option>
                 <option value="3"  ${dev.snmp_version_default==='3'?'selected':''}>v3</option>
               </select></div>
@@ -405,13 +403,13 @@ function _edgPick(g){
 }
 
 // v0.9.7: SNMPv3 block toggles on the Edit Device form.  Show the v3 auth
-// fields only when version=3; within the block, show auth/priv rows based on
-// the selected security level (noAuthNoPriv hides auth + priv; authNoPriv
-// shows auth only; authPriv shows both).
+// fields only when version=3; hide community when v3 is selected.
 function _edSnmpVerChange(){
   const ver = document.getElementById('ed-snmp-ver')?.value || '';
   const blk = document.getElementById('ed-v3-block');
+  const comm = document.getElementById('ed-snmp-comm-row');
   if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(comm) comm.style.display = (ver === '3') ? 'none' : '';
   if(ver === '3') _edV3LevelChange();
 }
 function _edV3LevelChange(){
@@ -425,7 +423,9 @@ function _edV3LevelChange(){
 function _adSnmpVerChange(){
   const ver = document.getElementById('ad-snmp-ver')?.value || '';
   const blk = document.getElementById('ad-v3-block');
+  const comm = document.getElementById('ad-snmp-comm-row');
   if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(comm) comm.style.display = (ver === '3') ? 'none' : '';
   if(ver === '3') _adV3LevelChange();
 }
 function _adV3LevelChange(){

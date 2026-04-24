@@ -135,7 +135,7 @@ function sensorFormHTML(dev, s=null) {
         <input type="number" id="as-sp" value="${s?.port||161}" min="1" max="65535"/></div>
     </div>
     <div class="fgrid">
-      <div class="fr"><label class="fl">Community String</label>
+      <div class="fr" id="as-snmp-comm-row" style="${(s?.snmp_version||dev?.snmp_version_default||'2c')==='3'?'display:none':''}"><label class="fl">Community String</label>
         <input type="text" id="as-sc" value="${esc(commVal)}" placeholder="${commHint}" autocomplete="off"/>
         ${commStatusHtml}</div>
       <div class="fr"><label class="fl">SNMP Version</label>
@@ -1087,11 +1087,13 @@ function _syncSnmpDisplay(unit) {
   sel.value = opts.includes(unit) ? unit : '';
 }
 
-// v0.9.7: SNMPv3 block visibility on the Add/Edit Sensor form.
+// v0.9.7: SNMPv3 block visibility on the Add/Edit Sensor form. Hide community when v3 is selected.
 function _asSnmpVerChange(){
   const ver = document.getElementById('as-sv')?.value || '';
   const blk = document.getElementById('as-v3-block');
+  const comm = document.getElementById('as-snmp-comm-row');
   if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(comm) comm.style.display = (ver === '3') ? 'none' : '';
   if(ver === '3') _asV3LevelChange();
 }
 function _asV3LevelChange(){
