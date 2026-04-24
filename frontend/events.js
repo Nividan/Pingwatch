@@ -8,9 +8,14 @@ function evtSeverity(d) {
   if (dir === 'recovered')                             return 'recovery';
   if (dir === 'threshold_ok')                          return 'recovery';
   if (dir === 'license_ok')                            return 'recovery';
+  if (dir === 'state_up')                              return 'recovery';
   if (dir === 'down')                                  return 'critical';
   if (dir === 'license_crit')                          return 'critical';
+  if (dir === 'state_down')                            return 'critical';
+  if (dir === 'reboot')                                return 'critical';
   if (dir === 'license_warn')                          return 'warning';
+  if (dir === 'state_change')                          return 'warning';
+  if (dir === 'value_change')                          return 'info';
   if (dir === 'threshold' && d._thr_level === 'crit') return 'critical';
   if (dir === 'threshold' && d._thr_level === 'warn') return 'warning';
   if (dir === 'anomaly')                              return 'warning';
@@ -42,6 +47,12 @@ function evtIcon(d) {
   if (dir === 'threshold') return '⚠️';
   if (dir === 'threshold_ok') return '✅';
   if (dir === 'anomaly') return '🧠';
+  // v0.9.7: typed SNMP transitions
+  if (dir === 'state_down')   return '🔻';
+  if (dir === 'state_up')     return '🔺';
+  if (dir === 'state_change') return '↔️';
+  if (dir === 'reboot')       return '♻️';
+  if (dir === 'value_change') return '📝';
   return _EVT_ICONS[d.stype] || '⚠️';
 }
 function _trapLabel(d) {
@@ -122,8 +133,8 @@ function _matchAlertEvt(event) {
   if (isNaN(evtSec)) return null;
   // Determine whether this sensor event is a down/threshold or recovery
   const dir = event._direction || event.direction || '';
-  const isDown = dir === 'down' || dir === 'threshold';
-  const isRecovered = dir === 'recovered' || dir === 'threshold_ok';
+  const isDown = dir === 'down' || dir === 'threshold' || dir === 'state_down' || dir === 'state_change' || dir === 'reboot';
+  const isRecovered = dir === 'recovered' || dir === 'threshold_ok' || dir === 'state_up';
   // Alert fires after sensor event (queue delay); allow up to 5 min after, 60s before
   const WINDOW = 300;
   return candidates.find(a => {
@@ -489,7 +500,11 @@ function _groupLabel(g) {
   }
   // device outage
   const uniqSids = new Set(g.events.map(m => m.sid)).size;
-  const dirWord = (dir === 'recovered' || dir === 'threshold_ok') ? 'recovered'
+  const dirWord = (dir === 'recovered' || dir === 'threshold_ok' || dir === 'state_up') ? 'recovered'
+               : (dir === 'state_down')                           ? 'changed state'
+               : (dir === 'state_change')                         ? 'changed state'
+               : (dir === 'reboot')                               ? 'rebooted'
+               : (dir === 'value_change')                         ? 'value changed'
                : (dir === 'down' || dir === 'threshold')          ? 'went down'
                : dir;
   return `${esc(g.dname || '')}: ${uniqSids} sensor${uniqSids === 1 ? '' : 's'} ${dirWord}` +
@@ -678,7 +693,11 @@ function _groupLabelShort(g) {
            (burstStr ? ` in ${burstStr}` : '');
   }
   const uniqSids = new Set(g.events.map(m => m.sid)).size;
-  const dirWord = (dir === 'recovered' || dir === 'threshold_ok') ? 'recovered'
+  const dirWord = (dir === 'recovered' || dir === 'threshold_ok' || dir === 'state_up') ? 'recovered'
+               : (dir === 'state_down')                           ? 'changed state'
+               : (dir === 'state_change')                         ? 'changed state'
+               : (dir === 'reboot')                               ? 'rebooted'
+               : (dir === 'value_change')                         ? 'value changed'
                : (dir === 'down' || dir === 'threshold')          ? 'went down'
                : dir;
   return `${uniqSids} sensor${uniqSids === 1 ? '' : 's'} ${dirWord}` +

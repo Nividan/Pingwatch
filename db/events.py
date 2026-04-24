@@ -476,10 +476,10 @@ def db_count_active_flaps() -> int:
 _FLAP_SEVERITY_SQL = (
     "SELECT "
     "SUM(CASE WHEN COALESCE(ack_state,'active')='active' "
-    "         AND direction IN ('down','threshold_crit','license_crit') "
+    "         AND direction IN ('down','threshold_crit','license_crit','state_down','reboot') "
     "    THEN 1 ELSE 0 END) AS crit_count, "
     "SUM(CASE WHEN COALESCE(ack_state,'active')='active' "
-    "         AND direction IN ('threshold_warn','license_warn') "
+    "         AND direction IN ('threshold_warn','license_warn','state_change') "
     "    THEN 1 ELSE 0 END) AS warn_count, "
     "SUM(CASE WHEN COALESCE(ack_state,'active')='acknowledged' "
     "    THEN 1 ELSE 0 END) AS ack_count "

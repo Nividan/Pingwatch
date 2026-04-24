@@ -1150,6 +1150,33 @@ function _parseEnumLegend(snmpUnit) {
   return map;
 }
 
+// Shared formatter for SNMP sensor display values used by the device-tile
+// sensor cards (devices.js) AND the Overview modal.  Returns the raw value
+// formatted per category: enum → legend label, gauge → unit-suffixed number,
+// duration → "Xd Yh", counter/text → raw string.
+function _snmpTileValue(s) {
+  if (s.alive === false) return 'FAIL';
+  if (s.last_value == null || s.last_value === '') return '—';
+  const cat = _snmpCategory(s.snmp_unit, s.snmp_type);
+  if (cat === 'enum_state') {
+    const legend = _parseEnumLegend(s.snmp_unit);
+    const code = String(parseInt(s.last_value, 10));
+    if (legend[code]) return legend[code];
+  }
+  if (cat === 'gauge_numeric') {
+    const v = parseFloat(s.last_value);
+    if (!isNaN(v)) return _fmtGaugeValue(v, s.snmp_unit);
+  }
+  if (cat === 'time_duration') {
+    const v = parseFloat(s.last_value);
+    if (!isNaN(v)) return _fmtDurationSec(v / 100);
+  }
+  // counter_rate sensors keep their existing formatted last_value
+  // (e.g. "141.2 Kbps" from _fmt_rate on the backend).  text / unknown
+  // fall through with a length cap so the tile doesn't blow out.
+  return String(s.last_value).slice(0, 20);
+}
+
 function _snmpCategoryFor(did, sid) {
   const s = S.sensors[`${did}/${sid}`];
   if (!s || s.stype !== 'snmp') return null;

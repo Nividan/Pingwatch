@@ -109,6 +109,55 @@ _COUNTER_TYPES  = {"counter32", "counter64", "counter"}
 _BYTE_UNITS     = {"bytes"}
 _COUNT_UNITS    = {"errors", "packets"}  # counter OIDs that count events, not bytes
 
+# v0.9.7: typed SNMP sensor categorization (Python mirror of frontend's
+# _snmpCategory).  Drives the event-transition detector in _run_once so a
+# state change from primary to non-primary fires a flap / webhook even though
+# SNMP itself succeeded (e.g. ifOperStatus goes 1→2 — the device answered,
+# but the interface is down).
+import re as _re
+_GAUGE_UNITS_PY  = frozenset([
+    "%", "percent", "celsius", "fahrenheit", "dbm", "count",
+    "seconds", "minutes", "hours", "hz", "volts", "amps", "ratio", "rpm",
+])
+_ENUM_UNIT_RE_PY = _re.compile(r"\d+\s*=\s*[a-zA-Z][\w-]*")
+_ENUM_PAIR_RE_PY = _re.compile(r"(\d+)\s*=\s*([a-zA-Z][\w-]*)")
+
+def _snmp_category_py(snmp_unit: str, snmp_type: str) -> str:
+    u = (snmp_unit or "").lower().strip()
+    if u in _BYTE_UNITS or u in _COUNT_UNITS:
+        return "counter_rate"
+    if snmp_unit and _ENUM_UNIT_RE_PY.search(snmp_unit):
+        return "enum_state"
+    if u in _GAUGE_UNITS_PY:
+        return "gauge_numeric"
+    if snmp_type == "TimeTicks":
+        return "time_duration"
+    if snmp_type == "OCTET STRING" or u == "string":
+        return "text"
+    return "gauge_numeric"
+
+def _parse_enum_legend_py(snmp_unit: str) -> dict:
+    if not snmp_unit:
+        return {}
+    return {m.group(1): m.group(2) for m in _ENUM_PAIR_RE_PY.finditer(snmp_unit)}
+
+def _enum_primary_code_py(snmp_unit: str) -> str:
+    legend = _parse_enum_legend_py(snmp_unit)
+    if "1" in legend:
+        return "1"
+    return next(iter(legend), "1")
+
+def _fmt_duration_s(secs: float) -> str:
+    if secs is None or secs < 0:
+        return "—"
+    secs = int(secs)
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d > 0: return f"{d}d {h}h"
+    if h > 0: return f"{h}h {m}m"
+    return f"{m}m {rem % 60}s"
+
 def _fmt_bps(bps):
     """Format bytes/sec as a human-readable network rate (bits/sec)."""
     bits = bps * 8
@@ -187,6 +236,13 @@ class Sensor:
         self.alerts_muted  = bool(alerts_muted)
         self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
         self.snmp_type     = ""   # SNMP ASN.1 type from probe (Counter32 / Counter64 / Gauge32 / Integer / TimeTicks / OCTET STRING) — populated on first successful SNMP probe; empty for non-SNMP sensors. Drives the frontend's typed rendering (enum vs gauge vs duration vs text).
+        # v0.9.7: prev-value tracking for typed SNMP event transitions.
+        # _prev_enum_code — last seen enum code (str), used to detect state flips
+        # _prev_ticks — last TimeTicks value, used to detect reboots (decrease)
+        # _prev_text_value — last OCTET STRING value, used to detect changes
+        self._prev_enum_code    = None
+        self._prev_ticks        = None
+        self._prev_text_value   = None
         self.host_override = False   # True = host was manually set; don't sync from device
         # VMware fields
         self.vmware_user     = vmware_user or ""
@@ -1026,6 +1082,92 @@ class MonitorState:
                 s.last_value = _raw_val
                 s._last_rate = None
             # ─────────────────────────────────────────────────
+            # v0.9.7: typed SNMP event transition detector.  Emits synthetic
+            # flap events for state changes the connectivity flap pipeline
+            # misses because SNMP itself succeeded (interface goes down →
+            # SNMP still answers with value=2 → s.alive stays True).  Each
+            # category has its own trigger; all go through db_log_flap so
+            # the Events tab and webhook path fire automatically.
+            if s.stype == "snmp" and _raw_val is not None and not _muted:
+                try:
+                    _cat = _snmp_category_py(s.snmp_unit, _raw_stype)
+                except Exception:
+                    _cat = None
+                if _cat == "enum_state":
+                    try: _cur_code = str(int(float(_raw_val)))
+                    except (ValueError, TypeError): _cur_code = None
+                    if _cur_code is not None:
+                        _prev_code = s._prev_enum_code
+                        if _prev_code is not None and _cur_code != _prev_code:
+                            legend  = _parse_enum_legend_py(s.snmp_unit)
+                            primary = _enum_primary_code_py(s.snmp_unit)
+                            prev_lbl = legend.get(_prev_code, f"state {_prev_code}")
+                            cur_lbl  = legend.get(_cur_code,  f"state {_cur_code}")
+                            if _cur_code != primary and _prev_code == primary:
+                                _dir, _msg = "state_down", f"State changed: {prev_lbl} → {cur_lbl}"
+                                log_sensors.warning(f"STATE DOWN: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            elif _cur_code == primary and _prev_code != primary:
+                                _dir, _msg = "state_up", f"State recovered: {prev_lbl} → {cur_lbl}"
+                                log_sensors.info(f"STATE UP: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            else:
+                                _dir, _msg = "state_change", f"State changed: {prev_lbl} → {cur_lbl}"
+                                log_sensors.info(f"STATE CHANGE: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            _flap = {
+                                "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                                "host": s.host, "stype": s.stype, "ts": _ts,
+                                "detail": _msg, "direction": _dir,
+                                "grp": dev.group, "consec_count": 1,
+                            }
+                            self._broadcast(f"flap_{_dir}", _flap)
+                            _db_enqueue(lambda _f=_flap: db_log_flap(_f))
+                            if _dir == "state_up":
+                                _db_enqueue(lambda _d=did, _s=sid, _t=_ts: db_auto_resolve_flap(
+                                    _d, _s, _t, directions=("state_down", "state_change")))
+                            if dev.webhook_url and _dir in ("state_down", "state_change"):
+                                _enqueue_webhook(dev.webhook_url, _flap)
+                        s._prev_enum_code = _cur_code
+                elif _cat == "time_duration":
+                    try: _cur_ticks = int(float(_raw_val))
+                    except (ValueError, TypeError): _cur_ticks = None
+                    if _cur_ticks is not None:
+                        _prev_ticks_v = s._prev_ticks
+                        # Threshold 100 ticks = 1s — avoids false positives
+                        # from small measurement jitter / TimeTicks wrap on
+                        # the rare 2^32/100s boundary (~497 days).
+                        if _prev_ticks_v is not None and _cur_ticks < _prev_ticks_v - 100:
+                            _prev_up = _fmt_duration_s(_prev_ticks_v / 100)
+                            _msg = f"Device rebooted (was up {_prev_up})"
+                            log_sensors.warning(f"REBOOT: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            _flap = {
+                                "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                                "host": s.host, "stype": s.stype, "ts": _ts,
+                                "detail": _msg, "direction": "reboot",
+                                "grp": dev.group, "consec_count": 1,
+                            }
+                            self._broadcast("flap_reboot", _flap)
+                            _db_enqueue(lambda _f=_flap: db_log_flap(_f))
+                            if dev.webhook_url:
+                                _enqueue_webhook(dev.webhook_url, _flap)
+                        s._prev_ticks = _cur_ticks
+                elif _cat == "text":
+                    _cur_text = str(_raw_val)
+                    _prev_text = s._prev_text_value
+                    if _prev_text is not None and _cur_text != _prev_text:
+                        _prev_disp = (_prev_text[:60] + "…") if len(_prev_text) > 60 else _prev_text
+                        _cur_disp  = (_cur_text[:60]  + "…") if len(_cur_text)  > 60 else _cur_text
+                        _msg = f"Value changed: {_prev_disp} → {_cur_disp}"
+                        log_sensors.info(f"VALUE CHANGE: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                        _flap = {
+                            "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                            "host": s.host, "stype": s.stype, "ts": _ts,
+                            "detail": _msg, "direction": "value_change",
+                            "grp": dev.group, "consec_count": 1,
+                        }
+                        self._broadcast("flap_value_change", _flap)
+                        _db_enqueue(lambda _f=_flap: db_log_flap(_f))
+                        if dev.webhook_url:
+                            _enqueue_webhook(dev.webhook_url, _flap)
+                    s._prev_text_value = _cur_text
             s.history.append(result["ms"])
             _log_msg = s.last_value if (s.stype == "snmp" and s._last_rate is not None and s.last_value) else result["detail"]
             # ── Debounce: track consecutive successes ──
