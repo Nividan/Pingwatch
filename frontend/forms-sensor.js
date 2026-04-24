@@ -1237,7 +1237,6 @@ function updateIfaceSelCount(){
   const cbs=[...document.querySelectorAll('.as-iface-cb')];
   const checked=cbs.filter(c=>c.checked);
   const n=checked.length;
-  console.log(`[updateIfaceSelCount] n=${n} interfaces checked`);
   let totalSensors=0;
   checked.forEach(cb=>{
     const idx=cb.dataset.idx;
@@ -1253,10 +1252,8 @@ function updateIfaceSelCount(){
         }
       }
       totalSensors+=metCbs.length;
-      console.log(`  idx=${idx}: found ${metCbs.length} metrics`);
     }
   });
-  console.log(`[updateIfaceSelCount] totalSensors=${totalSensors}`);
   const el=document.getElementById('as-iface-sel-count');
   if(el) el.textContent=n?`${n} of ${cbs.length} selected${totalSensors?` · ${totalSensors} sensor${totalSensors>1?'s':''}`:''}`:'0 selected';
   const all=document.getElementById('as-iface-all');
@@ -1265,9 +1262,7 @@ function updateIfaceSelCount(){
   if(addBtn) addBtn.textContent=(n===1&&totalSensors===1)?'Apply to Form':'Add Selected as Sensors';
   // When exactly 1 interface+1 metric is selected, sync the OID and snmp_unit fields
   const oidEl=document.getElementById('as-oid');
-  console.log(`[updateIfaceSelCount] oidEl=${!!oidEl}, n=${n}, totalSensors=${totalSensors}, condition=${!!(oidEl && n===1 && totalSensors===1)}`);
   if(oidEl && n===1 && totalSensors===1){
-    console.log(`[updateIfaceSelCount] Updating OID field...`);
     const cb=checked[0];
     const idx=parseInt(cb.dataset.idx);
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
@@ -1282,19 +1277,18 @@ function updateIfaceSelCount(){
       }
       if(metCbs.length===1){
         const metricValue=metCbs[0].value;
-        console.log(`[updateIfaceSelCount] Looking for metric with value: ${metricValue}`);
         const metric=(window._ifaceMetrics||[]).find(m=>m.v===metricValue);
-        console.log(`[updateIfaceSelCount] Found metric:`, metric);
         if(metric && !isNaN(idx)){
           const newOid=metric.oid+idx;
-          console.log(`[updateIfaceSelCount] Setting OID from ${oidEl.value} to ${newOid}`);
           oidEl.value=newOid;
-          console.log(`[updateIfaceSelCount] OID field now: ${oidEl.value}`);
           const ifaceName=cb.dataset.name||('interface '+idx);
           const unitEl=document.getElementById('as-oid-unit2');
           if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
           const sunitEl=document.getElementById('as-snmp-unit');
           if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+          // Update sensor name to reflect the metric
+          const nameEl=document.getElementById('as-n');
+          if(nameEl) nameEl.value=`${esc(ifaceName)} ${metric.l}`;
         }
       }
     }
@@ -1325,6 +1319,9 @@ async function addSelectedIfaceSensors(){
     if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
     const unitEl2=document.getElementById('as-oid-unit2');
     if(unitEl2) unitEl2.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
+    // Update sensor name to reflect the metric
+    const nameEl2=document.getElementById('as-n');
+    if(nameEl2) nameEl2.value=`${esc(ifaceName)} ${metric.l}`;
     const listEl=document.getElementById('as-iface-list');
     if(listEl) listEl.style.display='none';
     const statusEl=document.getElementById('as-iface-status');
@@ -1545,6 +1542,13 @@ function ifaceRowMetChanged(cb){
   const drop=cb.closest('.vm-met-drop');
   const wrap=drop?._ownerWrap||drop?.parentElement;
   if(!wrap) return;
+  // Auto-check the interface when a metric is checked
+  if(cb.checked && cb.value){
+    const ifaceCb=wrap.closest('tr')?.querySelector('.as-iface-cb');
+    if(ifaceCb && !ifaceCb.checked){
+      ifaceCb.checked=true;
+    }
+  }
   const allCb=drop.querySelector('.iface-row-met-all-cb');
   if(allCb&&cb!==allCb){
     const metCbs=[...drop.querySelectorAll('input[value]')];
@@ -2222,6 +2226,13 @@ function vmMetChanged(cb){
   // drop may be teleported to body — use stored owner reference
   const wrap=drop?._ownerWrap||drop?.parentElement;
   if(!wrap) return;
+  // Auto-check the VM/host/datastore when a metric is checked
+  if(cb.checked && cb.value){
+    const vmCb=wrap.closest('tr')?.querySelector('.as-vm-cb');
+    if(vmCb && !vmCb.checked){
+      vmCb.checked=true;
+    }
+  }
   // Keep "All metrics" checkbox in sync
   const allCb=drop.querySelector('.vm-met-all-cb');
   if(allCb&&cb!==allCb){
@@ -2670,6 +2681,14 @@ async function submitAddSensor(did){
     if(_listEl&&_listEl.style.display!=='none'){
       const _checked=[...document.querySelectorAll('.as-vm-cb:checked')];
       if(_checked.length){await addSelectedVMSensors();return;}
+    }
+  }
+  // If SNMP type with interface discovery table open and interfaces checked, delegate to addSelectedIfaceSensors()
+  if(_asType==='snmp'){
+    const _listEl=document.getElementById('as-iface-list');
+    if(_listEl&&_listEl.style.display!=='none'){
+      const _checked=[...document.querySelectorAll('.as-iface-cb:checked')];
+      if(_checked.length){await addSelectedIfaceSensors();return;}
     }
   }
   const payload=collectSensorForm(did);
