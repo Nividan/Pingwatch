@@ -1120,6 +1120,119 @@ function pushLog(did,sid,msg,type){
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DETAIL WINDOW �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
 // ── SNMP Counter rate helpers for history view ────────────────────────────
 const _COUNTER_HIST_UNITS = new Set(['bytes','errors','packets']);
+// v0.9.7: typed SNMP categories.  Dispatches rendering between counter-rate,
+// enum state (interface up/down, UPS battery status, HA mode, …), gauge
+// numeric (CPU %, temp °C, session count, …), TimeTicks duration (sysUpTime),
+// and text (sysName / sysDescr).  Replaces the old binary "counter vs ms"
+// split that silently rendered probe latency for every non-counter sensor.
+const _GAUGE_UNITS = new Set([
+  '%','percent','celsius','fahrenheit','dbm','count',
+  'seconds','minutes','hours','hz','volts','amps','ratio','rpm',
+]);
+const _ENUM_UNIT_RE = /\d+\s*=\s*[a-z][\w-]*/i;
+
+function _snmpCategory(snmpUnit, snmpType) {
+  const u = (snmpUnit || '').toLowerCase().trim();
+  if (_COUNTER_HIST_UNITS.has(u)) return 'counter_rate';
+  if (snmpUnit && _ENUM_UNIT_RE.test(snmpUnit)) return 'enum_state';
+  if (_GAUGE_UNITS.has(u)) return 'gauge_numeric';
+  if (snmpType === 'TimeTicks') return 'time_duration';
+  if (snmpType === 'OCTET STRING' || u === 'string') return 'text';
+  return 'gauge_numeric';   // safe default — renders value as a line, never ms
+}
+
+function _parseEnumLegend(snmpUnit) {
+  const map = {};
+  if (!snmpUnit) return map;
+  for (const m of snmpUnit.matchAll(/(\d+)\s*=\s*([a-z][\w-]*)/gi)) {
+    map[m[1]] = m[2];
+  }
+  return map;
+}
+
+function _snmpCategoryFor(did, sid) {
+  const s = S.sensors[`${did}/${sid}`];
+  if (!s || s.stype !== 'snmp') return null;
+  return _snmpCategory(s.snmp_unit, s.snmp_type);
+}
+
+function _fmtDurationSec(secs) {
+  if (secs == null || !isFinite(secs) || secs < 0) return '—';
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${Math.floor(secs % 60)}s`;
+}
+
+function _fmtGaugeValue(v, snmpUnit) {
+  if (v == null || !isFinite(v)) return '—';
+  const u = (snmpUnit || '').toLowerCase();
+  if (u === '%' || u === 'percent') return v.toFixed(v < 10 ? 1 : 0) + '%';
+  if (u === 'celsius')    return v.toFixed(1) + ' °C';
+  if (u === 'fahrenheit') return v.toFixed(1) + ' °F';
+  if (u === 'dbm')        return v.toFixed(1) + ' dBm';
+  if (u === 'hz')         return v >= 1e9 ? (v/1e9).toFixed(2)+' GHz' : v >= 1e6 ? (v/1e6).toFixed(2)+' MHz' : v >= 1e3 ? (v/1e3).toFixed(1)+' kHz' : v.toFixed(0)+' Hz';
+  if (u === 'volts')      return v.toFixed(2) + ' V';
+  if (u === 'amps')       return v.toFixed(2) + ' A';
+  if (u === 'ratio')      return v.toFixed(3);
+  if (u === 'rpm')        return Math.round(v) + ' RPM';
+  if (u === 'seconds')    return _fmtDurationSec(v);
+  if (u === 'minutes')    return _fmtDurationSec(v * 60);
+  if (u === 'hours')      return _fmtDurationSec(v * 3600);
+  // count / unknown — SI suffixes for large numbers
+  if (Math.abs(v) >= 1e9) return (v/1e9).toFixed(2) + 'G';
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return (Math.abs(v) < 1 ? v.toFixed(3) : (Math.abs(v) < 10 ? v.toFixed(2) : v.toFixed(0)));
+}
+
+function _gaugeValSamples(samples) {
+  // Normalise raw + rollup samples into {ts, ok, v, vMin, vMax, ms} with v
+  // as a numeric gauge value (or null when unparseable / non-ok).  Raw rows
+  // carry `value` (TEXT); rollup rows carry `avg_value` / `min_value` /
+  // `max_value`.  For enum_state rendering the caller just uses v (the state
+  // code); for gauge_numeric the envelope bounds drive the min/max band.
+  return samples.map(p => {
+    const isRollup = p.bucket_s != null;
+    let v, vMin, vMax;
+    if (isRollup) {
+      v = p.avg_value;
+      vMin = p.min_value != null ? p.min_value : v;
+      vMax = p.max_value != null ? p.max_value : v;
+    } else {
+      const parsed = p.value != null ? parseFloat(p.value) : NaN;
+      v = isNaN(parsed) ? null : parsed;
+      vMin = vMax = v;
+    }
+    return {ts: p.ts, ok: !!p.ok, v, vMin, vMax, ms: p.ms, raw: p.value};
+  });
+}
+
+function _enumTransitions(gvs) {
+  // Count state-code changes across ok samples.  Returns {count, lastChangeTs}.
+  let count = 0, lastCh = null, prev = null;
+  for (const g of gvs) {
+    if (!g.ok || g.v == null) continue;
+    if (prev != null && g.v !== prev) { count++; lastCh = g.ts; }
+    prev = g.v;
+  }
+  return {count, lastChangeTs: lastCh};
+}
+
+function _fmtGaugeYLabel(v, snmpUnit) {
+  if (v == null || !isFinite(v)) return '';
+  const u = (snmpUnit || '').toLowerCase();
+  if (u === '%' || u === 'percent') return v.toFixed(0) + '%';
+  if (u === 'celsius')    return v.toFixed(0) + '°';
+  if (u === 'fahrenheit') return v.toFixed(0) + '°F';
+  if (u === 'dbm')        return v.toFixed(0) + 'dB';
+  if (Math.abs(v) >= 1e9) return (v/1e9).toFixed(1) + 'G';
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(1) + 'M';
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return v.toFixed(Math.abs(v) < 10 ? 1 : 0);
+}
 
 function _computeRateSamples(samples, snmpUnit) {
   if (!_COUNTER_HIST_UNITS.has(snmpUnit)) return null;
@@ -1536,6 +1649,86 @@ function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
     ['avg','min','max'].forEach((k,i)=>{const el=document.getElementById(`dmv-${did}-${sid}-${k}`);if(el)el.textContent=[_fr(avgR),_fr(minR),_fr(maxR)][i];});
     return;
   }
+  // v0.9.7: typed SNMP KPI bars — enum_state / gauge_numeric / time_duration / text.
+  const _snmpCat = _snmpCategoryFor(did, sid);
+  if (_snmpCat && _snmpCat !== 'counter_rate') {
+    const _snmpSen = S.sensors[`${did}/${sid}`];
+    const gvs = _gaugeValSamples(samples);
+    const okG = gvs.filter(g => g.ok && g.v != null);
+    if (_snmpCat === 'enum_state') {
+      const legend = _parseEnumLegend(_snmpSen.snmp_unit);
+      const lastG = [...okG].reverse()[0];
+      const lastCode = lastG ? String(Math.round(lastG.v)) : null;
+      const lastLbl  = lastCode != null ? (legend[lastCode] || ('state ' + lastCode)) : '—';
+      // Primary state = legend key "1" if defined (RFC convention), else first key.
+      const primaryCode = legend['1'] ? '1' : Object.keys(legend)[0] || '1';
+      const primaryLbl  = legend[primaryCode] || ('state ' + primaryCode);
+      const inPrimary = okG.filter(g => String(Math.round(g.v)) === primaryCode).length;
+      const pct = okG.length ? (inPrimary / okG.length * 100) : 0;
+      const {count: transitions, lastChangeTs} = _enumTransitions(gvs);
+      const ageSec = lastChangeTs ? (Date.now()/1000 - lastChangeTs) : (gvs.length ? (Date.now()/1000 - gvs[0].ts) : null);
+      const isPrimary = lastCode === primaryCode;
+      _setKpi(`kpi-avg-${did}-${sid}`, 'Current', lastLbl, isPrimary ? 'dm-kpi-good' : 'dm-kpi-crit');
+      _setKpi(`kpi-min-${did}-${sid}`, '% '+primaryLbl, pct.toFixed(1)+'%',
+        pct<80?'dm-kpi-crit':pct<99?'dm-kpi-warn':'dm-kpi-good');
+      _setKpi(`kpi-max-${did}-${sid}`, 'Transitions', String(transitions),
+        transitions>10?'dm-kpi-warn':transitions>0?'dm-kpi-info':'dm-kpi-good');
+      _setKpi(`kpi-jitter-${did}-${sid}`, 'Age', _fmtDurationSec(ageSec), 'dm-kpi-info');
+      // Push current label into dmv- overview tiles.
+      const _so = S.sensors[`${did}/${sid}`];
+      if (_so) { _so._ov_avg = lastLbl; _so._ov_min = pct.toFixed(1)+'%'; _so._ov_max = String(transitions); }
+      ['avg','min','max'].forEach((k,i)=>{
+        const el=document.getElementById(`dmv-${did}-${sid}-${k}`);
+        if(el)el.textContent=[lastLbl, pct.toFixed(1)+'%', String(transitions)][i];
+      });
+      return;
+    }
+    if (_snmpCat === 'gauge_numeric') {
+      const u = _snmpSen.snmp_unit;
+      const lastG = [...okG].reverse()[0];
+      const avg = okG.length ? okG.reduce((a,g)=>a+g.v,0)/okG.length : null;
+      // Use per-bucket min/max when present (peak-preserving at rollup tier).
+      const minV = okG.length ? Math.min(...okG.map(g => g.vMin != null ? g.vMin : g.v)) : null;
+      const maxV = okG.length ? Math.max(...okG.map(g => g.vMax != null ? g.vMax : g.v)) : null;
+      const f = v => _fmtGaugeValue(v, u);
+      _setKpi(`kpi-avg-${did}-${sid}`, 'Avg', f(avg));
+      _setKpi(`kpi-min-${did}-${sid}`, 'Min', f(minV));
+      _setKpi(`kpi-max-${did}-${sid}`, 'Max', f(maxV));
+      _setKpi(`kpi-jitter-${did}-${sid}`, 'Last', lastG ? f(lastG.v) : '—', 'dm-kpi-info');
+      const _so = S.sensors[`${did}/${sid}`];
+      if (_so) { _so._ov_avg=f(avg); _so._ov_min=f(minV); _so._ov_max=f(maxV); }
+      ['avg','min','max'].forEach((k,i)=>{
+        const el=document.getElementById(`dmv-${did}-${sid}-${k}`);
+        if(el)el.textContent=[f(avg),f(minV),f(maxV)][i];
+      });
+      return;
+    }
+    if (_snmpCat === 'time_duration') {
+      // TimeTicks: value is in 1/100 seconds.  Detect reboots from value drops.
+      const lastG = [...okG].reverse()[0];
+      const curUptime = lastG ? _fmtDurationSec(lastG.v / 100) : '—';
+      let reboots = 0, prev = null;
+      for (const g of okG) { if (prev != null && g.v < prev) reboots++; prev = g.v; }
+      _setKpi(`kpi-avg-${did}-${sid}`, 'Uptime', curUptime, reboots>0?'dm-kpi-warn':'dm-kpi-good');
+      _setKpi(`kpi-min-${did}-${sid}`, 'Reboots', String(reboots), reboots>0?'dm-kpi-warn':'dm-kpi-good');
+      _setKpi(`kpi-max-${did}-${sid}`, 'Samples', String(okG.length), 'dm-kpi-info');
+      _setKpi(`kpi-jitter-${did}-${sid}`, '—', '—', 'dm-kpi-info');
+      return;
+    }
+    if (_snmpCat === 'text') {
+      // Count distinct non-null string values.
+      const strSamples = samples.filter(p => p.ok && p.value != null).map(p => String(p.value));
+      const lastStr = strSamples.length ? strSamples[strSamples.length-1] : '—';
+      let changes = 0, prevStr = null;
+      for (const s of strSamples) { if (prevStr != null && s !== prevStr) changes++; prevStr = s; }
+      const disp = lastStr.length > 48 ? lastStr.slice(0,45)+'…' : lastStr;
+      _setKpi(`kpi-avg-${did}-${sid}`, 'Current', disp, 'dm-kpi-info');
+      _setKpi(`kpi-min-${did}-${sid}`, 'Changes', String(changes), changes>0?'dm-kpi-warn':'dm-kpi-good');
+      _setKpi(`kpi-max-${did}-${sid}`, 'Samples', String(strSamples.length), 'dm-kpi-info');
+      _setKpi(`kpi-jitter-${did}-${sid}`, '—', '—', 'dm-kpi-info');
+      return;
+    }
+  }
   // VMware metric-value KPIs
   const _vmU = _vmUnit(did, sid);
   if (_vmU !== null) {
@@ -1743,6 +1936,21 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     ctx.fillStyle = `rgba(${_txt},.6)`; ctx.font = '13px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('No data for this period', W / 2, H / 2);
     if (statsEl) statsEl.textContent = 'No data';
+    return;
+  }
+
+  // v0.9.7: typed SNMP rendering.  Counter-rate stays on the main render
+  // path (preserves v0.9.6/v0.9.7 behavior).  Enum / gauge / time / text
+  // sensors render via a dedicated pipeline so their chart shows the value
+  // signal (not probe latency) with category-appropriate axes.
+  const _rateActive = Array.isArray(rateSamples) && rateSamples.length > 0;
+  const _snmpCat2 = _snmpCategoryFor(did, sid);
+  if (_snmpCat2 && _snmpCat2 !== 'counter_rate' && !_rateActive) {
+    _drawTypedSnmpChart(ctx, {W, H, LEFT, RIGHT, TOP, BOT, plotW, plotH,
+      did, sid, samples, summary, minutes,
+      windowStart: windowStart ?? (Date.now() / 1000 - minutes * 60),
+      category: _snmpCat2, statsEl,
+      _txt, _acc, _dn, _wn, _upC});
     return;
   }
 
@@ -2179,6 +2387,274 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   }
 }
 
+// v0.9.7: typed SNMP chart renderer.  Handles enum_state (step chart),
+// gauge_numeric (line chart with unit-aware axis), time_duration (uptime
+// line with reboot markers), and text (last-value banner with change log).
+function _drawTypedSnmpChart(ctx, P) {
+  const {W, H, LEFT, RIGHT, TOP, BOT, plotW, plotH,
+         did, sid, samples, summary, minutes, windowStart,
+         category, statsEl, _txt, _acc, _dn, _wn, _upC} = P;
+  const _sen = S.sensors[`${did}/${sid}`];
+  const snmpUnit = _sen?.snmp_unit || '';
+  const tsRange = minutes * 60;
+  const windowEnd = windowStart + tsRange;
+  const xOf = ts => LEFT + (ts - windowStart) / tsRange * plotW;
+
+  const gvs = _gaugeValSamples(samples);
+  const okG = gvs.filter(g => g.ok && g.v != null);
+
+  // Text category — no chart, just the last value centered + change count.
+  if (category === 'text') {
+    const strSamples = samples.filter(p => p.ok && p.value != null).map(p => String(p.value));
+    const lastStr = strSamples.length ? strSamples[strSamples.length - 1] : '';
+    let changes = 0, prevStr = null;
+    for (const s of strSamples) { if (prevStr != null && s !== prevStr) changes++; prevStr = s; }
+    ctx.fillStyle = `rgba(${_txt},.72)`; ctx.textAlign = 'center';
+    ctx.font = '13px Inter,sans-serif';
+    ctx.fillText('LAST VALUE', W/2, TOP + 30);
+    ctx.font = 'bold 18px Inter,sans-serif'; ctx.fillStyle = `rgb(${_acc})`;
+    const disp = lastStr.length > 60 ? lastStr.slice(0, 57) + '…' : lastStr || '—';
+    ctx.fillText(disp, W/2, TOP + 62);
+    ctx.font = '12px Inter,sans-serif'; ctx.fillStyle = `rgba(${_txt},.6)`;
+    ctx.fillText(`${changes} value change${changes === 1 ? '' : 's'} in window`, W/2, TOP + 92);
+    if (statsEl) statsEl.textContent = `${strSamples.length} probes · ${changes} changes`;
+    return;
+  }
+
+  // Y-axis scaling + formatter depending on category.
+  let maxY, minY = 0, yFmt, yLabels = null;
+  if (category === 'enum_state') {
+    // Y-axis = state codes (integers).  Legend from snmp_unit maps codes → names.
+    const legend = _parseEnumLegend(snmpUnit);
+    const codes = Object.keys(legend).map(Number).sort((a,b) => a-b);
+    if (codes.length) {
+      minY = Math.max(0, codes[0] - 0.5);
+      maxY = codes[codes.length-1] + 0.5;
+    } else {
+      const vs = okG.map(g => g.v);
+      minY = vs.length ? Math.min(...vs) - 0.5 : 0;
+      maxY = vs.length ? Math.max(...vs) + 0.5 : 1;
+    }
+    yLabels = codes.map(c => ({v: c, label: legend[String(c)] || ('state ' + c)}));
+    yFmt = v => {
+      const label = legend[String(Math.round(v))];
+      return label || Math.round(v).toString();
+    };
+  } else if (category === 'time_duration') {
+    const vs = okG.map(g => g.v / 100);  // TimeTicks → seconds
+    minY = 0;
+    maxY = vs.length ? Math.max(...vs) * 1.1 : 86400;
+    yFmt = v => _fmtDurationSec(v);
+  } else {
+    // gauge_numeric
+    const u = snmpUnit.toLowerCase();
+    const vs = okG.map(g => g.v);
+    if (u === '%' || u === 'percent') {
+      minY = 0; maxY = 100;
+    } else {
+      const sorted = [...vs].sort((a,b) => a-b);
+      const p95 = sorted.length ? (sorted[Math.floor(sorted.length * 0.95)] ?? sorted[sorted.length-1]) : 0;
+      const minV = sorted.length ? sorted[0] : 0;
+      minY = Math.min(0, minV);
+      maxY = Math.max(p95 * 1.4, 1);
+      if ((_sen?.warn_ms || 0) > maxY) maxY = _sen.warn_ms * 1.2;
+    }
+    yFmt = v => _fmtGaugeYLabel(v, snmpUnit);
+  }
+  const yOf = v => {
+    const clamped = Math.max(minY, Math.min(maxY, v));
+    return TOP + (1 - (clamped - minY) / (maxY - minY)) * plotH;
+  };
+  if (_histCache[`${did}/${sid}`]) {
+    _histCache[`${did}/${sid}`].maxY = maxY;
+    _histCache[`${did}/${sid}`].minY = minY;
+  }
+
+  // Grid + Y labels.  For enum, labels align to state codes; otherwise 20%/40%/.../100%.
+  ctx.lineWidth = 1; ctx.font = 'bold 11px Inter,sans-serif';
+  if (category === 'enum_state' && yLabels) {
+    yLabels.forEach(({v, label}) => {
+      const y = yOf(v);
+      ctx.strokeStyle = `rgba(${_txt},.08)`;
+      ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
+      ctx.fillStyle = `rgba(${_txt},.78)`; ctx.textAlign = 'right';
+      ctx.fillText(label, LEFT - 4, y + 4);
+    });
+  } else {
+    [0.2, 0.4, 0.6, 0.8, 1.0].forEach(f => {
+      const y = TOP + (1 - f) * plotH;
+      ctx.strokeStyle = `rgba(${_txt},.08)`;
+      ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke();
+      ctx.fillStyle = `rgba(${_txt},.78)`; ctx.textAlign = 'right';
+      ctx.fillText(yFmt(minY + f * (maxY - minY)), LEFT - 4, y + 4);
+    });
+    ctx.fillStyle = `rgba(${_txt},.5)`; ctx.textAlign = 'right';
+    ctx.fillText(yFmt(minY), LEFT - 4, H - BOT + 4);
+  }
+  // Y-axis border
+  ctx.strokeStyle = `rgba(${_txt},.12)`; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(LEFT, TOP); ctx.lineTo(LEFT, H - BOT); ctx.stroke();
+
+  // X-axis grid lines + date labels (mirrors the main renderer).
+  let _gInt;
+  if      (tsRange <=  2*3600)   _gInt =  15*60;
+  else if (tsRange <=  6*3600)   _gInt =   3600;
+  else if (tsRange <= 24*3600)   _gInt =  4*3600;
+  else if (tsRange <=  4*86400)  _gInt = 12*3600;
+  else if (tsRange <= 14*86400)  _gInt =  86400;
+  else if (tsRange <= 45*86400)  _gInt =  7*86400;
+  else if (tsRange <= 200*86400) _gInt = 30*86400;
+  else                           _gInt = 91*86400;
+  const _tzOff = new Date().getTimezoneOffset() * 60;
+  const _firstGrid = Math.ceil((windowStart + _tzOff) / _gInt) * _gInt - _tzOff;
+  for (let ts = _firstGrid; ts < windowEnd; ts += _gInt) {
+    const x = xOf(ts);
+    if (x < LEFT + 14) continue;
+    ctx.strokeStyle = `rgba(${_txt},.06)`; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, H - BOT); ctx.stroke();
+    const d = new Date(ts * 1000);
+    const lbl = _gInt < 86400
+      ? d.toLocaleDateString([], {month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false})
+      : d.toLocaleDateString([], {month:'short',day:'numeric'});
+    ctx.fillStyle = `rgba(${_txt},.72)`; ctx.font = '11px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(lbl, x, H - 3);
+  }
+
+  // Downtime spans (from summary).
+  ctx.fillStyle = `rgba(${_dn},.10)`;
+  for (const r of summary) {
+    if (r.ok === 0 && r.fail > 0) {
+      const x1 = Math.max(LEFT, xOf(r.ts));
+      const x2 = Math.min(W - RIGHT, xOf(r.ts + 3600));
+      if (x2 > x1) ctx.fillRect(x1, TOP, x2 - x1, plotH);
+    }
+  }
+
+  // Data rendering per category.
+  const sortedG = [...gvs].sort((a,b) => a.ts - b.ts);
+  if (category === 'enum_state') {
+    // Step chart: horizontal segment from each sample's ts to the next's ts,
+    // colored by primary-state match (green) vs non-primary (red).  Draw as
+    // thick strokes so brief visits are visible at zoomed-out ranges.
+    const legend = _parseEnumLegend(snmpUnit);
+    const primaryCode = legend['1'] ? '1' : Object.keys(legend)[0] || '1';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < sortedG.length; i++) {
+      const g = sortedG[i];
+      if (!g.ok || g.v == null) continue;
+      const isPrimary = String(Math.round(g.v)) === primaryCode;
+      ctx.strokeStyle = isPrimary ? `rgb(${_upC})` : `rgb(${_dn})`;
+      const x1 = xOf(g.ts);
+      const nextTs = (i + 1 < sortedG.length) ? sortedG[i+1].ts : Math.min(windowEnd, g.ts + (tsRange / Math.max(sortedG.length, 1)));
+      const x2 = xOf(nextTs);
+      const y = yOf(g.v);
+      ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke();
+      // Vertical transition marker
+      if (i > 0) {
+        const prev = sortedG.slice(0, i).reverse().find(p => p.ok && p.v != null);
+        if (prev && Math.round(prev.v) !== Math.round(g.v)) {
+          ctx.strokeStyle = `rgba(${_wn},.55)`; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(x1, TOP); ctx.lineTo(x1, H - BOT); ctx.stroke();
+          ctx.lineWidth = 3;
+        }
+      }
+    }
+    // Stats bar
+    if (statsEl) {
+      const total = gvs.length;
+      const ok = okG.length;
+      const inPrimary = okG.filter(g => String(Math.round(g.v)) === primaryCode).length;
+      const pct = ok ? (inPrimary / ok * 100) : 0;
+      const primaryLbl = legend[primaryCode] || ('state ' + primaryCode);
+      const {count: transitions} = _enumTransitions(gvs);
+      statsEl.textContent = `${total} probes · ${pct.toFixed(1)}% ${primaryLbl} · ${transitions} transition${transitions === 1 ? '' : 's'}`;
+    }
+    return;
+  }
+
+  // gauge_numeric and time_duration — line chart.
+  const TARGET = 300;
+  let pts;
+  const valOf = g => category === 'time_duration' ? g.v / 100 : g.v;
+  if (okG.length <= TARGET) {
+    pts = okG.map(g => ({x: xOf(g.ts), y: yOf(valOf(g)), ts: g.ts, v: valOf(g)}));
+  } else {
+    const bucketSec = tsRange / TARGET;
+    const acc = Array.from({length: TARGET}, () => ({sum: 0, n: 0, minV: Infinity, maxV: -Infinity}));
+    for (const g of okG) {
+      const bi = Math.min(TARGET-1, Math.floor((g.ts - windowStart) / bucketSec));
+      if (bi >= 0) {
+        const v = valOf(g);
+        acc[bi].sum += v; acc[bi].n++;
+        const vmn = g.vMin != null ? (category === 'time_duration' ? g.vMin/100 : g.vMin) : v;
+        const vmx = g.vMax != null ? (category === 'time_duration' ? g.vMax/100 : g.vMax) : v;
+        acc[bi].minV = Math.min(acc[bi].minV, vmn);
+        acc[bi].maxV = Math.max(acc[bi].maxV, vmx);
+      }
+    }
+    pts = [];
+    for (let i = 0; i < TARGET; i++) {
+      if (acc[i].n > 0) {
+        const ts = windowStart + (i + 0.5) * bucketSec;
+        pts.push({x: xOf(ts), y: yOf(acc[i].sum / acc[i].n), ts, v: acc[i].sum / acc[i].n,
+                  minV: acc[i].minV, maxV: acc[i].maxV});
+      }
+    }
+  }
+  // Min/Max envelope (rollup tier only — when points carry distinct minV/maxV).
+  const togBand = document.getElementById(`tog-band-${did}-${sid}`)?.checked ?? true;
+  if (togBand && pts.some(p => p.minV != null && p.maxV != null && p.minV !== p.maxV)) {
+    ctx.globalAlpha = 0.5; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(244,114,182,1)'; ctx.beginPath();
+    pts.forEach((p, i) => { if (p.maxV != null) (i === 0 ? ctx.moveTo : ctx.lineTo).call(ctx, p.x, yOf(p.maxV)); });
+    ctx.stroke();
+    ctx.strokeStyle = `rgb(${_upC})`; ctx.beginPath();
+    pts.forEach((p, i) => { if (p.minV != null) (i === 0 ? ctx.moveTo : ctx.lineTo).call(ctx, p.x, yOf(p.minV)); });
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+  }
+  // Main avg line.
+  const togAvg = document.getElementById(`tog-avg-${did}-${sid}`)?.checked ?? true;
+  if (togAvg && pts.length > 1) {
+    ctx.strokeStyle = `rgb(${_acc})`; ctx.lineWidth = 2;
+    ctx.shadowColor = `rgba(${_acc},.45)`; ctx.shadowBlur = 3;
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke(); ctx.shadowBlur = 0;
+  }
+  // time_duration: mark reboots (value drops) with red vertical lines.
+  if (category === 'time_duration') {
+    for (let i = 1; i < sortedG.length; i++) {
+      const prev = sortedG[i-1], curr = sortedG[i];
+      if (prev.ok && curr.ok && curr.v < prev.v) {
+        const x = xOf(curr.ts);
+        ctx.strokeStyle = `rgba(${_dn},.6)`; ctx.lineWidth = 1;
+        ctx.setLineDash([4,3]); ctx.beginPath();
+        ctx.moveTo(x, TOP); ctx.lineTo(x, H - BOT); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+  // Stats bar.
+  if (statsEl) {
+    const total = gvs.length;
+    const ok = okG.length;
+    const upPct = total ? Math.round(ok / total * 1000) / 10 : 0;
+    if (category === 'time_duration') {
+      const last = [...okG].reverse()[0];
+      let reboots = 0, prev = null;
+      for (const g of okG) { if (prev != null && g.v < prev) reboots++; prev = g.v; }
+      statsEl.textContent = `${total} probes · ${upPct}% up · uptime ${last ? _fmtDurationSec(last.v/100) : '—'} · ${reboots} reboot${reboots === 1 ? '' : 's'}`;
+    } else {
+      const avg = ok ? okG.reduce((a,g) => a + g.v, 0) / ok : null;
+      const minV = ok ? Math.min(...okG.map(g => g.vMin != null ? g.vMin : g.v)) : null;
+      const maxV = ok ? Math.max(...okG.map(g => g.vMax != null ? g.vMax : g.v)) : null;
+      const f = v => _fmtGaugeValue(v, snmpUnit);
+      statsEl.textContent = `${total} probes · ${upPct}% up · avg ${f(avg)} · min ${f(minV)} · max ${f(maxV)}`;
+    }
+  }
+}
+
 function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did, sid) {
   if (!sumEl) return;
   const _isPing = S.sensors[`${did}/${sid}`]?.stype === 'ping';
@@ -2189,6 +2665,119 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
   else if (minutes <= 288000) _bSec = 7 * 86400;
   else                        _bSec = 30 * 86400;
   const _tzOff = new Date().getTimezoneOffset() * 60;
+
+  // v0.9.7: typed SNMP summary tables for non-counter categories.
+  const _typedCat = _snmpCategoryFor(did, sid);
+  if (_typedCat && _typedCat !== 'counter_rate' && !_isCounter) {
+    const _samplesCache = _histCache[`${did}/${sid}`]?.samples || [];
+    const gvs = _gaugeValSamples(_samplesCache);
+    if (!gvs.length) { sumEl.innerHTML = ''; return; }
+
+    if (_typedCat === 'text') {
+      // Change log — list of (ts, old→new) pairs.
+      const strSamples = _samplesCache.filter(p => p.ok && p.value != null)
+        .map(p => ({ts: p.ts, v: String(p.value)}));
+      const changes = [];
+      for (let i = 1; i < strSamples.length; i++) {
+        if (strSamples[i].v !== strSamples[i-1].v) {
+          changes.push({ts: strSamples[i].ts, from: strSamples[i-1].v, to: strSamples[i].v});
+        }
+      }
+      const rows = changes.length
+        ? changes.map(c => {
+            const d = new Date(c.ts * 1000);
+            const lbl = d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' +
+                        d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+            return `<tr>
+              <td>${lbl}</td>
+              <td style="color:var(--text3)">${esc(c.from).slice(0,48)}</td>
+              <td style="color:var(--up)">→ ${esc(c.to).slice(0,48)}</td>
+            </tr>`;
+          }).join('')
+        : `<tr><td colspan="3" style="color:var(--text3);text-align:center;padding:16px">No changes in window</td></tr>`;
+      sumEl.innerHTML = `<table class="dm-hist-tbl">
+        <thead><tr><th>Time</th><th>Previous</th><th>New</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+      return;
+    }
+
+    // enum_state / gauge_numeric / time_duration → per-bucket aggregation.
+    const legend = _typedCat === 'enum_state' ? _parseEnumLegend(snmpUnit) : null;
+    const primaryCode = legend && (legend['1'] ? '1' : Object.keys(legend)[0] || '1');
+    const primaryLbl = legend ? (legend[primaryCode] || ('state ' + primaryCode)) : null;
+    const _bk = {};
+    for (const r of summary) {
+      const k = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+      if (!_bk[k]) _bk[k] = {ts:k, ok:0, fail:0, vsum:0, vmin:Infinity, vmax:-Infinity, vcnt:0, primary:0, transitions:0, prevV:null};
+      _bk[k].ok += r.ok; _bk[k].fail += r.fail;
+    }
+    for (const g of gvs) {
+      if (!g.ok || g.v == null) continue;
+      const k = Math.floor((g.ts + _tzOff) / _bSec) * _bSec - _tzOff;
+      if (!_bk[k]) _bk[k] = {ts:k, ok:0, fail:0, vsum:0, vmin:Infinity, vmax:-Infinity, vcnt:0, primary:0, transitions:0, prevV:null};
+      const b = _bk[k];
+      const v = _typedCat === 'time_duration' ? g.v / 100 : g.v;
+      b.vsum += v; b.vcnt++;
+      const vmn = g.vMin != null ? (_typedCat === 'time_duration' ? g.vMin/100 : g.vMin) : v;
+      const vmx = g.vMax != null ? (_typedCat === 'time_duration' ? g.vMax/100 : g.vMax) : v;
+      b.vmin = Math.min(b.vmin, vmn);
+      b.vmax = Math.max(b.vmax, vmx);
+      if (_typedCat === 'enum_state') {
+        if (String(Math.round(g.v)) === primaryCode) b.primary++;
+        if (b.prevV != null && Math.round(b.prevV) !== Math.round(g.v)) b.transitions++;
+        b.prevV = g.v;
+      }
+    }
+    const fmtTs = b => {
+      const d = new Date(b.ts * 1000);
+      if (_bSec < 86400)  return d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      if (_bSec < 604800) return d.toLocaleDateString([],{month:'short',day:'numeric'});
+      return d.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+    };
+    if (_typedCat === 'enum_state') {
+      const rows = Object.values(_bk).sort((a,b) => a.ts - b.ts).map(b => {
+        const upPct = b.ok + b.fail > 0 ? Math.round(b.ok / (b.ok + b.fail) * 100) : 100;
+        const pct = b.vcnt ? Math.round(b.primary / b.vcnt * 1000) / 10 : 0;
+        const rowCls = pct < 80 ? 'hrow-crit' : pct < 99 ? 'hrow-warn' : '';
+        return `<tr class="${rowCls}">
+          <td>${fmtTs(b)}</td>
+          <td style="color:var(--up)">${b.ok}↑</td>
+          <td style="color:${b.fail?'var(--down)':'var(--text3)'}">${b.fail}↓</td>
+          <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
+          <td>${pct.toFixed(1)}%</td>
+          <td style="color:${b.transitions?'var(--warn)':'var(--text3)'}">${b.transitions}</td>
+        </tr>`;
+      }).join('');
+      sumEl.innerHTML = `<table class="dm-hist-tbl">
+        <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
+          <th>% ${esc(primaryLbl)}</th><th>Transitions</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+      return;
+    }
+    // gauge_numeric / time_duration
+    const f = v => (v != null && isFinite(v))
+      ? (_typedCat === 'time_duration' ? _fmtDurationSec(v) : _fmtGaugeValue(v, snmpUnit))
+      : '—';
+    const rows = Object.values(_bk).sort((a,b) => a.ts - b.ts).map(b => {
+      const upPct = b.ok + b.fail > 0 ? Math.round(b.ok / (b.ok + b.fail) * 100) : 100;
+      const avg = b.vcnt ? b.vsum / b.vcnt : null;
+      const rowCls = upPct < 80 ? 'hrow-crit' : upPct < 95 ? 'hrow-warn' : '';
+      return `<tr class="${rowCls}">
+        <td>${fmtTs(b)}</td>
+        <td style="color:var(--up)">${b.ok}↑</td>
+        <td style="color:${b.fail?'var(--down)':'var(--text3)'}">${b.fail}↓</td>
+        <td style="color:${upPct<100?'var(--warn)':'var(--text2)'}">${upPct}%</td>
+        <td>${f(avg)}</td>
+        <td>${f(b.vmin === Infinity ? null : b.vmin)}</td>
+        <td>${f(b.vmax === -Infinity ? null : b.vmax)}</td>
+      </tr>`;
+    }).join('');
+    sumEl.innerHTML = `<table class="dm-hist-tbl">
+      <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th>
+        <th>Avg</th><th>Min</th><th>Max</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    return;
+  }
 
   if (_isCounter) {
     // Counter mode: rate stats per time bucket
@@ -2407,7 +2996,28 @@ function mVal(s,k){
   const isVm  =s.stype==='vmware';
   const _vu   =isVm?(_VM_UNITS[s.vmware_metric]||''):null;
   if(k==='last'){
-    if(isSnmp||isDns) return s.alive===false?'FAIL':(s.last_value||s.last_detail||'—');
+    if(isSnmp||isDns) {
+      if (s.alive === false) return 'FAIL';
+      // v0.9.7: typed SNMP — show labeled enum state, formatted gauge value,
+      // or duration instead of the raw response string.
+      if (isSnmp) {
+        const cat = _snmpCategory(s.snmp_unit, s.snmp_type);
+        if (cat === 'enum_state' && s.last_value != null) {
+          const legend = _parseEnumLegend(s.snmp_unit);
+          const code = String(parseInt(s.last_value, 10));
+          if (legend[code]) return legend[code];
+        }
+        if (cat === 'gauge_numeric' && s.last_value != null) {
+          const v = parseFloat(s.last_value);
+          if (!isNaN(v)) return _fmtGaugeValue(v, s.snmp_unit);
+        }
+        if (cat === 'time_duration' && s.last_value != null) {
+          const v = parseFloat(s.last_value);
+          if (!isNaN(v)) return _fmtDurationSec(v / 100);
+        }
+      }
+      return s.last_value||s.last_detail||'—';
+    }
     if(s.stype==='tls') return s.alive===false?'FAIL':(s.last_value!=null?s.last_value+'d':'—');
     if(isVm) return s.last_ms!=null?_fmtVmVal(s.last_ms,_vu):(s.alive===false?'DOWN':'—');
     return s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');

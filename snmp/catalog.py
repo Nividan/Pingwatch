@@ -19,7 +19,9 @@ SNMP_CATALOG = [
             {"label": "IF Out Octets (port 1)",   "oid": "1.3.6.1.2.1.2.2.1.16.1", "unit": "bytes"},
             {"label": "IF In Errors (port 1)",    "oid": "1.3.6.1.2.1.2.2.1.14.1", "unit": "errors"},
             {"label": "IF Out Errors (port 1)",   "oid": "1.3.6.1.2.1.2.2.1.20.1", "unit": "errors"},
-            {"label": "IF Operational Status (port 1)", "oid": "1.3.6.1.2.1.2.2.1.8.1", "unit": "1=up 2=down"},
+            {"label": "IF Operational Status (port 1)", "oid": "1.3.6.1.2.1.2.2.1.8.1", "unit": "1=up 2=down 3=testing 4=unknown 5=dormant 6=notPresent 7=lowerLayerDown"},
+            {"label": "IF Admin Status (port 1)", "oid": "1.3.6.1.2.1.2.2.1.7.1", "unit": "1=up 2=down 3=testing"},
+            {"label": "System Uptime (TimeTicks)", "oid": "1.3.6.1.2.1.1.3.0",  "unit": ""},
             {"label": "TCP Active Opens",         "oid": "1.3.6.1.2.1.6.5.0",  "unit": "count"},
             {"label": "TCP Established Conns",    "oid": "1.3.6.1.2.1.6.9.0",  "unit": "count"},
             {"label": "IP In Receives",           "oid": "1.3.6.1.2.1.4.3.0",  "unit": "packets"},
@@ -54,7 +56,7 @@ SNMP_CATALOG = [
             {"label": "Power Supply State (PSU 1)",   "oid": "1.3.6.1.4.1.9.9.13.1.5.1.3.1",      "unit": "1=normal"},
             # BGP / routing
             {"label": "BGP Established Peers",        "oid": "1.3.6.1.2.1.15.3.0",                "unit": "count"},
-            {"label": "OSPF Neighbors",               "oid": "1.3.6.1.2.1.14.10.1.6.0.0.0.0.0",  "unit": "state"},
+            {"label": "OSPF Neighbor State",          "oid": "1.3.6.1.2.1.14.10.1.6.0.0.0.0.0",  "unit": "1=down 2=attempt 3=init 4=twoWay 5=exchangeStart 6=exchange 7=loading 8=full"},
             # ASA / Firewall
             {"label": "ASA Active Connections",       "oid": "1.3.6.1.4.1.9.9.147.1.2.2.2.1.5.40.6", "unit": "count"},
             {"label": "ASA Connection Rate",          "oid": "1.3.6.1.4.1.9.9.147.1.2.2.2.1.5.40.1", "unit": "conn/sec"},

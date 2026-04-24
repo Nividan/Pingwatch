@@ -186,6 +186,7 @@ class Sensor:
         self.banner_regex  = banner_regex or ""
         self.alerts_muted  = bool(alerts_muted)
         self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
+        self.snmp_type     = ""   # SNMP ASN.1 type from probe (Counter32 / Counter64 / Gauge32 / Integer / TimeTicks / OCTET STRING) — populated on first successful SNMP probe; empty for non-SNMP sensors. Drives the frontend's typed rendering (enum vs gauge vs duration vs text).
         self.host_override = False   # True = host was manually set; don't sync from device
         # VMware fields
         self.vmware_user     = vmware_user or ""
@@ -381,6 +382,7 @@ class Sensor:
             "alerts_muted":          self.alerts_muted,
             "host_override":         self.host_override,
             "snmp_unit":             self.snmp_unit,
+            "snmp_type":             self.snmp_type,
             "vmware_user":           self.vmware_user,
             "vmware_vm_id":          self.vmware_vm_id,
             "vmware_vm_name":        self.vmware_vm_name,
@@ -987,6 +989,12 @@ class MonitorState:
             # ── SNMP counter rate calculation ─────────────────
             _raw_val = result.get("value")
             _stype   = result.get("snmp_type", "").lower()
+            # Persist the raw ASN.1 type on the sensor so the frontend can
+            # branch its rendering (enum / gauge / duration / text) without
+            # needing per-probe type info in every sample.
+            _raw_stype = result.get("snmp_type", "")
+            if s.stype == "snmp" and _raw_stype:
+                s.snmp_type = _raw_stype
             if s.stype == "snmp" and _stype in _COUNTER_TYPES and _raw_val is not None:
                 try:
                     _cur = int(_raw_val)

@@ -170,6 +170,36 @@ function sensorFormHTML(dev, s=null) {
       <input type="hidden" id="as-snmp-unit" value="${esc(s?.snmp_unit||'')}"/>
       <div class="fh" id="as-oid-unit2" style="min-height:14px">${s?.snmp_unit?'<b>Unit: '+esc(s.snmp_unit)+'</b>':'Type or paste an OID, choose from picker above, or use Discover Interfaces.'}</div>
     </div>
+    <div class="fr"><label class="fl">Display as</label>
+      <select id="as-snmp-display" onchange="snmpDisplayChange()" style="max-width:320px">
+        <option value="">Auto-detect (recommended)</option>
+        <optgroup label="Counter (rate)">
+          <option value="bytes">Traffic bytes → Mbps</option>
+          <option value="errors">Errors counter → err/s</option>
+          <option value="packets">Packets counter → pkt/s</option>
+        </optgroup>
+        <optgroup label="Gauge (numeric)">
+          <option value="%">Percent (0-100%)</option>
+          <option value="celsius">Temperature °C</option>
+          <option value="fahrenheit">Temperature °F</option>
+          <option value="dbm">Signal strength dBm</option>
+          <option value="count">Count / number</option>
+          <option value="rpm">Fan RPM</option>
+          <option value="volts">Voltage (V)</option>
+          <option value="amps">Current (A)</option>
+        </optgroup>
+        <optgroup label="Enum (state)">
+          <option value="1=up 2=down">Up / Down (1=up 2=down)</option>
+          <option value="1=up 2=down 3=testing 4=unknown 5=dormant 6=notPresent 7=lowerLayerDown">ifOperStatus (full IF-MIB enum)</option>
+          <option value="1=normal">Normal / other (1=normal)</option>
+          <option value="__enum_custom__">Custom enum (type legend below…)</option>
+        </optgroup>
+        <optgroup label="Other">
+          <option value="string">Text / identifier</option>
+        </optgroup>
+      </select>
+      <div class="fh" style="min-height:14px">Controls how History and KPI tiles render.  "Auto-detect" classifies from the probe's SNMP type on first poll.</div>
+    </div>
   </div>
   <!-- DNS -->
   <div class="fg ${curType==='dns'?'vis':''}" id="fg-dns">
@@ -892,6 +922,9 @@ function _snmpTryMatchCurrentOid(){
   const oidEl=document.getElementById('as-oid');
   if(!oidEl) return;
   const currentOid=oidEl.value.trim();
+  // v0.9.7: initialize the "Display as" dropdown from the sensor's saved unit.
+  const savedUnit=document.getElementById('as-snmp-unit')?.value||'';
+  _syncSnmpDisplay(savedUnit);
   if(!currentOid) return;
   // Exact catalog match
   for(const vendor of _snmpCatalog){
@@ -903,6 +936,7 @@ function _snmpTryMatchCurrentOid(){
         if(psel){ psel.value=o.oid; }
         const unitEl=document.getElementById('as-oid-unit');
         if(unitEl) unitEl.textContent=o.unit?'Unit: '+o.unit:'';
+        _syncSnmpDisplay(o.unit||'');
         return;
       }
     }
@@ -983,7 +1017,39 @@ function snmpOidPick(){
     const u=sel.dataset.unit||'';
     if(unitEl) unitEl.textContent=u?'Unit: '+u:'';
     if(sunitEl) sunitEl.value=u;
+    _syncSnmpDisplay(u);
   }
+}
+
+// v0.9.7: keep the "Display as" dropdown in sync with programmatic unit
+// changes (catalog pick, discover interfaces).  If the unit doesn't match
+// a predefined option, the dropdown shows "Auto-detect".
+function _syncSnmpDisplay(unit) {
+  const sel = document.getElementById('as-snmp-display');
+  if (!sel) return;
+  const opts = Array.from(sel.options).map(o => o.value);
+  sel.value = opts.includes(unit) ? unit : '';
+}
+
+function snmpDisplayChange() {
+  const sel  = document.getElementById('as-snmp-display');
+  const sunit = document.getElementById('as-snmp-unit');
+  const hint  = document.getElementById('as-oid-unit2');
+  if (!sel || !sunit) return;
+  let v = sel.value;
+  if (v === '__enum_custom__') {
+    const legend = prompt(
+      'Enter enum legend in the format "1=state1 2=state2 …"\n\nExamples:\n  1=up 2=down\n  1=normal 2=warning 3=critical',
+      sunit.value || '1=ok 2=fail');
+    if (legend && /\d+\s*=\s*\w+/.test(legend)) {
+      v = legend.trim();
+    } else {
+      sel.value = sunit.value || '';
+      return;
+    }
+  }
+  sunit.value = v;
+  if (hint) hint.innerHTML = v ? '<b>Unit: ' + esc(v) + '</b>' : 'Type or paste an OID, choose from picker above, or use Discover Interfaces.';
 }
 
 // ── SNMP Interface Discovery ──────────────────────────────────────────────
