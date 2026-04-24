@@ -1205,7 +1205,9 @@ async function discoverInterfaces(){
     const displayName=esc(iface.name||iface.descr);
     const displayDescr=esc(iface.alias||iface.descr);
     const rowBg=i%2?'background:var(--bg2)':'';
-    const opts=METRICS.map(m=>`<option value="${m.v}">${m.l}</option>`).join('');
+    const metCheckboxes=
+      `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-row-met-all-cb" onchange="ifaceRowMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+      METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceRowMetChanged(this)"> ${esc(m.l)}</label>`).join('');
     html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
     html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-iface-cb" data-idx="${iface.index}" data-name="${esc(iface.name||iface.descr)}" onchange="updateIfaceSelCount()"/></td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3)">${iface.index}</td>`;
@@ -1213,13 +1215,7 @@ async function discoverInterfaces(){
     html+=`<td style="padding:4px 8px;color:var(--text2)">${displayDescr}</td>`;
     html+=`<td style="padding:4px 8px;color:${stClr};white-space:nowrap">${iface.status}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${esc(iface.speed)}</td>`;
-    html+=`<td style="padding:4px 8px">
-      <select class="as-iface-metric" data-idx="${iface.index}"
-              onchange="updateIfaceSelCount()"
-              style="font-size:11px;padding:2px 4px;max-width:140px">
-        <option value="">— metric —</option>${opts}
-      </select>
-    </td>`;
+    html+=`<td style="padding:4px 8px"><div class="vm-met-wrap" data-idx="${iface.index}"><button class="vm-met-btn" type="button" onclick="toggleIfaceRowMetPicker(this)">— pick metrics —</button><div class="vm-met-drop" style="display:none">${metCheckboxes}</div></div></td>`;
     html+='</tr>';
   });
 
@@ -1241,26 +1237,38 @@ function updateIfaceSelCount(){
   const cbs=[...document.querySelectorAll('.as-iface-cb')];
   const checked=cbs.filter(c=>c.checked);
   const n=checked.length;
+  let totalSensors=0;
+  checked.forEach(cb=>{
+    const idx=cb.dataset.idx;
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    if(wrap){
+      const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      totalSensors+=metCbs.length;
+    }
+  });
   const el=document.getElementById('as-iface-sel-count');
-  if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
+  if(el) el.textContent=n?`${n} of ${cbs.length} selected${totalSensors?` · ${totalSensors} sensor${totalSensors>1?'s':''}`:''}`:'0 selected';
   const all=document.getElementById('as-iface-all');
   if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
   const addBtn=document.getElementById('as-iface-add-btn');
-  if(addBtn) addBtn.textContent=(n===1)?'Apply to Form':'Add Selected as Sensors';
-  // When exactly 1 interface+metric is selected, sync the OID and snmp_unit fields
+  if(addBtn) addBtn.textContent=(n===1&&totalSensors===1)?'Apply to Form':'Add Selected as Sensors';
+  // When exactly 1 interface+1 metric is selected, sync the OID and snmp_unit fields
   const oidEl=document.getElementById('as-oid');
-  if(oidEl && n===1){
+  if(oidEl && n===1 && totalSensors===1){
     const cb=checked[0];
     const idx=parseInt(cb.dataset.idx);
-    const sel=document.querySelector(`.as-iface-metric[data-idx="${cb.dataset.idx}"]`);
-    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel?.value);
-    if(metric && !isNaN(idx)){
-      oidEl.value=metric.oid+idx;
-      const ifaceName=cb.dataset.name||('interface '+idx);
-      const unitEl=document.getElementById('as-oid-unit2');
-      if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
-      const sunitEl=document.getElementById('as-snmp-unit');
-      if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+    if(metCbs.length===1){
+      const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCbs[0].value);
+      if(metric && !isNaN(idx)){
+        oidEl.value=metric.oid+idx;
+        const ifaceName=cb.dataset.name||('interface '+idx);
+        const unitEl=document.getElementById('as-oid-unit2');
+        if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
+        const sunitEl=document.getElementById('as-snmp-unit');
+        if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+      }
     }
   }
 }
@@ -1275,9 +1283,11 @@ async function addSelectedIfaceSensors(){
   if(checked.length===1){
     const cb=checked[0];
     const idx=cb.dataset.idx;
-    const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
-    if(!sel||!sel.value){toast('Choose a metric for the selected interface','err');return;}
-    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel.value);
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+    if(!metCbs.length){toast('Choose a metric for the selected interface','err');return;}
+    if(metCbs.length>1){toast('Select exactly one metric to apply to the form','err');return;}
+    const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCbs[0].value);
     if(!metric){toast('Unknown metric','err');return;}
     const oidEl=document.getElementById('as-oid');
     const sunitEl=document.getElementById('as-snmp-unit');
@@ -1310,13 +1320,16 @@ async function addSelectedIfaceSensors(){
   checked.forEach(cb=>{
     const idx=cb.dataset.idx;
     const name=cb.dataset.name||('IF'+idx);
-    const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
-    if(!sel||!sel.value){noMetric++;return;}
-    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel.value);
-    if(metric) rows.push({idx:parseInt(idx),name,metric});
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+    if(!metCbs.length){noMetric++;return;}
+    metCbs.forEach(metCb=>{
+      const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCb.value);
+      if(metric) rows.push({idx:parseInt(idx),name,metric});
+    });
   });
-  if(noMetric) toast(`${noMetric} row${noMetric>1?'s':''} skipped — no metric chosen`,'info');
-  if(!rows.length){toast('Choose a metric for each checked interface','err');return;}
+  if(noMetric) toast(`${noMetric} interface${noMetric>1?'s':''} skipped — no metrics chosen`,'info');
+  if(!rows.length){toast('Choose at least one metric for each checked interface','err');return;}
   const btn=document.querySelector('[onclick="addSelectedIfaceSensors()"]');
   if(btn){btn.disabled=true;btn.textContent=`Adding ${rows.length}…`;}
   let added=0,failed=0;
@@ -1437,13 +1450,85 @@ function ifaceMetChanged(cb){
   if(!wrap.dataset.idx){
     const checkedIdxs=[...document.querySelectorAll('.as-iface-cb:checked')].map(c=>c.dataset.idx);
     checkedIdxs.forEach(idx=>{
-      const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
-      if(!sel) return;
-      const checkedMets=[...drop.querySelectorAll('input[value]:checked')].map(c=>c.value);
-      sel.value=checkedMets.length===1?checkedMets[0]:'';
+      const rowWrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+      if(!rowWrap) return;
+      rowWrap.querySelectorAll('.vm-met-drop input').forEach(rowCb=>{
+        rowCb.checked=!!drop.querySelector(`input[value="${rowCb.value}"]:checked`);
+      });
+      const rowChecked=[...rowWrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      const rowBtn=rowWrap.querySelector('.vm-met-btn');
+      if(rowBtn){
+        if(!rowChecked.length) rowBtn.textContent='— pick metrics —';
+        else if(rowChecked.length===1) rowBtn.textContent=rowChecked[0].parentElement.textContent.trim();
+        else rowBtn.textContent=`${rowChecked.length} metrics`;
+      }
+      const rowAllCb=rowWrap.querySelector('.iface-row-met-all-cb');
+      const rowAllMetCbs=[...rowWrap.querySelectorAll('.vm-met-drop input[value]')];
+      if(rowAllCb){rowAllCb.checked=rowChecked.length===rowAllMetCbs.length;rowAllCb.indeterminate=rowChecked.length>0&&rowChecked.length<rowAllMetCbs.length;}
     });
     updateIfaceSelCount();
   }
+}
+function toggleIfaceRowMetPicker(btn){
+  const drop=btn.nextElementSibling;
+  const isOpen=_ifaceRowMetPickerOpen===drop;
+  if(_ifaceRowMetPickerOpen&&_ifaceRowMetPickerOpen!==drop) _closeIfaceRowMetPicker();
+  if(isOpen){
+    _closeIfaceRowMetPicker();
+  } else {
+    const wrap=btn.closest('.vm-met-wrap');
+    drop._ownerWrap=wrap;
+    document.body.appendChild(drop);
+    const r=btn.getBoundingClientRect();
+    const dropW=240;
+    const left=Math.max(4, r.right-dropW);
+    drop.style.position='fixed';
+    drop.style.top=(r.bottom+3)+'px';
+    drop.style.left=left+'px';
+    drop.style.right='auto';
+    drop.style.zIndex='9999';
+    drop.style.display='block';
+    _ifaceRowMetPickerOpen=drop;
+  }
+}
+function _closeIfaceRowMetPicker(){
+  if(!_ifaceRowMetPickerOpen) return;
+  const drop=_ifaceRowMetPickerOpen;
+  drop.style.display='none';
+  if(drop._ownerWrap) drop._ownerWrap.appendChild(drop);
+  _ifaceRowMetPickerOpen=null;
+}
+let _ifaceRowMetPickerOpen=null;
+document.addEventListener('click',e=>{
+  if(_ifaceRowMetPickerOpen&&!e.target.closest('.vm-met-wrap')&&!e.target.closest('.vm-met-drop')){
+    _closeIfaceRowMetPicker();
+  }
+});
+function ifaceRowMetSelectAll(allCb){
+  const drop=allCb.closest('.vm-met-drop');
+  if(!drop) return;
+  drop.querySelectorAll('input[value]').forEach(c=>c.checked=allCb.checked);
+  ifaceRowMetChanged(allCb);
+}
+function ifaceRowMetChanged(cb){
+  const drop=cb.closest('.vm-met-drop');
+  const wrap=drop?._ownerWrap||drop?.parentElement;
+  if(!wrap) return;
+  const allCb=drop.querySelector('.iface-row-met-all-cb');
+  if(allCb&&cb!==allCb){
+    const metCbs=[...drop.querySelectorAll('input[value]')];
+    const nChecked=metCbs.filter(c=>c.checked).length;
+    allCb.checked=nChecked===metCbs.length;
+    allCb.indeterminate=nChecked>0&&nChecked<metCbs.length;
+  }
+  const checked=[...drop.querySelectorAll('input[value]:checked')];
+  const btn=wrap.querySelector('.vm-met-btn');
+  if(btn){
+    if(!checked.length) btn.textContent='— pick metrics —';
+    else if(checked.length===1) btn.textContent=checked[0].parentElement.textContent.trim();
+    else btn.textContent=`${checked.length} metrics`;
+  }
+  updateIfaceSelCount();
 }
 
 // ── VMware VM Discovery ──────────────────────────────────────────────────
