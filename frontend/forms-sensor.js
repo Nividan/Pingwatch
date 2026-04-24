@@ -1179,7 +1179,15 @@ async function discoverInterfaces(){
   const METRICS=_IFACE_METRICS;
   window._ifaceMetrics=METRICS;
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">';
+  const metricCheckboxes=
+    `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-met-all-cb" onchange="ifaceMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+    METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceMetChanged(this)"> ${esc(m.l)}</label>`).join('');
+
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap">Set for checked:</span>';
+  html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleIfaceMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
+  html+='</div>';
   html+='<div style="overflow-x:auto;max-height:220px;overflow-y:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
@@ -1361,6 +1369,80 @@ async function addSelectedIfaceSensors(){
     closeM('mas');
   }else{
     toast('Failed to add sensors','err');
+  }
+}
+
+// ── SNMP Interface bulk metrics helpers ──────────────────────────────────
+
+let _ifaceMetPickerOpen=null;
+function _closeIfaceMetPicker(){
+  if(!_ifaceMetPickerOpen) return;
+  const drop=_ifaceMetPickerOpen;
+  drop.style.display='none';
+  if(drop._ownerWrap) drop._ownerWrap.appendChild(drop);
+  _ifaceMetPickerOpen=null;
+}
+function toggleIfaceMetPicker(btn){
+  const drop=btn.nextElementSibling;
+  const isOpen=_ifaceMetPickerOpen===drop;
+  if(_ifaceMetPickerOpen&&_ifaceMetPickerOpen!==drop) _closeIfaceMetPicker();
+  if(isOpen){
+    _closeIfaceMetPicker();
+  } else {
+    const wrap=btn.closest('.vm-met-wrap');
+    drop._ownerWrap=wrap;
+    document.body.appendChild(drop);
+    const r=btn.getBoundingClientRect();
+    const dropW=240;
+    const left=Math.max(4, r.right-dropW);
+    drop.style.position='fixed';
+    drop.style.top=(r.bottom+3)+'px';
+    drop.style.left=left+'px';
+    drop.style.right='auto';
+    drop.style.zIndex='9999';
+    drop.style.display='block';
+    _ifaceMetPickerOpen=drop;
+  }
+}
+document.addEventListener('click',e=>{
+  if(_ifaceMetPickerOpen&&!e.target.closest('.vm-met-wrap')&&!e.target.closest('.vm-met-drop')){
+    _closeIfaceMetPicker();
+  }
+});
+function ifaceMetSelectAll(allCb){
+  const drop=allCb.closest('.vm-met-drop');
+  if(!drop) return;
+  drop.querySelectorAll('input[value]').forEach(c=>c.checked=allCb.checked);
+  ifaceMetChanged(allCb);
+}
+function ifaceMetChanged(cb){
+  const drop=cb.closest('.vm-met-drop');
+  const wrap=drop?._ownerWrap||drop?.parentElement;
+  if(!wrap) return;
+  const allCb=drop.querySelector('.iface-met-all-cb');
+  if(allCb&&cb!==allCb){
+    const metCbs=[...drop.querySelectorAll('input[value]')];
+    const nChecked=metCbs.filter(c=>c.checked).length;
+    allCb.checked=nChecked===metCbs.length;
+    allCb.indeterminate=nChecked>0&&nChecked<metCbs.length;
+  }
+  const checked=[...drop.querySelectorAll('input[value]:checked')];
+  const btn=wrap.querySelector('.vm-met-btn');
+  if(btn){
+    if(!checked.length) btn.textContent='— bulk metrics —';
+    else if(checked.length===1) btn.textContent=checked[0].parentElement.textContent.trim();
+    else btn.textContent=`${checked.length} metrics`;
+  }
+  // If this is the bulk picker (in header, no data-idx), apply to all checked rows
+  if(!wrap.dataset.idx){
+    const checkedIdxs=[...document.querySelectorAll('.as-iface-cb:checked')].map(c=>c.dataset.idx);
+    checkedIdxs.forEach(idx=>{
+      const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
+      if(!sel) return;
+      const checkedMets=[...drop.querySelectorAll('input[value]:checked')].map(c=>c.value);
+      sel.value=checkedMets.length===1?checkedMets[0]:'';
+    });
+    updateIfaceSelCount();
   }
 }
 
