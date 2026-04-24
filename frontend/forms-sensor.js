@@ -1274,9 +1274,15 @@ function updateIfaceSelCount(){
     if(wrap){
       const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
       if(metCbs.length===1){
-        const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCbs[0].value);
+        const metricValue=metCbs[0].value;
+        console.log(`[updateIfaceSelCount] Looking for metric with value: ${metricValue}`);
+        const metric=(window._ifaceMetrics||[]).find(m=>m.v===metricValue);
+        console.log(`[updateIfaceSelCount] Found metric:`, metric);
         if(metric && !isNaN(idx)){
-          oidEl.value=metric.oid+idx;
+          const newOid=metric.oid+idx;
+          console.log(`[updateIfaceSelCount] Setting OID from ${oidEl.value} to ${newOid}`);
+          oidEl.value=newOid;
+          console.log(`[updateIfaceSelCount] OID field now: ${oidEl.value}`);
           const ifaceName=cb.dataset.name||('interface '+idx);
           const unitEl=document.getElementById('as-oid-unit2');
           if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
