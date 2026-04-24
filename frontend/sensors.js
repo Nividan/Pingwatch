@@ -1123,6 +1123,24 @@ const _COUNTER_HIST_UNITS = new Set(['bytes','errors','packets']);
 
 function _computeRateSamples(samples, snmpUnit) {
   if (!_COUNTER_HIST_UNITS.has(snmpUnit)) return null;
+  // Rollup tier path (v0.9.6): each sample already carries first_value +
+  // last_value for its bucket — derive per-bucket rate directly. Detection:
+  // bucket_s is set by the API for rollup rows and absent for raw rows.
+  const hasBuckets = samples.some(p => p.bucket_s && p.first_value != null && p.last_value != null);
+  if (hasBuckets) {
+    const result = [];
+    for (const p of samples) {
+      if (!p.ok || !p.bucket_s || p.first_value == null || p.last_value == null) {
+        result.push({ts: p.ts, ok: !!p.ok, rate: null, ms: p.ms});
+        continue;
+      }
+      let delta = p.last_value - p.first_value;
+      if (delta < 0) delta += 4294967296; // Counter32 wrap
+      result.push({ts: p.ts, ok: true, rate: delta / p.bucket_s, ms: p.ms});
+    }
+    return result;
+  }
+  // Raw tier: compute delta between consecutive samples.
   const sorted = [...samples].filter(p => p.value != null).sort((a, b) => a.ts - b.ts);
   const result = [];
   for (let i = 1; i < sorted.length; i++) {

@@ -6,6 +6,17 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ## v0.9.6
 
+### 📈 Preserve sensor `value` through rollup tiers
+
+SNMP traffic sensors (and any other sensor whose primary display metric lives in `sensor_samples.value` rather than `ms`) silently switched units at the rollup boundary — 24h view showed Mbps, 3d+ flipped to ms (poll latency) because `sensor_samples_5m` / `_1h` only aggregated `ms`.
+
+- **Schema** — [db/pg_schema.py](Pingwatch/db/pg_schema.py) + [db/core.py](Pingwatch/db/core.py) — added `avg_value`, `min_value`, `max_value`, `first_value`, `last_value` columns to both `sensor_samples_5m` and `sensor_samples_1h`. Idempotent `ADD COLUMN IF NOT EXISTS` on PG, try/except swallow on SQLite
+- **Rollup worker** — [db/samples.py](Pingwatch/db/samples.py) — `_rollup_5m` / `_rollup_1h` now aggregate value alongside ms. PG uses `CASE WHEN value ~ '^-?[0-9]+(\.[0-9]+)?$' THEN value::DOUBLE PRECISION END` to skip non-numeric rows (DNS IP, banner matches) and `ARRAY_AGG(... ORDER BY ts)` to pick bucket endpoints. SQLite rolls up row-wise in Python via the new `_bucket_raw_rows` helper (SQLite has no regex) — `_try_float` coerces, non-numeric rows contribute None to the aggregate
+- **Backfill** — `db_rollup_backfill` gains a third trigger: if any rollup row has `avg_value IS NULL` while raw `value` still exists, reset `rollup_state.last_ts = 0` so the rollup reprocesses within the raw-retention window. Rows older than raw retention stay NULL (unrecoverable). Runs once on first startup after deploy
+- **History API** — `_history_from_rollup` now selects + returns `avg_value` / `min_value` / `max_value` / `first_value` / `last_value` + `bucket_s` (300 or 3600). Raw rows still return `value`; rollup rows keep `value: null` so existing consumers don't silently break
+- **Frontend** — [frontend/sensors.js](Pingwatch/frontend/sensors.js) — `_computeRateSamples` gains a rollup-tier branch that derives the per-bucket rate from `(last_value - first_value) / bucket_s` (same Counter32-wrap handling that already existed for raw tier). With that, `_isCounter` is true at rollup tier → `_buildKpiBar`, `_drawHistCanvas`, `_setupHistTooltip`, `_buildSummaryTable` all render Mbps / err/s / pkt/s across the full 1h → 3y range
+- **Scope** — counter-rate SNMP (`snmp_unit` in `bytes` / `errors` / `packets`) is the reported bug and is fully fixed. SNMP gauges (`%`, `°C`, …) and TLS days-until-expiry have the backend aggregates ready, but their frontend rendering is pre-existing and unchanged by this commit (they already don't render `value` properly even at the raw tier — separate UI task)
+
 ### 🔢 5k-sensor scale pass
 
 Targeted backend + frontend patches to take PingWatch from ~1–2k comfortable to 5k on a single production PG instance. No architectural rewrite — thread-based probe dispatch stays, frontend stays DOM-full.

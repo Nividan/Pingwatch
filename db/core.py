@@ -1137,6 +1137,9 @@ def logs_db_init():
             )
 
         # ── Rollup tables (v0.8.0) ─────────────────────────────────
+        # v0.9.6: added {avg,min,max,first,last}_value for sensors whose
+        # primary display metric lives in sensor_samples.value (SNMP gauges,
+        # SNMP counter rates, TLS days-until-expiry).
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_samples_5m (
                 ts           REAL    NOT NULL,
@@ -1149,6 +1152,11 @@ def logs_db_init():
                 max_ms       REAL,
                 avg_ms_sq    REAL    DEFAULT 0,
                 sample_count INTEGER NOT NULL DEFAULT 0,
+                avg_value    REAL,
+                min_value    REAL,
+                max_value    REAL,
+                first_value  REAL,
+                last_value   REAL,
                 PRIMARY KEY (did, sid, ts)
             )""")
         con.execute(
@@ -1166,11 +1174,24 @@ def logs_db_init():
                 max_ms       REAL,
                 avg_ms_sq    REAL    DEFAULT 0,
                 sample_count INTEGER NOT NULL DEFAULT 0,
+                avg_value    REAL,
+                min_value    REAL,
+                max_value    REAL,
+                first_value  REAL,
+                last_value   REAL,
                 PRIMARY KEY (did, sid, ts)
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_s1h_ts ON sensor_samples_1h(ts)"
         )
+        # Idempotent add for installs that predate v0.9.6 — SQLite has no
+        # IF NOT EXISTS on ADD COLUMN; swallow the "duplicate column" error.
+        for _tbl in ("sensor_samples_5m", "sensor_samples_1h"):
+            for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value"):
+                try:
+                    con.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} REAL")
+                except sqlite3.OperationalError:
+                    pass   # column already exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS rollup_state (
                 tier    TEXT PRIMARY KEY,
