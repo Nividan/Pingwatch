@@ -1209,7 +1209,7 @@ async function discoverInterfaces(){
       `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-row-met-all-cb" onchange="ifaceRowMetSelectAll(this)"> <strong>All metrics</strong></label>`+
       METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceRowMetChanged(this)"> ${esc(m.l)}</label>`).join('');
     html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
-    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-iface-cb" data-idx="${iface.index}" data-name="${esc(iface.name||iface.descr)}" onchange="updateIfaceSelCount()"/></td>`;
+    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-iface-cb" data-idx="${iface.index}" data-name="${esc(iface.name||iface.descr)}" data-descr="${esc(iface.alias||iface.descr||'')}" onchange="updateIfaceSelCount()"/></td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3)">${iface.index}</td>`;
     html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap">${displayName}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text2)">${displayDescr}</td>`;
@@ -1319,7 +1319,9 @@ async function addSelectedIfaceSensors(){
   const rows=[];let noMetric=0;
   checked.forEach(cb=>{
     const idx=cb.dataset.idx;
-    const name=cb.dataset.name||('IF'+idx);
+    const ifaceName=cb.dataset.name||('IF'+idx);
+    const ifaceDescr=cb.dataset.descr||'';
+    const name=ifaceDescr?`${ifaceName} ${ifaceDescr}`:ifaceName;
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
     const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
     if(!metCbs.length){noMetric++;return;}
