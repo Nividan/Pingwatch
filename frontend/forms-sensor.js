@@ -1272,7 +1272,14 @@ function updateIfaceSelCount(){
     const idx=parseInt(cb.dataset.idx);
     const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
     if(wrap){
-      const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      // Find checked metrics in wrap (or in body if dropdown was teleported)
+      let metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      if(metCbs.length===0 && _ifaceRowMetPickerOpen && _ifaceRowMetPickerOpen._ownerWrap){
+        const ownerIdx=_ifaceRowMetPickerOpen._ownerWrap?.dataset?.idx;
+        if(ownerIdx===idx.toString()){
+          metCbs=[..._ifaceRowMetPickerOpen.querySelectorAll('input[value]:checked')];
+        }
+      }
       if(metCbs.length===1){
         const metricValue=metCbs[0].value;
         console.log(`[updateIfaceSelCount] Looking for metric with value: ${metricValue}`);
