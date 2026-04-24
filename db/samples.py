@@ -37,6 +37,17 @@ _last_flush_ms    = 0         # wall-clock ms of most recent flush
 _last_flush_rows  = 0         # row count of most recent flush
 _last_flush_ts    = 0.0       # monotonic ts of most recent flush completion
 
+# Startup grace period — suppresses the "Sample flush slow" WARN during the
+# first N seconds after process start.  Cold start briefly pushes flush
+# durations above 2s because of concurrent PG pool warmup, sensor history
+# restoration, alert-engine cold-cache rebuild, and first-VACUUM-after-migration.
+# None of those indicate chronic contention; the WARN only has signal in
+# steady state.  Fires at INFO level during grace so operators can still
+# see it if they're looking, but the noise doesn't trigger WARN-based
+# alerting / log monitoring.
+_STARTUP_GRACE_S = 60
+_startup_ts = time.monotonic()
+
 # Retention trim batching — bounds DELETE runtime so the flush loop
 # can't be blocked for seconds by a mass cleanup on a large rollup table.
 _TRIM_BATCH   = 10_000
@@ -145,10 +156,18 @@ def _do_insert_samples(rows):
         _last_flush_rows = len(rows)
         _last_flush_ts   = time.monotonic()
         if elapsed_ms > 2000:
-            log.warning(
-                f"Sample flush slow: {elapsed_ms} ms for {len(rows)} rows "
-                f"(>2s indicates DB contention — check retention trim, vacuum, or pool saturation)"
-            )
+            _in_grace = (time.monotonic() - _startup_ts) < _STARTUP_GRACE_S
+            if _in_grace:
+                log.info(
+                    f"Sample flush slow: {elapsed_ms} ms for {len(rows)} rows "
+                    f"(expected during first {_STARTUP_GRACE_S}s of startup — "
+                    f"PG pool warmup + history restore + alert cache rebuild)"
+                )
+            else:
+                log.warning(
+                    f"Sample flush slow: {elapsed_ms} ms for {len(rows)} rows "
+                    f"(>2s indicates DB contention — check retention trim, vacuum, or pool saturation)"
+                )
 
 
 def db_flush_samples():

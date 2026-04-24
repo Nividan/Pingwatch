@@ -122,11 +122,14 @@ _GAUGE_UNITS_PY  = frozenset([
 _ENUM_UNIT_RE_PY = _re.compile(r"\d+\s*=\s*[a-zA-Z][\w-]*")
 _ENUM_PAIR_RE_PY = _re.compile(r"(\d+)\s*=\s*([a-zA-Z][\w-]*)")
 
-def _snmp_category_py(snmp_unit: str, snmp_type: str) -> str:
+def _snmp_category_py(snmp_unit: str, snmp_type: str, snmp_oid: str = "") -> str:
     u = (snmp_unit or "").lower().strip()
     if u in _BYTE_UNITS or u in _COUNT_UNITS:
         return "counter_rate"
     if snmp_unit and _ENUM_UNIT_RE_PY.search(snmp_unit):
+        return "enum_state"
+    # v0.9.7: known-OID enum fallback for "Auto-detect" sensors (unit blank).
+    if not snmp_unit and snmp_oid and _enum_for_oid_py(snmp_oid):
         return "enum_state"
     if u in _GAUGE_UNITS_PY:
         return "gauge_numeric"
@@ -140,6 +143,30 @@ def _parse_enum_legend_py(snmp_unit: str) -> dict:
     if not snmp_unit:
         return {}
     return {m.group(1): m.group(2) for m in _ENUM_PAIR_RE_PY.finditer(snmp_unit)}
+
+# Well-known OID prefix → implicit enum legend (Python mirror of frontend
+# _KNOWN_ENUM_OIDS).  Lets event-transition detection fire on "Auto-detect"
+# sensors pointed at standard IF-MIB / UPS-MIB enum OIDs, without the user
+# having to set snmp_unit manually.
+_KNOWN_ENUM_OIDS_PY = [
+    ("1.3.6.1.2.1.2.2.1.8.",  {"1":"up","2":"down","3":"testing","4":"unknown","5":"dormant","6":"notPresent","7":"lowerLayerDown"}),
+    ("1.3.6.1.2.1.2.2.1.7.",  {"1":"up","2":"down","3":"testing"}),
+    ("1.3.6.1.2.1.33.1.2.1.", {"1":"unknown","2":"batteryNormal","3":"batteryLow","4":"batteryDepleted"}),
+]
+
+def _enum_for_oid_py(oid: str) -> dict:
+    if not oid:
+        return {}
+    for prefix, legend in _KNOWN_ENUM_OIDS_PY:
+        if oid.startswith(prefix):
+            return legend
+    return {}
+
+def _effective_enum_legend_py(snmp_unit: str, snmp_oid: str) -> dict:
+    legend = _parse_enum_legend_py(snmp_unit)
+    if legend:
+        return legend
+    return _enum_for_oid_py(snmp_oid)
 
 def _enum_primary_code_py(snmp_unit: str) -> str:
     legend = _parse_enum_legend_py(snmp_unit)
@@ -1090,7 +1117,7 @@ class MonitorState:
             # the Events tab and webhook path fire automatically.
             if s.stype == "snmp" and _raw_val is not None and not _muted:
                 try:
-                    _cat = _snmp_category_py(s.snmp_unit, _raw_stype)
+                    _cat = _snmp_category_py(s.snmp_unit, _raw_stype, s.snmp_oid)
                 except Exception:
                     _cat = None
                 if _cat == "enum_state":
@@ -1099,8 +1126,8 @@ class MonitorState:
                     if _cur_code is not None:
                         _prev_code = s._prev_enum_code
                         if _prev_code is not None and _cur_code != _prev_code:
-                            legend  = _parse_enum_legend_py(s.snmp_unit)
-                            primary = _enum_primary_code_py(s.snmp_unit)
+                            legend  = _effective_enum_legend_py(s.snmp_unit, s.snmp_oid)
+                            primary = "1" if "1" in legend else (next(iter(legend), "1") if legend else "1")
                             prev_lbl = legend.get(_prev_code, f"state {_prev_code}")
                             cur_lbl  = legend.get(_cur_code,  f"state {_cur_code}")
                             if _cur_code != primary and _prev_code == primary:

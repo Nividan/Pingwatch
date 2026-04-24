@@ -1160,14 +1160,26 @@ const _GAUGE_UNITS = new Set([
 ]);
 const _ENUM_UNIT_RE = /\d+\s*=\s*[a-z][\w-]*/i;
 
-function _snmpCategory(snmpUnit, snmpType) {
+function _snmpCategory(snmpUnit, snmpType, snmpOid) {
   const u = (snmpUnit || '').toLowerCase().trim();
   if (_COUNTER_HIST_UNITS.has(u)) return 'counter_rate';
   if (snmpUnit && _ENUM_UNIT_RE.test(snmpUnit)) return 'enum_state';
+  // v0.9.7: known-OID enum fallback for "Auto-detect" sensors (unit blank).
+  if (!snmpUnit && snmpOid && _enumForOid(snmpOid)) return 'enum_state';
   if (_GAUGE_UNITS.has(u)) return 'gauge_numeric';
   if (snmpType === 'TimeTicks') return 'time_duration';
   if (snmpType === 'OCTET STRING' || u === 'string') return 'text';
   return 'gauge_numeric';   // safe default — renders value as a line, never ms
+}
+
+// Effective legend: user-set unit wins; known-OID fallback picks up
+// "Auto-detect" sensors pointed at IF-MIB / UPS-MIB / etc.  Callers that
+// need labeled enum state should prefer this over raw _parseEnumLegend.
+function _effectiveEnumLegend(s) {
+  const legend = _parseEnumLegend(s.snmp_unit);
+  if (Object.keys(legend).length) return legend;
+  const implicit = _enumForOid(s.snmp_oid);
+  return implicit || {};
 }
 
 function _parseEnumLegend(snmpUnit) {
@@ -1179,6 +1191,25 @@ function _parseEnumLegend(snmpUnit) {
   return map;
 }
 
+// Well-known OID prefix → implicit enum legend.  Kicks in when the user
+// added a sensor via the "Auto-detect" Display-as option (unit left blank)
+// but the OID is a standard IF-MIB / ENTITY-MIB / UPS-MIB enum so we can
+// confidently label the integer value.  Prefix-match so indexed rows like
+// 1.3.6.1.2.1.2.2.1.8.44 resolve to ifOperStatus without needing per-index
+// catalog entries.
+const _KNOWN_ENUM_OIDS = [
+  {prefix: '1.3.6.1.2.1.2.2.1.8.',  legend: {1:'up',2:'down',3:'testing',4:'unknown',5:'dormant',6:'notPresent',7:'lowerLayerDown'}},
+  {prefix: '1.3.6.1.2.1.2.2.1.7.',  legend: {1:'up',2:'down',3:'testing'}},
+  {prefix: '1.3.6.1.2.1.33.1.2.1.', legend: {1:'unknown',2:'batteryNormal',3:'batteryLow',4:'batteryDepleted'}},
+];
+function _enumForOid(oid) {
+  if (!oid) return null;
+  for (const e of _KNOWN_ENUM_OIDS) {
+    if (oid.startsWith(e.prefix)) return e.legend;
+  }
+  return null;
+}
+
 // Shared formatter for SNMP sensor display values used by the device-tile
 // sensor cards (devices.js) AND the Overview modal.  Returns the raw value
 // formatted per category: enum → legend label, gauge → unit-suffixed number,
@@ -1187,10 +1218,21 @@ function _snmpTileValue(s) {
   if (s.alive === false) return 'FAIL';
   if (s.last_value == null || s.last_value === '') return '—';
   const cat = _snmpCategory(s.snmp_unit, s.snmp_type);
-  if (cat === 'enum_state') {
-    const legend = _parseEnumLegend(s.snmp_unit);
-    const code = String(parseInt(s.last_value, 10));
-    if (legend[code]) return legend[code];
+  // Enum-first resolution (defensive): if the sensor has a parseable legend
+  // OR its OID matches a well-known IF-MIB / UPS-MIB enum, prefer labeled
+  // output.  Catches the "Auto-detect" case where snmp_unit is blank but
+  // the OID family tells us it's ifOperStatus / ifAdminStatus / battery
+  // status.  Only skipped for counter_rate (already formatted upstream).
+  if (cat !== 'counter_rate') {
+    let legend = _parseEnumLegend(s.snmp_unit);
+    if (!Object.keys(legend).length) {
+      const implicit = _enumForOid(s.snmp_oid);
+      if (implicit) legend = implicit;
+    }
+    if (Object.keys(legend).length) {
+      const n = parseInt(s.last_value, 10);
+      if (!isNaN(n) && legend[String(n)]) return legend[String(n)];
+    }
   }
   if (cat === 'gauge_numeric') {
     const v = parseFloat(s.last_value);
@@ -1209,7 +1251,7 @@ function _snmpTileValue(s) {
 function _snmpCategoryFor(did, sid) {
   const s = S.sensors[`${did}/${sid}`];
   if (!s || s.stype !== 'snmp') return null;
-  return _snmpCategory(s.snmp_unit, s.snmp_type);
+  return _snmpCategory(s.snmp_unit, s.snmp_type, s.snmp_oid);
 }
 
 function _fmtDurationSec(secs) {
@@ -1712,7 +1754,7 @@ function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
     const gvs = _gaugeValSamples(samples);
     const okG = gvs.filter(g => g.ok && g.v != null);
     if (_snmpCat === 'enum_state') {
-      const legend = _parseEnumLegend(_snmpSen.snmp_unit);
+      const legend = _effectiveEnumLegend(_snmpSen);
       const lastG = [...okG].reverse()[0];
       const lastCode = lastG ? String(Math.round(lastG.v)) : null;
       const lastLbl  = lastCode != null ? (legend[lastCode] || ('state ' + lastCode)) : '—';
@@ -2481,7 +2523,7 @@ function _drawTypedSnmpChart(ctx, P) {
   let maxY, minY = 0, yFmt, yLabels = null;
   if (category === 'enum_state') {
     // Y-axis = state codes (integers).  Legend from snmp_unit maps codes → names.
-    const legend = _parseEnumLegend(snmpUnit);
+    const legend = _sen ? _effectiveEnumLegend(_sen) : _parseEnumLegend(snmpUnit);
     const codes = Object.keys(legend).map(Number).sort((a,b) => a-b);
     if (codes.length) {
       minY = Math.max(0, codes[0] - 0.5);
@@ -2592,7 +2634,7 @@ function _drawTypedSnmpChart(ctx, P) {
     // Step chart: horizontal segment from each sample's ts to the next's ts,
     // colored by primary-state match (green) vs non-primary (red).  Draw as
     // thick strokes so brief visits are visible at zoomed-out ranges.
-    const legend = _parseEnumLegend(snmpUnit);
+    const legend = _sen ? _effectiveEnumLegend(_sen) : _parseEnumLegend(snmpUnit);
     const primaryCode = legend['1'] ? '1' : Object.keys(legend)[0] || '1';
     ctx.lineWidth = 3;
     for (let i = 0; i < sortedG.length; i++) {
@@ -2758,7 +2800,10 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
     }
 
     // enum_state / gauge_numeric / time_duration → per-bucket aggregation.
-    const legend = _typedCat === 'enum_state' ? _parseEnumLegend(snmpUnit) : null;
+    const _summarySen = S.sensors[`${did}/${sid}`];
+    const legend = _typedCat === 'enum_state'
+      ? (_summarySen ? _effectiveEnumLegend(_summarySen) : _parseEnumLegend(snmpUnit))
+      : null;
     const primaryCode = legend && (legend['1'] ? '1' : Object.keys(legend)[0] || '1');
     const primaryLbl = legend ? (legend[primaryCode] || ('state ' + primaryCode)) : null;
     const _bk = {};
@@ -3057,9 +3102,9 @@ function mVal(s,k){
       // v0.9.7: typed SNMP — show labeled enum state, formatted gauge value,
       // or duration instead of the raw response string.
       if (isSnmp) {
-        const cat = _snmpCategory(s.snmp_unit, s.snmp_type);
+        const cat = _snmpCategory(s.snmp_unit, s.snmp_type, s.snmp_oid);
         if (cat === 'enum_state' && s.last_value != null) {
-          const legend = _parseEnumLegend(s.snmp_unit);
+          const legend = _effectiveEnumLegend(s);
           const code = String(parseInt(s.last_value, 10));
           if (legend[code]) return legend[code];
         }
