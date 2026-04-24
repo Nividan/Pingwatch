@@ -228,7 +228,11 @@ class Sensor:
                  sftp_auth_type="password", sftp_test_level="open",
                  sftp_remote_path="", sftp_expected_sha256="",
                  radius_secret="", radius_test_level="reachable",
-                 radius_username="", radius_password="", radius_nas_id=""):
+                 radius_username="", radius_password="", radius_nas_id="",
+                 snmp_v3_user="", snmp_v3_level="",
+                 snmp_v3_auth_proto="", snmp_v3_auth_pass="",
+                 snmp_v3_priv_proto="", snmp_v3_priv_pass="",
+                 snmp_v3_context=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -305,6 +309,15 @@ class Sensor:
         self.radius_username    = radius_username or ""
         self.radius_password    = radius_password or ""    # Fernet ciphertext (user password, auth level)
         self.radius_nas_id      = radius_nas_id or ""      # NAS-Identifier attribute; defaults to "pingwatch" at probe time
+        # SNMPv3 credentials (per-sensor override; blank field → inherit from device default at probe time)
+        # auth_pass / priv_pass are Fernet-encrypted at rest, decrypted just-in-time in probe().
+        self.snmp_v3_user       = snmp_v3_user or ""
+        self.snmp_v3_level      = snmp_v3_level or ""       # "" | noAuthNoPriv | authNoPriv | authPriv
+        self.snmp_v3_auth_proto = snmp_v3_auth_proto or ""  # MD5 | SHA | SHA-224 | SHA-256 | SHA-384 | SHA-512
+        self.snmp_v3_auth_pass  = snmp_v3_auth_pass or ""   # Fernet ciphertext
+        self.snmp_v3_priv_proto = snmp_v3_priv_proto or ""  # DES | AES | AES-192 | AES-256
+        self.snmp_v3_priv_pass  = snmp_v3_priv_pass or ""   # Fernet ciphertext
+        self.snmp_v3_context    = snmp_v3_context or ""
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -370,6 +383,40 @@ class Sensor:
         v = self._valid_history
         return round(max(v), 1) if v else None
 
+    def _resolve_snmp_v3_creds(self):
+        """Build the v3_creds dict for probe_snmp.
+
+        Per-sensor fields win; blank fields fall back to the parent device's
+        snmp_v3_*_default.  auth_pass / priv_pass are Fernet-decrypted at the
+        boundary — the net-snmp subprocess needs the plaintext passphrase, and
+        we never persist plaintext.
+        """
+        from db.backups import decrypt_pw
+        from core.app_state import STATE
+        dev = STATE.devices.get(self.device_id) if STATE else None
+
+        def _pick(sensor_val, dev_attr):
+            if sensor_val:
+                return sensor_val
+            return getattr(dev, dev_attr, "") if dev else ""
+
+        user  = _pick(self.snmp_v3_user,  "snmp_v3_user_default")
+        level = _pick(self.snmp_v3_level, "snmp_v3_level_default") or "noAuthNoPriv"
+        apr   = _pick(self.snmp_v3_auth_proto, "snmp_v3_auth_proto_default")
+        app   = _pick(self.snmp_v3_auth_pass,  "snmp_v3_auth_pass_default")
+        ppr   = _pick(self.snmp_v3_priv_proto, "snmp_v3_priv_proto_default")
+        ppp   = _pick(self.snmp_v3_priv_pass,  "snmp_v3_priv_pass_default")
+        ctx   = _pick(self.snmp_v3_context,    "snmp_v3_context_default")
+        return {
+            "user":       user,
+            "level":      level,
+            "auth_proto": apr,
+            "auth_pass":  decrypt_pw(app) if app else "",
+            "priv_proto": ppr,
+            "priv_pass":  decrypt_pw(ppp) if ppp else "",
+            "context":    ctx,
+        }
+
     def probe(self):
         if self.stype == "ping": return probe_ping(self.host, self.timeout)
         if self.stype == "tcp":  return probe_tcp(self.host, self.port or 80, self.timeout)
@@ -378,9 +425,11 @@ class Sensor:
         if self.stype == "dns":  return probe_dns(self.host, self.dns_query or self.host,
                                                    self.dns_record_type, self.dns_server,
                                                    self.port or 53, self.timeout)
-        if self.stype == "snmp": return probe_snmp(self.host, self.snmp_community,
-                                                    self.snmp_oid, self.port or 161,
-                                                    self.timeout, self.snmp_version)
+        if self.stype == "snmp":
+            v3_creds = self._resolve_snmp_v3_creds() if self.snmp_version == "3" else None
+            return probe_snmp(self.host, self.snmp_community,
+                              self.snmp_oid, self.port or 161,
+                              self.timeout, self.snmp_version, v3_creds)
         if self.stype == "tls":  return probe_tls(self.host, self.port or 443, self.timeout)
         if self.stype == "http_keyword": return probe_http_keyword(
                                                     self.url or self.host, self.keyword,
@@ -449,6 +498,16 @@ class Sensor:
             "snmp_community": self.snmp_community,
             "snmp_oid":       self.snmp_oid,
             "snmp_version":   self.snmp_version,
+            # SNMPv3 per-sensor override fields — passphrases never leave the
+            # server, surfaced as has_* flags so the UI can render "stored"
+            # placeholders without round-tripping ciphertext.
+            "snmp_v3_user":        self.snmp_v3_user,
+            "snmp_v3_level":       self.snmp_v3_level,
+            "snmp_v3_auth_proto":  self.snmp_v3_auth_proto,
+            "snmp_v3_priv_proto":  self.snmp_v3_priv_proto,
+            "snmp_v3_context":     self.snmp_v3_context,
+            "has_snmp_v3_auth_pass": bool(self.snmp_v3_auth_pass),
+            "has_snmp_v3_priv_pass": bool(self.snmp_v3_priv_pass),
             "dns_query":             self.dns_query,
             "dns_record_type":       self.dns_record_type,
             "dns_server":            self.dns_server,
@@ -542,6 +601,15 @@ class Device:
         self.snmp_version_default    = ""
         self.vmware_user_default     = ""
         self.vmware_password_default = ""
+        # SNMPv3 device defaults — sensor.probe() falls back to these when the
+        # per-sensor v3 field is blank. auth / priv passphrases Fernet-encrypted.
+        self.snmp_v3_user_default       = ""
+        self.snmp_v3_level_default      = ""   # noAuthNoPriv | authNoPriv | authPriv
+        self.snmp_v3_auth_proto_default = ""   # MD5 | SHA | SHA-224 | SHA-256 | SHA-384 | SHA-512
+        self.snmp_v3_auth_pass_default  = ""   # Fernet ciphertext
+        self.snmp_v3_priv_proto_default = ""   # DES | AES | AES-192 | AES-256
+        self.snmp_v3_priv_pass_default  = ""   # Fernet ciphertext
+        self.snmp_v3_context_default    = ""
         # Cached status string; invalidated (set to None) whenever a sensor's
         # alive / _threshold_state / running / alerts_muted changes, or when
         # a sensor is added/removed. Recomputed on next read.
@@ -589,6 +657,14 @@ class Device:
             "snmp_version_default":        self.snmp_version_default,
             "vmware_user_default":         self.vmware_user_default,
             "has_vmware_password_default":  bool(self.vmware_password_default),
+            # SNMPv3 defaults — passphrases exposed only as has_* flags
+            "snmp_v3_user_default":          self.snmp_v3_user_default,
+            "snmp_v3_level_default":         self.snmp_v3_level_default,
+            "snmp_v3_auth_proto_default":    self.snmp_v3_auth_proto_default,
+            "snmp_v3_priv_proto_default":    self.snmp_v3_priv_proto_default,
+            "snmp_v3_context_default":       self.snmp_v3_context_default,
+            "has_snmp_v3_auth_pass_default": bool(self.snmp_v3_auth_pass_default),
+            "has_snmp_v3_priv_pass_default": bool(self.snmp_v3_priv_pass_default),
             # Origin breadcrumb (Auto-Discovery). 0/"" for manually-added devices.
             "discovered_at":         float(getattr(self, "discovered_at", 0) or 0),
             "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
@@ -800,7 +876,11 @@ class MonitorState:
                    sftp_auth_type="password", sftp_test_level="open",
                    sftp_remote_path="", sftp_expected_sha256="",
                    radius_secret="", radius_test_level="reachable",
-                   radius_username="", radius_password="", radius_nas_id=""):
+                   radius_username="", radius_password="", radius_nas_id="",
+                   snmp_v3_user="", snmp_v3_level="",
+                   snmp_v3_auth_proto="", snmp_v3_auth_pass="",
+                   snmp_v3_priv_proto="", snmp_v3_priv_pass="",
+                   snmp_v3_context=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -834,7 +914,13 @@ class MonitorState:
                        radius_test_level=radius_test_level,
                        radius_username=radius_username,
                        radius_password=radius_password,
-                       radius_nas_id=radius_nas_id)
+                       radius_nas_id=radius_nas_id,
+                       snmp_v3_user=snmp_v3_user, snmp_v3_level=snmp_v3_level,
+                       snmp_v3_auth_proto=snmp_v3_auth_proto,
+                       snmp_v3_auth_pass=snmp_v3_auth_pass,
+                       snmp_v3_priv_proto=snmp_v3_priv_proto,
+                       snmp_v3_priv_pass=snmp_v3_priv_pass,
+                       snmp_v3_context=snmp_v3_context)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -877,6 +963,10 @@ class MonitorState:
                         "sftp_remote_path", "sftp_expected_sha256",
                         "radius_secret", "radius_test_level",
                         "radius_username", "radius_password", "radius_nas_id",
+                        "snmp_v3_user", "snmp_v3_level",
+                        "snmp_v3_auth_proto", "snmp_v3_auth_pass",
+                        "snmp_v3_priv_proto", "snmp_v3_priv_pass",
+                        "snmp_v3_context",
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)

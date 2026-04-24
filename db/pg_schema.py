@@ -232,6 +232,22 @@ def pg_create_main_schema(cur):
         ("main.devices", "secondary_ips",           "TEXT DEFAULT '[]'"),
         ("main.devices", "discovered_at",           "DOUBLE PRECISION DEFAULT 0"),
         ("main.devices", "discovered_from_cidr",    "TEXT DEFAULT ''"),
+        # SNMPv3 device defaults (auth/priv passwords stored Fernet-encrypted)
+        ("main.devices", "snmp_v3_user_default",       "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_v3_level_default",      "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_v3_auth_proto_default", "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_v3_auth_pass_default",  "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_v3_priv_proto_default", "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_v3_priv_pass_default",  "TEXT DEFAULT ''"),
+        ("main.devices", "snmp_v3_context_default",    "TEXT DEFAULT ''"),
+        # SNMPv3 per-sensor overrides (blank → inherit device default)
+        ("sensors", "snmp_v3_user",       "TEXT DEFAULT ''"),
+        ("sensors", "snmp_v3_level",      "TEXT DEFAULT ''"),
+        ("sensors", "snmp_v3_auth_proto", "TEXT DEFAULT ''"),
+        ("sensors", "snmp_v3_auth_pass",  "TEXT DEFAULT ''"),
+        ("sensors", "snmp_v3_priv_proto", "TEXT DEFAULT ''"),
+        ("sensors", "snmp_v3_priv_pass",  "TEXT DEFAULT ''"),
+        ("sensors", "snmp_v3_context",    "TEXT DEFAULT ''"),
         # Auto-Discovery (v0.9.3+)
         ("ipam_subnets", "auto_discover",           "INTEGER DEFAULT 0"),
         ("ipam_subnets", "first_scan_approved",     "INTEGER DEFAULT 0"),

@@ -469,6 +469,26 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # SNMPv3 device defaults (auth/priv passwords stored Fernet-encrypted)
+        for col in ("snmp_v3_user_default", "snmp_v3_level_default",
+                    "snmp_v3_auth_proto_default", "snmp_v3_auth_pass_default",
+                    "snmp_v3_priv_proto_default", "snmp_v3_priv_pass_default",
+                    "snmp_v3_context_default"):
+            try:
+                con.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
+                con.commit()
+            except Exception:
+                pass
+        # SNMPv3 per-sensor overrides — blank fields inherit device defaults
+        for col in ("snmp_v3_user", "snmp_v3_level",
+                    "snmp_v3_auth_proto", "snmp_v3_auth_pass",
+                    "snmp_v3_priv_proto", "snmp_v3_priv_pass",
+                    "snmp_v3_context"):
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {col} TEXT DEFAULT ''")
+                con.commit()
+            except Exception:
+                pass
         # Device secondary IPs (JSON array)
         try:
             con.execute("ALTER TABLE devices ADD COLUMN secondary_ips TEXT DEFAULT '[]'")

@@ -268,7 +268,46 @@ def handle(h, method, path, body):
             h._json(400, {"error": "port must be 1-65535"}); return True
         if _ver not in ("1", "2c", "3"):
             h._json(400, {"error": "version must be 1, 2c, or 3"}); return True
-        _ifaces = snmpwalk_interfaces(_host, _comm, _port, timeout=10, version=_ver)
+        # v3 credentials — accept either live form values (all fields) OR
+        # partial input that falls back to the device default when the caller
+        # supplied a device id.  Backend validates with the same whitelist
+        # used at probe time.
+        _v3_creds = None
+        if _ver == "3":
+            _V3_LEVELS = {"noAuthNoPriv", "authNoPriv", "authPriv"}
+            _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+            _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
+            _v3_level = (body.get("snmp_v3_level") or "noAuthNoPriv").strip()
+            if _v3_level not in _V3_LEVELS:
+                h._json(400, {"error": "invalid snmp_v3_level"}); return True
+            _v3_aproto = (body.get("snmp_v3_auth_proto") or "").strip()
+            if _v3_aproto not in _V3_AUTH:
+                h._json(400, {"error": "invalid snmp_v3_auth_proto"}); return True
+            _v3_pproto = (body.get("snmp_v3_priv_proto") or "").strip()
+            if _v3_pproto not in _V3_PRIV:
+                h._json(400, {"error": "invalid snmp_v3_priv_proto"}); return True
+            # Fall back to a device-level default when caller passes did +
+            # leaves the passphrase blank (user hit Discover before filling
+            # auth fields — reuse the stored device default).
+            _did = (body.get("did") or "").strip()
+            _dev = None
+            if _did:
+                from core.app_state import STATE
+                _dev = STATE.devices.get(_did) if STATE else None
+            _pick = lambda v, attr: v or (getattr(_dev, attr, "") if _dev else "")
+            _apw  = body.get("snmp_v3_auth_pass") or ""
+            _ppw  = body.get("snmp_v3_priv_pass") or ""
+            from db.backups import decrypt_pw
+            _v3_creds = {
+                "user":       _pick((body.get("snmp_v3_user") or "").strip(), "snmp_v3_user_default"),
+                "level":      _v3_level,
+                "auth_proto": _v3_aproto or (getattr(_dev, "snmp_v3_auth_proto_default", "") if _dev else ""),
+                "auth_pass":  _apw if _apw else (decrypt_pw(getattr(_dev, "snmp_v3_auth_pass_default", "")) if _dev else ""),
+                "priv_proto": _v3_pproto or (getattr(_dev, "snmp_v3_priv_proto_default", "") if _dev else ""),
+                "priv_pass":  _ppw if _ppw else (decrypt_pw(getattr(_dev, "snmp_v3_priv_pass_default", "")) if _dev else ""),
+                "context":    (body.get("snmp_v3_context") or "").strip() or (getattr(_dev, "snmp_v3_context_default", "") if _dev else ""),
+            }
+        _ifaces = snmpwalk_interfaces(_host, _comm, _port, timeout=10, version=_ver, v3_creds=_v3_creds)
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
         h._json(200, {"interfaces": _ifaces})

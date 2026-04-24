@@ -253,13 +253,66 @@ def _dns_decode_name(data: bytes, offset: int) -> str:
 
 _OID_RE = re.compile(r'^\.?[0-9]+(\.[0-9]+)*$')
 
-def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
+# Whitelists for SNMPv3 parameters — passed to net-snmp binaries, so we never
+# want to forward user input verbatim.  Protocol names match net-snmp's -a/-x
+# flag values exactly.
+_SNMP_V3_LEVELS = {"noAuthNoPriv", "authNoPriv", "authPriv"}
+_SNMP_V3_AUTH_PROTOS = {"MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+_SNMP_V3_PRIV_PROTOS = {"DES", "AES", "AES-192", "AES-256"}
+
+
+def _snmp_auth_args(community, version, v3_creds):
+    """Build net-snmp -v / -c / -l / -u / -a / -A / -x / -X / -n flags.
+
+    Returns (args_list, err_str).  err_str is non-None when v3 credentials
+    are incomplete or contain unsafe values, in which case args_list is [].
+    v3_creds is a dict with: user, level, auth_proto, auth_pass, priv_proto,
+    priv_pass, context.  Unused at v1/v2c.
+    """
+    v = (version or "2c").strip()
+    if v in ("1", "2c"):
+        return ["-v", v, "-c", community or "public"], None
+    if v != "3":
+        return [], f"unsupported SNMP version: {v}"
+    creds = v3_creds or {}
+    user  = (creds.get("user") or "").strip()
+    level = (creds.get("level") or "noAuthNoPriv").strip()
+    if not user:
+        return [], "SNMPv3 requires a username"
+    if level not in _SNMP_V3_LEVELS:
+        return [], f"invalid SNMPv3 level: {level}"
+    args = ["-v", "3", "-l", level, "-u", user]
+    if level in ("authNoPriv", "authPriv"):
+        ap = (creds.get("auth_proto") or "").strip()
+        apw = creds.get("auth_pass") or ""
+        if ap not in _SNMP_V3_AUTH_PROTOS:
+            return [], f"invalid SNMPv3 auth protocol: {ap}"
+        if not apw:
+            return [], "SNMPv3 auth passphrase required"
+        args += ["-a", ap, "-A", apw]
+    if level == "authPriv":
+        pp = (creds.get("priv_proto") or "").strip()
+        ppw = creds.get("priv_pass") or ""
+        if pp not in _SNMP_V3_PRIV_PROTOS:
+            return [], f"invalid SNMPv3 priv protocol: {pp}"
+        if not ppw:
+            return [], "SNMPv3 privacy passphrase required"
+        args += ["-x", pp, "-X", ppw]
+    ctx = (creds.get("context") or "").strip()
+    if ctx:
+        args += ["-n", ctx]
+    return args, None
+
+
+def probe_snmp(host, community, oid, port=161, timeout=5, version="2c", v3_creds=None):
     """Run snmpget via subprocess. Requires net-snmp tools installed."""
     if not _OID_RE.match(oid):
         return {"ok": False, "ms": 0, "detail": "Invalid OID format", "value": None}
-    ver_flag = f"-v{version}"
+    auth_args, auth_err = _snmp_auth_args(community, version, v3_creds)
+    if auth_err:
+        return {"ok": False, "ms": None, "detail": f"SNMP config: {auth_err}"}
     # -On: numeric OIDs in output — avoids MIB translation surprises
-    cmd = ["snmpget", ver_flag, "-On", "-c", community,
+    cmd = ["snmpget", *auth_args, "-On",
            "-t", str(timeout), "-r", "1",
            f"{host}:{port}", oid]
     t0 = time.time()
@@ -299,19 +352,22 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c"):
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
-def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="2c"):
+def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="2c", v3_creds=None):
     """
     Walk the ifTable and ifXTable on a live device to discover its interfaces.
     Returns a list of dicts, or None if snmpwalk is not installed.
     Each dict: {index, name, descr, alias, status, speed, speed_raw}
     """
-    ver_flag = f"-v{version}"
+    auth_args, auth_err = _snmp_auth_args(community, version, v3_creds)
+    if auth_err:
+        log_sensors.warning("snmpwalk_interfaces %s: %s", host, auth_err)
+        return []
     kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if SYS == "Windows" else {}
     target = f"{host}:{port}"
 
     def _walk(base_oid):
         """Run snmpwalk -OnQ (numeric OIDs, quick/no type) and return {index: value}."""
-        cmd = ["snmpwalk", ver_flag, "-c", community,
+        cmd = ["snmpwalk", *auth_args,
                "-t", str(timeout), "-r", "1",
                "-O", "nq",    # numeric OIDs + quick (no type prefix)
                target, base_oid]

@@ -8,7 +8,7 @@
 
 PingWatch is a Python-based network monitoring platform for tracking the availability and health of network devices and services. It runs a lightweight built-in HTTPS server, stores data in SQLite, and streams live updates to a vanilla JS dashboard — no external web framework or build step required.
 
-> 🤖 This project was designed and built with [Claude AI](https://claude.ai) (Anthropic) as an AI-driven development experiment — from architecture to implementation.
+> Built with [Claude AI](https://claude.ai).
 
 ---
 
@@ -38,22 +38,22 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🔌 Searchable, categorized sensor type browser — keyword search and sensor category sections in the Add Sensor sidebar
 - ⏱ Configurable monitoring intervals, debounce thresholds, and per-sensor defaults
 - 📜 Historical event logging with flap and SNMP trap tracking
-- 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays and repeat intervals; cascade resolution (sensor → device → group → global) so one global profile covers everything while individual scopes can override; reusable action templates (email, webhook, syslog, browser push); maintenance window suppression
-- 📬 **Notification batching** — when 12 sensors die at once, send **one** combined email/webhook instead of 12. Settings → Alert Profiles → Notification Batching: master switch (default on), window 5–3600 s (default 60), max-size 2–500 (default 20). Batches symmetrically on both down and recovery so recoveries don't become the new spam. Webhook batching is opt-in per action template (receiver must handle array payloads). Syslog + browser SSE never batch. Event records (`alert_events`, `flap_log`) stay granular — only outbound notifications are combined
-- 📚 **Event collapse** in the Events view — `Collapse related` toggle in the filter bar folds ≥3 flapping/outage events within 30 s into one expandable row (`switch-A: 5 sensors went down within 22s`). Click to expand the nested list. Works in both card and table modes; persists via `localStorage`
-- 🧠 Learned-baseline anomaly detection (opt-in per sensor) — EWMA-based upper-tail detection for latency deviations beyond static thresholds; fires `warn` only, never overrides crit; admin controls in Settings → Sensors (master switch, auto-enable, bulk enable)
+- 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays, repeat intervals, and reusable action templates (email, webhook, syslog, browser push); cascade resolution (sensor → device → group → global) so one profile covers everything; maintenance window suppression
+- 📬 **Notification batching** — combines bursts of alerts into one email/webhook instead of spamming. Configurable window and batch size; opt-in per webhook template
+- 📚 **Event collapse** — toggle to fold ≥3 related events within 30 s into one expandable row; works in both card and table modes
+- 🧠 Learned-baseline anomaly detection — opt-in per sensor; detects latency deviations beyond static thresholds; master switch and bulk-enable in Settings
 - 🏷 Alert tagging on sensor events — severity badge, profile name, and state shown inline; ACK / Resolve without leaving the Events tab; Events tab split into **Active** (unresolved, badge count) and **History** (resolved) inner tabs — SNMP traps without an alert rule go to History automatically
 - 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
 - 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
 - 🎨 Light / Dark theme toggle — switch from the user menu; preference persisted per user and synced across browsers/devices (`users.theme_preference` column + `localStorage` cache); instant switch with no page reload or flash-of-unthemed-content
-- 🌐 Web-based dashboard with live latency sparklines, customizable widgets, and multi-dashboard tabs — create named dashboards (e.g. "NOC", "Server Room") per user; tab bar with right-click rename/delete; new users get a pre-populated default layout
+- 🌐 Web-based dashboard with live latency sparklines and customizable widgets; multi-dashboard tabs with rename/delete; new users get a starter layout
 - 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
 - 🔒 Role-based access control: viewer / operator / admin
-- 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; QR enrolment, recovery codes, admin reset; revocable "Remember this device" trusted-device tokens
+- 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; QR enrolment, recovery codes, and trusted-device management
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates
 - 📤 Database export and import (individual DBs or full ZIP bundle)
 - 🖥 Native desktop status window with optional system-tray icon
-- 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback with full interface context (`interface X / no … / end / wr`)
+- 💾 Automated device configuration backup via SSH/Telnet — encrypted credentials, revision history, diff viewer, and vendor-aware rollback
 - 🔗 Sensor host linking — sensors inherit the device IP by default; setting a host manually marks it as overridden; clearing the host re-links it to the device
 - 🔍 Per-device port scanner with configurable default ports (Settings → Sensors)
 - 🧙 Interactive first-run setup wizard — GUI (tkinter, dark-themed) on Windows, CLI fallback on headless/SSH; handles packages, DB backend, ports, TLS, admin user
@@ -66,7 +66,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🩺 **Auth backend health checks** — boot-time config + crypto sanity pass populates LDAP / RADIUS / SAML / OIDC status badges within seconds of restart; configurable scheduled refresh (default hourly) does live LDAP bind + OIDC discovery refetch + cert expiry monitoring; "Run now" button + last-run indicator in Settings → Integrations
 - ☁️ Remote DB backup upload — automatically upload scheduled SQLite/PostgreSQL snapshots to an SFTP or SMB share after each local backup run; Fernet-encrypted credentials at rest
 - 🗂 IP Address Management (IPAM) — subnet tracking with live ping-sweep integration; sortable columns (click headers) and filter dropdowns for Status (Used/Free) and Licenses
-- 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (1 per 4 sensors, 64–512 range); manual override available in Settings → General. On PostgreSQL the connection pool also auto-scales post-load (roughly one connection per 4 workers plus a reserve for HTTP/scheduler/SSE), so 5k-sensor deployments don't silently starve on the default pool size. Explicit `pg_pool_max` in `pingwatch.conf` still wins.
+- 🔢 Auto-scaling probe executor — worker count scales automatically with sensor count (64–512 range); manual override available in Settings → General. PostgreSQL connection pool also auto-scales to match probe load
 - 🏷 Device list status filter pills — All / Down / Warn / Up / Pause with live counts; composes with text search
 - 📄 Device list pagination — 50 devices per page (user-selectable: 25/50/100); preference saved in `localStorage`
 - 🖱 Sensor tile drag-to-reorder — drag sensor tiles inside a device window to rearrange; layout persists per device across sessions; device card top-3 preview respects custom order
@@ -74,12 +74,12 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - ✅ Bulk resolve — resolve all active alerts and flaps in one click from the Events tab
 - 📊 Time-aware sensor KPI tiles — Avg / Min / Max latency tiles in the sensor history panel reflect the selected time window (12 h → 3 d → 7 d → 30 d → 90 d), matching the stats bar values
 - 🔭 Subnet Discovery — scan a CIDR range (up to /16) for unmonitored hosts; Full (ping + DNS + port scan + device-type guess) and Ping-only modes; multi-NIC duplicate detection, per-device sensor review, per-row group assignment, one-click bulk add
-- 🤖 **Scheduled Auto-Discovery** — configure IPAM subnets to scan automatically on a set interval (15 min – 24 h); new hosts are auto-added with a ping sensor plus guessed service sensors (HTTP, HTTPS, SNMP); safety rails include global enable/pause toggle, first-scan device cap with admin approval step, suppressed-hosts list (manually deleted devices are never re-added), and maintenance-window awareness; audit log entry per scan tick; optional alert event per auto-added device
-- ☑ **Bulk device multi-select** — toggle ☑ Select in the Devices toolbar to reveal checkboxes on every card and group header; tick individual devices, shift-click ranges, or tick a whole group's header to bulk-move to a new/existing group, bulk-pause, bulk-resume, or bulk-delete; `Ctrl+A` selects all visible (respects the search + status-pill filter), `Esc` exits; one `POST /api/devices/bulk` request per bulk action with one audit entry
+- 🤖 **Scheduled Auto-Discovery** — configure IPAM subnets to scan automatically on a set interval (15 min – 24 h); new hosts are auto-added with ping + guessed service sensors; safety rails include global enable/pause, first-scan cap, suppressed-hosts list, and maintenance-window awareness
+- ☑ **Bulk device multi-select** — toggle Select in the Devices toolbar to reveal checkboxes; bulk-move/pause/resume/delete with one request; respects search and status filters
 - 📋 Device License Tracking — attach software/hardware licenses to devices with expiry dates and configurable warn/critical thresholds; 6-hourly status check fires Warning/Critical events with auto-resolve on renewal; status badges in the Edit Device modal and IPAM table; License Overview dashboard widget
-- 📊 Scheduled PDF/CSV Reports — Executive / Technical / Inventory / Custom kinds rendered via WeasyPrint + Matplotlib; period picker with compare-to-previous deltas; CSV sidecar; aggregated incident log, Major Incidents clustering, Device Health Scores; deterministic Report ID + SHA-256 fingerprint; PDF/A-1b/2b/3b compliance mode; scheduled email delivery; History tab with bulk delete. See [DEVELOPER.md](DEVELOPER.md#reports) for architecture
-- 🔧 **Diagnostics tab (Settings)** — single operator/support console: System Overview (version, uptime, CPU/RAM/disk, scheduler heap, SSE listeners, sample-buffer pressure, DB writer queues), Database Health (per-table row counts + sizes, Run VACUUM), consolidated Health Checks (LDAP/RADIUS/SAML/OIDC/SMTP/Syslog/DB Backup/**NTP drift**/**DNS resolver**) with per-row Test + Test All, Probe-from-Server tool (ping/TCP/HTTP/DNS/TLS debug from the server's vantage point), Recent Errors (ERROR+ app log + sensor_err_log), Maintenance actions (Debug Mode, refresh OIDC discovery, refresh auth, clear caches, force VACUUM), and **Download diagnostics bundle** — a sanitized ZIP of logs + system snapshot + settings (secrets redacted) ready to attach to a bug report
-- 🪵 Professional log viewer — dedicated top-level **Logs** tab (admin-only) for application / sensors / audit / backup streams; live tail with smart scroll-follow ("Jump to live" pill auto-appears when you scroll up); minimum-level filter (DEBUG+ → CRITICAL only), time range + custom datetime range, text search with highlighting; word-wrap toggle, copy / CSV / JSON export; keyboard shortcuts (`/` focus search, `l` live, `r` refresh, `w` wrap, `End` jump-to-live); status bar shows on-disk file size, rotation count, and "+N new since open"; preferences persisted per browser
+- 📊 Scheduled PDF/CSV Reports — Executive / Technical / Inventory / Custom kinds; compare-to-previous deltas; incident aggregation and Device Health Scores; scheduled email delivery with bulk delete
+- 🔧 **Diagnostics tab (Settings)** — System Overview, Database Health, consolidated Health Checks (LDAP/RADIUS/SAML/OIDC/SMTP/Syslog/DB Backup/NTP/DNS), Probe-from-Server tool, Recent Errors, Maintenance actions, and support bundle download
+- 🪵 Professional log viewer — dedicated top-level **Logs** tab with live tail, minimum-level filter, time range, text search; word-wrap, copy, CSV/JSON export; keyboard shortcuts; real-time unread count
 
 ### Supported Sensor Types
 
@@ -226,70 +226,27 @@ Forward events to any RFC 5424 syslog server over UDP or TCP. Configure host, po
 
 ## LDAP / Active Directory Authentication
 
-Domain users log in with AD credentials; local users are unaffected. Configure in **Settings → Users → LDAP Settings**: server, port, security mode (None/LDAPS/StartTLS), base DN, bind DN, bind password (Fernet-encrypted at rest), and user search filter. Accepted login formats: `jsmith`, `CORP\jsmith`, `jsmith@corp.local`.
+Domain users log in with AD credentials; local users are unaffected. Configure in **Settings → Users → LDAP Settings**: server, port, security mode, base DN, and search filter. Use **Test Connection** and **Test User Auth** to verify before saving.
 
-Use **Test Connection** to verify the service-account bind and **Test User Auth** to run the full authentication flow before saving.
-
-### LDAP Group Integration
-
-Import AD/LDAP groups into PingWatch and tie them to PingWatch roles and notification groups:
-
-- **Import groups** — use **Settings → Groups → Import from LDAP** to browse and import AD groups. Each imported group gets an LDAP badge and a configurable default role (viewer / operator / admin).
-- **Auto-provision** — enable "Auto-provision" in LDAP Settings and any LDAP user who belongs to an imported group is created automatically on first login with the matching role, display name, and email. No manual user creation required.
-- **Login-time sync** — on every LDAP login, PingWatch refreshes the user's group assignment, role, and display name from LDAP. If the user is removed from all imported groups in AD, login is rejected and the account is suspended (local admin accounts are always unaffected).
-- **Background sync** — a configurable background thread (default every 60 minutes) reconciles all LDAP users against current AD group membership without waiting for a login.
-- **Nested groups** — optional AD recursive membership check using `LDAP_MATCHING_RULE_IN_CHAIN` (AD only).
-- **Multi-group priority** — users in multiple imported groups receive the highest role (admin > operator > viewer).
-- **Test User Groups** — admin diagnostic dialog: enter a username and see exactly which LDAP groups they belong to.
+**LDAP Group Integration:** Import AD groups via **Settings → Groups → Import from LDAP** and assign default roles. Enable auto-provision in LDAP Settings to create users automatically on first login. Background sync (default every 60 minutes) keeps group membership current. Optional nested group support (AD only). See [DEVELOPER.md](DEVELOPER.md) for implementation details.
 
 ---
 
 ## RADIUS Authentication
 
-Domain users log in with RADIUS credentials; local and LDAP users are unaffected. Configure in **Settings → Integrations → RADIUS**: primary server (host/port/shared secret), optional secondary server for automatic failover, timeout, retries, NAS-Identifier, and realm prefix/suffix. Shared secrets are Fernet-encrypted at rest.
-
-Use **Test Connection** to verify connectivity (the server only needs to *respond* — not accept) and **Test User Auth** to run a full authentication including any Access-Challenge 2FA steps, with the returned attributes displayed so you can build mappings.
-
-### RADIUS Group Mapping
-
-RADIUS has no group-enumeration API; instead, group assignment is driven by attributes returned on each `Access-Accept`:
-
-- **Attribute → Group mapping** — in the RADIUS panel's mapping table, assign each PingWatch group an attribute name (e.g. `Fortinet-Group-Name`) and value (e.g. `pingwatch-admins`). On every successful login, PingWatch matches the returned attributes to the first mapped group, and assigns the user that group and its default role.
-- **Default role / group** — if no mapping matches, the user receives the configured default role and default group.
-- **Auto-provision** — enable "Auto-provision" and unknown RADIUS users are created automatically on first successful login (no manual user creation required).
-- **Access-Challenge 2FA** — if the RADIUS server issues an `Access-Challenge` (FortiAuthenticator token, Duo, RSA SecurID, Azure NPS extension), the login screen presents the server's prompt and collects the OTP. Successfully completing a challenge skips the app's built-in TOTP step for that login.
-- **Primary/secondary failover** — on timeout or socket error, PingWatch transparently retries against the secondary server (if configured). `Access-Reject` is treated as a definitive answer and does not trigger failover.
+Domain users log in with RADIUS credentials; local and LDAP users are unaffected. Configure in **Settings → Integrations → RADIUS**: primary and optional secondary servers, timeouts, and retries. Support for `Access-Challenge` 2FA and attribute-based group mapping. Use **Test Connection** and **Test User Auth** to verify before saving. See [DEVELOPER.md](DEVELOPER.md) for attribute mapping details.
 
 ---
 
 ## SAML 2.0 / OIDC Single Sign-On
 
-Federated enterprise SSO alongside local + LDAP + RADIUS. Tested with **FortiAuthenticator**; protocol-compliant for **Okta, Microsoft Entra ID (Azure AD), Keycloak, ADFS, OneLogin, PingFederate, Google Workspace, Shibboleth**. Configure each independently in **Settings → Integrations → 🪪 SAML 2.0** or **🪙 OIDC**.
+Federated enterprise SSO alongside local + LDAP + RADIUS. Tested with **FortiAuthenticator**; protocol-compliant for **Okta, Microsoft Entra ID, Keycloak, ADFS, OneLogin, PingFederate, Google Workspace, Shibboleth**. Configure in **Settings → Integrations → 🪪 SAML 2.0** or **🪙 OIDC**.
 
-### SAML 2.0 (SP-initiated)
+**SAML 2.0:** Import IdP metadata by URL, XML paste, or file upload. Generate SP signing certificate from the UI. Enable signed AuthnRequests as needed.
 
-- **IdP metadata import** — three sources: **By URL** (auto-falls-back to TLS-unverified for self-signed internal IdPs; the IdP signing cert pinned post-import is the actual signature trust anchor), **Paste XML**, or **Upload XML file**. Extracted entityID, SSO URL, and signing cert auto-populate the form.
-- **SP metadata export** — `GET /api/saml/metadata` returns the XML blob; download from the UI, hand to your IdP admin.
-- **SP signing certificate** — generate from the UI (RSA-2048, 825-day, self-signed); private key Fernet-encrypted at rest. Rotatable independently of the TLS cert.
-- **Signed AuthnRequests** — when enabled, every request is signed with `signxml` (RSA-SHA256, exclusive c14n). Required by FAC and ADFS in default configs.
-- **Assertion verification** — IdP signing cert pinned per-provider; signature checked on every login; `NotOnOrAfter` + `Audience` + `Issuer` validated; assertion-only and Response+Assertion signing patterns both supported.
-- **TLS dependency** — `pysaml2 >= 7.5` + `signxml >= 3.2` (pure Python — no `xmlsec1`, no system deps; `pip install` is enough).
+**OpenID Connect:** Paste issuer URL and auto-discover endpoints. Support for PKCE and scheduled JWKS refresh (default hourly) for key rotation.
 
-### OpenID Connect
-
-- **Auto-discovery** — paste the issuer URL, click *Auto-discover*; PingWatch fetches `.well-known/openid-configuration` + JWKS and populates all endpoint fields.
-- **Authorization Code + PKCE (S256)** — no client_secret in the redirect; `state` + `nonce` validated; ID token verified against the JWKS via `authlib.jose`.
-- **Scheduled JWKS refresh** — discovery + JWKS re-fetched on the configured interval (default hourly), so key rotation is picked up before the first user hits a broken validation.
-- **Dependency** — `authlib >= 1.3`.
-
-### Common to both
-
-- **JIT provisioning** — first successful SSO login auto-creates a local user row with `external_id = "saml|<entity>|<nameid>"` or `"oidc|<issuer>|<sub>"`; subsequent logins look up by external_id and sync display name, email, and group/role from the IdP.
-- **Group → role mapping** — extends the existing groups table with `saml_group_value` / `oidc_group_value` columns. SAML attribute or OIDC `groups` claim values are matched case-insensitively against your mapped groups; first match assigns the role. Configurable default role + "reject unmapped users" policy.
-- **TOTP still applies** — IdP-provided identity flows through PingWatch's TOTP gate (if the user has 2FA enabled); the trusted-device cookie works unchanged.
-- **Login screen** — when at least one SSO method is enabled, the login form shows a **Sign in with {IdP}** button above the local form. With nothing configured, the login page looks identical to today.
-- **Coexistence** — local + LDAP + RADIUS + SAML + OIDC all active simultaneously; admin enables/disables each independently. Local admin login is always available as a break-glass.
-- **Health monitoring** — boot-time sanity pass + scheduled refresh (default hourly) revalidates certs, JWKS, and configuration; failures logged at WARNING/ERROR; status badge in Settings → Integrations turns yellow at <30 days to cert expiry.
+**Common features:** Just-In-Time user provisioning on first SSO login. Group → role mapping with optional unmapped-user rejection. All methods coexist with local/LDAP/RADIUS. Health monitoring with status badges. See [DEVELOPER.md](DEVELOPER.md) for configuration details.
 
 ---
 
@@ -401,12 +358,4 @@ Browser / Desktop GUI
         └── db/                   ← Dual-backend persistence (SQLite / PostgreSQL)
 ```
 
-- **`server.py`** — HTTP(S) dispatcher, starts all background threads
-- **`gui_setup.py`** — tkinter GUI setup wizard (dark-themed, 6-step flow)
-- **`setup_wizard.py`** — cross-platform CLI setup wizard (fallback for headless/SSH)
-- **`core/setup_logic.py`** — shared setup logic (packages, ports, DB init) used by both wizards
-- **`monitoring/probes.py`** — all sensor probe types on per-sensor threads (VMware probes via `vmware/client.py`)
-- **`backup/engine.py`** — SSH/Telnet connections, TOFU host key verification, enable-mode escalation
-- **`core/auth.py`** — PBKDF2-SHA256 local auth + LDAP branch via `core/ldap_auth.py`
-- **`snmp/`** — UDP trap listener, OID enrichment, vendor fingerprinting
-- **`db/`** — dual-backend persistence: Main DB (config/settings) + Logs DB (samples/events)
+See [DEVELOPER.md](DEVELOPER.md) for module responsibilities, API endpoints, database schema, and extension patterns.

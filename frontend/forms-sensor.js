@@ -139,14 +139,70 @@ function sensorFormHTML(dev, s=null) {
         <input type="text" id="as-sc" value="${esc(commVal)}" placeholder="${commHint}" autocomplete="off"/>
         ${commStatusHtml}</div>
       <div class="fr"><label class="fl">SNMP Version</label>
-        <select id="as-sv">
+        <select id="as-sv" onchange="_asSnmpVerChange()">
           ${(()=>{const dv=s?.snmp_version||dev?.snmp_version_default||'2c';
             return `<option value="2c" ${dv==='2c'?'selected':''}>v2c</option>
           <option value="1"  ${dv==='1'?'selected':''}>v1</option>
-          <option value="3"  ${dv==='3'?'selected':''}>v3 (community)</option>`;})()}
+          <option value="3"  ${dv==='3'?'selected':''}>v3</option>`;})()}
         </select>
       </div>
     </div>
+    ${(() => {
+      // SNMPv3 block — hidden unless version=3.  Fields pre-fill from the
+      // sensor override (if set) then the device default (falls back at
+      // probe time anyway; the pre-fill is just UX so the user sees what
+      // will actually be used).
+      const v3lvl = s?.snmp_v3_level || dev?.snmp_v3_level_default || 'noAuthNoPriv';
+      const v3usr = s?.snmp_v3_user  || dev?.snmp_v3_user_default  || '';
+      const v3ap  = s?.snmp_v3_auth_proto || dev?.snmp_v3_auth_proto_default || 'SHA';
+      const v3pp  = s?.snmp_v3_priv_proto || dev?.snmp_v3_priv_proto_default || 'AES';
+      const v3ctx = s?.snmp_v3_context || dev?.snmp_v3_context_default || '';
+      const hasAP = s?.has_snmp_v3_auth_pass || dev?.has_snmp_v3_auth_pass_default;
+      const hasPP = s?.has_snmp_v3_priv_pass || dev?.has_snmp_v3_priv_pass_default;
+      const showV3 = (s?.snmp_version || dev?.snmp_version_default || '2c') === '3';
+      const showAuth = v3lvl === 'authNoPriv' || v3lvl === 'authPriv';
+      const showPriv = v3lvl === 'authPriv';
+      return `
+      <div id="as-v3-block" style="${showV3?'':'display:none;'}border-left:2px solid var(--accent);padding-left:10px;margin:6px 0 0 2px;display:flex;flex-direction:column;gap:8px">
+        <div class="fh" style="color:var(--text3);font-size:11px">SNMPv3 credentials (blank fields inherit from device default)</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">v3 Username</label>
+            <input type="text" id="as-v3-user" value="${esc(v3usr)}" placeholder="snmpuser" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Security Level</label>
+            <select id="as-v3-level" onchange="_asV3LevelChange()">
+              <option value="noAuthNoPriv" ${v3lvl==='noAuthNoPriv'?'selected':''}>noAuthNoPriv</option>
+              <option value="authNoPriv"   ${v3lvl==='authNoPriv'?'selected':''}>authNoPriv</option>
+              <option value="authPriv"     ${v3lvl==='authPriv'?'selected':''}>authPriv</option>
+            </select></div>
+        </div>
+        <div class="fgrid" id="as-v3-auth-row" style="${showAuth?'':'display:none'}">
+          <div class="fr"><label class="fl">Auth Protocol</label>
+            <select id="as-v3-auth-proto">
+              <option value="SHA"     ${v3ap==='SHA'?'selected':''}>SHA</option>
+              <option value="MD5"     ${v3ap==='MD5'?'selected':''}>MD5</option>
+              <option value="SHA-224" ${v3ap==='SHA-224'?'selected':''}>SHA-224</option>
+              <option value="SHA-256" ${v3ap==='SHA-256'?'selected':''}>SHA-256</option>
+              <option value="SHA-384" ${v3ap==='SHA-384'?'selected':''}>SHA-384</option>
+              <option value="SHA-512" ${v3ap==='SHA-512'?'selected':''}>SHA-512</option>
+            </select></div>
+          <div class="fr"><label class="fl">Auth Passphrase</label>
+            <input type="password" id="as-v3-auth-pass" placeholder="${hasAP?'(unchanged — inherits device default)':'min 8 chars'}" autocomplete="new-password"/></div>
+        </div>
+        <div class="fgrid" id="as-v3-priv-row" style="${showPriv?'':'display:none'}">
+          <div class="fr"><label class="fl">Privacy Protocol</label>
+            <select id="as-v3-priv-proto">
+              <option value="AES"     ${v3pp==='AES'?'selected':''}>AES</option>
+              <option value="DES"     ${v3pp==='DES'?'selected':''}>DES</option>
+              <option value="AES-192" ${v3pp==='AES-192'?'selected':''}>AES-192</option>
+              <option value="AES-256" ${v3pp==='AES-256'?'selected':''}>AES-256</option>
+            </select></div>
+          <div class="fr"><label class="fl">Privacy Passphrase</label>
+            <input type="password" id="as-v3-priv-pass" placeholder="${hasPP?'(unchanged — inherits device default)':'min 8 chars'}" autocomplete="new-password"/></div>
+        </div>
+        <div class="fr"><label class="fl">Context (optional)</label>
+          <input type="text" id="as-v3-ctx" value="${esc(v3ctx)}" autocomplete="off"/></div>
+      </div>`;
+    })()}
     <div class="fr" style="margin-top:6px"><label class="fl">Common OIDs</label>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <select id="as-oid-vendor" style="max-width:210px" onchange="snmpVendorChange()">
@@ -1031,6 +1087,21 @@ function _syncSnmpDisplay(unit) {
   sel.value = opts.includes(unit) ? unit : '';
 }
 
+// v0.9.7: SNMPv3 block visibility on the Add/Edit Sensor form.
+function _asSnmpVerChange(){
+  const ver = document.getElementById('as-sv')?.value || '';
+  const blk = document.getElementById('as-v3-block');
+  if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(ver === '3') _asV3LevelChange();
+}
+function _asV3LevelChange(){
+  const lvl = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+  const ar  = document.getElementById('as-v3-auth-row');
+  const pr  = document.getElementById('as-v3-priv-row');
+  if(ar) ar.style.display = (lvl === 'authNoPriv' || lvl === 'authPriv') ? '' : 'none';
+  if(pr) pr.style.display = (lvl === 'authPriv') ? '' : 'none';
+}
+
 function snmpDisplayChange() {
   const sel  = document.getElementById('as-snmp-display');
   const sunit = document.getElementById('as-snmp-unit');
@@ -1066,9 +1137,24 @@ async function discoverInterfaces(){
   if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Querying device…'; }
   if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  const discoveryBody = {host, community, port, version, did};
+  // SNMPv3 discovery — read creds directly from the visible form fields so
+  // users can try v3 before saving a device default.  Blank passphrases OK;
+  // backend falls back to the device default / errors with a clear message.
+  if(version === '3'){
+    discoveryBody.snmp_v3_user       = (document.getElementById('as-v3-user')?.value || '').trim();
+    discoveryBody.snmp_v3_level      = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+    discoveryBody.snmp_v3_auth_proto = document.getElementById('as-v3-auth-proto')?.value || '';
+    discoveryBody.snmp_v3_priv_proto = document.getElementById('as-v3-priv-proto')?.value || '';
+    discoveryBody.snmp_v3_context    = (document.getElementById('as-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('as-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('as-v3-priv-pass')?.value || '';
+    if(_ap) discoveryBody.snmp_v3_auth_pass = _ap;
+    if(_pp) discoveryBody.snmp_v3_priv_pass = _pp;
+  }
   let r;
   try{
-    r=await api('POST','/api/snmp/interfaces',{host,community,port,version});
+    r=await api('POST','/api/snmp/interfaces', discoveryBody);
   }catch(e){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
     return;
@@ -2195,6 +2281,19 @@ function collectSensorForm(did){
           dns_query,dns_record_type,dns_server,http_expected_status,
           warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
+  // SNMPv3 per-sensor override — only send when type=snmp + version=3.  Empty
+  // fields round-trip as "" so the backend inherits from the device default.
+  if(type==='snmp' && snmp_version==='3'){
+    payload.snmp_v3_user       = (document.getElementById('as-v3-user')?.value || '').trim();
+    payload.snmp_v3_level      = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+    payload.snmp_v3_auth_proto = document.getElementById('as-v3-auth-proto')?.value || '';
+    payload.snmp_v3_priv_proto = document.getElementById('as-v3-priv-proto')?.value || '';
+    payload.snmp_v3_context    = (document.getElementById('as-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('as-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('as-v3-priv-pass')?.value || '';
+    if(_ap) payload.snmp_v3_auth_pass = _ap;
+    if(_pp) payload.snmp_v3_priv_pass = _pp;
+  }
   const _anomEn=document.getElementById('as-anom-en');
   if(_anomEn){
     payload.anomaly_enabled=_anomEn.checked?1:0;

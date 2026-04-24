@@ -6,6 +6,19 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ## v0.9.6
 
+### 🔒 SNMPv3 authentication — full USM support
+
+Previously the SNMP Version dropdown offered `v3 (community)`, but `probe_snmp` only passed `-c community` — so a sensor set to v3 silently ran a v2c query with the community-string field, or simply failed. This pass adds complete User-Based Security Model (USM) support end-to-end: per-device defaults, per-sensor override, all three security levels, every net-snmp-supported auth/priv algorithm, and write-only passphrase handling.
+
+- **Probes** — [monitoring/probes.py](Pingwatch/monitoring/probes.py) — new `_snmp_auth_args(community, version, v3_creds)` builds the full `-v3 -l level -u user -a auth -A authpass -x priv -X privpass -n context` argument vector. Whitelists protocol values (MD5 / SHA / SHA-224 / SHA-256 / SHA-384 / SHA-512 for auth; DES / AES / AES-192 / AES-256 for priv) and levels (noAuthNoPriv / authNoPriv / authPriv) before forwarding to the subprocess. Both `probe_snmp` and `snmpwalk_interfaces` accept an optional `v3_creds` dict; v1/v2c calls are bit-identical to before
+- **Credential resolution** — [core/state.py::Sensor._resolve_snmp_v3_creds](Pingwatch/core/state.py) — per-sensor fields win; blank fields inherit from the parent `Device.snmp_v3_*_default`. Passphrases are Fernet-decrypted at the probe-time boundary (same key as VMware / SSH / RADIUS passwords), so plaintext never sits on the Sensor attribute or in the DB
+- **Schema** — [db/pg_schema.py](Pingwatch/db/pg_schema.py) / [db/core.py](Pingwatch/db/core.py) — idempotent ADD COLUMN for `devices.snmp_v3_{user,level,auth_proto,auth_pass,priv_proto,priv_pass,context}_default` and `sensors.snmp_v3_{user,level,auth_proto,auth_pass,priv_proto,priv_pass,context}`. Both PG and SQLite migrations guarded; pre-existing installs pick up the columns on first restart without a manual step
+- **Persistence** — [db/persistence.py](Pingwatch/db/persistence.py) — round-trip for both tables across both backends. Column lists and value tuples are append-only (no renumbering of existing positions), so older DB snapshots load cleanly with blank v3 fields
+- **Routes** — [routes/devices.py](Pingwatch/routes/devices.py) — `/api/device` POST + PATCH and `/api/sensors/{did}` POST + `/api/sensors/{did}/{sid}` PATCH accept the new fields. Same whitelist validation as `probes.py`, returning HTTP 400 on bad enum values. Passphrases encrypt on the way in; empty-string means "keep existing" (placeholder-submit pattern matches the VMware / SSH flows). Responses never emit ciphertext — `has_snmp_v3_auth_pass` / `has_snmp_v3_priv_pass` boolean flags tell the UI when a stored value exists
+- **Edit/Add Device form** — [frontend/forms-device.js](Pingwatch/frontend/forms-device.js) — SNMP Version dropdown label changed from `v3 (community)` to `v3`. Selecting v3 reveals an accent-bordered credential block (Username, Security Level, Auth Proto + Passphrase, Priv Proto + Passphrase, Context). Auth row shows only for authNoPriv / authPriv; priv row only for authPriv. Passphrase inputs show `(unchanged)` placeholder when a stored value exists, so re-saving without retyping doesn't clear the vault
+- **Add/Edit Sensor form** — [frontend/forms-sensor.js](Pingwatch/frontend/forms-sensor.js) — same v3 block on the SNMP sensor tab, with inputs pre-filled from the device default (transparent to the user; the backend resolves the inheritance again at probe time). Discover Interfaces forwards the live v3 creds through `/api/snmp/interfaces` so users can validate credentials before committing a sensor
+- **Scope** — backwards compatible with all existing v1/v2c sensors (they never hit the v3 code path). No DB migration required beyond schema-idempotent column adds. Tested shape: Cisco N5K (172.22.99.89) and FortiGate (172.22.99.254) — production devices that historically required community-string workarounds
+
 ### 🔬 Typed SNMP sensor rendering — five categories
 
 Before this change, SNMP sensors rendered in one of two modes only: counter-rate (for `snmp_unit ∈ {bytes, errors, packets}`) or probe-latency fallback (everything else). That meant interface Oper Status, CPU %, temperature, memory, session count, UPS battery status, HA mode, uptime — every SNMP sensor that isn't a network traffic counter — silently displayed SNMP poll latency (~20-30ms) with "Avg ms / Max ms" axes and empty KPIs. Concrete reproducer: FortiGate `BS_LABS_TRUNK Oper Status` with a constant `value=1` (up) rendered a 393ms "max" figure as if the interface state were fluctuating. Fix: classify every SNMP sensor into one of five typed categories from `snmp_unit` and `snmp_type`, and render each category with appropriate KPIs, chart, and summary table.
@@ -317,7 +330,7 @@ Targeted backend + frontend patches to take PingWatch from ~1–2k comfortable t
 
 ---
 
-## Pre-0.9.2
+## v0.9.1 and earlier
 
 ### Reports module (scheduled PDF / CSV exports)
 - Three report kinds: Executive Summary, Technical/Operations, Inventory & Compliance
