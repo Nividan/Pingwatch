@@ -35,6 +35,23 @@ window.addEventListener('themechange', () => {
   } catch(_) {}
 });
 
+// v0.9.7: compute the tile sub-line.  For typed SNMP sensors (enum / gauge /
+// duration / text) where the main tile value already labels the reading,
+// fall back to target context (host, OID tail) instead of echoing the raw
+// numeric value as a useless second "1".
+function _tileDetail(s, tgt) {
+  if (s.stype === 'snmp') {
+    const cat = _snmpCategory(s.snmp_unit, s.snmp_type);
+    if (cat && cat !== 'counter_rate') {
+      // last_detail for non-counter SNMP is usually just the raw value (e.g. "1")
+      // — which the labeled tile value already conveys.  Show target instead.
+      const d = (s.last_detail || '').trim();
+      if (!d || d === String(s.last_value)) return tgt;
+    }
+  }
+  return s.last_detail || tgt;
+}
+
 function tileHTML(s){
   const st=s.alive===true?'up':s.alive===false?'down':'';
   const isSnmp=s.stype==='snmp';
@@ -44,9 +61,14 @@ function tileHTML(s){
   const isVmware=s.stype==='vmware';
   const rawVal = (isSnmp||isDns) ? (s.last_value||s.last_detail||'—')
                : isTls ? (s.last_value!=null?s.last_value+'d':null) : null;
+  // v0.9.7: SNMP tiles format through _snmpTileValue so enum/gauge/duration
+  // sensors show labeled state / unit-suffixed value instead of the raw int.
+  const _snmpFmt = isSnmp ? _snmpTileValue(s) : null;
   const vt = isVmware
     ? (s.alive===false?'FAIL':(()=>{const _v=parseFloat(s.last_value);return isNaN(_v)?(s.last_value||'—').slice(0,10):_fmtVmVal(_v,_VM_UNITS[s.vmware_metric]||'');})())
-    : (isSnmp||isDns)
+    : isSnmp
+      ? (_snmpFmt.length>14?_snmpFmt.slice(0,14)+'…':_snmpFmt)
+      : isDns
       ? (s.alive===false?'FAIL':(rawVal.length>14?rawVal.slice(0,14)+'…':rawVal))
       : isTls ? (s.alive===false?'FAIL':(rawVal||'—'))
       : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
@@ -82,7 +104,7 @@ function tileHTML(s){
   <div class="stl-body">
     <div class="stl-val ${vc}" id="stv-${s.device_id}_${s.sensor_id}">${vt}</div>
     <div class="stl-det" title="${esc(s.last_detail||'')}">
-      <span id="std-${s.device_id}_${s.sensor_id}">${esc(s.last_detail||tgt)}</span>
+      <span id="std-${s.device_id}_${s.sensor_id}">${esc(_tileDetail(s, tgt))}</span>
     </div>
     <div class="ub" id="ub-${s.device_id}_${s.sensor_id}">${ub}</div>
   </div>
@@ -333,9 +355,13 @@ function updateTile(s){
   const isVmware2=s.stype==='vmware';
   const rawVal2 = (isSnmp||isDns2)?(s.last_value||s.last_detail||'—')
                : isTls2?(s.last_value!=null?s.last_value+'d':null):null;
+  // v0.9.7: SNMP live updates route through _snmpTileValue.
+  const _snmpFmt2 = isSnmp ? _snmpTileValue(s) : null;
   const vt = isVmware2
     ? (s.alive===false?'FAIL':(()=>{const _v=parseFloat(s.last_value);return isNaN(_v)?(s.last_value||'—').slice(0,10):_fmtVmVal(_v,_VM_UNITS[s.vmware_metric]||'');})())
-    : (isSnmp||isDns2)
+    : isSnmp
+      ? (_snmpFmt2.length>14?_snmpFmt2.slice(0,14)+'…':_snmpFmt2)
+      : isDns2
       ? (s.alive===false?'FAIL':(rawVal2.length>14?rawVal2.slice(0,14)+'…':rawVal2))
       : isTls2 ? (s.alive===false?'FAIL':(rawVal2||'—'))
       : (s.last_ms!==null&&s.last_ms!==undefined?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—'));
@@ -350,7 +376,10 @@ function updateTile(s){
   const mutedBadge=document.getElementById(`sm-muted-${sk}`);
   if(mutedBadge){const isMuted2=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted2?'':'none';}
   const del=document.getElementById(`std-${sk}`);
-  if(del)del.textContent=s.last_detail||'';
+  if(del){
+    const _tgtLive=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
+    del.textContent=_tileDetail(s,_tgtLive);
+  }
   const ael=document.getElementById(`sa-${sk}`),mel=document.getElementById(`sm-${sk}`),lel=document.getElementById(`sl-${sk}`);
   if(isSnmp||isTls2){
     if(ael)ael.textContent=_isCounter2&&s.last_rate!=null?_fmtRateDisplay(s.last_rate,s.snmp_unit||'bytes'):'—';
