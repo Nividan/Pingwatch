@@ -682,6 +682,53 @@ def _rollup_1h():
             con.close()
 
 
+def _migration_done(key: str) -> bool:
+    """Return True if a one-shot migration marker is set in app_settings."""
+    try:
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            with pg_cursor("main") as cur:
+                cur.execute("SELECT value FROM app_settings WHERE key=%s", (key,))
+                row = cur.fetchone()
+                return bool(row and row["value"] == "1")
+        from core.config import DB_PATH
+        c = sqlite3.connect(DB_PATH, timeout=5)
+        try:
+            r = c.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+            return bool(r and r[0] == "1")
+        finally:
+            c.close()
+    except Exception:
+        return False   # treat unreadable marker as "not done" — safe default
+
+
+def _mark_migration_done(key: str) -> None:
+    """Persist a one-shot migration marker so it doesn't re-run next startup."""
+    try:
+        if is_pg():
+            from db.pg_pool import pg_conn
+            with pg_conn("main") as con:
+                con.cursor().execute(
+                    "INSERT INTO app_settings (key, value) VALUES (%s, '1') "
+                    "ON CONFLICT (key) DO UPDATE SET value='1'",
+                    (key,),
+                )
+            return
+        from core.config import DB_PATH
+        c = sqlite3.connect(DB_PATH, timeout=5)
+        try:
+            c.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, '1') "
+                "ON CONFLICT(key) DO UPDATE SET value='1'",
+                (key,),
+            )
+            c.commit()
+        finally:
+            c.close()
+    except Exception as e:
+        log.warning(f"Could not mark migration '{key}' done: {e}")
+
+
 def db_rollup_backfill():
     """Backfill rollup tables from existing raw data if needed.
 
@@ -693,10 +740,15 @@ def db_rollup_backfill():
     3. (v0.9.6) Rollup rows exist with NULL avg_value but raw data still has
        numeric `value` for the same sensor — means the rollup predates v0.9.6's
        value-aggregate columns. Reprocess so value aggregates are populated
-       for the full raw-retention window.
+       for the full raw-retention window. Guarded by a one-shot `app_settings`
+       marker ('migration_v096_value_aggregate_done'): otherwise old rollup
+       rows outside the raw-retention window permanently have NULL avg_value
+       (unrecoverable) and would make the trigger fire on every startup
+       forever.
 
     Safe to call repeatedly — upsert prevents duplicates.
     """
+    _V096_KEY = "migration_v096_value_aggregate_done"
     trigger_reason = None
     if is_pg():
         from db.pg_pool import pg_cursor
@@ -708,9 +760,9 @@ def db_rollup_backfill():
                 if cur.fetchone()["cnt"] == 0:
                     return  # no raw data to backfill from
                 trigger_reason = "rollup empty"
-            else:
-                # v0.9.6 value-aggregate backfill: any rollup row missing
-                # avg_value while raw value exists → reprocess.
+            elif not _migration_done(_V096_KEY):
+                # First startup after deploying v0.9.6 — rollup rows missing
+                # avg_value need repopulation from raw data within retention.
                 cur.execute(
                     "SELECT EXISTS(SELECT 1 FROM sensor_samples_5m "
                     "WHERE avg_value IS NULL LIMIT 1) AS need"
@@ -723,6 +775,9 @@ def db_rollup_backfill():
                     )
                     if bool(cur.fetchone()["has"]):
                         trigger_reason = "v0.9.6 value-aggregate migration"
+                if not need_value_backfill:
+                    # Nothing to backfill — mark as done so we don't re-check.
+                    _mark_migration_done(_V096_KEY)
         if trigger_reason is None:
             return
         log.info(f"Backfilling rollup tables from existing PG data ({trigger_reason}) …")
@@ -736,7 +791,7 @@ def db_rollup_backfill():
                 if not raw_cnt:
                     return
                 trigger_reason = "rollup empty"
-            else:
+            elif not _migration_done(_V096_KEY):
                 need_value = con.execute(
                     "SELECT EXISTS(SELECT 1 FROM sensor_samples_5m "
                     "WHERE avg_value IS NULL LIMIT 1)"
@@ -748,6 +803,8 @@ def db_rollup_backfill():
                     ).fetchone()[0]
                     if has_raw_value:
                         trigger_reason = "v0.9.6 value-aggregate migration"
+                if not need_value:
+                    _mark_migration_done(_V096_KEY)
         finally:
             con.close()
         if trigger_reason is None:
@@ -793,6 +850,11 @@ def db_rollup_backfill():
         log.info(f"Rollup backfill: 1h tier complete ({chunks_1h + 1} chunks)")
 
         log.info(f"Rollup backfill complete in {time.time() - started:.1f}s")
+        # One-shot guard: prevent the v0.9.6 trigger from re-firing next startup
+        # just because pre-v0.9.6 rollup rows (outside raw retention) still carry
+        # NULL avg_value — those can never be recovered.
+        if trigger_reason == "v0.9.6 value-aggregate migration":
+            _mark_migration_done(_V096_KEY)
     except Exception as e:
         log.error(f"Rollup backfill error: {e}")
 
