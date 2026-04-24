@@ -762,8 +762,7 @@ def handle(h, method, path, body):
             if "interval" in kwargs:
                 kwargs["interval"] = validate_interval(kwargs["interval"], 1, 3600)
             if "timeout" in kwargs:
-                iv = int(kwargs.get("interval", body.get("interval", 5)))
-                kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
+                kwargs["timeout"] = int(kwargs["timeout"])
             if "port" in kwargs and kwargs["port"] not in (None, ""):
                 kwargs["port"] = validate_port(kwargs["port"])
         except ValueError as _ve:
@@ -783,6 +782,17 @@ def handle(h, method, path, body):
                     h._json(400, {"error": "banner_regex is too complex"}); return True
             except re.error as _re_err:
                 h._json(400, {"error": f"Invalid banner_regex: {_re_err}"}); return True
+        # Validate timeout against the interval (current or being updated)
+        if "timeout" in kwargs:
+            with STATE._lock:
+                _sensor = STATE.devices.get(did)
+                _sensor = _sensor.sensors.get(sid) if _sensor else None
+                _current_iv = _sensor.interval if _sensor else 5
+            if "interval" in kwargs:
+                iv = int(kwargs["interval"])
+            else:
+                iv = _current_iv
+            kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
         ok = STATE.update_sensor(did, sid, **kwargs)
         if not ok:
             h._json(404, {"error": "sensor not found"}); return True
