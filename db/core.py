@@ -1043,7 +1043,8 @@ def logs_db_init():
                 sid   TEXT    NOT NULL,
                 ok    INTEGER NOT NULL,
                 ms    REAL,
-                value TEXT
+                value TEXT,
+                rate  REAL
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_samples_ds "
@@ -1053,6 +1054,11 @@ def logs_db_init():
             "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
             "ON sensor_samples(did, sid, ts, ok, ms)"
         )
+        # v0.9.7: per-probe rate column for counter-type SNMP sensors.
+        try:
+            con.execute("ALTER TABLE sensor_samples ADD COLUMN rate REAL")
+        except sqlite3.OperationalError:
+            pass   # column already exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS flap_log (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1157,6 +1163,9 @@ def logs_db_init():
                 max_value    REAL,
                 first_value  REAL,
                 last_value   REAL,
+                avg_rate     REAL,
+                min_rate     REAL,
+                max_rate     REAL,
                 PRIMARY KEY (did, sid, ts)
             )""")
         con.execute(
@@ -1179,15 +1188,19 @@ def logs_db_init():
                 max_value    REAL,
                 first_value  REAL,
                 last_value   REAL,
+                avg_rate     REAL,
+                min_rate     REAL,
+                max_rate     REAL,
                 PRIMARY KEY (did, sid, ts)
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_s1h_ts ON sensor_samples_1h(ts)"
         )
-        # Idempotent add for installs that predate v0.9.6 — SQLite has no
-        # IF NOT EXISTS on ADD COLUMN; swallow the "duplicate column" error.
+        # Idempotent add for installs that predate v0.9.6 / v0.9.7 — SQLite has
+        # no IF NOT EXISTS on ADD COLUMN; swallow the "duplicate column" error.
         for _tbl in ("sensor_samples_5m", "sensor_samples_1h"):
-            for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value"):
+            for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value",
+                         "avg_rate", "min_rate", "max_rate"):
                 try:
                     con.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} REAL")
                 except sqlite3.OperationalError:

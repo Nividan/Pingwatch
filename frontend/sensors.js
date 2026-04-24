@@ -1123,36 +1123,66 @@ const _COUNTER_HIST_UNITS = new Set(['bytes','errors','packets']);
 
 function _computeRateSamples(samples, snmpUnit) {
   if (!_COUNTER_HIST_UNITS.has(snmpUnit)) return null;
-  // Rollup tier path (v0.9.6): each sample already carries first_value +
-  // last_value for its bucket — derive per-bucket rate directly. Detection:
-  // bucket_s is set by the API for rollup rows and absent for raw rows.
-  const hasBuckets = samples.some(p => p.bucket_s && p.first_value != null && p.last_value != null);
+  // Each returned item carries {ts, ok, rate, min, max, ms}:
+  //   rate = central value (drawn as the avg line)
+  //   min/max = bucket extremes (drive the min/max envelope band)
+  // At raw tier, min = max = rate (single probe).  At rollup tier, min/max
+  // capture peak-preserving aggregates (v0.9.7) — a 30-second burst survives
+  // at 3d / 30d / 1y views instead of being averaged away.
+  const hasBuckets = samples.some(p => p.bucket_s);
   if (hasBuckets) {
     const result = [];
     for (const p of samples) {
-      if (!p.ok || !p.bucket_s || p.first_value == null || p.last_value == null) {
-        result.push({ts: p.ts, ok: !!p.ok, rate: null, ms: p.ms});
+      if (!p.ok) {
+        result.push({ts: p.ts, ok: false, rate: null, min: null, max: null, ms: p.ms});
         continue;
       }
-      let delta = p.last_value - p.first_value;
-      if (delta < 0) delta += 4294967296; // Counter32 wrap
-      result.push({ts: p.ts, ok: true, rate: delta / p.bucket_s, ms: p.ms});
+      // v0.9.7: prefer backend rate aggregates (Counter64-safe, peak-preserving).
+      if (p.avg_rate != null) {
+        result.push({
+          ts: p.ts, ok: true,
+          rate: p.avg_rate,
+          min: p.min_rate != null ? p.min_rate : p.avg_rate,
+          max: p.max_rate != null ? p.max_rate : p.avg_rate,
+          ms:  p.ms,
+        });
+        continue;
+      }
+      // v0.9.6 fallback: bucket-endpoint derivation (smoothed avg only).
+      // Applies to rollup rows that predate the v0.9.7 migration.
+      if (p.first_value != null && p.last_value != null) {
+        let delta = p.last_value - p.first_value;
+        if (delta < 0) delta += 4294967296; // Counter32 wrap (frontend-only fallback)
+        const r = delta / p.bucket_s;
+        result.push({ts: p.ts, ok: true, rate: r, min: r, max: r, ms: p.ms});
+        continue;
+      }
+      result.push({ts: p.ts, ok: true, rate: null, min: null, max: null, ms: p.ms});
     }
     return result;
   }
-  // Raw tier: compute delta between consecutive samples.
-  const sorted = [...samples].filter(p => p.value != null).sort((a, b) => a.ts - b.ts);
+  // Raw tier.
+  const sorted = [...samples].sort((a, b) => a.ts - b.ts);
   const result = [];
-  for (let i = 1; i < sorted.length; i++) {
-    const prev = sorted[i-1], curr = sorted[i];
-    if (!curr.ok) { result.push({ts:curr.ts, ok:false, rate:null, ms:curr.ms}); continue; }
-    if (curr.value==null||prev.value==null) continue;
+  for (let i = 0; i < sorted.length; i++) {
+    const curr = sorted[i];
+    if (!curr.ok) { result.push({ts: curr.ts, ok: false, rate: null, min: null, max: null, ms: curr.ms}); continue; }
+    // v0.9.7: prefer backend-computed rate (correct Counter64 wrap, no prev needed).
+    if (curr.rate != null) {
+      result.push({ts: curr.ts, ok: true, rate: curr.rate, min: curr.rate, max: curr.rate, ms: curr.ms});
+      continue;
+    }
+    // Fallback: client-side diff of consecutive raw counters (Counter32 only).
+    if (i === 0) continue;
+    const prev = sorted[i-1];
+    if (curr.value == null || prev.value == null) continue;
     const elapsed = curr.ts - prev.ts;
-    if (elapsed<=0||elapsed>300) continue;
+    if (elapsed <= 0 || elapsed > 300) continue;
     let delta = parseFloat(curr.value) - parseFloat(prev.value);
     if (isNaN(delta)) continue;
     if (delta < 0) delta += 4294967296; // Counter32 wrap
-    result.push({ts:curr.ts, ok:true, rate:delta/elapsed, ms:curr.ms});
+    const r = delta / elapsed;
+    result.push({ts: curr.ts, ok: true, rate: r, min: r, max: r, ms: curr.ms});
   }
   return result;
 }
@@ -1489,10 +1519,12 @@ function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
   if (_isCounter) {
     const _u   = snmpUnit;
     const _lbl = _u==='bytes'?'Mbps':_u==='errors'?'err/s':_u==='packets'?'pkt/s':'/s';
-    const okR  = rateSamples.filter(r=>r.ok&&r.rate!=null).map(r=>r.rate);
-    const avgR = okR.length ? okR.reduce((a,b)=>a+b,0)/okR.length : null;
-    const minR = okR.length ? Math.min(...okR) : null;
-    const maxR = okR.length ? Math.max(...okR) : null;
+    const okR  = rateSamples.filter(r=>r.ok&&r.rate!=null);
+    const avgR = okR.length ? okR.reduce((a,b)=>a+b.rate,0)/okR.length : null;
+    // v0.9.7: use per-bucket min/max (peak-preserving at rollup tier).
+    // At raw tier, r.min = r.max = r.rate so this degrades to Math.min/max of rates.
+    const minR = okR.length ? Math.min(...okR.map(r => r.min != null ? r.min : r.rate)) : null;
+    const maxR = okR.length ? Math.max(...okR.map(r => r.max != null ? r.max : r.rate)) : null;
     const _fr  = v => v!=null ? _fmtRateDisplay(v,_u) : '—';
     _setKpi(`kpi-avg-${did}-${sid}`, 'Avg '+_lbl, _fr(avgR));
     _setKpi(`kpi-min-${did}-${sid}`, 'Min '+_lbl, _fr(minR));
@@ -1734,7 +1766,11 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
   let msVals, rawMax, maxY, yOf;
   if (_isCounter) {
     const okR = rateSamples.filter(r => r.ok && r.rate != null);
-    const dispVals = okR.map(r => _rateToDisplayUnits(r.rate, snmpUnit));
+    // v0.9.7: include per-bucket max in scaling so peaks aren't clipped when
+    // the Min/Max envelope is drawn. Falls back to r.rate when r.max is not
+    // distinct from r.rate (raw tier, or pre-v0.9.7 rollup rows).
+    const dispVals = okR.map(r => _rateToDisplayUnits(
+      (r.max != null && r.max > r.rate) ? r.max : r.rate, snmpUnit));
     const sortedD = [...dispVals].sort((a, b) => a - b);
     const rP95 = sortedD.length ? (sortedD[Math.floor(sortedD.length * 0.95)] ?? sortedD[sortedD.length - 1]) : 0;
     maxY = Math.max(rP95 * 1.4, (_sen?.warn_ms || 0) * 1.2, 0.1);
@@ -1858,6 +1894,32 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       bandPts.forEach((r, i) => {
         const x = xOf(r.ts + 1800);
         i === 0 ? ctx.moveTo(x, yOf(r.min_ms)) : ctx.lineTo(x, yOf(r.min_ms));
+      });
+      ctx.strokeStyle = `rgb(${_upC})`; ctx.lineWidth = 1; ctx.stroke();
+      ctx.globalAlpha = 1.0;
+    }
+  }
+  // v0.9.7: Min/Max envelope for counter-rate sensors.  At raw tier
+  // min = max = rate so the band collapses to the avg line; at rollup tier
+  // the band shows peak probe rates within each bucket (e.g. a 30-second
+  // burst that would otherwise be smoothed away at 3d+ zoom).
+  if (togBand && _isCounter) {
+    const bandPts = rateSamples.filter(r => r.ok && r.min != null && r.max != null
+                                              && (r.min !== r.max));
+    if (bandPts.length > 1) {
+      ctx.globalAlpha = 0.5;
+      // Max — pink
+      ctx.beginPath();
+      bandPts.forEach((r, i) => {
+        const x = xOf(r.ts), y = yOf(_rateToDisplayUnits(r.max, snmpUnit));
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = 'rgba(244,114,182,1)'; ctx.lineWidth = 1; ctx.stroke();
+      // Min — teal/green
+      ctx.beginPath();
+      bandPts.forEach((r, i) => {
+        const x = xOf(r.ts), y = yOf(_rateToDisplayUnits(r.min, snmpUnit));
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       });
       ctx.strokeStyle = `rgb(${_upC})`; ctx.lineWidth = 1; ctx.stroke();
       ctx.globalAlpha = 1.0;
@@ -2094,8 +2156,9 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
       const okR = rateSamples.filter(r => r.ok && r.rate != null);
       const total = rateSamples.length, upPct = total ? Math.round(okR.length / total * 1000) / 10 : 0;
       const avgD = okR.length ? _rateToDisplayUnits(okR.reduce((a, r) => a + r.rate, 0) / okR.length, snmpUnit) : null;
-      const minD = okR.length ? _rateToDisplayUnits(Math.min(...okR.map(r => r.rate)), snmpUnit) : null;
-      const maxD = okR.length ? _rateToDisplayUnits(Math.max(...okR.map(r => r.rate)), snmpUnit) : null;
+      // v0.9.7: use per-bucket min/max for peak-preserving stats at rollup tier.
+      const minD = okR.length ? _rateToDisplayUnits(Math.min(...okR.map(r => r.min != null ? r.min : r.rate)), snmpUnit) : null;
+      const maxD = okR.length ? _rateToDisplayUnits(Math.max(...okR.map(r => r.max != null ? r.max : r.rate)), snmpUnit) : null;
       const _f = v => v != null ? _fmtRateThrLabel(v, snmpUnit) : '—';
       statsEl.textContent = `${total} probes · ${upPct}% up · avg ${_f(avgD)} · min ${_f(minD)} · max ${_f(maxD)}`;
     } else if (_isVmware) {
@@ -2141,8 +2204,13 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
       const k = Math.floor((r.ts + _tzOff) / _bSec) * _bSec - _tzOff;
       if (!_buckets[k]) _buckets[k] = {ts:k, ok:0, fail:0, rsum:0, rmin:Infinity, rmax:-Infinity, rcnt:0};
       const d = _rateToDisplayUnits(r.rate, snmpUnit);
-      _buckets[k].rsum += d; _buckets[k].rmin = Math.min(_buckets[k].rmin, d);
-      _buckets[k].rmax = Math.max(_buckets[k].rmax, d); _buckets[k].rcnt++;
+      _buckets[k].rsum += d; _buckets[k].rcnt++;
+      // v0.9.7: use per-bucket min/max (peak-preserving at rollup tier); at
+      // raw tier r.min = r.max = r.rate so this degrades to the old behavior.
+      const dMin = _rateToDisplayUnits(r.min != null ? r.min : r.rate, snmpUnit);
+      const dMax = _rateToDisplayUnits(r.max != null ? r.max : r.rate, snmpUnit);
+      _buckets[k].rmin = Math.min(_buckets[k].rmin, dMin);
+      _buckets[k].rmax = Math.max(_buckets[k].rmax, dMax);
     }
     const _u   = snmpUnit;
     const _lbl = _u==='bytes'?'Mbps':_u==='errors'?'err/s':_u==='packets'?'pkt/s':'/s';

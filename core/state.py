@@ -628,6 +628,39 @@ class MonitorState:
             flush_rows = _last_flush_rows
         except Exception:
             pass
+        # v0.9.7: peak-rate coverage — % of last-hour raw samples that carry
+        # a populated rate column. Near-0% right after deploy (rate computed
+        # forward-looking only); should climb to ~95%+ within 2 probe cycles
+        # on a counter-heavy deployment.
+        peak_rate_coverage = None
+        try:
+            from db.backend import is_pg
+            if is_pg():
+                from db.pg_pool import pg_cursor
+                with pg_cursor("logs") as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) AS n, COUNT(rate) AS nr "
+                        "FROM sensor_samples WHERE ts > %s",
+                        (time.time() - 3600,),
+                    )
+                    r = cur.fetchone()
+                    if r and r["n"]:
+                        peak_rate_coverage = round(100.0 * r["nr"] / r["n"], 1)
+            else:
+                import sqlite3
+                from core.config import LOGS_DB_PATH
+                c = sqlite3.connect(LOGS_DB_PATH, timeout=2)
+                try:
+                    row = c.execute(
+                        "SELECT COUNT(*), COUNT(rate) FROM sensor_samples WHERE ts > ?",
+                        (time.time() - 3600,),
+                    ).fetchone()
+                    if row and row[0]:
+                        peak_rate_coverage = round(100.0 * row[1] / row[0], 1)
+                finally:
+                    c.close()
+        except Exception:
+            pass
         return {
             "scheduler_heap":       heap_len,
             "scheduler_tombstones": tomb_len,
@@ -635,6 +668,7 @@ class MonitorState:
             "worker_max":           worker_max,
             "last_flush_ms":        flush_ms,
             "last_flush_rows":      flush_rows,
+            "peak_rate_coverage":   peak_rate_coverage,
         }
 
     def _next_did(self):
@@ -933,13 +967,14 @@ class MonitorState:
         _ts_float = time.time()
         _muted = s.alerts_muted or dev.alerts_muted or is_group_muted(dev.group)
 
-        # ── Log sample to DB (non-blocking) ──
+        # Sample buffered after the ok/fail branch so s._last_rate reflects
+        # THIS probe's rate (computed in the ok branch below for SNMP
+        # counters), not the previous probe's.
         _ok_cap  = result["ok"]
         _ms_cap  = result["ms"]
         _val_cap = str(result.get("value", "")) if result.get("value") is not None else None
         _ts_f_cap = _ts_float
         _did_cap, _sid_cap = did, sid
-        db_buffer_sample(_did_cap, _sid_cap, _ok_cap, _ms_cap, _val_cap, _ts_f_cap)
 
         _log_msg = result.get("detail", "")   # default; overridden in ok branch for SNMP
         if result["ok"]:
@@ -1024,6 +1059,7 @@ class MonitorState:
             s.last_ms     = None
             s.last_detail = result["detail"]
             s.last_value  = None
+            s._last_rate  = None   # v0.9.7: don't persist stale rate on probe failure
             s.history.append(None)
             self._broadcast("log", {"did": did, "sid": sid,
                                      "msg": result["detail"], "type": "err"})
@@ -1052,6 +1088,12 @@ class MonitorState:
                         _enqueue_webhook(dev.webhook_url, _flap_cap)
                 s._alerted_down    = True
                 s._down_since_ts   = time.time()
+
+        # ── Log sample to DB (non-blocking) ──
+        # v0.9.7: pass rate so counter-type SNMP sensors store the per-probe
+        # rate alongside the raw counter value.  None for non-counter sensors.
+        db_buffer_sample(_did_cap, _sid_cap, _ok_cap, _ms_cap, _val_cap, _ts_f_cap,
+                         rate=getattr(s, "_last_rate", None))
 
         # ── Threshold state check (transitions only) ──
         _new_thr = "ok"

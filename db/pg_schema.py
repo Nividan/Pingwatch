@@ -714,7 +714,8 @@ def pg_create_logs_schema(cur):
                 sid   TEXT NOT NULL,
                 ok    INTEGER NOT NULL,
                 ms    DOUBLE PRECISION,
-                value TEXT
+                value TEXT,
+                rate  DOUBLE PRECISION
             ) PARTITION BY RANGE (ts)""")
         pg_ensure_sample_partitions(cur)
         cur.execute(
@@ -725,6 +726,11 @@ def pg_create_logs_schema(cur):
             "CREATE INDEX IF NOT EXISTS idx_samples_ds_cov "
             "ON sensor_samples(did, sid, ts, ok, ms)"
         )
+    # v0.9.7: per-probe rate for counter-type SNMP sensors.  NULL for
+    # non-counter sensors and for the first probe after restart.
+    cur.execute(
+        "ALTER TABLE sensor_samples ADD COLUMN IF NOT EXISTS rate DOUBLE PRECISION"
+    )
 
     # ── Rollup tables (v0.8.0) ──────────────────────────────────────
     # v0.9.6: added {avg,min,max,first,last}_value for sensors whose primary
@@ -748,13 +754,17 @@ def pg_create_logs_schema(cur):
             max_value    DOUBLE PRECISION,
             first_value  DOUBLE PRECISION,
             last_value   DOUBLE PRECISION,
+            avg_rate     DOUBLE PRECISION,
+            min_rate     DOUBLE PRECISION,
+            max_rate     DOUBLE PRECISION,
             PRIMARY KEY (did, sid, ts)
         )""")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_s5m_ts ON sensor_samples_5m(ts)"
     )
-    # Idempotent add for installs that predate v0.9.6.
-    for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value"):
+    # Idempotent add for installs that predate v0.9.6 / v0.9.7.
+    for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value",
+                 "avg_rate", "min_rate", "max_rate"):
         cur.execute(
             f"ALTER TABLE sensor_samples_5m ADD COLUMN IF NOT EXISTS {_col} DOUBLE PRECISION"
         )
@@ -776,12 +786,16 @@ def pg_create_logs_schema(cur):
             max_value    DOUBLE PRECISION,
             first_value  DOUBLE PRECISION,
             last_value   DOUBLE PRECISION,
+            avg_rate     DOUBLE PRECISION,
+            min_rate     DOUBLE PRECISION,
+            max_rate     DOUBLE PRECISION,
             PRIMARY KEY (did, sid, ts)
         )""")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_s1h_ts ON sensor_samples_1h(ts)"
     )
-    for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value"):
+    for _col in ("avg_value", "min_value", "max_value", "first_value", "last_value",
+                 "avg_rate", "min_rate", "max_rate"):
         cur.execute(
             f"ALTER TABLE sensor_samples_1h ADD COLUMN IF NOT EXISTS {_col} DOUBLE PRECISION"
         )

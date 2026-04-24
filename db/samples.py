@@ -43,13 +43,17 @@ _TRIM_BATCH   = 10_000
 _TRIM_YIELD_S = 0.05
 
 
-def db_buffer_sample(did, sid, ok, ms, value, ts):
+def db_buffer_sample(did, sid, ok, ms, value, ts, rate=None):
     """Append one probe result to the in-memory buffer (thread-safe, no I/O).
 
     If the buffer exceeds _SAMPLE_BUF_MAX (writer stalled), the oldest row
     is dropped to prevent unbounded memory growth. Drops bump counters read
     by ``db_sample_buffer_stats()`` so operators get a client-visible signal
     instead of only a rate-limited log line.
+
+    ``rate`` (v0.9.7): per-probe rate in native units (bytes/s, events/s) for
+    counter-type SNMP sensors. ``None`` for non-counter sensors and the first
+    probe after restart (no prior sample to diff).
     """
     global _sample_overflow_logged, _sample_drops_total, _sample_highwater_armed
     with _SAMPLE_BUF_LOCK:
@@ -77,7 +81,7 @@ def db_buffer_sample(did, sid, ok, ms, value, ts):
             # Rearm once the buffer drains below 50% so we can warn again
             # if pressure recurs later in the same boot.
             _sample_highwater_armed = True
-        _SAMPLE_BUF.append((ts, did, sid, int(ok), ms, value))
+        _SAMPLE_BUF.append((ts, did, sid, int(ok), ms, value, rate))
 
 
 def db_sample_buffer_stats() -> dict:
@@ -114,7 +118,7 @@ def _do_insert_samples(rows):
                 with pg_conn("logs") as con:
                     psycopg2.extras.execute_values(
                         con.cursor(),
-                        "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES %s",
+                        "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value,rate) VALUES %s",
                         rows,
                         page_size=1000,
                     )
@@ -126,7 +130,7 @@ def _do_insert_samples(rows):
         try:
             con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
             con.executemany(
-                "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO sensor_samples (ts,did,sid,ok,ms,value,rate) VALUES (?,?,?,?,?,?,?)",
                 rows,
             )
             con.commit()
@@ -206,18 +210,27 @@ def _try_float(v):
 
 
 def _bucket_raw_rows(raw_rows, bucket_s):
-    """Group raw (ts, did, sid, ok, ms, value) rows into (bucket, did, sid)
-    buckets; compute per-bucket aggregates for both ms and value (v0.9.6).
-    Non-numeric `value` rows are skipped in value aggregates. Returns a dict
-    keyed by (bucket_ts, did, sid) → aggregate dict."""
+    """Group raw (ts, did, sid, ok, ms, value, rate) rows into (bucket, did, sid)
+    buckets; compute per-bucket aggregates for ms, value (v0.9.6), and rate
+    (v0.9.7). Non-numeric `value` rows are skipped in value aggregates; `rate`
+    is already typed (nullable float) so NULLs are skipped directly. Returns a
+    dict keyed by (bucket_ts, did, sid) → aggregate dict."""
     from collections import defaultdict
     out = defaultdict(lambda: {
         'ok': 0, 'fail': 0, 'count': 0,
         'ms_sum': 0.0, 'ms_sq_sum': 0.0, 'ms_count': 0,
         'ms_min': None, 'ms_max': None,
         'vals': [],   # (ts, float) tuples, numeric only
+        'rate_sum': 0.0, 'rate_count': 0,
+        'rate_min': None, 'rate_max': None,
     })
-    for ts, did, sid, ok, ms, value in raw_rows:
+    for row in raw_rows:
+        # v0.9.7: rows carry 7 cols (rate); older callers may still pass 6.
+        if len(row) == 7:
+            ts, did, sid, ok, ms, value, rate = row
+        else:
+            ts, did, sid, ok, ms, value = row
+            rate = None
         bucket = int(ts // bucket_s) * bucket_s
         b = out[(bucket, did, sid)]
         b['count'] += 1
@@ -236,6 +249,13 @@ def _bucket_raw_rows(raw_rows, bucket_s):
         v = _try_float(value)
         if v is not None:
             b['vals'].append((ts, v))
+        if rate is not None:
+            b['rate_sum']   += rate
+            b['rate_count'] += 1
+            if b['rate_min'] is None or rate < b['rate_min']:
+                b['rate_min'] = rate
+            if b['rate_max'] is None or rate > b['rate_max']:
+                b['rate_max'] = rate
     # Finalise aggregates
     for b in out.values():
         c = b['ms_count']
@@ -253,6 +273,9 @@ def _bucket_raw_rows(raw_rows, bucket_s):
         else:
             b['avg_value'] = b['min_value'] = b['max_value'] = None
             b['first_value'] = b['last_value'] = None
+        rc = b['rate_count']
+        b['avg_rate'] = (b['rate_sum'] / rc) if rc else None
+        # rate_min / rate_max already set during iteration
     return out
 
 
@@ -312,7 +335,8 @@ def _rollup_5m():
                 INSERT INTO sensor_samples_5m
                     (ts, did, sid, ok_count, fail_count,
                      avg_ms, min_ms, max_ms, avg_ms_sq, sample_count,
-                     avg_value, min_value, max_value, first_value, last_value)
+                     avg_value, min_value, max_value, first_value, last_value,
+                     avg_rate, min_rate, max_rate)
                 SELECT FLOOR(ts / 300) * 300 AS bucket,
                        did, sid,
                        SUM(ok), COUNT(*) - SUM(ok),
@@ -326,7 +350,8 @@ def _rollup_5m():
                        (ARRAY_AGG(value::DOUBLE PRECISION ORDER BY ts ASC)
                            FILTER (WHERE value ~ '^-?[0-9]+(\.[0-9]+)?$'))[1],
                        (ARRAY_AGG(value::DOUBLE PRECISION ORDER BY ts DESC)
-                           FILTER (WHERE value ~ '^-?[0-9]+(\.[0-9]+)?$'))[1]
+                           FILTER (WHERE value ~ '^-?[0-9]+(\.[0-9]+)?$'))[1],
+                       AVG(rate), MIN(rate), MAX(rate)
                 FROM sensor_samples
                 WHERE ts > %s AND ts < %s
                 GROUP BY bucket, did, sid
@@ -342,7 +367,10 @@ def _rollup_5m():
                     min_value    = EXCLUDED.min_value,
                     max_value    = EXCLUDED.max_value,
                     first_value  = EXCLUDED.first_value,
-                    last_value   = EXCLUDED.last_value
+                    last_value   = EXCLUDED.last_value,
+                    avg_rate     = EXCLUDED.avg_rate,
+                    min_rate     = EXCLUDED.min_rate,
+                    max_rate     = EXCLUDED.max_rate
             """, (window_start, upper))
 
             new_ts = int(upper // 300) * 300
@@ -385,8 +413,9 @@ def _rollup_5m():
         # — SQLite has no regex for the numeric guard and first/last within a
         # bucket need endpoint picks that are awkward in pure SQL. Fetch raw
         # rows in the window, bucket, compute per-bucket aggregates, UPSERT.
+        # v0.9.7: also aggregate rate into {avg,min,max}_rate per bucket.
         raw = con.execute("""
-            SELECT ts, did, sid, ok, ms, value
+            SELECT ts, did, sid, ok, ms, value, rate
             FROM sensor_samples
             WHERE ts > ? AND ts < ?
         """, (window_start, upper)).fetchall()
@@ -398,19 +427,23 @@ def _rollup_5m():
                 INSERT INTO sensor_samples_5m
                     (ts, did, sid, ok_count, fail_count,
                      avg_ms, min_ms, max_ms, avg_ms_sq, sample_count,
-                     avg_value, min_value, max_value, first_value, last_value)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     avg_value, min_value, max_value, first_value, last_value,
+                     avg_rate, min_rate, max_rate)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT (did, sid, ts) DO UPDATE SET
                     ok_count=excluded.ok_count, fail_count=excluded.fail_count,
                     avg_ms=excluded.avg_ms, min_ms=excluded.min_ms, max_ms=excluded.max_ms,
                     avg_ms_sq=excluded.avg_ms_sq, sample_count=excluded.sample_count,
                     avg_value=excluded.avg_value, min_value=excluded.min_value,
                     max_value=excluded.max_value,
-                    first_value=excluded.first_value, last_value=excluded.last_value
+                    first_value=excluded.first_value, last_value=excluded.last_value,
+                    avg_rate=excluded.avg_rate, min_rate=excluded.min_rate,
+                    max_rate=excluded.max_rate
             """, (bucket, did, sid, b['ok'], b['fail'],
                   b['avg_ms'], b['min_ms'], b['max_ms'], b['avg_ms_sq'], b['count'],
                   b['avg_value'], b['min_value'], b['max_value'],
-                  b['first_value'], b['last_value']))
+                  b['first_value'], b['last_value'],
+                  b['avg_rate'], b['rate_min'], b['rate_max']))
 
         new_ts = int(upper // 300) * 300
         con.execute(
@@ -469,7 +502,8 @@ def _rollup_1h():
                 INSERT INTO sensor_samples_1h
                     (ts, did, sid, ok_count, fail_count,
                      avg_ms, min_ms, max_ms, avg_ms_sq, sample_count,
-                     avg_value, min_value, max_value, first_value, last_value)
+                     avg_value, min_value, max_value, first_value, last_value,
+                     avg_rate, min_rate, max_rate)
                 SELECT FLOOR(ts / 3600) * 3600 AS bucket,
                        did, sid,
                        SUM(ok_count), SUM(fail_count),
@@ -484,7 +518,11 @@ def _rollup_1h():
                        (ARRAY_AGG(first_value ORDER BY ts ASC)
                            FILTER (WHERE first_value IS NOT NULL))[1],
                        (ARRAY_AGG(last_value ORDER BY ts DESC)
-                           FILTER (WHERE last_value IS NOT NULL))[1]
+                           FILTER (WHERE last_value IS NOT NULL))[1],
+                       SUM(avg_rate * sample_count) FILTER (WHERE avg_rate IS NOT NULL)
+                         / NULLIF(SUM(sample_count) FILTER (WHERE avg_rate IS NOT NULL), 0),
+                       MIN(min_rate),
+                       MAX(max_rate)
                 FROM sensor_samples_5m
                 WHERE ts > %s AND ts < %s
                 GROUP BY bucket, did, sid
@@ -500,7 +538,10 @@ def _rollup_1h():
                     min_value    = EXCLUDED.min_value,
                     max_value    = EXCLUDED.max_value,
                     first_value  = EXCLUDED.first_value,
-                    last_value   = EXCLUDED.last_value
+                    last_value   = EXCLUDED.last_value,
+                    avg_rate     = EXCLUDED.avg_rate,
+                    min_rate     = EXCLUDED.min_rate,
+                    max_rate     = EXCLUDED.max_rate
             """, (window_start, upper))
 
             new_ts = int(upper // 3600) * 3600
@@ -542,10 +583,12 @@ def _rollup_1h():
         # as the PG query above. Fetch 5m rows in the window, group by hour+did+sid,
         # weighted-avg avg_value by sample_count, pick first/last value from the
         # 5m bucket with the min/max ts in that hour.
+        # v0.9.7: also roll up avg_rate (sample_count-weighted) + min_rate / max_rate.
         raw = con.execute("""
             SELECT ts, did, sid, ok_count, fail_count,
                    avg_ms, min_ms, max_ms, avg_ms_sq, sample_count,
-                   avg_value, min_value, max_value, first_value, last_value
+                   avg_value, min_value, max_value, first_value, last_value,
+                   avg_rate, min_rate, max_rate
             FROM sensor_samples_5m
             WHERE ts > ? AND ts < ?
         """, (window_start, upper)).fetchall()
@@ -560,10 +603,13 @@ def _rollup_1h():
             'min_value': None, 'max_value': None,
             'first_ts': None, 'first_value': None,
             'last_ts': None,  'last_value': None,
+            'rate_weighted_sum': 0.0, 'rate_weight': 0,
+            'min_rate': None, 'max_rate': None,
         })
         for (ts, did, sid, ok_c, fail_c,
              avg_ms, min_ms, max_ms, avg_ms_sq, sc,
-             avg_v, min_v, max_v, first_v, last_v) in raw:
+             avg_v, min_v, max_v, first_v, last_v,
+             avg_r, min_r, max_r) in raw:
             bucket = int(ts // 3600) * 3600
             h = hourly[(bucket, did, sid)]
             h['ok_count']     += ok_c
@@ -590,28 +636,40 @@ def _rollup_1h():
             if last_v is not None and (h['last_ts'] is None or ts > h['last_ts']):
                 h['last_ts'] = ts
                 h['last_value'] = last_v
+            if avg_r is not None and sc:
+                h['rate_weighted_sum'] += avg_r * sc
+                h['rate_weight']       += sc
+            if min_r is not None and (h['min_rate'] is None or min_r < h['min_rate']):
+                h['min_rate'] = min_r
+            if max_r is not None and (h['max_rate'] is None or max_r > h['max_rate']):
+                h['max_rate'] = max_r
 
         for (bucket, did, sid), h in hourly.items():
             avg_ms    = h['ms_weighted_sum'] / h['ms_weight'] if h['ms_weight'] else None
             avg_ms_sq = h['ms_sq_weighted_sum'] / h['ms_weight'] if h['ms_weight'] else None
             avg_value = h['val_weighted_sum'] / h['val_weight'] if h['val_weight'] else None
+            avg_rate  = h['rate_weighted_sum'] / h['rate_weight'] if h['rate_weight'] else None
             con.execute("""
                 INSERT INTO sensor_samples_1h
                     (ts, did, sid, ok_count, fail_count,
                      avg_ms, min_ms, max_ms, avg_ms_sq, sample_count,
-                     avg_value, min_value, max_value, first_value, last_value)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     avg_value, min_value, max_value, first_value, last_value,
+                     avg_rate, min_rate, max_rate)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT (did, sid, ts) DO UPDATE SET
                     ok_count=excluded.ok_count, fail_count=excluded.fail_count,
                     avg_ms=excluded.avg_ms, min_ms=excluded.min_ms, max_ms=excluded.max_ms,
                     avg_ms_sq=excluded.avg_ms_sq, sample_count=excluded.sample_count,
                     avg_value=excluded.avg_value, min_value=excluded.min_value,
                     max_value=excluded.max_value,
-                    first_value=excluded.first_value, last_value=excluded.last_value
+                    first_value=excluded.first_value, last_value=excluded.last_value,
+                    avg_rate=excluded.avg_rate, min_rate=excluded.min_rate,
+                    max_rate=excluded.max_rate
             """, (bucket, did, sid, h['ok_count'], h['fail_count'],
                   avg_ms, h['min_ms'], h['max_ms'], avg_ms_sq, h['sample_count'],
                   avg_value, h['min_value'], h['max_value'],
-                  h['first_value'], h['last_value']))
+                  h['first_value'], h['last_value'],
+                  avg_rate, h['min_rate'], h['max_rate']))
 
         new_ts = int(upper // 3600) * 3600
         con.execute(
@@ -1103,6 +1161,8 @@ def db_load_history(did, sid, minutes=1440, limit=1000):
 
 
 def _history_from_raw(did, sid, cutoff, limit):
+    # v0.9.7: include rate so the frontend prefers backend-computed
+    # (Counter64-safe) rate over client-side diff of consecutive `value`.
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -1115,20 +1175,21 @@ def _history_from_raw(did, sid, cutoff, limit):
                 stride = total // limit
                 if stride < 2:
                     cur.execute(
-                        "SELECT ts,ok,ms,value FROM sensor_samples "
+                        "SELECT ts,ok,ms,value,rate FROM sensor_samples "
                         "WHERE did=%s AND sid=%s AND ts>=%s ORDER BY ts ASC",
                         (did, sid, cutoff)
                     )
                 else:
                     cur.execute(
-                        "SELECT ts,ok,ms,value FROM ("
-                        "  SELECT ts,ok,ms,value,ROW_NUMBER() OVER (ORDER BY ts) rn "
+                        "SELECT ts,ok,ms,value,rate FROM ("
+                        "  SELECT ts,ok,ms,value,rate,ROW_NUMBER() OVER (ORDER BY ts) rn "
                         "  FROM sensor_samples WHERE did=%s AND sid=%s AND ts>=%s"
                         ") sub WHERE rn %% %s = 1 ORDER BY ts ASC LIMIT %s",
                         (did, sid, cutoff, stride, limit)
                     )
                 rows = cur.fetchall()
-            return [{"ts": r["ts"], "ok": bool(r["ok"]), "ms": r["ms"], "value": r["value"]}
+            return [{"ts": r["ts"], "ok": bool(r["ok"]), "ms": r["ms"],
+                     "value": r["value"], "rate": r["rate"]}
                     for r in rows]
         except Exception as e:
             log.error(f"DB load history error: {e}")
@@ -1144,19 +1205,19 @@ def _history_from_raw(did, sid, cutoff, limit):
         stride = total // limit
         if stride < 2:
             rows = con.execute(
-                "SELECT ts,ok,ms,value FROM sensor_samples "
+                "SELECT ts,ok,ms,value,rate FROM sensor_samples "
                 "WHERE did=? AND sid=? AND ts>=? ORDER BY ts ASC",
                 (did, sid, cutoff)
             ).fetchall()
         else:
             rows = con.execute(
-                "SELECT ts,ok,ms,value FROM ("
-                "  SELECT ts,ok,ms,value,ROW_NUMBER() OVER (ORDER BY ts) rn "
+                "SELECT ts,ok,ms,value,rate FROM ("
+                "  SELECT ts,ok,ms,value,rate,ROW_NUMBER() OVER (ORDER BY ts) rn "
                 "  FROM sensor_samples WHERE did=? AND sid=? AND ts>=?"
                 ") WHERE rn % ? = 1 ORDER BY ts ASC LIMIT ?",
                 (did, sid, cutoff, stride, limit)
             ).fetchall()
-        return [{"ts": r[0], "ok": bool(r[1]), "ms": r[2], "value": r[3]}
+        return [{"ts": r[0], "ok": bool(r[1]), "ms": r[2], "value": r[3], "rate": r[4]}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load history error: {e}")
@@ -1169,10 +1230,13 @@ def _history_from_rollup(did, sid, cutoff, limit, table):
     """Load history from a rollup table, mapping to the same JSON format.
 
     v0.9.6: includes {avg,min,max,first,last}_value + bucket_s so the frontend
-    can derive rate / render gauges without raw samples."""
+    can derive rate / render gauges without raw samples.
+    v0.9.7: adds {avg,min,max}_rate so the frontend renders peak-preserving
+    min/max envelope at rollup tiers for counter-type SNMP sensors."""
     bucket_s = 3600 if table == "sensor_samples_1h" else 300
     cols = ("ts, ok_count, fail_count, avg_ms, "
-            "avg_value, min_value, max_value, first_value, last_value")
+            "avg_value, min_value, max_value, first_value, last_value, "
+            "avg_rate, min_rate, max_rate")
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -1201,12 +1265,15 @@ def _history_from_rollup(did, sid, cutoff, limit, table):
                     )
                 rows = cur.fetchall()
             return [{"ts": r["ts"], "ok": r["ok_count"] > r["fail_count"],
-                     "ms": r["avg_ms"], "value": None,
+                     "ms": r["avg_ms"], "value": None, "rate": None,
                      "avg_value":   r["avg_value"],
                      "min_value":   r["min_value"],
                      "max_value":   r["max_value"],
                      "first_value": r["first_value"],
                      "last_value":  r["last_value"],
+                     "avg_rate":    r["avg_rate"],
+                     "min_rate":    r["min_rate"],
+                     "max_rate":    r["max_rate"],
                      "bucket_s":    bucket_s}
                     for r in rows]
         except Exception as e:
@@ -1235,9 +1302,11 @@ def _history_from_rollup(did, sid, cutoff, limit, table):
                 f") WHERE rn % ? = 1 ORDER BY ts ASC LIMIT ?",
                 (did, sid, cutoff, stride, limit)
             ).fetchall()
-        return [{"ts": r[0], "ok": r[1] > r[2], "ms": r[3], "value": None,
+        return [{"ts": r[0], "ok": r[1] > r[2], "ms": r[3],
+                 "value": None, "rate": None,
                  "avg_value": r[4], "min_value": r[5], "max_value": r[6],
                  "first_value": r[7], "last_value": r[8],
+                 "avg_rate": r[9], "min_rate": r[10], "max_rate": r[11],
                  "bucket_s": bucket_s}
                 for r in rows]
     except Exception as e:
