@@ -256,8 +256,19 @@ def _bucket_raw_rows(raw_rows, bucket_s):
     return out
 
 
+_ROLLUP_5M_CHUNK_S = 3 * 3600   # per-call cap (PG statement_timeout = 30s)
+_ROLLUP_1H_CHUNK_S = 3 * 86400  # per-call cap on 1h tier (source = 5m rows)
+
+
 def _rollup_5m():
-    """Aggregate raw sensor_samples into 5-minute buckets."""
+    """Aggregate raw sensor_samples into 5-minute buckets.
+
+    Returns True if more work remains (caller can loop for backfill), False
+    once caught up to fence. Caps per-call work to a 3-hour window so a
+    large backlog (e.g. v0.9.6 value-aggregate migration) doesn't exceed PG's
+    statement_timeout. Jumps last_ts forward across empty gaps via an
+    index-efficient MIN(ts) lookup.
+    """
     now = time.time()
     fence = now - 300  # only complete 5-min windows
 
@@ -268,6 +279,31 @@ def _rollup_5m():
             cur.execute("SELECT last_ts FROM rollup_state WHERE tier = '5m'")
             row = cur.fetchone()
             last_ts = row[0] if row else 0
+
+            # Jump forward to earliest raw row beyond last_ts. Uses the
+            # (did, sid, ts) composite index via GROUP BY → O(sensors) index
+            # seeks, not a seq scan. Without this, backfills with last_ts=0
+            # would iterate empty epoch windows for decades.
+            cur.execute("""
+                SELECT MIN(min_ts) FROM (
+                    SELECT MIN(ts) AS min_ts FROM sensor_samples
+                    WHERE ts > %s GROUP BY did, sid
+                ) t
+            """, (last_ts,))
+            r = cur.fetchone()
+            min_next = r[0] if r else None
+
+            if min_next is None or min_next >= fence:
+                new_ts = int(fence // 300) * 300
+                cur.execute(
+                    "UPDATE rollup_state SET last_ts = %s WHERE tier = '5m'",
+                    (new_ts,),
+                )
+                cur.close()
+                return False
+
+            window_start = max(last_ts, int(min_next) - 1)
+            upper = min(fence, window_start + _ROLLUP_5M_CHUNK_S)
 
             # v0.9.6: {avg,min,max,first,last}_value aggregate sensor_samples.value
             # (TEXT — some sensors write non-numeric strings). CASE+FILTER guards
@@ -307,21 +343,20 @@ def _rollup_5m():
                     max_value    = EXCLUDED.max_value,
                     first_value  = EXCLUDED.first_value,
                     last_value   = EXCLUDED.last_value
-            """, (last_ts, fence))
+            """, (window_start, upper))
 
-            # Advance last_ts to the latest completed bucket
-            new_ts = (fence // 300) * 300
+            new_ts = int(upper // 300) * 300
             cur.execute(
                 "UPDATE rollup_state SET last_ts = %s WHERE tier = '5m'",
                 (new_ts,),
             )
             cur.close()
-        return
+        return upper < fence
 
     # SQLite
     import os as _os
     if not _os.path.exists(LOGS_DB_PATH):
-        return  # DB not yet initialised — skip silently
+        return False  # DB not yet initialised — skip silently
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
@@ -329,6 +364,22 @@ def _rollup_5m():
             "SELECT last_ts FROM rollup_state WHERE tier = '5m'"
         ).fetchone()
         last_ts = last_ts[0] if last_ts else 0
+
+        # Jump forward across empty gaps (e.g. after v0.9.6 backfill reset).
+        min_next = con.execute(
+            "SELECT MIN(ts) FROM sensor_samples WHERE ts > ?",
+            (last_ts,)
+        ).fetchone()[0]
+        if min_next is None or min_next >= fence:
+            new_ts = int(fence // 300) * 300
+            con.execute(
+                "UPDATE rollup_state SET last_ts = ? WHERE tier = '5m'", (new_ts,)
+            )
+            con.commit()
+            return False
+
+        window_start = max(last_ts, int(min_next) - 1)
+        upper = min(fence, window_start + _ROLLUP_5M_CHUNK_S)
 
         # v0.9.6: aggregate {avg,min,max,first,last}_value alongside ms in Python
         # — SQLite has no regex for the numeric guard and first/last within a
@@ -338,7 +389,7 @@ def _rollup_5m():
             SELECT ts, did, sid, ok, ms, value
             FROM sensor_samples
             WHERE ts > ? AND ts < ?
-        """, (last_ts, fence)).fetchall()
+        """, (window_start, upper)).fetchall()
 
         buckets = _bucket_raw_rows(raw, 300)
         for key, b in buckets.items():
@@ -361,18 +412,23 @@ def _rollup_5m():
                   b['avg_value'], b['min_value'], b['max_value'],
                   b['first_value'], b['last_value']))
 
-        new_ts = (fence // 300) * 300
+        new_ts = int(upper // 300) * 300
         con.execute(
             "UPDATE rollup_state SET last_ts = ? WHERE tier = '5m'", (new_ts,)
         )
         con.commit()
+        return upper < fence
     finally:
         if con:
             con.close()
 
 
 def _rollup_1h():
-    """Aggregate 5-minute buckets into 1-hour buckets (weighted averages)."""
+    """Aggregate 5-minute buckets into 1-hour buckets (weighted averages).
+
+    Returns True if more work remains, False once caught up. Same chunking
+    strategy as _rollup_5m — 3-day window per call, forward-jump over gaps.
+    """
     now = time.time()
     fence = now - 3600  # only complete 1-hour windows
 
@@ -383,6 +439,27 @@ def _rollup_1h():
             cur.execute("SELECT last_ts FROM rollup_state WHERE tier = '1h'")
             row = cur.fetchone()
             last_ts = row[0] if row else 0
+
+            cur.execute("""
+                SELECT MIN(min_ts) FROM (
+                    SELECT MIN(ts) AS min_ts FROM sensor_samples_5m
+                    WHERE ts > %s GROUP BY did, sid
+                ) t
+            """, (last_ts,))
+            r = cur.fetchone()
+            min_next = r[0] if r else None
+
+            if min_next is None or min_next >= fence:
+                new_ts = int(fence // 3600) * 3600
+                cur.execute(
+                    "UPDATE rollup_state SET last_ts = %s WHERE tier = '1h'",
+                    (new_ts,),
+                )
+                cur.close()
+                return False
+
+            window_start = max(last_ts, int(min_next) - 1)
+            upper = min(fence, window_start + _ROLLUP_1H_CHUNK_S)
 
             # v0.9.6: {avg,min,max,first,last}_value rolled up from 5m endpoints.
             # avg_value is sample_count-weighted over 5m buckets where avg_value
@@ -424,20 +501,20 @@ def _rollup_1h():
                     max_value    = EXCLUDED.max_value,
                     first_value  = EXCLUDED.first_value,
                     last_value   = EXCLUDED.last_value
-            """, (last_ts, fence))
+            """, (window_start, upper))
 
-            new_ts = (fence // 3600) * 3600
+            new_ts = int(upper // 3600) * 3600
             cur.execute(
                 "UPDATE rollup_state SET last_ts = %s WHERE tier = '1h'",
                 (new_ts,),
             )
             cur.close()
-        return
+        return upper < fence
 
     # SQLite
     import os as _os
     if not _os.path.exists(LOGS_DB_PATH):
-        return  # DB not yet initialised — skip silently
+        return False  # DB not yet initialised — skip silently
     con = None
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
@@ -445,6 +522,21 @@ def _rollup_1h():
             "SELECT last_ts FROM rollup_state WHERE tier = '1h'"
         ).fetchone()
         last_ts = last_ts[0] if last_ts else 0
+
+        min_next = con.execute(
+            "SELECT MIN(ts) FROM sensor_samples_5m WHERE ts > ?",
+            (last_ts,)
+        ).fetchone()[0]
+        if min_next is None or min_next >= fence:
+            new_ts = int(fence // 3600) * 3600
+            con.execute(
+                "UPDATE rollup_state SET last_ts = ? WHERE tier = '1h'", (new_ts,)
+            )
+            con.commit()
+            return False
+
+        window_start = max(last_ts, int(min_next) - 1)
+        upper = min(fence, window_start + _ROLLUP_1H_CHUNK_S)
 
         # v0.9.6: roll up 5m endpoints into 1h buckets in Python — same logic
         # as the PG query above. Fetch 5m rows in the window, group by hour+did+sid,
@@ -456,7 +548,7 @@ def _rollup_1h():
                    avg_value, min_value, max_value, first_value, last_value
             FROM sensor_samples_5m
             WHERE ts > ? AND ts < ?
-        """, (last_ts, fence)).fetchall()
+        """, (window_start, upper)).fetchall()
 
         from collections import defaultdict
         hourly = defaultdict(lambda: {
@@ -521,11 +613,12 @@ def _rollup_1h():
                   avg_value, h['min_value'], h['max_value'],
                   h['first_value'], h['last_value']))
 
-        new_ts = (fence // 3600) * 3600
+        new_ts = int(upper // 3600) * 3600
         con.execute(
             "UPDATE rollup_state SET last_ts = ? WHERE tier = '1h'", (new_ts,)
         )
         con.commit()
+        return upper < fence
     finally:
         if con:
             con.close()
@@ -616,11 +709,32 @@ def db_rollup_backfill():
         finally:
             con.close()
 
-    # Run 5m rollup (processes all pending data)
+    # Loop each tier until drained — every call processes at most one chunk
+    # (_ROLLUP_5M_CHUNK_S / _ROLLUP_1H_CHUNK_S) so a multi-week backfill never
+    # exceeds PG's statement_timeout on any single INSERT.
     try:
-        _rollup_5m()
-        _rollup_1h()
-        log.info("Rollup backfill complete")
+        started = time.time()
+        chunks_5m = 0
+        while _rollup_5m():
+            chunks_5m += 1
+            if chunks_5m % 20 == 0:
+                log.info(f"Rollup backfill: 5m tier processed {chunks_5m} chunks so far …")
+            if chunks_5m > 5000:  # safety cap (~1.7 years at 3h/chunk)
+                log.error("Rollup backfill: 5m tier chunk cap hit — aborting")
+                break
+        log.info(f"Rollup backfill: 5m tier complete ({chunks_5m + 1} chunks)")
+
+        chunks_1h = 0
+        while _rollup_1h():
+            chunks_1h += 1
+            if chunks_1h % 20 == 0:
+                log.info(f"Rollup backfill: 1h tier processed {chunks_1h} chunks so far …")
+            if chunks_1h > 2000:  # safety cap (~16 years at 3d/chunk)
+                log.error("Rollup backfill: 1h tier chunk cap hit — aborting")
+                break
+        log.info(f"Rollup backfill: 1h tier complete ({chunks_1h + 1} chunks)")
+
+        log.info(f"Rollup backfill complete in {time.time() - started:.1f}s")
     except Exception as e:
         log.error(f"Rollup backfill error: {e}")
 
