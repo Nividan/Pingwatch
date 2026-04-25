@@ -1703,8 +1703,11 @@ function renderPwLinksInLayer(layer, lblLayer) {
 
 // Shared link-label SVG fragment — keep all callers in sync (font, height, padding).
 // lbx/lby = text anchor (baseline x/y); lbw = pre-computed background rect width.
+// Style: opaque dark fill + thin colored border (matches link color, scaled
+// independently of zoom) + bold text — readable on both the dark map and
+// colored group rects without losing the cyber aesthetic.
 function _linkLabelSvg(lbx, lby, lbw, stroke, label) {
-  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" opacity="0.92">${escXml(label)}</text>`;
+  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="3" fill="rgba(5,10,20,0.95)" stroke="${stroke}" stroke-width="0.8" vector-effect="non-scaling-stroke"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" font-weight="bold">${escXml(label)}</text>`;
 }
 const LINK_LBL_CHAR_PX = 6.6; // estimated px-per-char at font-size 11
 
