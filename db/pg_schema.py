@@ -846,13 +846,15 @@ def pg_create_logs_schema(cur):
             ack_by    TEXT DEFAULT '',
             ack_at    DOUBLE PRECISION DEFAULT 0,
             resolved_at DOUBLE PRECISION DEFAULT 0,
-            duration    DOUBLE PRECISION DEFAULT 0
+            duration    DOUBLE PRECISION DEFAULT 0,
+            raw_data    TEXT
         )""")
 
     # flap_log migrations for existing databases
     for _col, _typedef in [
         ("resolved_at", "DOUBLE PRECISION DEFAULT 0"),
         ("duration",    "DOUBLE PRECISION DEFAULT 0"),
+        ("raw_data",    "TEXT"),
     ]:
         try:
             cur.execute("SAVEPOINT _flog_alter")

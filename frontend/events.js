@@ -1332,9 +1332,102 @@ function _iipAlert(alertEvt) {
   </div>`;
 }
 
+// Pretty-printed key labels for the structured raw_data block.
+// Anything not in this map gets a Title Case fallback.
+const _IIP_RAW_LABELS = {
+  host:'Host', port:'Port', probe_ms:'Probe latency',
+  warn_ms:'Warn limit', crit_ms:'Crit limit',
+  url:'URL', http_code:'HTTP code', keyword:'Keyword',
+  record_type:'DNS record', query:'Query', dns_server:'DNS server', records:'Records',
+  oid:'OID', unit:'Unit', snmp_type:'SNMP type',
+  rate:'Rate (per sec)', prev_counter:'Previous counter', prev_counter_ts:'Previous counter epoch',
+  value:'Value', display:'Display',
+  days_remaining:'Days remaining', regex:'Regex',
+  banner_excerpt:'Banner', test_level:'Test level', remote_path:'Remote path',
+  metric:'Metric', vm:'VM',
+  consec_fail:'Consecutive fails', last_error:'Last error', down_duration_s:'Down duration (s)',
+  actual:'Actual', limit:'Limit', previous_state:'Previous state',
+  loss_pct:'Loss %', loss_warn_pct:'Loss warn %', loss_crit_pct:'Loss crit %',
+  baseline_mean_ms:'Baseline mean (ms)', baseline_stddev_ms:'Baseline stddev (ms)',
+  sigma_eff_ms:'Sigma effective (ms)', threshold_ms:'Threshold (ms)',
+  z_score:'Z-score', sensitivity:'Sensitivity', sample_count:'Sample count',
+  actual_ms:'Actual (ms)',
+  from_state:'From state', to_state:'To state', from_code:'From code', to_code:'To code',
+  legend:'Legend',
+  prev_uptime_s:'Previous uptime (s)', new_uptime_s:'New uptime (s)',
+  prev_value:'Previous value', new_value:'New value',
+  license_name:'License', expires_at:'Expires', days_left:'Days left',
+};
+function _iipRawLabel(k) {
+  if (_IIP_RAW_LABELS[k]) return _IIP_RAW_LABELS[k];
+  return k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+function _iipRawValue(v) {
+  if (v === null || v === undefined) return '<span style="color:var(--text3)">—</span>';
+  if (Array.isArray(v)) return v.map(x => esc(String(x))).join(', ');
+  if (typeof v === 'object') {
+    return Object.entries(v).map(([k,vv]) =>
+      `<span class="iip-mono">${esc(k)}=${esc(String(vv))}</span>`).join(' ');
+  }
+  if (typeof v === 'number') {
+    // Format big counters with thousand separators; keep small floats intact.
+    if (Number.isInteger(v) && Math.abs(v) >= 1000) return v.toLocaleString();
+    return String(v);
+  }
+  return esc(String(v));
+}
+
 function _iipDebug(d) {
-  const txt = d.detail || d.community || '';
-  if (!txt) return '';
+  let parsed = null;
+  if (d.raw_data) {
+    try {
+      const obj = JSON.parse(d.raw_data);
+      if (obj && typeof obj === 'object' && Object.keys(obj).length) parsed = obj;
+    } catch { /* fall through to detail-text fallback */ }
+  }
+
+  if (parsed) {
+    // Render structured key/value list — group common keys at the top.
+    const order = [
+      'host','port','url','oid','snmp_type','unit','record_type','query','dns_server',
+      'metric','actual','limit','previous_state','probe_ms','warn_ms','crit_ms',
+      'http_code','keyword','records','rate','value','display','prev_counter','prev_counter_ts',
+      'days_remaining','regex','banner_excerpt','test_level','remote_path','vm',
+      'consec_fail','last_error','down_duration_s',
+      'loss_pct','loss_warn_pct','loss_crit_pct',
+      'baseline_mean_ms','baseline_stddev_ms','sigma_eff_ms','threshold_ms','z_score',
+      'sensitivity','sample_count','actual_ms',
+      'from_state','to_state','from_code','to_code','legend',
+      'prev_uptime_s','new_uptime_s','prev_value','new_value',
+      'license_name','expires_at','days_left',
+    ];
+    const seen = new Set();
+    const rows = [];
+    const addRow = (k) => {
+      if (seen.has(k) || !(k in parsed)) return;
+      seen.add(k);
+      rows.push(
+        `<div class="evt-raw-k">${esc(_iipRawLabel(k))}</div>` +
+        `<div class="evt-raw-v">${_iipRawValue(parsed[k])}</div>`
+      );
+    };
+    order.forEach(addRow);
+    Object.keys(parsed).forEach(addRow);  // append anything not in the canonical order
+    return `<details class="iip-debug" open>
+      <summary class="iip-debug-summary">▶ Debug / Raw Data</summary>
+      <div class="evt-raw-kv">${rows.join('')}</div>
+    </details>`;
+  }
+
+  // Fallback for legacy rows / traps without raw_data: only render if the
+  // text adds something beyond the Message field already shown above.
+  const msg = d.detail || '';
+  const community = d.community || '';
+  const txt = community ? (msg ? `${community}\n${msg}` : community) : msg;
+  if (!txt || txt === d.detail) {
+    // Pure detail-only payload that duplicates Message — hide the section.
+    if (!community) return '';
+  }
   return `<details class="iip-debug">
     <summary class="iip-debug-summary">▶ Debug / Raw Data</summary>
     <div class="evt-trap-raw-block" style="margin-top:8px;white-space:pre-wrap">${esc(txt)}</div>

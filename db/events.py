@@ -138,12 +138,12 @@ def db_log_flap(flap):
         try:
             with pg_cursor("logs") as cur:
                 cur.execute(
-                    "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction,raw_data) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (flap["ts"], flap["did"], flap["sid"], flap.get("dname", ""),
                      flap.get("sname", ""), flap.get("host", ""),
                      flap.get("stype", ""), flap.get("detail", ""),
-                     flap.get("direction", "down"))
+                     flap.get("direction", "down"), flap.get("raw_data") or None)
                 )
                 _flap_limit = max(50, int(_settings.get('max_flap_entries', 2000)))
                 # LRU trim resolved entries only — never evict active/acknowledged
@@ -164,12 +164,12 @@ def db_log_flap(flap):
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.execute(
-            "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction,raw_data) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (flap["ts"], flap["did"], flap["sid"], flap.get("dname", ""),
              flap.get("sname", ""), flap.get("host", ""),
              flap.get("stype", ""), flap.get("detail", ""),
-             flap.get("direction", "down"))
+             flap.get("direction", "down"), flap.get("raw_data") or None)
         )
         _flap_limit = max(50, int(_settings.get('max_flap_entries', 2000)))
         # LRU trim resolved entries only — see PG branch above for rationale.
@@ -283,7 +283,8 @@ def db_load_flaps():
                     "COALESCE(ack_by,'') AS ack_by,"
                     "COALESCE(ack_at,0) AS ack_at,"
                     "COALESCE(resolved_at,0) AS resolved_at,"
-                    "COALESCE(duration,0) AS duration "
+                    "COALESCE(duration,0) AS duration,"
+                    "raw_data "
                     "FROM flap_log " + _filter +
                     "ORDER BY id DESC LIMIT 500"
                 )
@@ -293,7 +294,8 @@ def db_load_flaps():
                      "stype": r["stype"], "detail": r["detail"],
                      "direction": r["direction"] or "down",
                      "ack_state": r["ack_state"], "ack_by": r["ack_by"], "ack_at": r["ack_at"],
-                     "resolved_at": r["resolved_at"], "duration": r["duration"]}
+                     "resolved_at": r["resolved_at"], "duration": r["duration"],
+                     "raw_data": r.get("raw_data") or ""}
                     for r in rows]
         except Exception as e:
             log.error(f"DB load flaps error: {e}")
@@ -304,7 +306,7 @@ def db_load_flaps():
         rows = con.execute(
             "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
             "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0),"
-            "COALESCE(resolved_at,0),COALESCE(duration,0) "
+            "COALESCE(resolved_at,0),COALESCE(duration,0),raw_data "
             "FROM flap_log " + _filter +
             "ORDER BY id DESC LIMIT 500"
         ).fetchall()
@@ -312,7 +314,8 @@ def db_load_flaps():
                  "dname": r[4], "sname": r[5], "host": r[6], "stype": r[7],
                  "detail": r[8], "direction": r[9] or "down",
                  "ack_state": r[10], "ack_by": r[11], "ack_at": r[12],
-                 "resolved_at": r[13], "duration": r[14]}
+                 "resolved_at": r[13], "duration": r[14],
+                 "raw_data": r[15] or ""}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load flaps error: {e}")

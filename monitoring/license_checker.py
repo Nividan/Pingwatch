@@ -119,11 +119,20 @@ def check_license_expirations() -> None:
 
         # Log flap event (Events tab)
         if new_status != "ok":
+            import json as _json
+            from core.raw_data import build_flap_raw_data
+            _lic_raw = build_flap_raw_data(
+                None, None, direction,
+                {"license_name": lic["license_name"],
+                 "expires_at": lic.get("expiry_date"),
+                 "days_left": days_left}
+            )
             db_log_flap({
                 "ts": ts, "did": did, "sid": sid,
                 "dname": dname, "sname": lic["license_name"],
                 "host": host, "stype": "license",
                 "detail": detail, "direction": direction,
+                "raw_data": _json.dumps(_lic_raw),
             })
 
         # SSE broadcast

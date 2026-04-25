@@ -104,6 +104,7 @@ from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, pro
 from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp, probe_radius
 from .settings import get as _cfg
 from .logger import log_sensors
+from .raw_data import build_flap_raw_data
 
 _COUNTER_TYPES  = {"counter32", "counter64", "counter"}
 _BYTE_UNITS     = {"bytes"}
@@ -1253,6 +1254,12 @@ class MonitorState:
                                 "detail": _msg, "direction": _dir,
                                 "grp": dev.group, "consec_count": 1,
                             }
+                            _flap["raw_data"] = json.dumps(build_flap_raw_data(
+                                s, result, _dir,
+                                {"from_state": prev_lbl, "to_state": cur_lbl,
+                                 "from_code": _prev_code, "to_code": _cur_code,
+                                 "legend": legend}
+                            ))
                             self._broadcast(f"flap_{_dir}", _flap)
                             _db_enqueue(lambda _f=_flap: db_log_flap(_f))
                             if _dir == "state_up":
@@ -1279,6 +1286,11 @@ class MonitorState:
                                 "detail": _msg, "direction": "reboot",
                                 "grp": dev.group, "consec_count": 1,
                             }
+                            _flap["raw_data"] = json.dumps(build_flap_raw_data(
+                                s, result, "reboot",
+                                {"prev_uptime_s": _prev_ticks_v / 100,
+                                 "new_uptime_s": _cur_ticks / 100}
+                            ))
                             self._broadcast("flap_reboot", _flap)
                             _db_enqueue(lambda _f=_flap: db_log_flap(_f))
                             if dev.webhook_url:
@@ -1298,6 +1310,10 @@ class MonitorState:
                             "detail": _msg, "direction": "value_change",
                             "grp": dev.group, "consec_count": 1,
                         }
+                        _flap["raw_data"] = json.dumps(build_flap_raw_data(
+                            s, result, "value_change",
+                            {"prev_value": _prev_text, "new_value": _cur_text}
+                        ))
                         self._broadcast("flap_value_change", _flap)
                         _db_enqueue(lambda _f=_flap: db_log_flap(_f))
                         if dev.webhook_url:
@@ -1364,6 +1380,9 @@ class MonitorState:
                     "grp": dev.group,
                     "consec_count": s._consec_fail,
                 }
+                flap_data["raw_data"] = json.dumps(build_flap_raw_data(
+                    s, result, "down", {"consec_fail": s._consec_fail}
+                ))
                 if not _muted:
                     self._broadcast("flap_down", flap_data)
                     log_sensors.warning(f"DOWN: {dev.name}/{s.name} ({s.host}) — {result['detail']}")
@@ -1382,8 +1401,8 @@ class MonitorState:
 
         # ── Threshold state check (transitions only) ──
         _new_thr = "ok"
+        _thr_chk = None
         if result["ok"]:
-            _thr_chk = None
             if s.stype in ('snmp', 'tls'):
                 if s._last_rate is not None:
                     _u = s.snmp_unit
@@ -1437,15 +1456,9 @@ class MonitorState:
                 s._threshold_recovery_pending = False
                 s._threshold_triggered_ts = time.time()
                 _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
-                _thr_evt_data = {
-                    "did": did, "sid": sid, "dname": dev.name,
-                    "sname": s.name, "host": s.host, "stype": s.stype,
-                    "state": _new_thr, "ts": _ts,
-                    "ms": s.last_ms, "loss_pct": s.loss_pct,
-                    "grp": dev.group,
-                    "consec_count": 1,
-                }
-                self._broadcast(_tevt, _thr_evt_data)
+                # Compute display unit + per-event value string up-front so that
+                # both the SSE broadcast AND the persisted flap row carry the
+                # same raw_data payload.
                 if s._last_rate is not None:
                     _u2 = s.snmp_unit
                     if _u2 in _BYTE_UNITS or _u2 == "":
@@ -1463,18 +1476,52 @@ class MonitorState:
                     _val_disp = f"{_rv} {_u3}" if _u3 else _rv
                 else:
                     _unit = 'ms'; _val_disp = f"{s.last_ms}ms"
+                if s._anom_caused_warn:
+                    from monitoring.anomaly import format_anomaly_detail
+                    _val_disp = format_anomaly_detail(s, s.last_ms)
+                # Resolve the flap direction once.
+                if _new_thr == "crit":
+                    _thr_dir = "threshold_crit"
+                elif s._anom_caused_warn:
+                    _thr_dir = "anomaly_warn"
+                else:
+                    _thr_dir = "threshold_warn"
+                # Pick the metric name that matches what was actually compared.
+                if s._last_rate is not None:
+                    _metric = "rate"
+                elif s.stype in ("snmp", "tls", "vmware"):
+                    _metric = "value"
+                else:
+                    _metric = "ms"
+                _thr_ctx = {
+                    "metric": _metric,
+                    "actual": _thr_chk,
+                    "unit": _unit.strip() if _unit else "",
+                    "limit": s.crit_ms if _new_thr == "crit" else s.warn_ms,
+                    "prev_state": _prev_thr,
+                }
+                _thr_raw_json = json.dumps(build_flap_raw_data(
+                    s, result, _thr_dir, _thr_ctx
+                ))
+                _thr_evt_data = {
+                    "did": did, "sid": sid, "dname": dev.name,
+                    "sname": s.name, "host": s.host, "stype": s.stype,
+                    "state": _new_thr, "ts": _ts,
+                    "ms": s.last_ms, "loss_pct": s.loss_pct,
+                    "grp": dev.group,
+                    "consec_count": 1,
+                    "raw_data": _thr_raw_json,
+                    "detail": _val_disp,
+                }
+                self._broadcast(_tevt, _thr_evt_data)
                 if _new_thr == "crit":
                     log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
+                elif s._anom_caused_warn:
+                    log_sensors.warning(f"ANOMALY WARN: {dev.name}/{s.name} — {_val_disp}")
                 else:
                     log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
                 _thr_flap = dict(_thr_evt_data)
-                if _new_thr == "crit":
-                    _thr_flap["direction"] = "threshold_crit"
-                elif s._anom_caused_warn:
-                    _thr_flap["direction"] = "anomaly_warn"
-                else:
-                    _thr_flap["direction"] = "threshold_warn"
-                _thr_flap["detail"]    = _val_disp
+                _thr_flap["direction"] = _thr_dir
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
                 # Escalation / de-escalation (warn↔crit) — auto-resolve the
                 # PREVIOUS active threshold entry so only the current state
