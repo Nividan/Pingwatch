@@ -1363,13 +1363,21 @@ async function addSelectedIfaceSensors(){
   let added=0,failed=0;
   const addedSids=[];
   for(const row of rows){
+    // Calculate warn/crit from interface speed if available; else use form defaults
+    let rowWms=warn_ms, rowCms=crit_ms;
+    const iface=(window._ifaceDiscovery||[]).find(i=>i.index===row.idx);
+    if(iface && iface.speed_raw && iface.speed_raw>0){
+      const speedMbps=Math.round(iface.speed_raw/1_000_000);
+      rowWms=Math.round(speedMbps*0.75);
+      rowCms=Math.round(speedMbps*0.90);
+    }
     const r=await api('POST',`/api/device/${did}/sensor`,{
       name:row.name+' '+row.metric.l, type:'snmp', host, port,
       snmp_community:community, snmp_oid:row.metric.oid+row.idx, snmp_version:version,
       snmp_unit:_normSnmpUnit(row.metric.u),
       interval:iv, timeout:tmo, verify_ssl:true, url:null,
       dns_query:'',dns_record_type:'A',dns_server:'',http_expected_status:0,
-      warn_ms,crit_ms,
+      warn_ms:rowWms,crit_ms:rowCms,
       loss_warn_pct:0,loss_crit_pct:0,keyword:'',keyword_case:false,banner_regex:''
     });
     if(r?.sid){
