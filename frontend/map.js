@@ -1154,6 +1154,8 @@ function _pwLiveUpdate(did) {
         filterG.style.filter = '';
       }
     }
+    // Refresh the status-colored border + alert glow in place.
+    _applyStatusBorder(el, node);
     // No innerHTML rebuild, no event listener teardown/reattach
   }
 
@@ -1409,6 +1411,68 @@ function render() {
 
 function resizeSVG() { /* no-op: zoom/pan via viewport group */ }
 
+// Returns the first group whose bounding rect contains node n (by x/y), or null.
+function _groupContainingNode(n) {
+  if (!n) return null;
+  for (const g of groups) {
+    if (n.x >= g.x && n.x <= g.x + g.w && n.y >= g.y && n.y <= g.y + g.h) return g;
+  }
+  return null;
+}
+
+// For a hub node and a receiving group, pick the waypoint where bundled links
+// converge — point on the group's rect closest to the hub, pulled slightly
+// toward the group center so the bundle visibly enters the zone.
+function _bundleWaypoint(hub, g) {
+  const hc = nodeCenter(hub);
+  const cx = Math.max(g.x, Math.min(hc.x, g.x + g.w));
+  const cy = Math.max(g.y, Math.min(hc.y, g.y + g.h));
+  const gxc = g.x + g.w / 2, gyc = g.y + g.h / 2;
+  const dx = gxc - cx, dy = gyc - cy;
+  const dlen = Math.sqrt(dx * dx + dy * dy) || 1;
+  const inset = Math.min(28, dlen * 0.18);
+  return { x: cx + dx / dlen * inset, y: cy + dy / dlen * inset };
+}
+
+const BUNDLE_MIN = 3;
+
+function _computeBundles() {
+  const bundles = new Map();   // key → { hubId, group, waypoint, lkIds:Set }
+  const _addCandidate = (hub, recv, lk) => {
+    const key = hub.id + ':' + recv.id + ':' + (lk.link_type || 'trunk');
+    let b = bundles.get(key);
+    if (!b) { b = { hubId: hub.id, group: recv, lkIds: new Set() }; bundles.set(key, b); }
+    b.lkIds.add(lk.id);
+  };
+  for (const lk of links) {
+    const A = nodeMap[lk.source_id], B = nodeMap[lk.target_id];
+    if (!A || !B) continue;
+    if (lk.link_type === 'tunnel') continue;
+    const ga = _groupContainingNode(A);
+    const gb = _groupContainingNode(B);
+    // Intra-group links should stay direct.
+    if (ga && gb && ga.id === gb.id) continue;
+    // Each endpoint in a group is a candidate receiver; the other is the hub.
+    if (gb) _addCandidate(A, gb, lk);
+    if (ga) _addCandidate(B, ga, lk);
+  }
+  // Drop sub-threshold bundles; for any link in multiple bundles, keep it in the largest.
+  const lkBundleKey = {};
+  const sorted = [...bundles.entries()]
+    .filter(([, b]) => b.lkIds.size >= BUNDLE_MIN)
+    .sort((a, b) => b[1].lkIds.size - a[1].lkIds.size);
+  bundles.clear();
+  for (const [key, b] of sorted) {
+    // Drop links already claimed by a larger bundle.
+    [...b.lkIds].forEach(id => { if (lkBundleKey[id]) b.lkIds.delete(id); });
+    if (b.lkIds.size < BUNDLE_MIN) continue;
+    b.waypoint = _bundleWaypoint(nodeMap[b.hubId], b.group);
+    bundles.set(key, b);
+    b.lkIds.forEach(id => { lkBundleKey[id] = key; });
+  }
+  return { bundles, lkBundleKey };
+}
+
 function renderLinks() {
   const layer = document.getElementById('links-layer');
   const lblLayer = document.getElementById('link-labels-layer');
@@ -1427,23 +1491,28 @@ function renderLinks() {
     pairIndex[lk.id] = pairSeen[key]++;
   }
 
+  // Detect hub→group bundles
+  const { bundles, lkBundleKey } = _computeBundles();
+
   links.forEach((lk, globalIdx) => {
     const src = nodeMap[lk.source_id];
     const tgt = nodeMap[lk.target_id];
     if (!src || !tgt) return;
     const idx = pairIndex[lk.id];
+    const bk = lkBundleKey[lk.id];
+    const bundle = bk ? bundles.get(bk) : null;
     // Line only (no label)
     const g = document.createElementNS('http://www.w3.org/2000/svg','g');
     g.setAttribute('class','link-g');
     g.setAttribute('data-id', lk.id);
-    g.innerHTML = buildLink(src, tgt, lk, idx, globalIdx, true);
+    g.innerHTML = buildLink(src, tgt, lk, idx, globalIdx, true, bundle);
     g.addEventListener('click', e => { e.stopPropagation(); selectLink(lk); });
     if (selectedEl && selectedEl.type==='link' && selectedEl.data.id===lk.id) {
       g.querySelector('.link-main')?.setAttribute('stroke-width', (parseFloat(g.querySelector('.link-main')?.getAttribute('stroke-width')||2)+2)+'');
     }
     layer.appendChild(g);
     // Label in top layer
-    const lblSvg = buildLinkLabel(src, tgt, lk, idx, globalIdx);
+    const lblSvg = buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle);
     if (lblSvg) {
       const lg = document.createElementNS('http://www.w3.org/2000/svg','g');
       lg.setAttribute('class','link-label-g');
@@ -1491,11 +1560,11 @@ function renderPwLinksInLayer(layer, lblLayer) {
     layer.appendChild(gg);
     // Label in top layer
     if (lk.label && lblLayer) {
-      const lbw = lk.label.length * 5.4 + 4;
+      const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
       const pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
       const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       lg.setAttribute('class','link-label-g pw-link-label');
-      lg.innerHTML = `<rect x="${(pos.lbx-2)}" y="${(pos.lby-8)}" width="${lbw.toFixed(0)}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${pos.lbx}" y="${pos.lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>`;
+      lg.innerHTML = _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
       lg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
       lblLayer.appendChild(lg);
     }
@@ -1503,7 +1572,14 @@ function renderPwLinksInLayer(layer, lblLayer) {
   });
 }
 
-function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
+// Shared link-label SVG fragment — keep all callers in sync (font, height, padding).
+// lbx/lby = text anchor (baseline x/y); lbw = pre-computed background rect width.
+function _linkLabelSvg(lbx, lby, lbw, stroke, label) {
+  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" opacity="0.92">${escXml(label)}</text>`;
+}
+const LINK_LBL_CHAR_PX = 6.6; // estimated px-per-char at font-size 11
+
+function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null) {
   const c1 = nodeCenter(src);
   const c2 = nodeCenter(tgt);
 
@@ -1514,6 +1590,21 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
   const sel = (selectedEl?.type==='link' && selectedEl?.data.id===lk.id);
   const w = sel ? cfg.width+2 : cfg.width;
 
+  // Bundled link — route through the shared waypoint regardless of pair-index.
+  if (bundle && bundle.waypoint) {
+    const qx = bundle.waypoint.x, qy = bundle.waypoint.y;
+    const tL = 0.55;  // label sits just past the waypoint, on the tendril side
+    const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x).toFixed(1);
+    const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y - 4).toFixed(1);
+    const lbwB = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
+    return `
+      <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
+      <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
+        fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwB, cfg.stroke, lk.label) : ''}
+    `;
+  }
+
   if (idx === 0) {
     // First (or only) link — always straight
     const tArr = [0.30, 0.50, 0.70];
@@ -1521,14 +1612,14 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
     const ldx  = c2.x - c1.x, ldy = c2.y - c1.y;
     const llen = Math.sqrt(ldx*ldx + ldy*ldy) || 1;
     const lnx  = -ldy/llen, lny = ldx/llen;
-    const lbx  = (c1.x + ldx*tL + lnx*8).toFixed(1);
-    const lby  = (c1.y + ldy*tL + lny*8 - 2).toFixed(1);
-    const lbw  = lk.label ? (lk.label.length * 5.4 + 4).toFixed(0) : 0;
+    const lbx  = (c1.x + ldx*tL + lnx*10).toFixed(1);
+    const lby  = (c1.y + ldy*tL + lny*10 - 2).toFixed(1);
+    const lbw  = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
     return `
       <line class="link-hit" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}" stroke="transparent" stroke-width="12"/>
       <line class="link-main ${cfg.cls}" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}"
         stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      ${(!noLabel && lk.label) ? `<rect x="${(lbx-2)}" y="${(lby-8)}" width="${lbw}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>` : ''}
+      ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbw, cfg.stroke, lk.label) : ''}
     `;
   }
 
@@ -1540,14 +1631,14 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
   const qx = (c1.x+c2.x)/2 + nx*off;
   const qy = (c1.y+c2.y)/2 + ny*off;
   const tL = 0.65;
-  const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x + nx*10 + 4).toFixed(1);
-  const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y + ny*10 - 4).toFixed(1);
-  const lbwP = lk.label ? (lk.label.length * 5.4 + 4).toFixed(0) : 0;
+  const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x + nx*12 + 4).toFixed(1);
+  const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y + ny*12 - 4).toFixed(1);
+  const lbwP = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
   return `
     <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
     <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
       fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-    ${(!noLabel && lk.label) ? `<rect x="${(lbx-2)}" y="${(lby-8)}" width="${lbwP}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>` : ''}
+    ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwP, cfg.stroke, lk.label) : ''}
   `;
 }
 
@@ -1573,25 +1664,27 @@ function _pickLabelPos(c1, c2, lbw, tPrefer, qx, qy) {
     const py = qx !== undefined
       ? (1-t)*(1-t)*c1.y + 2*(1-t)*t*qy + t*t*c2.y
       : c1.y + ldy*t;
-    const lbx = px + lnx*8, lby = py + lny*8 - 2;
-    if (!_labelHitsAnyNode(lbx - 2, lby - 8, lbw, 11))
+    const lbx = px + lnx*10, lby = py + lny*10 - 2;
+    if (!_labelHitsAnyNode(lbx - 2, lby - 10, lbw, 14))
       return { lbx: lbx.toFixed(1), lby: lby.toFixed(1) };
   }
   // fallback: preferred position regardless
   const t = tPrefer;
   const px = qx !== undefined ? (1-t)*(1-t)*c1.x+2*(1-t)*t*qx+t*t*c2.x : c1.x+ldx*t;
   const py = qx !== undefined ? (1-t)*(1-t)*c1.y+2*(1-t)*t*qy+t*t*c2.y : c1.y+ldy*t;
-  return { lbx: (px+lnx*8).toFixed(1), lby: (py+lny*8-2).toFixed(1) };
+  return { lbx: (px+lnx*10).toFixed(1), lby: (py+lny*10-2).toFixed(1) };
 }
 
-function buildLinkLabel(src, tgt, lk, idx, globalIdx) {
+function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
   if (!lk.label || lk.link_type === 'tunnel') return '';
   const c1 = nodeCenter(src), c2 = nodeCenter(tgt);
   const cfg = lcfg(lk.link_type);
-  const lbw = lk.label.length * 5.4 + 4;
+  const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
 
   let pos;
-  if (idx === 0) {
+  if (bundle && bundle.waypoint) {
+    pos = _pickLabelPos(c1, c2, lbw, 0.55, bundle.waypoint.x, bundle.waypoint.y);
+  } else if (idx === 0) {
     pos = _pickLabelPos(c1, c2, lbw, 0.50);
   } else {
     const dx = c2.x-c1.x, dy = c2.y-c1.y, len = Math.sqrt(dx*dx+dy*dy)||1;
@@ -1599,7 +1692,7 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx) {
     pos = _pickLabelPos(c1, c2, lbw, 0.65,
       (c1.x+c2.x)/2 + nx*idx*50, (c1.y+c2.y)/2 + ny*idx*50);
   }
-  return `<rect x="${(pos.lbx-2)}" y="${(pos.lby-8)}" width="${lbw.toFixed(0)}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${pos.lbx}" y="${pos.lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>`;
+  return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
 }
 
 function buildTunnel(p1, p2, lk) {
@@ -1652,6 +1745,43 @@ function _applyNodeColorFilter(el, node) {
   innerG.insertBefore(gfx, innerG.firstChild);
 }
 
+// Resolve a node's health status: live PingWatch device → custom device_id binding → manual override.
+function _resolveNodeStatus(node) {
+  if (node._pwDid != null) {
+    const d = (typeof _pwDevMap !== 'undefined' && _pwDevMap[node._pwDid])
+            || (pwDevices || []).find(x => x.device_id === node._pwDid);
+    if (d && d.status) return d.status;
+  }
+  const did = node.properties?.device_id;
+  if (did != null) {
+    const d = (pwDevices || []).find(x => String(x.device_id) === String(did));
+    if (d && d.status) return d.status;
+  }
+  return node.properties?.status || null;
+}
+
+// Paint a status-colored border + glow halo around a node.
+// Idempotent: removes any prior status-border before re-applying.
+function _applyStatusBorder(el, node) {
+  el.querySelector('.status-border')?.remove();
+  if (node.type === 'info-box' || node.type === 'cloud') return;
+  const s = _resolveNodeStatus(node);
+  if (s !== 'up' && s !== 'warn' && s !== 'down') return;
+  const sz = nsize(node.type, node);
+  const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  r.setAttribute('class', 'status-border status-border-' + s);
+  r.setAttribute('x', '-3'); r.setAttribute('y', '-3');
+  r.setAttribute('width', String(sz.w + 6));
+  r.setAttribute('height', String(sz.h + 6));
+  r.setAttribute('rx', '5');
+  r.setAttribute('fill', 'none');
+  r.setAttribute('pointer-events', 'none');
+  if (s === 'down')      r.setAttribute('filter', 'url(#glow-down)');
+  else if (s === 'warn') r.setAttribute('filter', 'url(#glow-warn)');
+  else if (s === 'up')   r.setAttribute('filter', 'url(#glow-up)');
+  el.appendChild(r);
+}
+
 // When set, renderOutsideLabel appends labels here instead of returning inline SVG
 let _labelLayerTarget = null;
 
@@ -1683,6 +1813,7 @@ function renderNodes() {
       g.appendChild(sr);
     }
     _applyNodeColorFilter(g, node);
+    _applyStatusBorder(g, node);
     g.addEventListener('mousedown', e => startDrag(e, node));
     g.addEventListener('click', e => {
       e.stopPropagation();
@@ -1714,7 +1845,7 @@ function _vlanIds(raw) {
 }
 function _vlanH(p) {
   const n = _vlanIds((p || {}).vlan).length;
-  return n > 5 ? 30 : n > 0 ? 16 : 0;
+  return n > 5 ? 34 : n > 0 ? 18 : 0;
 }
 // Truncate a device name to fit within availW pixels.
 // charPx: estimated pixels-per-character for the target font/size.
@@ -1727,7 +1858,7 @@ function _truncName(name, availW, charPx) {
 function vlanBadge(p, lx, y) {
   const ids = _vlanIds(p.vlan);
   if (!ids.length) return '';
-  const BW = 30, GAP = 4, ROW = 14;
+  const BW = 36, GAP = 4, ROW = 16;
   return ids.slice(0, 10).map((v, i) => {
     const row = Math.floor(i / 5), col = i % 5;
     const c   = VLAN_COLORS[v] || '#00d4ff';
@@ -1735,10 +1866,10 @@ function vlanBadge(p, lx, y) {
     const bx  = lx + col * (BW + GAP);
     const by  = y  + row * ROW;
     return `<g>
-      <rect x="${bx}" y="${by}" width="${BW}" height="11" rx="2"
-        fill="rgba(${rgb},0.15)" stroke="${c}" stroke-width="0.7"/>
-      <text x="${(bx + BW/2).toFixed(1)}" y="${by + 8}" text-anchor="middle"
-        fill="${c}" font-family="Share Tech Mono" font-size="8">V${escXml(v)}</text>
+      <rect x="${bx}" y="${by}" width="${BW}" height="13" rx="2"
+        fill="rgba(${rgb},0.15)" stroke="${c}" stroke-width="0.8"/>
+      <text x="${(bx + BW/2).toFixed(1)}" y="${by + 10}" text-anchor="middle"
+        fill="${c}" font-family="Share Tech Mono" font-size="10">V${escXml(v)}</text>
     </g>`;
   }).join('');
 }
@@ -2384,6 +2515,7 @@ function doDrag(e) {
       if (g) {
         g.innerHTML = buildNode(dragNode, selectedEl?.type==='node' && selectedEl?.data.id===dragNode.id);
         _applyNodeColorFilter(g, dragNode);
+        _applyStatusBorder(g, dragNode);
       }
       renderLinks();
       resizeSVG();
@@ -3798,9 +3930,11 @@ function renderGroups() {
 
     const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
     lbl.setAttribute('fill', g.color);
-    lbl.setAttribute('font-size','11');
-    lbl.setAttribute('font-family',"'Share Tech Mono',monospace");
-    lbl.setAttribute('font-weight','bold');
+    lbl.setAttribute('font-size','14');
+    lbl.setAttribute('font-family',"'Orbitron',monospace");
+    lbl.setAttribute('font-weight','900');
+    lbl.setAttribute('letter-spacing','2');
+    lbl.setAttribute('filter','url(#glow-group)');
     lbl.textContent = g.name;
     gg.appendChild(lbl);
 
@@ -3842,7 +3976,7 @@ function updateGroupAttrs(gg, g) {
   const [rect, lbl, handle] = gg.children;
   rect.setAttribute('x', g.x);   rect.setAttribute('y', g.y);
   rect.setAttribute('width', g.w); rect.setAttribute('height', g.h);
-  lbl.setAttribute('x', g.x + 10); lbl.setAttribute('y', g.y + 18);
+  lbl.setAttribute('x', g.x + 10); lbl.setAttribute('y', g.y + 22);
   handle.setAttribute('x', g.x + g.w - 12); handle.setAttribute('y', g.y + g.h - 12);
 }
 
