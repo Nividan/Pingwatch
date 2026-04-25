@@ -681,24 +681,27 @@ function renderDp(dev){
   document.getElementById('emptyMain').style.display='none';
   if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
   const old=document.getElementById('dp-'+dev.device_id);
-  if(old) old.remove();
   const oldLr=document.getElementById('dpl-'+dev.device_id);
-  if(oldLr) oldLr.remove();
   const group=dev.group||'Default Group';
   ensureGroupSection(group);
   const grid=document.getElementById(gridId(group));
   const addBtn=grid.querySelector('.dc-add');
+  // If the device is staying in its current group, replace cards in place to
+  // preserve position. If the group changed, fall back to remove + append at end.
+  const sameGroup = old && old.parentNode === grid;
   // Card (grid view)
   const el=document.createElement('div');
   el.innerHTML=cardHTML(dev);
   const card=el.firstElementChild;
-  grid.insertBefore(card,addBtn);
+  if(sameGroup) old.replaceWith(card);
+  else { if(old) old.remove(); grid.insertBefore(card,addBtn); }
   applyDrag(card);
   // List row (list view)
   const lr=document.createElement('div');
   lr.innerHTML=listRowHTML(dev);
   const row=lr.firstElementChild;
-  grid.insertBefore(row,addBtn);
+  if(sameGroup && oldLr && oldLr.parentNode === grid) oldLr.replaceWith(row);
+  else { if(oldLr) oldLr.remove(); grid.insertBefore(row,addBtn); }
   dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
   refreshGroupCounts();
   applyRbac();

@@ -289,7 +289,6 @@ function renderTile(did,s){
   if(!grid)return;
   const key=`${did}/${s.sensor_id}`;
   const old=document.getElementById(`t-${key.replace('/','_')}`);
-  if(old)old.remove();
   const t=document.createElement('div');
   const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
   t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr} stl-enter`;
@@ -313,7 +312,8 @@ function renderTile(did,s){
     grid.classList.remove('sg-drag-over');
     _snrDragEl=null; _snrDragDid=null;
   });
-  grid.appendChild(t);
+  if(old) old.replaceWith(t);
+  else grid.appendChild(t);
   t.addEventListener('animationend',()=>{t.classList.remove('stl-enter');t.style.animationDelay='';},{once:true});
   const cvs=t.querySelector('canvas.spk');
   if(cvs){
