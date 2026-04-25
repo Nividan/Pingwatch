@@ -256,13 +256,16 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .led-blink:nth-child(3n)   { animation-delay:-0.7s; }
 .led-blink:nth-child(5n+2) { animation-delay:-1.1s; }
 
-/* ── Status border (live device health overlay) ── */
-.status-border          { transition: stroke 0.2s, opacity 0.2s; }
-.status-border-up       { stroke: var(--accent2); stroke-width: 2;   opacity: 0.85; }
-.status-border-warn     { stroke: var(--warn);    stroke-width: 2.8; opacity: 0.95; }
-.status-border-down     { stroke: var(--danger);  stroke-width: 2.8; opacity: 1;
+/* ── Status border (live device health overlay) ──
+   Use non-scaling-stroke so the border stays visible when the map is zoomed out
+   (default scaling makes a 2px stroke vanish at ~30-40% zoom). */
+.status-border          { vector-effect: non-scaling-stroke;
+                          transition: stroke 0.2s, opacity 0.2s; }
+.status-border-up       { stroke: var(--accent2); stroke-width: 2.5; opacity: 0.9; }
+.status-border-warn     { stroke: var(--warn);    stroke-width: 3.5; opacity: 0.95; }
+.status-border-down     { stroke: var(--danger);  stroke-width: 3.5; opacity: 1;
                           animation: statusDownPulse 1.6s ease-in-out infinite; }
-.status-border-unknown  { stroke: rgba(150,160,180,0.55); stroke-width: 1.2;
+.status-border-unknown  { stroke: rgba(150,160,180,0.6); stroke-width: 1.5;
                           stroke-dasharray: 3 3; opacity: 0.6; }
 @keyframes statusDownPulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }
 
