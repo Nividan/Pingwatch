@@ -1677,8 +1677,7 @@ function renderPwLinksInLayer(layer, lblLayer) {
         const lbw = labelText.length * LINK_LBL_CHAR_PX + 4;
         let pos;
         if (useTrunk) {
-          // Single trunk badge along hub→waypoint with node-collision retry.
-          pos = _pickLabelPos(sc, bundle.waypoint, lbw, 0.4);
+          pos = _trunkLabelPos(sc, bundle.waypoint, labelText);
         } else if (isBundled) {
           const n = bundle.count || 1;
           const ord = bundle.order?.[lk.id] ?? 0;
@@ -1704,6 +1703,30 @@ function _linkLabelSvg(lbx, lby, lbw, stroke, label) {
   return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" opacity="0.92">${escXml(label)}</text>`;
 }
 const LINK_LBL_CHAR_PX = 6.6; // estimated px-per-char at font-size 11
+
+// Place a bundle's single trunk label OUTSIDE the receiver group: step back
+// from the waypoint along the hub-direction far enough to clear the inset
+// (~24px) and the group's title strip (~16px), then offset perpendicularly.
+// Tries both perpendicular sides; falls back to the positive side if both hit.
+function _trunkLabelPos(hubCenter, waypoint, label) {
+  const lbw = label.length * LINK_LBL_CHAR_PX + 4;
+  const dx = hubCenter.x - waypoint.x, dy = hubCenter.y - waypoint.y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const nx = -uy, ny = ux;
+  const STEP = 42; // inset (~24) + title clearance (~16)
+  const PERP = 9;
+  for (const sign of [1, -1]) {
+    const lbx = waypoint.x + ux * STEP + nx * PERP * sign;
+    const lby = waypoint.y + uy * STEP + ny * PERP * sign - 2;
+    if (!_labelHitsAnyNode(lbx - 2, lby - 10, lbw, 14)) {
+      return { lbx: lbx.toFixed(1), lby: lby.toFixed(1) };
+    }
+  }
+  const lbx = waypoint.x + ux * STEP + nx * PERP;
+  const lby = waypoint.y + uy * STEP + ny * PERP - 2;
+  return { lbx: lbx.toFixed(1), lby: lby.toFixed(1) };
+}
 
 function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null) {
   const c1 = nodeCenter(src);
@@ -1813,9 +1836,7 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
     const c1 = nodeCenter(src);
     const cfg = lcfg(lk.link_type);
     const lbw = bundle.commonLabel.length * LINK_LBL_CHAR_PX + 4;
-    // Position along the hub→waypoint trunk with node-collision retry. Bias to
-    // t=0.4 (hub side) so labels stay outside the receiver group's title strip.
-    const pos = _pickLabelPos(c1, bundle.waypoint, lbw, 0.4);
+    const pos = _trunkLabelPos(c1, bundle.waypoint, bundle.commonLabel);
     return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, bundle.commonLabel);
   }
   const c1 = nodeCenter(src), c2 = nodeCenter(tgt);
