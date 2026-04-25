@@ -1065,9 +1065,18 @@ async function api(method,path,body=null){
 }
 
 // ── Pills ────────────────────────────────────────────────────────
+// Throttled to 1 Hz: _hbUpdate() iterates all devices (up/down/warn filters)
+// and the SSE batch calls this every 250 ms. Visual pills don't need 4 Hz
+// updates; leading + trailing edge covers both initial load and final state.
+let _pillsTimer = null, _pillsPending = false;
 function updatePills(){
+  if (_pillsTimer) { _pillsPending = true; return; }
   _hbUpdate();
-  if(typeof _updateStatusPills==='function') _updateStatusPills();
+  if (typeof _updateStatusPills === 'function') _updateStatusPills();
+  _pillsTimer = setTimeout(() => {
+    _pillsTimer = null;
+    if (_pillsPending) { _pillsPending = false; updatePills(); }
+  }, 1000);
 }
 
 // ── Global Network Health Bar ─────────────────────────────────────

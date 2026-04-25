@@ -26,7 +26,7 @@ from core.logger import log
 def check_license_expirations() -> None:
     from core.app_state import STATE
     from db.licenses import db_get_all_licenses, db_update_license_status
-    from db.events   import db_log_flap, db_auto_resolve_flap
+    from db.events   import db_log_flap, db_auto_resolve_flap, db_has_open_flap
     from db.alert_profiles import db_clear_stage_state_for_sensor
 
     licenses = db_get_all_licenses()
@@ -40,7 +40,7 @@ def check_license_expirations() -> None:
 
     transitioned: set = set()   # lic IDs that changed state on this run
 
-    # ── Phase A: state transition detection ──────────────────────
+    # ── Phase A: state transition detection (and stale-flap replay) ──
     for lic in licenses:
         try:
             expiry = datetime.date.fromisoformat(lic["expiry_date"])
@@ -58,14 +58,7 @@ def check_license_expirations() -> None:
             new_status = "warn"
 
         old_status = lic.get("last_status") or "ok"
-        if new_status == old_status:
-            continue
-
-        # ── State changed — persist ──
-        db_update_license_status(lic["id"], new_status)
-        lic["last_status"] = new_status   # keep in-memory copy in sync
-        lic["updated_at"]  = now
-        transitioned.add(lic["id"])
+        transitioned_now = (new_status != old_status)
 
         did  = lic["did"]
         dev  = STATE.devices.get(did)
@@ -73,11 +66,34 @@ def check_license_expirations() -> None:
         host  = dev.host if dev else ""
         sid   = f"lic_{lic['id']}"
 
-        # Clear old alert session (fresh start for escalation)
-        try:
-            db_clear_stage_state_for_sensor(did, sid)
-        except Exception as e:
-            log.warning(f"license_checker: clear stage state error: {e}")
+        # Replay path: license is still in a non-OK state but has no open
+        # flap (operator resolved the original, or it was trimmed). Without
+        # this, the Events tab stays empty for chronic problems even though
+        # the License widget keeps showing the issue.
+        replay = (
+            not transitioned_now
+            and new_status != "ok"
+            and not db_has_open_flap(
+                did, sid, directions=("license_warn", "license_crit"))
+        )
+
+        if not transitioned_now and not replay:
+            continue
+
+        # ── State changed (or replay) — persist ──
+        if transitioned_now:
+            db_update_license_status(lic["id"], new_status)
+            lic["last_status"] = new_status   # keep in-memory copy in sync
+            lic["updated_at"]  = now
+            transitioned.add(lic["id"])
+
+            # Clear old alert session (fresh start for escalation) — only
+            # on a real transition. Replay must NOT reset the session, or
+            # we'd re-spam the user every check while the issue persists.
+            try:
+                db_clear_stage_state_for_sensor(did, sid)
+            except Exception as e:
+                log.warning(f"license_checker: clear stage state error: {e}")
 
         # ── Build detail string ──
         if new_status == "ok":
@@ -106,7 +122,11 @@ def check_license_expirations() -> None:
                     f"{lic['expiry_date']} "
                     f"({days_left} day{'s' if days_left != 1 else ''} left)"
                 )
-            log.error(f"LICENSE CRIT: {dname}/{lic['license_name']} — {detail}")
+            if replay:
+                log.info(f"LICENSE CRIT (replay): {dname}/{lic['license_name']} — "
+                         f"recreating event after prior resolve")
+            else:
+                log.error(f"LICENSE CRIT: {dname}/{lic['license_name']} — {detail}")
         else:  # warn
             direction = "license_warn"
             detail = (
@@ -114,16 +134,29 @@ def check_license_expirations() -> None:
                 f"{lic['expiry_date']} "
                 f"({days_left} day{'s' if days_left != 1 else ''} left)"
             )
-            log.warning(
-                f"LICENSE WARN: {dname}/{lic['license_name']} — {detail}")
+            if replay:
+                log.info(f"LICENSE WARN (replay): {dname}/{lic['license_name']} — "
+                         f"recreating event after prior resolve")
+            else:
+                log.warning(
+                    f"LICENSE WARN: {dname}/{lic['license_name']} — {detail}")
 
         # Log flap event (Events tab)
         if new_status != "ok":
+            import json as _json
+            from core.raw_data import build_flap_raw_data
+            _lic_raw = build_flap_raw_data(
+                None, None, direction,
+                {"license_name": lic["license_name"],
+                 "expires_at": lic.get("expiry_date"),
+                 "days_left": days_left}
+            )
             db_log_flap({
                 "ts": ts, "did": did, "sid": sid,
                 "dname": dname, "sname": lic["license_name"],
                 "host": host, "stype": "license",
                 "detail": detail, "direction": direction,
+                "raw_data": _json.dumps(_lic_raw),
             })
 
         # SSE broadcast

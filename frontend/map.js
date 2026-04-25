@@ -31,6 +31,7 @@ let _pwDevMap = {};           // device_id → device object (O(1) lookup)
 let pwSSE = null;             // SSE EventSource for live status updates
 let _selectedPwDid = null;   // device_id currently shown in panel
 let _pwTraceSrcDid = null;   // trace source override (null = auto-detect by name)
+let _pwBundleWaypointByPair = {}; // populated by renderPwLinksInLayer; lets the trace anim follow bundle curves
 let _pwActiveTraces = 0;     // concurrent animation count
 
 // ── Performance: canvas pause/resume via postMessage from parent ──────────
@@ -40,9 +41,10 @@ let _ntmVisible = true;
 let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
   if (e.origin !== window.location.origin) return;
-  if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
+  if (e.data?.type === 'ntm_pause')  { _ntmVisible = false; _setRunFlag?.(); }
   if (e.data?.type === 'ntm_resume') {
     _ntmVisible = true;
+    _setRunFlag?.();
     _resumeDashBg?.();
     _resumeMainBg?.();
     // Catchup: apply any device status updates that arrived while map was paused
@@ -133,7 +135,22 @@ let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
   _bgPaused = document.hidden;
   if (!document.hidden) { _resumeDashBg?.(); _resumeMainBg?.(); }
+  _setRunFlag();
 });
+
+// CSS animation gating — toggles `html.map-idle` so the heavy continuous
+// animations (link flow, incident pulse, radar spin, body-grid drift) pause
+// when the user isn't looking at the map. Without this, the iframe's
+// compositor work continues even while the user is on YouTube in another tab,
+// starving the GPU pipeline browser-wide.
+let _winFocused = (typeof document.hasFocus === 'function') ? document.hasFocus() : true;
+function _setRunFlag() {
+  const idle = document.hidden || !_winFocused || !_ntmVisible;
+  document.documentElement.classList.toggle('map-idle', idle);
+}
+window.addEventListener('focus', () => { _winFocused = true;  _setRunFlag(); });
+window.addEventListener('blur',  () => { _winFocused = false; _setRunFlag(); });
+_setRunFlag();
 
 // ── Performance: batch _pwLiveUpdate calls — one DOM pass per rAF ─────────
 const _pendingLiveUpdates = new Set();
@@ -685,6 +702,36 @@ function showPwDashboardPanel() {
   _resumeDashBg?.();
 }
 
+// Minimal port of _parseEnumLegend / _enumForOid from sensors.js so the map
+// iframe (which doesn't load sensors.js) can translate raw enum codes like "2"
+// into human-readable labels like "down". Keep in sync with sensors.js.
+const _PW_KNOWN_ENUM_OIDS = [
+  {prefix: '1.3.6.1.2.1.2.2.1.8.',  legend: {1:'up',2:'down',3:'testing',4:'unknown',5:'dormant',6:'notPresent',7:'lowerLayerDown'}},
+  {prefix: '1.3.6.1.2.1.2.2.1.7.',  legend: {1:'up',2:'down',3:'testing'}},
+  {prefix: '1.3.6.1.2.1.33.1.2.1.', legend: {1:'unknown',2:'batteryNormal',3:'batteryLow',4:'batteryDepleted'}},
+];
+function _pwSensorIncidentVal(s) {
+  if (!s || s.last_value == null || s.last_value === '') return '';
+  if (s.stype === 'snmp') {
+    let legend = null;
+    if (s.snmp_unit) {
+      legend = {};
+      for (const m of s.snmp_unit.matchAll(/(\d+)\s*=\s*([a-z][\w-]*)/gi)) legend[m[1]] = m[2];
+      if (!Object.keys(legend).length) legend = null;
+    }
+    if (!legend && s.snmp_oid) {
+      for (const e of _PW_KNOWN_ENUM_OIDS) {
+        if (s.snmp_oid.startsWith(e.prefix)) { legend = e.legend; break; }
+      }
+    }
+    if (legend) {
+      const n = parseInt(s.last_value, 10);
+      if (!isNaN(n) && legend[String(n)]) return legend[String(n)];
+    }
+  }
+  return String(s.last_value);
+}
+
 function _buildIncidentList() {
   const downDevs = pwDevices.filter(d => d.status === 'down' && !d.alerts_muted);
   const threshInc = [];
@@ -719,7 +766,8 @@ function _buildIncidentList() {
     </div>`;
   }
   for (const { dev, sensor } of critInc) {
-    const val = sensor.last_value ? escXml(String(sensor.last_value)) : '';
+    const raw = _pwSensorIncidentVal(sensor);
+    const val = raw ? escXml(raw) : '';
     html += `<div class="inc-card inc-card-crit">
       <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-crit"></span><span class="inc-hdr-txt">THRESHOLD CRIT</span></div>
       <div class="inc-name">${escXml(dev.name)}</div>
@@ -728,7 +776,8 @@ function _buildIncidentList() {
     </div>`;
   }
   for (const { dev, sensor } of warnInc) {
-    const val = sensor.last_value ? escXml(String(sensor.last_value)) : '';
+    const raw = _pwSensorIncidentVal(sensor);
+    const val = raw ? escXml(raw) : '';
     html += `<div class="inc-card inc-card-warn">
       <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-warn"></span><span class="inc-hdr-txt">THRESHOLD WARN</span></div>
       <div class="inc-name">${escXml(dev.name)}</div>
@@ -871,6 +920,15 @@ function startPwSSE() {
         if (!isPingWatchPage || !_ntmVisible) return;
         const d = JSON.parse(e.data);
         const state = evt === 'threshold_ok' ? 'ok' : evt === 'threshold_warning' ? 'warn' : 'crit';
+        _pwSensorThresholdUpdate(d.did, d.sid, state);
+      });
+    });
+    // Typed SNMP enum-state transitions feed the same sensor-state map so the
+    // live panel counts these as incidents alongside legacy threshold events.
+    [['flap_state_down','crit'], ['flap_state_change','warn'], ['flap_state_up','ok']].forEach(([evt,state]) => {
+      pwSSE.addEventListener(evt, e => {
+        if (!isPingWatchPage || !_ntmVisible) return;
+        const d = JSON.parse(e.data);
         _pwSensorThresholdUpdate(d.did, d.sid, state);
       });
     });
@@ -1025,6 +1083,37 @@ const PW_MAX_TRACES = 2;
 const _pwTraceCooldown = 6000;
 const _pwTraceLastFired = new Map();
 
+// ── Link `.flowing` activation ───────────────────────────────────────────────
+// Link dash animations only run when this helper marks them flowing. Without
+// this, every link in the topology runs an infinite stroke-offset animation
+// permanently — typically 50–150 concurrent animations, each repainting on
+// every frame. With it, a link only animates for ~6s after we observe traffic.
+const _LINK_FLOW_TTL = 6000;
+const _flowingTimers = new WeakMap();
+function _markLinkFlowing(linkMainEl) {
+  if (!linkMainEl) return;
+  linkMainEl.classList.add('flowing');
+  const prev = _flowingTimers.get(linkMainEl);
+  if (prev) clearTimeout(prev);
+  _flowingTimers.set(linkMainEl, setTimeout(() => {
+    linkMainEl.classList.remove('flowing');
+    _flowingTimers.delete(linkMainEl);
+  }, _LINK_FLOW_TTL));
+}
+function _markPathFlowing(pathDids) {
+  if (!Array.isArray(pwLinks) || !pathDids || pathDids.length < 2) return;
+  for (let i = 0; i < pathDids.length - 1; i++) {
+    const a = String(pathDids[i]), b = String(pathDids[i + 1]);
+    for (const lk of pwLinks) {
+      const sa = String(lk.src_did), tb = String(lk.tgt_did);
+      if ((sa === a && tb === b) || (sa === b && tb === a)) {
+        const g = document.querySelector(`g.pw-link[data-pwlid="${lk.id}"]`);
+        if (g) _markLinkFlowing(g.querySelector('.link-main'));
+      }
+    }
+  }
+}
+
 function _pwFireTrace(toDid, alive) {
   if (_pwActiveTraces >= PW_MAX_TRACES) return;
   const now = Date.now();
@@ -1047,8 +1136,16 @@ function _pwAnimateTrace(pathDids, color) {
   // Silently filtering nulls would draw an arc that skips intermediate nodes.
   if (pts.some(p => p === null)) return;
   if (pts.length < 2) return;
+  // Per-segment waypoint lookup — null = straight line, else quadratic bezier control point.
+  const segWaypoint = [];
+  for (let i = 0; i < pathDids.length - 1; i++) {
+    const a = String(pathDids[i]), b = String(pathDids[i + 1]);
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    segWaypoint.push(_pwBundleWaypointByPair[key] || null);
+  }
   const layer = document.getElementById('anim-layer');
   if (!layer) return;
+  _markPathFlowing(pathDids);
   _pwActiveTraces++;
   const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
   dot.setAttribute('r', '5');
@@ -1064,8 +1161,18 @@ function _pwAnimateTrace(pathDids, color) {
     if (!startTs) startTs = ts;
     const t = Math.min((ts - startTs) / segDur, 1);
     const p0 = pts[segIdx], p1 = pts[segIdx + 1];
-    dot.setAttribute('cx', (p0.x + (p1.x - p0.x) * t).toFixed(1));
-    dot.setAttribute('cy', (p0.y + (p1.y - p0.y) * t).toFixed(1));
+    const w = segWaypoint[segIdx];
+    let cx, cy;
+    if (w) {
+      const u = 1 - t;
+      cx = u * u * p0.x + 2 * u * t * w.x + t * t * p1.x;
+      cy = u * u * p0.y + 2 * u * t * w.y + t * t * p1.y;
+    } else {
+      cx = p0.x + (p1.x - p0.x) * t;
+      cy = p0.y + (p1.y - p0.y) * t;
+    }
+    dot.setAttribute('cx', cx.toFixed(1));
+    dot.setAttribute('cy', cy.toFixed(1));
     if (t < 1) {
       setTimeout(() => requestAnimationFrame(step), _TRACE_MS);
     } else if (segIdx + 2 < pts.length) {
@@ -1154,6 +1261,8 @@ function _pwLiveUpdate(did) {
         filterG.style.filter = '';
       }
     }
+    // Refresh the status-colored border + alert glow in place.
+    _applyStatusBorder(el, node);
     // No innerHTML rebuild, no event listener teardown/reattach
   }
 
@@ -1409,6 +1518,114 @@ function render() {
 
 function resizeSVG() { /* no-op: zoom/pan via viewport group */ }
 
+// Returns the first group whose bounding rect contains node n (by x/y), or null.
+function _groupContainingNode(n) {
+  if (!n) return null;
+  for (const g of groups) {
+    if (n.x >= g.x && n.x <= g.x + g.w && n.y >= g.y && n.y <= g.y + g.h) return g;
+  }
+  return null;
+}
+
+// For a hub node and a receiving group, pick the waypoint where bundled links
+// converge. Use dominant-axis side picking so the waypoint sits on the side of
+// the rect facing the hub (never on a corner — a corner waypoint produces
+// curves that detour around adjacent groups). Then pull the point ~20px inward
+// so the bundle visibly enters the zone before splitting to its tendrils.
+function _bundleWaypoint(hub, g) {
+  const hc = nodeCenter(hub);
+  const gxc = g.x + g.w / 2, gyc = g.y + g.h / 2;
+  const dxc = hc.x - gxc, dyc = hc.y - gyc;
+  // Normalize by half-extents so we compare which axis the hub is more outside on.
+  const ax = Math.abs(dxc) / Math.max(1, g.w / 2);
+  const ay = Math.abs(dyc) / Math.max(1, g.h / 2);
+  const PAD = 14;
+  let wx, wy;
+  if (ax >= ay) {
+    wx = dxc < 0 ? g.x : g.x + g.w;
+    wy = Math.max(g.y + PAD, Math.min(hc.y, g.y + g.h - PAD));
+  } else {
+    wx = Math.max(g.x + PAD, Math.min(hc.x, g.x + g.w - PAD));
+    wy = dyc < 0 ? g.y : g.y + g.h;
+  }
+  // Pull inward toward group center.
+  const ix = gxc - wx, iy = gyc - wy;
+  const ilen = Math.sqrt(ix * ix + iy * iy) || 1;
+  const inset = Math.min(24, Math.max(g.w, g.h) * 0.08);
+  return { x: wx + ix / ilen * inset, y: wy + iy / ilen * inset };
+}
+
+const BUNDLE_MIN = 3;
+
+// Generic edge bundler — edges: [{id, src:Node, tgt:Node, link_type, label}]
+function _computeBundlesFromEdges(edges) {
+  // Fast path: bundling needs at least BUNDLE_MIN edges and at least one group.
+  if (!edges || edges.length < BUNDLE_MIN || !groups || groups.length === 0) {
+    return { bundles: new Map(), lkBundleKey: {}, lkOrder: {} };
+  }
+  const bundles = new Map();   // key → { hubId, group, waypoint, lkIds:Set }
+  const edgeById = new Map();
+  for (const e of edges) edgeById.set(e.id, e);
+  const _addCandidate = (hub, recv, edge) => {
+    const key = hub.id + ':' + recv.id + ':' + (edge.link_type || 'trunk');
+    let b = bundles.get(key);
+    if (!b) { b = { hubId: hub.id, group: recv, lkIds: new Set() }; bundles.set(key, b); }
+    b.lkIds.add(edge.id);
+  };
+  for (const e of edges) {
+    if (!e.src || !e.tgt) continue;
+    if (e.link_type === 'tunnel') continue;
+    const ga = _groupContainingNode(e.src);
+    const gb = _groupContainingNode(e.tgt);
+    if (ga && gb && ga.id === gb.id) continue;
+    if (gb) _addCandidate(e.src, gb, e);
+    if (ga) _addCandidate(e.tgt, ga, e);
+  }
+  // Drop sub-threshold bundles; for any link in multiple bundles, keep it in the largest.
+  const lkBundleKey = {};
+  const lkOrder = {};       // lk.id → index within its bundle (0..count-1) for label staggering
+  const sorted = [...bundles.entries()]
+    .filter(([, b]) => b.lkIds.size >= BUNDLE_MIN)
+    .sort((a, b) => b[1].lkIds.size - a[1].lkIds.size);
+  bundles.clear();
+  for (const [key, b] of sorted) {
+    [...b.lkIds].forEach(id => { if (lkBundleKey[id]) b.lkIds.delete(id); });
+    if (b.lkIds.size < BUNDLE_MIN) continue;
+    b.waypoint = _bundleWaypoint(nodeMap[b.hubId], b.group);
+    b.count = b.lkIds.size;
+    b.order = {};
+    // Detect a shared label across the bundle — if all members carry the same
+    // label (e.g. "VLAN 100"), render it once on the trunk segment instead of
+    // stacking N identical badges along the tendrils.
+    const labels = new Set();
+    b.lkIds.forEach(id => labels.add(((edgeById.get(id)?.label) || '').trim()));
+    const sole = [...labels][0];
+    b.commonLabel = (labels.size === 1 && sole) ? sole : null;
+    bundles.set(key, b);
+    let i = 0;
+    b.lkIds.forEach(id => { lkBundleKey[id] = key; b.order[id] = i; lkOrder[id] = i; i++; });
+    // The first link in iteration order acts as the bundle's representative
+    // for rendering the single trunk-label badge.
+    b.trunkLabelLkId = [...b.lkIds][0];
+  }
+  return { bundles, lkBundleKey, lkOrder };
+}
+
+function _computeBundles() {
+  return _computeBundlesFromEdges(links.map(lk => ({
+    id: lk.id, src: nodeMap[lk.source_id], tgt: nodeMap[lk.target_id],
+    link_type: lk.link_type, label: lk.label
+  })));
+}
+
+function _computePwBundles() {
+  if (typeof pwLinks === 'undefined' || !pwLinks) return { bundles: new Map(), lkBundleKey: {} };
+  return _computeBundlesFromEdges(pwLinks.map(lk => ({
+    id: lk.id, src: nodeMap[_pwNodeId(lk.src_did)], tgt: nodeMap[_pwNodeId(lk.tgt_did)],
+    link_type: lk.link_type, label: lk.label
+  })));
+}
+
 function renderLinks() {
   const layer = document.getElementById('links-layer');
   const lblLayer = document.getElementById('link-labels-layer');
@@ -1427,23 +1644,28 @@ function renderLinks() {
     pairIndex[lk.id] = pairSeen[key]++;
   }
 
+  // Detect hub→group bundles
+  const { bundles, lkBundleKey } = _computeBundles();
+
   links.forEach((lk, globalIdx) => {
     const src = nodeMap[lk.source_id];
     const tgt = nodeMap[lk.target_id];
     if (!src || !tgt) return;
     const idx = pairIndex[lk.id];
+    const bk = lkBundleKey[lk.id];
+    const bundle = bk ? bundles.get(bk) : null;
     // Line only (no label)
     const g = document.createElementNS('http://www.w3.org/2000/svg','g');
     g.setAttribute('class','link-g');
     g.setAttribute('data-id', lk.id);
-    g.innerHTML = buildLink(src, tgt, lk, idx, globalIdx, true);
+    g.innerHTML = buildLink(src, tgt, lk, idx, globalIdx, true, bundle);
     g.addEventListener('click', e => { e.stopPropagation(); selectLink(lk); });
     if (selectedEl && selectedEl.type==='link' && selectedEl.data.id===lk.id) {
       g.querySelector('.link-main')?.setAttribute('stroke-width', (parseFloat(g.querySelector('.link-main')?.getAttribute('stroke-width')||2)+2)+'');
     }
     layer.appendChild(g);
     // Label in top layer
-    const lblSvg = buildLinkLabel(src, tgt, lk, idx, globalIdx);
+    const lblSvg = buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle);
     if (lblSvg) {
       const lg = document.createElementNS('http://www.w3.org/2000/svg','g');
       lg.setAttribute('class','link-label-g');
@@ -1468,6 +1690,20 @@ function _pwDevName(did) {
 function renderPwLinksInLayer(layer, lblLayer) {
   const tArr = [0.30, 0.50, 0.70];
   let pwIdx = 0;
+  // Detect hub→group bundles in pw-links (live page).
+  const { bundles: pwBundles, lkBundleKey: pwLkBundleKey } = _computePwBundles();
+  // Cache the waypoint by sorted device-id pair so the probe trace animation
+  // can step along the same bezier instead of a straight line.
+  _pwBundleWaypointByPair = {};
+  pwLinks.forEach(lk => {
+    const bk = pwLkBundleKey[lk.id];
+    const b  = bk ? pwBundles.get(bk) : null;
+    if (b && b.waypoint) {
+      const a = String(lk.src_did), c = String(lk.tgt_did);
+      const key = a < c ? a + '|' + c : c + '|' + a;
+      _pwBundleWaypointByPair[key] = b.waypoint;
+    }
+  });
   pwLinks.forEach(lk => {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
@@ -1479,31 +1715,98 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const stroke = _pwLinkStroke(lk, srcDev, tgtDev);
     const bwCls  = stroke === '#a855f7' ? 'pw-bw-crit' : stroke === '#c084fc' ? 'pw-bw-warn' : '';
     const lw     = stroke === '#a855f7' ? cfg.width * 2.5 : stroke === '#c084fc' ? cfg.width * 1.8 : cfg.width;
+    const bk     = pwLkBundleKey[lk.id];
+    const bundle = bk ? pwBundles.get(bk) : null;
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
-    gg.innerHTML = `
-      <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
-      <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-        stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-    `;
+    if (bundle && bundle.waypoint) {
+      const qx = bundle.waypoint.x.toFixed(1), qy = bundle.waypoint.y.toFixed(1);
+      gg.innerHTML = `
+        <path class="link-hit" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}" fill="none" stroke="transparent" stroke-width="12"/>
+        <path class="link-main ${cfg.cls} ${bwCls}" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}"
+          fill="none" stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      `;
+    } else {
+      gg.innerHTML = `
+        <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
+        <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
+          stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      `;
+    }
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);
     // Label in top layer
     if (lk.label && lblLayer) {
-      const lbw = lk.label.length * 5.4 + 4;
-      const pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
-      const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      lg.setAttribute('class','link-label-g pw-link-label');
-      lg.innerHTML = `<rect x="${(pos.lbx-2)}" y="${(pos.lby-8)}" width="${lbw.toFixed(0)}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${pos.lbx}" y="${pos.lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>`;
-      lg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
-      lblLayer.appendChild(lg);
+      // Common-label bundle: render the badge once on the trunk; suppress siblings.
+      const isBundled = bundle && bundle.waypoint;
+      const useTrunk = isBundled && bundle.commonLabel != null;
+      if (useTrunk && lk.id !== bundle.trunkLabelLkId) {
+        // Suppress sibling — the trunk-label link will draw the shared badge.
+      } else {
+        const labelText = useTrunk ? bundle.commonLabel : lk.label;
+        const lbw = labelText.length * LINK_LBL_CHAR_PX + 4;
+        let pos;
+        if (useTrunk) {
+          // Use the bundle's resolved hub center, not the link's src — the
+          // trunk-label link could be oriented either way.
+          const hubNode = nodeMap[bundle.hubId];
+          const hubC = hubNode ? nodeCenter(hubNode) : sc;
+          pos = _trunkLabelPos(hubC, bundle.waypoint, labelText);
+        } else if (isBundled) {
+          const n = bundle.count || 1;
+          const ord = bundle.order?.[lk.id] ?? 0;
+          const tPref = n > 1 ? (0.68 + 0.22 * (ord / (n - 1))) : 0.78;
+          pos = _pickLabelPos(sc, tc, lbw, tPref, bundle.waypoint.x, bundle.waypoint.y);
+        } else {
+          pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
+        }
+        const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        lg.setAttribute('class','link-label-g pw-link-label');
+        lg.innerHTML = _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, labelText);
+        lg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
+        lblLayer.appendChild(lg);
+      }
     }
     pwIdx++;
   });
 }
 
-function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
+// Shared link-label SVG fragment — keep all callers in sync (font, height, padding).
+// lbx/lby = text anchor (baseline x/y); lbw = pre-computed background rect width.
+// Style: opaque dark fill + thin colored border (matches link color, scaled
+// independently of zoom) + bold text — readable on both the dark map and
+// colored group rects without losing the cyber aesthetic.
+function _linkLabelSvg(lbx, lby, lbw, stroke, label) {
+  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="3" fill="rgba(5,10,20,0.95)" stroke="${stroke}" stroke-width="0.8" vector-effect="non-scaling-stroke"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" font-weight="bold">${escXml(label)}</text>`;
+}
+const LINK_LBL_CHAR_PX = 6.6; // estimated px-per-char at font-size 11
+
+// Place a bundle's single trunk label OUTSIDE the receiver group: step back
+// from the waypoint along the hub-direction far enough to clear the inset
+// (~24px) and the group's title strip (~16px), then offset perpendicularly.
+// Tries both perpendicular sides; falls back to the positive side if both hit.
+function _trunkLabelPos(hubCenter, waypoint, label) {
+  const lbw = label.length * LINK_LBL_CHAR_PX + 4;
+  const dx = hubCenter.x - waypoint.x, dy = hubCenter.y - waypoint.y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const nx = -uy, ny = ux;
+  const STEP = 42; // inset (~24) + title clearance (~16)
+  const PERP = 9;
+  for (const sign of [1, -1]) {
+    const lbx = waypoint.x + ux * STEP + nx * PERP * sign;
+    const lby = waypoint.y + uy * STEP + ny * PERP * sign - 2;
+    if (!_labelHitsAnyNode(lbx - 2, lby - 10, lbw, 14)) {
+      return { lbx: lbx.toFixed(1), lby: lby.toFixed(1) };
+    }
+  }
+  const lbx = waypoint.x + ux * STEP + nx * PERP;
+  const lby = waypoint.y + uy * STEP + ny * PERP - 2;
+  return { lbx: lbx.toFixed(1), lby: lby.toFixed(1) };
+}
+
+function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null) {
   const c1 = nodeCenter(src);
   const c2 = nodeCenter(tgt);
 
@@ -1514,6 +1817,25 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
   const sel = (selectedEl?.type==='link' && selectedEl?.data.id===lk.id);
   const w = sel ? cfg.width+2 : cfg.width;
 
+  // Bundled link — route through the shared waypoint regardless of pair-index.
+  if (bundle && bundle.waypoint) {
+    const qx = bundle.waypoint.x, qy = bundle.waypoint.y;
+    // Stagger label t along the tendril side so each label sits near its own target,
+    // not stacked at the waypoint with all its bundle siblings.
+    const n = bundle.count || 1;
+    const ordIdx = (bundle.order && bundle.order[lk.id] != null) ? bundle.order[lk.id] : 0;
+    const tL = n > 1 ? (0.68 + 0.22 * (ordIdx / (n - 1))) : 0.78;
+    const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x).toFixed(1);
+    const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y - 4).toFixed(1);
+    const lbwB = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
+    return `
+      <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
+      <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
+        fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwB, cfg.stroke, lk.label) : ''}
+    `;
+  }
+
   if (idx === 0) {
     // First (or only) link — always straight
     const tArr = [0.30, 0.50, 0.70];
@@ -1521,14 +1843,14 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
     const ldx  = c2.x - c1.x, ldy = c2.y - c1.y;
     const llen = Math.sqrt(ldx*ldx + ldy*ldy) || 1;
     const lnx  = -ldy/llen, lny = ldx/llen;
-    const lbx  = (c1.x + ldx*tL + lnx*8).toFixed(1);
-    const lby  = (c1.y + ldy*tL + lny*8 - 2).toFixed(1);
-    const lbw  = lk.label ? (lk.label.length * 5.4 + 4).toFixed(0) : 0;
+    const lbx  = (c1.x + ldx*tL + lnx*10).toFixed(1);
+    const lby  = (c1.y + ldy*tL + lny*10 - 2).toFixed(1);
+    const lbw  = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
     return `
       <line class="link-hit" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}" stroke="transparent" stroke-width="12"/>
       <line class="link-main ${cfg.cls}" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}"
         stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      ${(!noLabel && lk.label) ? `<rect x="${(lbx-2)}" y="${(lby-8)}" width="${lbw}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>` : ''}
+      ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbw, cfg.stroke, lk.label) : ''}
     `;
   }
 
@@ -1540,14 +1862,14 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false) {
   const qx = (c1.x+c2.x)/2 + nx*off;
   const qy = (c1.y+c2.y)/2 + ny*off;
   const tL = 0.65;
-  const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x + nx*10 + 4).toFixed(1);
-  const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y + ny*10 - 4).toFixed(1);
-  const lbwP = lk.label ? (lk.label.length * 5.4 + 4).toFixed(0) : 0;
+  const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x + nx*12 + 4).toFixed(1);
+  const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y + ny*12 - 4).toFixed(1);
+  const lbwP = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
   return `
     <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
     <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
       fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-    ${(!noLabel && lk.label) ? `<rect x="${(lbx-2)}" y="${(lby-8)}" width="${lbwP}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${lbx}" y="${lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>` : ''}
+    ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwP, cfg.stroke, lk.label) : ''}
   `;
 }
 
@@ -1573,25 +1895,44 @@ function _pickLabelPos(c1, c2, lbw, tPrefer, qx, qy) {
     const py = qx !== undefined
       ? (1-t)*(1-t)*c1.y + 2*(1-t)*t*qy + t*t*c2.y
       : c1.y + ldy*t;
-    const lbx = px + lnx*8, lby = py + lny*8 - 2;
-    if (!_labelHitsAnyNode(lbx - 2, lby - 8, lbw, 11))
+    const lbx = px + lnx*10, lby = py + lny*10 - 2;
+    if (!_labelHitsAnyNode(lbx - 2, lby - 10, lbw, 14))
       return { lbx: lbx.toFixed(1), lby: lby.toFixed(1) };
   }
   // fallback: preferred position regardless
   const t = tPrefer;
   const px = qx !== undefined ? (1-t)*(1-t)*c1.x+2*(1-t)*t*qx+t*t*c2.x : c1.x+ldx*t;
   const py = qx !== undefined ? (1-t)*(1-t)*c1.y+2*(1-t)*t*qy+t*t*c2.y : c1.y+ldy*t;
-  return { lbx: (px+lnx*8).toFixed(1), lby: (py+lny*8-2).toFixed(1) };
+  return { lbx: (px+lnx*10).toFixed(1), lby: (py+lny*10-2).toFixed(1) };
 }
 
-function buildLinkLabel(src, tgt, lk, idx, globalIdx) {
+function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
   if (!lk.label || lk.link_type === 'tunnel') return '';
+  // Bundle with one shared label across all members → render once on the trunk segment.
+  if (bundle && bundle.commonLabel != null) {
+    if (lk.id !== bundle.trunkLabelLkId) return '';
+    const cfg = lcfg(lk.link_type);
+    // Use the BUNDLE's hub (always outside the receiver group), not the link's
+    // src — the trunk-label link could be oriented either way.
+    const hubNode = nodeMap[bundle.hubId];
+    const hubC = hubNode ? nodeCenter(hubNode) : nodeCenter(src);
+    const lbw = bundle.commonLabel.length * LINK_LBL_CHAR_PX + 4;
+    const pos = _trunkLabelPos(hubC, bundle.waypoint, bundle.commonLabel);
+    return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, bundle.commonLabel);
+  }
   const c1 = nodeCenter(src), c2 = nodeCenter(tgt);
   const cfg = lcfg(lk.link_type);
-  const lbw = lk.label.length * 5.4 + 4;
+  const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
 
   let pos;
-  if (idx === 0) {
+  if (bundle && bundle.waypoint) {
+    // Stagger along the tendril side so labels track each link's individual target
+    // instead of stacking at the waypoint.
+    const n = bundle.count || 1;
+    const ord = bundle.order?.[lk.id] ?? 0;
+    const tPref = n > 1 ? (0.68 + 0.22 * (ord / (n - 1))) : 0.78;
+    pos = _pickLabelPos(c1, c2, lbw, tPref, bundle.waypoint.x, bundle.waypoint.y);
+  } else if (idx === 0) {
     pos = _pickLabelPos(c1, c2, lbw, 0.50);
   } else {
     const dx = c2.x-c1.x, dy = c2.y-c1.y, len = Math.sqrt(dx*dx+dy*dy)||1;
@@ -1599,7 +1940,7 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx) {
     pos = _pickLabelPos(c1, c2, lbw, 0.65,
       (c1.x+c2.x)/2 + nx*idx*50, (c1.y+c2.y)/2 + ny*idx*50);
   }
-  return `<rect x="${(pos.lbx-2)}" y="${(pos.lby-8)}" width="${lbw.toFixed(0)}" height="11" rx="2" fill="rgba(5,10,20,0.82)"/><text x="${pos.lbx}" y="${pos.lby}" fill="${cfg.stroke}" font-family="Share Tech Mono" font-size="9" opacity="0.9">${escXml(lk.label)}</text>`;
+  return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
 }
 
 function buildTunnel(p1, p2, lk) {
@@ -1652,6 +1993,56 @@ function _applyNodeColorFilter(el, node) {
   innerG.insertBefore(gfx, innerG.firstChild);
 }
 
+// Resolve a node's health status: live PingWatch device → custom device_id binding → manual override.
+function _resolveNodeStatus(node) {
+  if (node._pwDid != null) {
+    const d = (typeof _pwDevMap !== 'undefined' && _pwDevMap[node._pwDid])
+            || (pwDevices || []).find(x => x.device_id === node._pwDid);
+    if (d && d.status) return d.status;
+  }
+  const did = node.properties?.device_id;
+  if (did != null) {
+    const d = (pwDevices || []).find(x => String(x.device_id) === String(did));
+    if (d && d.status) return d.status;
+  }
+  return node.properties?.status || null;
+}
+
+// Paint a status-colored border around a node.
+// Idempotent: returns immediately if the same status was last applied to this
+// element — avoids DOM churn on repeated SSE-driven re-applies.
+function _applyStatusBorder(el, node) {
+  if (node.type === 'info-box' || node.type === 'cloud') return;
+  const raw = _resolveNodeStatus(node);
+  const s = (raw === 'up' || raw === 'warn' || raw === 'down' || raw === 'unknown') ? raw : '';
+  const prev = el._pwStatusBorderClass;
+  if (prev === s) return;
+  el._pwStatusBorderClass = s;
+  el.querySelector('.status-border')?.remove();
+  if (!s) return;
+  const sz = nsize(node.type, node);
+  const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  // `.recent` is added only when transitioning INTO down — the CSS pulses
+  // 6 times then naturally stops, so we get attention-grabbing motion on
+  // the actual change without burning compositor cycles forever after.
+  let cls = 'status-border status-border-' + s;
+  if (s === 'down' && prev !== 'down') cls += ' recent';
+  r.setAttribute('class', cls);
+  r.setAttribute('x', '-5'); r.setAttribute('y', '-5');
+  r.setAttribute('width', String(sz.w + 10));
+  r.setAttribute('height', String(sz.h + 10));
+  r.setAttribute('rx', '6');
+  r.setAttribute('fill', 'none');
+  r.setAttribute('pointer-events', 'none');
+  // Note: SVG filters rasterize their source in user-space before applying, which
+  // defeats vector-effect:non-scaling-stroke at low zoom. Rely on stroke + pulse
+  // for emphasis instead — the dropped halo isn't worth the visibility loss.
+  el.appendChild(r);
+  if (s === 'down' && prev !== 'down') {
+    setTimeout(() => { r.classList.remove('recent'); }, 10000);
+  }
+}
+
 // When set, renderOutsideLabel appends labels here instead of returning inline SVG
 let _labelLayerTarget = null;
 
@@ -1683,6 +2074,7 @@ function renderNodes() {
       g.appendChild(sr);
     }
     _applyNodeColorFilter(g, node);
+    _applyStatusBorder(g, node);
     g.addEventListener('mousedown', e => startDrag(e, node));
     g.addEventListener('click', e => {
       e.stopPropagation();
@@ -1714,7 +2106,7 @@ function _vlanIds(raw) {
 }
 function _vlanH(p) {
   const n = _vlanIds((p || {}).vlan).length;
-  return n > 5 ? 30 : n > 0 ? 16 : 0;
+  return n > 5 ? 34 : n > 0 ? 18 : 0;
 }
 // Truncate a device name to fit within availW pixels.
 // charPx: estimated pixels-per-character for the target font/size.
@@ -1727,7 +2119,7 @@ function _truncName(name, availW, charPx) {
 function vlanBadge(p, lx, y) {
   const ids = _vlanIds(p.vlan);
   if (!ids.length) return '';
-  const BW = 30, GAP = 4, ROW = 14;
+  const BW = 36, GAP = 4, ROW = 16;
   return ids.slice(0, 10).map((v, i) => {
     const row = Math.floor(i / 5), col = i % 5;
     const c   = VLAN_COLORS[v] || '#00d4ff';
@@ -1735,10 +2127,10 @@ function vlanBadge(p, lx, y) {
     const bx  = lx + col * (BW + GAP);
     const by  = y  + row * ROW;
     return `<g>
-      <rect x="${bx}" y="${by}" width="${BW}" height="11" rx="2"
-        fill="rgba(${rgb},0.15)" stroke="${c}" stroke-width="0.7"/>
-      <text x="${(bx + BW/2).toFixed(1)}" y="${by + 8}" text-anchor="middle"
-        fill="${c}" font-family="Share Tech Mono" font-size="8">V${escXml(v)}</text>
+      <rect x="${bx}" y="${by}" width="${BW}" height="13" rx="2"
+        fill="rgba(${rgb},0.15)" stroke="${c}" stroke-width="0.8"/>
+      <text x="${(bx + BW/2).toFixed(1)}" y="${by + 10}" text-anchor="middle"
+        fill="${c}" font-family="Share Tech Mono" font-size="10">V${escXml(v)}</text>
     </g>`;
   }).join('');
 }
@@ -2384,6 +2776,7 @@ function doDrag(e) {
       if (g) {
         g.innerHTML = buildNode(dragNode, selectedEl?.type==='node' && selectedEl?.data.id===dragNode.id);
         _applyNodeColorFilter(g, dragNode);
+        _applyStatusBorder(g, dragNode);
       }
       renderLinks();
       resizeSVG();
@@ -3798,9 +4191,11 @@ function renderGroups() {
 
     const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
     lbl.setAttribute('fill', g.color);
-    lbl.setAttribute('font-size','11');
-    lbl.setAttribute('font-family',"'Share Tech Mono',monospace");
-    lbl.setAttribute('font-weight','bold');
+    lbl.setAttribute('font-size','14');
+    lbl.setAttribute('font-family',"'Orbitron',monospace");
+    lbl.setAttribute('font-weight','900');
+    lbl.setAttribute('letter-spacing','2');
+    lbl.setAttribute('filter','url(#glow-group)');
     lbl.textContent = g.name;
     gg.appendChild(lbl);
 
@@ -3842,7 +4237,7 @@ function updateGroupAttrs(gg, g) {
   const [rect, lbl, handle] = gg.children;
   rect.setAttribute('x', g.x);   rect.setAttribute('y', g.y);
   rect.setAttribute('width', g.w); rect.setAttribute('height', g.h);
-  lbl.setAttribute('x', g.x + 10); lbl.setAttribute('y', g.y + 18);
+  lbl.setAttribute('x', g.x + 10); lbl.setAttribute('y', g.y + 22);
   handle.setAttribute('x', g.x + g.w - 12); handle.setAttribute('y', g.y + g.h - 12);
 }
 
@@ -4687,11 +5082,11 @@ function showDashboardPanel() {
         <circle cx="50" cy="50" r="30" fill="none" stroke="rgba(0,212,255,0.05)" stroke-width="1"/>
         <circle cx="50" cy="50" r="16" fill="none" stroke="rgba(0,212,255,0.09)" stroke-width="1"/>
         <circle cx="50" cy="50" r="2.5" fill="rgba(0,212,255,0.5)"/>
-        <g style="transform-origin:50px 50px;animation:radarSpin 3s linear infinite">
+        <g class="radar-g">
           <line x1="50" y1="50" x2="50" y2="6" stroke="rgba(0,212,255,0.55)" stroke-width="1.5"/>
           <circle cx="50" cy="6" r="2" fill="rgba(0,212,255,0.9)"/>
         </g>
-        <g style="transform-origin:50px 50px;animation:radarSpin 3s linear infinite;animation-delay:-1s">
+        <g class="radar-g radar-g-2">
           <circle cx="50" cy="6" r="1" fill="rgba(0,212,255,0.25)"/>
         </g>
         ${nodes.slice(0,8).map((n,i) => {

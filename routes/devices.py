@@ -289,6 +289,24 @@ def handle(h, method, path, body):
         if vmware_password_default:
             from db.backups import encrypt_pw
             vmware_password_default = encrypt_pw(vmware_password_default)
+        # SNMPv3 device defaults — same validation whitelists as probes.py
+        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
+        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
+        snmp_v3_user_default       = body.get("snmp_v3_user_default", "").strip()
+        snmp_v3_level_default      = body.get("snmp_v3_level_default", "").strip()
+        if snmp_v3_level_default not in _V3_LEVELS: snmp_v3_level_default = ""
+        snmp_v3_auth_proto_default = body.get("snmp_v3_auth_proto_default", "").strip()
+        if snmp_v3_auth_proto_default not in _V3_AUTH: snmp_v3_auth_proto_default = ""
+        snmp_v3_priv_proto_default = body.get("snmp_v3_priv_proto_default", "").strip()
+        if snmp_v3_priv_proto_default not in _V3_PRIV: snmp_v3_priv_proto_default = ""
+        snmp_v3_context_default    = body.get("snmp_v3_context_default", "").strip()
+        _v3_auth_pw_default = body.get("snmp_v3_auth_pass_default", "")
+        _v3_priv_pw_default = body.get("snmp_v3_priv_pass_default", "")
+        if _v3_auth_pw_default or _v3_priv_pw_default:
+            from db.backups import encrypt_pw
+            _v3_auth_pw_default = encrypt_pw(_v3_auth_pw_default) if _v3_auth_pw_default else ""
+            _v3_priv_pw_default = encrypt_pw(_v3_priv_pw_default) if _v3_priv_pw_default else ""
         did = STATE.add_device(name, host, group)
         with STATE._lock:
             if did in STATE.devices:
@@ -297,6 +315,15 @@ def handle(h, method, path, body):
                 STATE.devices[did].snmp_version_default    = snmp_version_default
                 STATE.devices[did].vmware_user_default     = vmware_user_default
                 STATE.devices[did].vmware_password_default = vmware_password_default
+                STATE.devices[did].snmp_v3_user_default       = snmp_v3_user_default
+                STATE.devices[did].snmp_v3_level_default      = snmp_v3_level_default
+                STATE.devices[did].snmp_v3_auth_proto_default = snmp_v3_auth_proto_default
+                STATE.devices[did].snmp_v3_priv_proto_default = snmp_v3_priv_proto_default
+                STATE.devices[did].snmp_v3_context_default    = snmp_v3_context_default
+                if _v3_auth_pw_default:
+                    STATE.devices[did].snmp_v3_auth_pass_default = _v3_auth_pw_default
+                if _v3_priv_pw_default:
+                    STATE.devices[did].snmp_v3_priv_pass_default = _v3_priv_pw_default
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
@@ -442,6 +469,34 @@ def handle(h, method, path, body):
                     from db.backups import encrypt_pw
                     dev.vmware_password_default = encrypt_pw(_vpw)
                 # empty string = keep existing (don't clear)
+            # SNMPv3 device defaults
+            _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
+            _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+            _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
+            if "snmp_v3_user_default" in body:
+                dev.snmp_v3_user_default = str(body["snmp_v3_user_default"]).strip()
+            if "snmp_v3_level_default" in body:
+                _lv = str(body["snmp_v3_level_default"]).strip()
+                if _lv in _V3_LEVELS: dev.snmp_v3_level_default = _lv
+            if "snmp_v3_auth_proto_default" in body:
+                _ap = str(body["snmp_v3_auth_proto_default"]).strip()
+                if _ap in _V3_AUTH: dev.snmp_v3_auth_proto_default = _ap
+            if "snmp_v3_priv_proto_default" in body:
+                _pp = str(body["snmp_v3_priv_proto_default"]).strip()
+                if _pp in _V3_PRIV: dev.snmp_v3_priv_proto_default = _pp
+            if "snmp_v3_context_default" in body:
+                dev.snmp_v3_context_default = str(body["snmp_v3_context_default"]).strip()
+            if "snmp_v3_auth_pass_default" in body:
+                _pw = body["snmp_v3_auth_pass_default"]
+                if _pw:
+                    from db.backups import encrypt_pw
+                    dev.snmp_v3_auth_pass_default = encrypt_pw(_pw)
+                # empty = keep existing (placeholder-submit from UI)
+            if "snmp_v3_priv_pass_default" in body:
+                _pw = body["snmp_v3_priv_pass_default"]
+                if _pw:
+                    from db.backups import encrypt_pw
+                    dev.snmp_v3_priv_pass_default = encrypt_pw(_pw)
             if "host" in body:
                 h2 = body["host"].strip()
                 if len(h2) > 253:
@@ -626,6 +681,8 @@ def handle(h, method, path, body):
                   "sftp_user", "sftp_auth_type", "sftp_test_level",
                   "sftp_remote_path", "sftp_expected_sha256",
                   "radius_test_level", "radius_username", "radius_nas_id",
+                  "snmp_v3_user", "snmp_v3_level",
+                  "snmp_v3_auth_proto", "snmp_v3_priv_proto", "snmp_v3_context",
                   "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
             if k in body: kwargs[k] = body[k]
         # Normalize anomaly fields to safe ranges
@@ -672,6 +729,23 @@ def handle(h, method, path, body):
         if body.get("radius_password"):
             from db.backups import encrypt_pw
             kwargs["radius_password"] = encrypt_pw(body["radius_password"])
+        # SNMPv3: validate enum fields, encrypt passphrases.  Empty field in
+        # body = keep existing (placeholder-submit pattern from UI).
+        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
+        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
+        if "snmp_v3_level" in kwargs and kwargs["snmp_v3_level"] not in _V3_LEVELS:
+            h._json(400, {"error": "invalid snmp_v3_level"}); return True
+        if "snmp_v3_auth_proto" in kwargs and kwargs["snmp_v3_auth_proto"] not in _V3_AUTH:
+            h._json(400, {"error": "invalid snmp_v3_auth_proto"}); return True
+        if "snmp_v3_priv_proto" in kwargs and kwargs["snmp_v3_priv_proto"] not in _V3_PRIV:
+            h._json(400, {"error": "invalid snmp_v3_priv_proto"}); return True
+        if body.get("snmp_v3_auth_pass"):
+            from db.backups import encrypt_pw
+            kwargs["snmp_v3_auth_pass"] = encrypt_pw(body["snmp_v3_auth_pass"])
+        if body.get("snmp_v3_priv_pass"):
+            from db.backups import encrypt_pw
+            kwargs["snmp_v3_priv_pass"] = encrypt_pw(body["snmp_v3_priv_pass"])
         # SFTP checksum level: enforce minimum interval (avoids hammering the
         # server with big downloads). Guard fires only when both level + interval
         # are present in the update.
@@ -688,8 +762,7 @@ def handle(h, method, path, body):
             if "interval" in kwargs:
                 kwargs["interval"] = validate_interval(kwargs["interval"], 1, 3600)
             if "timeout" in kwargs:
-                iv = int(kwargs.get("interval", body.get("interval", 5)))
-                kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
+                kwargs["timeout"] = int(kwargs["timeout"])
             if "port" in kwargs and kwargs["port"] not in (None, ""):
                 kwargs["port"] = validate_port(kwargs["port"])
         except ValueError as _ve:
@@ -709,6 +782,17 @@ def handle(h, method, path, body):
                     h._json(400, {"error": "banner_regex is too complex"}); return True
             except re.error as _re_err:
                 h._json(400, {"error": f"Invalid banner_regex: {_re_err}"}); return True
+        # Validate timeout against the interval (current or being updated)
+        if "timeout" in kwargs:
+            with STATE._lock:
+                _sensor = STATE.devices.get(did)
+                _sensor = _sensor.sensors.get(sid) if _sensor else None
+                _current_iv = _sensor.interval if _sensor else 5
+            if "interval" in kwargs:
+                iv = int(kwargs["interval"])
+            else:
+                iv = _current_iv
+            kwargs["timeout"] = max(1, min(iv, int(kwargs["timeout"])))
         ok = STATE.update_sensor(did, sid, **kwargs)
         if not ok:
             h._json(404, {"error": "sensor not found"}); return True
@@ -868,6 +952,28 @@ def handle(h, method, path, body):
                 radius_secret_v = encrypt_pw(radius_secret_v)
             if radius_pw_v:
                 radius_pw_v = encrypt_pw(radius_pw_v)
+        # SNMPv3 fields — per-sensor override of device defaults.  Blank
+        # fields inherit from the device at probe time (see Sensor._resolve_snmp_v3_creds).
+        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
+        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
+        v3_user   = (body.get("snmp_v3_user") or "").strip()
+        v3_level  = (body.get("snmp_v3_level") or "").strip()
+        if v3_level not in _V3_LEVELS:
+            h._json(400, {"error": "invalid snmp_v3_level"}); return True
+        v3_aproto = (body.get("snmp_v3_auth_proto") or "").strip()
+        if v3_aproto not in _V3_AUTH:
+            h._json(400, {"error": "invalid snmp_v3_auth_proto"}); return True
+        v3_pproto = (body.get("snmp_v3_priv_proto") or "").strip()
+        if v3_pproto not in _V3_PRIV:
+            h._json(400, {"error": "invalid snmp_v3_priv_proto"}); return True
+        v3_context = (body.get("snmp_v3_context") or "").strip()
+        v3_apw = body.get("snmp_v3_auth_pass") or ""
+        v3_ppw = body.get("snmp_v3_priv_pass") or ""
+        if v3_apw or v3_ppw:
+            from db.backups import encrypt_pw
+            v3_apw = encrypt_pw(v3_apw) if v3_apw else ""
+            v3_ppw = encrypt_pw(v3_ppw) if v3_ppw else ""
         if bnr:
             if len(bnr) > 200:
                 h._json(400, {"error": "banner_regex too long (max 200 chars)"}); return True
@@ -921,7 +1027,13 @@ def handle(h, method, path, body):
                                radius_test_level=radius_level_v,
                                radius_username=radius_user_v,
                                radius_password=radius_pw_v,
-                               radius_nas_id=radius_nas_id_v)
+                               radius_nas_id=radius_nas_id_v,
+                               snmp_v3_user=v3_user, snmp_v3_level=v3_level,
+                               snmp_v3_auth_proto=v3_aproto,
+                               snmp_v3_auth_pass=v3_apw,
+                               snmp_v3_priv_proto=v3_pproto,
+                               snmp_v3_priv_pass=v3_ppw,
+                               snmp_v3_context=v3_context)
         if not sid:
             h._json(404, {"error": "device not found"}); return True
         with STATE._lock:

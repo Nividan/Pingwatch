@@ -135,18 +135,74 @@ function sensorFormHTML(dev, s=null) {
         <input type="number" id="as-sp" value="${s?.port||161}" min="1" max="65535"/></div>
     </div>
     <div class="fgrid">
-      <div class="fr"><label class="fl">Community String</label>
+      <div class="fr" id="as-snmp-comm-row" style="${(s?.snmp_version||dev?.snmp_version_default||'2c')==='3'?'display:none':''}"><label class="fl">Community String</label>
         <input type="text" id="as-sc" value="${esc(commVal)}" placeholder="${commHint}" autocomplete="off"/>
         ${commStatusHtml}</div>
       <div class="fr"><label class="fl">SNMP Version</label>
-        <select id="as-sv">
+        <select id="as-sv" onchange="_asSnmpVerChange()">
           ${(()=>{const dv=s?.snmp_version||dev?.snmp_version_default||'2c';
             return `<option value="2c" ${dv==='2c'?'selected':''}>v2c</option>
           <option value="1"  ${dv==='1'?'selected':''}>v1</option>
-          <option value="3"  ${dv==='3'?'selected':''}>v3 (community)</option>`;})()}
+          <option value="3"  ${dv==='3'?'selected':''}>v3</option>`;})()}
         </select>
       </div>
     </div>
+    ${(() => {
+      // SNMPv3 block — hidden unless version=3.  Fields pre-fill from the
+      // sensor override (if set) then the device default (falls back at
+      // probe time anyway; the pre-fill is just UX so the user sees what
+      // will actually be used).
+      const v3lvl = s?.snmp_v3_level || dev?.snmp_v3_level_default || 'noAuthNoPriv';
+      const v3usr = s?.snmp_v3_user  || dev?.snmp_v3_user_default  || '';
+      const v3ap  = s?.snmp_v3_auth_proto || dev?.snmp_v3_auth_proto_default || 'SHA';
+      const v3pp  = s?.snmp_v3_priv_proto || dev?.snmp_v3_priv_proto_default || 'AES';
+      const v3ctx = s?.snmp_v3_context || dev?.snmp_v3_context_default || '';
+      const hasAP = s?.has_snmp_v3_auth_pass || dev?.has_snmp_v3_auth_pass_default;
+      const hasPP = s?.has_snmp_v3_priv_pass || dev?.has_snmp_v3_priv_pass_default;
+      const showV3 = (s?.snmp_version || dev?.snmp_version_default || '2c') === '3';
+      const showAuth = v3lvl === 'authNoPriv' || v3lvl === 'authPriv';
+      const showPriv = v3lvl === 'authPriv';
+      return `
+      <div id="as-v3-block" style="${showV3?'':'display:none;'}border-left:2px solid var(--accent);padding-left:10px;margin:6px 0 0 2px;display:flex;flex-direction:column;gap:8px">
+        <div class="fh" style="color:var(--text3);font-size:11px">SNMPv3 credentials (blank fields inherit from device default)</div>
+        <div class="fgrid">
+          <div class="fr"><label class="fl">v3 Username</label>
+            <input type="text" id="as-v3-user" value="${esc(v3usr)}" placeholder="snmpuser" autocomplete="off"/></div>
+          <div class="fr"><label class="fl">Security Level</label>
+            <select id="as-v3-level" onchange="_asV3LevelChange()">
+              <option value="noAuthNoPriv" ${v3lvl==='noAuthNoPriv'?'selected':''}>noAuthNoPriv</option>
+              <option value="authNoPriv"   ${v3lvl==='authNoPriv'?'selected':''}>authNoPriv</option>
+              <option value="authPriv"     ${v3lvl==='authPriv'?'selected':''}>authPriv</option>
+            </select></div>
+        </div>
+        <div class="fgrid" id="as-v3-auth-row" style="${showAuth?'':'display:none'}">
+          <div class="fr"><label class="fl">Auth Protocol</label>
+            <select id="as-v3-auth-proto">
+              <option value="SHA"     ${v3ap==='SHA'?'selected':''}>SHA</option>
+              <option value="MD5"     ${v3ap==='MD5'?'selected':''}>MD5</option>
+              <option value="SHA-224" ${v3ap==='SHA-224'?'selected':''}>SHA-224</option>
+              <option value="SHA-256" ${v3ap==='SHA-256'?'selected':''}>SHA-256</option>
+              <option value="SHA-384" ${v3ap==='SHA-384'?'selected':''}>SHA-384</option>
+              <option value="SHA-512" ${v3ap==='SHA-512'?'selected':''}>SHA-512</option>
+            </select></div>
+          <div class="fr"><label class="fl">Auth Passphrase</label>
+            <input type="password" id="as-v3-auth-pass" placeholder="${hasAP?'(unchanged — inherits device default)':'min 8 chars'}" autocomplete="new-password"/></div>
+        </div>
+        <div class="fgrid" id="as-v3-priv-row" style="${showPriv?'':'display:none'}">
+          <div class="fr"><label class="fl">Privacy Protocol</label>
+            <select id="as-v3-priv-proto">
+              <option value="AES"     ${v3pp==='AES'?'selected':''}>AES</option>
+              <option value="DES"     ${v3pp==='DES'?'selected':''}>DES</option>
+              <option value="AES-192" ${v3pp==='AES-192'?'selected':''}>AES-192</option>
+              <option value="AES-256" ${v3pp==='AES-256'?'selected':''}>AES-256</option>
+            </select></div>
+          <div class="fr"><label class="fl">Privacy Passphrase</label>
+            <input type="password" id="as-v3-priv-pass" placeholder="${hasPP?'(unchanged — inherits device default)':'min 8 chars'}" autocomplete="new-password"/></div>
+        </div>
+        <div class="fr"><label class="fl">Context (optional)</label>
+          <input type="text" id="as-v3-ctx" value="${esc(v3ctx)}" autocomplete="off"/></div>
+      </div>`;
+    })()}
     <div class="fr" style="margin-top:6px"><label class="fl">Common OIDs</label>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <select id="as-oid-vendor" style="max-width:210px" onchange="snmpVendorChange()">
@@ -169,6 +225,36 @@ function sensorFormHTML(dev, s=null) {
       <input type="text" id="as-oid" value="${esc(s?.snmp_oid||'1.3.6.1.2.1.1.1.0')}" placeholder="1.3.6.1.2.1.1.1.0" autocomplete="off"/>
       <input type="hidden" id="as-snmp-unit" value="${esc(s?.snmp_unit||'')}"/>
       <div class="fh" id="as-oid-unit2" style="min-height:14px">${s?.snmp_unit?'<b>Unit: '+esc(s.snmp_unit)+'</b>':'Type or paste an OID, choose from picker above, or use Discover Interfaces.'}</div>
+    </div>
+    <div class="fr"><label class="fl">Display as</label>
+      <select id="as-snmp-display" onchange="snmpDisplayChange()" style="max-width:320px">
+        <option value="">Auto-detect (recommended)</option>
+        <optgroup label="Counter (rate)">
+          <option value="bytes">Traffic bytes → Mbps</option>
+          <option value="errors">Errors counter → err/s</option>
+          <option value="packets">Packets counter → pkt/s</option>
+        </optgroup>
+        <optgroup label="Gauge (numeric)">
+          <option value="%">Percent (0-100%)</option>
+          <option value="celsius">Temperature °C</option>
+          <option value="fahrenheit">Temperature °F</option>
+          <option value="dbm">Signal strength dBm</option>
+          <option value="count">Count / number</option>
+          <option value="rpm">Fan RPM</option>
+          <option value="volts">Voltage (V)</option>
+          <option value="amps">Current (A)</option>
+        </optgroup>
+        <optgroup label="Enum (state)">
+          <option value="1=up 2=down">Up / Down (1=up 2=down)</option>
+          <option value="1=up 2=down 3=testing 4=unknown 5=dormant 6=notPresent 7=lowerLayerDown">ifOperStatus (full IF-MIB enum)</option>
+          <option value="1=normal">Normal / other (1=normal)</option>
+          <option value="__enum_custom__">Custom enum (type legend below…)</option>
+        </optgroup>
+        <optgroup label="Other">
+          <option value="string">Text / identifier</option>
+        </optgroup>
+      </select>
+      <div class="fh" style="min-height:14px">Controls how History and KPI tiles render.  "Auto-detect" classifies from the probe's SNMP type on first poll.</div>
     </div>
   </div>
   <!-- DNS -->
@@ -892,6 +978,9 @@ function _snmpTryMatchCurrentOid(){
   const oidEl=document.getElementById('as-oid');
   if(!oidEl) return;
   const currentOid=oidEl.value.trim();
+  // v0.9.7: initialize the "Display as" dropdown from the sensor's saved unit.
+  const savedUnit=document.getElementById('as-snmp-unit')?.value||'';
+  _syncSnmpDisplay(savedUnit);
   if(!currentOid) return;
   // Exact catalog match
   for(const vendor of _snmpCatalog){
@@ -903,6 +992,7 @@ function _snmpTryMatchCurrentOid(){
         if(psel){ psel.value=o.oid; }
         const unitEl=document.getElementById('as-oid-unit');
         if(unitEl) unitEl.textContent=o.unit?'Unit: '+o.unit:'';
+        _syncSnmpDisplay(o.unit||'');
         return;
       }
     }
@@ -983,7 +1073,56 @@ function snmpOidPick(){
     const u=sel.dataset.unit||'';
     if(unitEl) unitEl.textContent=u?'Unit: '+u:'';
     if(sunitEl) sunitEl.value=u;
+    _syncSnmpDisplay(u);
   }
+}
+
+// v0.9.7: keep the "Display as" dropdown in sync with programmatic unit
+// changes (catalog pick, discover interfaces).  If the unit doesn't match
+// a predefined option, the dropdown shows "Auto-detect".
+function _syncSnmpDisplay(unit) {
+  const sel = document.getElementById('as-snmp-display');
+  if (!sel) return;
+  const opts = Array.from(sel.options).map(o => o.value);
+  sel.value = opts.includes(unit) ? unit : '';
+}
+
+// v0.9.7: SNMPv3 block visibility on the Add/Edit Sensor form. Hide community when v3 is selected.
+function _asSnmpVerChange(){
+  const ver = document.getElementById('as-sv')?.value || '';
+  const blk = document.getElementById('as-v3-block');
+  const comm = document.getElementById('as-snmp-comm-row');
+  if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(comm) comm.style.display = (ver === '3') ? 'none' : '';
+  if(ver === '3') _asV3LevelChange();
+}
+function _asV3LevelChange(){
+  const lvl = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+  const ar  = document.getElementById('as-v3-auth-row');
+  const pr  = document.getElementById('as-v3-priv-row');
+  if(ar) ar.style.display = (lvl === 'authNoPriv' || lvl === 'authPriv') ? '' : 'none';
+  if(pr) pr.style.display = (lvl === 'authPriv') ? '' : 'none';
+}
+
+function snmpDisplayChange() {
+  const sel  = document.getElementById('as-snmp-display');
+  const sunit = document.getElementById('as-snmp-unit');
+  const hint  = document.getElementById('as-oid-unit2');
+  if (!sel || !sunit) return;
+  let v = sel.value;
+  if (v === '__enum_custom__') {
+    const legend = prompt(
+      'Enter enum legend in the format "1=state1 2=state2 …"\n\nExamples:\n  1=up 2=down\n  1=normal 2=warning 3=critical',
+      sunit.value || '1=ok 2=fail');
+    if (legend && /\d+\s*=\s*\w+/.test(legend)) {
+      v = legend.trim();
+    } else {
+      sel.value = sunit.value || '';
+      return;
+    }
+  }
+  sunit.value = v;
+  if (hint) hint.innerHTML = v ? '<b>Unit: ' + esc(v) + '</b>' : 'Type or paste an OID, choose from picker above, or use Discover Interfaces.';
 }
 
 // ── SNMP Interface Discovery ──────────────────────────────────────────────
@@ -1000,9 +1139,24 @@ async function discoverInterfaces(){
   if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Querying device…'; }
   if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  const discoveryBody = {host, community, port, version, did};
+  // SNMPv3 discovery — read creds directly from the visible form fields so
+  // users can try v3 before saving a device default.  Blank passphrases OK;
+  // backend falls back to the device default / errors with a clear message.
+  if(version === '3'){
+    discoveryBody.snmp_v3_user       = (document.getElementById('as-v3-user')?.value || '').trim();
+    discoveryBody.snmp_v3_level      = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+    discoveryBody.snmp_v3_auth_proto = document.getElementById('as-v3-auth-proto')?.value || '';
+    discoveryBody.snmp_v3_priv_proto = document.getElementById('as-v3-priv-proto')?.value || '';
+    discoveryBody.snmp_v3_context    = (document.getElementById('as-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('as-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('as-v3-priv-pass')?.value || '';
+    if(_ap) discoveryBody.snmp_v3_auth_pass = _ap;
+    if(_pp) discoveryBody.snmp_v3_priv_pass = _pp;
+  }
   let r;
   try{
-    r=await api('POST','/api/snmp/interfaces',{host,community,port,version});
+    r=await api('POST','/api/snmp/interfaces', discoveryBody);
   }catch(e){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
     return;
@@ -1025,7 +1179,15 @@ async function discoverInterfaces(){
   const METRICS=_IFACE_METRICS;
   window._ifaceMetrics=METRICS;
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">';
+  const metricCheckboxes=
+    `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-met-all-cb" onchange="ifaceMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+    METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceMetChanged(this)"> ${esc(m.l)}</label>`).join('');
+
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap">Set for checked:</span>';
+  html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleIfaceMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
+  html+='</div>';
   html+='<div style="overflow-x:auto;max-height:220px;overflow-y:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
@@ -1043,21 +1205,17 @@ async function discoverInterfaces(){
     const displayName=esc(iface.name||iface.descr);
     const displayDescr=esc(iface.alias||iface.descr);
     const rowBg=i%2?'background:var(--bg2)':'';
-    const opts=METRICS.map(m=>`<option value="${m.v}">${m.l}</option>`).join('');
+    const metCheckboxes=
+      `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-row-met-all-cb" onchange="ifaceRowMetSelectAll(this)"> <strong>All metrics</strong></label>`+
+      METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceRowMetChanged(this)"> ${esc(m.l)}</label>`).join('');
     html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
-    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-iface-cb" data-idx="${iface.index}" data-name="${esc(iface.name||iface.descr)}" onchange="updateIfaceSelCount()"/></td>`;
+    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-iface-cb" data-idx="${iface.index}" data-name="${esc(iface.name||iface.descr)}" data-descr="${esc(iface.alias||iface.descr||'')}" onchange="updateIfaceSelCount()"/></td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3)">${iface.index}</td>`;
     html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap">${displayName}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text2)">${displayDescr}</td>`;
     html+=`<td style="padding:4px 8px;color:${stClr};white-space:nowrap">${iface.status}</td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3);white-space:nowrap">${esc(iface.speed)}</td>`;
-    html+=`<td style="padding:4px 8px">
-      <select class="as-iface-metric" data-idx="${iface.index}"
-              onchange="updateIfaceSelCount()"
-              style="font-size:11px;padding:2px 4px;max-width:140px">
-        <option value="">— metric —</option>${opts}
-      </select>
-    </td>`;
+    html+=`<td style="padding:4px 8px"><div class="vm-met-wrap" data-idx="${iface.index}"><button class="vm-met-btn" type="button" onclick="toggleIfaceRowMetPicker(this)">— pick metrics —</button><div class="vm-met-drop" style="display:none">${metCheckboxes}</div></div></td>`;
     html+='</tr>';
   });
 
@@ -1079,26 +1237,60 @@ function updateIfaceSelCount(){
   const cbs=[...document.querySelectorAll('.as-iface-cb')];
   const checked=cbs.filter(c=>c.checked);
   const n=checked.length;
+  let totalSensors=0;
+  checked.forEach(cb=>{
+    const idx=cb.dataset.idx;
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    if(wrap){
+      // Count checked metrics in wrap (dropdown closed)
+      let metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      // Also check if this wrap's dropdown is open in the body
+      if(_ifaceRowMetPickerOpen && _ifaceRowMetPickerOpen._ownerWrap){
+        const ownerIdx=_ifaceRowMetPickerOpen._ownerWrap?.dataset?.idx;
+        if(ownerIdx===idx){
+          metCbs=[..._ifaceRowMetPickerOpen.querySelectorAll('input[value]:checked')];
+        }
+      }
+      totalSensors+=metCbs.length;
+    }
+  });
   const el=document.getElementById('as-iface-sel-count');
-  if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
+  if(el) el.textContent=n?`${n} of ${cbs.length} selected${totalSensors?` · ${totalSensors} sensor${totalSensors>1?'s':''}`:''}`:'0 selected';
   const all=document.getElementById('as-iface-all');
   if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
   const addBtn=document.getElementById('as-iface-add-btn');
-  if(addBtn) addBtn.textContent=(n===1)?'Apply to Form':'Add Selected as Sensors';
-  // When exactly 1 interface+metric is selected, sync the OID and snmp_unit fields
+  if(addBtn) addBtn.textContent=(n===1&&totalSensors===1)?'Apply to Form':'Add Selected as Sensors';
+  // When exactly 1 interface+1 metric is selected, sync the OID and snmp_unit fields
   const oidEl=document.getElementById('as-oid');
-  if(oidEl && n===1){
+  if(oidEl && n===1 && totalSensors===1){
     const cb=checked[0];
     const idx=parseInt(cb.dataset.idx);
-    const sel=document.querySelector(`.as-iface-metric[data-idx="${cb.dataset.idx}"]`);
-    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel?.value);
-    if(metric && !isNaN(idx)){
-      oidEl.value=metric.oid+idx;
-      const ifaceName=cb.dataset.name||('interface '+idx);
-      const unitEl=document.getElementById('as-oid-unit2');
-      if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
-      const sunitEl=document.getElementById('as-snmp-unit');
-      if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    if(wrap){
+      // Find checked metrics in wrap (or in body if dropdown was teleported)
+      let metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      if(metCbs.length===0 && _ifaceRowMetPickerOpen && _ifaceRowMetPickerOpen._ownerWrap){
+        const ownerIdx=_ifaceRowMetPickerOpen._ownerWrap?.dataset?.idx;
+        if(ownerIdx===idx.toString()){
+          metCbs=[..._ifaceRowMetPickerOpen.querySelectorAll('input[value]:checked')];
+        }
+      }
+      if(metCbs.length===1){
+        const metricValue=metCbs[0].value;
+        const metric=(window._ifaceMetrics||[]).find(m=>m.v===metricValue);
+        if(metric && !isNaN(idx)){
+          const newOid=metric.oid+idx;
+          oidEl.value=newOid;
+          const ifaceName=cb.dataset.name||('interface '+idx);
+          const unitEl=document.getElementById('as-oid-unit2');
+          if(unitEl) unitEl.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
+          const sunitEl=document.getElementById('as-snmp-unit');
+          if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
+          // Update sensor name to reflect the metric
+          const nameEl=document.getElementById('as-n');
+          if(nameEl) nameEl.value=`${esc(ifaceName)} ${metric.l}`;
+        }
+      }
     }
   }
 }
@@ -1113,9 +1305,12 @@ async function addSelectedIfaceSensors(){
   if(checked.length===1){
     const cb=checked[0];
     const idx=cb.dataset.idx;
-    const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
-    if(!sel||!sel.value){toast('Choose a metric for the selected interface','err');return;}
-    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel.value);
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    if(!wrap){toast('Interface not found in modal','err');return;}
+    const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+    if(!metCbs.length){toast('Choose a metric for the selected interface','err');return;}
+    if(metCbs.length>1){toast('Select exactly one metric to apply to the form','err');return;}
+    const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCbs[0].value);
     if(!metric){toast('Unknown metric','err');return;}
     const oidEl=document.getElementById('as-oid');
     const sunitEl=document.getElementById('as-snmp-unit');
@@ -1124,6 +1319,9 @@ async function addSelectedIfaceSensors(){
     if(sunitEl) sunitEl.value=_normSnmpUnit(metric.u);
     const unitEl2=document.getElementById('as-oid-unit2');
     if(unitEl2) unitEl2.innerHTML=`<b>${esc(metric.l)} on ${esc(ifaceName)}</b> · Unit: ${esc(metric.u)}`;
+    // Update sensor name to reflect the metric
+    const nameEl2=document.getElementById('as-n');
+    if(nameEl2) nameEl2.value=`${esc(ifaceName)} ${metric.l}`;
     const listEl=document.getElementById('as-iface-list');
     if(listEl) listEl.style.display='none';
     const statusEl=document.getElementById('as-iface-status');
@@ -1147,26 +1345,39 @@ async function addSelectedIfaceSensors(){
   const rows=[];let noMetric=0;
   checked.forEach(cb=>{
     const idx=cb.dataset.idx;
-    const name=cb.dataset.name||('IF'+idx);
-    const sel=document.querySelector(`.as-iface-metric[data-idx="${idx}"]`);
-    if(!sel||!sel.value){noMetric++;return;}
-    const metric=(window._ifaceMetrics||[]).find(m=>m.v===sel.value);
-    if(metric) rows.push({idx:parseInt(idx),name,metric});
+    const ifaceName=cb.dataset.name||('IF'+idx);
+    const ifaceDescr=cb.dataset.descr||'';
+    const name=ifaceDescr?`${ifaceName} ${ifaceDescr}`:ifaceName;
+    const wrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+    const metCbs=[...wrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+    if(!metCbs.length){noMetric++;return;}
+    metCbs.forEach(metCb=>{
+      const metric=(window._ifaceMetrics||[]).find(m=>m.v===metCb.value);
+      if(metric) rows.push({idx:parseInt(idx),name,metric});
+    });
   });
-  if(noMetric) toast(`${noMetric} row${noMetric>1?'s':''} skipped — no metric chosen`,'info');
-  if(!rows.length){toast('Choose a metric for each checked interface','err');return;}
+  if(noMetric) toast(`${noMetric} interface${noMetric>1?'s':''} skipped — no metrics chosen`,'info');
+  if(!rows.length){toast('Choose at least one metric for each checked interface','err');return;}
   const btn=document.querySelector('[onclick="addSelectedIfaceSensors()"]');
   if(btn){btn.disabled=true;btn.textContent=`Adding ${rows.length}…`;}
   let added=0,failed=0;
   const addedSids=[];
   for(const row of rows){
+    // Calculate warn/crit from interface speed if available; else use form defaults
+    let rowWms=warn_ms, rowCms=crit_ms;
+    const iface=(window._ifaceDiscovery||[]).find(i=>i.index===row.idx);
+    if(iface && iface.speed_raw && iface.speed_raw>0){
+      const speedMbps=Math.round(iface.speed_raw/1_000_000);
+      rowWms=Math.round(speedMbps*0.75);
+      rowCms=Math.round(speedMbps*0.90);
+    }
     const r=await api('POST',`/api/device/${did}/sensor`,{
       name:row.name+' '+row.metric.l, type:'snmp', host, port,
       snmp_community:community, snmp_oid:row.metric.oid+row.idx, snmp_version:version,
       snmp_unit:_normSnmpUnit(row.metric.u),
       interval:iv, timeout:tmo, verify_ssl:true, url:null,
       dns_query:'',dns_record_type:'A',dns_server:'',http_expected_status:0,
-      warn_ms,crit_ms,
+      warn_ms:rowWms,crit_ms:rowCms,
       loss_warn_pct:0,loss_crit_pct:0,keyword:'',keyword_case:false,banner_regex:''
     });
     if(r?.sid){
@@ -1208,6 +1419,159 @@ async function addSelectedIfaceSensors(){
   }else{
     toast('Failed to add sensors','err');
   }
+}
+
+// ── SNMP Interface bulk metrics helpers ──────────────────────────────────
+
+let _ifaceMetPickerOpen=null;
+function _closeIfaceMetPicker(){
+  if(!_ifaceMetPickerOpen) return;
+  const drop=_ifaceMetPickerOpen;
+  drop.style.display='none';
+  if(drop._ownerWrap) drop._ownerWrap.appendChild(drop);
+  _ifaceMetPickerOpen=null;
+}
+function toggleIfaceMetPicker(btn){
+  const drop=btn.nextElementSibling;
+  const isOpen=_ifaceMetPickerOpen===drop;
+  if(_ifaceMetPickerOpen&&_ifaceMetPickerOpen!==drop) _closeIfaceMetPicker();
+  if(isOpen){
+    _closeIfaceMetPicker();
+  } else {
+    const wrap=btn.closest('.vm-met-wrap');
+    drop._ownerWrap=wrap;
+    document.body.appendChild(drop);
+    const r=btn.getBoundingClientRect();
+    const dropW=240;
+    const left=Math.max(4, r.right-dropW);
+    drop.style.position='fixed';
+    drop.style.top=(r.bottom+3)+'px';
+    drop.style.left=left+'px';
+    drop.style.right='auto';
+    drop.style.zIndex='9999';
+    drop.style.display='block';
+    _ifaceMetPickerOpen=drop;
+  }
+}
+document.addEventListener('click',e=>{
+  if(_ifaceMetPickerOpen&&!e.target.closest('.vm-met-wrap')&&!e.target.closest('.vm-met-drop')){
+    _closeIfaceMetPicker();
+  }
+});
+function ifaceMetSelectAll(allCb){
+  const drop=allCb.closest('.vm-met-drop');
+  if(!drop) return;
+  drop.querySelectorAll('input[value]').forEach(c=>c.checked=allCb.checked);
+  ifaceMetChanged(allCb);
+}
+function ifaceMetChanged(cb){
+  const drop=cb.closest('.vm-met-drop');
+  const wrap=drop?._ownerWrap||drop?.parentElement;
+  if(!wrap) return;
+  const allCb=drop.querySelector('.iface-met-all-cb');
+  if(allCb&&cb!==allCb){
+    const metCbs=[...drop.querySelectorAll('input[value]')];
+    const nChecked=metCbs.filter(c=>c.checked).length;
+    allCb.checked=nChecked===metCbs.length;
+    allCb.indeterminate=nChecked>0&&nChecked<metCbs.length;
+  }
+  const checked=[...drop.querySelectorAll('input[value]:checked')];
+  const btn=wrap.querySelector('.vm-met-btn');
+  if(btn){
+    if(!checked.length) btn.textContent='— bulk metrics —';
+    else if(checked.length===1) btn.textContent=checked[0].parentElement.textContent.trim();
+    else btn.textContent=`${checked.length} metrics`;
+  }
+  // If this is the bulk picker (in header, no data-idx), apply to all checked rows
+  if(!wrap.dataset.idx){
+    const checkedIdxs=[...document.querySelectorAll('.as-iface-cb:checked')].map(c=>c.dataset.idx);
+    checkedIdxs.forEach(idx=>{
+      const rowWrap=document.querySelector(`.vm-met-wrap[data-idx="${idx}"]`);
+      if(!rowWrap) return;
+      rowWrap.querySelectorAll('.vm-met-drop input').forEach(rowCb=>{
+        rowCb.checked=!!drop.querySelector(`input[value="${rowCb.value}"]:checked`);
+      });
+      const rowChecked=[...rowWrap.querySelectorAll('.vm-met-drop input[value]:checked')];
+      const rowBtn=rowWrap.querySelector('.vm-met-btn');
+      if(rowBtn){
+        if(!rowChecked.length) rowBtn.textContent='— pick metrics —';
+        else if(rowChecked.length===1) rowBtn.textContent=rowChecked[0].parentElement.textContent.trim();
+        else rowBtn.textContent=`${rowChecked.length} metrics`;
+      }
+      const rowAllCb=rowWrap.querySelector('.iface-row-met-all-cb');
+      const rowAllMetCbs=[...rowWrap.querySelectorAll('.vm-met-drop input[value]')];
+      if(rowAllCb){rowAllCb.checked=rowChecked.length===rowAllMetCbs.length;rowAllCb.indeterminate=rowChecked.length>0&&rowChecked.length<rowAllMetCbs.length;}
+    });
+    updateIfaceSelCount();
+  }
+}
+function toggleIfaceRowMetPicker(btn){
+  const drop=btn.nextElementSibling;
+  const isOpen=_ifaceRowMetPickerOpen===drop;
+  if(_ifaceRowMetPickerOpen&&_ifaceRowMetPickerOpen!==drop) _closeIfaceRowMetPicker();
+  if(isOpen){
+    _closeIfaceRowMetPicker();
+  } else {
+    const wrap=btn.closest('.vm-met-wrap');
+    drop._ownerWrap=wrap;
+    document.body.appendChild(drop);
+    const r=btn.getBoundingClientRect();
+    const dropW=240;
+    const left=Math.max(4, r.right-dropW);
+    drop.style.position='fixed';
+    drop.style.top=(r.bottom+3)+'px';
+    drop.style.left=left+'px';
+    drop.style.right='auto';
+    drop.style.zIndex='9999';
+    drop.style.display='block';
+    _ifaceRowMetPickerOpen=drop;
+  }
+}
+function _closeIfaceRowMetPicker(){
+  if(!_ifaceRowMetPickerOpen) return;
+  const drop=_ifaceRowMetPickerOpen;
+  drop.style.display='none';
+  if(drop._ownerWrap) drop._ownerWrap.appendChild(drop);
+  _ifaceRowMetPickerOpen=null;
+}
+let _ifaceRowMetPickerOpen=null;
+document.addEventListener('click',e=>{
+  if(_ifaceRowMetPickerOpen&&!e.target.closest('.vm-met-wrap')&&!e.target.closest('.vm-met-drop')){
+    _closeIfaceRowMetPicker();
+  }
+});
+function ifaceRowMetSelectAll(allCb){
+  const drop=allCb.closest('.vm-met-drop');
+  if(!drop) return;
+  drop.querySelectorAll('input[value]').forEach(c=>c.checked=allCb.checked);
+  ifaceRowMetChanged(allCb);
+}
+function ifaceRowMetChanged(cb){
+  const drop=cb.closest('.vm-met-drop');
+  const wrap=drop?._ownerWrap||drop?.parentElement;
+  if(!wrap) return;
+  // Auto-check the interface when a metric is checked
+  if(cb.checked && cb.value){
+    const ifaceCb=wrap.closest('tr')?.querySelector('.as-iface-cb');
+    if(ifaceCb && !ifaceCb.checked){
+      ifaceCb.checked=true;
+    }
+  }
+  const allCb=drop.querySelector('.iface-row-met-all-cb');
+  if(allCb&&cb!==allCb){
+    const metCbs=[...drop.querySelectorAll('input[value]')];
+    const nChecked=metCbs.filter(c=>c.checked).length;
+    allCb.checked=nChecked===metCbs.length;
+    allCb.indeterminate=nChecked>0&&nChecked<metCbs.length;
+  }
+  const checked=[...drop.querySelectorAll('input[value]:checked')];
+  const btn=wrap.querySelector('.vm-met-btn');
+  if(btn){
+    if(!checked.length) btn.textContent='— pick metrics —';
+    else if(checked.length===1) btn.textContent=checked[0].parentElement.textContent.trim();
+    else btn.textContent=`${checked.length} metrics`;
+  }
+  updateIfaceSelCount();
 }
 
 // ── VMware VM Discovery ──────────────────────────────────────────────────
@@ -1870,6 +2234,13 @@ function vmMetChanged(cb){
   // drop may be teleported to body — use stored owner reference
   const wrap=drop?._ownerWrap||drop?.parentElement;
   if(!wrap) return;
+  // Auto-check the VM/host/datastore when a metric is checked
+  if(cb.checked && cb.value){
+    const vmCb=wrap.closest('tr')?.querySelector('.as-vm-cb');
+    if(vmCb && !vmCb.checked){
+      vmCb.checked=true;
+    }
+  }
   // Keep "All metrics" checkbox in sync
   const allCb=drop.querySelector('.vm-met-all-cb');
   if(allCb&&cb!==allCb){
@@ -2129,6 +2500,19 @@ function collectSensorForm(did){
           dns_query,dns_record_type,dns_server,http_expected_status,
           warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
+  // SNMPv3 per-sensor override — only send when type=snmp + version=3.  Empty
+  // fields round-trip as "" so the backend inherits from the device default.
+  if(type==='snmp' && snmp_version==='3'){
+    payload.snmp_v3_user       = (document.getElementById('as-v3-user')?.value || '').trim();
+    payload.snmp_v3_level      = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+    payload.snmp_v3_auth_proto = document.getElementById('as-v3-auth-proto')?.value || '';
+    payload.snmp_v3_priv_proto = document.getElementById('as-v3-priv-proto')?.value || '';
+    payload.snmp_v3_context    = (document.getElementById('as-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('as-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('as-v3-priv-pass')?.value || '';
+    if(_ap) payload.snmp_v3_auth_pass = _ap;
+    if(_pp) payload.snmp_v3_priv_pass = _pp;
+  }
   const _anomEn=document.getElementById('as-anom-en');
   if(_anomEn){
     payload.anomaly_enabled=_anomEn.checked?1:0;
@@ -2305,6 +2689,14 @@ async function submitAddSensor(did){
     if(_listEl&&_listEl.style.display!=='none'){
       const _checked=[...document.querySelectorAll('.as-vm-cb:checked')];
       if(_checked.length){await addSelectedVMSensors();return;}
+    }
+  }
+  // If SNMP type with interface discovery table open and interfaces checked, delegate to addSelectedIfaceSensors()
+  if(_asType==='snmp'){
+    const _listEl=document.getElementById('as-iface-list');
+    if(_listEl&&_listEl.style.display!=='none'){
+      const _checked=[...document.querySelectorAll('.as-iface-cb:checked')];
+      if(_checked.length){await addSelectedIfaceSensors();return;}
     }
   }
   const payload=collectSensorForm(did);

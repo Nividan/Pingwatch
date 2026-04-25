@@ -137,14 +137,47 @@ def _clean_template_body(body: dict) -> dict:
 
 
 # ── Cache invalidation ───────────────────────────────────────────
+#
+# Every sensor caches its resolved alert profile keyed by _profile_cache_ver.
+# A version bump forces all sensors to re-resolve on their next probe — at 5k
+# sensors, that's a 5k-sensor re-resolve storm on the next cycle. To absorb
+# bursts of profile edits (bulk imports, admin rapid-clicking through a tree of
+# templates), we debounce the bump so a flurry of writes collapses into one.
 
-def _invalidate():
-    """Force every sensor to re-resolve its alert profile on next probe."""
+import threading as _threading
+
+_INVALIDATE_DEBOUNCE_S = 5.0
+_invalidate_lock  = _threading.Lock()
+_invalidate_timer = None   # pending threading.Timer or None
+
+
+def _do_invalidate():
+    """Actually bump the cache version. Runs when the debounce timer fires."""
+    global _invalidate_timer
     try:
         from core.app_state import STATE
         STATE._profile_cache_ver = getattr(STATE, "_profile_cache_ver", 0) + 1
+        log.debug(f"alert_profiles: cache ver bumped to {STATE._profile_cache_ver}")
     except Exception as e:
         log.warning(f"alert_profiles: cache invalidate failed: {e}")
+    with _invalidate_lock:
+        _invalidate_timer = None
+
+
+def _invalidate():
+    """Force every sensor to re-resolve its alert profile on next probe.
+
+    Debounced: rapid successive calls coalesce into one version bump after
+    _INVALIDATE_DEBOUNCE_S seconds of quiescence. A burst of N profile edits →
+    one re-resolve storm on the next probe cycle instead of N.
+    """
+    global _invalidate_timer
+    with _invalidate_lock:
+        if _invalidate_timer is not None:
+            _invalidate_timer.cancel()
+        _invalidate_timer = _threading.Timer(_INVALIDATE_DEBOUNCE_S, _do_invalidate)
+        _invalidate_timer.daemon = True
+        _invalidate_timer.start()
 
 
 # ── Test fire ────────────────────────────────────────────────────

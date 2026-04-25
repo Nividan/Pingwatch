@@ -104,10 +104,87 @@ from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, pro
 from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp, probe_radius
 from .settings import get as _cfg
 from .logger import log_sensors
+from .raw_data import build_flap_raw_data
 
 _COUNTER_TYPES  = {"counter32", "counter64", "counter"}
 _BYTE_UNITS     = {"bytes"}
 _COUNT_UNITS    = {"errors", "packets"}  # counter OIDs that count events, not bytes
+
+# v0.9.7: typed SNMP sensor categorization (Python mirror of frontend's
+# _snmpCategory).  Drives the event-transition detector in _run_once so a
+# state change from primary to non-primary fires a flap / webhook even though
+# SNMP itself succeeded (e.g. ifOperStatus goes 1→2 — the device answered,
+# but the interface is down).
+import re as _re
+_GAUGE_UNITS_PY  = frozenset([
+    "%", "percent", "celsius", "fahrenheit", "dbm", "count",
+    "seconds", "minutes", "hours", "hz", "volts", "amps", "ratio", "rpm",
+])
+_ENUM_UNIT_RE_PY = _re.compile(r"\d+\s*=\s*[a-zA-Z][\w-]*")
+_ENUM_PAIR_RE_PY = _re.compile(r"(\d+)\s*=\s*([a-zA-Z][\w-]*)")
+
+def _snmp_category_py(snmp_unit: str, snmp_type: str, snmp_oid: str = "") -> str:
+    u = (snmp_unit or "").lower().strip()
+    if u in _BYTE_UNITS or u in _COUNT_UNITS:
+        return "counter_rate"
+    if snmp_unit and _ENUM_UNIT_RE_PY.search(snmp_unit):
+        return "enum_state"
+    # v0.9.7: known-OID enum fallback for "Auto-detect" sensors (unit blank).
+    if not snmp_unit and snmp_oid and _enum_for_oid_py(snmp_oid):
+        return "enum_state"
+    if u in _GAUGE_UNITS_PY:
+        return "gauge_numeric"
+    if snmp_type == "TimeTicks":
+        return "time_duration"
+    if snmp_type == "OCTET STRING" or u == "string":
+        return "text"
+    return "gauge_numeric"
+
+def _parse_enum_legend_py(snmp_unit: str) -> dict:
+    if not snmp_unit:
+        return {}
+    return {m.group(1): m.group(2) for m in _ENUM_PAIR_RE_PY.finditer(snmp_unit)}
+
+# Well-known OID prefix → implicit enum legend (Python mirror of frontend
+# _KNOWN_ENUM_OIDS).  Lets event-transition detection fire on "Auto-detect"
+# sensors pointed at standard IF-MIB / UPS-MIB enum OIDs, without the user
+# having to set snmp_unit manually.
+_KNOWN_ENUM_OIDS_PY = [
+    ("1.3.6.1.2.1.2.2.1.8.",  {"1":"up","2":"down","3":"testing","4":"unknown","5":"dormant","6":"notPresent","7":"lowerLayerDown"}),
+    ("1.3.6.1.2.1.2.2.1.7.",  {"1":"up","2":"down","3":"testing"}),
+    ("1.3.6.1.2.1.33.1.2.1.", {"1":"unknown","2":"batteryNormal","3":"batteryLow","4":"batteryDepleted"}),
+]
+
+def _enum_for_oid_py(oid: str) -> dict:
+    if not oid:
+        return {}
+    for prefix, legend in _KNOWN_ENUM_OIDS_PY:
+        if oid.startswith(prefix):
+            return legend
+    return {}
+
+def _effective_enum_legend_py(snmp_unit: str, snmp_oid: str) -> dict:
+    legend = _parse_enum_legend_py(snmp_unit)
+    if legend:
+        return legend
+    return _enum_for_oid_py(snmp_oid)
+
+def _enum_primary_code_py(snmp_unit: str) -> str:
+    legend = _parse_enum_legend_py(snmp_unit)
+    if "1" in legend:
+        return "1"
+    return next(iter(legend), "1")
+
+def _fmt_duration_s(secs: float) -> str:
+    if secs is None or secs < 0:
+        return "—"
+    secs = int(secs)
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d > 0: return f"{d}d {h}h"
+    if h > 0: return f"{h}h {m}m"
+    return f"{m}m {rem % 60}s"
 
 def _fmt_bps(bps):
     """Format bytes/sec as a human-readable network rate (bits/sec)."""
@@ -152,7 +229,11 @@ class Sensor:
                  sftp_auth_type="password", sftp_test_level="open",
                  sftp_remote_path="", sftp_expected_sha256="",
                  radius_secret="", radius_test_level="reachable",
-                 radius_username="", radius_password="", radius_nas_id=""):
+                 radius_username="", radius_password="", radius_nas_id="",
+                 snmp_v3_user="", snmp_v3_level="",
+                 snmp_v3_auth_proto="", snmp_v3_auth_pass="",
+                 snmp_v3_priv_proto="", snmp_v3_priv_pass="",
+                 snmp_v3_context=""):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -186,6 +267,14 @@ class Sensor:
         self.banner_regex  = banner_regex or ""
         self.alerts_muted  = bool(alerts_muted)
         self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
+        self.snmp_type     = ""   # SNMP ASN.1 type from probe (Counter32 / Counter64 / Gauge32 / Integer / TimeTicks / OCTET STRING) — populated on first successful SNMP probe; empty for non-SNMP sensors. Drives the frontend's typed rendering (enum vs gauge vs duration vs text).
+        # v0.9.7: prev-value tracking for typed SNMP event transitions.
+        # _prev_enum_code — last seen enum code (str), used to detect state flips
+        # _prev_ticks — last TimeTicks value, used to detect reboots (decrease)
+        # _prev_text_value — last OCTET STRING value, used to detect changes
+        self._prev_enum_code    = None
+        self._prev_ticks        = None
+        self._prev_text_value   = None
         self.host_override = False   # True = host was manually set; don't sync from device
         # VMware fields
         self.vmware_user     = vmware_user or ""
@@ -221,6 +310,15 @@ class Sensor:
         self.radius_username    = radius_username or ""
         self.radius_password    = radius_password or ""    # Fernet ciphertext (user password, auth level)
         self.radius_nas_id      = radius_nas_id or ""      # NAS-Identifier attribute; defaults to "pingwatch" at probe time
+        # SNMPv3 credentials (per-sensor override; blank field → inherit from device default at probe time)
+        # auth_pass / priv_pass are Fernet-encrypted at rest, decrypted just-in-time in probe().
+        self.snmp_v3_user       = snmp_v3_user or ""
+        self.snmp_v3_level      = snmp_v3_level or ""       # "" | noAuthNoPriv | authNoPriv | authPriv
+        self.snmp_v3_auth_proto = snmp_v3_auth_proto or ""  # MD5 | SHA | SHA-224 | SHA-256 | SHA-384 | SHA-512
+        self.snmp_v3_auth_pass  = snmp_v3_auth_pass or ""   # Fernet ciphertext
+        self.snmp_v3_priv_proto = snmp_v3_priv_proto or ""  # DES | AES | AES-192 | AES-256
+        self.snmp_v3_priv_pass  = snmp_v3_priv_pass or ""   # Fernet ciphertext
+        self.snmp_v3_context    = snmp_v3_context or ""
         # SNMP counter rate tracking (not persisted)
         self._snmp_prev    = None   # previous raw counter value (int)
         self._snmp_prev_ts = None   # timestamp of previous counter read
@@ -286,6 +384,40 @@ class Sensor:
         v = self._valid_history
         return round(max(v), 1) if v else None
 
+    def _resolve_snmp_v3_creds(self):
+        """Build the v3_creds dict for probe_snmp.
+
+        Per-sensor fields win; blank fields fall back to the parent device's
+        snmp_v3_*_default.  auth_pass / priv_pass are Fernet-decrypted at the
+        boundary — the net-snmp subprocess needs the plaintext passphrase, and
+        we never persist plaintext.
+        """
+        from db.backups import decrypt_pw
+        from core.app_state import STATE
+        dev = STATE.devices.get(self.device_id) if STATE else None
+
+        def _pick(sensor_val, dev_attr):
+            if sensor_val:
+                return sensor_val
+            return getattr(dev, dev_attr, "") if dev else ""
+
+        user  = _pick(self.snmp_v3_user,  "snmp_v3_user_default")
+        level = _pick(self.snmp_v3_level, "snmp_v3_level_default") or "noAuthNoPriv"
+        apr   = _pick(self.snmp_v3_auth_proto, "snmp_v3_auth_proto_default")
+        app   = _pick(self.snmp_v3_auth_pass,  "snmp_v3_auth_pass_default")
+        ppr   = _pick(self.snmp_v3_priv_proto, "snmp_v3_priv_proto_default")
+        ppp   = _pick(self.snmp_v3_priv_pass,  "snmp_v3_priv_pass_default")
+        ctx   = _pick(self.snmp_v3_context,    "snmp_v3_context_default")
+        return {
+            "user":       user,
+            "level":      level,
+            "auth_proto": apr,
+            "auth_pass":  decrypt_pw(app) if app else "",
+            "priv_proto": ppr,
+            "priv_pass":  decrypt_pw(ppp) if ppp else "",
+            "context":    ctx,
+        }
+
     def probe(self):
         if self.stype == "ping": return probe_ping(self.host, self.timeout)
         if self.stype == "tcp":  return probe_tcp(self.host, self.port or 80, self.timeout)
@@ -294,9 +426,11 @@ class Sensor:
         if self.stype == "dns":  return probe_dns(self.host, self.dns_query or self.host,
                                                    self.dns_record_type, self.dns_server,
                                                    self.port or 53, self.timeout)
-        if self.stype == "snmp": return probe_snmp(self.host, self.snmp_community,
-                                                    self.snmp_oid, self.port or 161,
-                                                    self.timeout, self.snmp_version)
+        if self.stype == "snmp":
+            v3_creds = self._resolve_snmp_v3_creds() if self.snmp_version == "3" else None
+            return probe_snmp(self.host, self.snmp_community,
+                              self.snmp_oid, self.port or 161,
+                              self.timeout, self.snmp_version, v3_creds)
         if self.stype == "tls":  return probe_tls(self.host, self.port or 443, self.timeout)
         if self.stype == "http_keyword": return probe_http_keyword(
                                                     self.url or self.host, self.keyword,
@@ -365,6 +499,16 @@ class Sensor:
             "snmp_community": self.snmp_community,
             "snmp_oid":       self.snmp_oid,
             "snmp_version":   self.snmp_version,
+            # SNMPv3 per-sensor override fields — passphrases never leave the
+            # server, surfaced as has_* flags so the UI can render "stored"
+            # placeholders without round-tripping ciphertext.
+            "snmp_v3_user":        self.snmp_v3_user,
+            "snmp_v3_level":       self.snmp_v3_level,
+            "snmp_v3_auth_proto":  self.snmp_v3_auth_proto,
+            "snmp_v3_priv_proto":  self.snmp_v3_priv_proto,
+            "snmp_v3_context":     self.snmp_v3_context,
+            "has_snmp_v3_auth_pass": bool(self.snmp_v3_auth_pass),
+            "has_snmp_v3_priv_pass": bool(self.snmp_v3_priv_pass),
             "dns_query":             self.dns_query,
             "dns_record_type":       self.dns_record_type,
             "dns_server":            self.dns_server,
@@ -381,6 +525,7 @@ class Sensor:
             "alerts_muted":          self.alerts_muted,
             "host_override":         self.host_override,
             "snmp_unit":             self.snmp_unit,
+            "snmp_type":             self.snmp_type,
             "vmware_user":           self.vmware_user,
             "vmware_vm_id":          self.vmware_vm_id,
             "vmware_vm_name":        self.vmware_vm_name,
@@ -457,6 +602,15 @@ class Device:
         self.snmp_version_default    = ""
         self.vmware_user_default     = ""
         self.vmware_password_default = ""
+        # SNMPv3 device defaults — sensor.probe() falls back to these when the
+        # per-sensor v3 field is blank. auth / priv passphrases Fernet-encrypted.
+        self.snmp_v3_user_default       = ""
+        self.snmp_v3_level_default      = ""   # noAuthNoPriv | authNoPriv | authPriv
+        self.snmp_v3_auth_proto_default = ""   # MD5 | SHA | SHA-224 | SHA-256 | SHA-384 | SHA-512
+        self.snmp_v3_auth_pass_default  = ""   # Fernet ciphertext
+        self.snmp_v3_priv_proto_default = ""   # DES | AES | AES-192 | AES-256
+        self.snmp_v3_priv_pass_default  = ""   # Fernet ciphertext
+        self.snmp_v3_context_default    = ""
         # Cached status string; invalidated (set to None) whenever a sensor's
         # alive / _threshold_state / running / alerts_muted changes, or when
         # a sensor is added/removed. Recomputed on next read.
@@ -504,6 +658,14 @@ class Device:
             "snmp_version_default":        self.snmp_version_default,
             "vmware_user_default":         self.vmware_user_default,
             "has_vmware_password_default":  bool(self.vmware_password_default),
+            # SNMPv3 defaults — passphrases exposed only as has_* flags
+            "snmp_v3_user_default":          self.snmp_v3_user_default,
+            "snmp_v3_level_default":         self.snmp_v3_level_default,
+            "snmp_v3_auth_proto_default":    self.snmp_v3_auth_proto_default,
+            "snmp_v3_priv_proto_default":    self.snmp_v3_priv_proto_default,
+            "snmp_v3_context_default":       self.snmp_v3_context_default,
+            "has_snmp_v3_auth_pass_default": bool(self.snmp_v3_auth_pass_default),
+            "has_snmp_v3_priv_pass_default": bool(self.snmp_v3_priv_pass_default),
             # Origin breadcrumb (Auto-Discovery). 0/"" for manually-added devices.
             "discovered_at":         float(getattr(self, "discovered_at", 0) or 0),
             "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
@@ -621,11 +783,54 @@ class MonitorState:
             worker_max = self._executor._max_workers
         except Exception:
             worker_max = 0
+        flush_ms = flush_rows = 0
+        try:
+            from db.samples import _last_flush_ms, _last_flush_rows
+            flush_ms   = _last_flush_ms
+            flush_rows = _last_flush_rows
+        except Exception:
+            pass
+        # v0.9.7: peak-rate coverage — % of last-hour raw samples that carry
+        # a populated rate column. Near-0% right after deploy (rate computed
+        # forward-looking only); should climb to ~95%+ within 2 probe cycles
+        # on a counter-heavy deployment.
+        peak_rate_coverage = None
+        try:
+            from db.backend import is_pg
+            if is_pg():
+                from db.pg_pool import pg_cursor
+                with pg_cursor("logs") as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) AS n, COUNT(rate) AS nr "
+                        "FROM sensor_samples WHERE ts > %s",
+                        (time.time() - 3600,),
+                    )
+                    r = cur.fetchone()
+                    if r and r["n"]:
+                        peak_rate_coverage = round(100.0 * r["nr"] / r["n"], 1)
+            else:
+                import sqlite3
+                from core.config import LOGS_DB_PATH
+                c = sqlite3.connect(LOGS_DB_PATH, timeout=2)
+                try:
+                    row = c.execute(
+                        "SELECT COUNT(*), COUNT(rate) FROM sensor_samples WHERE ts > ?",
+                        (time.time() - 3600,),
+                    ).fetchone()
+                    if row and row[0]:
+                        peak_rate_coverage = round(100.0 * row[1] / row[0], 1)
+                finally:
+                    c.close()
+        except Exception:
+            pass
         return {
             "scheduler_heap":       heap_len,
             "scheduler_tombstones": tomb_len,
             "sse_listeners":        sse_count,
             "worker_max":           worker_max,
+            "last_flush_ms":        flush_ms,
+            "last_flush_rows":      flush_rows,
+            "peak_rate_coverage":   peak_rate_coverage,
         }
 
     def _next_did(self):
@@ -672,7 +877,11 @@ class MonitorState:
                    sftp_auth_type="password", sftp_test_level="open",
                    sftp_remote_path="", sftp_expected_sha256="",
                    radius_secret="", radius_test_level="reachable",
-                   radius_username="", radius_password="", radius_nas_id=""):
+                   radius_username="", radius_password="", radius_nas_id="",
+                   snmp_v3_user="", snmp_v3_level="",
+                   snmp_v3_auth_proto="", snmp_v3_auth_pass="",
+                   snmp_v3_priv_proto="", snmp_v3_priv_pass="",
+                   snmp_v3_context=""):
         with self._lock:
             dev = self.devices.get(did)
             if not dev: return None
@@ -706,7 +915,13 @@ class MonitorState:
                        radius_test_level=radius_test_level,
                        radius_username=radius_username,
                        radius_password=radius_password,
-                       radius_nas_id=radius_nas_id)
+                       radius_nas_id=radius_nas_id,
+                       snmp_v3_user=snmp_v3_user, snmp_v3_level=snmp_v3_level,
+                       snmp_v3_auth_proto=snmp_v3_auth_proto,
+                       snmp_v3_auth_pass=snmp_v3_auth_pass,
+                       snmp_v3_priv_proto=snmp_v3_priv_proto,
+                       snmp_v3_priv_pass=snmp_v3_priv_pass,
+                       snmp_v3_context=snmp_v3_context)
             dev.sensors[sid] = s
             s.host_override = bool(host)  # True only when caller explicitly passed a host
         return sid
@@ -749,6 +964,10 @@ class MonitorState:
                         "sftp_remote_path", "sftp_expected_sha256",
                         "radius_secret", "radius_test_level",
                         "radius_username", "radius_password", "radius_nas_id",
+                        "snmp_v3_user", "snmp_v3_level",
+                        "snmp_v3_auth_proto", "snmp_v3_auth_pass",
+                        "snmp_v3_priv_proto", "snmp_v3_priv_pass",
+                        "snmp_v3_context",
                         "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
@@ -924,13 +1143,14 @@ class MonitorState:
         _ts_float = time.time()
         _muted = s.alerts_muted or dev.alerts_muted or is_group_muted(dev.group)
 
-        # ── Log sample to DB (non-blocking) ──
+        # Sample buffered after the ok/fail branch so s._last_rate reflects
+        # THIS probe's rate (computed in the ok branch below for SNMP
+        # counters), not the previous probe's.
         _ok_cap  = result["ok"]
         _ms_cap  = result["ms"]
         _val_cap = str(result.get("value", "")) if result.get("value") is not None else None
         _ts_f_cap = _ts_float
         _did_cap, _sid_cap = did, sid
-        db_buffer_sample(_did_cap, _sid_cap, _ok_cap, _ms_cap, _val_cap, _ts_f_cap)
 
         _log_msg = result.get("detail", "")   # default; overridden in ok branch for SNMP
         if result["ok"]:
@@ -943,21 +1163,45 @@ class MonitorState:
             # ── SNMP counter rate calculation ─────────────────
             _raw_val = result.get("value")
             _stype   = result.get("snmp_type", "").lower()
+            # Persist the raw ASN.1 type on the sensor so the frontend can
+            # branch its rendering (enum / gauge / duration / text) without
+            # needing per-probe type info in every sample.
+            _raw_stype = result.get("snmp_type", "")
+            if s.stype == "snmp" and _raw_stype:
+                s.snmp_type = _raw_stype
             if s.stype == "snmp" and _stype in _COUNTER_TYPES and _raw_val is not None:
                 try:
                     _cur = int(_raw_val)
                     _now = time.time()
                     if s._snmp_prev is not None and s._snmp_prev_ts is not None:
                         _elapsed = _now - s._snmp_prev_ts
-                        if _elapsed > 0:
-                            _delta = _cur - s._snmp_prev
-                            if _delta < 0:  # counter wrapped
-                                _delta += (2**32 if _stype == "counter32" else 2**64)
-                            _rate = _delta / _elapsed  # bytes/sec OR events/sec
+                        _delta   = _cur - s._snmp_prev
+                        _rate    = None
+                        if _elapsed < 1.0:
+                            # Sub-second elapsed → division would amplify timing
+                            # noise into huge rate spikes. Skip this sample.
+                            pass
+                        elif _delta < 0:
+                            # Counter32 wraps every ~34s at 1Gbps — adding 2^32 is
+                            # legitimate. Counter64 wraps take decades; a negative
+                            # delta there means the agent reset (reboot, ifIndex
+                            # reuse, snmpd restart) and the rate is unknowable.
+                            if _stype == "counter32":
+                                _delta += 2**32
+                                _rate = _delta / _elapsed
+                            # else: leave _rate=None for counter64 reset
+                        else:
+                            _rate = _delta / _elapsed
+                        # Absolute sanity ceiling: 1.25e11 B/s = 1 TB/s = 8 Tbps.
+                        # No physical interface today exceeds this; anything
+                        # above is garbage from a missed reset or clock anomaly.
+                        if _rate is not None and _rate > 1.25e11:
+                            _rate = None
+                        if _rate is not None:
                             s._last_rate = _rate
                             s.last_value = _fmt_rate(_rate, s.snmp_unit)
                         else:
-                            s.last_value = _raw_val
+                            s.last_value = None
                             s._last_rate = None
                     else:
                         s.last_value  = None  # first poll — no rate yet
@@ -974,6 +1218,128 @@ class MonitorState:
                 s.last_value = _raw_val
                 s._last_rate = None
             # ─────────────────────────────────────────────────
+            # v0.9.7: typed SNMP event transition detector.  Emits synthetic
+            # flap events for state changes the connectivity flap pipeline
+            # misses because SNMP itself succeeded (interface goes down →
+            # SNMP still answers with value=2 → s.alive stays True).  Each
+            # category has its own trigger; all go through db_log_flap so
+            # the Events tab and webhook path fire automatically.
+            if s.stype == "snmp" and _raw_val is not None and not _muted:
+                try:
+                    _cat = _snmp_category_py(s.snmp_unit, _raw_stype, s.snmp_oid)
+                except Exception:
+                    _cat = None
+                if _cat == "enum_state":
+                    try: _cur_code = str(int(float(_raw_val)))
+                    except (ValueError, TypeError): _cur_code = None
+                    if _cur_code is not None:
+                        _prev_code = s._prev_enum_code
+                        if _prev_code is not None and _cur_code != _prev_code:
+                            legend  = _effective_enum_legend_py(s.snmp_unit, s.snmp_oid)
+                            primary = "1" if "1" in legend else (next(iter(legend), "1") if legend else "1")
+                            prev_lbl = legend.get(_prev_code, f"state {_prev_code}")
+                            cur_lbl  = legend.get(_cur_code,  f"state {_cur_code}")
+                            if _cur_code != primary and _prev_code == primary:
+                                _dir, _msg = "state_down", f"State changed: {prev_lbl} → {cur_lbl}"
+                                log_sensors.warning(f"STATE DOWN: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            elif _cur_code == primary and _prev_code != primary:
+                                _dir, _msg = "state_up", f"State recovered: {prev_lbl} → {cur_lbl}"
+                                log_sensors.info(f"STATE UP: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            else:
+                                _dir, _msg = "state_change", f"State changed: {prev_lbl} → {cur_lbl}"
+                                log_sensors.info(f"STATE CHANGE: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            _flap = {
+                                "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                                "host": s.host, "stype": s.stype, "ts": _ts,
+                                "detail": _msg, "direction": _dir,
+                                "grp": dev.group, "consec_count": 1,
+                            }
+                            _flap["raw_data"] = json.dumps(build_flap_raw_data(
+                                s, result, _dir,
+                                {"from_state": prev_lbl, "to_state": cur_lbl,
+                                 "from_code": _prev_code, "to_code": _cur_code,
+                                 "legend": legend}
+                            ))
+                            # Drive _threshold_state from the typed transition so
+                            # Device.status, the alert profile engine, and the
+                            # right-side live panel all see this as a real incident.
+                            # We deliberately do NOT broadcast threshold_critical /
+                            # threshold_warning / threshold_ok here — the flap_state_*
+                            # broadcast above is the single source of truth for the
+                            # event; piping a second broadcast would re-introduce
+                            # the duplicate alert row we just removed.
+                            _thr_target = {"state_down": "crit", "state_change": "warn",
+                                           "state_up": "ok"}.get(_dir)
+                            if _thr_target is not None and _thr_target != s._threshold_state:
+                                s._threshold_state = _thr_target
+                                if _thr_target == "ok":
+                                    s._threshold_triggered_ts     = None
+                                    s._threshold_recovery_pending = False
+                                    s._alerted_down               = False
+                                    s._email_sent_down            = False
+                                else:
+                                    s._threshold_triggered_ts     = time.time()
+                                    s._threshold_recovery_pending = False
+                                dev.invalidate_status()
+                            self._broadcast(f"flap_{_dir}", _flap)
+                            _db_enqueue(lambda _f=_flap: db_log_flap(_f))
+                            if _dir == "state_up":
+                                _db_enqueue(lambda _d=did, _s=sid, _t=_ts: db_auto_resolve_flap(
+                                    _d, _s, _t, directions=("state_down", "state_change")))
+                            if dev.webhook_url and _dir in ("state_down", "state_change"):
+                                _enqueue_webhook(dev.webhook_url, _flap)
+                        s._prev_enum_code = _cur_code
+                elif _cat == "time_duration":
+                    try: _cur_ticks = int(float(_raw_val))
+                    except (ValueError, TypeError): _cur_ticks = None
+                    if _cur_ticks is not None:
+                        _prev_ticks_v = s._prev_ticks
+                        # Threshold 100 ticks = 1s — avoids false positives
+                        # from small measurement jitter / TimeTicks wrap on
+                        # the rare 2^32/100s boundary (~497 days).
+                        if _prev_ticks_v is not None and _cur_ticks < _prev_ticks_v - 100:
+                            _prev_up = _fmt_duration_s(_prev_ticks_v / 100)
+                            _msg = f"Device rebooted (was up {_prev_up})"
+                            log_sensors.warning(f"REBOOT: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                            _flap = {
+                                "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                                "host": s.host, "stype": s.stype, "ts": _ts,
+                                "detail": _msg, "direction": "reboot",
+                                "grp": dev.group, "consec_count": 1,
+                            }
+                            _flap["raw_data"] = json.dumps(build_flap_raw_data(
+                                s, result, "reboot",
+                                {"prev_uptime_s": _prev_ticks_v / 100,
+                                 "new_uptime_s": _cur_ticks / 100}
+                            ))
+                            self._broadcast("flap_reboot", _flap)
+                            _db_enqueue(lambda _f=_flap: db_log_flap(_f))
+                            if dev.webhook_url:
+                                _enqueue_webhook(dev.webhook_url, _flap)
+                        s._prev_ticks = _cur_ticks
+                elif _cat == "text":
+                    _cur_text = str(_raw_val)
+                    _prev_text = s._prev_text_value
+                    if _prev_text is not None and _cur_text != _prev_text:
+                        _prev_disp = (_prev_text[:60] + "…") if len(_prev_text) > 60 else _prev_text
+                        _cur_disp  = (_cur_text[:60]  + "…") if len(_cur_text)  > 60 else _cur_text
+                        _msg = f"Value changed: {_prev_disp} → {_cur_disp}"
+                        log_sensors.info(f"VALUE CHANGE: {dev.name}/{s.name} ({s.host}) — {_msg}")
+                        _flap = {
+                            "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
+                            "host": s.host, "stype": s.stype, "ts": _ts,
+                            "detail": _msg, "direction": "value_change",
+                            "grp": dev.group, "consec_count": 1,
+                        }
+                        _flap["raw_data"] = json.dumps(build_flap_raw_data(
+                            s, result, "value_change",
+                            {"prev_value": _prev_text, "new_value": _cur_text}
+                        ))
+                        self._broadcast("flap_value_change", _flap)
+                        _db_enqueue(lambda _f=_flap: db_log_flap(_f))
+                        if dev.webhook_url:
+                            _enqueue_webhook(dev.webhook_url, _flap)
+                    s._prev_text_value = _cur_text
             s.history.append(result["ms"])
             _log_msg = s.last_value if (s.stype == "snmp" and s._last_rate is not None and s.last_value) else result["detail"]
             # ── Debounce: track consecutive successes ──
@@ -1015,6 +1381,7 @@ class MonitorState:
             s.last_ms     = None
             s.last_detail = result["detail"]
             s.last_value  = None
+            s._last_rate  = None   # v0.9.7: don't persist stale rate on probe failure
             s.history.append(None)
             self._broadcast("log", {"did": did, "sid": sid,
                                      "msg": result["detail"], "type": "err"})
@@ -1034,6 +1401,9 @@ class MonitorState:
                     "grp": dev.group,
                     "consec_count": s._consec_fail,
                 }
+                flap_data["raw_data"] = json.dumps(build_flap_raw_data(
+                    s, result, "down", {"consec_fail": s._consec_fail}
+                ))
                 if not _muted:
                     self._broadcast("flap_down", flap_data)
                     log_sensors.warning(f"DOWN: {dev.name}/{s.name} ({s.host}) — {result['detail']}")
@@ -1044,18 +1414,51 @@ class MonitorState:
                 s._alerted_down    = True
                 s._down_since_ts   = time.time()
 
+        # ── Log sample to DB (non-blocking) ──
+        # v0.9.7: pass rate so counter-type SNMP sensors store the per-probe
+        # rate alongside the raw counter value.  None for non-counter sensors.
+        db_buffer_sample(_did_cap, _sid_cap, _ok_cap, _ms_cap, _val_cap, _ts_f_cap,
+                         rate=getattr(s, "_last_rate", None))
+
         # ── Threshold state check (transitions only) ──
         _new_thr = "ok"
+        _thr_chk = None
         if result["ok"]:
-            _thr_chk = None
-            if s.stype in ('snmp', 'tls'):
-                if s._last_rate is not None:
+            if s.stype == 'snmp':
+                # Skip numeric threshold comparison for non-numeric SNMP categories.
+                # Why: enum codes (1=up,2=down,...), uptime ticks, and OCTET STRINGs
+                # are not numeric metrics — comparing the raw enum code (e.g. 2)
+                # against crit_ms triggers a meaningless "Threshold Alert (crit): 2"
+                # alongside the proper state_down event from the typed detector above.
+                try:
+                    _cat_skip = _snmp_category_py(s.snmp_unit, s.snmp_type, s.snmp_oid) in (
+                        "enum_state", "time_duration", "text"
+                    )
+                except Exception:
+                    _cat_skip = False
+                if _cat_skip:
+                    # Typed detector owns _threshold_state for these categories.
+                    # Preserve it so the transition block below stays a no-op
+                    # (otherwise _new_thr=ok != threshold_state=crit would fire
+                    # a spurious threshold_ok recovery on every probe).
+                    _new_thr = s._threshold_state
+                elif s._last_rate is not None:
                     _u = s.snmp_unit
                     if _u in _BYTE_UNITS or _u == "":
                         # Traffic bytes counter — compare in Mbps
                         _thr_chk = s._last_rate * 8 / 1_000_000
                     else:
                         # Event counter (errors, packets) — compare raw events/sec
+                        _thr_chk = s._last_rate
+                else:
+                    try: _thr_chk = float(s.last_value)
+                    except (TypeError, ValueError): pass
+            elif s.stype == 'tls':
+                if s._last_rate is not None:
+                    _u = s.snmp_unit
+                    if _u in _BYTE_UNITS or _u == "":
+                        _thr_chk = s._last_rate * 8 / 1_000_000
+                    else:
                         _thr_chk = s._last_rate
                 else:
                     try: _thr_chk = float(s.last_value)
@@ -1101,15 +1504,9 @@ class MonitorState:
                 s._threshold_recovery_pending = False
                 s._threshold_triggered_ts = time.time()
                 _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
-                _thr_evt_data = {
-                    "did": did, "sid": sid, "dname": dev.name,
-                    "sname": s.name, "host": s.host, "stype": s.stype,
-                    "state": _new_thr, "ts": _ts,
-                    "ms": s.last_ms, "loss_pct": s.loss_pct,
-                    "grp": dev.group,
-                    "consec_count": 1,
-                }
-                self._broadcast(_tevt, _thr_evt_data)
+                # Compute display unit + per-event value string up-front so that
+                # both the SSE broadcast AND the persisted flap row carry the
+                # same raw_data payload.
                 if s._last_rate is not None:
                     _u2 = s.snmp_unit
                     if _u2 in _BYTE_UNITS or _u2 == "":
@@ -1127,18 +1524,52 @@ class MonitorState:
                     _val_disp = f"{_rv} {_u3}" if _u3 else _rv
                 else:
                     _unit = 'ms'; _val_disp = f"{s.last_ms}ms"
+                if s._anom_caused_warn:
+                    from monitoring.anomaly import format_anomaly_detail
+                    _val_disp = format_anomaly_detail(s, s.last_ms)
+                # Resolve the flap direction once.
+                if _new_thr == "crit":
+                    _thr_dir = "threshold_crit"
+                elif s._anom_caused_warn:
+                    _thr_dir = "anomaly_warn"
+                else:
+                    _thr_dir = "threshold_warn"
+                # Pick the metric name that matches what was actually compared.
+                if s._last_rate is not None:
+                    _metric = "rate"
+                elif s.stype in ("snmp", "tls", "vmware"):
+                    _metric = "value"
+                else:
+                    _metric = "ms"
+                _thr_ctx = {
+                    "metric": _metric,
+                    "actual": _thr_chk,
+                    "unit": _unit.strip() if _unit else "",
+                    "limit": s.crit_ms if _new_thr == "crit" else s.warn_ms,
+                    "prev_state": _prev_thr,
+                }
+                _thr_raw_json = json.dumps(build_flap_raw_data(
+                    s, result, _thr_dir, _thr_ctx
+                ))
+                _thr_evt_data = {
+                    "did": did, "sid": sid, "dname": dev.name,
+                    "sname": s.name, "host": s.host, "stype": s.stype,
+                    "state": _new_thr, "ts": _ts,
+                    "ms": s.last_ms, "loss_pct": s.loss_pct,
+                    "grp": dev.group,
+                    "consec_count": 1,
+                    "raw_data": _thr_raw_json,
+                    "detail": _val_disp,
+                }
+                self._broadcast(_tevt, _thr_evt_data)
                 if _new_thr == "crit":
                     log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
+                elif s._anom_caused_warn:
+                    log_sensors.warning(f"ANOMALY WARN: {dev.name}/{s.name} — {_val_disp}")
                 else:
                     log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
                 _thr_flap = dict(_thr_evt_data)
-                if _new_thr == "crit":
-                    _thr_flap["direction"] = "threshold_crit"
-                elif s._anom_caused_warn:
-                    _thr_flap["direction"] = "anomaly_warn"
-                else:
-                    _thr_flap["direction"] = "threshold_warn"
-                _thr_flap["detail"]    = _val_disp
+                _thr_flap["direction"] = _thr_dir
                 _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
                 # Escalation / de-escalation (warn↔crit) — auto-resolve the
                 # PREVIOUS active threshold entry so only the current state
@@ -1223,7 +1654,8 @@ class MonitorState:
             s._stopped.set()
 
     def subscribe(self):
-        q = queue.Queue(maxsize=300)
+        # Queue sized for 5k-sensor bursts: ~200 events/s × 5s buffer = 1000 msgs.
+        q = queue.Queue(maxsize=1000)
         with self._lock:
             if len(self._sse) >= 200:
                 oldest = self._sse.pop(0)
@@ -1302,7 +1734,13 @@ class MonitorState:
             self._fanout(events)
 
     def _fanout(self, events):
-        """Actual subscriber fan-out. Runs on the broadcaster thread."""
+        """Actual subscriber fan-out. Runs on the broadcaster thread.
+
+        Each subscriber gets at most a 20 ms grace window on a full queue
+        before eviction — absorbs brief GC / network hiccups without stalling
+        the broadcaster. At 200 subscribers this bounds worst-case fan-out
+        to ~4 s (only if every subscriber is saturated at once).
+        """
         msgs = [f"event: {ev}\ndata: {json.dumps(dt)}\n\n" for ev, dt in events]
         with self._lock:
             subscribers = list(self._sse)
@@ -1310,7 +1748,12 @@ class MonitorState:
         for q in subscribers:
             try:
                 for msg in msgs:
-                    q.put_nowait(msg)
+                    try:
+                        q.put_nowait(msg)
+                    except queue.Full:
+                        # Slow subscriber: give it one short grace window before
+                        # evicting. If still full, it's not keeping up — drop it.
+                        q.put(msg, timeout=0.02)
             except queue.Full:
                 dead.append(q)
         if dead:
@@ -1319,6 +1762,10 @@ class MonitorState:
                     try: self._sse.remove(d)
                     except ValueError: pass
                     self._sse_registered.pop(d, None)
+            log_sensors.warning(
+                "SSE back-pressure: evicted %d slow subscriber(s) "
+                "(queue full after 20ms grace)", len(dead)
+            )
         # Forward alert-category events to remote syslog (best-effort, non-blocking)
         for ev, dt in events:
             if ev in self._SYSLOG_EVENTS:

@@ -138,12 +138,12 @@ def db_log_flap(flap):
         try:
             with pg_cursor("logs") as cur:
                 cur.execute(
-                    "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction,raw_data) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (flap["ts"], flap["did"], flap["sid"], flap.get("dname", ""),
                      flap.get("sname", ""), flap.get("host", ""),
                      flap.get("stype", ""), flap.get("detail", ""),
-                     flap.get("direction", "down"))
+                     flap.get("direction", "down"), flap.get("raw_data") or None)
                 )
                 _flap_limit = max(50, int(_settings.get('max_flap_entries', 2000)))
                 # LRU trim resolved entries only — never evict active/acknowledged
@@ -164,12 +164,12 @@ def db_log_flap(flap):
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
         con.execute(
-            "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO flap_log (ts,did,sid,dname,sname,host,stype,detail,direction,raw_data) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (flap["ts"], flap["did"], flap["sid"], flap.get("dname", ""),
              flap.get("sname", ""), flap.get("host", ""),
              flap.get("stype", ""), flap.get("detail", ""),
-             flap.get("direction", "down"))
+             flap.get("direction", "down"), flap.get("raw_data") or None)
         )
         _flap_limit = max(50, int(_settings.get('max_flap_entries', 2000)))
         # LRU trim resolved entries only — see PG branch above for rationale.
@@ -272,7 +272,7 @@ def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
 
 def db_load_flaps():
     """Return last 500 flap events, newest first.  Excludes legacy recovery rows."""
-    _filter = "WHERE direction NOT IN ('recovered','threshold_ok') "
+    _filter = "WHERE direction NOT IN ('recovered','threshold_ok','state_up') "
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -283,7 +283,8 @@ def db_load_flaps():
                     "COALESCE(ack_by,'') AS ack_by,"
                     "COALESCE(ack_at,0) AS ack_at,"
                     "COALESCE(resolved_at,0) AS resolved_at,"
-                    "COALESCE(duration,0) AS duration "
+                    "COALESCE(duration,0) AS duration,"
+                    "raw_data "
                     "FROM flap_log " + _filter +
                     "ORDER BY id DESC LIMIT 500"
                 )
@@ -293,7 +294,8 @@ def db_load_flaps():
                      "stype": r["stype"], "detail": r["detail"],
                      "direction": r["direction"] or "down",
                      "ack_state": r["ack_state"], "ack_by": r["ack_by"], "ack_at": r["ack_at"],
-                     "resolved_at": r["resolved_at"], "duration": r["duration"]}
+                     "resolved_at": r["resolved_at"], "duration": r["duration"],
+                     "raw_data": r.get("raw_data") or ""}
                     for r in rows]
         except Exception as e:
             log.error(f"DB load flaps error: {e}")
@@ -304,7 +306,7 @@ def db_load_flaps():
         rows = con.execute(
             "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
             "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0),"
-            "COALESCE(resolved_at,0),COALESCE(duration,0) "
+            "COALESCE(resolved_at,0),COALESCE(duration,0),raw_data "
             "FROM flap_log " + _filter +
             "ORDER BY id DESC LIMIT 500"
         ).fetchall()
@@ -312,7 +314,8 @@ def db_load_flaps():
                  "dname": r[4], "sname": r[5], "host": r[6], "stype": r[7],
                  "detail": r[8], "direction": r[9] or "down",
                  "ack_state": r[10], "ack_by": r[11], "ack_at": r[12],
-                 "resolved_at": r[13], "duration": r[14]}
+                 "resolved_at": r[13], "duration": r[14],
+                 "raw_data": r[15] or ""}
                 for r in rows]
     except Exception as e:
         log.error(f"DB load flaps error: {e}")
@@ -445,6 +448,49 @@ def db_resolve_flaps_by_sensor(did, sid):
         con.close()
 
 
+def db_has_open_flap(did, sid, directions=("down",)) -> bool:
+    """Return True if at least one flap_log row for did+sid in `directions`
+    is still active or acknowledged (i.e. not resolved).
+
+    Used by long-lived monitors (license_checker, etc.) to decide whether
+    the underlying problem already has an open event in the Events tab —
+    so we can re-create the flap when the original was resolved by the
+    user but the condition still exists.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                ph = ",".join(["%s"] * len(directions))
+                cur.execute(
+                    f"SELECT 1 FROM flap_log "
+                    f"WHERE did=%s AND sid=%s AND direction IN ({ph}) "
+                    f"AND COALESCE(ack_state,'active') IN ('active','acknowledged') "
+                    f"LIMIT 1",
+                    (did, sid, *directions)
+                )
+                return cur.fetchone() is not None
+        except Exception as e:
+            log.error(f"db_has_open_flap error: {e}")
+            return False
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+    try:
+        ph = ",".join(["?"] * len(directions))
+        row = con.execute(
+            f"SELECT 1 FROM flap_log "
+            f"WHERE did=? AND sid=? AND direction IN ({ph}) "
+            f"AND COALESCE(ack_state,'active') IN ('active','acknowledged') "
+            f"LIMIT 1",
+            (did, sid, *directions)
+        ).fetchone()
+        return row is not None
+    except Exception as e:
+        log.error(f"db_has_open_flap error: {e}")
+        return False
+    finally:
+        con.close()
+
+
 def db_count_active_flaps() -> int:
     """Count flap_log entries with ack_state in ('active','acknowledged')."""
     if is_pg():
@@ -476,10 +522,10 @@ def db_count_active_flaps() -> int:
 _FLAP_SEVERITY_SQL = (
     "SELECT "
     "SUM(CASE WHEN COALESCE(ack_state,'active')='active' "
-    "         AND direction IN ('down','threshold_crit','license_crit') "
+    "         AND direction IN ('down','threshold_crit','license_crit','state_down','reboot') "
     "    THEN 1 ELSE 0 END) AS crit_count, "
     "SUM(CASE WHEN COALESCE(ack_state,'active')='active' "
-    "         AND direction IN ('threshold_warn','license_warn') "
+    "         AND direction IN ('threshold_warn','license_warn','state_change') "
     "    THEN 1 ELSE 0 END) AS warn_count, "
     "SUM(CASE WHEN COALESCE(ack_state,'active')='acknowledged' "
     "    THEN 1 ELSE 0 END) AS ack_count "

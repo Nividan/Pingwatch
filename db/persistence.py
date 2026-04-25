@@ -46,7 +46,14 @@ def _pg_save(state):
              json.dumps(getattr(dev, "secondary_ips", []) or []),
              getattr(dev, "external_id", None),
              float(getattr(dev, "discovered_at", 0) or 0),
-             getattr(dev, "discovered_from_cidr", "") or "")
+             getattr(dev, "discovered_from_cidr", "") or "",
+             getattr(dev, "snmp_v3_user_default", ""),
+             getattr(dev, "snmp_v3_level_default", ""),
+             getattr(dev, "snmp_v3_auth_proto_default", ""),
+             getattr(dev, "snmp_v3_auth_pass_default", ""),
+             getattr(dev, "snmp_v3_priv_proto_default", ""),
+             getattr(dev, "snmp_v3_priv_pass_default", ""),
+             getattr(dev, "snmp_v3_context_default", ""))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -98,7 +105,14 @@ def _pg_save(state):
              getattr(s, "radius_test_level", "reachable") or "reachable",
              getattr(s, "radius_username", ""),
              getattr(s, "radius_password", ""),
-             getattr(s, "radius_nas_id", ""))
+             getattr(s, "radius_nas_id", ""),
+             getattr(s, "snmp_v3_user", ""),
+             getattr(s, "snmp_v3_level", ""),
+             getattr(s, "snmp_v3_auth_proto", ""),
+             getattr(s, "snmp_v3_auth_pass", ""),
+             getattr(s, "snmp_v3_priv_proto", ""),
+             getattr(s, "snmp_v3_priv_pass", ""),
+             getattr(s, "snmp_v3_context", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -117,7 +131,11 @@ def _pg_save(state):
                     "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
                     "snmp_community_default,snmp_version_default,vmware_user_default,"
                     "vmware_password_default,secondary_ips,external_id,"
-                    "discovered_at,discovered_from_cidr) "
+                    "discovered_at,discovered_from_cidr,"
+                    "snmp_v3_user_default,snmp_v3_level_default,"
+                    "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
+                    "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
+                    "snmp_v3_context_default) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
@@ -130,7 +148,14 @@ def _pg_save(state):
                     "secondary_ips=EXCLUDED.secondary_ips, "
                     "external_id=EXCLUDED.external_id, "
                     "discovered_at=EXCLUDED.discovered_at, "
-                    "discovered_from_cidr=EXCLUDED.discovered_from_cidr",
+                    "discovered_from_cidr=EXCLUDED.discovered_from_cidr, "
+                    "snmp_v3_user_default=EXCLUDED.snmp_v3_user_default, "
+                    "snmp_v3_level_default=EXCLUDED.snmp_v3_level_default, "
+                    "snmp_v3_auth_proto_default=EXCLUDED.snmp_v3_auth_proto_default, "
+                    "snmp_v3_auth_pass_default=EXCLUDED.snmp_v3_auth_pass_default, "
+                    "snmp_v3_priv_proto_default=EXCLUDED.snmp_v3_priv_proto_default, "
+                    "snmp_v3_priv_pass_default=EXCLUDED.snmp_v3_priv_pass_default, "
+                    "snmp_v3_context_default=EXCLUDED.snmp_v3_context_default",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -158,7 +183,9 @@ def _pg_save(state):
                     "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
                     "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
                     "sftp_remote_path,sftp_expected_sha256,"
-                    "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id) "
+                    "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
+                    "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
+                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -195,7 +222,14 @@ def _pg_save(state):
                     "radius_test_level=EXCLUDED.radius_test_level, "
                     "radius_username=EXCLUDED.radius_username, "
                     "radius_password=EXCLUDED.radius_password, "
-                    "radius_nas_id=EXCLUDED.radius_nas_id",
+                    "radius_nas_id=EXCLUDED.radius_nas_id, "
+                    "snmp_v3_user=EXCLUDED.snmp_v3_user, "
+                    "snmp_v3_level=EXCLUDED.snmp_v3_level, "
+                    "snmp_v3_auth_proto=EXCLUDED.snmp_v3_auth_proto, "
+                    "snmp_v3_auth_pass=EXCLUDED.snmp_v3_auth_pass, "
+                    "snmp_v3_priv_proto=EXCLUDED.snmp_v3_priv_proto, "
+                    "snmp_v3_priv_pass=EXCLUDED.snmp_v3_priv_pass, "
+                    "snmp_v3_context=EXCLUDED.snmp_v3_context",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -236,7 +270,14 @@ def db_save(state):
              json.dumps(getattr(dev, "secondary_ips", []) or []),
              getattr(dev, "external_id", None),
              float(getattr(dev, "discovered_at", 0) or 0),
-             getattr(dev, "discovered_from_cidr", "") or "")
+             getattr(dev, "discovered_from_cidr", "") or "",
+             getattr(dev, "snmp_v3_user_default", ""),
+             getattr(dev, "snmp_v3_level_default", ""),
+             getattr(dev, "snmp_v3_auth_proto_default", ""),
+             getattr(dev, "snmp_v3_auth_pass_default", ""),
+             getattr(dev, "snmp_v3_priv_proto_default", ""),
+             getattr(dev, "snmp_v3_priv_pass_default", ""),
+             getattr(dev, "snmp_v3_context_default", ""))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -288,7 +329,14 @@ def db_save(state):
              getattr(s, "radius_test_level", "reachable") or "reachable",
              getattr(s, "radius_username", ""),
              getattr(s, "radius_password", ""),
-             getattr(s, "radius_nas_id", ""))
+             getattr(s, "radius_nas_id", ""),
+             getattr(s, "snmp_v3_user", ""),
+             getattr(s, "snmp_v3_level", ""),
+             getattr(s, "snmp_v3_auth_proto", ""),
+             getattr(s, "snmp_v3_auth_pass", ""),
+             getattr(s, "snmp_v3_priv_proto", ""),
+             getattr(s, "snmp_v3_priv_pass", ""),
+             getattr(s, "snmp_v3_context", ""))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -306,8 +354,12 @@ def db_save(state):
             "(did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
             "snmp_community_default,snmp_version_default,vmware_user_default,"
             "vmware_password_default,secondary_ips,external_id,"
-            "discovered_at,discovered_from_cidr) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "discovered_at,discovered_from_cidr,"
+            "snmp_v3_user_default,snmp_v3_level_default,"
+            "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
+            "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
+            "snmp_v3_context_default) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -329,8 +381,10 @@ def db_save(state):
             "ssh_user,ssh_password,ssh_private_key,ssh_auth_type,ssh_test_level,"
             "sftp_user,sftp_password,sftp_private_key,sftp_auth_type,sftp_test_level,"
             "sftp_remote_path,sftp_expected_sha256,"
-            "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
+            "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
+            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -366,7 +420,14 @@ def _pg_load(state):
                 "COALESCE(secondary_ips,'[]') AS secondary_ips,"
                 "external_id,"
                 "COALESCE(discovered_at,0) AS discovered_at,"
-                "COALESCE(discovered_from_cidr,'') AS discovered_from_cidr "
+                "COALESCE(discovered_from_cidr,'') AS discovered_from_cidr,"
+                "COALESCE(snmp_v3_user_default,'') AS snmp_v3_user_default,"
+                "COALESCE(snmp_v3_level_default,'') AS snmp_v3_level_default,"
+                "COALESCE(snmp_v3_auth_proto_default,'') AS snmp_v3_auth_proto_default,"
+                "COALESCE(snmp_v3_auth_pass_default,'') AS snmp_v3_auth_pass_default,"
+                "COALESCE(snmp_v3_priv_proto_default,'') AS snmp_v3_priv_proto_default,"
+                "COALESCE(snmp_v3_priv_pass_default,'') AS snmp_v3_priv_pass_default,"
+                "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -407,7 +468,14 @@ def _pg_load(state):
                 "COALESCE(radius_test_level,'reachable') AS radius_test_level,"
                 "COALESCE(radius_username,'') AS radius_username,"
                 "COALESCE(radius_password,'') AS radius_password,"
-                "COALESCE(radius_nas_id,'') AS radius_nas_id "
+                "COALESCE(radius_nas_id,'') AS radius_nas_id,"
+                "COALESCE(snmp_v3_user,'') AS snmp_v3_user,"
+                "COALESCE(snmp_v3_level,'') AS snmp_v3_level,"
+                "COALESCE(snmp_v3_auth_proto,'') AS snmp_v3_auth_proto,"
+                "COALESCE(snmp_v3_auth_pass,'') AS snmp_v3_auth_pass,"
+                "COALESCE(snmp_v3_priv_proto,'') AS snmp_v3_priv_proto,"
+                "COALESCE(snmp_v3_priv_pass,'') AS snmp_v3_priv_pass,"
+                "COALESCE(snmp_v3_context,'') AS snmp_v3_context "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -444,6 +512,13 @@ def _pg_load(state):
         dev.external_id = row[12] if len(row) > 12 else None
         dev.discovered_at        = float(row[13] or 0) if len(row) > 13 else 0.0
         dev.discovered_from_cidr = (row[14] or "")    if len(row) > 14 else ""
+        dev.snmp_v3_user_default       = (row[15] or "") if len(row) > 15 else ""
+        dev.snmp_v3_level_default      = (row[16] or "") if len(row) > 16 else ""
+        dev.snmp_v3_auth_proto_default = (row[17] or "") if len(row) > 17 else ""
+        dev.snmp_v3_auth_pass_default  = (row[18] or "") if len(row) > 18 else ""
+        dev.snmp_v3_priv_proto_default = (row[19] or "") if len(row) > 19 else ""
+        dev.snmp_v3_priv_pass_default  = (row[20] or "") if len(row) > 20 else ""
+        dev.snmp_v3_context_default    = (row[21] or "") if len(row) > 21 else ""
         state.devices[did] = dev
 
     for row in srows:
@@ -499,6 +574,13 @@ def _pg_load(state):
         s.radius_username      = row[58] or ""
         s.radius_password      = row[59] or ""
         s.radius_nas_id        = row[60] or ""
+        s.snmp_v3_user         = row[61] or "" if len(row) > 61 else ""
+        s.snmp_v3_level        = row[62] or "" if len(row) > 62 else ""
+        s.snmp_v3_auth_proto   = row[63] or "" if len(row) > 63 else ""
+        s.snmp_v3_auth_pass    = row[64] or "" if len(row) > 64 else ""
+        s.snmp_v3_priv_proto   = row[65] or "" if len(row) > 65 else ""
+        s.snmp_v3_priv_pass    = row[66] or "" if len(row) > 66 else ""
+        s.snmp_v3_context      = row[67] or "" if len(row) > 67 else ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -577,7 +659,11 @@ def db_load(state):
             "COALESCE(snmp_community_default,''),COALESCE(snmp_version_default,''),"
             "COALESCE(vmware_user_default,''),COALESCE(vmware_password_default,''),"
             "COALESCE(secondary_ips,'[]'),external_id,"
-            "COALESCE(discovered_at,0),COALESCE(discovered_from_cidr,'') "
+            "COALESCE(discovered_at,0),COALESCE(discovered_from_cidr,''),"
+            "COALESCE(snmp_v3_user_default,''),COALESCE(snmp_v3_level_default,''),"
+            "COALESCE(snmp_v3_auth_proto_default,''),COALESCE(snmp_v3_auth_pass_default,''),"
+            "COALESCE(snmp_v3_priv_proto_default,''),COALESCE(snmp_v3_priv_pass_default,''),"
+            "COALESCE(snmp_v3_context_default,'') "
             "FROM devices"
         ).fetchall()
         srows = con.execute(
@@ -603,7 +689,11 @@ def db_load(state):
             "COALESCE(sftp_remote_path,''),COALESCE(sftp_expected_sha256,''),"
             "COALESCE(radius_secret,''),COALESCE(radius_test_level,'reachable'),"
             "COALESCE(radius_username,''),COALESCE(radius_password,''),"
-            "COALESCE(radius_nas_id,'') "
+            "COALESCE(radius_nas_id,''),"
+            "COALESCE(snmp_v3_user,''),COALESCE(snmp_v3_level,''),"
+            "COALESCE(snmp_v3_auth_proto,''),COALESCE(snmp_v3_auth_pass,''),"
+            "COALESCE(snmp_v3_priv_proto,''),COALESCE(snmp_v3_priv_pass,''),"
+            "COALESCE(snmp_v3_context,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -619,10 +709,15 @@ def db_load(state):
         return
 
     max_did = 0
-    for (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
+    for _row in devs:
+        (did, name, host, grp, sid_ctr, webhook_url, alerts_muted,
          snmp_community_default, snmp_version_default, vmware_user_default,
          vmware_password_default, secondary_ips_json, external_id,
-         discovered_at, discovered_from_cidr) in devs:
+         discovered_at, discovered_from_cidr,
+         v3_user_default, v3_level_default,
+         v3_auth_proto_default, v3_auth_pass_default,
+         v3_priv_proto_default, v3_priv_pass_default,
+         v3_context_default) = _row
         dev = Device(did, name, host, grp)
         try:
             n = int(did.replace("d", ""))
@@ -643,6 +738,13 @@ def db_load(state):
         dev.external_id = external_id or None
         dev.discovered_at        = float(discovered_at or 0)
         dev.discovered_from_cidr = discovered_from_cidr or ""
+        dev.snmp_v3_user_default       = v3_user_default or ""
+        dev.snmp_v3_level_default      = v3_level_default or ""
+        dev.snmp_v3_auth_proto_default = v3_auth_proto_default or ""
+        dev.snmp_v3_auth_pass_default  = v3_auth_pass_default or ""
+        dev.snmp_v3_priv_proto_default = v3_priv_proto_default or ""
+        dev.snmp_v3_priv_pass_default  = v3_priv_pass_default or ""
+        dev.snmp_v3_context_default    = v3_context_default or ""
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,
@@ -661,7 +763,11 @@ def db_load(state):
          sftp_auth_type, sftp_test_level,
          sftp_remote_path, sftp_expected_sha256,
          radius_secret, radius_test_level,
-         radius_username, radius_password, radius_nas_id) in srows:
+         radius_username, radius_password, radius_nas_id,
+         snmp_v3_user, snmp_v3_level,
+         snmp_v3_auth_proto, snmp_v3_auth_pass,
+         snmp_v3_priv_proto, snmp_v3_priv_pass,
+         snmp_v3_context) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -713,6 +819,13 @@ def db_load(state):
         s.radius_username      = radius_username or ""
         s.radius_password      = radius_password or ""
         s.radius_nas_id        = radius_nas_id or ""
+        s.snmp_v3_user         = snmp_v3_user or ""
+        s.snmp_v3_level        = snmp_v3_level or ""
+        s.snmp_v3_auth_proto   = snmp_v3_auth_proto or ""
+        s.snmp_v3_auth_pass    = snmp_v3_auth_pass or ""
+        s.snmp_v3_priv_proto   = snmp_v3_priv_proto or ""
+        s.snmp_v3_priv_pass    = snmp_v3_priv_pass or ""
+        s.snmp_v3_context      = snmp_v3_context or ""
         dev.sensors[sid] = s
 
     state._did_ctr = max_did

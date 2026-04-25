@@ -19,15 +19,52 @@ function openAddDevice(){
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
           <div class="fgrid">
-            <div class="fr"><label class="fl">SNMP Community</label>
+            <div class="fr" id="ad-snmp-comm-row"><label class="fl">SNMP Community</label>
               <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
-              <select id="ad-snmp-ver">
-                <option value="">— any —</option>
-                <option value="2c">v2c</option>
+              <select id="ad-snmp-ver" onchange="_adSnmpVerChange()">
+                <option value="2c" selected>v2c</option>
                 <option value="1">v1</option>
-                <option value="3">v3 (community)</option>
+                <option value="3">v3</option>
               </select></div>
+          </div>
+          <div id="ad-v3-block" style="display:none;border-left:2px solid var(--accent);padding-left:10px;margin-left:2px;flex-direction:column;gap:8px">
+            <div class="fgrid">
+              <div class="fr"><label class="fl">v3 Username</label>
+                <input type="text" id="ad-v3-user" placeholder="snmpuser" autocomplete="off"/></div>
+              <div class="fr"><label class="fl">Security Level</label>
+                <select id="ad-v3-level" onchange="_adV3LevelChange()">
+                  <option value="noAuthNoPriv" selected>noAuthNoPriv</option>
+                  <option value="authNoPriv">authNoPriv</option>
+                  <option value="authPriv">authPriv</option>
+                </select></div>
+            </div>
+            <div class="fgrid" id="ad-v3-auth-row" style="display:none">
+              <div class="fr"><label class="fl">Auth Protocol</label>
+                <select id="ad-v3-auth-proto">
+                  <option value="SHA" selected>SHA</option>
+                  <option value="MD5">MD5</option>
+                  <option value="SHA-224">SHA-224</option>
+                  <option value="SHA-256">SHA-256</option>
+                  <option value="SHA-384">SHA-384</option>
+                  <option value="SHA-512">SHA-512</option>
+                </select></div>
+              <div class="fr"><label class="fl">Auth Passphrase</label>
+                <input type="password" id="ad-v3-auth-pass" placeholder="min 8 chars" autocomplete="new-password"/></div>
+            </div>
+            <div class="fgrid" id="ad-v3-priv-row" style="display:none">
+              <div class="fr"><label class="fl">Privacy Protocol</label>
+                <select id="ad-v3-priv-proto">
+                  <option value="AES" selected>AES</option>
+                  <option value="DES">DES</option>
+                  <option value="AES-192">AES-192</option>
+                  <option value="AES-256">AES-256</option>
+                </select></div>
+              <div class="fr"><label class="fl">Privacy Passphrase</label>
+                <input type="password" id="ad-v3-priv-pass" placeholder="min 8 chars" autocomplete="new-password"/></div>
+            </div>
+            <div class="fr"><label class="fl">Context (optional)</label>
+              <input type="text" id="ad-v3-ctx" placeholder="" autocomplete="off"/></div>
           </div>
           <div class="fgrid">
             <div class="fr"><label class="fl">VMware Username</label>
@@ -64,6 +101,18 @@ async function submitAddDevice(){
   if(snmp_version_default) payload.snmp_version_default=snmp_version_default;
   if(vmware_user_default) payload.vmware_user_default=vmware_user_default;
   if(vmware_password_default) payload.vmware_password_default=vmware_password_default;
+  // SNMPv3 device defaults (send only when v3 is selected)
+  if(snmp_version_default === '3'){
+    payload.snmp_v3_user_default       = (document.getElementById('ad-v3-user')?.value || '').trim();
+    payload.snmp_v3_level_default      = document.getElementById('ad-v3-level')?.value || 'noAuthNoPriv';
+    payload.snmp_v3_auth_proto_default = document.getElementById('ad-v3-auth-proto')?.value || '';
+    payload.snmp_v3_priv_proto_default = document.getElementById('ad-v3-priv-proto')?.value || '';
+    payload.snmp_v3_context_default    = (document.getElementById('ad-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('ad-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('ad-v3-priv-pass')?.value || '';
+    if(_ap) payload.snmp_v3_auth_pass_default = _ap;
+    if(_pp) payload.snmp_v3_priv_pass_default = _pp;
+  }
   let r;
   try{
     r=await api('POST','/api/device',payload);
@@ -176,19 +225,56 @@ function openEditDevice(did){
         <div class="alrt-section-hdr">Alert Profile</div>
         <div id="ed-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
       </div>
-      <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default)?' open':''}>
+      <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default||dev.snmp_v3_user_default||dev.has_snmp_v3_auth_pass_default)?' open':''}>
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
           <div class="fgrid">
-            <div class="fr"><label class="fl">SNMP Community</label>
+            <div class="fr" id="ed-snmp-comm-row" style="${dev.snmp_version_default==='3'?'display:none':''};"><label class="fl">SNMP Community</label>
               <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
-              <select id="ed-snmp-ver">
-                <option value="" ${!dev.snmp_version_default?'selected':''}>— any —</option>
-                <option value="2c" ${dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
+              <select id="ed-snmp-ver" onchange="_edSnmpVerChange()">
+                <option value="2c" ${!dev.snmp_version_default || dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
                 <option value="1"  ${dev.snmp_version_default==='1'?'selected':''}>v1</option>
-                <option value="3"  ${dev.snmp_version_default==='3'?'selected':''}>v3 (community)</option>
+                <option value="3"  ${dev.snmp_version_default==='3'?'selected':''}>v3</option>
               </select></div>
+          </div>
+          <div id="ed-v3-block" style="${dev.snmp_version_default==='3'?'':'display:none;'}border-left:2px solid var(--accent);padding-left:10px;margin-left:2px;display:flex;flex-direction:column;gap:8px">
+            <div class="fgrid">
+              <div class="fr"><label class="fl">v3 Username</label>
+                <input type="text" id="ed-v3-user" value="${esc(dev.snmp_v3_user_default||'')}" placeholder="snmpuser" autocomplete="off"/></div>
+              <div class="fr"><label class="fl">Security Level</label>
+                <select id="ed-v3-level" onchange="_edV3LevelChange()">
+                  <option value="noAuthNoPriv" ${(dev.snmp_v3_level_default||'noAuthNoPriv')==='noAuthNoPriv'?'selected':''}>noAuthNoPriv</option>
+                  <option value="authNoPriv"   ${dev.snmp_v3_level_default==='authNoPriv'?'selected':''}>authNoPriv</option>
+                  <option value="authPriv"     ${dev.snmp_v3_level_default==='authPriv'?'selected':''}>authPriv</option>
+                </select></div>
+            </div>
+            <div class="fgrid" id="ed-v3-auth-row" style="${(dev.snmp_v3_level_default==='authNoPriv'||dev.snmp_v3_level_default==='authPriv')?'':'display:none'}">
+              <div class="fr"><label class="fl">Auth Protocol</label>
+                <select id="ed-v3-auth-proto">
+                  <option value="SHA"     ${(dev.snmp_v3_auth_proto_default||'SHA')==='SHA'?'selected':''}>SHA</option>
+                  <option value="MD5"     ${dev.snmp_v3_auth_proto_default==='MD5'?'selected':''}>MD5</option>
+                  <option value="SHA-224" ${dev.snmp_v3_auth_proto_default==='SHA-224'?'selected':''}>SHA-224</option>
+                  <option value="SHA-256" ${dev.snmp_v3_auth_proto_default==='SHA-256'?'selected':''}>SHA-256</option>
+                  <option value="SHA-384" ${dev.snmp_v3_auth_proto_default==='SHA-384'?'selected':''}>SHA-384</option>
+                  <option value="SHA-512" ${dev.snmp_v3_auth_proto_default==='SHA-512'?'selected':''}>SHA-512</option>
+                </select></div>
+              <div class="fr"><label class="fl">Auth Passphrase</label>
+                <input type="password" id="ed-v3-auth-pass" placeholder="${dev.has_snmp_v3_auth_pass_default?'(unchanged)':'min 8 chars'}" autocomplete="new-password"/></div>
+            </div>
+            <div class="fgrid" id="ed-v3-priv-row" style="${dev.snmp_v3_level_default==='authPriv'?'':'display:none'}">
+              <div class="fr"><label class="fl">Privacy Protocol</label>
+                <select id="ed-v3-priv-proto">
+                  <option value="AES"     ${(dev.snmp_v3_priv_proto_default||'AES')==='AES'?'selected':''}>AES</option>
+                  <option value="DES"     ${dev.snmp_v3_priv_proto_default==='DES'?'selected':''}>DES</option>
+                  <option value="AES-192" ${dev.snmp_v3_priv_proto_default==='AES-192'?'selected':''}>AES-192</option>
+                  <option value="AES-256" ${dev.snmp_v3_priv_proto_default==='AES-256'?'selected':''}>AES-256</option>
+                </select></div>
+              <div class="fr"><label class="fl">Privacy Passphrase</label>
+                <input type="password" id="ed-v3-priv-pass" placeholder="${dev.has_snmp_v3_priv_pass_default?'(unchanged)':'min 8 chars'}" autocomplete="new-password"/></div>
+            </div>
+            <div class="fr"><label class="fl">Context (optional)</label>
+              <input type="text" id="ed-v3-ctx" value="${esc(dev.snmp_v3_context_default||'')}" placeholder="" autocomplete="off"/></div>
           </div>
           <div class="fgrid">
             <div class="fr"><label class="fl">VMware Username</label>
@@ -316,6 +402,40 @@ function _edgPick(g){
   _edgHide();
 }
 
+// v0.9.7: SNMPv3 block toggles on the Edit Device form.  Show the v3 auth
+// fields only when version=3; hide community when v3 is selected.
+function _edSnmpVerChange(){
+  const ver = document.getElementById('ed-snmp-ver')?.value || '';
+  const blk = document.getElementById('ed-v3-block');
+  const comm = document.getElementById('ed-snmp-comm-row');
+  if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(comm) comm.style.display = (ver === '3') ? 'none' : '';
+  if(ver === '3') _edV3LevelChange();
+}
+function _edV3LevelChange(){
+  const lvl = document.getElementById('ed-v3-level')?.value || 'noAuthNoPriv';
+  const ar  = document.getElementById('ed-v3-auth-row');
+  const pr  = document.getElementById('ed-v3-priv-row');
+  if(ar) ar.style.display = (lvl === 'authNoPriv' || lvl === 'authPriv') ? '' : 'none';
+  if(pr) pr.style.display = (lvl === 'authPriv') ? '' : 'none';
+}
+// Same toggles on the Add Device form (mirrored IDs with "ad-" prefix).
+function _adSnmpVerChange(){
+  const ver = document.getElementById('ad-snmp-ver')?.value || '';
+  const blk = document.getElementById('ad-v3-block');
+  const comm = document.getElementById('ad-snmp-comm-row');
+  if(blk) blk.style.display = (ver === '3') ? 'flex' : 'none';
+  if(comm) comm.style.display = (ver === '3') ? 'none' : '';
+  if(ver === '3') _adV3LevelChange();
+}
+function _adV3LevelChange(){
+  const lvl = document.getElementById('ad-v3-level')?.value || 'noAuthNoPriv';
+  const ar  = document.getElementById('ad-v3-auth-row');
+  const pr  = document.getElementById('ad-v3-priv-row');
+  if(ar) ar.style.display = (lvl === 'authNoPriv' || lvl === 'authPriv') ? '' : 'none';
+  if(pr) pr.style.display = (lvl === 'authPriv') ? '' : 'none';
+}
+
 async function submitEditDevice(did){
   const name  = (document.getElementById('ed-n')?.value || '').trim();
   const host  = (document.getElementById('ed-h')?.value || '').trim().replace(/^https?:\/\//,'').split('/')[0].toLowerCase();
@@ -332,6 +452,18 @@ async function submitEditDevice(did){
     snmp_community_default, snmp_version_default, vmware_user_default,
     secondary_ips: _edSecIps};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
+  // SNMPv3 device defaults — emit only when the section is visible (version=3).
+  if(snmp_version_default === '3'){
+    payload.snmp_v3_user_default       = (document.getElementById('ed-v3-user')?.value || '').trim();
+    payload.snmp_v3_level_default      = document.getElementById('ed-v3-level')?.value || 'noAuthNoPriv';
+    payload.snmp_v3_auth_proto_default = document.getElementById('ed-v3-auth-proto')?.value || '';
+    payload.snmp_v3_priv_proto_default = document.getElementById('ed-v3-priv-proto')?.value || '';
+    payload.snmp_v3_context_default    = (document.getElementById('ed-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('ed-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('ed-v3-priv-pass')?.value || '';
+    if(_ap) payload.snmp_v3_auth_pass_default = _ap;
+    if(_pp) payload.snmp_v3_priv_pass_default = _pp;
+  }
   let r;
   try{
     r = await api('PATCH', `/api/device/${did}`, payload);

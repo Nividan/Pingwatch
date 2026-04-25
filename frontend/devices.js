@@ -544,7 +544,8 @@ function _updateGrpSummary(group){
 
 function _devSnrSummaryHtml(did){
   const dev=S.devices[did];
-  const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
+  const _keys=S._devSensors?.[did]||new Set();
+  const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   if(!snrs.length) return '';
   let ok=0,warn=0,down=0;
   snrs.forEach(s=>{
@@ -680,24 +681,27 @@ function renderDp(dev){
   document.getElementById('emptyMain').style.display='none';
   if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
   const old=document.getElementById('dp-'+dev.device_id);
-  if(old) old.remove();
   const oldLr=document.getElementById('dpl-'+dev.device_id);
-  if(oldLr) oldLr.remove();
   const group=dev.group||'Default Group';
   ensureGroupSection(group);
   const grid=document.getElementById(gridId(group));
   const addBtn=grid.querySelector('.dc-add');
+  // If the device is staying in its current group, replace cards in place to
+  // preserve position. If the group changed, fall back to remove + append at end.
+  const sameGroup = old && old.parentNode === grid;
   // Card (grid view)
   const el=document.createElement('div');
   el.innerHTML=cardHTML(dev);
   const card=el.firstElementChild;
-  grid.insertBefore(card,addBtn);
+  if(sameGroup) old.replaceWith(card);
+  else { if(old) old.remove(); grid.insertBefore(card,addBtn); }
   applyDrag(card);
   // List row (list view)
   const lr=document.createElement('div');
   lr.innerHTML=listRowHTML(dev);
   const row=lr.firstElementChild;
-  grid.insertBefore(row,addBtn);
+  if(sameGroup && oldLr && oldLr.parentNode === grid) oldLr.replaceWith(row);
+  else { if(oldLr) oldLr.remove(); grid.insertBefore(row,addBtn); }
   dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
   refreshGroupCounts();
   applyRbac();
@@ -708,7 +712,8 @@ function renderDp(dev){
 
 function sSnrPreview(did){
   // return up to 3 sensor preview rows for the card, respecting saved drag order
-  const snrs=Object.values(S.sensors).filter(s=>s.device_id===did);
+  const _keys=S._devSensors?.[did]||new Set();
+  const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   if(!snrs.length) return '<div class="dc-more" style="padding:6px 0">No sensors yet</div>';
   const _ord=_lsGet(`pw_snr_order_${did}`,[]);
   if(_ord.length){
@@ -726,6 +731,7 @@ function sSnrPreview(did){
       const u=_VM_UNITS[s.vmware_metric]||'';
       return _fmtVmVal(v,u);
     }
+    if(s.stype==='snmp') return (typeof _snmpTileValue === 'function') ? _snmpTileValue(s) : (s.alive===false?'FAIL':(s.last_value||'—').slice(0,10));
     if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'—').slice(0,10);
     return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'—');
   };
@@ -806,7 +812,8 @@ function cardHTML(dev){
 
 function listRowHTML(dev){
   const st=dev.device_id ? (dev.status||'unknown') : 'unknown';
-  const snrs=Object.values(S.sensors).filter(s=>s.device_id===dev.device_id);
+  const _keys=S._devSensors?.[dev.device_id]||new Set();
+  const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   // Apply saved sensor drag order (same as sSnrPreview)
   const _ord=_lsGet(`pw_snr_order_${dev.device_id}`,[]);
   if(_ord.length){
@@ -823,6 +830,7 @@ function listRowHTML(dev){
       if(isNaN(v)) return (s.last_value+'').slice(0,10);
       return _fmtVmVal(v,_VM_UNITS[s.vmware_metric]||'');
     }
+    if(s.stype==='snmp') return (typeof _snmpTileValue === 'function') ? _snmpTileValue(s) : (s.alive===false?'FAIL':(s.last_value||'\u2014').slice(0,10));
     if(isSnmp(s)) return s.alive===false?'FAIL':(s.last_value||'\u2014').slice(0,10);
     return s.last_ms!=null?`${s.last_ms}ms`:(s.alive===false?'DOWN':'\u2014');
   };
@@ -881,6 +889,8 @@ function updateCardSensor(s){
     if(isVmware){
       if(full.last_value==null) v='—';
       else { const nv=parseFloat(full.last_value); v=isNaN(nv)?(full.last_value+'').slice(0,10):_fmtVmVal(nv,_VM_UNITS[full.vmware_metric]||''); }
+    } else if(full.stype==='snmp' && typeof _snmpTileValue === 'function'){
+      v=_snmpTileValue(full);
     } else if(isSnmp){
       v=full.alive===false?'FAIL':(full.last_value||'—').slice(0,10);
     } else {
@@ -897,6 +907,7 @@ function updateCardSensor(s){
     const isVm2=full.stype==='vmware';
     let v2;
     if(isVm2){ if(full.last_value==null) v2='\u2014'; else { const nv=parseFloat(full.last_value); v2=isNaN(nv)?(full.last_value+'').slice(0,10):_fmtVmVal(nv,_VM_UNITS[full.vmware_metric]||''); } }
+    else if(full.stype==='snmp' && typeof _snmpTileValue === 'function'){ v2=_snmpTileValue(full); }
     else if(isSnmp2){ v2=full.alive===false?'FAIL':(full.last_value||'\u2014').slice(0,10); }
     else { v2=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'\u2014'); }
     const c2=full.alive===false?'b':((isSnmp2||isVm2)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));

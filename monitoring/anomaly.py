@@ -116,6 +116,27 @@ def evaluate_anomaly(sensor, current_ms: float) -> str:
         return "ok"
 
 
+def format_anomaly_detail(sensor, current_ms: float) -> str:
+    """Render a human-readable explanation of why a sample is anomalous.
+
+    Used for flap-log detail and the alert-event Message field, so an operator
+    seeing the alert understands the baseline, the band, and how far the sample
+    sits outside it — not just the raw latency.
+    """
+    try:
+        mean = float(sensor._anom_mean or 0.0)
+        stddev = math.sqrt(max(0.0, float(sensor._anom_var or 0.0)))
+        sigma_eff = max(stddev, 10.0, 0.2 * mean)
+        sens = int(getattr(sensor, "anomaly_sensitivity", 2) or 2)
+        k = _K_BY_SENSITIVITY.get(sens, _K_BY_SENSITIVITY[2])
+        threshold = mean + k * sigma_eff
+        z = (float(current_ms) - mean) / sigma_eff if sigma_eff > 0 else 0.0
+        return (f"{current_ms:.1f}ms — baseline {mean:.0f}ms "
+                f"± {stddev:.0f}ms (z={z:.1f}), threshold {threshold:.0f}ms")
+    except Exception:
+        return f"{current_ms}ms"
+
+
 def reset_baseline(sensor) -> None:
     """Wipe in-memory baseline state for a sensor. Caller must also delete
     the sensor_anomaly_baselines row if persisting."""
