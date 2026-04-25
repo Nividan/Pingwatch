@@ -1677,7 +1677,11 @@ function renderPwLinksInLayer(layer, lblLayer) {
         const lbw = labelText.length * LINK_LBL_CHAR_PX + 4;
         let pos;
         if (useTrunk) {
-          pos = _trunkLabelPos(sc, bundle.waypoint, labelText);
+          // Use the bundle's resolved hub center, not the link's src — the
+          // trunk-label link could be oriented either way.
+          const hubNode = nodeMap[bundle.hubId];
+          const hubC = hubNode ? nodeCenter(hubNode) : sc;
+          pos = _trunkLabelPos(hubC, bundle.waypoint, labelText);
         } else if (isBundled) {
           const n = bundle.count || 1;
           const ord = bundle.order?.[lk.id] ?? 0;
@@ -1833,10 +1837,13 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
   // Bundle with one shared label across all members → render once on the trunk segment.
   if (bundle && bundle.commonLabel != null) {
     if (lk.id !== bundle.trunkLabelLkId) return '';
-    const c1 = nodeCenter(src);
     const cfg = lcfg(lk.link_type);
+    // Use the BUNDLE's hub (always outside the receiver group), not the link's
+    // src — the trunk-label link could be oriented either way.
+    const hubNode = nodeMap[bundle.hubId];
+    const hubC = hubNode ? nodeCenter(hubNode) : nodeCenter(src);
     const lbw = bundle.commonLabel.length * LINK_LBL_CHAR_PX + 4;
-    const pos = _trunkLabelPos(c1, bundle.waypoint, bundle.commonLabel);
+    const pos = _trunkLabelPos(hubC, bundle.waypoint, bundle.commonLabel);
     return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, bundle.commonLabel);
   }
   const c1 = nodeCenter(src), c2 = nodeCenter(tgt);
