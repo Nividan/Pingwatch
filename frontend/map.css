@@ -258,10 +258,12 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 
 /* ── Status border (live device health overlay) ── */
 .status-border          { transition: stroke 0.2s, opacity 0.2s; }
-.status-border-up       { stroke: var(--accent2); stroke-width: 1.5; opacity: 0.65; }
-.status-border-warn     { stroke: var(--warn);    stroke-width: 2.5; opacity: 0.95; }
-.status-border-down     { stroke: var(--danger);  stroke-width: 2.5; opacity: 1;
+.status-border-up       { stroke: var(--accent2); stroke-width: 2;   opacity: 0.85; }
+.status-border-warn     { stroke: var(--warn);    stroke-width: 2.8; opacity: 0.95; }
+.status-border-down     { stroke: var(--danger);  stroke-width: 2.8; opacity: 1;
                           animation: statusDownPulse 1.6s ease-in-out infinite; }
+.status-border-unknown  { stroke: rgba(150,160,180,0.55); stroke-width: 1.2;
+                          stroke-dasharray: 3 3; opacity: 0.6; }
 @keyframes statusDownPulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }
 
 /* ── SVG animations ── */

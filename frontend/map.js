@@ -1421,17 +1421,31 @@ function _groupContainingNode(n) {
 }
 
 // For a hub node and a receiving group, pick the waypoint where bundled links
-// converge — point on the group's rect closest to the hub, pulled slightly
-// toward the group center so the bundle visibly enters the zone.
+// converge. Use dominant-axis side picking so the waypoint sits on the side of
+// the rect facing the hub (never on a corner — a corner waypoint produces
+// curves that detour around adjacent groups). Then pull the point ~20px inward
+// so the bundle visibly enters the zone before splitting to its tendrils.
 function _bundleWaypoint(hub, g) {
   const hc = nodeCenter(hub);
-  const cx = Math.max(g.x, Math.min(hc.x, g.x + g.w));
-  const cy = Math.max(g.y, Math.min(hc.y, g.y + g.h));
   const gxc = g.x + g.w / 2, gyc = g.y + g.h / 2;
-  const dx = gxc - cx, dy = gyc - cy;
-  const dlen = Math.sqrt(dx * dx + dy * dy) || 1;
-  const inset = Math.min(28, dlen * 0.18);
-  return { x: cx + dx / dlen * inset, y: cy + dy / dlen * inset };
+  const dxc = hc.x - gxc, dyc = hc.y - gyc;
+  // Normalize by half-extents so we compare which axis the hub is more outside on.
+  const ax = Math.abs(dxc) / Math.max(1, g.w / 2);
+  const ay = Math.abs(dyc) / Math.max(1, g.h / 2);
+  const PAD = 14;
+  let wx, wy;
+  if (ax >= ay) {
+    wx = dxc < 0 ? g.x : g.x + g.w;
+    wy = Math.max(g.y + PAD, Math.min(hc.y, g.y + g.h - PAD));
+  } else {
+    wx = Math.max(g.x + PAD, Math.min(hc.x, g.x + g.w - PAD));
+    wy = dyc < 0 ? g.y : g.y + g.h;
+  }
+  // Pull inward toward group center.
+  const ix = gxc - wx, iy = gyc - wy;
+  const ilen = Math.sqrt(ix * ix + iy * iy) || 1;
+  const inset = Math.min(24, Math.max(g.w, g.h) * 0.08);
+  return { x: wx + ix / ilen * inset, y: wy + iy / ilen * inset };
 }
 
 const BUNDLE_MIN = 3;
@@ -1456,6 +1470,7 @@ function _computeBundlesFromEdges(edges) {
   }
   // Drop sub-threshold bundles; for any link in multiple bundles, keep it in the largest.
   const lkBundleKey = {};
+  const lkOrder = {};       // lk.id → index within its bundle (0..count-1) for label staggering
   const sorted = [...bundles.entries()]
     .filter(([, b]) => b.lkIds.size >= BUNDLE_MIN)
     .sort((a, b) => b[1].lkIds.size - a[1].lkIds.size);
@@ -1464,10 +1479,13 @@ function _computeBundlesFromEdges(edges) {
     [...b.lkIds].forEach(id => { if (lkBundleKey[id]) b.lkIds.delete(id); });
     if (b.lkIds.size < BUNDLE_MIN) continue;
     b.waypoint = _bundleWaypoint(nodeMap[b.hubId], b.group);
+    b.count = b.lkIds.size;
+    b.order = {};
     bundles.set(key, b);
-    b.lkIds.forEach(id => { lkBundleKey[id] = key; });
+    let i = 0;
+    b.lkIds.forEach(id => { lkBundleKey[id] = key; b.order[id] = i; lkOrder[id] = i; i++; });
   }
-  return { bundles, lkBundleKey };
+  return { bundles, lkBundleKey, lkOrder };
 }
 
 function _computeBundles() {
@@ -1584,9 +1602,15 @@ function renderPwLinksInLayer(layer, lblLayer) {
     // Label in top layer
     if (lk.label && lblLayer) {
       const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
-      const pos = (bundle && bundle.waypoint)
-        ? _pickLabelPos(sc, tc, lbw, 0.55, bundle.waypoint.x, bundle.waypoint.y)
-        : _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
+      let pos;
+      if (bundle && bundle.waypoint) {
+        const n = bundle.count || 1;
+        const ord = bundle.order?.[lk.id] ?? 0;
+        const tPref = n > 1 ? (0.68 + 0.22 * (ord / (n - 1))) : 0.78;
+        pos = _pickLabelPos(sc, tc, lbw, tPref, bundle.waypoint.x, bundle.waypoint.y);
+      } else {
+        pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
+      }
       const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       lg.setAttribute('class','link-label-g pw-link-label');
       lg.innerHTML = _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
@@ -1618,7 +1642,11 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null)
   // Bundled link — route through the shared waypoint regardless of pair-index.
   if (bundle && bundle.waypoint) {
     const qx = bundle.waypoint.x, qy = bundle.waypoint.y;
-    const tL = 0.55;  // label sits just past the waypoint, on the tendril side
+    // Stagger label t along the tendril side so each label sits near its own target,
+    // not stacked at the waypoint with all its bundle siblings.
+    const n = bundle.count || 1;
+    const ordIdx = (bundle.order && bundle.order[lk.id] != null) ? bundle.order[lk.id] : 0;
+    const tL = n > 1 ? (0.68 + 0.22 * (ordIdx / (n - 1))) : 0.78;
     const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x).toFixed(1);
     const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y - 4).toFixed(1);
     const lbwB = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
@@ -1708,7 +1736,12 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
 
   let pos;
   if (bundle && bundle.waypoint) {
-    pos = _pickLabelPos(c1, c2, lbw, 0.55, bundle.waypoint.x, bundle.waypoint.y);
+    // Stagger along the tendril side so labels track each link's individual target
+    // instead of stacking at the waypoint.
+    const n = bundle.count || 1;
+    const ord = bundle.order?.[lk.id] ?? 0;
+    const tPref = n > 1 ? (0.68 + 0.22 * (ord / (n - 1))) : 0.78;
+    pos = _pickLabelPos(c1, c2, lbw, tPref, bundle.waypoint.x, bundle.waypoint.y);
   } else if (idx === 0) {
     pos = _pickLabelPos(c1, c2, lbw, 0.50);
   } else {
@@ -1791,14 +1824,14 @@ function _applyStatusBorder(el, node) {
   el.querySelector('.status-border')?.remove();
   if (node.type === 'info-box' || node.type === 'cloud') return;
   const s = _resolveNodeStatus(node);
-  if (s !== 'up' && s !== 'warn' && s !== 'down') return;
+  if (s !== 'up' && s !== 'warn' && s !== 'down' && s !== 'unknown') return;
   const sz = nsize(node.type, node);
   const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   r.setAttribute('class', 'status-border status-border-' + s);
-  r.setAttribute('x', '-3'); r.setAttribute('y', '-3');
-  r.setAttribute('width', String(sz.w + 6));
-  r.setAttribute('height', String(sz.h + 6));
-  r.setAttribute('rx', '5');
+  r.setAttribute('x', '-5'); r.setAttribute('y', '-5');
+  r.setAttribute('width', String(sz.w + 10));
+  r.setAttribute('height', String(sz.h + 10));
+  r.setAttribute('rx', '6');
   r.setAttribute('fill', 'none');
   r.setAttribute('pointer-events', 'none');
   if (s === 'down')      r.setAttribute('filter', 'url(#glow-down)');
