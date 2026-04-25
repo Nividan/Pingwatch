@@ -1436,25 +1436,23 @@ function _bundleWaypoint(hub, g) {
 
 const BUNDLE_MIN = 3;
 
-function _computeBundles() {
+// Generic edge bundler — edges: [{id, src:Node, tgt:Node, link_type}]
+function _computeBundlesFromEdges(edges) {
   const bundles = new Map();   // key → { hubId, group, waypoint, lkIds:Set }
-  const _addCandidate = (hub, recv, lk) => {
-    const key = hub.id + ':' + recv.id + ':' + (lk.link_type || 'trunk');
+  const _addCandidate = (hub, recv, edge) => {
+    const key = hub.id + ':' + recv.id + ':' + (edge.link_type || 'trunk');
     let b = bundles.get(key);
     if (!b) { b = { hubId: hub.id, group: recv, lkIds: new Set() }; bundles.set(key, b); }
-    b.lkIds.add(lk.id);
+    b.lkIds.add(edge.id);
   };
-  for (const lk of links) {
-    const A = nodeMap[lk.source_id], B = nodeMap[lk.target_id];
-    if (!A || !B) continue;
-    if (lk.link_type === 'tunnel') continue;
-    const ga = _groupContainingNode(A);
-    const gb = _groupContainingNode(B);
-    // Intra-group links should stay direct.
+  for (const e of edges) {
+    if (!e.src || !e.tgt) continue;
+    if (e.link_type === 'tunnel') continue;
+    const ga = _groupContainingNode(e.src);
+    const gb = _groupContainingNode(e.tgt);
     if (ga && gb && ga.id === gb.id) continue;
-    // Each endpoint in a group is a candidate receiver; the other is the hub.
-    if (gb) _addCandidate(A, gb, lk);
-    if (ga) _addCandidate(B, ga, lk);
+    if (gb) _addCandidate(e.src, gb, e);
+    if (ga) _addCandidate(e.tgt, ga, e);
   }
   // Drop sub-threshold bundles; for any link in multiple bundles, keep it in the largest.
   const lkBundleKey = {};
@@ -1463,7 +1461,6 @@ function _computeBundles() {
     .sort((a, b) => b[1].lkIds.size - a[1].lkIds.size);
   bundles.clear();
   for (const [key, b] of sorted) {
-    // Drop links already claimed by a larger bundle.
     [...b.lkIds].forEach(id => { if (lkBundleKey[id]) b.lkIds.delete(id); });
     if (b.lkIds.size < BUNDLE_MIN) continue;
     b.waypoint = _bundleWaypoint(nodeMap[b.hubId], b.group);
@@ -1471,6 +1468,19 @@ function _computeBundles() {
     b.lkIds.forEach(id => { lkBundleKey[id] = key; });
   }
   return { bundles, lkBundleKey };
+}
+
+function _computeBundles() {
+  return _computeBundlesFromEdges(links.map(lk => ({
+    id: lk.id, src: nodeMap[lk.source_id], tgt: nodeMap[lk.target_id], link_type: lk.link_type
+  })));
+}
+
+function _computePwBundles() {
+  if (typeof pwLinks === 'undefined' || !pwLinks) return { bundles: new Map(), lkBundleKey: {} };
+  return _computeBundlesFromEdges(pwLinks.map(lk => ({
+    id: lk.id, src: nodeMap[_pwNodeId(lk.src_did)], tgt: nodeMap[_pwNodeId(lk.tgt_did)], link_type: lk.link_type
+  })));
 }
 
 function renderLinks() {
@@ -1537,6 +1547,8 @@ function _pwDevName(did) {
 function renderPwLinksInLayer(layer, lblLayer) {
   const tArr = [0.30, 0.50, 0.70];
   let pwIdx = 0;
+  // Detect hub→group bundles in pw-links (live page).
+  const { bundles: pwBundles, lkBundleKey: pwLkBundleKey } = _computePwBundles();
   pwLinks.forEach(lk => {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
@@ -1548,20 +1560,33 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const stroke = _pwLinkStroke(lk, srcDev, tgtDev);
     const bwCls  = stroke === '#a855f7' ? 'pw-bw-crit' : stroke === '#c084fc' ? 'pw-bw-warn' : '';
     const lw     = stroke === '#a855f7' ? cfg.width * 2.5 : stroke === '#c084fc' ? cfg.width * 1.8 : cfg.width;
+    const bk     = pwLkBundleKey[lk.id];
+    const bundle = bk ? pwBundles.get(bk) : null;
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
-    gg.innerHTML = `
-      <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
-      <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-        stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-    `;
+    if (bundle && bundle.waypoint) {
+      const qx = bundle.waypoint.x.toFixed(1), qy = bundle.waypoint.y.toFixed(1);
+      gg.innerHTML = `
+        <path class="link-hit" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}" fill="none" stroke="transparent" stroke-width="12"/>
+        <path class="link-main ${cfg.cls} ${bwCls}" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}"
+          fill="none" stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      `;
+    } else {
+      gg.innerHTML = `
+        <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
+        <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
+          stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      `;
+    }
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);
     // Label in top layer
     if (lk.label && lblLayer) {
       const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
-      const pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
+      const pos = (bundle && bundle.waypoint)
+        ? _pickLabelPos(sc, tc, lbw, 0.55, bundle.waypoint.x, bundle.waypoint.y)
+        : _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
       const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       lg.setAttribute('class','link-label-g pw-link-label');
       lg.innerHTML = _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
