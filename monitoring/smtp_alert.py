@@ -416,16 +416,30 @@ def _render_snmp_body(ctx: dict) -> str:
         html += _html_stat_row(lbl, value, ri % 2 == 0); ri += 1
 
     # For SNMP warn_ms/crit_ms are value thresholds (field names are a misnomer).
-    thr = []
-    u_suffix = f' {unit}' if unit else ''
-    if ctx.get('warn_ms'):
-        thr.append(('Warn', f"&gt; {ctx['warn_ms']}{u_suffix}"))
-    if ctx.get('crit_ms'):
-        thr.append(('Crit', f"&gt; {ctx['crit_ms']}{u_suffix}"))
-    if thr:
-        html += _html_section_hdr('Thresholds')
-        for lbl, value in thr:
-            html += _html_stat_row(lbl, value, ri % 2 == 0); ri += 1
+    # Skip the section entirely for enum_state / time_duration / text categories
+    # — the engine ignores numeric thresholds for those, so showing leftover
+    # config values like "Crit > 2" is misleading.
+    _skip_thr = False
+    try:
+        from core.state import _snmp_category_py
+        _skip_thr = _snmp_category_py(
+            ctx.get('snmp_unit', '') or '',
+            ctx.get('snmp_type', '') or '',
+            ctx.get('snmp_oid',  '') or '',
+        ) in ('enum_state', 'time_duration', 'text')
+    except Exception:
+        pass
+    if not _skip_thr:
+        thr = []
+        u_suffix = f' {unit}' if unit else ''
+        if ctx.get('warn_ms'):
+            thr.append(('Warn', f"&gt; {ctx['warn_ms']}{u_suffix}"))
+        if ctx.get('crit_ms'):
+            thr.append(('Crit', f"&gt; {ctx['crit_ms']}{u_suffix}"))
+        if thr:
+            html += _html_section_hdr('Thresholds')
+            for lbl, value in thr:
+                html += _html_stat_row(lbl, value, ri % 2 == 0); ri += 1
     return html
 
 
@@ -577,7 +591,13 @@ def _render_snmp_text(ctx: dict) -> list:
     dur = _fmt_duration(ctx.get('duration_s'))
     if dur:
         rows.append(('Duration', dur))
-    rows.append(('Detail', _safe(ctx.get('detail', ''))))
+    detail_translated = _snmp_display_value({
+        'stype': 'snmp',
+        'last_value': ctx.get('detail', ''),
+        'snmp_unit':  ctx.get('snmp_unit', ''),
+        'snmp_oid':   ctx.get('snmp_oid', ''),
+    })
+    rows.append(('Detail', detail_translated))
     return rows
 
 
@@ -605,7 +625,18 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
     logo_s      = _html_logo_section(logo, _co)
     banner_s    = _html_status_banner(color, emoji, label, ts_str)
     breadcrumb_s = _html_breadcrumb(ctx) if ctx else ''
-    detail_val  = _safe(ctx.get('detail', '')) if ctx else ''
+    # SNMP enum probes carry the raw enum code in ctx["detail"] — translate to
+    # the human label ("down" / "up") so the hero "Last Message" banner matches
+    # the per-stype "Current Value" row below it.
+    if ctx and ctx.get('stype') == 'snmp':
+        detail_val = _snmp_display_value({
+            'stype': 'snmp',
+            'last_value': ctx.get('detail', ''),
+            'snmp_unit':  ctx.get('snmp_unit', ''),
+            'snmp_oid':   ctx.get('snmp_oid', ''),
+        })
+    else:
+        detail_val = _safe(ctx.get('detail', '')) if ctx else ''
     detail_s    = _html_detail_box(detail_val, color, severity)
     stats_s     = _html_stats_grid(ctx) if ctx else _html_legacy_rows(rows)
     footer_s    = _html_footer(_co)

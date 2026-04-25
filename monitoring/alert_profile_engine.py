@@ -189,6 +189,7 @@ def _build_ctx(dev, sensor, current_state: str, trigger_state: str,
         "last_value":    getattr(sensor, "last_value", None),
         "snmp_unit":     getattr(sensor, "snmp_unit", ""),
         "snmp_oid":      getattr(sensor, "snmp_oid", ""),
+        "snmp_type":     getattr(sensor, "snmp_type", ""),
         "port":          getattr(sensor, "port", None),
     }
     if duration_s is not None:
