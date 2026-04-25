@@ -268,6 +268,10 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .status-border-unknown  { stroke: rgba(150,160,180,0.6); stroke-width: 1.5;
                           stroke-dasharray: 3 3; opacity: 0.6; }
 @keyframes statusDownPulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }
+/* Respect OS-level reduce-motion (also drops compositor work). */
+@media (prefers-reduced-motion: reduce) {
+  .status-border-down { animation: none; }
+}
 
 /* ── SVG animations ── */
 .link-trunk   { stroke-dasharray:8,8;  animation:dashFlow 1.2s steps(8) infinite; }

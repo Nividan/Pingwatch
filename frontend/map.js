@@ -1450,9 +1450,15 @@ function _bundleWaypoint(hub, g) {
 
 const BUNDLE_MIN = 3;
 
-// Generic edge bundler — edges: [{id, src:Node, tgt:Node, link_type}]
+// Generic edge bundler — edges: [{id, src:Node, tgt:Node, link_type, label}]
 function _computeBundlesFromEdges(edges) {
+  // Fast path: bundling needs at least BUNDLE_MIN edges and at least one group.
+  if (!edges || edges.length < BUNDLE_MIN || !groups || groups.length === 0) {
+    return { bundles: new Map(), lkBundleKey: {}, lkOrder: {} };
+  }
   const bundles = new Map();   // key → { hubId, group, waypoint, lkIds:Set }
+  const edgeById = new Map();
+  for (const e of edges) edgeById.set(e.id, e);
   const _addCandidate = (hub, recv, edge) => {
     const key = hub.id + ':' + recv.id + ':' + (edge.link_type || 'trunk');
     let b = bundles.get(key);
@@ -1481,23 +1487,35 @@ function _computeBundlesFromEdges(edges) {
     b.waypoint = _bundleWaypoint(nodeMap[b.hubId], b.group);
     b.count = b.lkIds.size;
     b.order = {};
+    // Detect a shared label across the bundle — if all members carry the same
+    // label (e.g. "VLAN 100"), render it once on the trunk segment instead of
+    // stacking N identical badges along the tendrils.
+    const labels = new Set();
+    b.lkIds.forEach(id => labels.add(((edgeById.get(id)?.label) || '').trim()));
+    const sole = [...labels][0];
+    b.commonLabel = (labels.size === 1 && sole) ? sole : null;
     bundles.set(key, b);
     let i = 0;
     b.lkIds.forEach(id => { lkBundleKey[id] = key; b.order[id] = i; lkOrder[id] = i; i++; });
+    // The first link in iteration order acts as the bundle's representative
+    // for rendering the single trunk-label badge.
+    b.trunkLabelLkId = [...b.lkIds][0];
   }
   return { bundles, lkBundleKey, lkOrder };
 }
 
 function _computeBundles() {
   return _computeBundlesFromEdges(links.map(lk => ({
-    id: lk.id, src: nodeMap[lk.source_id], tgt: nodeMap[lk.target_id], link_type: lk.link_type
+    id: lk.id, src: nodeMap[lk.source_id], tgt: nodeMap[lk.target_id],
+    link_type: lk.link_type, label: lk.label
   })));
 }
 
 function _computePwBundles() {
   if (typeof pwLinks === 'undefined' || !pwLinks) return { bundles: new Map(), lkBundleKey: {} };
   return _computeBundlesFromEdges(pwLinks.map(lk => ({
-    id: lk.id, src: nodeMap[_pwNodeId(lk.src_did)], tgt: nodeMap[_pwNodeId(lk.tgt_did)], link_type: lk.link_type
+    id: lk.id, src: nodeMap[_pwNodeId(lk.src_did)], tgt: nodeMap[_pwNodeId(lk.tgt_did)],
+    link_type: lk.link_type, label: lk.label
   })));
 }
 
@@ -1601,21 +1619,35 @@ function renderPwLinksInLayer(layer, lblLayer) {
     layer.appendChild(gg);
     // Label in top layer
     if (lk.label && lblLayer) {
-      const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
-      let pos;
-      if (bundle && bundle.waypoint) {
-        const n = bundle.count || 1;
-        const ord = bundle.order?.[lk.id] ?? 0;
-        const tPref = n > 1 ? (0.68 + 0.22 * (ord / (n - 1))) : 0.78;
-        pos = _pickLabelPos(sc, tc, lbw, tPref, bundle.waypoint.x, bundle.waypoint.y);
+      // Common-label bundle: render the badge once on the trunk; suppress siblings.
+      const isBundled = bundle && bundle.waypoint;
+      const useTrunk = isBundled && bundle.commonLabel != null;
+      if (useTrunk && lk.id !== bundle.trunkLabelLkId) {
+        // Suppress sibling — the trunk-label link will draw the shared badge.
       } else {
-        pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
+        const labelText = useTrunk ? bundle.commonLabel : lk.label;
+        const lbw = labelText.length * LINK_LBL_CHAR_PX + 4;
+        let pos;
+        if (useTrunk) {
+          const t = 0.35;
+          pos = {
+            lbx: (sc.x + (bundle.waypoint.x - sc.x) * t).toFixed(1),
+            lby: (sc.y + (bundle.waypoint.y - sc.y) * t - 4).toFixed(1),
+          };
+        } else if (isBundled) {
+          const n = bundle.count || 1;
+          const ord = bundle.order?.[lk.id] ?? 0;
+          const tPref = n > 1 ? (0.68 + 0.22 * (ord / (n - 1))) : 0.78;
+          pos = _pickLabelPos(sc, tc, lbw, tPref, bundle.waypoint.x, bundle.waypoint.y);
+        } else {
+          pos = _pickLabelPos(sc, tc, lbw, tArr[pwIdx % 3]);
+        }
+        const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        lg.setAttribute('class','link-label-g pw-link-label');
+        lg.innerHTML = _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, labelText);
+        lg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
+        lblLayer.appendChild(lg);
       }
-      const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      lg.setAttribute('class','link-label-g pw-link-label');
-      lg.innerHTML = _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
-      lg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
-      lblLayer.appendChild(lg);
     }
     pwIdx++;
   });
@@ -1730,6 +1762,18 @@ function _pickLabelPos(c1, c2, lbw, tPrefer, qx, qy) {
 
 function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
   if (!lk.label || lk.link_type === 'tunnel') return '';
+  // Bundle with one shared label across all members → render once on the trunk segment.
+  if (bundle && bundle.commonLabel != null) {
+    if (lk.id !== bundle.trunkLabelLkId) return '';
+    const c1 = nodeCenter(src);
+    const cfg = lcfg(lk.link_type);
+    const lbw = bundle.commonLabel.length * LINK_LBL_CHAR_PX + 4;
+    // Place the badge ~35% along the trunk (hub → waypoint), so it sits before the fan-out.
+    const t = 0.35;
+    const lbx = (c1.x + (bundle.waypoint.x - c1.x) * t).toFixed(1);
+    const lby = (c1.y + (bundle.waypoint.y - c1.y) * t - 4).toFixed(1);
+    return _linkLabelSvg(lbx, lby, lbw.toFixed(0), cfg.stroke, bundle.commonLabel);
+  }
   const c1 = nodeCenter(src), c2 = nodeCenter(tgt);
   const cfg = lcfg(lk.link_type);
   const lbw = lk.label.length * LINK_LBL_CHAR_PX + 4;
@@ -1818,13 +1862,17 @@ function _resolveNodeStatus(node) {
   return node.properties?.status || null;
 }
 
-// Paint a status-colored border + glow halo around a node.
-// Idempotent: removes any prior status-border before re-applying.
+// Paint a status-colored border around a node.
+// Idempotent: returns immediately if the same status was last applied to this
+// element — avoids DOM churn on repeated SSE-driven re-applies.
 function _applyStatusBorder(el, node) {
-  el.querySelector('.status-border')?.remove();
   if (node.type === 'info-box' || node.type === 'cloud') return;
-  const s = _resolveNodeStatus(node);
-  if (s !== 'up' && s !== 'warn' && s !== 'down' && s !== 'unknown') return;
+  const raw = _resolveNodeStatus(node);
+  const s = (raw === 'up' || raw === 'warn' || raw === 'down' || raw === 'unknown') ? raw : '';
+  if (el._pwStatusBorderClass === s) return;
+  el._pwStatusBorderClass = s;
+  el.querySelector('.status-border')?.remove();
+  if (!s) return;
   const sz = nsize(node.type, node);
   const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   r.setAttribute('class', 'status-border status-border-' + s);
@@ -1834,9 +1882,9 @@ function _applyStatusBorder(el, node) {
   r.setAttribute('rx', '6');
   r.setAttribute('fill', 'none');
   r.setAttribute('pointer-events', 'none');
-  if (s === 'down')      r.setAttribute('filter', 'url(#glow-down)');
-  else if (s === 'warn') r.setAttribute('filter', 'url(#glow-warn)');
-  else if (s === 'up')   r.setAttribute('filter', 'url(#glow-up)');
+  // Note: SVG filters rasterize their source in user-space before applying, which
+  // defeats vector-effect:non-scaling-stroke at low zoom. Rely on stroke + pulse
+  // for emphasis instead — the dropped halo isn't worth the visibility loss.
   el.appendChild(r);
 }
 

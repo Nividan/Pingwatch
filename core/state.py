@@ -1403,14 +1403,37 @@ class MonitorState:
         _new_thr = "ok"
         _thr_chk = None
         if result["ok"]:
-            if s.stype in ('snmp', 'tls'):
-                if s._last_rate is not None:
+            if s.stype == 'snmp':
+                # Skip numeric threshold comparison for non-numeric SNMP categories.
+                # Why: enum codes (1=up,2=down,...), uptime ticks, and OCTET STRINGs
+                # are not numeric metrics — comparing the raw enum code (e.g. 2)
+                # against crit_ms triggers a meaningless "Threshold Alert (crit): 2"
+                # alongside the proper state_down event from the typed detector above.
+                try:
+                    _cat_skip = _snmp_category_py(s.snmp_unit, s.snmp_type, s.snmp_oid) in (
+                        "enum_state", "time_duration", "text"
+                    )
+                except Exception:
+                    _cat_skip = False
+                if _cat_skip:
+                    pass
+                elif s._last_rate is not None:
                     _u = s.snmp_unit
                     if _u in _BYTE_UNITS or _u == "":
                         # Traffic bytes counter — compare in Mbps
                         _thr_chk = s._last_rate * 8 / 1_000_000
                     else:
                         # Event counter (errors, packets) — compare raw events/sec
+                        _thr_chk = s._last_rate
+                else:
+                    try: _thr_chk = float(s.last_value)
+                    except (TypeError, ValueError): pass
+            elif s.stype == 'tls':
+                if s._last_rate is not None:
+                    _u = s.snmp_unit
+                    if _u in _BYTE_UNITS or _u == "":
+                        _thr_chk = s._last_rate * 8 / 1_000_000
+                    else:
                         _thr_chk = s._last_rate
                 else:
                     try: _thr_chk = float(s.last_value)
