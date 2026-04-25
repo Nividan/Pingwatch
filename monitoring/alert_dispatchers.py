@@ -311,6 +311,22 @@ def dispatch_syslog(cfg: dict, ctx: dict) -> None:
     sname  = ctx.get("sname",  ctx.get("sid", "?"))
     etype  = ctx.get("event_type", "")
     detail = ctx.get("detail", "")
+    # SNMP enum-state sensors carry the raw enum code ("2") in detail; translate
+    # to the human label ("down") via the unit legend or well-known OID fallback.
+    if ctx.get("stype") == "snmp" and detail:
+        try:
+            from core.state import _effective_enum_legend_py
+            legend = _effective_enum_legend_py(ctx.get("snmp_unit", ""),
+                                               ctx.get("snmp_oid", ""))
+            if legend:
+                try:
+                    code = str(int(float(detail)))
+                except (ValueError, TypeError):
+                    code = str(detail)
+                if code in legend:
+                    detail = legend[code]
+        except Exception:
+            pass
     msg    = f"[ALERT] {dname}/{sname} — {etype}" + (f" — {detail}" if detail else "")
 
     payload = _format_rfc5424(pri, hostname, msg)

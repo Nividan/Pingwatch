@@ -402,7 +402,7 @@ def _render_snmp_body(ctx: dict) -> str:
     for lbl, val in rows:
         html += _html_stat_row(lbl, val, ri % 2 == 0); ri += 1
 
-    val = _safe(ctx.get('last_value', '')) or '\u2014'
+    val = _snmp_display_value(ctx) or '\u2014'
     ms = ctx.get('ms')
     html += _html_section_hdr('Reading')
     read_rows = [
@@ -568,7 +568,7 @@ def _render_snmp_text(ctx: dict) -> list:
         rows.append(('OID', oid))
     if unit:
         rows.append(('Unit', unit))
-    val = _safe(ctx.get('last_value', ''))
+    val = _snmp_display_value(ctx)
     if val:
         rows.append(('Current Value', val))
     ms = ctx.get('ms')
@@ -729,6 +729,31 @@ def _persist_probe_result(ts: float, ok: bool, err_msg: str) -> None:
 def _safe(v):
     """Strip CR/LF from user-controlled values to prevent email header injection."""
     return str(v or '').replace('\r', '').replace('\n', ' ')
+
+
+def _snmp_display_value(ctx: dict) -> str:
+    """Translate raw SNMP enum codes ("2") into human labels ("down") using the
+    sensor's unit legend or the well-known IF-MIB / UPS-MIB OID fallback. Pass
+    through unchanged for non-enum SNMP values and non-SNMP sensors. Always
+    routes through _safe() so callers don't need to."""
+    raw = ctx.get('last_value', '')
+    if raw is None or raw == '':
+        return ''
+    if ctx.get('stype') == 'snmp':
+        try:
+            from core.state import _effective_enum_legend_py
+            legend = _effective_enum_legend_py(ctx.get('snmp_unit', ''),
+                                                ctx.get('snmp_oid', ''))
+            if legend:
+                try:
+                    code = str(int(float(raw)))
+                except (ValueError, TypeError):
+                    code = str(raw)
+                if code in legend:
+                    return _safe(legend[code])
+        except Exception:
+            pass
+    return _safe(raw)
 
 
 def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
