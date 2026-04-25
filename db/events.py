@@ -448,6 +448,49 @@ def db_resolve_flaps_by_sensor(did, sid):
         con.close()
 
 
+def db_has_open_flap(did, sid, directions=("down",)) -> bool:
+    """Return True if at least one flap_log row for did+sid in `directions`
+    is still active or acknowledged (i.e. not resolved).
+
+    Used by long-lived monitors (license_checker, etc.) to decide whether
+    the underlying problem already has an open event in the Events tab —
+    so we can re-create the flap when the original was resolved by the
+    user but the condition still exists.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                ph = ",".join(["%s"] * len(directions))
+                cur.execute(
+                    f"SELECT 1 FROM flap_log "
+                    f"WHERE did=%s AND sid=%s AND direction IN ({ph}) "
+                    f"AND COALESCE(ack_state,'active') IN ('active','acknowledged') "
+                    f"LIMIT 1",
+                    (did, sid, *directions)
+                )
+                return cur.fetchone() is not None
+        except Exception as e:
+            log.error(f"db_has_open_flap error: {e}")
+            return False
+    con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+    try:
+        ph = ",".join(["?"] * len(directions))
+        row = con.execute(
+            f"SELECT 1 FROM flap_log "
+            f"WHERE did=? AND sid=? AND direction IN ({ph}) "
+            f"AND COALESCE(ack_state,'active') IN ('active','acknowledged') "
+            f"LIMIT 1",
+            (did, sid, *directions)
+        ).fetchone()
+        return row is not None
+    except Exception as e:
+        log.error(f"db_has_open_flap error: {e}")
+        return False
+    finally:
+        con.close()
+
+
 def db_count_active_flaps() -> int:
     """Count flap_log entries with ack_state in ('active','acknowledged')."""
     if is_pg():

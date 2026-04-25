@@ -42,6 +42,7 @@ from db.events      import (
     db_resolve_flap,
     db_resolve_flaps_by_sensor,
     db_resolve_all_flaps,
+    db_has_open_flap,
     db_count_active_flaps,
     db_count_active_flaps_by_severity,
     db_log_trap,
@@ -231,7 +232,7 @@ __all__ = [
     "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
     "db_rollup_backfill", "db_cleanup_impossible_rates", "db_sample_buffer_stats",
     # events
-    "db_log_flap", "db_load_flaps", "db_auto_resolve_flap", "db_ack_flap", "db_ack_flaps_by_sensor", "db_resolve_flap", "db_resolve_flaps_by_sensor", "db_resolve_all_flaps", "db_count_active_flaps", "db_count_active_flaps_by_severity",
+    "db_log_flap", "db_load_flaps", "db_auto_resolve_flap", "db_ack_flap", "db_ack_flaps_by_sensor", "db_resolve_flap", "db_resolve_flaps_by_sensor", "db_resolve_all_flaps", "db_has_open_flap", "db_count_active_flaps", "db_count_active_flaps_by_severity",
     "db_log_trap", "db_load_traps", "db_clear_device_traps",
     "db_log_err", "db_load_err_logs", "db_clear_err_logs",
     "db_clear_sensor_err_logs",
