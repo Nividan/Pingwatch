@@ -890,6 +890,15 @@ function startPwSSE() {
         _pwSensorThresholdUpdate(d.did, d.sid, state);
       });
     });
+    // Typed SNMP enum-state transitions feed the same sensor-state map so the
+    // live panel counts these as incidents alongside legacy threshold events.
+    [['flap_state_down','crit'], ['flap_state_change','warn'], ['flap_state_up','ok']].forEach(([evt,state]) => {
+      pwSSE.addEventListener(evt, e => {
+        if (!isPingWatchPage || !_ntmVisible) return;
+        const d = JSON.parse(e.data);
+        _pwSensorThresholdUpdate(d.did, d.sid, state);
+      });
+    });
     // ── Live device CRUD: keep map in sync without manual refresh ──
     pwSSE.addEventListener('device_added', e => {
       if (!isPingWatchPage || !_ntmVisible) return;

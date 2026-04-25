@@ -1260,6 +1260,27 @@ class MonitorState:
                                  "from_code": _prev_code, "to_code": _cur_code,
                                  "legend": legend}
                             ))
+                            # Drive _threshold_state from the typed transition so
+                            # Device.status, the alert profile engine, and the
+                            # right-side live panel all see this as a real incident.
+                            # We deliberately do NOT broadcast threshold_critical /
+                            # threshold_warning / threshold_ok here — the flap_state_*
+                            # broadcast above is the single source of truth for the
+                            # event; piping a second broadcast would re-introduce
+                            # the duplicate alert row we just removed.
+                            _thr_target = {"state_down": "crit", "state_change": "warn",
+                                           "state_up": "ok"}.get(_dir)
+                            if _thr_target is not None and _thr_target != s._threshold_state:
+                                s._threshold_state = _thr_target
+                                if _thr_target == "ok":
+                                    s._threshold_triggered_ts     = None
+                                    s._threshold_recovery_pending = False
+                                    s._alerted_down               = False
+                                    s._email_sent_down            = False
+                                else:
+                                    s._threshold_triggered_ts     = time.time()
+                                    s._threshold_recovery_pending = False
+                                dev.invalidate_status()
                             self._broadcast(f"flap_{_dir}", _flap)
                             _db_enqueue(lambda _f=_flap: db_log_flap(_f))
                             if _dir == "state_up":
@@ -1416,7 +1437,11 @@ class MonitorState:
                 except Exception:
                     _cat_skip = False
                 if _cat_skip:
-                    pass
+                    # Typed detector owns _threshold_state for these categories.
+                    # Preserve it so the transition block below stays a no-op
+                    # (otherwise _new_thr=ok != threshold_state=crit would fire
+                    # a spurious threshold_ok recovery on every probe).
+                    _new_thr = s._threshold_state
                 elif s._last_rate is not None:
                     _u = s.snmp_unit
                     if _u in _BYTE_UNITS or _u == "":

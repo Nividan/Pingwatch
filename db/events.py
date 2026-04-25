@@ -272,7 +272,7 @@ def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
 
 def db_load_flaps():
     """Return last 500 flap events, newest first.  Excludes legacy recovery rows."""
-    _filter = "WHERE direction NOT IN ('recovered','threshold_ok') "
+    _filter = "WHERE direction NOT IN ('recovered','threshold_ok','state_up') "
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
