@@ -701,6 +701,36 @@ function showPwDashboardPanel() {
   _resumeDashBg?.();
 }
 
+// Minimal port of _parseEnumLegend / _enumForOid from sensors.js so the map
+// iframe (which doesn't load sensors.js) can translate raw enum codes like "2"
+// into human-readable labels like "down". Keep in sync with sensors.js.
+const _PW_KNOWN_ENUM_OIDS = [
+  {prefix: '1.3.6.1.2.1.2.2.1.8.',  legend: {1:'up',2:'down',3:'testing',4:'unknown',5:'dormant',6:'notPresent',7:'lowerLayerDown'}},
+  {prefix: '1.3.6.1.2.1.2.2.1.7.',  legend: {1:'up',2:'down',3:'testing'}},
+  {prefix: '1.3.6.1.2.1.33.1.2.1.', legend: {1:'unknown',2:'batteryNormal',3:'batteryLow',4:'batteryDepleted'}},
+];
+function _pwSensorIncidentVal(s) {
+  if (!s || s.last_value == null || s.last_value === '') return '';
+  if (s.stype === 'snmp') {
+    let legend = null;
+    if (s.snmp_unit) {
+      legend = {};
+      for (const m of s.snmp_unit.matchAll(/(\d+)\s*=\s*([a-z][\w-]*)/gi)) legend[m[1]] = m[2];
+      if (!Object.keys(legend).length) legend = null;
+    }
+    if (!legend && s.snmp_oid) {
+      for (const e of _PW_KNOWN_ENUM_OIDS) {
+        if (s.snmp_oid.startsWith(e.prefix)) { legend = e.legend; break; }
+      }
+    }
+    if (legend) {
+      const n = parseInt(s.last_value, 10);
+      if (!isNaN(n) && legend[String(n)]) return legend[String(n)];
+    }
+  }
+  return String(s.last_value);
+}
+
 function _buildIncidentList() {
   const downDevs = pwDevices.filter(d => d.status === 'down' && !d.alerts_muted);
   const threshInc = [];
@@ -735,7 +765,8 @@ function _buildIncidentList() {
     </div>`;
   }
   for (const { dev, sensor } of critInc) {
-    const val = sensor.last_value ? escXml(String(sensor.last_value)) : '';
+    const raw = _pwSensorIncidentVal(sensor);
+    const val = raw ? escXml(raw) : '';
     html += `<div class="inc-card inc-card-crit">
       <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-crit"></span><span class="inc-hdr-txt">THRESHOLD CRIT</span></div>
       <div class="inc-name">${escXml(dev.name)}</div>
@@ -744,7 +775,8 @@ function _buildIncidentList() {
     </div>`;
   }
   for (const { dev, sensor } of warnInc) {
-    const val = sensor.last_value ? escXml(String(sensor.last_value)) : '';
+    const raw = _pwSensorIncidentVal(sensor);
+    const val = raw ? escXml(raw) : '';
     html += `<div class="inc-card inc-card-warn">
       <div class="inc-card-hdr"><span class="inc-pulse inc-pulse-warn"></span><span class="inc-hdr-txt">THRESHOLD WARN</span></div>
       <div class="inc-name">${escXml(dev.name)}</div>
