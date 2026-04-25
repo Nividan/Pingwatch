@@ -609,6 +609,14 @@ def main():
     except Exception as _re:
         log.error(f"Rollup backfill: {_re}")
 
+    # One-shot cleanup of impossible SNMP rates left by the pre-fix Counter64
+    # reset-as-wrap bug. Self-gates via app_settings marker.
+    try:
+        from db.samples import db_cleanup_impossible_rates
+        db_cleanup_impossible_rates()
+    except Exception as _re:
+        log.error(f"Rate cleanup: {_re}")
+
     try:
         init_topo_db()
     except Exception as _e:

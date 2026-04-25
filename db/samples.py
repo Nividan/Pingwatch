@@ -748,6 +748,82 @@ def _mark_migration_done(key: str) -> None:
         log.warning(f"Could not mark migration '{key}' done: {e}")
 
 
+# Absolute upper bound for an SNMP counter rate (bytes/sec or events/sec).
+# 1.25e11 B/s = 1 TB/s = 8 Tbps — beyond any physical interface in use today.
+# Anything above is the residue of a counter reset misread as a wrap, or a
+# clock anomaly on the probe side. Used by both the probe-time defense in
+# core/state.py and the one-shot cleanup below.
+_RATE_SANITY_MAX = 1.25e11
+
+
+def db_cleanup_impossible_rates():
+    """Scrub physically-impossible rate values left over from before the
+    probe-time defenses landed (Counter64 reset misread as wrap, sub-second
+    elapsed division, etc.). Runs once, gated by an app_settings marker.
+
+    NULLs the offending columns rather than deleting rows so the
+    surrounding sample/aggregate stays intact for the History chart.
+    """
+    _KEY = "rate_cleanup_v1_done"
+    if _migration_done(_KEY):
+        return
+    try:
+        if is_pg():
+            from db.pg_pool import pg_conn
+            with pg_conn("logs") as con:
+                cur = con.cursor()
+                cur.execute(
+                    "UPDATE sensor_samples SET rate=NULL WHERE rate > %s",
+                    (_RATE_SANITY_MAX,),
+                )
+                cur.execute(
+                    "UPDATE sensor_samples_5m "
+                    "SET avg_rate = CASE WHEN avg_rate > %s THEN NULL ELSE avg_rate END, "
+                    "    min_rate = CASE WHEN min_rate > %s THEN NULL ELSE min_rate END, "
+                    "    max_rate = CASE WHEN max_rate > %s THEN NULL ELSE max_rate END "
+                    "WHERE avg_rate > %s OR min_rate > %s OR max_rate > %s",
+                    (_RATE_SANITY_MAX,) * 6,
+                )
+                cur.execute(
+                    "UPDATE sensor_samples_1h "
+                    "SET avg_rate = CASE WHEN avg_rate > %s THEN NULL ELSE avg_rate END, "
+                    "    min_rate = CASE WHEN min_rate > %s THEN NULL ELSE min_rate END, "
+                    "    max_rate = CASE WHEN max_rate > %s THEN NULL ELSE max_rate END "
+                    "WHERE avg_rate > %s OR min_rate > %s OR max_rate > %s",
+                    (_RATE_SANITY_MAX,) * 6,
+                )
+        else:
+            con = sqlite3.connect(LOGS_DB_PATH, timeout=10)
+            try:
+                con.execute(
+                    "UPDATE sensor_samples SET rate=NULL WHERE rate > ?",
+                    (_RATE_SANITY_MAX,),
+                )
+                con.execute(
+                    "UPDATE sensor_samples_5m SET "
+                    "avg_rate = CASE WHEN avg_rate > ? THEN NULL ELSE avg_rate END, "
+                    "min_rate = CASE WHEN min_rate > ? THEN NULL ELSE min_rate END, "
+                    "max_rate = CASE WHEN max_rate > ? THEN NULL ELSE max_rate END "
+                    "WHERE avg_rate > ? OR min_rate > ? OR max_rate > ?",
+                    (_RATE_SANITY_MAX,) * 6,
+                )
+                con.execute(
+                    "UPDATE sensor_samples_1h SET "
+                    "avg_rate = CASE WHEN avg_rate > ? THEN NULL ELSE avg_rate END, "
+                    "min_rate = CASE WHEN min_rate > ? THEN NULL ELSE min_rate END, "
+                    "max_rate = CASE WHEN max_rate > ? THEN NULL ELSE max_rate END "
+                    "WHERE avg_rate > ? OR min_rate > ? OR max_rate > ?",
+                    (_RATE_SANITY_MAX,) * 6,
+                )
+                con.commit()
+            finally:
+                con.close()
+        _mark_migration_done(_KEY)
+        log.info("Cleaned up impossible SNMP rate values from sample tables")
+    except Exception as e:
+        log.error(f"db_cleanup_impossible_rates failed: {e}", exc_info=True)
+
+
 def db_rollup_backfill():
     """Backfill rollup tables from existing raw data if needed.
 

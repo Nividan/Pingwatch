@@ -1340,6 +1340,12 @@ function _fmtGaugeYLabel(v, snmpUnit) {
   return v.toFixed(Math.abs(v) < 10 ? 1 : 0);
 }
 
+// Mirror of _RATE_SANITY_MAX in db/samples.py (1 TB/s = 8 Tbps). Defense in
+// depth: any rate above this is residue from the pre-fix Counter64 reset bug
+// or upstream clock anomaly — skip it so the chart doesn't render the spike.
+const _RATE_SANITY_MAX = 1.25e11;
+function _saneRate(v) { return (v != null && v <= _RATE_SANITY_MAX) ? v : null; }
+
 function _computeRateSamples(samples, snmpUnit) {
   if (!_COUNTER_HIST_UNITS.has(snmpUnit)) return null;
   // Each returned item carries {ts, ok, rate, min, max, ms}:
@@ -1358,11 +1364,14 @@ function _computeRateSamples(samples, snmpUnit) {
       }
       // v0.9.7: prefer backend rate aggregates (Counter64-safe, peak-preserving).
       if (p.avg_rate != null) {
+        const _avg = _saneRate(p.avg_rate);
+        const _min = _saneRate(p.min_rate);
+        const _max = _saneRate(p.max_rate);
         result.push({
           ts: p.ts, ok: true,
-          rate: p.avg_rate,
-          min: p.min_rate != null ? p.min_rate : p.avg_rate,
-          max: p.max_rate != null ? p.max_rate : p.avg_rate,
+          rate: _avg,
+          min: _min != null ? _min : _avg,
+          max: _max != null ? _max : _avg,
           ms:  p.ms,
         });
         continue;
@@ -1388,7 +1397,8 @@ function _computeRateSamples(samples, snmpUnit) {
     if (!curr.ok) { result.push({ts: curr.ts, ok: false, rate: null, min: null, max: null, ms: curr.ms}); continue; }
     // v0.9.7: prefer backend-computed rate (correct Counter64 wrap, no prev needed).
     if (curr.rate != null) {
-      result.push({ts: curr.ts, ok: true, rate: curr.rate, min: curr.rate, max: curr.rate, ms: curr.ms});
+      const _r = _saneRate(curr.rate);
+      result.push({ts: curr.ts, ok: true, rate: _r, min: _r, max: _r, ms: curr.ms});
       continue;
     }
     // Fallback: client-side diff of consecutive raw counters (Counter32 only).

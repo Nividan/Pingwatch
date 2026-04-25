@@ -1174,15 +1174,33 @@ class MonitorState:
                     _now = time.time()
                     if s._snmp_prev is not None and s._snmp_prev_ts is not None:
                         _elapsed = _now - s._snmp_prev_ts
-                        if _elapsed > 0:
-                            _delta = _cur - s._snmp_prev
-                            if _delta < 0:  # counter wrapped
-                                _delta += (2**32 if _stype == "counter32" else 2**64)
-                            _rate = _delta / _elapsed  # bytes/sec OR events/sec
+                        _delta   = _cur - s._snmp_prev
+                        _rate    = None
+                        if _elapsed < 1.0:
+                            # Sub-second elapsed → division would amplify timing
+                            # noise into huge rate spikes. Skip this sample.
+                            pass
+                        elif _delta < 0:
+                            # Counter32 wraps every ~34s at 1Gbps — adding 2^32 is
+                            # legitimate. Counter64 wraps take decades; a negative
+                            # delta there means the agent reset (reboot, ifIndex
+                            # reuse, snmpd restart) and the rate is unknowable.
+                            if _stype == "counter32":
+                                _delta += 2**32
+                                _rate = _delta / _elapsed
+                            # else: leave _rate=None for counter64 reset
+                        else:
+                            _rate = _delta / _elapsed
+                        # Absolute sanity ceiling: 1.25e11 B/s = 1 TB/s = 8 Tbps.
+                        # No physical interface today exceeds this; anything
+                        # above is garbage from a missed reset or clock anomaly.
+                        if _rate is not None and _rate > 1.25e11:
+                            _rate = None
+                        if _rate is not None:
                             s._last_rate = _rate
                             s.last_value = _fmt_rate(_rate, s.snmp_unit)
                         else:
-                            s.last_value = _raw_val
+                            s.last_value = None
                             s._last_rate = None
                     else:
                         s.last_value  = None  # first poll — no rate yet
