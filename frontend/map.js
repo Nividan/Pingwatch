@@ -31,6 +31,7 @@ let _pwDevMap = {};           // device_id → device object (O(1) lookup)
 let pwSSE = null;             // SSE EventSource for live status updates
 let _selectedPwDid = null;   // device_id currently shown in panel
 let _pwTraceSrcDid = null;   // trace source override (null = auto-detect by name)
+let _pwBundleWaypointByPair = {}; // populated by renderPwLinksInLayer; lets the trace anim follow bundle curves
 let _pwActiveTraces = 0;     // concurrent animation count
 
 // ── Performance: canvas pause/resume via postMessage from parent ──────────
@@ -1135,6 +1136,13 @@ function _pwAnimateTrace(pathDids, color) {
   // Silently filtering nulls would draw an arc that skips intermediate nodes.
   if (pts.some(p => p === null)) return;
   if (pts.length < 2) return;
+  // Per-segment waypoint lookup — null = straight line, else quadratic bezier control point.
+  const segWaypoint = [];
+  for (let i = 0; i < pathDids.length - 1; i++) {
+    const a = String(pathDids[i]), b = String(pathDids[i + 1]);
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    segWaypoint.push(_pwBundleWaypointByPair[key] || null);
+  }
   const layer = document.getElementById('anim-layer');
   if (!layer) return;
   _markPathFlowing(pathDids);
@@ -1153,8 +1161,18 @@ function _pwAnimateTrace(pathDids, color) {
     if (!startTs) startTs = ts;
     const t = Math.min((ts - startTs) / segDur, 1);
     const p0 = pts[segIdx], p1 = pts[segIdx + 1];
-    dot.setAttribute('cx', (p0.x + (p1.x - p0.x) * t).toFixed(1));
-    dot.setAttribute('cy', (p0.y + (p1.y - p0.y) * t).toFixed(1));
+    const w = segWaypoint[segIdx];
+    let cx, cy;
+    if (w) {
+      const u = 1 - t;
+      cx = u * u * p0.x + 2 * u * t * w.x + t * t * p1.x;
+      cy = u * u * p0.y + 2 * u * t * w.y + t * t * p1.y;
+    } else {
+      cx = p0.x + (p1.x - p0.x) * t;
+      cy = p0.y + (p1.y - p0.y) * t;
+    }
+    dot.setAttribute('cx', cx.toFixed(1));
+    dot.setAttribute('cy', cy.toFixed(1));
     if (t < 1) {
       setTimeout(() => requestAnimationFrame(step), _TRACE_MS);
     } else if (segIdx + 2 < pts.length) {
@@ -1674,6 +1692,18 @@ function renderPwLinksInLayer(layer, lblLayer) {
   let pwIdx = 0;
   // Detect hub→group bundles in pw-links (live page).
   const { bundles: pwBundles, lkBundleKey: pwLkBundleKey } = _computePwBundles();
+  // Cache the waypoint by sorted device-id pair so the probe trace animation
+  // can step along the same bezier instead of a straight line.
+  _pwBundleWaypointByPair = {};
+  pwLinks.forEach(lk => {
+    const bk = pwLkBundleKey[lk.id];
+    const b  = bk ? pwBundles.get(bk) : null;
+    if (b && b.waypoint) {
+      const a = String(lk.src_did), c = String(lk.tgt_did);
+      const key = a < c ? a + '|' + c : c + '|' + a;
+      _pwBundleWaypointByPair[key] = b.waypoint;
+    }
+  });
   pwLinks.forEach(lk => {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
