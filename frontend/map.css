@@ -56,9 +56,12 @@ body::before {
   content:''; position:fixed; inset:0;
   background-image: linear-gradient(var(--grid) 1px,transparent 1px), linear-gradient(90deg,var(--grid) 1px,transparent 1px);
   background-size:40px 40px; z-index:0; pointer-events:none;
-  animation: gridShift 20s linear infinite;
+  animation: gridShift 60s linear infinite;
 }
 @keyframes gridShift { to { background-position:40px 40px; } }
+/* Pause the body grid drift when the map iframe is not the foreground:
+   the user can't tell — saves continuous compositor work on the whole viewport. */
+html.map-idle body::before { animation-play-state: paused; }
 
 /* ── Fullscreen mode ── */
 body.fs-active #page-bar { display:none; }
@@ -263,32 +266,43 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
                           transition: stroke 0.2s, opacity 0.2s; }
 .status-border-up       { stroke: var(--accent2); stroke-width: 2.5; opacity: 0.9; }
 .status-border-warn     { stroke: var(--warn);    stroke-width: 3.5; opacity: 0.95; }
-.status-border-down     { stroke: var(--danger);  stroke-width: 3.5; opacity: 1;
-                          animation: statusDownPulse 1.6s ease-in-out infinite; }
+.status-border-down     { stroke: var(--danger);  stroke-width: 3.5; opacity: 1; }
+/* Brief attention-grabbing pulse when a device JUST went down — JS adds
+   .recent for ~10s on the down transition then strips it. After that the
+   border stays a static red, no more compositor work. */
+.status-border-down.recent { animation: statusDownPulse 1.6s ease-in-out 6; }
 .status-border-unknown  { stroke: rgba(150,160,180,0.6); stroke-width: 1.5;
                           stroke-dasharray: 3 3; opacity: 0.6; }
 @keyframes statusDownPulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }
-/* Respect OS-level reduce-motion (also drops compositor work). */
-@media (prefers-reduced-motion: reduce) {
-  .status-border-down { animation: none; }
-}
 
-/* ── SVG animations ── */
-.link-trunk   { stroke-dasharray:8,8;  animation:dashFlow 1.2s steps(8) infinite; }
-.link-access  { stroke-dasharray:8,8;  animation:dashFlow 1.4s steps(10) infinite; }
-.link-ha      { stroke-dasharray:4,4;  animation:dashFlow 0.8s steps(6) infinite; }
-.link-internet{ stroke-dasharray:6,6;  animation:dashFlow 2s   steps(12) infinite; }
-.link-wifi    { stroke-dasharray:6,6;  animation:dashFlow 2.2s steps(12) infinite; }
-.link-tunnel  { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(15) infinite; }
-.link-tunnel2 { stroke-dasharray:3,11; animation:tunnelFlow 3s steps(15) infinite; animation-delay:-1.5s; }
+/* ── SVG animations ──
+   The static dasharray defines the visual style (dashed vs solid line) and
+   stays on the base class. The animated stroke-offset only runs when JS
+   adds .flowing on actual recent traffic — see _markLinkFlowing in map.js.
+   This collapses 50–150 simultaneous infinite animations into the 0–3 that
+   are actually active at any moment. */
+.link-trunk    { stroke-dasharray:8,8; }
+.link-access   { stroke-dasharray:8,8; }
+.link-ha       { stroke-dasharray:4,4; }
+.link-internet { stroke-dasharray:6,6; }
+.link-wifi     { stroke-dasharray:6,6; }
+.link-tunnel   { stroke-dasharray:3,11; }
+.link-tunnel2  { stroke-dasharray:3,11; }
+.link-trunk.flowing    { animation:dashFlow 1.2s steps(8)  infinite; }
+.link-access.flowing   { animation:dashFlow 1.4s steps(10) infinite; }
+.link-ha.flowing       { animation:dashFlow 0.8s steps(6)  infinite; }
+.link-internet.flowing { animation:dashFlow 2s   steps(12) infinite; }
+.link-wifi.flowing     { animation:dashFlow 2.2s steps(12) infinite; }
+.link-tunnel.flowing   { animation:tunnelFlow 3s steps(15) infinite; }
+.link-tunnel2.flowing  { animation:tunnelFlow 3s steps(15) infinite; animation-delay:-1.5s; }
 @keyframes dashFlow   { to { stroke-dashoffset:-16; } }
 @keyframes tunnelFlow { to { stroke-dashoffset:-28; } }
 
-/* ── Bandwidth threshold link pulse ── */
+/* ── Bandwidth threshold link pulse — also flow-gated ── */
 @keyframes pwBwCritPulse { 0%,100%{opacity:.9} 50%{opacity:.12} }
 @keyframes pwBwWarnPulse { 0%,100%{opacity:.85} 50%{opacity:.3} }
-.pw-bw-crit { animation:dashFlow 1.2s steps(15) infinite, pwBwCritPulse  1s ease-in-out infinite !important; }
-.pw-bw-warn { animation:dashFlow 1.2s steps(15) infinite, pwBwWarnPulse 2s ease-in-out infinite !important; }
+.pw-bw-crit.flowing { animation:dashFlow 1.2s steps(15) infinite, pwBwCritPulse  1s ease-in-out infinite !important; }
+.pw-bw-warn.flowing { animation:dashFlow 1.2s steps(15) infinite, pwBwWarnPulse 2s ease-in-out infinite !important; }
 
 .node-g { cursor:grab; }
 .node-g:active { cursor:grabbing; }
@@ -397,6 +411,8 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 
 /* ── Dashboard panel ─────────────────────────────────────────────── */
 @keyframes radarSpin { to { transform:rotate(360deg); } }
+.radar-g   { transform-origin:50px 50px; animation:radarSpin 3s linear infinite; }
+.radar-g-2 { animation-delay:-1s; }
 .dash-stat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; padding:0 12px 12px; }
 .dash-stat-card { text-align:center; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.1); border-radius:4px; padding:10px 4px; }
 .dash-stat-val  { font-family:'Orbitron',monospace; font-size:20px; font-weight:700; line-height:1; }
@@ -425,13 +441,26 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .inc-sensors { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(255,100,100,0.7); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .inc-val { font-family:'Orbitron',monospace; font-size:12px; font-weight:700; margin-top:3px; color:#a855f7; }
 .inc-val-warn { color:#ff8c00; }
-.inc-pulse { display:inline-block; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-.inc-pulse-down { background:#ff3333; animation:inc-pd 1.4s infinite; }
-.inc-pulse-crit { background:#a855f7; animation:inc-pc 1.8s infinite; }
-.inc-pulse-warn { background:#ff8c00; animation:inc-pw 2s infinite; }
-@keyframes inc-pd { 0%{box-shadow:0 0 0 0 rgba(255,51,51,0.5)} 70%{box-shadow:0 0 0 6px rgba(255,51,51,0)} 100%{box-shadow:0 0 0 0 rgba(255,51,51,0)} }
-@keyframes inc-pc { 0%{box-shadow:0 0 0 0 rgba(168,85,247,0.5)} 70%{box-shadow:0 0 0 6px rgba(168,85,247,0)} 100%{box-shadow:0 0 0 0 rgba(168,85,247,0)} }
-@keyframes inc-pw { 0%{box-shadow:0 0 0 0 rgba(255,140,0,0.5)} 70%{box-shadow:0 0 0 6px rgba(255,140,0,0)} 100%{box-shadow:0 0 0 0 rgba(255,140,0,0)} }
+/* Incident pulse — compositor-only (transform + opacity), zero paint per frame.
+   Previous box-shadow keyframes forced full rasterization on every tick and
+   choked the GPU pipeline browser-wide once a few incidents were on screen. */
+.inc-pulse { position:relative; display:inline-block; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.inc-pulse::after {
+  content:''; position:absolute; inset:-1px;
+  border-radius:50%; border:2px solid currentColor; opacity:0;
+  pointer-events:none; will-change:transform, opacity;
+  animation: inc-ring 1.6s ease-out infinite;
+}
+.inc-pulse-down { background:#ff3333; color:rgba(255,51,51,0.85); }
+.inc-pulse-crit { background:#a855f7; color:rgba(168,85,247,0.85); }
+.inc-pulse-warn { background:#ff8c00; color:rgba(255,140,0,0.85); }
+.inc-pulse-crit::after { animation-duration:1.8s; }
+.inc-pulse-warn::after { animation-duration:2s; }
+@keyframes inc-ring {
+  0%   { transform:scale(0.6); opacity:0.7; }
+  70%  { transform:scale(2.4); opacity:0; }
+  100% { transform:scale(2.4); opacity:0; }
+}
 .inc-all-clear { text-align:center; padding:18px 0 8px; }
 .inc-all-clear-icon { font-size:26px; color:#00ff9d; text-shadow:0 0 10px #00ff9d; margin-bottom:6px; }
 .inc-all-clear-txt { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(0,255,157,0.55); letter-spacing:1.5px; line-height:1.8; }
@@ -698,3 +727,41 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 
 /* Link hover outline on light background — dark outline, not white */
 [data-theme="light"] .link-g:hover .link-hit { stroke: rgba(9,105,218,0.25); }
+
+/* ── GPU/compositor budget control ──────────────────────────────────────────
+   When the map iframe is not the foreground (parent tab switched, window
+   blurred, OS tab hidden), pause all infinite CSS animations. The user can't
+   see them anyway — and continuing to run them starves the browser
+   compositor of frame budget, which causes other tabs (e.g. video playback)
+   to stutter. JS toggles `html.map-idle` from focus/blur/visibilitychange. */
+html.map-idle .radar-g,
+html.map-idle .link-trunk.flowing,
+html.map-idle .link-access.flowing,
+html.map-idle .link-ha.flowing,
+html.map-idle .link-internet.flowing,
+html.map-idle .link-wifi.flowing,
+html.map-idle .link-tunnel.flowing,
+html.map-idle .link-tunnel2.flowing,
+html.map-idle .pw-bw-crit.flowing,
+html.map-idle .pw-bw-warn.flowing,
+html.map-idle .inc-pulse::after,
+html.map-idle .status-border-down.recent,
+html.map-idle .logo-pulse,
+html.map-idle .led-blink {
+  animation-play-state: paused;
+}
+
+/* Respect OS-level reduce-motion: drop every continuous animation. */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  .radar-g,
+  .link-trunk.flowing, .link-access.flowing, .link-ha.flowing,
+  .link-internet.flowing, .link-wifi.flowing,
+  .link-tunnel.flowing, .link-tunnel2.flowing,
+  .pw-bw-crit.flowing, .pw-bw-warn.flowing,
+  .inc-pulse::after,
+  .status-border-down.recent,
+  .logo-pulse {
+    animation: none !important;
+  }
+}

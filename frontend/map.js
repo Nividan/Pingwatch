@@ -40,9 +40,10 @@ let _ntmVisible = true;
 let _resumeDashBg = null, _resumeMainBg = null;
 window.addEventListener('message', e => {
   if (e.origin !== window.location.origin) return;
-  if (e.data?.type === 'ntm_pause')  _ntmVisible = false;
+  if (e.data?.type === 'ntm_pause')  { _ntmVisible = false; _setRunFlag?.(); }
   if (e.data?.type === 'ntm_resume') {
     _ntmVisible = true;
+    _setRunFlag?.();
     _resumeDashBg?.();
     _resumeMainBg?.();
     // Catchup: apply any device status updates that arrived while map was paused
@@ -133,7 +134,22 @@ let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
   _bgPaused = document.hidden;
   if (!document.hidden) { _resumeDashBg?.(); _resumeMainBg?.(); }
+  _setRunFlag();
 });
+
+// CSS animation gating — toggles `html.map-idle` so the heavy continuous
+// animations (link flow, incident pulse, radar spin, body-grid drift) pause
+// when the user isn't looking at the map. Without this, the iframe's
+// compositor work continues even while the user is on YouTube in another tab,
+// starving the GPU pipeline browser-wide.
+let _winFocused = (typeof document.hasFocus === 'function') ? document.hasFocus() : true;
+function _setRunFlag() {
+  const idle = document.hidden || !_winFocused || !_ntmVisible;
+  document.documentElement.classList.toggle('map-idle', idle);
+}
+window.addEventListener('focus', () => { _winFocused = true;  _setRunFlag(); });
+window.addEventListener('blur',  () => { _winFocused = false; _setRunFlag(); });
+_setRunFlag();
 
 // ── Performance: batch _pwLiveUpdate calls — one DOM pass per rAF ─────────
 const _pendingLiveUpdates = new Set();
@@ -1025,6 +1041,37 @@ const PW_MAX_TRACES = 2;
 const _pwTraceCooldown = 6000;
 const _pwTraceLastFired = new Map();
 
+// ── Link `.flowing` activation ───────────────────────────────────────────────
+// Link dash animations only run when this helper marks them flowing. Without
+// this, every link in the topology runs an infinite stroke-offset animation
+// permanently — typically 50–150 concurrent animations, each repainting on
+// every frame. With it, a link only animates for ~6s after we observe traffic.
+const _LINK_FLOW_TTL = 6000;
+const _flowingTimers = new WeakMap();
+function _markLinkFlowing(linkMainEl) {
+  if (!linkMainEl) return;
+  linkMainEl.classList.add('flowing');
+  const prev = _flowingTimers.get(linkMainEl);
+  if (prev) clearTimeout(prev);
+  _flowingTimers.set(linkMainEl, setTimeout(() => {
+    linkMainEl.classList.remove('flowing');
+    _flowingTimers.delete(linkMainEl);
+  }, _LINK_FLOW_TTL));
+}
+function _markPathFlowing(pathDids) {
+  if (!Array.isArray(pwLinks) || !pathDids || pathDids.length < 2) return;
+  for (let i = 0; i < pathDids.length - 1; i++) {
+    const a = String(pathDids[i]), b = String(pathDids[i + 1]);
+    for (const lk of pwLinks) {
+      const sa = String(lk.src_did), tb = String(lk.tgt_did);
+      if ((sa === a && tb === b) || (sa === b && tb === a)) {
+        const g = document.querySelector(`g.pw-link[data-pwlid="${lk.id}"]`);
+        if (g) _markLinkFlowing(g.querySelector('.link-main'));
+      }
+    }
+  }
+}
+
 function _pwFireTrace(toDid, alive) {
   if (_pwActiveTraces >= PW_MAX_TRACES) return;
   const now = Date.now();
@@ -1049,6 +1096,7 @@ function _pwAnimateTrace(pathDids, color) {
   if (pts.length < 2) return;
   const layer = document.getElementById('anim-layer');
   if (!layer) return;
+  _markPathFlowing(pathDids);
   _pwActiveTraces++;
   const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
   dot.setAttribute('r', '5');
@@ -1629,11 +1677,8 @@ function renderPwLinksInLayer(layer, lblLayer) {
         const lbw = labelText.length * LINK_LBL_CHAR_PX + 4;
         let pos;
         if (useTrunk) {
-          const t = 0.35;
-          pos = {
-            lbx: (sc.x + (bundle.waypoint.x - sc.x) * t).toFixed(1),
-            lby: (sc.y + (bundle.waypoint.y - sc.y) * t - 4).toFixed(1),
-          };
+          // Single trunk badge along hub→waypoint with node-collision retry.
+          pos = _pickLabelPos(sc, bundle.waypoint, lbw, 0.4);
         } else if (isBundled) {
           const n = bundle.count || 1;
           const ord = bundle.order?.[lk.id] ?? 0;
@@ -1768,11 +1813,10 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
     const c1 = nodeCenter(src);
     const cfg = lcfg(lk.link_type);
     const lbw = bundle.commonLabel.length * LINK_LBL_CHAR_PX + 4;
-    // Place the badge ~35% along the trunk (hub → waypoint), so it sits before the fan-out.
-    const t = 0.35;
-    const lbx = (c1.x + (bundle.waypoint.x - c1.x) * t).toFixed(1);
-    const lby = (c1.y + (bundle.waypoint.y - c1.y) * t - 4).toFixed(1);
-    return _linkLabelSvg(lbx, lby, lbw.toFixed(0), cfg.stroke, bundle.commonLabel);
+    // Position along the hub→waypoint trunk with node-collision retry. Bias to
+    // t=0.4 (hub side) so labels stay outside the receiver group's title strip.
+    const pos = _pickLabelPos(c1, bundle.waypoint, lbw, 0.4);
+    return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, bundle.commonLabel);
   }
   const c1 = nodeCenter(src), c2 = nodeCenter(tgt);
   const cfg = lcfg(lk.link_type);
@@ -1869,13 +1913,19 @@ function _applyStatusBorder(el, node) {
   if (node.type === 'info-box' || node.type === 'cloud') return;
   const raw = _resolveNodeStatus(node);
   const s = (raw === 'up' || raw === 'warn' || raw === 'down' || raw === 'unknown') ? raw : '';
-  if (el._pwStatusBorderClass === s) return;
+  const prev = el._pwStatusBorderClass;
+  if (prev === s) return;
   el._pwStatusBorderClass = s;
   el.querySelector('.status-border')?.remove();
   if (!s) return;
   const sz = nsize(node.type, node);
   const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-  r.setAttribute('class', 'status-border status-border-' + s);
+  // `.recent` is added only when transitioning INTO down — the CSS pulses
+  // 6 times then naturally stops, so we get attention-grabbing motion on
+  // the actual change without burning compositor cycles forever after.
+  let cls = 'status-border status-border-' + s;
+  if (s === 'down' && prev !== 'down') cls += ' recent';
+  r.setAttribute('class', cls);
   r.setAttribute('x', '-5'); r.setAttribute('y', '-5');
   r.setAttribute('width', String(sz.w + 10));
   r.setAttribute('height', String(sz.h + 10));
@@ -1886,6 +1936,9 @@ function _applyStatusBorder(el, node) {
   // defeats vector-effect:non-scaling-stroke at low zoom. Rely on stroke + pulse
   // for emphasis instead — the dropped halo isn't worth the visibility loss.
   el.appendChild(r);
+  if (s === 'down' && prev !== 'down') {
+    setTimeout(() => { r.classList.remove('recent'); }, 10000);
+  }
 }
 
 // When set, renderOutsideLabel appends labels here instead of returning inline SVG
@@ -4927,11 +4980,11 @@ function showDashboardPanel() {
         <circle cx="50" cy="50" r="30" fill="none" stroke="rgba(0,212,255,0.05)" stroke-width="1"/>
         <circle cx="50" cy="50" r="16" fill="none" stroke="rgba(0,212,255,0.09)" stroke-width="1"/>
         <circle cx="50" cy="50" r="2.5" fill="rgba(0,212,255,0.5)"/>
-        <g style="transform-origin:50px 50px;animation:radarSpin 3s linear infinite">
+        <g class="radar-g">
           <line x1="50" y1="50" x2="50" y2="6" stroke="rgba(0,212,255,0.55)" stroke-width="1.5"/>
           <circle cx="50" cy="6" r="2" fill="rgba(0,212,255,0.9)"/>
         </g>
-        <g style="transform-origin:50px 50px;animation:radarSpin 3s linear infinite;animation-delay:-1s">
+        <g class="radar-g radar-g-2">
           <circle cx="50" cy="6" r="1" fill="rgba(0,212,255,0.25)"/>
         </g>
         ${nodes.slice(0,8).map((n,i) => {
