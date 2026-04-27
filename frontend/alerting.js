@@ -1029,7 +1029,7 @@ function _mwDayToggle(btn) {
 async function _alertMaintSave(id) {
   const name      = (document.getElementById('mw-name')?.value || '').trim();
   const scopeType = document.getElementById('mw-scope')?.value || 'all';
-  const scopeVal  = (document.getElementById('mw-scope-val')?.value || '').trim();
+  let   scopeVal  = (document.getElementById('mw-scope-val')?.value || '').trim();
   const startRaw  = document.getElementById('mw-start')?.value;
   const endRaw    = document.getElementById('mw-end')?.value;
   const recurring = document.getElementById('mw-recurring')?.checked || false;
