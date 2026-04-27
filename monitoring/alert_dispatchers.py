@@ -23,6 +23,19 @@ from core.logger import log
 
 # ── Maintenance window check (engine-level alert suppression) ────
 
+def _mw_parse_groups(val: str) -> list:
+    """Parse scope_value for group windows — JSON array (new) or plain string (legacy)."""
+    if not val:
+        return []
+    try:
+        parsed = json.loads(val)
+        if isinstance(parsed, list):
+            return parsed
+    except (ValueError, TypeError):
+        pass
+    return [val]
+
+
 def check_maintenance(ctx: dict) -> tuple:
     """Return (is_suppressed: bool, window_name: str).
 
@@ -61,7 +74,7 @@ def check_maintenance(ctx: dict) -> tuple:
                     continue
 
         scope = w.get("scope_type", "all")
-        if scope == "group" and ctx.get("grp", "") != w.get("scope_value", ""):
+        if scope == "group" and ctx.get("grp", "") not in _mw_parse_groups(w.get("scope_value", "")):
             continue
         if scope == "device" and ctx.get("did", "") != w.get("scope_value", ""):
             continue
