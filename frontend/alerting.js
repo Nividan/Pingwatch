@@ -844,7 +844,7 @@ function _alertMaintRenderList(windows) {
       ? Object.values(S.devices || {}).find(d => String(d.device_id) === String(w.scope_value))
       : null;
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
-                   : w.scope_type === 'group'  ? `Group: ${esc(w.scope_value)}`
+                   : w.scope_type === 'group'  ? `Group: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
                    : `Device: ${esc(_devForScope ? _devForScope.name : w.scope_value)}`;
     const recurLbl = w.recurring
       ? `Recurring days ${esc(w.recur_days)} ${esc(w.recur_start)}–${esc(w.recur_end)}`
@@ -975,6 +975,13 @@ function _alertMaintOpen(id) {
   setTimeout(() => document.getElementById('mw-name')?.focus(), 60);
 }
 
+// Parse scope_value for group windows — supports both JSON array (new) and plain string (legacy).
+function _mwParseGroups(val) {
+  if (!val) return [];
+  try { const a = JSON.parse(val); if (Array.isArray(a)) return a; } catch (_) {}
+  return [val];
+}
+
 function _mwScopeInner(scopeType, curVal) {
   if (scopeType === 'device') {
     const opts = Object.values(S.devices || {})
@@ -984,9 +991,10 @@ function _mwScopeInner(scopeType, curVal) {
     return `<select id="mw-scope-val" style="width:100%">${opts || '<option value="">No devices</option>'}</select>`;
   }
   if (scopeType === 'group') {
-    const groups = [...new Set(Object.values(S.devices || {}).map(d => d.group).filter(Boolean))].sort();
-    const opts = groups.map(g => `<option value="${esc(g)}" ${g === curVal ? 'selected' : ''}>${esc(g)}</option>`).join('');
-    return `<select id="mw-scope-val" style="width:100%">${opts || '<option value="">No groups</option>'}</select>`;
+    const groups  = [...new Set(Object.values(S.devices || {}).map(d => d.group).filter(Boolean))].sort();
+    const selSet  = new Set(_mwParseGroups(curVal));
+    const opts    = groups.map(g => `<option value="${esc(g)}" ${selSet.has(g) ? 'selected' : ''}>${esc(g)}</option>`).join('');
+    return `<select id="mw-scope-val" multiple size="${Math.min(groups.length, 6)}" style="width:100%">${opts || '<option value="">No groups</option>'}</select>`;
   }
   return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" autocomplete="off"/>`;
 }
@@ -1021,7 +1029,7 @@ function _mwDayToggle(btn) {
 async function _alertMaintSave(id) {
   const name      = (document.getElementById('mw-name')?.value || '').trim();
   const scopeType = document.getElementById('mw-scope')?.value || 'all';
-  const scopeVal  = (document.getElementById('mw-scope-val')?.value || '').trim();
+  let   scopeVal  = (document.getElementById('mw-scope-val')?.value || '').trim();
   const startRaw  = document.getElementById('mw-start')?.value;
   const endRaw    = document.getElementById('mw-end')?.value;
   const recurring = document.getElementById('mw-recurring')?.checked || false;
@@ -1038,6 +1046,11 @@ async function _alertMaintSave(id) {
   const endTs   = recurring ? nowSec + 10 * 365 * 24 * 3600          // 10 years
                 : (endRaw   ? Math.floor(new Date(endRaw).getTime()   / 1000) : 0);
 
+  // For group scope, collect all selected options and store as JSON array
+  if (scopeType === 'group') {
+    const sel = document.getElementById('mw-scope-val');
+    scopeVal = sel ? JSON.stringify([...sel.selectedOptions].map(o => o.value)) : '[]';
+  }
   const payload = {
     name, scope_type: scopeType, scope_value: scopeVal,
     start_ts: startTs, end_ts: endTs,

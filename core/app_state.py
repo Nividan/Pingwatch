@@ -12,8 +12,8 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "0.9.6"
-APP_VERSION_NAME = "Quiet Hours"
+APP_VERSION      = "0.9.7"
+APP_VERSION_NAME = "Live Wire"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─
