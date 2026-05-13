@@ -1,6 +1,7 @@
 """
 db/groups.py — User group CRUD and email resolution.
 """
+from __future__ import annotations
 
 from core.logger import log
 from db.backend  import is_pg

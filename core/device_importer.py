@@ -19,6 +19,8 @@ Both paths share:
 NO HTTP concerns here — callers are responsible for auth, audit, response
 serialization. This module is pure domain logic.
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 

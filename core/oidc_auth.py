@@ -14,6 +14,8 @@ Public API:
   oidc_exchange_code(code, state)           -> dict (parsed claims)
   oidc_test_config()                        -> (ok, message, detail)
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 

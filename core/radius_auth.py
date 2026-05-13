@@ -21,6 +21,8 @@ authoritative; do not fail over on an auth rejection.
 Security: shared secrets stored Fernet-encrypted in app_settings and decrypted
 here via db.decrypt_pw (same pattern as LDAP bind password). Never logged.
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 

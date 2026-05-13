@@ -7,6 +7,7 @@ GET    /api/alert/window/{id}  viewer  — get single window
 PATCH  /api/alert/window/{id}  admin   — update window
 DELETE /api/alert/window/{id}  admin   — delete window
 """
+from __future__ import annotations
 
 from core.config import _RE_ALERT_WINDOWS, _RE_ALERT_WINDOW
 from db.maintenance_windows import (

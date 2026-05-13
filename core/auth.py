@@ -2,6 +2,8 @@
 auth.py — Password hashing and session management.
 """
 
+from __future__ import annotations
+
 import hashlib
 import secrets
 import sqlite3

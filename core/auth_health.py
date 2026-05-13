@@ -18,6 +18,8 @@ A value of 0 disables the loop but keeps the boot pass.
 Every non-ok outcome produces at least a WARNING log line so admins can
 trace failures without enabling DEBUG.
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 

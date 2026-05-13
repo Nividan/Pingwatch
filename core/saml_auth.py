@@ -18,6 +18,8 @@ Public API:
 
 Secrets are never logged. Status updates on _record_ok / _record_err.
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 
