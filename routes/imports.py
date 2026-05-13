@@ -20,6 +20,7 @@ The /parse endpoint mutates no state — it only renders a preview. Apply
 is the only state-changing call; it goes through `reconcile_devices_batch`
 which uses the same dedup + sensor-create path as Subnet Discovery.
 """
+from __future__ import annotations
 
 import base64
 
