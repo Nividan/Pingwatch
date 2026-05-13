@@ -195,7 +195,7 @@ def check_import(module_name: str) -> bool:
     try:
         __import__(module_name)
         return True
-    except ImportError:
+    except Exception:
         return False
 
 
