@@ -21,6 +21,8 @@ Cache invalidation:
     _resolved_profile_ver. Any profile write bumps STATE._profile_cache_ver,
     forcing every sensor to re-resolve on its next probe.
 """
+from __future__ import annotations
+
 
 import threading
 import time

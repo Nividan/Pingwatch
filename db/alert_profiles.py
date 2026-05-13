@@ -12,6 +12,8 @@ for PostgreSQL). Writes are normally invoked from route handlers; the engine
 also calls db_record_stage_fire / db_clear_stage_state_for_sensor on the
 probe-loop hot path.
 """
+from __future__ import annotations
+
 
 import json
 import time

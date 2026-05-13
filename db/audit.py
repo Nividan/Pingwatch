@@ -1,6 +1,7 @@
 """
 db/audit.py — Audit log write and query helpers.
 """
+from __future__ import annotations
 
 import time
 

@@ -4,6 +4,7 @@ routes/settings.py — Application settings and server info endpoints.
 Handles: /api/settings (GET/PATCH), /api/server_info (GET),
          /api/settings/smtp_test (POST).
 """
+from __future__ import annotations
 
 import json
 import os

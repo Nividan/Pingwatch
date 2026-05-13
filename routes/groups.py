@@ -7,6 +7,7 @@ PATCH  /api/user/group/{id}          admin   — update group {name?, descriptio
 DELETE /api/user/group/{id}          admin   — delete group
 PUT    /api/user/group/{id}/members  admin   — replace member list {usernames: [...]}
 """
+from __future__ import annotations
 
 from core.config import (
     _RE_GROUPS, _RE_GROUP, _RE_GROUP_ITEM, _RE_GROUP_MEMBERS,

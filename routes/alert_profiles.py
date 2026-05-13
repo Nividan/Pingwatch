@@ -19,6 +19,8 @@ Action templates
     PATCH  /api/alert/action-template/{id}       admin     — update
     DELETE /api/alert/action-template/{id}       admin     — delete (fails if referenced)
 """
+from __future__ import annotations
+
 
 from core.config import (
     _RE_ALERT_PROFILES, _RE_ALERT_PROFILE_NEW,

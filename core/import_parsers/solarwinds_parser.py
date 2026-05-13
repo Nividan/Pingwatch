@@ -24,6 +24,8 @@ XLSX uses openpyxl (added to requirements.txt). When the dep isn't
 installed, the parser returns a clean row-0 error rather than crashing;
 the route layer translates it to a 503 "openpyxl not installed".
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 

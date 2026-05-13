@@ -15,6 +15,8 @@ Keys are normalized via `_norm_prtg_type()` (lowercased, non-alnum stripped)
 so `"SSL Certificate"`, `"sslcertificate"`, and `"sslcert"` all hit the
 same bucket.
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 

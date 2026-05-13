@@ -9,6 +9,7 @@ ssl setting values:
   1 = LDAPS (TLS-wrapped from the start, default port 636)
   2 = StartTLS (upgrade plain connection after connect, port 389)
 """
+from __future__ import annotations
 
 import threading as _threading
 import time as _time_mod

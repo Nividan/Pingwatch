@@ -6,6 +6,7 @@ which abstracts the SQLite vs PostgreSQL boilerplate. Functions that need
 backend-specific behavior (e.g., catching IntegrityError) use db_cursor()
 directly with a single try/except branch.
 """
+from __future__ import annotations
 
 from core.logger import log
 from db.backend  import is_pg
