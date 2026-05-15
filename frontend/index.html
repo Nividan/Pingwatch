@@ -4,15 +4,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PingWatch — Network Monitor</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
-<!-- Theme bootstrap — runs BEFORE CSS paints to prevent FOUC -->
+<!-- Theme + density bootstrap — runs BEFORE CSS paints to prevent FOUC -->
 <script>
   (function () {
+    var d = document.documentElement;
     try {
       var t = localStorage.getItem('pw_theme');
       if (t !== 'dark' && t !== 'light') t = 'dark';
-      document.documentElement.setAttribute('data-theme', t);
+      d.setAttribute('data-theme', t);
     } catch (_) {
-      document.documentElement.setAttribute('data-theme', 'dark');
+      d.setAttribute('data-theme', 'dark');
+    }
+    try {
+      var dn = localStorage.getItem('pw_density');
+      if (dn !== 'compact' && dn !== 'comfortable') dn = 'compact';
+      d.setAttribute('data-density', dn);
+    } catch (_) {
+      d.setAttribute('data-density', 'compact');
     }
   })();
 </script>

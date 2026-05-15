@@ -856,7 +856,7 @@ function _alertMaintRenderList(windows) {
           <div class="alrt-card-top">
             ${active ? '<span class="alrt-dot-on" title="Currently active">●</span>' : ''}
             <span class="alrt-name">${esc(w.name)}</span>
-            ${active ? '<span class="alrt-sev-badge alrt-sev-warn">ACTIVE</span>' : ''}
+            ${active ? '<span class="alrt-sev-badge alrt-sev-effective">In effect</span>' : ''}
           </div>
           <div class="alrt-card-info">
             <span class="alrt-info-pill">📅 ${start} → ${end}</span>

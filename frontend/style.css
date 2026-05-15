@@ -11,83 +11,186 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   color-scheme: dark;
-  --bg:    #0d1117;
-  --bg2:   #161b22;
-  --bg3:   #1c2333;
-  --bg4:   #243044;
-  --panel: #13181f;
-  --border:#21293a;
-  --border2:#2d3a4e;
-  --up:    #23d18b;  --up-bg:    rgba(35,209,139,.10);  --up-border:   rgba(35,209,139,.28);
-  --warn:  #f0a500;  --warn-bg:  rgba(240,165,0,.10);   --warn-border: rgba(240,165,0,.28);
-  --down:  #f85149;  --down-bg:  rgba(248,81,73,.10);   --down-border: rgba(248,81,73,.28);
-  --pause: #6e7681;  --pause-bg: rgba(110,118,129,.10); --pause-border:rgba(110,118,129,.28);
-  --info:  #388bfd;
+  /* Depth gradient — tighter, deeper, less blue-cast */
+  --bg:     #0a0d12;
+  --bg2:    #11161e;
+  --bg3:    #181f29;
+  --bg4:    #232b38;
+  --panel:  #11161e;
+  --border:  #1f2733;
+  --border2: #2a3344;
+  --border3: #364259;
+  /* Status colors — canonical palette + glow tokens for new components */
+  --up:    #2ee5a3;  --up-bg:    rgba(46,229,163,.10);  --up-border:   rgba(46,229,163,.32);  --up-glow:   rgba(46,229,163,.45);
+  --warn:  #f0a500;  --warn-bg:  rgba(240,165,0,.10);   --warn-border: rgba(240,165,0,.32);   --warn-glow: rgba(240,165,0,.45);
+  --down:  #ff5c5c;  --down-bg:  rgba(255,92,92,.10);   --down-border: rgba(255,92,92,.34);   --down-glow: rgba(255,92,92,.50);
+  --pause: #6e7681;  --pause-bg: rgba(110,118,129,.10); --pause-border:rgba(110,118,129,.32);
+  --info:  #4d9eff;
+  /* Text scale — added text4 for finer hierarchy */
   --text:  #e6edf3;
-  --text2: #8b949e;
-  --text3: #8b949e;
-  --accent:#2f81f7;
-  --accent-glow: rgba(47,129,247,.35);
-  --accent-hover:#388bfd;
-  --header-h:52px;
-  /* Tokens used by rules that previously had hard-coded colors */
-  --topbar-bg:     rgba(9,13,19,.85);
-  --topbar-border: rgba(33,41,58,.7);
-  --body-grad-1:   rgba(17,30,60,.6);
-  --body-grad-2:   rgba(10,25,50,.5);
-  /* Semantic surface tokens — flip with the theme. Used by panels, cards, modals,
-     device-window, sensor-tile, etc. that used to hard-code dark rgba. */
-  --card-bg:          rgba(13,17,23,.78);
-  --card-bg-soft:     rgba(13,17,23,.55);
-  --card-bg-subtle:   rgba(13,17,23,.35);
-  --panel-bg:         rgba(22,27,34,.85);
-  --panel-bg-strong:  rgba(22,27,34,.95);
-  --panel-bg-glass:   rgba(22,27,34,.50);
-  --modal-overlay:    rgba(5,8,14,.72);
+  --text2: #9ba6b3;
+  --text3: #6b7585;
+  --text4: #4a5364;
+  /* Accent + soft variants */
+  --accent:       #4d9eff;
+  --accent-hover: #6cb1ff;
+  --accent-glow:  rgba(77,158,255,.32);
+  --accent-soft:  rgba(77,158,255,.10);
+  /* Legacy alias kept for any rule that references the old --header-h */
+  --header-h: 52px;
+  /* Topbar surface — derived from new --bg for theme parity */
+  --topbar-bg:     rgba(10,13,18,.86);
+  --topbar-border: rgba(31,39,51,.7);
+  --body-grad-1:   rgba(77,158,255,.06);
+  --body-grad-2:   rgba(46,229,163,.04);
+  /* Primary surface tokens (design names) */
+  --card:           rgba(17,22,30,.78);
+  --card-strong:    rgba(17,22,30,.95);
+  --card-soft:      rgba(17,22,30,.55);
+  --card-hover:     rgba(24,31,41,.92);
+  --inset:          rgba(0,0,0,.22);
+  --inset-soft:     rgba(0,0,0,.12);
+  --overlay:        rgba(5,8,14,.72);
+  /* Legacy surface aliases — kept in sync with new tokens so existing rules keep resolving */
+  --card-bg:          var(--card);
+  --card-bg-soft:     var(--card-soft);
+  --card-bg-subtle:   rgba(17,22,30,.35);
+  --panel-bg:         var(--card);
+  --panel-bg-strong:  var(--card-strong);
+  --panel-bg-glass:   rgba(17,22,30,.50);
+  --modal-overlay:        var(--overlay);
   --modal-overlay-strong: rgba(5,8,14,.78);
-  --surface-inset:    rgba(0,0,0,.15);
-  --surface-inset-soft:rgba(0,0,0,.10);
-  --surface-inset-strong:rgba(0,0,0,.25);
+  --surface-inset:        var(--inset);
+  --surface-inset-soft:   var(--inset-soft);
+  --surface-inset-strong: rgba(0,0,0,.28);
+  /* Type families (kept as-is — fonts already self-hosted) */
+  --font-sans: 'Exo 2', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Radii (additive — used by new Phase 2+ components) */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-pill: 999px;
+  /* Layout heights (forward-declared — Phase 2 uses these) */
+  --topbar-h: 52px;
+  --rail-w:   56px;
+  --tabbar-h: 40px;
+  /* Density-aware spacing — defaults match current "comfortable" feel; [data-density="compact"] tightens. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --row-pad-y: 9px;
+  --row-pad-x: 12px;
+  --card-pad:  14px;
+  --tile-pad:  10px;
+  --tile-gap:  8px;
+  /* Type scale */
+  --fs-xs:  10px;
+  --fs-sm:  11px;
+  --fs-md:  12px;
+  --fs-lg:  13px;
+  --fs-xl:  15px;
+  --fs-2xl: 18px;
+  --fs-3xl: 22px;
+  /* Shadows — restrained */
+  --shadow-sm: 0 1px 0 rgba(255,255,255,.03) inset, 0 1px 2px rgba(0,0,0,.4);
+  --shadow-md: 0 1px 0 rgba(255,255,255,.04) inset, 0 4px 16px rgba(0,0,0,.45);
+  --shadow-lg: 0 1px 0 rgba(255,255,255,.05) inset, 0 12px 40px rgba(0,0,0,.55);
+  /* Motion */
+  --ease:     cubic-bezier(.4,0,.2,1);
+  --dur-fast: 120ms;
+  --dur:      180ms;
 }
+
+/* ── Density overrides ───────────────────────────────────────────
+   Bound via <html data-density="compact|comfortable"> by the inline
+   bootstrap in index.html. Affects only NEW Phase 2+ components that
+   reference --sp-*, --fs-*, --topbar-h, --tabbar-h, --row-pad-*, etc. */
+:root[data-density="compact"]{
+  --topbar-h: 44px;
+  --tabbar-h: 36px;
+  --row-pad-y: 6px;
+  --row-pad-x: 10px;
+  --card-pad: 10px;
+  --tile-pad: 8px;
+  --tile-gap: 6px;
+  --fs-md: 11px;
+  --fs-lg: 12px;
+  --fs-xl: 14px;
+  --sp-3: 10px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+}
+:root[data-density="comfortable"]{
+  --topbar-h: 56px;
+  --tabbar-h: 44px;
+  --row-pad-y: 12px;
+  --row-pad-x: 16px;
+  --card-pad: 18px;
+  --tile-pad: 12px;
+  --tile-gap: 10px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 16px;
+}
+
 /* ── Light theme palette ─────────────────────────────────────────
-   Flipped via <html data-theme="light">. All UI rules using
-   CSS variables re-resolve automatically — no JS DOM walk needed. */
+   Flipped via <html data-theme="light">. All UI rules using CSS
+   variables re-resolve automatically — no JS DOM walk needed. */
 :root[data-theme="light"]{
   color-scheme: light;
-  --bg:    #ffffff;
-  --bg2:   #f6f8fa;
-  --bg3:   #eaeef2;
-  --bg4:   #d8dee4;
-  --panel: #ffffff;
-  --border:#d0d7de;
-  --border2:#afb8c1;
-  --up:    #1a7f37;  --up-bg:    rgba(26,127,55,.12);   --up-border:   rgba(26,127,55,.45);
-  --warn:  #9a6700;  --warn-bg:  rgba(154,103,0,.12);   --warn-border: rgba(154,103,0,.45);
-  --down:  #cf222e;  --down-bg:  rgba(207,34,46,.12);   --down-border: rgba(207,34,46,.45);
-  --pause: #6e7781;  --pause-bg: rgba(110,119,129,.12); --pause-border:rgba(110,119,129,.45);
+  --bg:     #ffffff;
+  --bg2:    #f6f8fa;
+  --bg3:    #eef1f5;
+  --bg4:    #dde3eb;
+  --panel:  #ffffff;
+  --border:  #d8dee5;
+  --border2: #c4ccd6;
+  --border3: #a8b3c0;
+  --up:    #1a7f37;  --up-bg:    rgba(26,127,55,.10);   --up-border:   rgba(26,127,55,.40);   --up-glow:   rgba(26,127,55,.28);
+  --warn:  #b86e00;  --warn-bg:  rgba(184,110,0,.10);   --warn-border: rgba(184,110,0,.40);   --warn-glow: rgba(184,110,0,.28);
+  --down:  #cf222e;  --down-bg:  rgba(207,34,46,.10);   --down-border: rgba(207,34,46,.42);   --down-glow: rgba(207,34,46,.32);
+  --pause: #6e7781;  --pause-bg: rgba(110,119,129,.10); --pause-border:rgba(110,119,129,.40);
   --info:  #0969da;
   --text:  #1f2328;
-  --text2: #424a53;
-  --text3: #57606a;
-  --accent:#0969da;
-  --accent-glow: rgba(9,105,218,.22);
-  --accent-hover:#0860ca;
+  --text2: #57606a;
+  --text3: #6e7781;
+  --text4: #9aa3ad;
+  --accent:       #0969da;
+  --accent-hover: #0860ca;
+  --accent-glow:  rgba(9,105,218,.22);
+  --accent-soft:  rgba(9,105,218,.08);
   --topbar-bg:     rgba(255,255,255,.90);
-  --topbar-border: rgba(208,215,222,.90);
-  --body-grad-1:   transparent;
+  --topbar-border: rgba(216,222,229,.90);
+  --body-grad-1:   rgba(9,105,218,.04);
   --body-grad-2:   transparent;
-  /* Light-mode surfaces — white/near-white panels; overlays stay dim but lighter */
-  --card-bg:          rgba(255,255,255,.96);
-  --card-bg-soft:     rgba(246,248,250,.85);
-  --card-bg-subtle:   rgba(234,238,242,.60);
-  --panel-bg:         rgba(255,255,255,.95);
-  --panel-bg-strong:  rgba(255,255,255,.98);
+  --card:        rgba(255,255,255,.96);
+  --card-strong: rgba(255,255,255,1);
+  --card-soft:   rgba(246,248,250,.85);
+  --card-hover:  rgba(246,248,250,1);
+  --inset:       rgba(13,17,23,.05);
+  --inset-soft:  rgba(13,17,23,.03);
+  --overlay:     rgba(15,23,42,.42);
+  --card-bg:          var(--card);
+  --card-bg-soft:     var(--card-soft);
+  --card-bg-subtle:   rgba(238,241,245,.60);
+  --panel-bg:         var(--card);
+  --panel-bg-strong:  var(--card-strong);
   --panel-bg-glass:   rgba(255,255,255,.70);
-  --modal-overlay:    rgba(15,23,42,.35);
-  --modal-overlay-strong: rgba(15,23,42,.45);
-  --surface-inset:    rgba(13,17,23,.05);
-  --surface-inset-soft:rgba(13,17,23,.03);
-  --surface-inset-strong:rgba(13,17,23,.08);
+  --modal-overlay:        var(--overlay);
+  --modal-overlay-strong: rgba(15,23,42,.52);
+  --surface-inset:        var(--inset);
+  --surface-inset-soft:   var(--inset-soft);
+  --surface-inset-strong: rgba(13,17,23,.08);
+  --shadow-sm: 0 1px 0 rgba(255,255,255,1) inset, 0 1px 2px rgba(15,23,42,.06);
+  --shadow-md: 0 1px 0 rgba(255,255,255,1) inset, 0 4px 14px rgba(15,23,42,.07);
+  --shadow-lg: 0 1px 0 rgba(255,255,255,1) inset, 0 12px 36px rgba(15,23,42,.10);
 }
 html,body{height:100%;overflow:hidden}
 body{
@@ -105,9 +208,9 @@ body{
 
 /* ── Network grid background canvas ── */
 #netbg{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.55}
-/* Light mode relies on the in-canvas alpha scale (C.aScale in bg.js) to
-   boost stroke/fill alphas for contrast on white — no macro dimmer here. */
-:root[data-theme="light"] #netbg{opacity:.55}
+/* Light mode: dim the network grid so it recedes behind cards instead of
+   competing with them. bg.js handles per-layer alpha scaling separately. */
+:root[data-theme="light"] #netbg{opacity:.28}
 #layout,#topbar{z-index:1;position:relative}
 #layout{z-index:1}
 
@@ -281,7 +384,7 @@ body{
   max-width:40px;flex:0 0 40px;
 }
 .grp-label{
-  font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+  font-size:11px;font-weight:500;letter-spacing:.4px;text-transform:uppercase;
   color:var(--text3);cursor:pointer;padding:3px 10px;border-radius:4px;
   transition:all .15s;white-space:nowrap;
 }
@@ -401,41 +504,41 @@ body{
 }
 .dc-snr-ico.ping{background:rgba(59,130,246,.2); color:#60a5fa}
 .dc-snr-ico.tcp {background:rgba(16,185,129,.2); color:#34d399}
-.dc-snr-ico.http{background:rgba(245,158,11,.2); color:#fbbf24}
+.dc-snr-ico.http{background:rgba(167,139,250,.2); color:#a78bfa}
 .dc-snr-ico.snmp{background:rgba(168,85,247,.2); color:#c084fc}
 .dc-snr-ico.dns {background:rgba(20,184,166,.2); color:#2dd4bf}
 .dc-snr-ico.tls         {background:rgba(6,182,212,.2);  color:#22d3ee}
 .dc-snr-ico.http_keyword{background:rgba(234,179,8,.2);  color:#fde047}
-.dc-snr-ico.banner      {background:rgba(251,146,60,.2); color:#fb923c}
+.dc-snr-ico.banner      {background:rgba(125,211,252,.2); color:#7dd3fc}
 .dc-snr-ico.vmware      {background:rgba(99,102,241,.2); color:#818cf8}
 /* Type-specific border accent for tile card sensor rows */
 .dc-snr.snr-t-ping        {border-color:rgba(59,130,246,.22)}
 .dc-snr.snr-t-tcp         {border-color:rgba(16,185,129,.22)}
-.dc-snr.snr-t-http        {border-color:rgba(245,158,11,.22)}
+.dc-snr.snr-t-http        {border-color:rgba(167,139,250,.22)}
 .dc-snr.snr-t-snmp        {border-color:rgba(168,85,247,.22)}
 .dc-snr.snr-t-dns         {border-color:rgba(20,184,166,.22)}
 .dc-snr.snr-t-tls         {border-color:rgba(6,182,212,.22)}
 .dc-snr.snr-t-http_keyword{border-color:rgba(234,179,8,.22)}
-.dc-snr.snr-t-banner      {border-color:rgba(251,146,60,.22)}
+.dc-snr.snr-t-banner      {border-color:rgba(125,211,252,.22)}
 .dc-snr.snr-t-vmware      {border-color:rgba(99,102,241,.22)}
 .dc-snr.snr-t-smtp        {border-color:rgba(236,72,153,.22)}
-.dc-snr.snr-t-ssh         {border-color:rgba(132,204,22,.22)}
+.dc-snr.snr-t-ssh         {border-color:rgba(148,163,184,.22)}
 .dc-snr.snr-t-sftp        {border-color:rgba(251,113,133,.22)}
-.dc-snr.snr-t-radius      {border-color:rgba(251,191,36,.22)}
+.dc-snr.snr-t-radius      {border-color:rgba(232,121,249,.22)}
 /* Light-theme: sensor type icons need darker foreground to hit AA on white */
 :root[data-theme="light"] .dc-snr-ico.ping        {background:rgba(59,130,246,.12); color:#1f6feb}
 :root[data-theme="light"] .dc-snr-ico.tcp         {background:rgba(16,185,129,.14); color:#0e7c54}
-:root[data-theme="light"] .dc-snr-ico.http        {background:rgba(245,158,11,.15); color:#9a6700}
+:root[data-theme="light"] .dc-snr-ico.http        {background:rgba(167,139,250,.18); color:#7c3aed}
 :root[data-theme="light"] .dc-snr-ico.snmp        {background:rgba(168,85,247,.12); color:#7c3aed}
 :root[data-theme="light"] .dc-snr-ico.dns         {background:rgba(20,184,166,.14); color:#0f766e}
 :root[data-theme="light"] .dc-snr-ico.tls         {background:rgba(6,182,212,.14);  color:#0e7490}
 :root[data-theme="light"] .dc-snr-ico.http_keyword{background:rgba(234,179,8,.15);  color:#854d0e}
-:root[data-theme="light"] .dc-snr-ico.banner      {background:rgba(251,146,60,.15); color:#9a3412}
+:root[data-theme="light"] .dc-snr-ico.banner      {background:rgba(125,211,252,.18); color:#0284c7}
 :root[data-theme="light"] .dc-snr-ico.vmware      {background:rgba(99,102,241,.12); color:#4338ca}
 :root[data-theme="light"] .dc-snr-ico.smtp        {background:rgba(236,72,153,.12); color:#be185d}
-:root[data-theme="light"] .dc-snr-ico.ssh         {background:rgba(132,204,22,.15); color:#4d7c0f}
+:root[data-theme="light"] .dc-snr-ico.ssh         {background:rgba(148,163,184,.18); color:#475569}
 :root[data-theme="light"] .dc-snr-ico.sftp        {background:rgba(251,113,133,.14); color:#be123c}
-:root[data-theme="light"] .dc-snr-ico.radius      {background:rgba(251,191,36,.18); color:#b45309}
+:root[data-theme="light"] .dc-snr-ico.radius      {background:rgba(232,121,249,.16); color:#a21caf}
 .dc-snr-nm{font-size:10px;color:var(--text2);flex:1;min-width:0;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-snr-val{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;flex-shrink:0}
@@ -815,7 +918,7 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
 }
 .stl-tbdg.ping{background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.25)}
 .stl-tbdg.tcp {background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.25)}
-.stl-tbdg.http{background:rgba(245,158,11,.15); color:#fbbf24;border:1px solid rgba(245,158,11,.25)}
+.stl-tbdg.http{background:rgba(167,139,250,.15); color:#a78bfa;border:1px solid rgba(167,139,250,.25)}
 .stl-tbdg.snmp{background:rgba(168,85,247,.15); color:#c084fc;border:1px solid rgba(168,85,247,.25)}
 .stl-tbdg.dns {background:rgba(20,184,166,.15);  color:#2dd4bf;border:1px solid rgba(20,184,166,.25)}
 .stl-nm{font-size:12px;font-weight:600;color:var(--text);flex:1;min-width:0;
@@ -856,28 +959,28 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
 /* New probe type icons */
 .stl-tbdg.tls         {background:rgba(6,182,212,.15);color:#22d3ee;border:1px solid rgba(6,182,212,.25)}
 .stl-tbdg.http_keyword{background:rgba(234,179,8,.15); color:#fde047;border:1px solid rgba(234,179,8,.25)}
-.stl-tbdg.banner      {background:rgba(251,146,60,.15);color:#fb923c;border:1px solid rgba(251,146,60,.25)}
+.stl-tbdg.banner      {background:rgba(125,211,252,.15);color:#7dd3fc;border:1px solid rgba(125,211,252,.25)}
 .s-ico.tls         {background:rgba(6,182,212,.2);color:#22d3ee}
 .s-ico.http_keyword{background:rgba(234,179,8,.2); color:#fde047}
-.s-ico.banner      {background:rgba(251,146,60,.2);color:#fb923c}
+.s-ico.banner      {background:rgba(125,211,252,.2);color:#7dd3fc}
 .dc-snr-ico.tls         {background:rgba(6,182,212,.2);color:#22d3ee}
 .dc-snr-ico.http_keyword{background:rgba(234,179,8,.2); color:#fde047}
-.dc-snr-ico.banner      {background:rgba(251,146,60,.2);color:#fb923c}
+.dc-snr-ico.banner      {background:rgba(125,211,252,.2);color:#7dd3fc}
 .stl-tbdg.vmware   {background:rgba(168,85,247,.15);color:#c084fc;border:1px solid rgba(168,85,247,.25)}
 .s-ico.vmware      {background:rgba(168,85,247,.2);color:#c084fc}
 .dc-snr-ico.vmware {background:rgba(168,85,247,.2);color:#c084fc}
 .stl-tbdg.smtp     {background:rgba(236,72,153,.15);color:#f472b6;border:1px solid rgba(236,72,153,.25)}
 .s-ico.smtp        {background:rgba(236,72,153,.2); color:#f472b6}
 .dc-snr-ico.smtp   {background:rgba(236,72,153,.2); color:#f472b6}
-.stl-tbdg.ssh      {background:rgba(132,204,22,.15);color:#a3e635;border:1px solid rgba(132,204,22,.25)}
-.s-ico.ssh         {background:rgba(132,204,22,.2); color:#a3e635}
-.dc-snr-ico.ssh    {background:rgba(132,204,22,.2); color:#a3e635}
+.stl-tbdg.ssh      {background:rgba(148,163,184,.15);color:#94a3b8;border:1px solid rgba(148,163,184,.25)}
+.s-ico.ssh         {background:rgba(148,163,184,.2); color:#94a3b8}
+.dc-snr-ico.ssh    {background:rgba(148,163,184,.2); color:#94a3b8}
 .stl-tbdg.sftp     {background:rgba(251,113,133,.15);color:#fb7185;border:1px solid rgba(251,113,133,.25)}
 .s-ico.sftp        {background:rgba(251,113,133,.2); color:#fb7185}
 .dc-snr-ico.sftp   {background:rgba(251,113,133,.2); color:#fb7185}
-.stl-tbdg.radius   {background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.25)}
-.s-ico.radius      {background:rgba(251,191,36,.2); color:#fbbf24}
-.dc-snr-ico.radius {background:rgba(251,191,36,.2); color:#fbbf24}
+.stl-tbdg.radius   {background:rgba(232,121,249,.15);color:#e879f9;border:1px solid rgba(232,121,249,.25)}
+.s-ico.radius      {background:rgba(232,121,249,.2); color:#e879f9}
+.dc-snr-ico.radius {background:rgba(232,121,249,.2); color:#e879f9}
 /* ── VMware VM sensor groups ─────────────────────────────────────── */
 .vm-grp{grid-column:1/-1;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel-bg)}
 .vm-grp-hdr{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg2);cursor:pointer;user-select:none}
@@ -1342,57 +1445,73 @@ select{cursor:pointer;appearance:none;
   .rpt-edit-left{border-right:none;border-bottom:1px solid var(--border)}
 }
 
-/* Buttons */
-.btn-p{
-  background:linear-gradient(135deg,var(--accent),#0ea5e9);
-  color:#fff;border:none;padding:9px 20px;border-radius:6px;
-  font-size:13px;font-weight:600;cursor:pointer;
-  transition:all .2s;box-shadow:0 0 0 rgba(47,129,247,0);
+/* Buttons — three-tier ladder (primary / secondary / ghost) + danger modifier.
+   Old class names (.btn-p, .btn-s, .btn-sm, .btn-xs, .btn-danger) aliased to
+   the new ladder for backward compatibility. New code should use .btn--primary
+   / .btn--secondary / .btn--ghost / .is-danger. */
+
+/* Shared base — primary + secondary + danger share size; ghost is smaller. */
+.btn-p, .btn-s, .btn-danger,
+.btn--primary, .btn--secondary{
+  font-family:inherit;font-size:12px;font-weight:500;line-height:1;
+  padding:7px 14px;border-radius:6px;
+  border:1px solid transparent;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  transition:background .12s,color .12s,border-color .12s;
 }
-.btn-p:hover{
-  background:linear-gradient(135deg,var(--accent-hover),#38bdf8);
-  box-shadow:0 0 20px rgba(47,129,247,.4);
-  transform:translateY(-1px);
+
+/* Primary — flat accent. Save, Apply, Confirm. */
+.btn-p, .btn--primary{
+  background:var(--accent);color:#fff;border-color:var(--accent);
 }
-.btn-p:active{transform:translateY(0)}
-.btn-danger{background:transparent;color:var(--down,#ff4444);border:1px solid var(--down,#ff4444);
-  padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
-.btn-danger:hover{background:rgba(255,68,68,.12);box-shadow:0 0 14px rgba(255,68,68,.25);transform:translateY(-1px)}
-.btn-danger:active{transform:translateY(0)}
-.btn-s{background:var(--bg3);color:var(--text2);border:1px solid var(--border);padding:8px 16px;border-radius:4px;font-size:13px;font-weight:500;cursor:pointer;transition:all .12s}
-.btn-s:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
-.btn-xs{padding:3px 8px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--bg3);color:var(--text2);transition:background .12s}
-.btn-xs:hover{background:var(--bg4);color:var(--text)}
-.btn-xs.btn-d{color:var(--down,#f85149);border-color:var(--down,#f85149)}
-.btn-xs.btn-d:hover{background:rgba(248,81,73,.12)}
-.btn-sm{
-  padding:5px 13px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;
-  border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.05);
-  color:var(--text2);
-  transition:background .18s ease,color .18s ease,border-color .18s ease,
-             transform .15s ease,box-shadow .18s ease,filter .18s ease;
+.btn-p:hover, .btn--primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+
+/* Secondary — outlined neutral. Cancel, Close, Edit. */
+.btn-s, .btn--secondary{
+  background:transparent;color:var(--text);border-color:var(--border2);
 }
-.btn-sm:hover{
-  background:rgba(255,255,255,.1);color:var(--text);
-  border-color:rgba(255,255,255,.16);transform:translateY(-1px);
-  filter:brightness(1.08);
+.btn-s:hover, .btn--secondary:hover{background:var(--bg3)}
+
+/* Ghost (small) — table-row actions and tertiary controls. */
+.btn-sm, .btn--ghost{
+  font-family:inherit;font-size:11px;font-weight:500;line-height:1;
+  padding:5px 12px;border-radius:6px;
+  background:transparent;color:var(--text2);border:1px solid transparent;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  transition:background .12s,color .12s,border-color .12s;
 }
-.btn-sm:active{transform:scale(0.97) translateY(0);filter:brightness(.95);}
-/* ── Primary / accent ── */
+.btn-sm:hover, .btn--ghost:hover{color:var(--text);background:rgba(255,255,255,.05)}
+:root[data-theme="light"] .btn-sm:hover,
+:root[data-theme="light"] .btn--ghost:hover{background:rgba(13,17,23,.05)}
+
+/* Extra-small (table-row utility) — same shape as ghost, tighter padding. */
+.btn-xs{
+  font-family:inherit;font-size:11px;font-weight:500;line-height:1;
+  padding:3px 10px;border-radius:5px;
+  background:transparent;color:var(--text2);border:1px solid transparent;
+  cursor:pointer;transition:background .12s,color .12s,border-color .12s;
+}
+.btn-xs:hover{color:var(--text);background:rgba(255,255,255,.05)}
+:root[data-theme="light"] .btn-xs:hover{background:rgba(13,17,23,.05)}
+
+/* Danger MODIFIER — quiet until hover. Reads as ghost in resting state. */
+.btn-danger,
+.btn-s.is-danger, .btn-sm.is-danger, .btn-xs.btn-d, .btn-xs.is-danger,
+.btn--secondary.is-danger, .btn--ghost.is-danger{
+  color:var(--text2);background:transparent;border-color:transparent;
+}
+.btn-danger:hover,
+.btn-s.is-danger:hover, .btn-sm.is-danger:hover, .btn-xs.btn-d:hover, .btn-xs.is-danger:hover,
+.btn--secondary.is-danger:hover, .btn--ghost.is-danger:hover{
+  color:var(--down);background:var(--down-bg);border-color:var(--down-border);
+}
+
+/* .btn-sm.btn-accent — legacy accent variant, now a flat primary (no gradient). */
 .btn-sm.btn-accent{
-  background:linear-gradient(135deg,#3b8ff5 0%,#1b6dd9 100%);
-  color:#fff;border-color:transparent;
-  box-shadow:0 0 12px rgba(47,129,247,.4),inset 0 1px 0 rgba(255,255,255,.12);
+  background:var(--accent);color:#fff;border-color:var(--accent);
+  padding:5px 12px;
 }
-.btn-sm.btn-accent:hover{
-  background:linear-gradient(135deg,#5aa3ff 0%,#2f81f7 100%);
-  box-shadow:0 0 22px rgba(47,129,247,.65),inset 0 1px 0 rgba(255,255,255,.18);
-  transform:translateY(-1px);filter:brightness(1.05);
-}
-.btn-sm.btn-accent:active{
-  transform:scale(0.97) translateY(0);
-  box-shadow:0 0 8px rgba(47,129,247,.3);filter:brightness(.95);
-}
+.btn-sm.btn-accent:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
 
 /* ── Detail window ── */
 .dmo{
@@ -1419,17 +1538,17 @@ select{cursor:pointer;appearance:none;
 .dm-tbdg{padding:4px 10px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;text-align:center;line-height:1.4;flex-shrink:0}
 .dm-tbdg.ping{background:rgba(59,130,246,.2);color:#60a5fa}
 .dm-tbdg.tcp {background:rgba(16,185,129,.2);color:#34d399}
-.dm-tbdg.http{background:rgba(245,158,11,.2); color:#fbbf24}
+.dm-tbdg.http{background:rgba(167,139,250,.2); color:#a78bfa}
 .dm-tbdg.snmp{background:rgba(168,85,247,.2);  color:#c084fc}
 .dm-tbdg.dns          {background:rgba(20,184,166,.2);  color:#2dd4bf}
 .dm-tbdg.tls          {background:rgba(6,182,212,.2);   color:#22d3ee}
 .dm-tbdg.http_keyword {background:rgba(234,179,8,.2);   color:#fde047}
-.dm-tbdg.banner       {background:rgba(251,146,60,.2);  color:#fb923c}
+.dm-tbdg.banner       {background:rgba(125,211,252,.2);  color:#7dd3fc}
 .dm-tbdg.vmware       {background:rgba(96,165,250,.15); color:#93bbfd}
 .dm-tbdg.smtp         {background:rgba(236,72,153,.2);  color:#f472b6}
-.dm-tbdg.ssh          {background:rgba(132,204,22,.2);  color:#a3e635}
+.dm-tbdg.ssh          {background:rgba(148,163,184,.2);  color:#94a3b8}
 .dm-tbdg.sftp         {background:rgba(251,113,133,.2); color:#fb7185}
-.dm-tbdg.radius       {background:rgba(251,191,36,.2);  color:#fbbf24}
+.dm-tbdg.radius       {background:rgba(232,121,249,.2);  color:#e879f9}
 .dm-ttl{font-size:15px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dm-tgt{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dm-body{flex:1;overflow-y:auto;padding:14px 18px}
@@ -1437,7 +1556,7 @@ select{cursor:pointer;appearance:none;
 .dm-m{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:9px 7px;text-align:center}
 .dm-mv{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:500;color:var(--text);display:block;margin-bottom:2px;transition:color .3s}
 .dm-mv.g{color:var(--up)}.dm-mv.w{color:var(--warn)}.dm-mv.b{color:var(--down)}.dm-mv.r{color:var(--down)}
-.dm-mk{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px}
+.dm-mk{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px}
 .dm-chart-wrap{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:11px;margin-bottom:12px}
 .dm-cht{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;
         display:flex;justify-content:space-between;margin-bottom:7px}
@@ -2157,11 +2276,16 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 /* ── Widget: SLA Report ──────────────────────────────────────────── */
 .dw-sla-wrap   {display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 8px;flex:1;justify-content:center;}
 .dw-sla-loading{color:var(--text3);font-size:11px;}
-.dw-sla-pct    {font-size:48px;font-weight:700;line-height:1;letter-spacing:-2px;}
-.dw-sla-sym    {font-size:24px;font-weight:400;}
-.dw-sla-tier   {font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;}
+/* Neutral number — color only conveys status on the delta + bar below. */
+.dw-sla-pct    {font-size:36px;font-weight:600;line-height:1;letter-spacing:-1px;color:var(--text);}
+.dw-sla-sym    {font-size:18px;font-weight:400;color:var(--text3);margin-left:2px;}
+.dw-sla-delta  {font-size:12px;font-weight:500;color:var(--text2);letter-spacing:.02em;}
+.dw-sla-delta[data-state="warn"]{color:var(--warn);}
+.dw-sla-delta[data-state="crit"]{color:var(--down);}
 .dw-sla-bar-wrap{width:100%;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin:4px 0;}
-.dw-sla-bar    {height:100%;border-radius:3px;transition:width .4s;}
+.dw-sla-bar    {height:100%;border-radius:3px;transition:width .4s;background:var(--up);}
+.dw-sla-bar[data-state="warn"]{background:var(--warn);}
+.dw-sla-bar[data-state="crit"]{background:var(--down);}
 .dw-sla-stats  {display:flex;gap:16px;font-size:12px;color:var(--text2);}
 .dw-sla-key    {color:var(--text3);font-size:10px;margin-right:4px;text-transform:uppercase;letter-spacing:.04em;}
 
@@ -2279,12 +2403,17 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
               font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;}
 .rpt-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
 .rpt-table tbody tr:hover td{background:var(--bg3);}
-.rpt-kind{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;
-          text-transform:uppercase;letter-spacing:.3px;}
-.rpt-kind-executive{background:rgba(9,105,218,.14);color:var(--accent);}
-.rpt-kind-technical{background:rgba(248,81,73,.12);color:#e3b341;}
-.rpt-kind-inventory{background:rgba(63,185,80,.14);color:var(--up);}
-.rpt-kind-custom{background:var(--bg4);color:var(--text2);}
+/* Report kind tags — categorical taxonomy, NOT status. Outlined neutral pill
+   with a small colored glyph dot to encode the category. Hues are picked
+   outside the status palette (no green/amber/red, and no accent-blue). */
+.rpt-kind{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:10px;
+          font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;
+          color:var(--text2);background:transparent;border:1px solid var(--border);}
+.rpt-kind::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--rpt-cat,var(--text3));}
+.rpt-kind-executive{--rpt-cat:#818cf8;}   /* indigo */
+.rpt-kind-technical{--rpt-cat:#a78bfa;}   /* violet (was amber/red) */
+.rpt-kind-inventory{--rpt-cat:#06b6d4;}   /* cyan (was green) */
+.rpt-kind-custom   {--rpt-cat:#9ca3af;}   /* slate */
 .rpt-fingerprint{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10px;
                  color:var(--text3);background:var(--bg);border:1px solid var(--border);
                  padding:1px 6px;border-radius:3px;letter-spacing:.3px;cursor:help;}
@@ -2620,6 +2749,9 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-sev-warn{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);}
 .alrt-sev-crit{color:var(--down);background:var(--down-bg);border:1px solid var(--down-border);}
 .alrt-sev-info{color:var(--text2);background:var(--bg3);border:1px solid var(--border);}
+/* Maintenance "in effect" — positive operational state, not a warning. */
+.alrt-sev-effective{color:var(--accent);background:rgba(47,129,247,.12);border:1px solid rgba(47,129,247,.35);}
+:root[data-theme="light"] .alrt-sev-effective{background:rgba(9,105,218,.10);border-color:rgba(9,105,218,.40);}
 .alrt-sev-recovery{color:var(--up);background:var(--up-bg);border:1px solid var(--up-border);}
 .alrt-card-info{display:flex;gap:8px;flex-wrap:wrap;}
 .alrt-info-pill{font-size:11px;color:var(--text2);background:var(--bg3);border:1px solid var(--border);

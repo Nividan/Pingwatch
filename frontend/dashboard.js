@@ -1410,16 +1410,18 @@ async function _dwFetchSLA(wid, cfg) {
     return;
   }
   const slaPct  = totalOk / totalAll * 100;
-  const slaFixed = slaPct.toFixed(3);
-  const slaColor = slaPct >= 99.5 ? 'var(--up)' : slaPct >= 99 ? 'var(--warn)' : 'var(--down)';
-  const slaLabel = slaPct >= 99.9 ? 'SLA 99.9%' : slaPct >= 99.5 ? 'SLA 99.5%' : slaPct >= 99 ? 'SLA 99%' : 'Below 99%';
+  const target  = 99;
+  const delta   = slaPct - target;
+  // crit only when more than 1 point below target or actively losing samples
+  const state   = delta >= 0.5 ? 'ok' : delta >= -1 ? 'warn' : 'crit';
+  const arrow   = delta >= 0 ? '▲' : '▼';
   const dtSec = Math.round(totalFail / totalAll * mins * 60);
   const dtH   = Math.floor(dtSec / 3600);
   const dtM   = String(Math.floor((dtSec % 3600) / 60)).padStart(2, '0');
   _dwSwap(wrap, `
-    <div class="dw-sla-pct" style="color:${slaColor}">${slaFixed}<span class="dw-sla-sym">%</span></div>
-    <div class="dw-sla-tier" style="color:${slaColor}">${slaLabel}</div>
-    <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" style="width:${Math.min(100,slaPct).toFixed(2)}%;background:${slaColor}"></div></div>
+    <div class="dw-sla-pct">${slaPct.toFixed(3)}<span class="dw-sla-sym">%</span></div>
+    <div class="dw-sla-delta" data-state="${state}">${arrow} ${Math.abs(delta).toFixed(2)} from ${target}% target</div>
+    <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" data-state="${state}" style="width:${Math.min(100,slaPct).toFixed(2)}%"></div></div>
     <div class="dw-sla-stats">
       <span><span class="dw-sla-key">Downtime</span>${dtH}h ${dtM}m</span>
       <span><span class="dw-sla-key">Samples</span>${totalAll}</span>
