@@ -91,38 +91,62 @@
 
 <!-- Top bar -->
 <div id="topbar">
-  <div class="tb-brand" onclick="switchMainTab('dashboard')" title="Go to Dashboard" style="cursor:pointer">
-    <div class="tb-logo">
-      <img src="/favicon.ico" width="28" height="28" alt="PingWatch">
+  <div class="brand" onclick="switchMainTab('dashboard')" title="Go to Dashboard">
+    <div class="brand-mark">
+      <svg width="28" height="28" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <defs><radialGradient id="bm-glow" cx=".5" cy=".5" r=".5">
+          <stop offset="0" stop-color="currentColor" stop-opacity=".6"/>
+          <stop offset="1" stop-color="currentColor" stop-opacity="0"/>
+        </radialGradient></defs>
+        <circle cx="10" cy="10" r="9" fill="url(#bm-glow)" opacity=".4"/>
+        <circle cx="10" cy="10" r="8.5" stroke="currentColor" stroke-width="1" opacity=".30"/>
+        <circle cx="10" cy="10" r="5"   stroke="currentColor" stroke-width="1" opacity=".55"/>
+        <circle cx="10" cy="10" r="2"   fill="currentColor"/>
+        <g class="radar-sweep" opacity=".75">
+          <path d="M10 10 L18.5 10 A 8.5 8.5 0 0 1 14.5 17 Z" fill="currentColor" opacity=".18"/>
+          <line x1="10" y1="10" x2="18.5" y2="10" stroke="currentColor" stroke-width="1.2"/>
+        </g>
+        <line x1="1.5" y1="10" x2="4"    y2="10" stroke="currentColor" stroke-width="1.2" opacity=".4"/>
+        <line x1="10"  y1="1.5" x2="10" y2="4"   stroke="currentColor" stroke-width="1.2" opacity=".4"/>
+        <line x1="10"  y1="16"  x2="10" y2="18.5" stroke="currentColor" stroke-width="1.2" opacity=".4"/>
+      </svg>
     </div>
-    <div>
-      <div class="tb-wordmark">
-        <span class="tw-ping">Ping</span><span class="tw-watch">Watch</span>
-      </div>
-      <div class="tb-ver" id="tbVer">Network Monitor v0.5</div>
-    </div>
-  </div>
-  <div class="tb-mid">
-    <div id="healthBar" style="display:none">
-      <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
-      <span id="hb-pct" class="hb-pct-healthy">—</span>
-      <span id="hb-label" class="hb-lbl-healthy">—</span>
-      <span id="hb-devices-sep" class="hb-sep"></span>
-      <span id="hb-devices-lbl" class="hb-spark-lbl">Devices:</span>
-      <div id="hb-pills">
-        <span class="hb-pill up"   id="hb-up"></span>
-        <span class="hb-pill down" id="hb-dn" style="display:none"></span>
-        <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
-      </div>
-      <span id="hb-spark-sep" class="hb-sep" style="display:none"></span>
-      <span id="hb-spark-lbl" class="hb-spark-lbl" style="display:none">24h Trend</span>
-      <span id="hb-trend-arrow" style="display:none"></span>
-      <canvas id="hb-spark" height="22" style="display:none;cursor:pointer" title="Health trend — click to expand"></canvas>
+    <div class="brand-text">
+      <div class="brand-word"><span class="b-ping">Ping</span><span class="b-watch">Watch</span></div>
+      <div class="brand-tag" id="tbVer">Network Monitor v0.5</div>
     </div>
   </div>
+
+  <!-- Command palette stub (visual only — full implementation in v1.1) -->
+  <button class="cmd" id="tbCmd" type="button"
+          onclick="(window._pwCmdStub||function(){window.showToast&&window.showToast('Command palette coming in v1.1')})()"
+          title="Search devices, sensors, or IPs (Ctrl+K)">
+    <span class="cmd-ico" id="tbCmdIco" aria-hidden="true"></span>
+    <span class="cmd-placeholder">Search devices, sensors, or IPs…</span>
+    <span class="cmd-kbd">Ctrl K</span>
+  </button>
+
+  <!-- Health bar — preserved IDs, restyled by new .healthbar rules -->
+  <div id="healthBar" class="healthbar" style="display:none">
+    <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
+    <span id="hb-pct" class="hb-pct-healthy">—</span>
+    <span id="hb-label" class="hb-lbl-healthy">—</span>
+    <span id="hb-devices-sep" class="hb-sep"></span>
+    <span id="hb-devices-lbl" class="hb-spark-lbl">Devices:</span>
+    <div id="hb-pills">
+      <span class="hb-pill up"   id="hb-up"></span>
+      <span class="hb-pill down" id="hb-dn" style="display:none"></span>
+      <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
+    </div>
+    <span id="hb-spark-sep" class="hb-sep" style="display:none"></span>
+    <span id="hb-spark-lbl" class="hb-spark-lbl" style="display:none">24h Trend</span>
+    <span id="hb-trend-arrow" style="display:none"></span>
+    <canvas id="hb-spark" height="22" style="display:none;cursor:pointer" title="Health trend — click to expand"></canvas>
+  </div>
+
   <div class="tb-right">
-    <div class="tb-time" id="clk"></div>
-    <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
+    <div class="tb-time tabular" id="clk"></div>
+    <div class="tb-db-badge" title="Database connection"><div class="tb-db-dot"></div>DB</div>
     <div class="tb-badges" id="tbBadges">
       <div class="tb-badge tb-badge-crit" id="badgeCrit" style="display:none"
            onclick="_openBadgeCrit()" title="Active critical/down events">
@@ -145,6 +169,12 @@
          onclick="_openLogBadge()" title="New log entries (WARNING+)">
       New Log Entries <span id="logBadgeCnt">0</span>
     </div>
+    <!-- Theme toggle: moved out of user menu per design refinement -->
+    <button class="tb-iconbtn" id="tbThemeBtn" type="button"
+            onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"></button>
+    <!-- Bell: visual stub. Click jumps to active events list -->
+    <button class="tb-iconbtn" id="tbBellBtn" type="button"
+            onclick="switchMainTab('events')" title="Notifications" aria-label="Notifications"></button>
     <div class="usr-dd" id="usrDd" style="display:none">
       <button class="usr-dd-trigger" id="usrDdBtn" onclick="_usrDdToggle(event)" aria-haspopup="true" aria-expanded="false">
         <span class="usr-dd-dot"></span>
@@ -161,7 +191,6 @@
         <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_openProfileModal()"><span class="usr-dd-ico">👤</span>Edit Profile</button>
         <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_openChangePwModal()"><span class="usr-dd-ico">🔑</span>Change Password</button>
         <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_open2faModal()"><span class="usr-dd-ico">🔐</span>Two-Factor Authentication</button>
-        <button class="usr-dd-item" id="usrThemeBtn" role="menuitem" onclick="_usrDdClose();toggleTheme()" title="Toggle between dark and light themes"><span class="usr-dd-ico">☀</span>Switch to Light</button>
         <div class="usr-dd-sep"></div>
         <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openAbout()"><span class="usr-dd-ico">ⓘ</span>About PingWatch</button>
         <button class="usr-dd-item usr-dd-item--danger" role="menuitem" onclick="_usrDdClose();doLogout()"><span class="usr-dd-ico">⏻</span>Sign Out</button>
@@ -170,20 +199,39 @@
   </div>
 </div>
 
-<!-- Layout -->
+<!-- Layout: icon rail + main content -->
 <div id="layout">
+  <nav id="rail" class="rail" aria-label="Main navigation">
+    <button class="rail-btn" id="tabDashboard" onclick="switchMainTab('dashboard')" title="Dashboard">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Dashboard</span>
+    </button>
+    <button class="rail-btn" id="tabDevices" onclick="switchMainTab('devices')" title="Devices">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Devices</span>
+    </button>
+    <button class="rail-btn" id="tabEvents" onclick="switchMainTab('events')" title="Events">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Events</span>
+    </button>
+    <button class="rail-btn" id="tabMap" onclick="switchMainTab('map')" title="Topology Map">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Topology</span>
+    </button>
+    <button class="rail-btn" id="tabIpam" onclick="switchMainTab('ipam')" title="IP Addresses">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">IPAM</span>
+    </button>
+    <button class="rail-btn" id="tabReports" onclick="switchMainTab('reports')" title="Reports">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Reports</span>
+    </button>
+    <button class="rail-btn" id="tabBackups" onclick="switchMainTab('backups')" title="Backups">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Backups</span>
+    </button>
+    <button class="rail-btn rbac-admin" id="tabLogs" onclick="switchMainTab('logs')" title="Logs">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Logs</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn rail-btn--settings" id="railSettings" onclick="openSettings()" title="Settings">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Settings</span>
+    </button>
+  </nav>
   <div id="main">
-    <!-- Tab bar -->
-    <div id="mainTabs">
-      <button class="mtab" id="tabDashboard" onclick="switchMainTab('dashboard')">📊 Dashboard</button>
-      <button class="mtab" id="tabDevices" onclick="switchMainTab('devices')">🖧 Devices</button>
-      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events</button>
-      <button class="mtab" id="tabMap" onclick="switchMainTab('map')">🌐 Map</button>
-      <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
-      <button class="mtab" id="tabIpam" onclick="switchMainTab('ipam')">📋 IP Addresses</button>
-      <button class="mtab" id="tabReports" onclick="switchMainTab('reports')">📊 Reports</button>
-      <button class="mtab rbac-admin" id="tabLogs" onclick="switchMainTab('logs')">📜 Logs</button>
-    </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
       <div id="dw-tab-bar" class="dw-tab-bar"></div>
