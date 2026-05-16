@@ -38,6 +38,17 @@ Major visual refresh based on a hi-fi design prototype exported from claude.ai/d
 ### Events — [frontend/index.html](frontend/index.html)
 - `.evt-view-hdr` dual-classed with `.pagehead`; "⚡ Events" emoji replaced with a `<h1>Events</h1>`. Action buttons (Resolve All / view-mode toggle / export) converted to `.btn ghost sm` + `.seg` with SVG icons
 
+### Alerting — new top-level page ([frontend/alerting.js](frontend/alerting.js), [frontend/index.html](frontend/index.html), [frontend/icons.js](frontend/icons.js), [frontend/app.js](frontend/app.js), [frontend/style.css](frontend/style.css))
+- New "Alerting" rail item between Events and Map, opens dedicated `#alertingView` page. Replaces the old "alerting → events" redirect
+- Page-head with live subtitle (`N of M profiles active · K channels configured`) + `Test Alert` / `New Profile` buttons
+- **2-column layout**: profiles + recent deliveries on left; channels card + escalation policy + quiet-hours hint on right
+- **Alert Profiles section** — each row has a toggle switch, name, condition summary (`down ∨ warning · Global · 3 stages`), channel pills colored per atype (email/webhook/syslog/browser), and inline Edit / Test / Delete icon buttons. Filter input narrows by name/scope. Reuses existing CRUD via `openProfileEditor`/`_alertingProfTest`/`_alertingProfDelete`
+- **Recent Deliveries table** — Time / Profile / Device / Severity / State columns pulled from `/api/alert/events?state=all&limit=50`. Refresh icon button reloads
+- **Channels card** — lists action templates from `/api/alert/action-templates` with type icon (mail/webhook/syslog/bell), connection detail (to / url / host:port), and uppercase type label. Click a row to edit; `+` in the card head creates new
+- **Escalation Policy card** — picks the default global profile (or first available) and renders its stages as numbered rows showing channel names + trigger + delay (`immediate` / `+30s` / `+10 min`)
+- **Quiet Hours card** — placeholder pointing to Settings → Alert Profiles → Maintenance Windows (no new backend yet)
+- Existing Settings → Alert Profiles tab remains during the transition; the new top-level page is the recommended surface
+
 ### IPAM — [frontend/ipam.js](frontend/ipam.js), [frontend/style.css](frontend/style.css)
 - `_ipamRenderShell()` rewritten with `.pagehead` (title bumped to "IP Address Management" + sub + Add Subnet/Edit/Refresh DNS/Remove buttons using `.btn primary`/`.btn`/`.btn ghost`/`.btn danger` with SVG icons)
 - New 2-column layout (`.ipam-layout`): left **sidebar** with filter input + grouped subnet cards, right **main pane** with subnet header + 5-card KPI row (Total / In use / Reserved / Free / Utilization %) + Address heatmap + allocation table

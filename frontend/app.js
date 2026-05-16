@@ -1697,12 +1697,12 @@ async function _refreshFlapList(){
 }
 
 function switchMainTab(tab){
-  if(tab==='alerting') tab='events';
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
   document.getElementById('tabDashboard').classList.toggle('active',tab==='dashboard');
   document.getElementById('tabDevices').classList.toggle('active',tab==='devices');
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
+  { const _ab=document.getElementById('tabAlerting'); if(_ab) _ab.classList.toggle('active',tab==='alerting'); }
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
@@ -1714,6 +1714,7 @@ function switchMainTab(tab){
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
   const reportsView  =document.getElementById('reportsView');
+  const alertingView =document.getElementById('alertingView');
   const logsView     =document.getElementById('logsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
@@ -1722,8 +1723,9 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
-  if(reportsView) reportsView.style.display='none';
-  if(logsView)    logsView.style.display   ='none';
+  if(reportsView)  reportsView.style.display ='none';
+  if(alertingView) alertingView.style.display='none';
+  if(logsView)     logsView.style.display    ='none';
   // Deactivate logs polling when switching away from the Logs tab
   if(tab!=='logs' && typeof _logsDeactivate==='function') _logsDeactivate();
   document.getElementById('devActBar').style.display='none';
@@ -1779,6 +1781,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _rptInit==='function') _rptInit();
+  } else if(tab==='alerting'){
+    if(alertingView) alertingView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _alertingPageInit==='function') _alertingPageInit();
   } else if(tab==='logs'){
     if(logsView) logsView.style.display='flex';
     emptyMain.style.display='none';

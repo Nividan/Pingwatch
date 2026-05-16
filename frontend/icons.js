@@ -111,6 +111,7 @@
   function _pwShellInit() {
     var rail = [
       ['tabDashboard','dashboard'], ['tabDevices','devices'], ['tabEvents','events'],
+      ['tabAlerting','alerts'],
       ['tabMap','map'],              ['tabBackups','backups'], ['tabIpam','ipam'],
       ['tabReports','reports'],      ['tabLogs','logs'],       ['railSettings','settings'],
     ];

@@ -1080,3 +1080,350 @@ async function _alertMaintSave(id) {
 // Backwards-compat shim — old call sites may still invoke _alertingLoadRules.
 // Map it to the new profiles loader so nothing breaks.
 function _alertingLoadRules() { _alertingLoadProfiles(); }
+
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTING TOP-LEVEL PAGE (#alertingView) — v1.0 redesign
+// Shell + profiles + recent deliveries + channels card + escalation card
+// Reuses existing CRUD endpoints under /api/alert/* so no backend changes.
+// ═══════════════════════════════════════════════════════════════
+
+let _alPgFilter = '';
+
+async function _alertingPageInit() {
+  const root = document.getElementById('alertingView');
+  if (!root) return;
+  root.innerHTML = `
+    <div class="pagehead">
+      <div class="pagehead-l">
+        <h1>Alerting</h1>
+        <div class="sub" id="al-pg-sub">Profiles, channels, escalation, and delivery history.</div>
+      </div>
+      <div class="pagehead-r">
+        <button class="btn" id="al-pg-test-btn" onclick="_alPgTestAlert()">${icon('play',12)} Test Alert</button>
+        <button class="btn primary rbac-admin" onclick="openProfileEditor(null)">${icon('plus',12)} New Profile</button>
+      </div>
+    </div>
+    <div class="al-pg-layout">
+      <div class="al-pg-main">
+        <section class="al-pg-section">
+          <div class="al-pg-sec-head">
+            <div class="al-pg-sec-title">Alert Profiles <span class="al-pg-badge" id="al-pg-pf-count">0</span></div>
+            <div class="search" style="max-width:260px">
+              ${icon('search',13)}
+              <input class="pw-input" id="al-pg-pf-filter" type="search" placeholder="Filter…" oninput="_alPgFilterChange(this.value)"/>
+            </div>
+          </div>
+          <div id="al-pg-profiles"><div class="muted" style="padding:18px 16px">Loading…</div></div>
+        </section>
+        <section class="al-pg-section">
+          <div class="al-pg-sec-head">
+            <div class="al-pg-sec-title">Recent Deliveries <span class="muted small">last 24h</span></div>
+            <button class="iconbtn" onclick="_alPgLoadDeliveries()" title="Refresh">${icon('refresh',12)}</button>
+          </div>
+          <div id="al-pg-deliveries"><div class="muted" style="padding:18px 16px">Loading…</div></div>
+        </section>
+      </div>
+      <aside class="al-pg-side">
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">
+            <span>Channels <span class="al-pg-badge" id="al-pg-ch-count">0</span></span>
+            <button class="iconbtn rbac-admin" onclick="openTemplateEditor(null)" title="New action template">${icon('plus',12)}</button>
+          </div>
+          <div id="al-pg-channels"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">Escalation Policy <span class="muted small" id="al-pg-esc-sub"></span></div>
+          <div id="al-pg-escalation"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">Quiet Hours</div>
+          <div id="al-pg-quiet" class="al-pg-quiet">
+            <div class="muted small" style="padding:14px;line-height:1.5">
+              Suppress notifications during scheduled maintenance via
+              <a class="al-pg-link" onclick="openSettings('alert-rules')">Settings → Alert Profiles → Maintenance Windows</a>.
+            </div>
+          </div>
+        </section>
+      </aside>
+    </div>`;
+  applyRbac();
+  await Promise.all([
+    _alPgLoadProfilesAndChannels(),
+    _alPgLoadDeliveries(),
+  ]);
+}
+
+async function _alPgLoadProfilesAndChannels() {
+  try {
+    const [pr, tr] = await Promise.all([
+      api('GET', '/api/alert/profiles'),
+      api('GET', '/api/alert/action-templates'),
+    ]);
+    _alertProfiles  = pr.profiles  || [];
+    _alertTemplates = tr.templates || [];
+    _alPgRenderProfiles();
+    _alPgRenderChannels();
+    _alPgRenderEscalation();
+    _alPgRefreshSubtitle();
+  } catch (e) {
+    const pf = document.getElementById('al-pg-profiles');
+    if (pf) pf.innerHTML = `<div class="error" style="padding:16px">Failed to load profiles: ${esc(String(e))}</div>`;
+  }
+}
+
+function _alPgFilterChange(v) {
+  _alPgFilter = (v || '').trim().toLowerCase();
+  _alPgRenderProfiles();
+}
+
+function _alPgRefreshSubtitle() {
+  const sub = document.getElementById('al-pg-sub');
+  if (!sub) return;
+  const total  = _alertProfiles.length;
+  const active = _alertProfiles.filter(p => p.enabled).length;
+  const chans  = _alertTemplates.length;
+  sub.textContent = `${active} of ${total} profile${total===1?'':'s'} active · ${chans} channel${chans===1?'':'s'} configured`;
+}
+
+// ── Profile rows ────────────────────────────────────────────────────
+function _alPgRenderProfiles() {
+  const wrap = document.getElementById('al-pg-profiles');
+  if (!wrap) return;
+
+  const tplById = {};
+  _alertTemplates.forEach(t => { tplById[t.id] = t; });
+
+  let arr = _alertProfiles;
+  if (_alPgFilter) {
+    arr = arr.filter(p =>
+      (p.name||'').toLowerCase().includes(_alPgFilter) ||
+      (p.scope_type||'').toLowerCase().includes(_alPgFilter) ||
+      (p.scope_value||'').toLowerCase().includes(_alPgFilter));
+  }
+  const cntEl = document.getElementById('al-pg-pf-count');
+  if (cntEl) cntEl.textContent = _alertProfiles.length;
+
+  if (!arr.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:18px 16px;text-align:center">
+      ${_alPgFilter ? 'No profiles match the filter.' : 'No alert profiles yet — click + New Profile.'}
+    </div>`;
+    return;
+  }
+
+  // Stable order: global → group → device → sensor, then by name
+  const rank = {global: 0, group: 1, device: 2, sensor: 3};
+  const sorted = arr.slice().sort((a, b) =>
+    (rank[a.scope_type] - rank[b.scope_type]) || a.name.localeCompare(b.name));
+
+  wrap.innerHTML = sorted.map(p => _alPgProfileRow(p, tplById)).join('');
+  applyRbac();
+}
+
+function _alPgProfileRow(p, tplById) {
+  // Build a condition summary from triggers + scope
+  const triggers = [...new Set((p.stages||[]).map(s => s.trigger_state))];
+  const trigStr  = triggers.length
+    ? triggers.map(t => ({down:'down', warning:'warning', down_recovered:'recovered', warning_recovered:'warn-recovered'})[t] || t).join(' ∨ ')
+    : '—';
+  const scopeStr = p.scope_type === 'global'
+    ? 'Global'
+    : `${p.scope_type[0].toUpperCase()}${p.scope_type.slice(1)}: ${esc(p.scope_value || '')}`;
+
+  // Unique channel types across all stages
+  const chanTypes = new Set();
+  (p.stages || []).forEach(s => {
+    (s.action_ids || []).forEach(aid => {
+      const t = tplById[aid];
+      if (t) chanTypes.add(t.atype);
+    });
+  });
+  const chanPills = [...chanTypes].map(at =>
+    `<span class="al-pg-chan-pill" data-at="${esc(at)}">${esc(at)}</span>`).join('');
+
+  const safeName = esc(p.name).replace(/'/g, '&#39;');
+  return `
+    <div class="al-pg-pf-row" data-pid="${p.id}">
+      <label class="al-pg-toggle rbac-op" title="${p.enabled?'Disable':'Enable'} profile">
+        <input type="checkbox" ${p.enabled?'checked':''} onchange="_alPgProfToggle(${p.id})"/>
+        <span class="al-pg-toggle-slider"></span>
+      </label>
+      <div class="al-pg-pf-body">
+        <div class="al-pg-pf-name">${esc(p.name)}</div>
+        <div class="al-pg-pf-cond mono">
+          <span class="al-pg-cond-trig">${esc(trigStr)}</span>
+          <span class="al-pg-cond-sep">·</span>
+          <span class="al-pg-cond-scope">${scopeStr}</span>
+          <span class="al-pg-cond-sep">·</span>
+          <span class="al-pg-cond-stages">${(p.stages||[]).length} stage${(p.stages||[]).length===1?'':'s'}</span>
+        </div>
+      </div>
+      <div class="al-pg-pf-chans">${chanPills}</div>
+      <div class="al-pg-pf-acts">
+        <button class="iconbtn rbac-admin" onclick="openProfileEditor(${p.id})" title="Edit">${icon('edit',12)}</button>
+        <button class="iconbtn rbac-admin" onclick="_alertingProfTest(${p.id},'${safeName}')" title="Test fire">${icon('play',12)}</button>
+        <button class="iconbtn rbac-admin" onclick="_alertingProfDelete(${p.id},'${safeName}')" title="Delete">${icon('trash',12)}</button>
+      </div>
+    </div>`;
+}
+
+async function _alPgProfToggle(pid) {
+  try {
+    await api('POST', `/api/alert/profile/${pid}/toggle`);
+    const p = _alertProfiles.find(x => x.id === pid);
+    if (p) p.enabled = !p.enabled;
+    _alPgRenderProfiles();
+    _alPgRefreshSubtitle();
+  } catch (e) {
+    toast('Toggle failed: ' + (e.message || e), 'err');
+    _alPgRenderProfiles();   // revert visual state on error
+  }
+}
+
+// ── Channels card ───────────────────────────────────────────────────
+function _alPgRenderChannels() {
+  const wrap = document.getElementById('al-pg-channels');
+  if (!wrap) return;
+  const cntEl = document.getElementById('al-pg-ch-count');
+  if (cntEl) cntEl.textContent = _alertTemplates.length;
+  if (!_alertTemplates.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      No action templates yet — add one to start receiving alerts.
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = _alertTemplates.map(t => {
+    const ic = ({email:'mail', webhook:'ipam', syslog:'logs', browser:'bell'})[t.atype] || 'bell';
+    const detail = _alPgChannelDetail(t);
+    return `
+      <div class="al-pg-chan-row" onclick="openTemplateEditor(${t.id})">
+        <div class="al-pg-chan-ico">${icon(ic,14)}</div>
+        <div class="al-pg-chan-body">
+          <div class="al-pg-chan-name">${esc(t.name)}</div>
+          <div class="al-pg-chan-detail mono">${esc(detail)}</div>
+        </div>
+        <div class="al-pg-chan-type">${esc(t.atype)}</div>
+      </div>`;
+  }).join('');
+  applyRbac();
+}
+
+function _alPgChannelDetail(t) {
+  const c = t.config || {};
+  if (t.atype === 'email')   return c.to || c.recipients || '—';
+  if (t.atype === 'webhook') return c.url || '—';
+  if (t.atype === 'syslog')  return `${c.host || ''}:${c.port || 514}`;
+  if (t.atype === 'browser') return 'In-app notifications';
+  return '';
+}
+
+// ── Escalation Policy card ──────────────────────────────────────────
+function _alPgRenderEscalation() {
+  const wrap = document.getElementById('al-pg-escalation');
+  if (!wrap) return;
+  // Pick the default policy: a global profile (preferred), else the first profile
+  const def = _alertProfiles.find(p => p.scope_type === 'global') || _alertProfiles[0];
+  const sub = document.getElementById('al-pg-esc-sub');
+  if (!def) {
+    if (sub) sub.textContent = '';
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      No profile to derive policy from.
+    </div>`;
+    return;
+  }
+  if (sub) sub.textContent = esc(def.name);
+
+  const tplById = {};
+  _alertTemplates.forEach(t => { tplById[t.id] = t; });
+
+  const stages = (def.stages || []).slice().sort((a,b) => a.sort_order - b.sort_order);
+  if (!stages.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      Profile has no stages configured.
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = stages.map((s, i) => {
+    const delay = s.delay_s
+      ? (s.delay_s < 60 ? `+${s.delay_s}s` : `+${Math.round(s.delay_s/60)} min`)
+      : 'immediate';
+    const channels = (s.action_ids || []).map(aid => tplById[aid]).filter(Boolean);
+    const chanStr  = channels.map(t => t.name).join(' + ') || '—';
+    const trigLbl  = ({down:'Down', warning:'Warning', down_recovered:'Recovered', warning_recovered:'Warn recovered'})[s.trigger_state] || s.trigger_state;
+    return `
+      <div class="al-pg-esc-row">
+        <div class="al-pg-esc-num">${i+1}</div>
+        <div class="al-pg-esc-body">
+          <div class="al-pg-esc-name">${esc(chanStr)} <span class="muted small">· ${esc(trigLbl)}</span></div>
+          <div class="al-pg-esc-when">After ${esc(delay)}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Recent Deliveries ───────────────────────────────────────────────
+async function _alPgLoadDeliveries() {
+  const wrap = document.getElementById('al-pg-deliveries');
+  if (!wrap) return;
+  try {
+    const r = await api('GET', '/api/alert/events?state=all&limit=50');
+    const events = r.events || [];
+    if (!events.length) {
+      wrap.innerHTML = `<div class="muted" style="padding:18px 16px;text-align:center">
+        No deliveries in the recent window.
+      </div>`;
+      return;
+    }
+    // Last 24h cutoff (events are time-ordered desc)
+    const cutoff = Date.now()/1000 - 86400;
+    const recent = events.filter(e => (e.started_at || e.created_at || 0) >= cutoff);
+    const rows = (recent.length ? recent : events.slice(0, 12)).map(_alPgDeliveryRow).join('');
+    wrap.innerHTML = `
+      <div class="al-pg-tbl-wrap">
+        <table class="al-pg-tbl">
+          <thead><tr>
+            <th>Time</th><th>Profile</th><th>Device</th><th>Severity</th><th>State</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    wrap.innerHTML = `<div class="error" style="padding:16px">Failed to load deliveries: ${esc(String(e))}</div>`;
+  }
+}
+
+function _alPgDeliveryRow(e) {
+  const ts = e.started_at || e.created_at || 0;
+  const when = ts ? _alPgRelTime(ts) : '—';
+  const sev = (e.severity || e.trigger_state || 'info').toLowerCase();
+  const sevCls = sev.includes('down') || sev === 'critical' ? 'crit'
+              : sev.includes('warn') ? 'warn'
+              : sev.includes('recover') ? 'ok'
+              : 'info';
+  const sevLbl = ({down:'Down', warning:'Warning', down_recovered:'Recovered', warning_recovered:'Warn recovered', critical:'Critical', info:'Info'})[sev] || sev;
+  const state = (e.state || '').toLowerCase();
+  const stateCls = state === 'active' ? 'crit' : state === 'ack' ? 'warn' : 'ok';
+  return `
+    <tr>
+      <td class="muted small mono">${esc(when)}</td>
+      <td>${esc(e.profile_name || '—')}</td>
+      <td>${esc(e.device_name || e.device_id || '—')}</td>
+      <td><span class="al-pg-sev ${sevCls}">${esc(sevLbl)}</span></td>
+      <td><span class="al-pg-state ${stateCls}">${esc(state || '—')}</span></td>
+    </tr>`;
+}
+
+function _alPgRelTime(epochSec) {
+  const diff = Date.now()/1000 - epochSec;
+  if (diff < 60)    return `${Math.round(diff)}s ago`;
+  if (diff < 3600)  return `${Math.round(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.round(diff/3600)}h ago`;
+  return `${Math.round(diff/86400)}d ago`;
+}
+
+// ── Test Alert button — picks the first enabled profile to fire ─────
+function _alPgTestAlert() {
+  const target = _alertProfiles.find(p => p.enabled) || _alertProfiles[0];
+  if (!target) { toast('No profile to test — create one first', 'warn'); return; }
+  _alertingProfTest(target.id, target.name);
+}
