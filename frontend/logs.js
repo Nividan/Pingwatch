@@ -292,7 +292,15 @@ function _lvApplyWrapUI() {
 // ── fetch + render ───────────────────────────────────────────────────────────
 function _lvBuildQuery() {
   const q = new URLSearchParams();
-  if (_lvFilter.minLevel) q.set('min_level', _lvFilter.minLevel);
+  // Exact-match per design: clicking "Info" shows only Info, not Info-and-above.
+  // Backend supports both `level=` (exact) and `min_level=` (inclusive).
+  // The "Error" pill is the exception — fold CRITICAL into it since the design
+  // has no separate CRITICAL pill and the row renderer already styles CRITICAL
+  // with the same red badge as ERROR.
+  if (_lvFilter.minLevel) {
+    if (_lvFilter.minLevel === 'ERROR') q.set('min_level', 'ERROR');
+    else                                q.set('level',     _lvFilter.minLevel);
+  }
   if (_lvFilter.search)   q.set('search',    _lvFilter.search);
 
   // Time range → after / before

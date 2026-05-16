@@ -2111,7 +2111,15 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-search:focus{border-color:var(--accent);}
 .ipam-pg{color:var(--text3);font-size:11px;margin-left:auto;display:flex;
   align-items:center;gap:6px;flex-shrink:0;}
-#ipam-table-wrap{flex:1;overflow-y:auto;}
+#ipam-table-wrap{
+  margin:0 var(--sp-6) var(--sp-6);
+  border:1px solid var(--border);border-radius:var(--r-md);
+  background:var(--card);overflow:hidden;
+}
+.ipam-main .ipam-hdr{
+  background:transparent;border:none;
+  padding:6px var(--sp-6) 10px;
+}
 .ipam-tbl{width:100%;border-collapse:collapse;font-size:12px;}
 .ipam-tbl th{padding:8px 14px;text-align:left;color:var(--text3);font-weight:600;
   border-bottom:2px solid var(--border);background:var(--bg2);
@@ -2175,6 +2183,172 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-col-filter{background:var(--bg3);border:1px solid var(--border);border-radius:3px;
   color:var(--text2);font-size:10px;padding:1px 4px;cursor:pointer;outline:none;max-width:80px;}
 .ipam-col-filter:focus{border-color:var(--accent);}
+
+/* ── IPAM v1.0 — sidebar + main 2-column layout ─────────────── */
+.ipam-layout{
+  display:grid;grid-template-columns:300px minmax(0, 1fr);
+  flex:1;min-height:0;overflow:hidden;
+}
+@media (max-width: 1100px){
+  .ipam-layout{ grid-template-columns:260px minmax(0, 1fr); }
+}
+
+/* Sidebar */
+.ipam-sidebar{
+  display:flex;flex-direction:column;min-height:0;
+  border-right:1px solid var(--border);
+  background:var(--bg2);
+  overflow:hidden;
+}
+.ipam-sidebar-filter{
+  padding:12px var(--sp-4) 8px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.ipam-subnet-list{
+  flex:1;overflow-y:auto;
+  padding:8px 0;
+}
+.ipam-empty{
+  padding:32px 16px;text-align:center;
+  color:var(--text3);font-size:var(--fs-sm);
+}
+.ipam-subnet-card{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 14px;margin:1px 6px;
+  border-radius:var(--r-sm);cursor:pointer;
+  border-left:2px solid transparent;
+  transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease);
+}
+.ipam-subnet-card:hover{ background:var(--card-hover); }
+.ipam-subnet-card.active{
+  background:var(--accent-soft);
+  border-left-color:var(--accent);
+}
+.ipam-subnet-card-l{ min-width:0;flex:1; }
+.ipam-subnet-cidr{
+  font-family:var(--font-mono);font-size:var(--fs-md);font-weight:600;
+  color:var(--text);
+}
+.ipam-subnet-card.active .ipam-subnet-cidr{ color:var(--accent); }
+.ipam-subnet-meta{
+  font-size:var(--fs-xs);color:var(--text3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  margin-top:2px;
+}
+.ipam-subnet-util{
+  font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:600;
+  color:var(--text3);flex-shrink:0;
+}
+.ipam-subnet-util.warn{ color:var(--warn); }
+.ipam-subnet-util.crit{ color:var(--down); }
+
+/* Main pane */
+.ipam-main{
+  display:flex;flex-direction:column;min-height:0;overflow-y:auto;
+  background:var(--bg);
+}
+.ipam-main-empty{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;padding:40px;text-align:center;color:var(--text3);
+}
+.ipam-main-empty-icon{ opacity:.4;color:var(--text3); }
+.ipam-main-empty-title{ font-size:var(--fs-lg);font-weight:600;color:var(--text2); }
+.ipam-main-empty-hint{ font-size:var(--fs-sm);max-width:380px;line-height:1.5; }
+
+.ipam-main-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px var(--sp-6) 10px;gap:var(--sp-4);
+  flex-shrink:0;
+}
+.ipam-main-head-l{ min-width:0; }
+.ipam-main-title{
+  font-size:var(--fs-2xl);font-weight:600;color:var(--text);
+  letter-spacing:-.3px;
+}
+.ipam-main-sub{
+  font-size:var(--fs-sm);color:var(--text3);margin-top:2px;
+}
+.ipam-main-head-r{
+  display:flex;align-items:center;gap:6px;flex-shrink:0;
+}
+
+/* KPI cards row */
+.ipam-kpis{
+  display:grid;grid-template-columns:repeat(5, 1fr);
+  gap:12px;padding:0 var(--sp-6) var(--sp-4);
+}
+@media (max-width: 1400px){ .ipam-kpis{ grid-template-columns:repeat(3, 1fr); } }
+@media (max-width: 900px){  .ipam-kpis{ grid-template-columns:repeat(2, 1fr); } }
+.ipam-kpi{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--r-md);padding:14px 16px;
+  display:flex;flex-direction:column;gap:6px;
+}
+.ipam-kpi-label{
+  font-size:var(--fs-xs);font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--text3);
+}
+.ipam-kpi-val{
+  font-family:var(--font-mono);font-size:24px;font-weight:600;
+  color:var(--text);letter-spacing:-.3px;line-height:1;
+}
+.ipam-kpi-val.accent{ color:var(--accent); }
+.ipam-kpi-val.warn  { color:var(--warn); }
+.ipam-kpi-val.crit  { color:var(--down); }
+.ipam-kpi-unit{
+  font-size:11px;color:var(--text3);font-weight:400;
+  margin-left:3px;letter-spacing:0;
+}
+
+/* Section blocks (heatmap + table containers) */
+.ipam-section{
+  margin:0 var(--sp-6) var(--sp-5);
+  border:1px solid var(--border);border-radius:var(--r-md);
+  background:var(--card);overflow:hidden;
+}
+.ipam-section-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--border);
+  background:var(--bg2);
+}
+.ipam-section-title{
+  font-size:var(--fs-md);font-weight:600;color:var(--text);
+}
+
+/* Heatmap */
+.ipam-heatmap-legend{
+  display:flex;align-items:center;gap:14px;
+  font-size:var(--fs-xs);color:var(--text3);
+}
+.ipam-heatmap-legend span{ display:inline-flex;align-items:center;gap:5px; }
+.ipam-heatmap-legend .ipam-leg{
+  width:9px;height:9px;border-radius:2px;display:inline-block;
+}
+.ipam-leg.free{ background:var(--bg4); }
+.ipam-leg.used{ background:var(--accent); }
+.ipam-leg.gw  { background:var(--up); }
+.ipam-leg.rsv { background:var(--warn); }
+.ipam-leg.cfl { background:var(--down); }
+
+.ipam-heatmap{
+  display:grid;grid-template-columns:repeat(32, 1fr);gap:3px;
+  padding:14px;
+}
+@media (max-width: 1400px){ .ipam-heatmap{ grid-template-columns:repeat(24, 1fr); } }
+@media (max-width: 900px){  .ipam-heatmap{ grid-template-columns:repeat(16, 1fr); } }
+.ipam-hm-cell{
+  aspect-ratio:1/1;border:none;border-radius:2px;
+  background:var(--bg4);cursor:pointer;padding:0;
+  transition:transform .12s ease, box-shadow var(--dur) var(--ease);
+}
+.ipam-hm-cell:hover{ transform:scale(1.18);z-index:2;position:relative;
+  box-shadow:0 0 0 1px var(--text2); }
+.ipam-hm-cell.free{ background:var(--bg4); }
+.ipam-hm-cell.used{ background:var(--accent); }
+.ipam-hm-cell.gw  { background:var(--up); }
+.ipam-hm-cell.rsv { background:var(--warn); }
+.ipam-hm-cell.cfl { background:var(--down); }
 
 /* ── Log viewer (top-level Logs tab) ──────────────────────────────────── */
 #logsView{flex:1;display:none;flex-direction:column;overflow:hidden;}

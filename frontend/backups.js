@@ -166,16 +166,22 @@ function _bkRenderTable(devices) {
          : dev.in_schedule ? '<span class="bk-pill pending">Pending</span>'
          : '<span class="bk-pill off">Disabled</span>');
 
-      // Actions — collapsed into one ⋯ trigger (Run + View + Settings)
+      // Row click opens the latest config (if any). If no backup exists yet,
+      // fall back to opening settings so the row stays useful.
+      const rowAction = dev.last_run_id
+        ? `_bkOpenViewer(${dev.last_run_id},'${esc(dev.did)}')`
+        : `_bkOpenSettings('${esc(dev.did)}')`;
+      const rowTitle  = dev.last_run_id
+        ? 'Click to view latest config'
+        : 'Click to configure — no backups yet';
+
+      // Right-hand actions: Run + Edit settings
       const runBtn = eligible
         ? `<button class="iconbtn ${isRunning?'bk-btn-spin':''}" onclick="event.stopPropagation();_bkTriggerRun('${esc(dev.did)}')" ${isRunning?'disabled':''} title="Run backup now">${icon('play',13)}</button>`
         : '';
-      const viewBtn = dev.last_run_id
-        ? `<button class="iconbtn" onclick="event.stopPropagation();_bkOpenViewer(${dev.last_run_id},'${esc(dev.did)}')" title="View latest config">${icon('eye',13)}</button>`
-        : '';
-      const setBtn = `<button class="iconbtn" onclick="event.stopPropagation();_bkOpenSettings('${esc(dev.did)}')" title="Settings">${icon('more',13)}</button>`;
+      const setBtn = `<button class="iconbtn" onclick="event.stopPropagation();_bkOpenSettings('${esc(dev.did)}')" title="Edit device settings">${icon('edit',13)}</button>`;
 
-      return `<tr onclick="_bkOpenSettings('${esc(dev.did)}')" title="Click to configure">
+      return `<tr onclick="${rowAction}" title="${rowTitle}">
         <td>${nameCell}</td>
         <td>${lastCell}</td>
         <td class="bk-mono">${sizeKb}</td>
@@ -183,7 +189,7 @@ function _bkRenderTable(devices) {
         <td>${stripCell}</td>
         <td>${diffCell}</td>
         <td>${statusCell}</td>
-        <td class="bk-acts" onclick="event.stopPropagation()">${runBtn}${viewBtn}${setBtn}</td>
+        <td class="bk-acts" onclick="event.stopPropagation()">${runBtn}${setBtn}</td>
       </tr>`;
     }).join('');
   }
