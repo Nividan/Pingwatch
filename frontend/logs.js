@@ -59,21 +59,37 @@ function _logsInit() {
         </div>
         <div class="pagehead-r">
           <button class="btn ghost sm lv-live" id="lvLiveBtn" onclick="_lvToggleLive()" title="Toggle live tail (l)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" opacity=".4"/></svg>
-            Live
+            <span class="lv-live-dot"></span>
+            <span id="lvLiveLbl">Tailing live</span>
           </button>
           <button class="btn ghost sm" onclick="_lvFetch(true)" title="Refresh (r)">${icon('refresh',13)} Refresh</button>
+          <button class="btn ghost sm" id="lvExportBtn" onclick="_lvExport('csv')" title="Export visible logs as CSV">${icon('download',13)} Export</button>
         </div>
       </div>
       <div class="lv-toolbar">
         <div class="lv-streams seg">
           <button class="lv-stream" data-stream="app"     onclick="_lvSwitchStream('app')">Application</button>
-          <button class="lv-stream" data-stream="sensors" onclick="_lvSwitchStream('sensors')">Sensors</button>
           <button class="lv-stream" data-stream="audit"   onclick="_lvSwitchStream('audit')">Audit</button>
-          <button class="lv-stream" data-stream="backup"  onclick="_lvSwitchStream('backup')">Backup</button>
+          <button class="lv-stream" data-stream="sensors" onclick="_lvSwitchStream('sensors')">Sensors</button>
+          <button class="lv-stream" data-stream="backup"  onclick="_lvSwitchStream('backup')">Backups</button>
         </div>
       </div>
       <div class="lv-filters">
+        <div class="lv-lvl-pills" id="lvLvlPills">
+          <button class="lv-lvl-pill" data-lvl=""        onclick="_lvSetLevel('')"        title="All levels">All</button>
+          <button class="lv-lvl-pill" data-lvl="DEBUG"   onclick="_lvSetLevel('DEBUG')"   title="Debug and above">
+            <span class="lv-lvl-dot debug"></span>Debug <span class="lv-lvl-cnt" data-cnt="DEBUG">0</span>
+          </button>
+          <button class="lv-lvl-pill" data-lvl="INFO"    onclick="_lvSetLevel('INFO')"    title="Info and above">
+            <span class="lv-lvl-dot info"></span>Info <span class="lv-lvl-cnt" data-cnt="INFO">0</span>
+          </button>
+          <button class="lv-lvl-pill" data-lvl="WARNING" onclick="_lvSetLevel('WARNING')" title="Warning and above">
+            <span class="lv-lvl-dot warn"></span>Warn <span class="lv-lvl-cnt" data-cnt="WARNING">0</span>
+          </button>
+          <button class="lv-lvl-pill" data-lvl="ERROR"   onclick="_lvSetLevel('ERROR')"   title="Error and above">
+            <span class="lv-lvl-dot err"></span>Error <span class="lv-lvl-cnt" data-cnt="ERROR">0</span>
+          </button>
+        </div>
         <select id="lvFTime" class="pw-select" onchange="_lvOnFilter()">
           <option value="all">All time</option>
           <option value="5m">Last 5 min</option>
@@ -90,26 +106,19 @@ function _logsInit() {
           <span style="font-size:11px;color:var(--text3)">to</span>
           <input type="datetime-local" id="lvFCustomTo" class="pw-input" onchange="_lvOnFilter()">
         </div>
-        <select id="lvFLevel" class="pw-select" onchange="_lvOnFilter()" title="Minimum level to show">
-          <option value="">All Levels</option>
-          <option value="DEBUG">DEBUG+</option>
-          <option value="INFO">INFO+</option>
-          <option value="WARNING">WARNING+</option>
-          <option value="ERROR">ERROR+</option>
-          <option value="CRITICAL">CRITICAL only</option>
+        <select id="lvFLevel" class="pw-select" style="display:none" onchange="_lvOnFilter()">
+          <option value=""></option><option value="DEBUG"></option><option value="INFO"></option>
+          <option value="WARNING"></option><option value="ERROR"></option><option value="CRITICAL"></option>
         </select>
-        <div class="search" style="flex:1;max-width:320px">
+        <div class="search" style="flex:1;max-width:380px">
           ${icon('search',14)}
-          <input id="lvFSearch" type="search" placeholder="Search (e.g. timeout, FortiGate)… /" oninput="_lvOnFilter()" class="lv-search pw-input" style="width:100%">
+          <input id="lvFSearch" type="search" placeholder="Search logs…" oninput="_lvOnFilter()" class="lv-search pw-input" style="width:100%">
         </div>
-        <button class="iconbtn lv-iconbtn" onclick="_lvClearFilters()" title="Clear filters (Esc)">${icon('x',13)}</button>
         <div class="lv-spacer"></div>
         <button class="iconbtn lv-iconbtn" id="lvWrapBtn" onclick="_lvToggleWrap()" title="Toggle word wrap (w)">⤶</button>
         <button class="iconbtn lv-iconbtn" onclick="_lvCopy()" title="Copy visible log lines">${icon('check',13)}</button>
-        <button class="iconbtn lv-iconbtn" onclick="_lvExport('csv')" title="Export as CSV">${icon('download',13)}</button>
-        <button class="iconbtn lv-iconbtn" onclick="_lvExport('json')" title="Export as JSON">${icon('download',13)}</button>
+        <button class="btn ghost sm" onclick="_lvClearFilters()" title="Clear filters (Esc)">Clear</button>
       </div>
-      <div class="lv-status" id="lvStatus">—</div>
       <div class="lv-body-wrap">
         <div id="lvBody" class="lv-body"></div>
         <button class="lv-jump" id="lvJump" onclick="_lvJumpToLive()">⤓ Jump to live</button>
@@ -129,6 +138,8 @@ function _logsInit() {
   el('lvFCustom').style.display = _lvFilter.timeRange === 'custom' ? 'flex' : 'none';
   _lvApplyWrapUI();
   _lvUpdateStreamBtns();
+  _lvUpdateLevelPills();
+  _lvUpdateLiveBtn();
   _lvInitialTotal = null;
   _lvFetch(true);
 }
@@ -156,8 +167,7 @@ function _lvUpdateStreamBtns() {
 // ── live / follow ────────────────────────────────────────────────────────────
 function _lvToggleLive() {
   _lvLive = !_lvLive;
-  const btn = document.getElementById('lvLiveBtn');
-  if (btn) { btn.classList.toggle('on', _lvLive); btn.textContent = _lvLive ? '● Live' : '⊙ Live'; }
+  _lvUpdateLiveBtn();
   if (_lvLive) {
     _lvFetch(false);
     _lvTimer = setInterval(() => {
@@ -168,13 +178,16 @@ function _lvToggleLive() {
     _lvStopLive(false);
   }
 }
+function _lvUpdateLiveBtn() {
+  const btn = document.getElementById('lvLiveBtn');
+  const lbl = document.getElementById('lvLiveLbl');
+  if (btn) btn.classList.toggle('on', _lvLive);
+  if (lbl) lbl.textContent = _lvLive ? 'Tailing live' : 'Paused';
+}
 function _lvStopLive(resetBtn = true) {
   _lvLive = false;
   if (_lvTimer) { clearInterval(_lvTimer); _lvTimer = null; }
-  if (resetBtn) {
-    const btn = document.getElementById('lvLiveBtn');
-    if (btn) { btn.classList.remove('on'); btn.textContent = '⊙ Live'; }
-  }
+  if (resetBtn) _lvUpdateLiveBtn();
 }
 
 function _lvBindScrollFollow() {
@@ -218,8 +231,49 @@ function _lvClearFilters() {
   document.getElementById('lvFCustomFrom').value = '';
   document.getElementById('lvFCustomTo').value   = '';
   document.getElementById('lvFCustom').style.display = 'none';
+  _lvUpdateLevelPills();
   _lvPrefsSave();
   _lvFetch(true);
+}
+
+// Inline level segmented filter — pills with live counts replace the old dropdown
+function _lvSetLevel(lvl) {
+  _lvFilter.minLevel = lvl || '';
+  const sel = document.getElementById('lvFLevel');
+  if (sel) sel.value = _lvFilter.minLevel;
+  _lvUpdateLevelPills();
+  _lvPrefsSave();
+  _lvFetch(true);
+}
+function _lvUpdateLevelPills() {
+  document.querySelectorAll('.lv-lvl-pill').forEach(p => {
+    p.classList.toggle('active', (p.dataset.lvl || '') === (_lvFilter.minLevel || ''));
+  });
+}
+// Recompute Debug/Info/Warn/Error counts from the rendered lines and refresh the pills + subtitle.
+function _lvUpdateCounts(rawText, r) {
+  const counts = { DEBUG: 0, INFO: 0, WARNING: 0, ERROR: 0 };
+  if (rawText) {
+    for (const line of rawText.split('\n')) {
+      const m = _LV_LINE_RE.exec(line);
+      if (!m) continue;
+      let lv = m[2];
+      if (lv === 'WARN') lv = 'WARNING';
+      if (lv === 'CRITICAL') lv = 'ERROR';
+      if (counts[lv] !== undefined) counts[lv] += 1;
+    }
+  }
+  document.querySelectorAll('.lv-lvl-cnt').forEach(el => {
+    const k = el.dataset.cnt;
+    el.textContent = counts[k] != null ? counts[k] : 0;
+  });
+  // Subtitle — "N of N entries · live tail since boot · rotated nightly @ 00:00 UTC"
+  const sub = document.getElementById('lvSub');
+  if (sub && r) {
+    const tail = _lvLive ? 'tailing live' : 'paused';
+    const rot  = r.rotated_count ? ` · ${r.rotated_count} rotated` : '';
+    sub.textContent = `${r.filtered ?? 0} of ${r.total ?? 0} entries · ${tail} since boot${rot}`;
+  }
 }
 
 // ── wrap / display ───────────────────────────────────────────────────────────
@@ -299,7 +353,10 @@ async function _lvFetch(resetScroll) {
     ? lines.map(_lvRenderLine).join('')
     : `<div class="lv-empty">No log lines match the current filters.</div>`;
 
-  // Status bar
+  // Refresh level pill counts + dynamic subtitle from this batch
+  _lvUpdateCounts(r.lines || '', r);
+
+  // Legacy status bar (if it still exists in some old layout cache)
   if (status) {
     const size = _lvFmtBytes(r.file_size || 0);
     const rot  = r.rotated_count ? ` · ${r.rotated_count} rotated` : '';
@@ -323,19 +380,32 @@ function _lvBuildSearchRegex(q) {
 }
 
 const _LV_LINE_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(INFO|WARNING|WARN|ERROR|CRITICAL|DEBUG)\s+(.*)$/;
+// Short single-letter badge used by the design (D / I / W / E)
+const _LV_BADGE = { DEBUG:'D', INFO:'I', WARN:'W', WARNING:'W', ERROR:'E', CRITICAL:'E' };
 function _lvRenderLine(line) {
   const m = _LV_LINE_RE.exec(line);
   if (!m) {
-    // Continuation line
+    // Continuation line (stack traces etc.) — render as a hanging-indent row
     const text = esc(line);
     const hl = _lvSearchRe ? text.replace(_lvSearchRe, '<mark>$1</mark>') : text;
-    return `<div class="lv-line lv-cont">${hl || '&nbsp;'}</div>`;
+    return `<div class="lv-row lv-cont">${hl || '&nbsp;'}</div>`;
   }
-  const ts = m[1], lvl = m[2], msg = m[3];
-  const cls = `lv-${lvl.toLowerCase()}`;
+  const ts = m[1], lvlRaw = m[2], msg = m[3];
+  const lvl = (lvlRaw === 'WARN') ? 'WARNING' : lvlRaw;
+  const lvlCls = lvl === 'CRITICAL' ? 'err' :
+                 lvl === 'ERROR'    ? 'err' :
+                 lvl === 'WARNING'  ? 'warn' :
+                 lvl === 'DEBUG'    ? 'debug' : 'info';
+  const badge = _LV_BADGE[lvl] || 'I';
+  // Show only HH:MM:SS in the timestamp column to match the design's compact look
+  const tsShort = (ts.split(' ')[1] || ts) + 'Z';
   const msgEsc = esc(msg);
   const msgHl  = _lvSearchRe ? msgEsc.replace(_lvSearchRe, '<mark>$1</mark>') : msgEsc;
-  return `<div class="lv-line ${cls}"><span class="lv-ts">${esc(ts)}</span><span class="lv-lvl">${lvl}</span><span class="lv-msg">${msgHl}</span></div>`;
+  return `<div class="lv-row lvl-${lvlCls}">
+    <span class="lv-badge lvl-${lvlCls}">${badge}</span>
+    <span class="lv-ts">${esc(tsShort)}</span>
+    <span class="lv-msg">${msgHl}</span>
+  </div>`;
 }
 
 function _lvFmtBytes(n) {

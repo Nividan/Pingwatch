@@ -44,8 +44,12 @@ Major visual refresh based on a hi-fi design prototype exported from claude.ai/d
 ### Reports — [frontend/reports.js](frontend/reports.js)
 - `_rptInit()` shell rewritten with `.pagehead` (title + sub + New button) + sub-tabs converted to `.seg`. The internal RPT sections catalogue is untouched
 
-### Backups — [frontend/index.html](frontend/index.html)
+### Backups — [frontend/index.html](frontend/index.html), [frontend/backups.js](frontend/backups.js), [frontend/style.css](frontend/style.css)
 - `#backupsView` toolbar split into `.pagehead` (title + Run All Enabled/Refresh buttons with SVG icons) + `#bk-toolbar` with `.search`-styled config search
+- New design-style page: dynamic subtitle (`N configs tracked · last sweep Xm ago · Y succeeded · Z failed`), 5-card KPI row (Successful 24h / Failed 24h / Disabled / Avg size / Storage used)
+- Table restructured to 8 design columns: **Device** (name + host + vendor chip) / **Last success** / **Size** / **Version** / **14-day history** (strip chart) / **Diff since** / **Status** (pill) / **Actions** (Run/View/Settings icon buttons). Status pill replaces the old text status; icon-only actions replace the three separate columns
+- 14-day strip paints per-day status (ok/fail/none) from the backend's new `strip_14d` field; falls back to a single-bar placeholder for legacy installs
+- "Diff since" cell shows real `last_diff_lines` count (`no changes` / `N lines changed`) computed at backup time; clicking opens the History modal so the user can pick which two runs to diff
 
 ### Logs — [frontend/logs.js](frontend/logs.js)
 - `_logsInit()` rewritten with `.pagehead` (title + Live toggle / Refresh buttons), stream tabs converted to `.seg`, filters use `.pw-select`/`.search`/`.iconbtn` design
@@ -66,6 +70,12 @@ Major visual refresh based on a hi-fi design prototype exported from claude.ai/d
 - **New endpoints** in [routes/auth.py](routes/auth.py): `GET /api/me/sessions` (returns `[{id, current, ip, user_agent, device_label, created_at, last_active, expires}, ...]`, `id` = SHA-256 token-hash matching the row's primary key), `DELETE /api/me/sessions/{id}` (returns 400 if trying to revoke the current session — use `/api/logout` instead), `DELETE /api/me/sessions` (revokes all but the current session, returns `{revoked: N}`)
 - **Single-session caveat documented**: `_create_session()` still does `DELETE FROM sessions WHERE username=?` before inserting on each login. The new endpoints work — they just typically return 1 row. Removing single-session enforcement is a future security trade-off
 - **Audit trail** — `session_revoked` and `sessions_revoke_others` audit events emitted to `db_log_audit`
+
+### Backend — Backups page enrichment ([db/backups.py](db/backups.py), [backup/engine.py](backup/engine.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py))
+- **Schema** — additive `diff_lines INTEGER DEFAULT NULL` column on `backup_runs`. Idempotent migrations in both SQLite (try/except `ALTER TABLE`) and PG (`ADD COLUMN IF NOT EXISTS`); fresh-install `CREATE TABLE` blocks updated to match. NULL on legacy rows = "we don't know" — new runs populate the value naturally
+- **Engine** — `do_backup()` now fetches the previous successful run's config via new `db_get_last_successful_config()` helper and stores `diff_lines = _count_diff_lines(prev, current)` on each new successful run. Uses stdlib `difflib.unified_diff` (no new dep). Identical configs → `0`; first backups + failed runs → NULL. Failure during diff computation is logged and doesn't break the save
+- **List endpoint** — `db_get_backup_list()` (powers `GET /api/backups`) now returns two extra fields per device: `last_diff_lines` (int or null) and `strip_14d` (14-entry array of `ok`/`fail`/`none` in oldest→newest UTC-day order). Strip computed via one extra query per call (4th query in the existing function) bucketed in Python by `_build_14d_strip()`
+- **Cost** — one extra SELECT per `/api/backups` call (~14-day window, indexed on `(did, ts DESC)`), one extra `db_get_last_successful_config()` query per backup run. Both bounded and cheap
 
 ### Out of scope (deferred to a future release)
 - Map view (Live tab) — kept as-is per scope decision; the existing builder app inside the iframe inherits the new theme tokens but its chrome wasn't redesigned

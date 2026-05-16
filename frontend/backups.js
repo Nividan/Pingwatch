@@ -23,11 +23,78 @@ async function _bkInit() {
       _bkKeepMax = parseInt(s.backup_keep) || 3;
     }
     _bkDevices = d.devices || [];
+    _bkRenderHeader(_bkDevices);
     _bkRenderTable(_bkDevices);
   } catch (e) {
     _bkInited = false;  // allow retry on next tab click
     wrap.innerHTML = `<div class="bk-err">Failed to load: ${esc(String(e))}</div>`;
   }
+}
+
+// ── Header counts + KPI cards ────────────────────────────────────────
+function _bkRenderHeader(devices) {
+  const eligible = devices.filter(_bkIsEligible);
+  // 24h window — count last_ts events within the last 24 hours
+  const now = Date.now();
+  const dayAgo = now - 86400000;
+  let success24 = 0, failed24 = 0, totalSize = 0, sizedCount = 0, storageBytes = 0;
+  let lastSweep = 0;
+  eligible.forEach(d => {
+    if (typeof d.last_size === 'number') {
+      totalSize += d.last_size;
+      sizedCount += 1;
+      storageBytes += d.last_size * (d.run_count || 1);
+    }
+    const t = _bkParseTs(d.last_ts)?.getTime() || 0;
+    if (t > lastSweep) lastSweep = t;
+    if (t >= dayAgo) {
+      if (d.last_success === true) success24 += 1;
+      else if (d.last_success === false) failed24 += 1;
+    }
+  });
+  const disabledCnt = eligible.filter(d => d.in_schedule !== true).length;
+  const tracked = eligible.length;
+  const avgKb = sizedCount ? Math.round((totalSize / sizedCount) / 1024 * 10) / 10 : 0;
+  const storageStr = _bkFmtBytes(storageBytes);
+
+  const sub = document.getElementById('bkSub');
+  if (sub) {
+    const sweepAgo = lastSweep ? _bkRelTime(new Date(lastSweep).toISOString()) : '—';
+    sub.innerHTML = `${tracked} config${tracked===1?'':'s'} tracked · last sweep ${esc(sweepAgo)} · ${success24} succeeded${failed24?` · <span class="text-down">${failed24} failed</span>`:''}`;
+  }
+
+  const kpiRow = document.getElementById('bk-kpi-row');
+  if (kpiRow) {
+    kpiRow.innerHTML = `
+      <div class="bk-kpi-card">
+        <div class="bk-kpi-label">Successful (24h)</div>
+        <div class="bk-kpi-val">${success24}</div>
+      </div>
+      <div class="bk-kpi-card">
+        <div class="bk-kpi-label">Failed (24h)</div>
+        <div class="bk-kpi-val ${failed24?'text-down':''}">${failed24}</div>
+      </div>
+      <div class="bk-kpi-card">
+        <div class="bk-kpi-label">Disabled</div>
+        <div class="bk-kpi-val">${disabledCnt}</div>
+      </div>
+      <div class="bk-kpi-card">
+        <div class="bk-kpi-label">Avg size</div>
+        <div class="bk-kpi-val">${avgKb}<span class="bk-kpi-unit">KB</span></div>
+      </div>
+      <div class="bk-kpi-card">
+        <div class="bk-kpi-label">Storage used</div>
+        <div class="bk-kpi-val">${storageStr}</div>
+      </div>`;
+  }
+}
+
+function _bkFmtBytes(n) {
+  if (!n) return `0<span class="bk-kpi-unit">B</span>`;
+  if (n < 1024) return `${n}<span class="bk-kpi-unit">B</span>`;
+  if (n < 1024*1024) return `${(n/1024).toFixed(1)}<span class="bk-kpi-unit">KB</span>`;
+  if (n < 1024*1024*1024) return `${(n/1024/1024).toFixed(1)}<span class="bk-kpi-unit">MB</span>`;
+  return `${(n/1024/1024/1024).toFixed(2)}<span class="bk-kpi-unit">GB</span>`;
 }
 
 // ── Eligibility heuristic ─────────────────────────────────────────────
@@ -50,47 +117,73 @@ function _bkRenderTable(devices) {
 
   function buildRows(devList) {
     return devList.map(dev => {
-      const isRunning  = _bkRunning.has(dev.did);
-      const eligible   = _bkIsEligible(dev);
-      const scheduled  = dev.enabled && dev.in_schedule
-        ? '<span class="bk-dot-on" title="In schedule">✓</span>'
-        : '<span class="bk-never">—</span>';
-      const timeCell   = dev.last_ts ? _bkRelTime(dev.last_ts) : '<span class="bk-never">—</span>';
-      const statusCell = _bkStatusCell(dev, isRunning);
-      const enabledDot = !eligible
-        ? '<span class="bk-never" title="Internet monitor — not SSH-accessible">N/A</span>'
-        : dev.enabled
-          ? '<span class="bk-dot-on" title="Backup enabled">●</span>'
-          : '<span class="bk-dot-off" title="Backup disabled">○</span>';
-      const cnt = dev.run_count || 0;
-      const cntCell = dev.enabled
-        ? `<span class="bk-cnt ${cnt >= _bkKeepMax ? 'bk-cnt-full' : ''}" title="${cnt} saved, max ${_bkKeepMax}">${cnt}/${_bkKeepMax}</span>`
+      const isRunning = _bkRunning.has(dev.did);
+      const eligible  = _bkIsEligible(dev);
+
+      // Device cell — name + host + vendor/group chip
+      const vendorChip = dev.group ? `<span class="bk-vendor">${esc(dev.group)}</span>` : '';
+      const nameCell = dev.orphaned
+        ? `<div class="bk-orphaned" title="Device no longer exists">⚠ ${esc(dev.did)}</div>`
+        : `<div class="bk-dev-name"><strong>${esc(dev.name || dev.did)}</strong></div>
+           <div class="bk-dev-sub mono">${esc(dev.host || '—')}${vendorChip ? ' · ' + vendorChip : ''}</div>`;
+
+      // Last success
+      const lastCell = (dev.last_success && dev.last_ts)
+        ? `<span class="muted small">${_bkRelTime(dev.last_ts)}</span>`
         : '<span class="bk-never">—</span>';
 
-      const nameCell = dev.orphaned
-        ? `<span class="bk-orphaned" title="Device no longer exists — backup config is stale. Open settings to delete it.">⚠ Device not found (${esc(dev.did)})</span>`
-        : `<strong>${esc(dev.name || dev.did)}</strong>`;
+      // Size
+      const sizeKb = (typeof dev.last_size === 'number')
+        ? `${(dev.last_size/1024).toFixed(1)}<span class="muted"> KB</span>`
+        : '<span class="bk-never">—</span>';
+
+      // Version — short tag from run id (best-effort visual placeholder; the
+      // real config version is opaque, so we surface the run id as r###)
+      const verCell = dev.last_run_id
+        ? `<span class="bk-ver mono">r${esc(String(dev.last_run_id).slice(-4))}</span>`
+        : '<span class="bk-never">—</span>';
+
+      // 14-day strip — paint per-day status from backend; fall back to a
+      // placeholder bar when no history is available yet.
+      const stripCell = Array.isArray(dev.strip_14d) && dev.strip_14d.length
+        ? _bkStripFromArr(dev.strip_14d)
+        : _bkStripPlaceholder(dev);
+
+      // Diff since — surface real line-count from the previous successful run.
+      // Click opens the History modal so the user can pick which two runs to
+      // diff (matches the existing compare workflow).
+      const diffCell = (typeof dev.last_diff_lines === 'number')
+        ? (dev.last_diff_lines === 0
+            ? '<span class="muted small">no changes</span>'
+            : `<a class="bk-diff-link" onclick="event.stopPropagation();_bkOpenHistory('${esc(dev.did)}')" title="Open backup history to compare runs">${dev.last_diff_lines} line${dev.last_diff_lines===1?'':'s'} changed</a>`)
+        : '<span class="bk-never">—</span>';
+
+      // Status pill
+      const statusCell = isRunning
+        ? '<span class="bk-pill running">running</span>'
+        : (dev.last_success === true ? '<span class="bk-pill ok">OK</span>'
+         : dev.last_success === false ? '<span class="bk-pill fail">Failed</span>'
+         : dev.in_schedule ? '<span class="bk-pill pending">Pending</span>'
+         : '<span class="bk-pill off">Disabled</span>');
+
+      // Actions — collapsed into one ⋯ trigger (Run + View + Settings)
+      const runBtn = eligible
+        ? `<button class="iconbtn ${isRunning?'bk-btn-spin':''}" onclick="event.stopPropagation();_bkTriggerRun('${esc(dev.did)}')" ${isRunning?'disabled':''} title="Run backup now">${icon('play',13)}</button>`
+        : '';
+      const viewBtn = dev.last_run_id
+        ? `<button class="iconbtn" onclick="event.stopPropagation();_bkOpenViewer(${dev.last_run_id},'${esc(dev.did)}')" title="View latest config">${icon('eye',13)}</button>`
+        : '';
+      const setBtn = `<button class="iconbtn" onclick="event.stopPropagation();_bkOpenSettings('${esc(dev.did)}')" title="Settings">${icon('more',13)}</button>`;
+
       return `<tr onclick="_bkOpenSettings('${esc(dev.did)}')" title="Click to configure">
-        <td>${enabledDot} ${nameCell}</td>
-        <td class="bk-mono">${esc(dev.host || '—')}</td>
-        <td style="text-align:center">${scheduled}</td>
-        <td>${timeCell}</td>
+        <td>${nameCell}</td>
+        <td>${lastCell}</td>
+        <td class="bk-mono">${sizeKb}</td>
+        <td>${verCell}</td>
+        <td>${stripCell}</td>
+        <td>${diffCell}</td>
         <td>${statusCell}</td>
-        <td style="text-align:center">${cntCell}</td>
-        <td onclick="event.stopPropagation()" style="text-align:center">
-          ${dev.last_run_id
-            ? `<button class="btn-sm" onclick="_bkOpenViewer(${dev.last_run_id}, '${esc(dev.did)}')" title="View latest config">📄</button>`
-            : `<button class="btn-sm" disabled title="No backups yet">📄</button>`}
-        </td>
-        <td onclick="event.stopPropagation()" style="text-align:center">
-          ${eligible
-            ? `<button class="btn-sm ${isRunning ? 'bk-btn-spin' : ''}"
-                  onclick="_bkTriggerRun('${esc(dev.did)}')"
-                  ${isRunning ? 'disabled' : ''} title="Run backup now">
-                ${isRunning ? '⟳' : '▶'}
-              </button>`
-            : '<span class="bk-never" title="Not SSH-accessible">—</span>'}
-        </td>
+        <td class="bk-acts" onclick="event.stopPropagation()">${runBtn}${viewBtn}${setBtn}</td>
       </tr>`;
     }).join('');
   }
@@ -118,19 +211,53 @@ function _bkRenderTable(devices) {
     <table class="bk-table">
       <thead>
         <tr>
-          <th>Device Name</th>
-          <th>IP Address</th>
-          <th style="text-align:center">Scheduled</th>
-          <th>Last Backup</th>
-          <th>Last Status</th>
-          <th style="text-align:center">Saved</th>
-          <th style="text-align:center">Config</th>
-          <th style="text-align:center">Run</th>
+          <th>Device</th>
+          <th>Last success</th>
+          <th>Size</th>
+          <th>Version</th>
+          <th>14-day history</th>
+          <th>Diff since</th>
+          <th>Status</th>
+          <th></th>
         </tr>
       </thead>
       ${buildSection('Backup Enabled',  'enabled',  enabledDevs)}
       ${buildSection('Backup Disabled', 'disabled', disabledDevs)}
     </table>`;
+}
+
+// Paint a 14-day strip from the backend-provided array. Each entry is
+// 'ok' / 'fail' / 'none' in oldest→newest order; the rightmost bar = today.
+function _bkStripFromArr(arr) {
+  const days = Math.min(14, arr.length);
+  const bars = [];
+  let ok = 0, fail = 0, miss = 0;
+  for (let i = 0; i < days; i++) {
+    const s = arr[i];
+    const cls = (s === 'ok') ? 'ok' : (s === 'fail') ? 'fail' : 'miss';
+    if (cls === 'ok') ok++; else if (cls === 'fail') fail++; else miss++;
+    bars.push(`<span class="bk-strip-bar ${cls}"></span>`);
+  }
+  const tip = `Last 14 days · ${ok} ok · ${fail} fail · ${miss} no run`;
+  return `<div class="bk-strip" title="${tip}">${bars.join('')}</div>`;
+}
+
+// Fallback strip when no per-day data is available yet (e.g. legacy installs
+// before the v1.0 backend enrichment landed, or first-time render before the
+// fetch completes). Bars reflect only the most recent run.
+function _bkStripPlaceholder(dev) {
+  if (!dev.last_run_id) {
+    return '<div class="bk-strip empty"></div>';
+  }
+  const days = 14;
+  const fail = dev.last_success === false;
+  const bars = [];
+  for (let i = 0; i < days; i++) {
+    const isLast = i === days - 1;
+    const cls = fail && isLast ? 'fail' : 'ok';
+    bars.push(`<span class="bk-strip-bar ${cls}"></span>`);
+  }
+  return `<div class="bk-strip" title="Last 14 days (history not available yet)">${bars.join('')}</div>`;
 }
 
 function _bkToggleGroup(key) {

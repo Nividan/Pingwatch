@@ -232,7 +232,8 @@ def db_init():
                 size_bytes INTEGER DEFAULT 0,
                 sha256     TEXT    DEFAULT '',
                 config     TEXT    DEFAULT '',
-                error_msg  TEXT    DEFAULT ''
+                error_msg  TEXT    DEFAULT '',
+                diff_lines INTEGER DEFAULT NULL
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS ix_backup_runs_did_ts "
@@ -537,6 +538,14 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
+        # Backups page enrichment (v1.0+) — surface a per-row "lines changed
+        # vs previous successful backup" count so the redesigned Backups view
+        # can populate its Diff column without computing diffs on the fly.
+        try:
+            con.execute("ALTER TABLE backup_runs ADD COLUMN diff_lines INTEGER DEFAULT NULL")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (

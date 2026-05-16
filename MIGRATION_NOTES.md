@@ -89,6 +89,99 @@ curl -X DELETE -b cookies.txt http://localhost:7070/api/me/sessions
 - Existing sessions on upgrade: any pre-existing token row with NULL `device` / `user_agent` shows `"Unknown device"` in the UI; doesn't break the row.
 - Existing `POST /api/logout` continues to revoke the current session only.
 
+## Backend changes — Phase 4c spec (backups page enrichment)
+
+### Need
+
+The redesigned Backups view ([frontend/backups.js](frontend/backups.js)) wants two pieces of metadata per device that the existing `/api/backups` payload doesn't carry:
+
+1. **14-day history strip** — a 14-element array of per-day status (`ok` / `fail` / `none`) so the strip-chart cell can paint real activity instead of a placeholder.
+2. **Diff since last successful** — line-count delta between the latest successful run and the run immediately preceding it. Surfaced as the "Diff since" column ("no changes" or "N lines changed").
+
+Both can be derived from the existing `backup_runs` table — no new table needed.
+
+### Schema additions
+
+One new column on `backup_runs`, idempotent migration in both DB paths:
+
+```sql
+ALTER TABLE backup_runs ADD COLUMN diff_lines INTEGER DEFAULT NULL
+```
+
+- SQLite: try/except wrapping the ALTER in [db/core.py](db/core.py) alongside the existing pattern around line 519.
+- PG: `ADD COLUMN IF NOT EXISTS` in [db/pg_schema.py](db/pg_schema.py).
+- `CREATE TABLE` blocks updated so fresh installs get the column too.
+- NULL on legacy rows is meaningful: "we don't know" — UI renders em-dash. New runs after the migration land with an integer.
+
+### Engine change
+
+[backup/engine.py](backup/engine.py) — when persisting a successful run, look up the immediately-previous *successful* run's `config` for the same `did` and compute the unified-diff line count (added + removed). Store the integer on the new row.
+
+- Use `difflib.unified_diff` (stdlib — no new dep). Count lines starting with `+` or `-` excluding `+++` / `---` headers.
+- Skip the computation when:
+  - No previous successful run exists → `diff_lines = NULL` (first backup)
+  - The current run is a failure → leave `diff_lines = NULL`
+  - Configs are byte-identical → `diff_lines = 0`
+- Computation cost: O(N) on config size. Typical network device configs are 10-100 KB → milliseconds. Done after the SSH grab on a background thread that's already off the request path.
+
+### `db_save_backup_run` change
+
+Accept an optional `diff_lines` in the `result` dict and write it into the INSERT. Falls back to `NULL` when not provided (preserves the old caller contract).
+
+### `db_get_backup_list` change
+
+Two new keys per device in the response:
+
+```jsonc
+{
+  "did": "...",
+  // ... existing fields ...
+  "last_diff_lines": 38,           // or null when unknown / first backup
+  "strip_14d": ["ok","ok","none","fail","ok", ... 14 entries]
+}
+```
+
+Compute both with the same single extra query per call (the existing function already does 3 queries — we add a 4th):
+
+```sql
+SELECT did, ts, success
+FROM backup_runs
+WHERE ts >= ?                       -- 14 days ago, ISO format
+ORDER BY ts ASC
+```
+
+Then in Python, bucket each row into `(did, date)` and reduce to `ok` (any success that day) / `fail` (only failures that day) / `none` (no row for that day). Walk the last 14 calendar days in UTC to emit the array in oldest→newest order.
+
+`last_diff_lines` is read straight off the latest-run map that's already built — no extra query, just include `diff_lines` in the existing `SELECT id, ts, success, size_bytes, error_msg` query.
+
+### Frontend changes
+
+[frontend/backups.js](frontend/backups.js):
+
+- Replace the `_bkStripPlaceholder()` placeholder with one that reads `dev.strip_14d` and paints 14 bars colored by status. Missing/short array falls back to the placeholder pattern.
+- Replace the diff-since em-dash cell with:
+  - `dev.last_diff_lines === 0` → `<span class="muted">no changes</span>`
+  - `dev.last_diff_lines > 0` → clickable text linking into the diff modal already implemented at `_bkOpenDiff(did)`
+  - `null/undefined` → em-dash
+
+### Verification
+
+```bash
+# After running a backup at least twice, the new fields appear:
+curl -s -b cookies.txt http://localhost:7070/api/backups | jq '.devices[0] | {did, last_diff_lines, strip_14d}'
+
+# 14-day strip is always exactly 14 entries (or absent if no runs at all):
+curl -s -b cookies.txt http://localhost:7070/api/backups | jq '.devices[] | .strip_14d | length' | sort -u
+```
+
+Manual UI check: open Backups tab, the strip column shows actual per-day bars, the diff column shows "no changes" / "N lines changed" or em-dash for legacy/first-time devices.
+
+### Backwards compatibility
+
+- Pre-1.0 clients ignore the two extra fields — additive.
+- Legacy rows have `diff_lines = NULL` until their next successful run lands. No backfill needed; the next scheduled sweep populates them naturally.
+- Existing `db_save_backup_run` callers that don't pass `diff_lines` continue to work — column just stays NULL.
+
 ## Deferred (NOT in this release)
 
 | # | Need | Notes |

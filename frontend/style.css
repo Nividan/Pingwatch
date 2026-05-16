@@ -2241,6 +2241,95 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .lv-jump.show{opacity:1;pointer-events:auto;transform:translateY(0);}
 .lv-jump:hover{background:var(--accent);color:#fff;}
 
+/* ── Logs v1.0 — level segmented pills (replaces .lv-filters dropdown) ── */
+.lv-lvl-pills{
+  display:inline-flex;align-items:center;gap:4px;flex-shrink:0;
+  background:var(--card-soft);border:1px solid var(--border);
+  border-radius:var(--r-pill);padding:2px;
+}
+.lv-lvl-pill{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:3px 10px;border:none;background:transparent;
+  font-size:var(--fs-sm);font-weight:500;color:var(--text3);
+  border-radius:var(--r-pill);cursor:pointer;white-space:nowrap;
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.lv-lvl-pill:hover{ color:var(--text); }
+.lv-lvl-pill.active{
+  background:var(--bg);color:var(--accent);
+  box-shadow:0 1px 2px rgba(0,0,0,.2);
+}
+.lv-lvl-pill[data-lvl="DEBUG"].active   { color:var(--text2); }
+.lv-lvl-pill[data-lvl="INFO"].active    { color:var(--accent); }
+.lv-lvl-pill[data-lvl="WARNING"].active { color:var(--warn); }
+.lv-lvl-pill[data-lvl="ERROR"].active   { color:var(--down); }
+.lv-lvl-dot{
+  width:6px;height:6px;border-radius:50%;flex-shrink:0;
+}
+.lv-lvl-dot.debug{ background:var(--text3); }
+.lv-lvl-dot.info { background:var(--accent); }
+.lv-lvl-dot.warn { background:var(--warn); }
+.lv-lvl-dot.err  { background:var(--down); }
+.lv-lvl-cnt{
+  font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:600;
+  color:var(--text3);
+}
+.lv-lvl-pill.active .lv-lvl-cnt{ color:inherit;opacity:.85; }
+
+/* "Tailing live" / "Paused" pill in the topbar */
+.lv-live-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--text3);flex-shrink:0;
+}
+.lv-live.on .lv-live-dot{
+  background:var(--up);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--up) 30%, transparent);
+  animation:lv-dot-pulse 1.8s ease-in-out infinite;
+}
+@keyframes lv-dot-pulse{
+  0%,100%{ opacity:1; }
+  50%    { opacity:.55; }
+}
+
+/* ── Logs v1.0 — compact mono row layout ─────────────────────────── */
+.lv-body .lv-row{
+  display:grid;grid-template-columns:24px 100px 1fr;
+  gap:14px;align-items:start;padding:3px 16px;
+  min-height:1.6em;font-family:var(--font-mono);font-size:12px;
+  border-left:2px solid transparent;
+}
+.lv-body .lv-row:hover{ background:rgba(255,255,255,.03); }
+.lv-body .lv-row.lvl-err  { border-left-color:var(--down); background:color-mix(in srgb, var(--down) 6%, transparent); }
+.lv-body .lv-row.lvl-warn { border-left-color:var(--warn); background:color-mix(in srgb, var(--warn) 5%, transparent); }
+.lv-body .lv-row .lv-ts{
+  color:var(--text3);font-size:11px;width:auto;
+  white-space:nowrap;
+}
+.lv-body .lv-row .lv-msg{
+  flex:1;color:var(--text2);
+  white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
+}
+.lv-body.nowrap .lv-row{ }
+.lv-body.nowrap .lv-row .lv-msg{ white-space:pre;overflow:hidden;text-overflow:ellipsis; }
+
+/* Continuation rows (stack-trace lines that don't match the header regex) */
+.lv-body .lv-row.lv-cont{
+  display:block;padding-left:154px;color:var(--text3);
+  border-left-color:transparent;
+}
+
+/* Compact colored badge — D / I / W / E square */
+.lv-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:18px;border-radius:3px;
+  font-family:var(--font-mono);font-size:10px;font-weight:700;
+  letter-spacing:0;line-height:1;
+}
+.lv-badge.lvl-info { color:var(--accent); background:var(--accent-soft); }
+.lv-badge.lvl-warn { color:var(--warn);   background:var(--warn-bg); }
+.lv-badge.lvl-err  { color:var(--down);   background:var(--down-bg); }
+.lv-badge.lvl-debug{ color:var(--text3);  background:var(--card-soft); }
+
 /* ── Sensor-type defaults table (Settings → Sensors tab) ──────────────── */
 .sdr-tbl                {width:100%;border-collapse:collapse;}
 .sdr-tbl thead th       {font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;
@@ -2742,6 +2831,97 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .bk-grp-cnt{background:var(--bg4);border-radius:20px;padding:1px 8px;
   font-size:10px;font-weight:600;color:var(--text3);}
 tbody.bk-grp-collapsed{display:none;}
+
+/* ── Backups — KPI cards row (design parity) ────────────────── */
+.bk-kpi-row{
+  display:grid;grid-template-columns:repeat(5, 1fr);
+  gap:12px;padding:0 var(--sp-6) var(--sp-4);
+}
+.bk-kpi-card{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--r-md);padding:14px 16px;
+  display:flex;flex-direction:column;gap:6px;
+}
+.bk-kpi-label{
+  font-size:var(--fs-xs);font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--text3);
+}
+.bk-kpi-val{
+  font-family:var(--font-mono);font-size:24px;font-weight:600;
+  color:var(--text);letter-spacing:-.3px;line-height:1;
+}
+.bk-kpi-unit{
+  font-size:11px;color:var(--text3);font-weight:400;
+  margin-left:4px;letter-spacing:0;
+}
+@media (max-width: 1100px){
+  .bk-kpi-row{ grid-template-columns:repeat(3, 1fr); }
+}
+@media (max-width: 700px){
+  .bk-kpi-row{ grid-template-columns:repeat(2, 1fr); }
+}
+
+/* ── Backups — design-style table cells ────────────────────── */
+.bk-dev-name{ color:var(--text);font-size:var(--fs-md); }
+.bk-dev-sub{ color:var(--text3);font-size:var(--fs-xs);margin-top:2px; }
+.bk-vendor{
+  display:inline-flex;align-items:center;
+  padding:1px 6px;border-radius:3px;
+  background:var(--bg3);color:var(--text2);
+  font-size:10px;font-weight:600;letter-spacing:.3px;
+  text-transform:uppercase;margin-left:4px;
+}
+.bk-ver{
+  display:inline-block;padding:1px 6px;border-radius:var(--r-sm);
+  background:var(--bg3);color:var(--text2);
+  font-size:var(--fs-xs);
+}
+.bk-acts{ display:flex;gap:2px;justify-content:flex-end;white-space:nowrap; }
+.bk-acts .iconbtn{
+  width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;border:1px solid transparent;border-radius:var(--r-sm);
+  color:var(--text3);cursor:pointer;transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.bk-acts .iconbtn:hover{ background:var(--card-hover);color:var(--text); }
+.bk-acts .iconbtn:disabled{ opacity:.4;cursor:not-allowed; }
+
+/* ── Backups — status pills ────────────────────────────────── */
+.bk-pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:2px 9px;border-radius:var(--r-pill);
+  font-size:var(--fs-xs);font-weight:600;
+  border:1px solid var(--border);
+  font-family:var(--font-mono);
+}
+.bk-pill::before{
+  content:'';width:5px;height:5px;border-radius:50%;background:currentColor;
+}
+.bk-pill.ok      { color:var(--up);   background:var(--up-bg);   border-color:color-mix(in srgb, var(--up) 40%, var(--border)); }
+.bk-pill.fail    { color:var(--down); background:var(--down-bg); border-color:color-mix(in srgb, var(--down) 40%, var(--border)); }
+.bk-pill.running { color:var(--accent); background:var(--accent-soft); border-color:color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.bk-pill.pending { color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.bk-pill.off     { color:var(--text3); background:var(--card-soft); }
+
+/* ── Backups — 14-day strip chart ───────────────────────────── */
+.bk-strip{
+  display:inline-flex;align-items:flex-end;gap:1px;height:18px;
+}
+.bk-strip.empty{ width:60px; }
+.bk-strip-bar{
+  width:5px;height:14px;border-radius:1px;background:var(--bg4);
+  transition:transform .12s ease;
+}
+.bk-strip-bar.ok   { background:var(--up); }
+.bk-strip-bar.fail { background:var(--down); height:16px; }
+.bk-strip-bar.miss { background:var(--bg4); opacity:.4; height:8px; }
+.bk-strip:hover .bk-strip-bar{ transform:scaleY(1.08); }
+
+/* Diff-since link in the Backups table */
+.bk-diff-link{
+  color:var(--accent);font-size:var(--fs-sm);
+  cursor:pointer;text-decoration:none;
+}
+.bk-diff-link:hover{ text-decoration:underline; }
 
 /* ── Config Diff viewer ─────────────────────────────────────────── */
 .bk-diff-meta{padding:10px 16px;border-bottom:1px solid var(--border);

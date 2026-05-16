@@ -346,8 +346,10 @@ def pg_create_main_schema(cur):
             size_bytes INTEGER DEFAULT 0,
             sha256     TEXT    DEFAULT '',
             config     TEXT    DEFAULT '',
-            error_msg  TEXT    DEFAULT ''
+            error_msg  TEXT    DEFAULT '',
+            diff_lines INTEGER DEFAULT NULL
         )""")
+    cur.execute("ALTER TABLE backup_runs ADD COLUMN IF NOT EXISTS diff_lines INTEGER DEFAULT NULL")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS ix_backup_runs_did_ts "
         "ON backup_runs(did, ts DESC)"

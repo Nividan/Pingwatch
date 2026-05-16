@@ -209,6 +209,7 @@ from db.backups     import (
     db_get_backup_history,
     db_get_backup_run,
     db_save_backup_run,
+    db_get_last_successful_config,
     db_delete_backup_run,
     db_ensure_backup_device,
     db_write_config_file,
@@ -291,6 +292,7 @@ __all__ = [
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",
+    "db_get_last_successful_config",
     "db_delete_backup_run", "db_ensure_backup_device", "db_write_config_file",
     "db_search_configs", "encrypt_pw", "decrypt_pw",
 ]
