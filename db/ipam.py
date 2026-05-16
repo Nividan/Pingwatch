@@ -506,6 +506,7 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
     now = time.time()
     set_kind = kind is not None
     kind_val = str(kind)[:24] if set_kind else ''
+    kind_log = repr(kind_val) if set_kind else 'unchanged'
     def _do():
         if is_pg():
             from db.pg_pool import pg_cursor
@@ -537,7 +538,7 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
                             (subnet_id, ip, name, user, now, device_id)
                         )
                 log.debug(f"IPAM allocation set: {ip} → {name!r} by {user!r} "
-                          f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_val!r if set_kind else 'unchanged'})")
+                          f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_log})")
             except Exception as e:
                 log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
             return
@@ -571,7 +572,7 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
                 )
             con.commit()
             log.debug(f"IPAM allocation set: {ip} → {name!r} by {user!r} "
-                      f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_val!r if set_kind else 'unchanged'})")
+                      f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_log})")
         except Exception as e:
             log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
         finally:
