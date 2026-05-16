@@ -560,6 +560,32 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Exclusive flag on alert profiles (v1.0+) — when an exclusive profile
+        # matches the cascade, broader-scope profiles are not added. Lets users
+        # opt out of the new default-additive cascade per-profile.
+        try:
+            con.execute("ALTER TABLE alert_profiles ADD COLUMN exclusive INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        # One-shot migration: preserve "first-match wins" semantics for every
+        # pre-existing profile by setting exclusive=1 on each. Gated via the
+        # schema_version table so re-runs are no-ops. Fresh installs that
+        # populate the Default profile do so AFTER this block (line ~1080
+        # in this file) — fresh rows therefore stay exclusive=0 (additive).
+        try:
+            _existed = con.execute(
+                "SELECT 1 FROM schema_version WHERE notes='exclusive_v1=done'"
+            ).fetchone()
+            if not _existed:
+                con.execute("UPDATE alert_profiles SET exclusive=1")
+                con.execute(
+                    "INSERT OR IGNORE INTO schema_version VALUES (?, datetime('now'), ?)",
+                    (1001, 'exclusive_v1=done')
+                )
+                con.commit()
+        except Exception as _e:
+            log.warning(f"exclusive_v1 migration skipped: {_e}")
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (

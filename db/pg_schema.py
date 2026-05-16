@@ -485,6 +485,7 @@ def pg_create_main_schema(cur):
             scope_type  TEXT NOT NULL DEFAULT 'global',
             scope_value TEXT DEFAULT '',
             enabled     INTEGER NOT NULL DEFAULT 1,
+            exclusive   INTEGER NOT NULL DEFAULT 0,
             created_at  DOUBLE PRECISION DEFAULT 0,
             updated_at  DOUBLE PRECISION DEFAULT 0,
             UNIQUE(scope_type, scope_value)
@@ -493,6 +494,19 @@ def pg_create_main_schema(cur):
         "CREATE INDEX IF NOT EXISTS idx_alert_profiles_scope "
         "ON alert_profiles(scope_type, scope_value)"
     )
+    # Idempotent ALTER for existing PG installs (CREATE TABLE IF NOT EXISTS
+    # above skips when the table already exists, missing the new column).
+    cur.execute("ALTER TABLE alert_profiles ADD COLUMN IF NOT EXISTS exclusive INTEGER NOT NULL DEFAULT 0")
+    # One-shot migration: set exclusive=1 on every pre-existing profile to
+    # preserve "first-match wins" semantics. Gated via schema_version notes
+    # so re-runs are no-ops.
+    cur.execute("SELECT 1 FROM schema_version WHERE notes='exclusive_v1=done'")
+    if not cur.fetchone():
+        cur.execute("UPDATE alert_profiles SET exclusive=1")
+        cur.execute(
+            "INSERT INTO schema_version (version, applied, notes) "
+            "VALUES (1001, NOW()::text, 'exclusive_v1=done') ON CONFLICT (version) DO NOTHING"
+        )
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_action_templates (
             id         SERIAL PRIMARY KEY,

@@ -286,6 +286,7 @@ def handle(h, method, path, body):
         name        = body.get("name", "").strip()
         host        = body.get("host", "").lower().strip()
         group       = body.get("group", "Default Group")
+        site        = str(body.get("site", "") or "").strip()
         webhook_url = body.get("webhook_url", "").strip()
         if not name or not host:
             h._json(400, {"error": "name and host required"}); return True
@@ -293,6 +294,8 @@ def handle(h, method, path, body):
             h._json(400, {"error": "name too long (max 255)"}); return True
         if len(host) > 253:
             h._json(400, {"error": "host too long (max 253)"}); return True
+        if len(site) > 80:
+            h._json(400, {"error": "site too long (max 80 chars)"}); return True
         if webhook_url and len(webhook_url) > 2048:
             h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
@@ -324,7 +327,7 @@ def handle(h, method, path, body):
             from db.backups import encrypt_pw
             _v3_auth_pw_default = encrypt_pw(_v3_auth_pw_default) if _v3_auth_pw_default else ""
             _v3_priv_pw_default = encrypt_pw(_v3_priv_pw_default) if _v3_priv_pw_default else ""
-        did = STATE.add_device(name, host, group)
+        did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url

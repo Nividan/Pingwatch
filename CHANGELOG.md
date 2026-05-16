@@ -8,6 +8,56 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### Site hierarchy — Phase E: auto-discovery propagation
+
+When auto-discovery creates a new device from an IPAM subnet, the subnet's `site` tag is now propagated onto the new device automatically. Existing devices in the subnet are NOT touched — only new finds inherit (back-filling would require a separate one-shot tool).
+
+- [`monitoring/auto_discovery.py:545`](monitoring/auto_discovery.py#L545) — read `subnet["site"]` and pass it through to `_build_device_specs(..., site=_subnet_site)`.
+- [`monitoring/auto_discovery.py:610`](monitoring/auto_discovery.py#L610) — `_build_device_specs()` gains `site=""` kwarg; threads through into each device spec dict.
+- [`core/device_importer.py:189, 207`](core/device_importer.py#L189) — `create_devices_batch()` reads `item.get("site")` and passes it as kwarg to `STATE.add_device(name, host, group, site=site)`. Truncated to 80 chars to match the PATCH/bulk validator.
+
+### Site hierarchy — Phase D: NTM Live tab visible site separation
+
+The Live map's auto-laid-out group frames now distinguish Site → Group buckets visibly. Same group name under different sites renders as distinct frames (mirroring the Devices tab), and each frame's title carries the site prefix (`HQ → Servers`). For v1, the layout stays single-axis — no nested outer site frame (that would require a bigger placement rewrite).
+
+- [`frontend/map.js:379` `calcPwLayout()`](frontend/map.js#L379) — bucket key changes from bare `group` to composite `"<site><group>"`. New `gtitle` carries the human label (`HQ → Servers` or just `Servers` for Unsited). `syntheticGroup.name` now holds the friendly title; new `syntheticGroup.key` carries the composite for downstream lookups.
+- **`pwGroupOverrides` keying** becomes composite. One-shot migration on first run: bare-key entries are re-keyed with leading `` (Unsited bucket) so saved positions are preserved. Gated via `localStorage.pw_group_overrides_site_v1='1'`.
+- **Cleanup pass** (`_pwCleanupOrphanGroups`) — live key set now built as composite keys; stale entries evict correctly.
+- **Color/reset handlers** (`setPwGroupColor` / `resetPwGroupColor`) — parameter renamed to `gkey` (composite); `groups.find(x => (x.key || x.name) === gkey)` falls back to `.name` for backwards-compat. Panel rendering reads `g.key || g.name` for `pwGroupOverrides` lookups.
+- **Placement bookkeeping** at lines 573 + 594 — compares `sg.key === gname || sg.name === gname` so post-grow size/position updates target the right synthetic entry.
+
+### Site hierarchy — Phase C: additive alert cascade + Site scope
+
+The load-bearing piece of the Site hierarchy: alert profiles can now target a **Site** scope, and the cascade is **additive by default** so a NOC site-profile fires alongside a server-team group-profile on the same incident. Pre-existing profiles are migrated to `exclusive=true` so today's first-match behavior is preserved byte-for-byte until users explicitly opt in.
+
+- **New column `alert_profiles.exclusive INTEGER NOT NULL DEFAULT 0`** on both backends. Idempotent `ALTER TABLE` ([db/core.py:567-572](db/core.py), [db/pg_schema.py:493](db/pg_schema.py) `ADD COLUMN IF NOT EXISTS`).
+- **One-shot migration** (`exclusive_v1`) runs once per DB: `UPDATE alert_profiles SET exclusive=1` on all pre-existing rows, then `INSERT INTO schema_version (1001, …, 'exclusive_v1=done')` so re-runs are no-ops. Fresh-install Default profile is seeded AFTER the migration, so it stays exclusive=0 (additive).
+- **`_VALID_SCOPES` extended to include `'site'`** in [routes/alert_profiles.py:42](routes/alert_profiles.py#L42). `_clean_profile_body` plumbs the new `exclusive` flag (defaults to False for new profiles).
+- **DB layer** ([db/alert_profiles.py](db/alert_profiles.py)) — `_AP_COLS` extended; `_profile_row()` returns `exclusive: bool`; `db_save_profile()` writes the new column in both INSERT and UPDATE paths.
+- **Engine cascade rewrite** ([monitoring/alert_profile_engine.py](monitoring/alert_profile_engine.py)):
+  - New `resolve_profiles_for_sensor()` returns a **list** of matching profiles, narrowest → broadest (sensor → device → group → **site** → global). Walks every level, collecting every match. After each match, if `profile.exclusive` is True, broader-scope profiles are NOT added (narrower siblings already collected stay).
+  - Old `resolve_profile_for_sensor()` kept as a back-compat wrapper returning the first (narrowest) match — no external caller signature broken.
+  - Per-sensor cache fields: new `_resolved_profile_ids` / `_resolved_profiles` (lists), back-compat aliases `_resolved_profile_id` / `_resolved_profile` point at the first match.
+  - `evaluate_and_fire()` iterates the cascade list, extracted per-profile stage logic into new `_evaluate_profile_stages()` helper. Post-recovery cleanup uses the narrowest profile as the representative (db_log_event dedups by `(did, sid)` so multi-profile fires share one event row, but dispatch fan-out is preserved — separate emails to separate recipients).
+  - `_build_ctx()` now surfaces `dev.site` in the ctx dict so email/webhook templates and maintenance-window matching can use it.
+- **Maintenance windows ride along** ([routes/maintenance_windows.py:19](routes/maintenance_windows.py#L19), [monitoring/alert_dispatchers.py:81-83](monitoring/alert_dispatchers.py)) — `_VALID_SCOPES` adds `'site'`; `check_maintenance()` matches `ctx['site']` for site-scoped windows. No DB change (scope_value is already free-text TEXT).
+- **Frontend — profile editor** ([frontend/alerting.js](frontend/alerting.js)) — scope dropdown adds `Site`; scope_value input gets a `<datalist>` populated from `/api/sites` when scope is Site (or from in-memory groups when Group). New **Exclusive** checkbox with tooltip explaining the additive vs suppressive semantics. Profile list rows show an "Exclusive" pill next to the name when set.
+- **Frontend — maintenance window editor** — scope dropdown adds `Site`; `_mwScopeInner()` renders a site datalist autocomplete for site scope. Window list rows show `Site: <name>` for site-scoped windows.
+- **Sort order updated** in `_alPgRenderProfiles()`: `global → site → group → device → sensor`.
+
+### Site hierarchy — Phase B: Devices tab UI nesting
+
+Layers a collapsible **Site** wrapper above the existing Group rows on the Devices tab. Same group name under different sites renders as separate buckets (e.g. `HQ → Servers` and `DR-Site-2 → Servers` are two distinct visual sections — intentional per the user's enterprise model). Site assignment is via the device editor or new bulk-move-to-site action.
+
+- **Device editor — Site input** ([frontend/forms-device.js](frontend/forms-device.js)) — both Add and Edit modals get a `Site` text input alongside the existing `Group` field. Uses a native `<datalist>` populated from `GET /api/sites` (cached on `window._pwSitesCache` with 60s TTL). Empty value = "Unsited". `POST /api/device` now accepts `site` ([routes/devices.py:287, 295, 327](routes/devices.py)); `STATE.add_device()` takes the new kwarg.
+- **Site wrapper rendering** ([frontend/devices.js](frontend/devices.js)) — new helpers `_dgKey(site, group)`, `siteId(s)`, `sitebId(s)`, `_siteLabel(s)`. `ensureSiteSection(site)` builds `.site-wrap > .site-hdr + .site-body` and is called from `ensureGroupSection(group, site)` so each `.grp-wrap` nests inside its parent site's body instead of `#dpanels` directly. Composite `(site, group)` key is used for all `grpId/gridId/cntId` lookups — same group name under different sites becomes distinct DOM buckets. Empty `site` = "Unsited" sentinel.
+- **Per-site collapse state** — new localStorage key `pw-site-collapsed` (Set of site values), mirrors the existing `pw-grp-collapsed` mechanic. Click site header to toggle. Group-level collapse state now keyed by composite (site,group) — a one-time reset of `pw-grp-collapsed`/`pw-grp-order` is expected on first load.
+- **Drag-drop across sites** ([frontend/devices.js:1224](frontend/devices.js#L1224)) — `onDrop` now reads `dataset.site` AND `dataset.group` from the target grid. If either differs from the dragged device, both fields are PATCHed in a single request. Sites cache is invalidated on cross-site moves.
+- **Group reorder constrained to within-site** ([frontend/devices.js:1281](frontend/devices.js#L1281)) — `onGrpDragOver` only allows reordering within the same `.site-body` parent. Cross-site moves require explicit Edit Device / bulk-move-to-site (avoids the complexity of inferring intent from a drag).
+- **Rename group cascades across all sites** ([frontend/devices.js:1357](frontend/devices.js#L1357)) — `renameGroup()` iterates every `.grp-wrap[data-grp-name=oldName]` (possibly one per site that contains the group). Mute badges and selection checkboxes mirror the same multi-wrap pattern.
+- **Bulk move to site** ([frontend/index.html:478](frontend/index.html#L478), [frontend/devices.js:343](frontend/devices.js#L343)) — bulk action bar gets a second `Move to site:` input alongside `Move to group:`. New handler `_bulkApplySiteMove()` POSTs `{action:'move', site:'<name>'}` (empty string is valid — clears to Unsited). Reuses the same `/api/devices/bulk` endpoint extended in Phase A.
+- **CSS** ([frontend/style.css](frontend/style.css)) — `.site-wrap` / `.site-hdr` / `.site-arr` / `.site-label` / `.site-count` / `.site-body`. Bold larger header in `var(--card-soft)` chrome, collapsible body, count pill showing "N groups · M devices".
+
 ### Site hierarchy — Phase A: data model + sites API
 
 Introduces a **Site** level above Group on devices (`Site → Group → Device` hierarchy). Phase A is data-layer only — no UI change yet. Subsequent phases ship the UI nesting (B), additive alert cascade (C), NTM Live tab nesting (D), and auto-discovery propagation (E).

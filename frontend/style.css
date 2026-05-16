@@ -366,6 +366,42 @@ body{
 }
 
 /* ── Group section wrapper ── */
+/* ── Site wrapper (parent of groups, v1.0+) ─────────────────────── */
+/* Sites wrap a set of groups under a collapsible parent header. Same group
+ * name under different sites renders as separate .grp-wrap children. */
+.site-wrap{
+  padding:8px 24px 0;
+}
+.site-hdr{
+  display:flex;align-items:center;gap:10px;
+  margin:6px 0 4px;
+  padding:8px 10px;
+  background:var(--card-soft);
+  border:1px solid var(--border);
+  border-radius:var(--r-md);
+  user-select:none;cursor:pointer;
+  transition:background var(--dur) var(--ease);
+}
+.site-hdr:hover{ background:var(--card-hover); }
+.site-arr{
+  width:14px;height:14px;flex-shrink:0;color:var(--text3);font-size:9px;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform .2s;
+}
+.site-arr.open{ transform:rotate(90deg); }
+.site-label{
+  font-size:var(--fs-lg);font-weight:700;color:var(--text);
+  letter-spacing:.2px;
+}
+.site-count{
+  font-size:var(--fs-xs);color:var(--text3);
+  margin-left:auto;
+  background:var(--bg3);border:1px solid var(--border);
+  padding:2px 8px;border-radius:var(--r-pill);
+}
+.site-body{ padding:0; }
+.site-body.collapsed{ display:none; }
+
 .grp-wrap{
   padding:14px 24px 4px;
 }
@@ -4954,6 +4990,15 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .al-pg-mw-pill-off{
   color:var(--text3);background:var(--bg3);
   border-color:var(--border);
+}
+/* Exclusive flag pill on profile rows — marks profiles that suppress
+ * broader-scope profiles in the cascade (v1.0+). */
+.al-pg-excl-pill{
+  display:inline-block;margin-left:6px;padding:1px 7px;border-radius:var(--r-pill);
+  font-size:10px;font-weight:600;color:var(--warn);
+  background:var(--warn-bg);
+  border:1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  letter-spacing:.2px;vertical-align:middle;
 }
 /* Settings-tab card dim when disabled. */
 .alrt-card.alrt-maint-disabled .alrt-card-left{ opacity:.55; }

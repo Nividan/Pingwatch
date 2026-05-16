@@ -377,26 +377,54 @@ function deviceToNode(dev, x, y) {
 }
 
 function calcPwLayout(devices) {
-  const byGroup = {};
+  // v1.0+: bucket by (site, group) composite key so the same group name under
+  // different sites renders as distinct frames — matches the Devices tab's
+  // approach. Site is just a prefix on the visible label (no outer site
+  // frame in v1; that would require a bigger layout rewrite).
+  // Key uses the unit-separator like the Devices tab does. Empty site →
+  // "Unsited" prefix in the label, key "<US>Servers".
+  //
+  // One-shot migration: existing pwGroupOverrides keyed by bare group name
+  // (pre-v1.0) get re-keyed to "<US><group>" (Unsited bucket) so saved
+  // positions don't evaporate. Marker is the localStorage flag below.
+  try { if (!localStorage.getItem('pw_group_overrides_site_v1')) {
+    let migrated = false;
+    for (const oldKey of Object.keys(pwGroupOverrides)) {
+      if (!oldKey.includes('')) {
+        pwGroupOverrides[`${oldKey}`] = pwGroupOverrides[oldKey];
+        delete pwGroupOverrides[oldKey];
+        migrated = true;
+      }
+    }
+    if (migrated) _pwSave('pw_group_overrides', pwGroupOverrides);
+    localStorage.setItem('pw_group_overrides_site_v1', '1');
+  } } catch (_) { /* localStorage unavailable — skip migration, accept reset */ }
+
+  const byKey = {};
   for (const dev of devices) {
     const g = dev.group || 'Default Group';
-    (byGroup[g] = byGroup[g] || []).push(dev);
+    const s = dev.site  || '';
+    const key = `${s}${g}`;
+    (byKey[key] = byKey[key] || { site: s, group: g, devs: [] }).devs.push(dev);
   }
   const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60, MAX_ROWS = 5;
   const syntheticNodes = [], syntheticGroups = [];
   // Smart-placement dirty flags — batched save at end of pass
   let _pwNodeDirty = false, _pwGroupDirty = false;
 
-  // Pre-compute each group's slot dimensions based on actual device types
-  const entries = Object.entries(byGroup).map(([gname, devs]) => {
+  // Pre-compute each group's slot dimensions based on actual device types.
+  // gname (the bucket key) is the COMPOSITE; gtitle is the human-friendly
+  // label that includes the site prefix when present.
+  const entries = Object.entries(byKey).map(([gkey, { site, group, devs }]) => {
     const sizes = devs.map(d => nsize(pwDeviceType(d), null) || { w: 170, h: 95 });
-    const NW    = Math.max(...sizes.map(s => s.w)) + 30;   // slot width  = widest node + gap
-    const NH    = Math.max(...sizes.map(s => s.h)) + 28;   // slot height = tallest node + gap
-    const nrows = Math.min(devs.length, MAX_ROWS);          // column-major: max 5 rows per column
+    const NW    = Math.max(...sizes.map(s => s.w)) + 30;
+    const NH    = Math.max(...sizes.map(s => s.h)) + 28;
+    const nrows = Math.min(devs.length, MAX_ROWS);
     const ncols = Math.ceil(devs.length / MAX_ROWS);
-    return { gname, devs, NW, NH,
+    const gtitle = site ? `${site} → ${group}` : group;
+    return { gname: gkey, gtitle, devs, NW, NH,
              w: ncols * NW + PAD * 2,
-             h: nrows * NH + PAD * 2 + 28 };   // 28px = group title bar
+             h: nrows * NH + PAD * 2 + 28 };
   });
 
   // Two-phase placement: anchor user-positioned groups first, then slide
@@ -491,11 +519,13 @@ function calcPwLayout(devices) {
   }
 
   // 4) Render every group + its devices using the resolved positions.
-  for (const { gname, devs, NW, NH, w, h, gi } of decorated) {
+  for (const { gname, gtitle, devs, NW, NH, w, h, gi } of decorated) {
     const govr = pwGroupOverrides[gname] || {};
     const gax = govr.x, gay = govr.y;
     const gw  = govr.w ?? w, gh = govr.h ?? h;
-    syntheticGroups.push({ id: 'pw_g_' + gi, name: gname,
+    // .name is the displayed title (Site → Group); .key keeps the composite
+    // bucket key for downstream lookups (overrides, rename, color, etc).
+    syntheticGroups.push({ id: 'pw_g_' + gi, name: gtitle || gname, key: gname,
                            x: gax, y: gay,
                            w: gw, h: gh,
                            color: govr.color || '#00d4ff' });
@@ -555,9 +585,11 @@ function calcPwLayout(devices) {
                                       x: groupRect.x, y: groupRect.y,
                                       w: groupRect.w, h: groupRect.h };
           _pwGroupDirty = true;
-          // Patch the syntheticGroups entry so this render reflects the new size
+          // Patch the syntheticGroups entry so this render reflects the new size.
+          // syntheticGroup.name is now the friendly title (Site → Group); compare
+          // by .key which holds the composite bucket key.
           const sg = syntheticGroups[syntheticGroups.length - 1];
-          if (sg && sg.name === gname) { sg.w = groupRect.w; sg.h = groupRect.h; }
+          if (sg && (sg.key === gname || sg.name === gname)) { sg.w = groupRect.w; sg.h = groupRect.h; }
 
           // Keep placedRects coherent for later iterations' overlap checks
           const myIdx = placedRects.findIndex(r => r.gname === gname);
@@ -578,7 +610,7 @@ function calcPwLayout(devices) {
               groupRect.x = np.x; groupRect.y = np.y;
               pwGroupOverrides[gname].x = np.x;
               pwGroupOverrides[gname].y = np.y;
-              if (sg && sg.name === gname) { sg.x = np.x; sg.y = np.y; }
+              if (sg && (sg.key === gname || sg.name === gname)) { sg.x = np.x; sg.y = np.y; }
               if (myIdx >= 0) {
                 placedRects[myIdx].x = np.x;
                 placedRects[myIdx].y = np.y;
@@ -981,13 +1013,17 @@ function startPwSSE() {
   } catch(e) {}
 }
 
-// Drop pwGroupOverrides entries whose group no longer has any live devices.
-// Prevents stale positions from snapping a re-added group back to its old spot.
+// Drop pwGroupOverrides entries whose (site,group) bucket no longer has any
+// live devices. Prevents stale positions from snapping a re-added bucket back
+// to its old spot. v1.0+: live keys are composite "<site><US><group>" to
+// match calcPwLayout's bucketing.
 function _pwCleanupOrphanGroups() {
-  const live = new Set(pwDevices.map(d => d.group || 'Default Group'));
+  const live = new Set(pwDevices.map(d =>
+    `${d.site || ''}${d.group || 'Default Group'}`
+  ));
   let dirty = false;
-  for (const gname of Object.keys(pwGroupOverrides)) {
-    if (!live.has(gname)) { delete pwGroupOverrides[gname]; dirty = true; }
+  for (const gkey of Object.keys(pwGroupOverrides)) {
+    if (!live.has(gkey)) { delete pwGroupOverrides[gkey]; dirty = true; }
   }
   if (dirty) _pwSave('pw_group_overrides', pwGroupOverrides);
 }
@@ -4342,9 +4378,13 @@ function showGroupPanel(g) {
   if (isPwGroup) _selectedPwDid = null;
   document.getElementById('panel-title').textContent = g.name.toUpperCase();
   document.getElementById('panel-icon').textContent = '◧';
-  const curColor = isPwGroup ? (pwGroupOverrides[g.name]?.color || g.color) : g.color;
-  // Escape name for safe embedding inside a JS string in an HTML attribute
-  const jsGname = g.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  // For v1.0 Site → Group buckets, g.key is the composite bucket key used
+  // as the pwGroupOverrides index; g.name is the friendly title shown to
+  // the user. Older code paths that don't set g.key fall back to g.name.
+  const gkey = g.key || g.name;
+  const curColor = isPwGroup ? (pwGroupOverrides[gkey]?.color || g.color) : g.color;
+  // Escape key for safe embedding inside a JS string in an HTML attribute
+  const jsGkey = gkey.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
     <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'Share Tech Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
@@ -4354,10 +4394,10 @@ function showGroupPanel(g) {
       <div class="field-label">COLOR OVERRIDE</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="color" value="${curColor}"
-               onchange="setPwGroupColor('${jsGname}',this.value)"
+               onchange="setPwGroupColor('${jsGkey}',this.value)"
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
-        ${pwGroupOverrides[g.name]?.color
-          ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGname}')">Reset</button>`
+        ${pwGroupOverrides[gkey]?.color
+          ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGkey}')">Reset</button>`
           : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
       </div>
     </div>` : ''}
@@ -4418,23 +4458,25 @@ function resetPwLayout() {
   toast('Layout reset to auto');
 }
 
-function setPwGroupColor(gname, color) {
-  pwGroupOverrides[gname] = { ...(pwGroupOverrides[gname] || {}), color };
+function setPwGroupColor(gkey, color) {
+  // gkey is the composite bucket key (site<US>group). Lookup against the
+  // synthetic group uses .key first, then falls back to .name for older
+  // pre-v1.0 entries that may still be in the overrides dict.
+  pwGroupOverrides[gkey] = { ...(pwGroupOverrides[gkey] || {}), color };
   _pwSave('pw_group_overrides', pwGroupOverrides);
   renderPingWatchCanvas();
-  // Re-show panel with updated color
-  const g = groups.find(x => x.name === gname);
+  const g = groups.find(x => (x.key || x.name) === gkey);
   if (g) showGroupPanel(g);
 }
 
-function resetPwGroupColor(gname) {
-  if (pwGroupOverrides[gname]) {
-    delete pwGroupOverrides[gname].color;
-    if (!Object.keys(pwGroupOverrides[gname]).length) delete pwGroupOverrides[gname];
+function resetPwGroupColor(gkey) {
+  if (pwGroupOverrides[gkey]) {
+    delete pwGroupOverrides[gkey].color;
+    if (!Object.keys(pwGroupOverrides[gkey]).length) delete pwGroupOverrides[gkey];
   }
   _pwSave('pw_group_overrides', pwGroupOverrides);
   renderPingWatchCanvas();
-  const g = groups.find(x => x.name === gname);
+  const g = groups.find(x => (x.key || x.name) === gkey);
   if (g) showGroupPanel(g);
 }
 

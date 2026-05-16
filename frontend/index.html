@@ -474,6 +474,12 @@
           <datalist id="bulkGroupList"></datalist>
           <button class="btn-p" onclick="_bulkApplyMove()">Apply</button>
         </div>
+        <div class="bulk-move">
+          <label for="bulkSiteInput">Move to site:</label>
+          <input list="bulkSiteList" id="bulkSiteInput" autocomplete="off" placeholder="Pick or type new…"/>
+          <datalist id="bulkSiteList"></datalist>
+          <button class="btn-p" onclick="_bulkApplySiteMove()">Apply</button>
+        </div>
         <div class="bulk-ops">
           <button class="btn-s" onclick="_bulkAction('start')" title="Resume monitoring for selected devices">&#x25B6; Resume</button>
           <button class="btn-s" onclick="_bulkAction('stop')" title="Pause monitoring for selected devices">&#x23F8; Pause</button>

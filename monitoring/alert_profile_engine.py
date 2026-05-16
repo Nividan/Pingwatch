@@ -12,14 +12,26 @@ Concepts:
     Session         The contiguous period a sensor has been in a failing state.
                     Identified by str(sensor._down_since_ts). Resets when the
                     sensor recovers and goes down again.
-    Cascade         sensor → device → group → global. First match wins. If no
-                    profile resolves, no alerts fire (intentional "off" state).
+    Cascade         sensor → device → group → site → global, narrowest to
+                    broadest. ADDITIVE by default — every matching profile in
+                    the cascade fires independently, so a NOC-level site
+                    profile can dispatch alongside a server-team group profile
+                    on the same incident. If a matched profile has
+                    `exclusive=True`, broader-scope profiles are NOT added
+                    (narrower siblings already collected stay). If no profile
+                    resolves at any level, no alerts fire (intentional "off"
+                    state).
+                    Pre-v1.0 profiles are auto-migrated to exclusive=True so
+                    today's first-match-wins behavior is preserved byte-for-
+                    byte until users explicitly opt in to additive cascade.
 
 Cache invalidation:
 
-    Sensor caches its resolved profile id on _resolved_profile_id /
+    Sensor caches its resolved profile list on _resolved_profiles /
     _resolved_profile_ver. Any profile write bumps STATE._profile_cache_ver,
-    forcing every sensor to re-resolve on its next probe.
+    forcing every sensor to re-resolve on its next probe. _resolved_profile
+    (singular) is preserved as a back-compat alias pointing at the first
+    profile in the list — used by the resolve_profile_for_sensor() wrapper.
 """
 from __future__ import annotations
 
@@ -87,12 +99,20 @@ def _scope_get_profile(scope_type, scope_value, cur_ver, db_get_profile_for_scop
 
 # ── Profile resolution (cascade) ─────────────────────────────────
 
-def resolve_profile_for_sensor(dev, sensor) -> dict | None:
-    """Return the profile that applies to this sensor, or None.
+def resolve_profiles_for_sensor(dev, sensor) -> list:
+    """Return every profile that applies to this sensor, narrowest-first.
+
+    Walks sensor → device → group → site → global, collecting every matching
+    profile. Stops adding broader scopes after the first match with
+    `exclusive=True` — narrower matches already in the list stay.
+
+    Pre-v1.0 profiles are migrated to exclusive=True so the cascade short-
+    circuits at the first match (same as the old single-profile behavior).
+    New profiles default to exclusive=False (truly additive).
 
     Two-level cache:
-      1. Per-sensor: sensor._resolved_profile (full dict) — zero DB hits on
-         the hot probe path once resolved for this version.
+      1. Per-sensor: sensor._resolved_profiles (list of dicts) — zero DB hits
+         on the hot probe path once resolved for this version.
       2. Scope-level: _scope_cache — first probe for each unique scope queries
          the DB once; all subsequent sensors sharing that scope get a cache hit.
     Both caches are invalidated when STATE._profile_cache_ver changes (on any
@@ -102,37 +122,56 @@ def resolve_profile_for_sensor(dev, sensor) -> dict | None:
     from db.alert_profiles import db_get_profile_for_scope
 
     cur_ver = getattr(STATE, "_profile_cache_ver", 0)
-    if (getattr(sensor, "_resolved_profile_ver", -1) == cur_ver
-            and getattr(sensor, "_resolved_profile_id", None) is not None):
-        pid = sensor._resolved_profile_id
-        if pid == 0:
-            return None
-        # Return the cached profile dict — no DB hit on the hot probe path
-        return getattr(sensor, "_resolved_profile", None)
+    cached_ids = getattr(sensor, "_resolved_profile_ids", None)
+    if cached_ids is not None and getattr(sensor, "_resolved_profile_ver", -1) == cur_ver:
+        return getattr(sensor, "_resolved_profiles", []) or []
 
     # Version changed (or first time) — invalidate scope cache if needed
     _invalidate_scope_cache(cur_ver)
 
-    profile = None
-    did = dev.did if hasattr(dev, "did") else getattr(dev, "device_id", "")
-    sid = sensor.sensor_id
+    did   = dev.did if hasattr(dev, "did") else getattr(dev, "device_id", "")
+    sid   = sensor.sensor_id
+    group = getattr(dev, "group", "") or ""
+    site  = getattr(dev, "site",  "") or ""
 
-    # 1. sensor scope
-    profile = _scope_get_profile("sensor", f"{did}/{sid}", cur_ver, db_get_profile_for_scope)
-    # 2. device scope
-    if not profile:
-        profile = _scope_get_profile("device", did, cur_ver, db_get_profile_for_scope)
-    # 3. group scope
-    if not profile and getattr(dev, "group", ""):
-        profile = _scope_get_profile("group", dev.group, cur_ver, db_get_profile_for_scope)
-    # 4. global
-    if not profile:
-        profile = _scope_get_profile("global", "", cur_ver, db_get_profile_for_scope)
+    profiles: list = []
+    # Walk narrowest → broadest. Empty scope_value skips that level entirely
+    # (no group / no site assigned). 'global' is always queried last unless
+    # an earlier exclusive profile short-circuits the cascade.
+    cascade = [
+        ("sensor", f"{did}/{sid}"),
+        ("device", did),
+        ("group",  group),
+        ("site",   site),
+        ("global", ""),
+    ]
+    for scope_type, scope_value in cascade:
+        if scope_value == "" and scope_type != "global":
+            continue
+        p = _scope_get_profile(scope_type, scope_value, cur_ver, db_get_profile_for_scope)
+        if p:
+            profiles.append(p)
+            if p.get("exclusive", False):
+                break  # don't add broader-scope profiles
 
-    sensor._resolved_profile_id  = profile["id"] if profile else 0
-    sensor._resolved_profile     = profile           # cache full dict, not just id
+    sensor._resolved_profile_ids = [p["id"] for p in profiles]
+    sensor._resolved_profiles    = profiles
+    # Back-compat singleton fields — pointed at the first (narrowest) match.
+    sensor._resolved_profile_id  = profiles[0]["id"] if profiles else 0
+    sensor._resolved_profile     = profiles[0] if profiles else None
     sensor._resolved_profile_ver = cur_ver
-    return profile
+    return profiles
+
+
+def resolve_profile_for_sensor(dev, sensor) -> dict | None:
+    """Back-compat wrapper — returns the narrowest matching profile or None.
+
+    Some external call sites still expect a single profile. The new cascade
+    is additive, but those callers only care about "is there at least one
+    profile that applies?" semantics, which the narrowest match preserves.
+    """
+    profiles = resolve_profiles_for_sensor(dev, sensor)
+    return profiles[0] if profiles else None
 
 
 # ── Context builder (mirrors the legacy alert_engine ctx shape) ──
@@ -165,6 +204,9 @@ def _build_ctx(dev, sensor, current_state: str, trigger_state: str,
         "host":      sensor.host,
         "stype":     sensor.stype,
         "grp":       getattr(dev, "group", ""),
+        # Site (v1.0+) — surfaces in maintenance-window scope=site matching
+        # and is available to email/webhook templates.
+        "site":      getattr(dev, "site", ""),
         "state":     sensor._threshold_state,
         "ms":        sensor.last_ms,
         "loss_pct":  getattr(sensor, "loss_pct", 0),
@@ -276,6 +318,11 @@ def evaluate_and_fire(dev, sensor) -> None:
 
     Called from Sensor._run_once after the existing flap/threshold blocks
     have already updated _down_since_ts / _threshold_triggered_ts.
+
+    v1.0+: walks ALL matching profiles in the cascade (sensor → device →
+    group → site → global), firing each one's stages independently. A
+    matched profile with `exclusive=True` stops the cascade for broader
+    scopes — see resolve_profiles_for_sensor().
     """
     did = getattr(dev, "did", None) or getattr(dev, "device_id", "")
     sid = sensor.sensor_id
@@ -293,11 +340,13 @@ def evaluate_and_fire(dev, sensor) -> None:
                       f"group={_grp_muted})")
         return
 
-    profile = resolve_profile_for_sensor(dev, sensor)
-    if not profile:
+    profiles = resolve_profiles_for_sensor(dev, sensor)
+    if not profiles:
         if is_failing:
             dev_group = getattr(dev, "group", "") or "(none)"
-            searched = (f"sensor={did}/{sid}, device={did}, group={dev_group!r}, global")
+            dev_site  = getattr(dev, "site",  "") or "(none)"
+            searched = (f"sensor={did}/{sid}, device={did}, "
+                        f"group={dev_group!r}, site={dev_site!r}, global")
             try:
                 from db.alert_profiles import db_list_profiles
                 rows = db_list_profiles() or []
@@ -312,15 +361,6 @@ def evaluate_and_fire(dev, sensor) -> None:
                       f"no dispatch — no profile resolved. Searched: {searched}. "
                       f"Profiles in DB: {dump}")
         return
-    if not profile.get("enabled", True):
-        if is_failing:
-            _diag_log(sensor, label, f"no dispatch — profile {profile['name']!r} is disabled")
-        return
-    stages = profile.get("stages") or []
-    if not stages:
-        if is_failing:
-            _diag_log(sensor, label, f"no dispatch — profile {profile['name']!r} has no stages")
-        return
 
     current_state, started_ts = _classify(sensor)
     now = time.time()
@@ -332,6 +372,99 @@ def evaluate_and_fire(dev, sensor) -> None:
     from db.alert_events  import db_log_event, db_auto_resolve_event
     from monitoring.alert_dispatchers import dispatch, check_maintenance
 
+    fired_recovery = False
+    fired_any      = False
+    matched_trig   = False
+    skip_reasons   = []
+    any_enabled    = False  # at least one matched profile had stages enabled
+
+    for profile in profiles:
+        if not profile.get("enabled", True):
+            if is_failing:
+                _diag_log(sensor, label,
+                          f"profile {profile['name']!r} (scope={profile.get('scope_type')}"
+                          f":{profile.get('scope_value','-')}) is disabled — skipped")
+            continue
+        stages = profile.get("stages") or []
+        if not stages:
+            if is_failing:
+                _diag_log(sensor, label,
+                          f"profile {profile['name']!r} has no stages — skipped")
+            continue
+        any_enabled = True
+        _r, _f, _m, _skips = _evaluate_profile_stages(
+            profile, stages, dev, sensor, did, sid, current_state, started_ts, now,
+            db_get_stage_state, db_record_stage_fire, db_log_event,
+            dispatch, check_maintenance,
+        )
+        fired_recovery = fired_recovery or _r
+        fired_any      = fired_any      or _f
+        matched_trig   = matched_trig   or _m
+        skip_reasons.extend(_skips)
+
+    if not any_enabled:
+        # All matched profiles were disabled or stageless — treat as no-op.
+        return
+
+    # Below this point, the rest of the function uses the narrowest profile
+    # as the "representative" for diag logging and cleanup. db_log_event
+    # already dedups on (did, sid) so multi-profile fires share one event row.
+    profile = profiles[0]
+    stages  = profile.get("stages") or []
+
+    # Diagnostic: sensor is failing but nothing dispatched — explain once
+    # (then stay silent until the reason changes). The reason is computed
+    # against the narrowest profile; cross-profile silence is rare in
+    # practice but the same skip_reasons list is shared across all profiles.
+    if current_state != "ok" and not fired_any:
+        if not matched_trig:
+            trigs = sorted({s["trigger_state"] for s in stages
+                            if s["trigger_state"] in ("down", "warning")})
+            reason = (f"no dispatch — no stages match current_state={current_state} "
+                      f"(profile {profile['name']!r} has triggers: {trigs or 'none'})")
+        else:
+            reason = (f"no dispatch — state={current_state} matched but all stages gated: "
+                      f"{'; '.join(skip_reasons) if skip_reasons else 'unknown'}")
+        _diag_log(sensor, label, reason)
+
+    # When sensor is fully OK, auto-resolve any active alert event and
+    # clear per-stage history so a future failure starts a fresh session.
+    # This must run even if no recovery stage dispatched (e.g. profile has
+    # no recovery stage, or its recovery stage has no action templates).
+    if current_state == "ok":
+        # Reset the diag-throttle so the next failing session logs its first reason.
+        sensor._alert_diag_last_reason = None
+        # Fast path: if no stage has ever fired for this sensor (in this process
+        # run), there is nothing to clean up — skip the per-stage DB reads.
+        # _alert_has_fired is set True inside _fire() and cleared here after cleanup.
+        if not getattr(sensor, "_alert_has_fired", False):
+            return
+        should_cleanup = fired_recovery
+        if not should_cleanup:
+            for s in stages:
+                if s["trigger_state"] not in ("down", "warning"):
+                    continue
+                st = db_get_stage_state(s["id"], did, sid)
+                if st and st.get("fire_count", 0) > 0:
+                    should_cleanup = True
+                    break
+        if should_cleanup:
+            try:
+                db_clear_stage_state_for_sensor(did, sid)
+                db_auto_resolve_event(profile["id"], did, sid)
+                sensor._alert_has_fired = False   # no active state left in DB
+            except Exception as e:
+                log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
+
+
+# Per-profile stages loop, extracted from evaluate_and_fire so the additive
+# cascade can call it once per matched profile. Returns
+# (fired_recovery, fired_any, matched_trig, skip_reasons) so the caller can
+# decide whether post-recovery cleanup needs to run.
+def _evaluate_profile_stages(profile, stages, dev, sensor, did, sid,
+                             current_state, started_ts, now,
+                             db_get_stage_state, db_record_stage_fire,
+                             db_log_event, dispatch, check_maintenance):
     fired_recovery = False
     fired_any      = False
     matched_trig   = False
@@ -378,23 +511,10 @@ def evaluate_and_fire(dev, sensor) -> None:
         # ── Recovery stages: fire once when sensor is fully OK ──
         elif is_recovery_stage:
             target_state = "down" if trig == "down_recovered" else "warning"
-            # Only fire on full recovery to ok — warn↔crit transitions are
-            # escalations within the same session, not recoveries. Firing
-            # warning_recovered on warning→crit would resolve the active event
-            # mid-incident and cause the next stage to insert a fresh row.
             if current_state != "ok":
                 continue
-            # Fast path: a sensor that has never fired in this process run
-            # cannot have a prior state to recover from. Skip the per-stage
-            # `db_get_stage_state` reads entirely. `_alert_has_fired` is set
-            # True inside _fire() and cleared after post-recovery cleanup, so
-            # it correctly tracks "does this sensor have live stage history".
-            # Without this short-circuit, every healthy sensor runs N DB
-            # queries on every probe cycle — at 5k sensors with a pool of 36,
-            # that's how sample-flush starved and tripped the slow-flush WARN.
             if not getattr(sensor, "_alert_has_fired", False):
                 continue
-            # Did any state-stage of the matching trigger fire previously?
             if not _had_prior_fire(stages, target_state, sid_key, did, sid,
                                    db_get_stage_state):
                 continue
@@ -410,47 +530,7 @@ def evaluate_and_fire(dev, sensor) -> None:
                   db_record_stage_fire, recovery=True, duration_s=duration_s)
             fired_recovery = True
 
-    # Diagnostic: sensor is failing but nothing dispatched — explain once
-    # (then stay silent until the reason changes).
-    if current_state != "ok" and not fired_any:
-        if not matched_trig:
-            trigs = sorted({s["trigger_state"] for s in stages
-                            if s["trigger_state"] in ("down", "warning")})
-            reason = (f"no dispatch — no stages match current_state={current_state} "
-                      f"(profile {profile['name']!r} has triggers: {trigs or 'none'})")
-        else:
-            reason = (f"no dispatch — state={current_state} matched but all stages gated: "
-                      f"{'; '.join(skip_reasons) if skip_reasons else 'unknown'}")
-        _diag_log(sensor, label, reason)
-
-    # When sensor is fully OK, auto-resolve any active alert event and
-    # clear per-stage history so a future failure starts a fresh session.
-    # This must run even if no recovery stage dispatched (e.g. profile has
-    # no recovery stage, or its recovery stage has no action templates).
-    if current_state == "ok":
-        # Reset the diag-throttle so the next failing session logs its first reason.
-        sensor._alert_diag_last_reason = None
-        # Fast path: if no stage has ever fired for this sensor (in this process
-        # run), there is nothing to clean up — skip the per-stage DB reads.
-        # _alert_has_fired is set True inside _fire() and cleared here after cleanup.
-        if not getattr(sensor, "_alert_has_fired", False):
-            return
-        should_cleanup = fired_recovery
-        if not should_cleanup:
-            for s in stages:
-                if s["trigger_state"] not in ("down", "warning"):
-                    continue
-                st = db_get_stage_state(s["id"], did, sid)
-                if st and st.get("fire_count", 0) > 0:
-                    should_cleanup = True
-                    break
-        if should_cleanup:
-            try:
-                db_clear_stage_state_for_sensor(did, sid)
-                db_auto_resolve_event(profile["id"], did, sid)
-                sensor._alert_has_fired = False   # no active state left in DB
-            except Exception as e:
-                log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
+    return fired_recovery, fired_any, matched_trig, skip_reasons
 
 
 def _had_prior_fire(stages, target_state, recovery_stage_id,

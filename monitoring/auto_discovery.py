@@ -542,7 +542,11 @@ def _scan_subnet(subnet: dict) -> dict:
             if alt:
                 r["hostname"] = alt   # mutates the scan result in place
 
-    device_specs = _build_device_specs(allowed_results, group, use_ptr, cidr=cidr)
+    # Subnet's site tag propagates to every device created in this scan (v1.0+).
+    # Empty string when the subnet isn't tagged — devices stay Unsited until edited.
+    _subnet_site = (subnet.get("site") or "").strip()
+    device_specs = _build_device_specs(allowed_results, group, use_ptr,
+                                       cidr=cidr, site=_subnet_site)
     if not device_specs:
         _commit_last_scan_ts(sid)
         return stats
@@ -608,11 +612,14 @@ def _filter_suppressed(results: list) -> tuple[list, int]:
 
 
 def _build_device_specs(results: list, group: str, use_ptr: bool,
-                         cidr: str = "") -> list:
+                         cidr: str = "", site: str = "") -> list:
     """Convert _enrich_host result rows into create_devices_batch input shape.
 
     `cidr` feeds the per-device origin breadcrumb (`discovered_from_cidr`)
     so the device UI can show "Auto-discovered from 10.0.0.0/24".
+    `site` (v1.0+) propagates the IPAM subnet's site tag onto every
+    auto-discovered device, so the Site → Group → Device hierarchy is
+    populated automatically for new finds.
     """
     from monitoring.subnet_discovery import _suggest_sensors
     specs: list = []
@@ -634,6 +641,7 @@ def _build_device_specs(results: list, group: str, use_ptr: bool,
             "name":                 name,
             "host":                 ip,
             "group":                group,
+            "site":                 site or "",
             "sensors":              sensors,
             "discovered_at":        now,
             "discovered_from_cidr": cidr,

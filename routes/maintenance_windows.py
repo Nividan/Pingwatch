@@ -16,7 +16,7 @@ from db.maintenance_windows import (
 )
 from db import db_log_audit
 
-_VALID_SCOPES = {"all", "group", "device"}
+_VALID_SCOPES = {"all", "site", "group", "device"}
 
 
 def _validate(body: dict) -> str | None:

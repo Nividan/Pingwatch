@@ -214,6 +214,10 @@ async function openProfileEditor(id, scopeDefaults = null) {
   const enabled     = prof ? prof.enabled : true;
   const scopeType   = prof?.scope_type  || scopeDefaults?.scope_type  || 'global';
   const scopeValue  = prof?.scope_value || scopeDefaults?.scope_value || '';
+  // Exclusive flag — v1.0+. Defaults to false (additive cascade) for new
+  // profiles. Migrated pre-existing profiles have exclusive=true so they
+  // continue to short-circuit broader matches like before.
+  const exclusive   = prof ? !!prof.exclusive : false;
 
   // Pre-fill stages by trigger position; if profile has fewer than 6, blanks
   const stagesByPos = _AP_TRIG_ORDER.map((trig, i) => {
@@ -265,6 +269,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
             <label class="fl">Scope</label>
             <select id="ap-scope-type" onchange="_apScopeChange()">
               <option value="global" ${scopeType === 'global' ? 'selected' : ''}>Global</option>
+              <option value="site"   ${scopeType === 'site'   ? 'selected' : ''}>Site</option>
               <option value="group"  ${scopeType === 'group'  ? 'selected' : ''}>Group</option>
               <option value="device" ${scopeType === 'device' ? 'selected' : ''}>Device</option>
               <option value="sensor" ${scopeType === 'sensor' ? 'selected' : ''}>Sensor</option>
@@ -272,15 +277,22 @@ async function openProfileEditor(id, scopeDefaults = null) {
           </div>
           <div class="fr" id="ap-scope-val-row" style="${scopeType === 'global' ? 'display:none' : ''}">
             <label class="fl" id="ap-scope-val-lbl">${
-              scopeType === 'group' ? 'Group name' :
+              scopeType === 'site'   ? 'Site name' :
+              scopeType === 'group'  ? 'Group name' :
               scopeType === 'device' ? 'Device ID' : 'did/sid'
             }</label>
-            <input type="text" id="ap-scope-val" value="${esc(scopeValue)}" autocomplete="off"/>
+            <input type="text" id="ap-scope-val" value="${esc(scopeValue)}" list="ap-scope-val-dl" autocomplete="off"/>
+            <datalist id="ap-scope-val-dl"></datalist>
           </div>
-          <div class="fr" style="align-self:flex-end;padding-bottom:14px">
+          <div class="fr" style="align-self:flex-end;padding-bottom:14px;display:flex;flex-direction:column;gap:4px">
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
               <input type="checkbox" id="ap-enabled" ${enabled ? 'checked' : ''}/>
               <span style="font-size:12px;color:var(--text2)">Enabled</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"
+                   title="When checked, profiles at broader scopes (e.g. site or global) are SUPPRESSED when this one matches. Off = additive — every matching profile fires.">
+              <input type="checkbox" id="ap-exclusive" ${exclusive ? 'checked' : ''}/>
+              <span style="font-size:12px;color:var(--text2)">Exclusive</span>
             </label>
           </div>
         </div>
@@ -415,16 +427,31 @@ function _apScopeChange() {
   const sel  = document.getElementById('ap-scope-type')?.value;
   const row  = document.getElementById('ap-scope-val-row');
   const lbl  = document.getElementById('ap-scope-val-lbl');
+  const dl   = document.getElementById('ap-scope-val-dl');
   if (!row) return;
   row.style.display = sel === 'global' ? 'none' : '';
   if (lbl) lbl.textContent =
+    sel === 'site'   ? 'Site name'  :
     sel === 'group'  ? 'Group name' :
     sel === 'device' ? 'Device ID'  : 'did/sid';
+  // Populate the datalist with relevant suggestions per scope.
+  if (dl) {
+    if (sel === 'site') {
+      _populateSiteDatalist('ap-scope-val-dl');
+    } else if (sel === 'group') {
+      const groups = [...new Set(Object.values(S.devices || {})
+        .map(d => d.group || 'Default Group'))].sort();
+      dl.innerHTML = groups.map(g => `<option value="${esc(g)}"></option>`).join('');
+    } else {
+      dl.innerHTML = '';
+    }
+  }
 }
 
 async function _alertingSaveProfile() {
   const name       = (document.getElementById('ap-name')?.value || '').trim();
   const enabled    = !!document.getElementById('ap-enabled')?.checked;
+  const exclusive  = !!document.getElementById('ap-exclusive')?.checked;
   const scopeType  = document.getElementById('ap-scope-type')?.value || 'global';
   const scopeValue = (document.getElementById('ap-scope-val')?.value || '').trim();
 
@@ -450,7 +477,7 @@ async function _alertingSaveProfile() {
   });
 
   const payload = {
-    name, enabled,
+    name, enabled, exclusive,
     scope_type: scopeType,
     scope_value: scopeType === 'global' ? '' : scopeValue,
     stages,
@@ -880,6 +907,7 @@ function _alPgRenderMaintWindows(windows) {
     const active   = enabled && w.start_ts <= now && w.end_ts >= now;
     const safeName = esc(w.name).replace(/'/g, '&#39;');
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
+                   : w.scope_type === 'site'   ? `Site: ${esc(w.scope_value || '')}`
                    : w.scope_type === 'group'  ? `Groups: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
                    : w.scope_type === 'device' ? `Device: ${esc(_mwLookupDevName(w.scope_value))}`
                    : esc(w.scope_value || '');
@@ -979,6 +1007,7 @@ function _alertMaintRenderList(windows) {
       ? Object.values(S.devices || {}).find(d => String(d.device_id) === String(w.scope_value))
       : null;
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
+                   : w.scope_type === 'site'   ? `Site: ${esc(w.scope_value || '')}`
                    : w.scope_type === 'group'  ? `Group: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
                    : `Device: ${esc(_devForScope ? _devForScope.name : w.scope_value)}`;
     const recurLbl = w.recurring
@@ -1064,12 +1093,16 @@ function _alertMaintOpen(id) {
           <label class="fl">Scope</label>
           <select id="mw-scope" onchange="_mwScopeChange()">
             <option value="all"    ${scopeType==='all'   ?'selected':''}>All devices</option>
+            <option value="site"   ${scopeType==='site'  ?'selected':''}>Site</option>
             <option value="group"  ${scopeType==='group' ?'selected':''}>Device group</option>
             <option value="device" ${scopeType==='device'?'selected':''}>Specific device ID</option>
           </select>
         </div>
         <div class="fr" id="mw-scope-val-row" style="${scopeType==='all'?'display:none':''}">
-          <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Device group':'Device'}</label>
+          <label class="fl" id="mw-scope-val-lbl">${
+            scopeType==='site'  ? 'Site' :
+            scopeType==='group' ? 'Device group' : 'Device'
+          }</label>
           ${_mwScopeInner(scopeType, scopeVal)}
         </div>
         <div id="mw-onetime-row" style="${recurring?'display:none':'display:flex'};gap:12px;flex-wrap:wrap">
@@ -1120,6 +1153,11 @@ function _alertMaintOpen(id) {
 
   document.body.appendChild(o);
   setTimeout(() => document.getElementById('mw-name')?.focus(), 60);
+  // If the window is already site-scoped, populate the datalist now so the
+  // existing value autocompletes correctly.
+  if (scopeType === 'site' && typeof _populateSiteDatalist === 'function') {
+    setTimeout(() => _populateSiteDatalist('mw-site-dl'), 80);
+  }
 }
 
 // Parse scope_value for group windows — supports both JSON array (new) and plain string (legacy).
@@ -1143,6 +1181,11 @@ function _mwScopeInner(scopeType, curVal) {
     const opts    = groups.map(g => `<option value="${esc(g)}" ${selSet.has(g) ? 'selected' : ''}>${esc(g)}</option>`).join('');
     return `<select id="mw-scope-val" multiple size="${Math.min(groups.length, 6)}" style="width:100%">${opts || '<option value="">No groups</option>'}</select>`;
   }
+  if (scopeType === 'site') {
+    // Site picker — datalist autocomplete from /api/sites, populated async.
+    return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" list="mw-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
+            <datalist id="mw-site-dl"></datalist>`;
+  }
   return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" autocomplete="off"/>`;
 }
 
@@ -1152,10 +1195,15 @@ function _mwScopeChange() {
   const lbl = document.getElementById('mw-scope-val-lbl');
   if (!row) return;
   row.style.display = sel === 'all' ? 'none' : '';
-  if (lbl) lbl.textContent = sel === 'group' ? 'Device group' : 'Device';
+  if (lbl) lbl.textContent =
+    sel === 'site'  ? 'Site' :
+    sel === 'group' ? 'Device group' : 'Device';
   // Replace the control with the appropriate dropdown for the new scope type
   const existing = document.getElementById('mw-scope-val');
   if (existing) existing.outerHTML = _mwScopeInner(sel, '');
+  if (sel === 'site' && typeof _populateSiteDatalist === 'function') {
+    _populateSiteDatalist('mw-site-dl');
+  }
 }
 
 function _mwRecurChange() {
@@ -1455,8 +1503,8 @@ function _alPgRenderProfiles() {
     return;
   }
 
-  // Stable order: global → group → device → sensor, then by name
-  const rank = {global: 0, group: 1, device: 2, sensor: 3};
+  // Stable order: global → site → group → device → sensor, then by name
+  const rank = {global: 0, site: 1, group: 2, device: 3, sensor: 4};
   const sorted = arr.slice().sort((a, b) =>
     (rank[a.scope_type] - rank[b.scope_type]) || a.name.localeCompare(b.name));
 
@@ -1493,7 +1541,10 @@ function _alPgProfileRow(p, tplById) {
         <span class="al-pg-toggle-slider"></span>
       </label>
       <div class="al-pg-pf-body">
-        <div class="al-pg-pf-name">${esc(p.name)}</div>
+        <div class="al-pg-pf-name">
+          ${esc(p.name)}
+          ${p.exclusive ? '<span class="al-pg-excl-pill" title="Exclusive — suppresses parent-scope profiles when matched">Exclusive</span>' : ''}
+        </div>
         <div class="al-pg-pf-cond mono">
           <span class="al-pg-cond-trig">${esc(trigStr)}</span>
           <span class="al-pg-cond-sep">·</span>
