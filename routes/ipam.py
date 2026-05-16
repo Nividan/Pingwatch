@@ -150,7 +150,7 @@ def handle(h, method, path, body):
         return True
 
     # ── PATCH /api/ipam/subnets/<id> — multi-field edit ───────────
-    # Accepts any subset of: name, auto_discover, dns_server. The
+    # Accepts any subset of: name, site, auto_discover, dns_server. The
     # editor modal builds a single payload with only changed fields.
     m = _RE_IPAM_SUBNET.match(path)
     if m and method == 'PATCH':
@@ -169,6 +169,12 @@ def handle(h, method, path, body):
             if new_name != (sub.get('name') or ''):
                 updates['name'] = new_name
                 audit_parts.append(f"name={new_name!r}")
+
+        if 'site' in body:
+            new_site = (body.get('site') or '').strip()[:40]
+            if new_site != (sub.get('site') or ''):
+                updates['site'] = new_site
+                audit_parts.append(f"site={new_site!r}")
 
         if 'auto_discover' in body:
             new_ad = 1 if body.get('auto_discover') else 0
