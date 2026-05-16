@@ -370,15 +370,13 @@ body{
   padding:14px 24px 4px;
 }
 
-/* ── Group header row (design-aligned: clean single line, hover-revealed controls) ── */
+/* ── Group header row (design-aligned: clean single line) ── */
 .grp-hdr{
   display:flex;align-items:center;gap:8px;
   margin-bottom:10px;
   padding:6px 4px;border-radius:var(--r-sm);
   user-select:none;
-  transition:background var(--dur) var(--ease);
 }
-.grp-hdr:hover{ background:var(--card-hover); }
 .grp-line{ display:none; }
 .grp-label{
   font-size:var(--fs-md);font-weight:600;letter-spacing:0;text-transform:none;
@@ -391,8 +389,13 @@ body{
   font-size:var(--fs-xs);font-weight:500;
   background:var(--card-soft);border:1px solid var(--border);
   color:var(--text3);border-radius:var(--r-pill);padding:1px 8px;
-  flex-shrink:0;margin-left:6px;
+  flex-shrink:0;
+  /* When the summary pills precede us (the design's order), no extra left
+   * margin needed — the summary already consumed the auto-spacer.
+   * Fallback when there's no summary (empty group): push count to the right. */
+  margin-left:auto;
 }
+.grp-summary ~ .grp-count{ margin-left:6px; }
 .grp-arr{
   width:16px;height:16px;flex-shrink:0;color:var(--text3);font-size:9px;
   display:flex;align-items:center;justify-content:center;
@@ -402,15 +405,14 @@ body{
 .grp-arr.open{transform:rotate(90deg)}
 .grp-grid.collapsed{display:none}
 
-/* Drag handle + gear: hidden by default, fade in on row hover */
+/* Drag handle + gear are always visible (matches the design's persistent affordances) */
 .grp-drag-handle{
   cursor:grab;color:var(--text3);font-size:14px;padding:1px 4px;
   border-radius:var(--r-sm);flex-shrink:0;
-  opacity:0;transition:opacity var(--dur) var(--ease),background var(--dur) var(--ease);
+  opacity:.5;transition:opacity var(--dur) var(--ease),background var(--dur) var(--ease);
   line-height:1;display:flex;align-items:center;
 }
-.grp-hdr:hover .grp-drag-handle{ opacity:.55; }
-.grp-drag-handle:hover{ opacity:1 !important;background:var(--bg3); }
+.grp-drag-handle:hover{ opacity:1;background:var(--bg3); }
 .grp-drag-handle:active{cursor:grabbing}
 .grp-wrap.grp-dragging{opacity:0.35;}
 
@@ -3554,13 +3556,12 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .alrt-tree-name{font-size:13px;font-weight:600;color:var(--text);flex:1;}
 .alrt-tree-btns{display:flex;gap:6px;flex-shrink:0;}
 
-/* Group header gear icon — hidden by default, fades in on row hover */
+/* Group header gear icon — always visible */
 .grp-edit-btn{background:none;border:none;color:var(--text3);cursor:pointer;
   font-size:13px;padding:3px 6px;border-radius:var(--r-sm);line-height:1;
-  opacity:0;
+  opacity:.6;
   transition:color var(--dur) var(--ease),background var(--dur) var(--ease),opacity var(--dur) var(--ease);}
-.grp-hdr:hover .grp-edit-btn{ opacity:.7; }
-.grp-edit-btn:hover{color:var(--accent);background:var(--bg3);opacity:1 !important;}
+.grp-edit-btn:hover{color:var(--accent);background:var(--bg3);opacity:1;}
 /* 🔕 badge shown in the group header when alerts are muted for the group */
 .grp-mute-badge{font-size:12px;line-height:1;padding:2px 6px;border-radius:10px;
   background:var(--bg3);border:1px solid var(--border);color:var(--warn);

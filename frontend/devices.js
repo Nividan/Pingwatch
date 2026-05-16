@@ -444,9 +444,11 @@ function ensureGroupSection(group){
   const summary=document.createElement('span');
   summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
 
+  // Order matches the design: drag · checkbox · arrow · label · gear · spacer · pills · count
+  // (summary status pills come BEFORE the total count to read "●6 ●1 ●1   8 total")
   hdr.appendChild(dragH); hdr.appendChild(grpCb); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
   if (muteBadge) hdr.appendChild(muteBadge);
-  hdr.appendChild(editBtn); hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
+  hdr.appendChild(editBtn); hdr.appendChild(summary); hdr.appendChild(cnt); hdr.appendChild(line2);
 
   // Grid
   const grid=document.createElement('div');
