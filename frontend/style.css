@@ -415,7 +415,8 @@ body{
 /* ── Card grid inside each group ── */
 .grp-grid{
   display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  grid-template-columns:repeat(auto-fill, 320px);
+  justify-content:start;
   gap:12px;
   padding:4px 2px 4px;
   border-radius:12px;
@@ -4057,10 +4058,10 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 /* Layout variants — wired by Phase 5 tweaks panel via [data-*-layout] on <html> */
 [data-dash-layout="rows"] .dash-grid{ grid-template-columns:1fr; }
 [data-dash-layout="rows"] .widget{ grid-column:span 12; }
-[data-dev-layout="dense"] .grp-grid{ grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); }
+[data-dev-layout="dense"] .grp-grid{ grid-template-columns:repeat(auto-fill, 260px); }
 [data-dev-layout="dense"] .dcard-tiles{ grid-template-columns:repeat(3, 1fr); }
 [data-dev-layout="dense"] .stile-spark{ height:14px; }
-[data-dev-layout="wide"] .grp-grid{ grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); }
+[data-dev-layout="wide"] .grp-grid{ grid-template-columns:repeat(auto-fill, 400px); }
 
 /* Devices view — pagehead + toolbar + sub line */
 #devActBar > .pagehead{ padding-bottom:var(--sp-2); }
