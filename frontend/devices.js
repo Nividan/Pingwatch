@@ -861,12 +861,27 @@ function _stileHTML(s){
   } else if (s.alive === false) {
     val = 'DOWN';
   }
+  const sparkColor = st === 'down' ? 'var(--down)'
+                    : st === 'warn' ? 'var(--warn)'
+                    : st === 'pause' ? 'var(--pause)'
+                    : 'var(--up)';
+  let sparkHtml = '<div class="stile-spark empty"></div>';
+  if (typeof pwSparkline === 'function' && Array.isArray(s.history) && s.history.length > 1) {
+    const series = s.history.slice(-20).map(v => {
+      const n = typeof v === 'number' ? v : parseFloat(v);
+      return isNaN(n) ? 0 : n;
+    });
+    try {
+      sparkHtml = `<div class="stile-spark">${pwSparkline(series, { color: sparkColor, h: 18, w: 100, fill: true })}</div>`;
+    } catch (_) { /* keep empty placeholder */ }
+  }
   return `<div class="stile ${st}">
     <div class="stile-head">
       <span class="dot ${st}" id="csd-${s.device_id}_${s.sensor_id}"></span>
       <span>${esc(s.name)}</span>
     </div>
     <div class="stile-val" id="csv-${s.device_id}_${s.sensor_id}">${esc(val)}</div>
+    ${sparkHtml}
   </div>`;
 }
 

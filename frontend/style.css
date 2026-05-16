@@ -415,8 +415,8 @@ body{
 /* ── Card grid inside each group ── */
 .grp-grid{
   display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
-  gap:14px;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  gap:12px;
   padding:4px 2px 4px;
   border-radius:12px;
   transition:background .2s;
@@ -3930,31 +3930,41 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 }
 .dcard-tiles{
   display:grid;grid-template-columns:repeat(2, 1fr);
+  grid-auto-rows:1fr;
   gap:1px;background:var(--border);
 }
 .dcard.compact-tiles .dcard-tiles{ grid-template-columns:repeat(3, 1fr); }
 .stile{
   background:var(--card-soft);padding:var(--tile-pad);
-  display:grid;grid-template-rows:auto 1fr auto;gap:3px;min-height:70px;
+  display:grid;grid-template-rows:auto 1fr auto;gap:4px;
+  height:84px;min-width:0;overflow:hidden;
 }
 .stile-head{
   display:flex;align-items:center;gap:5px;
   font-size:var(--fs-xs);color:var(--text3);
   text-transform:uppercase;letter-spacing:.5px;
+  min-width:0;
 }
-.stile-head .dot{ width:5px;height:5px;border-radius:50%; }
+.stile-head .dot{ width:5px;height:5px;border-radius:50%;flex:0 0 5px; }
 .stile-head .dot.up   { background:var(--up); }
 .stile-head .dot.warn { background:var(--warn); }
 .stile-head .dot.down { background:var(--down); }
 .stile-head .dot.pause{ background:var(--pause); }
+.stile-head > span:last-child{
+  flex:1 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
 .stile-val{
-  font-family:var(--font-mono);font-size:15px;font-weight:600;
+  font-family:var(--font-mono);font-size:17px;font-weight:600;
   color:var(--text);letter-spacing:-.2px;line-height:1;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
 }
 .stile.down .stile-val{ color:var(--down); }
 .stile.warn .stile-val{ color:var(--warn); }
 .stile-val .unit{ font-size:10px;color:var(--text3);font-weight:400;margin-left:2px; }
-.stile-spark{ height:18px;opacity:.9; }
+.stile-spark{ height:18px;opacity:.85;min-width:0;overflow:hidden; }
+.stile-spark svg{ display:block;width:100%;height:100%; }
+.stile-spark.empty{ height:18px; }
 .dcard-foot{
   display:flex;align-items:center;gap:var(--sp-2);
   padding:8px 12px;border-top:1px solid var(--border);
@@ -4047,10 +4057,10 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 /* Layout variants — wired by Phase 5 tweaks panel via [data-*-layout] on <html> */
 [data-dash-layout="rows"] .dash-grid{ grid-template-columns:1fr; }
 [data-dash-layout="rows"] .widget{ grid-column:span 12; }
-[data-dev-layout="dense"] .dev-grid-pw{ grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); }
+[data-dev-layout="dense"] .grp-grid{ grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); }
 [data-dev-layout="dense"] .dcard-tiles{ grid-template-columns:repeat(3, 1fr); }
 [data-dev-layout="dense"] .stile-spark{ height:14px; }
-[data-dev-layout="wide"] .dev-grid-pw{ grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); }
+[data-dev-layout="wide"] .grp-grid{ grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); }
 
 /* Devices view — pagehead + toolbar + sub line */
 #devActBar > .pagehead{ padding-bottom:var(--sp-2); }
