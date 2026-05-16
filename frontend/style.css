@@ -5009,17 +5009,31 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 
 /* ── Notification Batching card (Alerting page sidebar) ─────── */
 .al-pg-batch-body{ padding:10px 14px; }
-.al-pg-batch-row{
+/* Enable-toggle row: toggle on the left, stacked label/description on the right. */
+.al-pg-batch-toggle-row{
   display:flex;align-items:flex-start;gap:10px;
-  padding:8px 0;border-bottom:1px solid var(--border);
+  padding:6px 0 10px;border-bottom:1px solid var(--border);
 }
-.al-pg-batch-row:last-of-type{ border-bottom:none; }
 .al-pg-batch-lbl{ flex:1;min-width:0;font-size:var(--fs-sm);color:var(--text2); }
 .al-pg-batch-lbl .small{ font-size:11px;line-height:1.35;margin-top:2px; }
-.al-pg-batch-num{
-  width:70px;padding:4px 6px;font-size:var(--fs-sm);
+/* Numeric fields: label + range on top-left, input on top-right, description below.
+ * Stacked rather than side-by-side so the description has room to breathe in the
+ * narrow sidebar. */
+.al-pg-batch-field{
+  padding:10px 0;border-bottom:1px solid var(--border);
+}
+.al-pg-batch-field:last-of-type{ border-bottom:none; }
+.al-pg-batch-field-head{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  font-size:var(--fs-sm);color:var(--text2);
+  margin-bottom:4px;
+}
+/* Beat the global input[type=number] width:100% via a compound selector. */
+.al-pg-batch-field input.al-pg-batch-num,
+.al-pg-batch-toggle-row input.al-pg-batch-num{
+  width:80px;padding:4px 8px;font-size:var(--fs-sm);
   background:var(--bg3);border:1px solid var(--border);border-radius:var(--r-sm);
-  color:var(--text);text-align:right;
+  color:var(--text);text-align:right;flex:0 0 auto;
 }
 .al-pg-batch-foot{
   display:flex;align-items:center;justify-content:space-between;gap:10px;

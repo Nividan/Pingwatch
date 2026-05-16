@@ -1384,7 +1384,7 @@ function _alPgRenderBatching(sr) {
   if (status) status.textContent = enabled ? `on · ${win}s / ${max}` : 'off';
   wrap.innerHTML = `
     <div class="al-pg-batch-body">
-      <div class="al-pg-batch-row">
+      <div class="al-pg-batch-toggle-row">
         <label class="al-pg-toggle rbac-admin" title="${enabled?'Disable':'Enable'} batching">
           <input type="checkbox" id="al-pg-batch-en" ${enabled?'checked':''}/>
           <span class="al-pg-toggle-slider"></span>
@@ -1394,19 +1394,19 @@ function _alPgRenderBatching(sr) {
           <div class="muted small">When off, alerts fire immediately as separate emails/webhooks.</div>
         </div>
       </div>
-      <div class="al-pg-batch-row">
-        <input type="number" id="al-pg-batch-win" min="5" max="3600" value="${win}" class="pw-input al-pg-batch-num"/>
-        <div class="al-pg-batch-lbl">
-          <div>Batch window <span class="muted small">5–3600s</span></div>
-          <div class="muted small">Hold the first alert this long before flushing.</div>
+      <div class="al-pg-batch-field">
+        <div class="al-pg-batch-field-head">
+          <span>Batch window <span class="muted small">5–3600s</span></span>
+          <input type="number" id="al-pg-batch-win" min="5" max="3600" value="${win}" class="al-pg-batch-num"/>
         </div>
+        <div class="muted small">Hold the first alert this long before flushing.</div>
       </div>
-      <div class="al-pg-batch-row">
-        <input type="number" id="al-pg-batch-max" min="2" max="500" value="${max}" class="pw-input al-pg-batch-num"/>
-        <div class="al-pg-batch-lbl">
-          <div>Max batch size <span class="muted small">2–500</span></div>
-          <div class="muted small">Flush early when this many events accumulate.</div>
+      <div class="al-pg-batch-field">
+        <div class="al-pg-batch-field-head">
+          <span>Max batch size <span class="muted small">2–500</span></span>
+          <input type="number" id="al-pg-batch-max" min="2" max="500" value="${max}" class="al-pg-batch-num"/>
         </div>
+        <div class="muted small">Flush early when this many events accumulate.</div>
       </div>
       <div class="al-pg-batch-foot">
         <span class="muted small">Webhook batching is opt-in per template.</span>
