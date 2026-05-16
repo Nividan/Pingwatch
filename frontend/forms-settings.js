@@ -1575,25 +1575,25 @@ async function openSettings(initialTab){
   o.innerHTML=`
   <div class="mbox" style="width:1020px;max-width:96vw;height:85vh;display:flex;flex-direction:column">
     <div class="mhd">
-      <div class="mttl">⚙ Settings</div>
+      <div class="mttl">${icon('settings',16)} Settings</div>
       <button class="mclose" onclick="closeM('mset')">✕</button>
     </div>
     <div class="stab-layout">
     <nav class="stab-sidebar">
-      <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">⚙️ General</button>
-      <button class="stab-nav" id="stab-btn-retention" onclick="switchSettingsTab('retention')">🗃️ Retention</button>
-      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">👤 Users</button>
-      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">👥 Groups</button>
-      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">🔗 Integrations</button>
-      <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">🗄️ Database</button>
-      <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">📄 Reports</button>
-      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">📡 Sensors</button>
-      <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">🌐 Networking</button>
-      <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">🔐 Certificates</button>
-      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">💾 Config Backup</button>
-      <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">📡 Auto-Discovery</button>
-      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">🚨 Alert Profiles</button>
-      <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">🔧 Diagnostics</button>
+      <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">${icon('settings',13)} General</button>
+      <button class="stab-nav" id="stab-btn-retention" onclick="switchSettingsTab('retention')">${icon('backups',13)} Retention</button>
+      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">${icon('user',13)} Users</button>
+      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">${icon('devices',13)} Groups</button>
+      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">${icon('ipam',13)} Integrations</button>
+      <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">${icon('backups',13)} Database</button>
+      <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">${icon('reports',13)} Reports</button>
+      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">${icon('activity',13)} Sensors</button>
+      <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">${icon('map',13)} Networking</button>
+      <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">${icon('shield',13)} Certificates</button>
+      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">${icon('download',13)} Config Backup</button>
+      <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">${icon('zoom',13)} Auto-Discovery</button>
+      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">${icon('alerts',13)} Alert Profiles</button>
+      <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">${icon('cpu',13)} Diagnostics</button>
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}

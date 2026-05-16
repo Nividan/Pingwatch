@@ -1870,6 +1870,41 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .usr-dd-item--disabled{color:var(--text3);cursor:default;}
 .usr-dd-item--danger{color:#f85149;}
 .usr-dd-item--danger:hover{background:rgba(248,81,73,.1);}
+
+/* ── v1.0 user-menu refinements (additive) ─────────────────────── */
+.usr-dd-menu .usr-menu-head{
+  display:grid;
+  grid-template-columns:34px 1fr auto;
+  gap:10px;
+  align-items:center;
+  padding:12px 14px 10px;
+}
+.usr-menu-av{
+  width:34px;height:34px;border-radius:50%;
+  background:linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, var(--up)));
+  color:#fff;
+  display:grid;place-items:center;
+  font-size:11px;font-weight:700;letter-spacing:.3px;
+}
+.usr-menu-id{ min-width:0;display:flex;flex-direction:column;gap:2px; }
+.usr-menu-name{ font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.usr-menu-email{ font-size:10px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.usr-menu-role{
+  font-size:9px;font-weight:700;padding:2px 7px;border-radius:var(--r-pill);
+  text-transform:uppercase;letter-spacing:.4px;
+}
+.usr-menu-session{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 14px 8px;
+  font-size:10px;color:var(--text3);
+  border-bottom:1px solid var(--border);
+}
+.usr-menu-session .dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--up);box-shadow:0 0 6px var(--up-glow);
+}
+/* SVG icons inside menu items align with the legacy text glyphs */
+.usr-dd-item .usr-dd-ico svg{ display:block;margin:0 auto; }
 .st-info-grid{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;align-items:center;margin-top:4px;}
 .st-info-key{font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;}
 .st-info-val{font-size:12px;color:var(--text);font-family:'JetBrains Mono',monospace;word-break:break-all;}

@@ -182,18 +182,41 @@
         <span class="usr-dd-caret">▾</span>
       </button>
       <div class="usr-dd-menu" id="usrDdMenu" role="menu">
-        <div class="usr-dd-header">
-          <div class="usr-dd-name" id="usr-dd-name"></div>
-          <div class="usr-dd-badge" id="usr-dd-badge"></div>
+        <div class="usr-dd-header usr-menu-head">
+          <div class="usr-menu-av" id="usr-menu-av">—</div>
+          <div class="usr-menu-id">
+            <div class="usr-dd-name usr-menu-name" id="usr-dd-name"></div>
+            <div class="usr-menu-email" id="usr-menu-email" style="display:none"></div>
+          </div>
+          <div class="usr-dd-badge usr-menu-role" id="usr-dd-badge"></div>
+        </div>
+        <div class="usr-menu-session" id="usr-menu-session" style="display:none">
+          <span class="dot"></span>
+          <span id="usr-menu-session-text">—</span>
         </div>
         <div class="usr-dd-sep"></div>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openSettings()"><span class="usr-dd-ico">⚙</span>Settings</button>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_openProfileModal()"><span class="usr-dd-ico">👤</span>Edit Profile</button>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_openChangePwModal()"><span class="usr-dd-ico">🔑</span>Change Password</button>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_open2faModal()"><span class="usr-dd-ico">🔐</span>Two-Factor Authentication</button>
+        <button class="usr-dd-item" role="menuitem" data-icon="settings" onclick="_usrDdClose();openSettings()">
+          <span class="usr-dd-ico"></span>Settings
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="user" onclick="_usrDdClose();_openProfileModal()">
+          <span class="usr-dd-ico"></span>Edit Profile
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="lock" onclick="_usrDdClose();_openChangePwModal()">
+          <span class="usr-dd-ico"></span>Change Password
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="shield" onclick="_usrDdClose();_open2faModal()">
+          <span class="usr-dd-ico"></span>Two-Factor Authentication
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="activity" onclick="_usrDdClose();_openSessionsModal()">
+          <span class="usr-dd-ico"></span>Active Sessions
+        </button>
         <div class="usr-dd-sep"></div>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openAbout()"><span class="usr-dd-ico">ⓘ</span>About PingWatch</button>
-        <button class="usr-dd-item usr-dd-item--danger" role="menuitem" onclick="_usrDdClose();doLogout()"><span class="usr-dd-ico">⏻</span>Sign Out</button>
+        <button class="usr-dd-item" role="menuitem" data-icon="info" onclick="_usrDdClose();openAbout()">
+          <span class="usr-dd-ico"></span>About PingWatch
+        </button>
+        <button class="usr-dd-item usr-dd-item--danger" role="menuitem" data-icon="log_out" onclick="_usrDdClose();doLogout()">
+          <span class="usr-dd-ico"></span>Sign Out
+        </button>
       </div>
     </div>
   </div>

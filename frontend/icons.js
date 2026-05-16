@@ -122,6 +122,12 @@
     _pwUpdateThemeBtn();
     var tb = document.getElementById('tbBellBtn');
     if (tb && !tb.firstChild) tb.innerHTML = icon('bell', 16);
+    // User menu items — populate icons via data-icon attribute
+    var items = document.querySelectorAll('.usr-dd-item[data-icon]');
+    for (var j = 0; j < items.length; j++) {
+      var slot = items[j].querySelector('.usr-dd-ico');
+      if (slot && !slot.firstChild) slot.innerHTML = icon(items[j].dataset.icon, 14);
+    }
   }
 
   /** Sync the topbar theme button glyph to the current data-theme. */

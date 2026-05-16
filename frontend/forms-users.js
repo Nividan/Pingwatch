@@ -497,3 +497,95 @@ async function deleteUser(username){
   await reloadUserTable();
   toast(`User "${username}" deleted`,'ok');
 }
+
+// ── Active Sessions sub-modal ──────────────────────────────────────
+// Lists every active session for the current user from /api/me/sessions
+// and lets them revoke individual sessions or "Sign out all other sessions".
+async function _openSessionsModal(){
+  closeM('m-sess');
+  const o=document.createElement('div'); o.className='mo'; o.id='m-sess';
+  _overlayClose(o,()=>closeM('m-sess'));
+  o.innerHTML=`
+  <div class="mbox" style="max-width:560px">
+    <div class="mhd">
+      <div class="mttl">${typeof icon==='function'?icon('activity',16):'⚡'} Active Sessions</div>
+      <button class="mclose" onclick="closeM('m-sess')">✕</button>
+    </div>
+    <div class="mbdy">
+      <div id="sess-list" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
+        <div style="color:var(--text3);font-size:12px;padding:20px;text-align:center">Loading…</div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span style="font-size:11px;color:var(--text3)">Signing out another session immediately invalidates its cookie.</span>
+        <button class="btn ghost sm" id="sess-revoke-all" onclick="_sessRevokeOthers()">Sign out all other sessions</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  await _sessRefresh();
+}
+
+async function _sessRefresh(){
+  const list = document.getElementById('sess-list');
+  if (!list) return;
+  let data = { sessions: [] };
+  try { data = await api('GET','/api/me/sessions'); } catch (e) {
+    list.innerHTML = '<div style="color:var(--down);font-size:12px;padding:20px;text-align:center">Failed to load sessions.</div>';
+    return;
+  }
+  const rows = (data.sessions || []).map(s => {
+    const label  = esc(s.device_label || 'Unknown device');
+    const ip     = esc(s.ip || '—');
+    const last   = s.last_active ? _sessFmtAgo(s.last_active) : '—';
+    const curBadge = s.current ? '<span class="pill up" style="font-size:9px;padding:1px 6px;margin-left:6px">CURRENT</span>' : '';
+    const revokeBtn = s.current
+      ? '<span style="font-size:11px;color:var(--text3)">— this session —</span>'
+      : `<button class="btn ghost sm danger" onclick="_sessRevoke('${esc(s.id)}')">Revoke</button>`;
+    return `<div class="sess-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--card-soft)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center">
+          ${label}${curBadge}
+        </div>
+        <div style="font-size:10px;color:var(--text3);font-family:var(--font-mono);margin-top:3px">
+          ${ip} · last active ${last}
+        </div>
+      </div>
+      ${revokeBtn}
+    </div>`;
+  }).join('');
+  if (!rows) {
+    list.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:20px;text-align:center">No active sessions.</div>';
+  } else {
+    list.innerHTML = rows;
+  }
+  // Disable "revoke all others" if there's only the current session
+  const others = (data.sessions || []).filter(s => !s.current).length;
+  const btn = document.getElementById('sess-revoke-all');
+  if (btn) btn.disabled = others === 0;
+}
+
+function _sessFmtAgo(epochSec){
+  const s = Math.max(0, Math.round(Date.now()/1000 - epochSec));
+  if (s < 60)   return s + 's ago';
+  if (s < 3600) return Math.round(s/60) + 'm ago';
+  if (s < 86400) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
+}
+
+async function _sessRevoke(id){
+  if (!confirm('Revoke this session? The user on that device will be signed out immediately.')) return;
+  try {
+    await api('DELETE', `/api/me/sessions/${encodeURIComponent(id)}`);
+    toast('Session revoked','ok');
+  } catch (e) { toast(e.message || 'Revoke failed','err'); return; }
+  await _sessRefresh();
+}
+
+async function _sessRevokeOthers(){
+  if (!confirm('Sign out all OTHER sessions for your account? Your current session stays signed in.')) return;
+  try {
+    const r = await api('DELETE','/api/me/sessions');
+    toast(`Signed out ${r.revoked || 0} session${(r.revoked||0)===1?'':'s'}`,'ok');
+  } catch (e) { toast(e.message || 'Revoke failed','err'); return; }
+  await _sessRefresh();
+}

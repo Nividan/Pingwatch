@@ -574,7 +574,39 @@ function _usrDdToggle(e){
   const btn=document.getElementById('usrDdBtn');
   const open=menu.classList.toggle('usr-dd-menu--open');
   btn.setAttribute('aria-expanded',open);
-  if(open){const first=menu.querySelector('.usr-dd-item:not([disabled])');if(first)first.focus();}
+  if(open){
+    _refreshUsrMenuHeader();
+    const first=menu.querySelector('.usr-dd-item:not([disabled])');if(first)first.focus();
+  }
+}
+function _refreshUsrMenuHeader(){
+  const me = S.me || {};
+  const uname = me.username || S.user || '';
+  // Avatar — first 2 chars of full_name or username
+  const avText = (me.full_name || uname || '?').replace(/[^A-Za-z0-9]/g,'').slice(0,2).toUpperCase() || '?';
+  const av = document.getElementById('usr-menu-av');     if(av) av.textContent = avText;
+  // Name = full_name with username fallback
+  const dn = document.getElementById('usr-dd-name');
+  if(dn) dn.textContent = me.full_name || uname;
+  // Email
+  const em = document.getElementById('usr-menu-email');
+  if(em){
+    if(me.email){ em.textContent = me.email; em.style.display=''; }
+    else        { em.style.display='none'; }
+  }
+  // Session row — "Session expires in Xh Ym · signed in via Local"
+  const sess = document.getElementById('usr-menu-session');
+  const txt  = document.getElementById('usr-menu-session-text');
+  if(sess && txt){
+    const remainSec = Math.max(0, _sessionTtl - Math.round((Date.now()-_lastActivity)/1000));
+    const h = Math.floor(remainSec/3600);
+    const m = Math.floor((remainSec%3600)/60);
+    const remStr = h>0 ? `${h}h ${String(m).padStart(2,'0')}m` : `${m}m`;
+    // Auth method label (Local / LDAP / SAML / OIDC / RADIUS) — best-effort from S.me
+    const method = me.auth_method || me.auth_type || 'Local';
+    txt.textContent = `Session expires in ${remStr} · signed in via ${method[0].toUpperCase()+method.slice(1)}`;
+    sess.style.display = '';
+  }
 }
 function _usrDdClose(){
   const menu=document.getElementById('usrDdMenu');
@@ -1037,7 +1069,7 @@ async function checkAuth(){
   document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
-    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}
+    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; S.me=d; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}
     else{showLogin();}
   }catch(e){showLogin();}
 }
