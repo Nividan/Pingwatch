@@ -1580,20 +1580,24 @@ async function openSettings(initialTab){
     </div>
     <div class="stab-layout">
     <nav class="stab-sidebar">
+      <div class="stab-section">Platform</div>
       <button class="stab-nav active" id="stab-btn-general" onclick="switchSettingsTab('general')">${icon('settings',13)} General</button>
       <button class="stab-nav" id="stab-btn-retention" onclick="switchSettingsTab('retention')">${icon('backups',13)} Retention</button>
-      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">${icon('user',13)} Users</button>
-      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">${icon('devices',13)} Groups</button>
-      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">${icon('ipam',13)} Integrations</button>
       <button class="stab-nav" id="stab-btn-database" onclick="switchSettingsTab('database')">${icon('backups',13)} Database</button>
-      <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">${icon('reports',13)} Reports</button>
-      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">${icon('activity',13)} Sensors</button>
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">${icon('map',13)} Networking</button>
       <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">${icon('shield',13)} Certificates</button>
-      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">${icon('download',13)} Config Backup</button>
+      <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">${icon('cpu',13)} Diagnostics</button>
+      <div class="stab-section">Identity</div>
+      <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">${icon('user',13)} Users</button>
+      <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">${icon('devices',13)} Groups</button>
+      <div class="stab-section">Monitoring</div>
+      <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">${icon('activity',13)} Sensors</button>
       <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">${icon('zoom',13)} Auto-Discovery</button>
       <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">${icon('alerts',13)} Alert Profiles</button>
-      <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">${icon('cpu',13)} Diagnostics</button>
+      <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">${icon('reports',13)} Reports</button>
+      <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">${icon('download',13)} Config Backup</button>
+      <div class="stab-section">Connections</div>
+      <button class="stab-nav" id="stab-btn-integrations" onclick="switchSettingsTab('integrations')">${icon('ipam',13)} Integrations</button>
     </nav>
     <div class="stab-content">
     ${_buildSettingsTab_general(sr)}

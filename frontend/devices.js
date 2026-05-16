@@ -436,7 +436,7 @@ function ensureGroupSection(group){
   });
 
   const cnt=document.createElement('div');
-  cnt.className='grp-count'; cnt.id=gcid; cnt.textContent='0';
+  cnt.className='grp-count'; cnt.id=gcid; cnt.textContent='0 total';
 
   const line2=document.createElement('div');
   line2.className='grp-line';
@@ -478,7 +478,10 @@ function refreshGroupCounts(){
   document.querySelectorAll('.grp-grid').forEach(grid=>{
     const group=grid.dataset.group;
     const cnt=document.getElementById(cntId(group));
-    if(cnt) cnt.textContent=grid.querySelectorAll('.dc:not(.dc-add)').length;
+    if(cnt){
+      const n=grid.querySelectorAll('.dc:not(.dc-add)').length;
+      cnt.textContent=`${n} total`;
+    }
   });
 }
 
@@ -526,20 +529,19 @@ function _updateGrpSummary(group){
   const el=document.getElementById('gsum-'+gid);
   if(!el) return;
   const grid=document.getElementById(gridId(group));
-  if(!grid||!grid.classList.contains('collapsed')){el.style.display='none';return;}
-  // Count devices by status in this group
+  if(!grid){ el.innerHTML=''; return; }
+  // Count devices by status in this group (always show, regardless of collapsed state)
   const counts={up:0,down:0,warn:0};
   grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
     const did=card.id.replace('dp-','');
     const dev=S.devices[did];
     if(dev){const st=dev.status||'unknown';if(counts[st]!==undefined)counts[st]++;}
   });
-  let html='';
-  if(counts.up)   html+=`<span class="grp-sum-dot up"></span> ${counts.up}`;
-  if(counts.down)  html+=`${html?' ':''}  <span class="grp-sum-dot down"></span> ${counts.down}`;
-  if(counts.warn)  html+=`${html?' ':''}  <span class="grp-sum-dot warn"></span> ${counts.warn}`;
-  el.innerHTML=html;
-  el.style.display=html?'inline-flex':'none';
+  const parts=[];
+  if(counts.up)   parts.push(`<span class="grp-sum-pill up"><span class="grp-sum-dot"></span>${counts.up}</span>`);
+  if(counts.warn) parts.push(`<span class="grp-sum-pill warn"><span class="grp-sum-dot"></span>${counts.warn}</span>`);
+  if(counts.down) parts.push(`<span class="grp-sum-pill down"><span class="grp-sum-dot"></span>${counts.down}</span>`);
+  el.innerHTML=parts.join('');
 }
 
 function _devSnrSummaryHtml(did){
@@ -954,6 +956,9 @@ function updateCardStatus(did,st){
   // Refresh summary badge
   const sumEl=document.getElementById(`dlr-sum-${did}`);
   if(sumEl){ const h=_devSnrSummaryHtml(did); if(h) sumEl.outerHTML=h; }
+  // Refresh the group header status-pill summary (live)
+  const dev=S.devices[did];
+  if(dev?.group && typeof _updateGrpSummary==='function') _updateGrpSummary(dev.group);
 }
 
 function updateCardSensor(s){
