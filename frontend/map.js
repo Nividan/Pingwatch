@@ -1,5 +1,8 @@
 // ═══════════════════════════ STATE ═══════════════════════════
 let nodes = [], links = [], groups = [], nodeMap = {}, groupMap = {};
+// Site backdrops (v1.0+) — purely-visual rectangles wrapping the group
+// frames belonging to each site. Populated each render from calcPwLayout.
+let pwSiteFrames = [];
 let pwOverrides = {};      // { device_id: {x, y, color?} }  — persisted via /api/settings/pw_node_overrides
 let pwGroupOverrides = {}; // { groupName: {x, y, w, h, color?} } — persisted via /api/settings/pw_group_overrides
 let pwLinks = [];          // [ {id, src_did, tgt_did, link_type, label?} ] — persisted via /api/settings/pw_links
@@ -422,9 +425,19 @@ function calcPwLayout(devices) {
     const nrows = Math.min(devs.length, MAX_ROWS);
     const ncols = Math.ceil(devs.length / MAX_ROWS);
     const gtitle = site ? `${site} → ${group}` : group;
-    return { gname: gkey, gtitle, devs, NW, NH,
+    return { gname: gkey, gtitle, site, group, devs, NW, NH,
              w: ncols * NW + PAD * 2,
              h: nrows * NH + PAD * 2 + 28 };
+  });
+  // Sort entries so groups belonging to the same site are placed consecutively
+  // in the index-based grid. This makes "Reset Layout" naturally cluster groups
+  // by site, which lets the site backdrops fit tightly around their contents.
+  // Unsited groups sort last so they don't break up real site clusters.
+  entries.sort((a, b) => {
+    const aS = a.site || '￿';   // Unsited → end
+    const bS = b.site || '￿';
+    if (aS !== bS) return aS.localeCompare(bS);
+    return (a.group || '').localeCompare(b.group || '');
   });
 
   // Two-phase placement: anchor user-positioned groups first, then slide
@@ -645,20 +658,66 @@ function calcPwLayout(devices) {
     }
   }
 
+  // ── Site backdrops (v1.0+) ───────────────────────────────────────
+  // Compute a bounding box per site from its constituent group rects, then
+  // emit one synthetic "site" frame behind each cluster. Purely visual: no
+  // user positioning, no resize handles — the backdrop tracks whatever the
+  // groups do. Skip the Unsited bucket entirely (rendering a wrapper around
+  // every unassigned group would just be noise).
+  const SITE_PAD = 24;          // gap between site border and inner groups
+  const SITE_TITLE_H = 34;      // header bar above the content area
+  const syntheticSites = [];
+  const bySiteBbox = {};
+  for (const d of decorated) {
+    const site = d.site;
+    if (!site) continue;        // Unsited stays unwrapped
+    const rect = placedRects.find(r => r.gname === d.gname);
+    if (!rect) continue;
+    const b = bySiteBbox[site] || { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    b.minX = Math.min(b.minX, rect.x);
+    b.minY = Math.min(b.minY, rect.y);
+    b.maxX = Math.max(b.maxX, rect.x + rect.w);
+    b.maxY = Math.max(b.maxY, rect.y + rect.h);
+    bySiteBbox[site] = b;
+  }
+  // Deterministic color per site name so the visual identity is stable across
+  // reloads. Sites get muted distinct hues; group frames stay on the cyan/
+  // accent palette so the two layers don't compete.
+  const SITE_PALETTE = ['#7a5cff', '#22d3ee', '#22c55e', '#f59e0b',
+                        '#ec4899', '#06b6d4', '#a78bfa', '#10b981'];
+  let _sIdx = 0;
+  for (const site of Object.keys(bySiteBbox).sort()) {
+    const b = bySiteBbox[site];
+    const color = SITE_PALETTE[_sIdx % SITE_PALETTE.length];
+    syntheticSites.push({
+      id:    'pw_site_' + _sIdx,
+      name:  site,
+      x:     b.minX - SITE_PAD,
+      y:     b.minY - SITE_PAD - SITE_TITLE_H,
+      w:     (b.maxX - b.minX) + SITE_PAD * 2,
+      h:     (b.maxY - b.minY) + SITE_PAD * 2 + SITE_TITLE_H,
+      color,
+      device_count: decorated.filter(d => d.site === site)
+                             .reduce((n, d) => n + d.devs.length, 0),
+    });
+    _sIdx++;
+  }
+
   // Batched persistence — one PATCH per settings key per layout pass
   if (_pwNodeDirty)  _pwSave('pw_node_overrides',  pwOverrides);
   if (_pwGroupDirty) _pwSave('pw_group_overrides', pwGroupOverrides);
 
-  return { syntheticNodes, syntheticGroups };
+  return { syntheticNodes, syntheticGroups, syntheticSites };
 }
 
 function renderPingWatchCanvas() {
   if (!isPingWatchPage) return;
   if (dragNode || groupDrag || linkDraw) { _pwRenderPending = true; return; }
-  const { syntheticNodes, syntheticGroups } = calcPwLayout(pwDevices);
+  const { syntheticNodes, syntheticGroups, syntheticSites } = calcPwLayout(pwDevices);
   nodes = syntheticNodes;
   links = [];
   groups = syntheticGroups;
+  pwSiteFrames = syntheticSites || [];
   nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
   groupMap = Object.fromEntries(groups.map(g => [g.id, g]));
   // Inject internet cloud only when at least one link connects to it
@@ -715,6 +774,7 @@ function showPwDashboardPanel() {
         <div class="dash-stat-label">UNKNOWN</div>
       </div>
     </div>
+    ${_buildSiteStatsSection()}
     <div class="dash-section" style="margin-top:12px">
       <div class="dash-section-title" style="margin-bottom:8px">ACTIVE INCIDENTS</div>
       <div id="pw-incident-list">${_buildIncidentList()}</div>
@@ -762,6 +822,34 @@ function _pwSensorIncidentVal(s) {
     }
   }
   return String(s.last_value);
+}
+
+// SITE STATS section for the right dashboard panel — modeled after the new
+// design's "Site Stats" sidebar. One row per site with up-count vs total and
+// a coloured dot reflecting overall health. Sites are sourced from the
+// computed site frames so the list matches what's drawn on the canvas.
+// Returns '' (no section) when there are no sites — single-site / all-Unsited
+// fleets stay focused on the UP/DOWN tiles + incident list above.
+function _buildSiteStatsSection() {
+  if (!pwSiteFrames || !pwSiteFrames.length) return '';
+  const rows = pwSiteFrames.slice().sort((a, b) => a.name.localeCompare(b.name)).map(s => {
+    const devsInSite = pwDevices.filter(d => (d.site || '') === s.name);
+    const up   = devsInSite.filter(d => d.status === 'up').length;
+    const down = devsInSite.filter(d => d.status === 'down').length;
+    const tot  = devsInSite.length;
+    const cls  = down ? 'down' : (up === tot && tot > 0 ? 'ok' : 'warn');
+    return `
+      <div class="pw-site-stat-row">
+        <span class="pw-site-stat-dot pw-site-stat-${cls}" style="background:${s.color}"></span>
+        <span class="pw-site-stat-name">${escXml(s.name)}</span>
+        <span class="pw-site-stat-val">${up}/${tot}</span>
+      </div>`;
+  }).join('');
+  return `
+    <div class="dash-section" style="margin-top:12px">
+      <div class="dash-section-title" style="margin-bottom:8px">SITE STATS</div>
+      <div class="pw-site-stats">${rows}</div>
+    </div>`;
 }
 
 function _buildIncidentList() {
@@ -1547,6 +1635,7 @@ function _findFreeSlotInGroup(groupRect, occupied, newW, newH) {
 // ═══════════════════════════ RENDER ═══════════════════════════
 function render() {
   resizeSVG();
+  renderSites();    // backdrop layer, behind groups
   renderGroups();
   renderLinks();
   renderNodes();
@@ -4208,6 +4297,68 @@ function endRubberBand(e) {
 }
 
 // ═══════════════════════════ GROUPS ═══════════════════════════
+// Site backdrops (v1.0+) — draw a tinted rectangle behind each site's
+// cluster of group frames, with a header bar carrying the site name and a
+// device-count chip. Sites are non-interactive in v1: positions track the
+// underlying group rects (computed in calcPwLayout from placedRects). Empty
+// `pwSiteFrames` is fine — the layer is just empty.
+function renderSites() {
+  const layer = document.getElementById('sites-layer');
+  if (!layer) return;
+  layer.innerHTML = '';
+  pwSiteFrames.forEach(s => {
+    const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    gg.setAttribute('class', 'site-g');
+    gg.setAttribute('id', 'site-' + s.id);
+
+    // Outer rect — tinted fill + thin solid stroke (distinct from groups'
+    // dashed cyan borders so the two layers don't compete).
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', s.x); rect.setAttribute('y', s.y);
+    rect.setAttribute('width',  s.w); rect.setAttribute('height', s.h);
+    rect.setAttribute('rx', '12');
+    rect.setAttribute('fill',   s.color + '14');   // ~8% opacity
+    rect.setAttribute('stroke', s.color + 'aa');
+    rect.setAttribute('stroke-width', '1.5');
+    gg.appendChild(rect);
+
+    // Header bar across the top — solid colour for legibility against the
+    // varied content beneath.
+    const TITLE_H = 30;
+    const hdr = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    hdr.setAttribute('x', s.x); hdr.setAttribute('y', s.y);
+    hdr.setAttribute('width',  s.w); hdr.setAttribute('height', TITLE_H);
+    hdr.setAttribute('rx', '12');
+    hdr.setAttribute('fill', s.color + '33');
+    gg.appendChild(hdr);
+
+    // Site name label
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    lbl.setAttribute('x', s.x + 14);
+    lbl.setAttribute('y', s.y + 20);
+    lbl.setAttribute('fill', s.color);
+    lbl.setAttribute('font-size', '14');
+    lbl.setAttribute('font-family', "'Orbitron',monospace");
+    lbl.setAttribute('font-weight', '800');
+    lbl.setAttribute('letter-spacing', '1.5');
+    lbl.textContent = s.name.toUpperCase();
+    gg.appendChild(lbl);
+
+    // Device count chip on the right of the header
+    const cnt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    cnt.setAttribute('x', s.x + s.w - 12);
+    cnt.setAttribute('y', s.y + 20);
+    cnt.setAttribute('text-anchor', 'end');
+    cnt.setAttribute('fill', s.color + 'cc');
+    cnt.setAttribute('font-size', '11');
+    cnt.setAttribute('font-family', "'Share Tech Mono',monospace");
+    cnt.textContent = `${s.device_count} device${s.device_count === 1 ? '' : 's'}`;
+    gg.appendChild(cnt);
+
+    layer.appendChild(gg);
+  });
+}
+
 function renderGroups() {
   const layer = document.getElementById('groups-layer');
   if (!layer) return;

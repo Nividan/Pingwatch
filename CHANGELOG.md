@@ -16,6 +16,18 @@ When auto-discovery creates a new device from an IPAM subnet, the subnet's `site
 - [`monitoring/auto_discovery.py:610`](monitoring/auto_discovery.py#L610) — `_build_device_specs()` gains `site=""` kwarg; threads through into each device spec dict.
 - [`core/device_importer.py:189, 207`](core/device_importer.py#L189) — `create_devices_batch()` reads `item.get("site")` and passes it as kwarg to `STATE.add_device(name, host, group, site=site)`. Truncated to 80 chars to match the PATCH/bulk validator.
 
+### Site hierarchy — Phase D+: NTM Live tab site backdrops + Site Stats panel
+
+Builds on Phase D's composite-key bucketing (groups already distinct per site). Adds actual VISIBLE site representation on the canvas + a Site Stats sidebar so a glance at the Live tab tells you "HQ is 6/8, DR is 8/8" without clicking around. Inspired by the new design's site-card grid but evolves rather than replaces the operational layout — every device + connection line stays visible.
+
+- **calcPwLayout — entries sorted by site first** ([frontend/map.js:430](frontend/map.js#L430)) so "Reset Layout" naturally clusters groups belonging to the same site instead of interleaving them. Unsited entries sort last via a high-codepoint sentinel.
+- **Per-site bounding box computation** in calcPwLayout: after group placement finalizes, walks `placedRects` and builds a min/max bbox per site, then emits `syntheticSites` entries with x/y/w/h padded for the title bar and breathing room (24px gap + 34px header). Unsited groups stay unwrapped — rendering a backdrop around them would just be noise.
+- **Deterministic site colors** from an 8-color palette indexed by sort order, so identity is stable across reloads. Colors are muted purples/cyans/greens to stay distinct from the cyan/accent palette used by group frames.
+- **New SVG layer `#sites-layer`** ([frontend/map.html:81](frontend/map.html#L81)) inserted between `bg-layer` and `groups-layer` so site backdrops render BEHIND group frames.
+- **`renderSites()`** ([frontend/map.js](frontend/map.js)) — draws a tinted rounded rectangle per site with a solid header bar across the top carrying the site name (Orbitron, uppercase) and a device-count chip on the right (`N devices`). Non-interactive in v1 — positions track the underlying groups; no resize/drag handles to compete with the group-frame interactions.
+- **`SITE STATS` panel** in the right dashboard ([frontend/map.js `_buildSiteStatsSection`](frontend/map.js)) — one row per site with a coloured status dot (green=all up, yellow=mixed, red=any down) + site name + `up/total` count. Section is omitted entirely when there are no sites, so single-site / all-Unsited fleets see the cleaner pre-existing layout.
+- **CSS** in [frontend/map.css](frontend/map.css) — `.pw-site-stats` + `.pw-site-stat-row` + `.pw-site-stat-dot` + `.pw-site-stat-name` + `.pw-site-stat-val`, with light-theme softening.
+
 ### Site hierarchy — Phase D: NTM Live tab visible site separation
 
 The Live map's auto-laid-out group frames now distinguish Site → Group buckets visibly. Same group name under different sites renders as distinct frames (mirroring the Devices tab), and each frame's title carries the site prefix (`HQ → Servers`). For v1, the layout stays single-axis — no nested outer site frame (that would require a bigger placement rewrite).
