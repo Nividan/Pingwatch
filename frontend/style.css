@@ -370,11 +370,12 @@ body{
   padding:14px 24px 4px;
 }
 
-/* ── Group header row (design-aligned: clean single line) ── */
+/* ── Group header row (design-aligned: clean single line with divider) ── */
 .grp-hdr{
   display:flex;align-items:center;gap:8px;
   margin-bottom:10px;
-  padding:6px 4px;border-radius:var(--r-sm);
+  padding:6px 4px 10px;
+  border-bottom:1px solid var(--border);
   user-select:none;
 }
 .grp-line{ display:none; }
