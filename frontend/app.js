@@ -579,7 +579,175 @@ function _usrDdToggle(e){
     const first=menu.querySelector('.usr-dd-item:not([disabled])');if(first)first.focus();
   }
 }
+function _toggleDensity(){
+  const d = document.documentElement;
+  const cur = d.getAttribute('data-density') === 'comfortable' ? 'comfortable' : 'compact';
+  const next = cur === 'compact' ? 'comfortable' : 'compact';
+  d.setAttribute('data-density', next);
+  try { localStorage.setItem('pw_density', next); } catch (_) {}
+  if (typeof showToast === 'function') showToast('Density: ' + (next === 'compact' ? 'Compact' : 'Comfortable'));
+}
+
+// ── Command palette (Ctrl+K) ─────────────────────────────────────
+// Live search across devices + sensors + IPAM allocations.
+// Click or Enter on a result → jump to the device's detail window
+// (or the events-tab filter if it's an event-related hit).
+let _cmdPaletteOpen = false;
+let _cmdResults     = [];
+let _cmdSelIdx      = 0;
+
+function _openCmdPalette(){
+  if (_cmdPaletteOpen) return;
+  _cmdPaletteOpen = true;
+  const o = document.createElement('div');
+  o.id = 'pw-cmd-overlay';
+  o.innerHTML = `
+    <div class="pw-cmd-box" onclick="event.stopPropagation()">
+      <div class="pw-cmd-input-row">
+        <span class="pw-cmd-input-ico">${typeof icon==='function'?icon('search',14):''}</span>
+        <input id="pw-cmd-inp" type="text" placeholder="Search devices, sensors, IPs…  (Esc to close)"
+               autocomplete="off" spellcheck="false">
+        <span class="pw-cmd-input-kbd">Esc</span>
+      </div>
+      <div id="pw-cmd-results" class="pw-cmd-results"></div>
+      <div class="pw-cmd-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span><kbd>Enter</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  o.addEventListener('click', _closeCmdPalette);
+  const inp = document.getElementById('pw-cmd-inp');
+  inp.addEventListener('input', _cmdPaletteSearch);
+  inp.addEventListener('keydown', _cmdPaletteKey);
+  inp.focus();
+  _cmdPaletteSearch();
+}
+
+function _closeCmdPalette(){
+  const o = document.getElementById('pw-cmd-overlay');
+  if (o) o.remove();
+  _cmdPaletteOpen = false;
+  _cmdResults = [];
+  _cmdSelIdx = 0;
+}
+
+function _cmdPaletteSearch(){
+  const inp = document.getElementById('pw-cmd-inp');
+  const q = (inp?.value || '').trim().toLowerCase();
+  const out = [];
+  const devs = Object.values(S.devices || {});
+  // Devices — match on name, host, vendor, group
+  for (const d of devs) {
+    const hay = [(d.name||''), (d.host||''), (d.vendor||''), (d.group||'')].join(' ').toLowerCase();
+    if (!q || hay.includes(q)) {
+      out.push({ kind:'device', did:d.device_id, name:d.name, host:d.host||'',
+                 vendor:d.vendor||'', status:d.status||'unknown', group:d.group||'' });
+      if (out.length >= 40) break;
+    }
+  }
+  // Sensors — match on name (only if query non-empty; otherwise we'd flood)
+  if (q) {
+    const sens = Object.values(S.sensors || {});
+    let sensorAdded = 0;
+    for (const s of sens) {
+      const nm = (s.name||'').toLowerCase();
+      if (nm.includes(q)) {
+        const dev = S.devices[s.device_id];
+        out.push({ kind:'sensor', did:s.device_id, sid:s.sensor_id,
+                   name:s.name, stype:s.stype||'',
+                   parent:(dev && dev.name) || s.device_id });
+        sensorAdded++;
+        if (sensorAdded >= 20) break;
+      }
+    }
+  }
+  _cmdResults = out.slice(0, 40);
+  _cmdSelIdx = 0;
+  _cmdPaletteRender();
+}
+
+function _cmdPaletteRender(){
+  const wrap = document.getElementById('pw-cmd-results');
+  if (!wrap) return;
+  if (!_cmdResults.length) {
+    wrap.innerHTML = '<div class="pw-cmd-empty">No matches.</div>';
+    return;
+  }
+  const devs = _cmdResults.filter(r => r.kind==='device');
+  const sens = _cmdResults.filter(r => r.kind==='sensor');
+  let html = '';
+  if (devs.length) {
+    html += '<div class="pw-cmd-section">Devices</div>';
+    devs.forEach((r,i) => {
+      const idx = _cmdResults.indexOf(r);
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-dot ${r.status}"></span>
+        <span class="pw-cmd-name">${esc(r.name)}</span>
+        <span class="pw-cmd-meta">${esc(r.host)}${r.vendor?' · '+esc(r.vendor):''}</span>
+      </div>`;
+    });
+  }
+  if (sens.length) {
+    html += '<div class="pw-cmd-section">Sensors</div>';
+    sens.forEach(r => {
+      const idx = _cmdResults.indexOf(r);
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-stype">${esc(r.stype)}</span>
+        <span class="pw-cmd-name">${esc(r.name)}</span>
+        <span class="pw-cmd-meta">on ${esc(r.parent)}</span>
+      </div>`;
+    });
+  }
+  wrap.innerHTML = html;
+  // Scroll the selected row into view
+  const sel = wrap.querySelector('.pw-cmd-row.sel');
+  if (sel) sel.scrollIntoView({block:'nearest'});
+}
+
+function _cmdPaletteKey(e){
+  if (e.key === 'Escape') { e.preventDefault(); _closeCmdPalette(); return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (_cmdResults.length) _cmdSelIdx = (_cmdSelIdx + 1) % _cmdResults.length;
+    _cmdPaletteRender();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (_cmdResults.length) _cmdSelIdx = (_cmdSelIdx - 1 + _cmdResults.length) % _cmdResults.length;
+    _cmdPaletteRender();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    _cmdPickIdx(_cmdSelIdx);
+  }
+}
+
+function _cmdPickIdx(idx){
+  const r = _cmdResults[idx];
+  if (!r) return;
+  _closeCmdPalette();
+  // Switch to Devices tab so the user lands somewhere coherent
+  if (typeof switchMainTab === 'function') switchMainTab('devices');
+  // Open the device's detail window
+  if (typeof openDevWin === 'function' && r.did) {
+    setTimeout(() => openDevWin(r.did), 50);
+  }
+}
+
+// Ctrl+K / Cmd+K global shortcut
+document.addEventListener('keydown', function(e){
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    _openCmdPalette();
+  }
+});
+function _refreshDensityLabel(){
+  const cur = document.documentElement.getAttribute('data-density') === 'comfortable' ? 'Comfortable' : 'Compact';
+  const lbl = document.getElementById('usrDensityLabel');
+  if (lbl) lbl.textContent = 'Density: ' + cur;
+}
 function _refreshUsrMenuHeader(){
+  _refreshDensityLabel();
   const me = S.me || {};
   const uname = me.username || S.user || '';
   // Avatar — first 2 chars of full_name or username

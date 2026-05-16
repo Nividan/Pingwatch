@@ -4,6 +4,78 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.0 — UI redesign (pending release)
+
+Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
+
+### Design tokens & theme — [frontend/style.css](frontend/style.css)
+- New `:root` palette: deeper black `--bg` (#0a0d12 vs #0d1117), brighter accent `--accent` (#4d9eff vs #2f81f7), refined status colors (`--up` #2ee5a3, `--down` #ff5c5c). Glow variants (`--up-glow`, `--warn-glow`, `--down-glow`, `--accent-glow`) added for new components
+- Additive tokens: `--card`/`--card-soft`/`--card-strong`/`--card-hover`, `--inset`/`--inset-soft`, `--overlay`, `--text4`, `--border3`, `--accent-soft`, radii `--r-xs..xl/pill`, type scale `--fs-xs..3xl`, spacing `--sp-1..7`, motion `--ease/--dur/--dur-fast`, shadows `--shadow-sm/md/lg`, layout heights `--topbar-h/--rail-w/--tabbar-h`
+- Density-aware overrides via `[data-density="compact"]` (default) and `[data-density="comfortable"]` on `<html>`. Toggle in user dropdown menu. Persisted as `pw_density` in localStorage, applied before paint via the FOUC bootstrap in `index.html`
+- Light theme palette updated with parallel tokens. Theme switch still flips `<html data-theme>`; moved out of the user menu to a dedicated topbar icon button (`#tbThemeBtn`)
+- Existing legacy tokens (`--card-bg`, `--panel-bg`, `--header-h`, etc.) kept as aliases pointing at the new tokens so every pre-v1.0 rule keeps resolving
+
+### Shell — topbar + icon rail — [frontend/index.html](frontend/index.html), [frontend/icons.js](frontend/icons.js), [frontend/style.css](frontend/style.css)
+- New topbar layout: brand wordmark with animated radar mark · command-palette stub · health bar (pill chrome) · clock · DB badge · status badges · log badge · theme toggle (sun/moon) · bell · user dropdown. Every internal id preserved (`tbVer`, `healthBar`, `hb-*`, `badgeCrit/Warn/Ack/Muted`, `logBadge`, `tb-user`, `usrDd`, etc.) so [app.js](frontend/app.js) selectors keep targeting the right elements
+- Horizontal tab bar (`#mainTabs`) replaced with a **left icon rail** (`#rail`). Each rail button is `class="rail-btn"` with stroked-SVG icon, accent left-stripe + soft fill on active, hover tooltip. Tab IDs (`tabDashboard`, `tabDevices`, etc.) moved onto the rail buttons so `switchMainTab()` keeps toggling `.active` on the same elements. RBAC class hooks (`.rbac-admin` on Logs button) preserved
+- New [frontend/icons.js](frontend/icons.js) — lucide-style SVG icon library (~40 icons). Single export `icon(name, size=16, attrs={})` returning an SVG string. Loaded first in the inline-JS chain ([server.py:69](server.py#L69)) so every later module can call it at module-load time. `_pwShellInit()` runs on DOMContentLoaded to populate rail/topbar/menu glyphs by id and `data-icon` attribute; re-runs on `themechange` for the topbar theme button
+- New [frontend/charts.js](frontend/charts.js) — vanilla SVG `sparkline()`, `donut()`, `heatmap()` helpers (`PWChart` global plus `pwSparkline`/`pwDonut`/`pwHeatmap` shortcuts). Replaces the prototype's React-based chart components with pure-string SVG generators. No chart library
+- `#layout` switched from flexbox to CSS grid (`grid-template-columns: var(--rail-w) minmax(0, 1fr)`)
+
+### Dashboard — [frontend/dashboard.js](frontend/dashboard.js)
+- All 17 widget types in `_DW_REG` get SVG icons (was emoji); icons render in widget headers and the Add Widget picker
+- Widget chrome (`.dw-card` / `.dw-hdr` / `.dw-body`) dual-classed with new design vocabulary (`.widget` / `.widget-head` / `.widget-body`) — slightly more rounded corners (10px vs 8px), refined padding, hover accent. Header action buttons (✎ ⤢ ×) replaced with sharp SVG icons via `icon()`
+- **New widget type: Fleet Status** — donut breakdown of Up/Warning/Down/Paused with legend rows. Auto-refreshes on device-status updates. Uses `pwDonut()`
+- **New widget type: Latency Heatmap** — N devices × 30 time-buckets, color-ramped (green → amber → red). Configurable device limit (10/20/30). Caches per-widget for 30s to avoid request storms across the per-sensor `/history` fetches. Reads `p.ms` (or `p.value` fallback) and surfaces failed probes (`ok === false`) as red max-clamped cells
+- **Global dashboard time-range** — `5m / 1h / 24h / 7d` segmented control in the dashboard tab bar. Persisted as `pw_dw_range`. Affects all time-aware widgets: `sensor_chart`, `sla_report`, `flap_detect`, `latency_heatmap` now read `_dwTimeRangeMinutes()` instead of per-widget config. Per-widget time fields removed from those registry entries. `_dwSetTimeRange()` re-renders every widget on change. Internal pill bar inside `sensor_chart` removed (global control is the single source of truth). `network_avail` (purpose-built 24h) and `event_count` (multi-period table) keep their hardcoded ranges
+- Bugfix: fullscreen widget icon now uses `.innerHTML = reg.icon` (not `.textContent`) so SVG icons render rather than appear as raw markup
+
+### Devices — [frontend/index.html](frontend/index.html), [frontend/devices.js](frontend/devices.js)
+- `#devActBar` split into `.pagehead` (title "Devices" + live device-count sub + Add Device/Discover/Import/Group buttons) and `.dev-toolbar` (status pills + search + view toggle + select)
+- Action buttons converted to `.btn primary` / `.btn` / `.btn ghost` with inline SVG icons (plus/zoom/upload). `.dev-status-pill` markup dual-classed with `.dev-status-btn` for new layout while keeping the existing `[data-st]`-driven styling. View toggle dual-classed `.seg view-toggle`. Search uses `.search` design with leading SVG glyph
+- `_updateStatusPills()` now also fills `#devSub` with a live "N devices across M groups" line
+
+### Events — [frontend/index.html](frontend/index.html)
+- `.evt-view-hdr` dual-classed with `.pagehead`; "⚡ Events" emoji replaced with a `<h1>Events</h1>`. Action buttons (Resolve All / view-mode toggle / export) converted to `.btn ghost sm` + `.seg` with SVG icons
+
+### IPAM — [frontend/ipam.js](frontend/ipam.js)
+- `_ipamRenderShell()` rewritten with `.pagehead` (title + sub + Add Subnet/Edit/Refresh DNS/Remove buttons using `.btn primary`/`.btn`/`.btn ghost`/`.btn danger` with SVG icons) + `.ipam-hdr` toolbar (subnet selector + `.search`-styled search + pagination)
+
+### Reports — [frontend/reports.js](frontend/reports.js)
+- `_rptInit()` shell rewritten with `.pagehead` (title + sub + New button) + sub-tabs converted to `.seg`. The internal RPT sections catalogue is untouched
+
+### Backups — [frontend/index.html](frontend/index.html)
+- `#backupsView` toolbar split into `.pagehead` (title + Run All Enabled/Refresh buttons with SVG icons) + `#bk-toolbar` with `.search`-styled config search
+
+### Logs — [frontend/logs.js](frontend/logs.js)
+- `_logsInit()` rewritten with `.pagehead` (title + Live toggle / Refresh buttons), stream tabs converted to `.seg`, filters use `.pw-select`/`.search`/`.iconbtn` design
+
+### User menu + Active Sessions — [frontend/index.html](frontend/index.html), [frontend/app.js](frontend/app.js), [frontend/forms-users.js](frontend/forms-users.js)
+- New menu header: avatar (initials), name + email, role pill. New session row: "Session expires in Xh Ym · signed in via Local". Menu items have SVG icons (settings/user/lock/shield/activity/info/log_out) via `data-icon` attribute populated by `_pwShellInit`. Theme toggle removed (lives in topbar). New "Active Sessions" item between 2FA and the separator. New "Density: Compact/Comfortable" toggle replacing the old theme toggle slot
+- `_refreshUsrMenuHeader()` runs on every menu open — avatar, name, email, role badge, session-expiry countdown. `S.me` populated from `/api/me` so name/email/role are available without re-fetching
+- New `_openSessionsModal()` ([forms-users.js](frontend/forms-users.js)) — fetches `GET /api/me/sessions`, renders one row per session with device label + IP + last-active + revoke button. Current session shows a CURRENT pill and "— this session —" instead of revoke. "Sign out all other sessions" button calls `DELETE /api/me/sessions` (disabled when only the current session exists)
+- New `_toggleDensity()` — flips `<html data-density>` between `compact` and `comfortable`, persists as `pw_density`. Density label in menu refreshes on each menu open
+
+### Settings — [frontend/forms-settings.js](frontend/forms-settings.js)
+- Modal title and all 14 sidebar tabs swapped from emoji to SVG icons via `icon()`. Internal tab content unchanged
+
+### Backend — Active Sessions endpoint (the only `/api/*` change)
+- **Schema** — 5 additive columns on `sessions` table: `ip`, `user_agent`, `device_label`, `created_at`, `last_active`. Idempotent migrations in both [db/core.py](db/core.py) (SQLite) and [db/pg_schema.py](db/pg_schema.py) (PG) per dual-backend pattern
+- **Login capture** — [core/auth.py::_create_session()](core/auth.py) and `auth_login()` accept optional `ip`/`user_agent`/`device_label` kwargs. The main `/api/login` and `/api/login/totp` paths in [routes/auth.py](routes/auth.py) thread these through (parsed via `parse_user_agent_label` for the friendly "Chrome on Windows" label). SSO/LDAP/RADIUS auto-provision paths leave the fields blank for now
+- **New helpers** in core/auth.py: `auth_list_user_sessions()`, `auth_revoke_session_by_id()` (enforces `username` server-side — cross-user revoke returns 404, no info leak), `auth_revoke_other_user_sessions()`
+- **New endpoints** in [routes/auth.py](routes/auth.py): `GET /api/me/sessions` (returns `[{id, current, ip, user_agent, device_label, created_at, last_active, expires}, ...]`, `id` = SHA-256 token-hash matching the row's primary key), `DELETE /api/me/sessions/{id}` (returns 400 if trying to revoke the current session — use `/api/logout` instead), `DELETE /api/me/sessions` (revokes all but the current session, returns `{revoked: N}`)
+- **Single-session caveat documented**: `_create_session()` still does `DELETE FROM sessions WHERE username=?` before inserting on each login. The new endpoints work — they just typically return 1 row. Removing single-session enforcement is a future security trade-off
+- **Audit trail** — `session_revoked` and `sessions_revoke_others` audit events emitted to `db_log_audit`
+
+### Out of scope (deferred to a future release)
+- Map view (Live tab) — kept as-is per scope decision; the existing builder app inside the iframe inherits the new theme tokens but its chrome wasn't redesigned
+- Alerting view — lives inside Settings; gets icon refresh only
+- Notification stream behind the topbar bell — currently jumps to the Events tab as a stub
+- Topology snapshots / version diff, drawio export, topology-vs-monitored discrepancy detection — all noted in MIGRATION_NOTES.md as future endpoints
+- Full Settings modal rewrite to the prototype's grouped Platform/Identity/Monitoring/Connections layout — surface area too large for v1.0; tabs swapped from emoji to SVG icons only
+
+---
+
 ## v0.9.6
 
 ### 🔌 Typed SNMP transitions — alert-profile + map + live-panel integration

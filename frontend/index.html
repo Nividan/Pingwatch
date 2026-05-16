@@ -117,9 +117,9 @@
     </div>
   </div>
 
-  <!-- Command palette stub (visual only — full implementation in v1.1) -->
+  <!-- Command palette — Ctrl+K. Jumps to devices / sensors by fuzzy match. -->
   <button class="cmd" id="tbCmd" type="button"
-          onclick="(window._pwCmdStub||function(){window.showToast&&window.showToast('Command palette coming in v1.1')})()"
+          onclick="_openCmdPalette()"
           title="Search devices, sensors, or IPs (Ctrl+K)">
     <span class="cmd-ico" id="tbCmdIco" aria-hidden="true"></span>
     <span class="cmd-placeholder">Search devices, sensors, or IPs…</span>
@@ -209,6 +209,10 @@
         </button>
         <button class="usr-dd-item" role="menuitem" data-icon="activity" onclick="_usrDdClose();_openSessionsModal()">
           <span class="usr-dd-ico"></span>Active Sessions
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="grid" id="usrDensityBtn"
+                onclick="_usrDdClose();_toggleDensity()" title="Switch between compact and comfortable spacing">
+          <span class="usr-dd-ico"></span><span id="usrDensityLabel">Density: Compact</span>
         </button>
         <div class="usr-dd-sep"></div>
         <button class="usr-dd-item" role="menuitem" data-icon="info" onclick="_usrDdClose();openAbout()">
