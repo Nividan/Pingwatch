@@ -17,11 +17,12 @@ function _dwSwap(body, html) {
 }
 
 // ── Dashboard widget system ───────────────────────────────────────
-// Widget registry — add entries here to support new widget types
+// Widget registry — add entries here to support new widget types.
+// Icons use icon() from icons.js (loaded earlier in inline-script chain).
 const _DW_REG = {
   sensor_chart: {
     label: 'Sensor History Chart',
-    icon:  '📈',
+    icon:  icon('activity', 14),
     defaultCols: 2,
     fields: [
       { key: 'did',     label: 'Device', type: 'device-select' },
@@ -35,7 +36,7 @@ const _DW_REG = {
   },
   device_status: {
     label: 'Device Status',
-    icon:  '⊞',
+    icon:  icon('devices', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, cfg) => _dwRenderDeviceStatus(wid),
@@ -43,7 +44,7 @@ const _DW_REG = {
   },
   network_avail: {
     label: 'Network Availability History (24h)',
-    icon:  '✦',
+    icon:  icon('shield', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderNetAvail(wid),
@@ -51,7 +52,7 @@ const _DW_REG = {
   },
   sensor_gauge: {
     label: 'Sensor Gauge',
-    icon:  '◉',
+    icon:  icon('cpu', 14),
     defaultCols: 1,
     fields: [
       { key: 'did', label: 'Device', type: 'device-select' },
@@ -62,7 +63,7 @@ const _DW_REG = {
   },
   flap_events: {
     label: 'Recent Flap Events',
-    icon:  '⚡',
+    icon:  icon('events', 14),
     defaultCols: 2,
     fields: [
       { key: 'limit', label: 'Max events', type: 'select',
@@ -73,7 +74,7 @@ const _DW_REG = {
   },
   system_status: {
     label: 'System Status',
-    icon:  '⚙',
+    icon:  icon('settings', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderSystemStatus(wid),
@@ -81,7 +82,7 @@ const _DW_REG = {
   },
   server_perf: {
     label: 'Server Performance',
-    icon:  '🖥',
+    icon:  icon('cpu', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderServerPerf(wid),
@@ -89,7 +90,7 @@ const _DW_REG = {
   },
   down_devices: {
     label: 'Down & Warning Devices',
-    icon:  '⚠',
+    icon:  icon('alerts', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshDownDevices(wid),
@@ -97,7 +98,7 @@ const _DW_REG = {
   },
   top_latency: {
     label: 'Slowest Ping Devices',
-    icon:  '⏱',
+    icon:  icon('activity', 14),
     defaultCols: 1,
     fields: [
       { key: 'limit', label: 'Show top', type: 'select',
@@ -108,7 +109,7 @@ const _DW_REG = {
   },
   event_count: {
     label: 'Event Summary',
-    icon:  '📊',
+    icon:  icon('reports', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshEventCount(wid),
@@ -116,7 +117,7 @@ const _DW_REG = {
   },
   packet_loss: {
     label: 'Packet Loss',
-    icon:  '◎',
+    icon:  icon('activity', 14),
     defaultCols: 1,
     fields: [
       { key: 'limit',     label: 'Max sensors', type: 'select',
@@ -129,7 +130,7 @@ const _DW_REG = {
   },
   sla_report: {
     label: 'SLA Report',
-    icon:  '◈',
+    icon:  icon('check', 14),
     defaultCols: 1,
     fields: [
       { key: 'did',    label: 'Device', type: 'device-select' },
@@ -143,7 +144,7 @@ const _DW_REG = {
   },
   flap_detect: {
     label: 'Flapping Devices',
-    icon:  '🔁',
+    icon:  icon('refresh', 14),
     defaultCols: 1,
     fields: [
       { key: 'window',    label: 'Time window', type: 'select',
@@ -156,7 +157,7 @@ const _DW_REG = {
   },
   internet_health: {
     label: 'Internet Health',
-    icon:  '🌐',
+    icon:  icon('map', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshInternetHealth(wid),
@@ -164,7 +165,7 @@ const _DW_REG = {
   },
   ncm_status: {
     label: 'Backup Status',
-    icon:  '💾',
+    icon:  icon('backups', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwNcmStatusRefresh(wid),
@@ -172,7 +173,7 @@ const _DW_REG = {
   },
   license_overview: {
     label: 'License Overview',
-    icon:  '📋',
+    icon:  icon('reports', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
@@ -245,10 +246,10 @@ function _dwRenderTabBar() {
              oncontextmenu="_dwTabCtxMenu(event,${d.id})"
              title="${esc(d.name)}">${esc(d.name)}</button>`
   ).join('') +
-  '<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">＋</button>';
+  `<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">${icon('plus',12)}</button>`;
   bar.innerHTML =
     `<div class="dw-tab-bar-tabs">${tabs}</div>` +
-    `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">＋ Add Widget</button>`;
+    `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">${icon('plus',13)} Add Widget</button>`;
 }
 
 async function _dwSwitchTo(id) {
@@ -494,7 +495,7 @@ function _dwRenderAll() {
   grid.querySelectorAll('.dw-card').forEach(c => { if (c._interval) { clearInterval(c._interval); c._interval = null; } });
   const widgets = _dwLoad();
   if (!widgets.length) {
-    grid.innerHTML = '<div class="dw-empty">No widgets yet. Click <strong>＋ Add Widget</strong> to get started.</div>';
+    grid.innerHTML = '<div class="dw-empty">No widgets yet. Click <strong>+ Add Widget</strong> to get started.</div>';
     grid.classList.remove('grid-stack');
     return;
   }
@@ -511,13 +512,13 @@ function _dwRenderAll() {
     return `
       <div class="grid-stack-item" gs-id="${esc(w.id)}" ${posAttrs} gs-w="${gw}" gs-h="${gh}">
         <div class="grid-stack-item-content">
-          <div class="dw-card" id="dw-${w.id}" data-wid="${w.id}">
-            <div class="dw-hdr">
-              <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||'◧'}</span>
+          <div class="dw-card widget" id="dw-${w.id}" data-wid="${w.id}">
+            <div class="dw-hdr widget-head">
+              <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||icon('cpu',14)}</span>
               <span class="dw-title">${esc(w.title)}</span>
-              <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">✎</button>
-              <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">⤢</button>
-              <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">×</button>
+              <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">${icon('settings',13)}</button>
+              <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">${icon('expand',13)}</button>
+              <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">${icon('x',13)}</button>
             </div>
             <div class="dw-body" id="dw-body-${w.id}"></div>
           </div>

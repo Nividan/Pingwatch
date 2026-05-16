@@ -67,6 +67,7 @@ _VENDOR_JS_FILES = [
 ]
 _JS_FILES = _VENDOR_JS_FILES + [
     "icons.js",
+    "charts.js",
     "theme.js",
     "bg.js", "devices.js", "sensors.js",
     "forms-utils.js", "forms-device.js", "forms-sensor.js", "forms-group.js",
