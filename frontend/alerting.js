@@ -815,17 +815,89 @@ async function _alertResolve(id) {
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadMaint() {
-  const list = document.getElementById('alrt-maint-list');
-  if (!list) return;
-  list.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  // Used by BOTH the Settings \u2192 Alert Profiles tab (renders into
+  // #alrt-maint-list) and the new top-level Alerting page (renders into
+  // #al-pg-maint). Either or both containers may be present.
+  const listSettings = document.getElementById('alrt-maint-list');
+  const listPage     = document.getElementById('al-pg-maint');
+  if (!listSettings && !listPage) return;
+  if (listSettings) listSettings.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  if (listPage)     listPage.innerHTML     = '<div class="muted" style="padding:14px">Loading\u2026</div>';
   applyRbac();
   try {
     const d = await api('GET', '/api/alert/windows');
     _alertMaintWindows = d.windows || [];
-    _alertMaintRenderList(_alertMaintWindows);
+    if (listSettings) _alertMaintRenderList(_alertMaintWindows);
+    if (listPage)     _alPgRenderMaintWindows(_alertMaintWindows);
   } catch (e) {
-    list.innerHTML = `<div class="alrt-err">Error: ${esc(String(e))}</div>`;
+    const msg = `Error: ${esc(String(e))}`;
+    if (listSettings) listSettings.innerHTML = `<div class="alrt-err">${msg}</div>`;
+    if (listPage)     listPage.innerHTML     = `<div class="error" style="padding:14px">${msg}</div>`;
   }
+}
+
+// Compact maintenance-window renderer for the Alerting page's sidebar card.
+// Reuses the existing _alertMaintOpen / _alertMaintDelete handlers.
+function _alPgRenderMaintWindows(windows) {
+  const wrap = document.getElementById('al-pg-maint');
+  if (!wrap) return;
+  const cntEl = document.getElementById('al-pg-mw-count');
+  if (cntEl) cntEl.textContent = windows.length;
+  if (!windows.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      No maintenance windows. <a class="al-pg-link rbac-admin" onclick="_alertMaintOpen(null)">Create one</a>
+      to suppress notifications during scheduled work.
+    </div>`;
+    applyRbac();
+    return;
+  }
+  const now = Date.now() / 1000;
+  // Show active windows first, then upcoming, then past
+  const sorted = windows.slice().sort((a, b) => {
+    const aActive = a.start_ts <= now && a.end_ts >= now;
+    const bActive = b.start_ts <= now && b.end_ts >= now;
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return (a.start_ts || 0) - (b.start_ts || 0);
+  });
+  wrap.innerHTML = sorted.map(w => {
+    const active = w.start_ts <= now && w.end_ts >= now;
+    const safeName = esc(w.name).replace(/'/g, '&#39;');
+    const scopeLbl = w.scope_type === 'all'    ? 'All devices'
+                   : w.scope_type === 'group'  ? `Groups: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
+                   : w.scope_type === 'device' ? `Device: ${esc(_mwLookupDevName(w.scope_value))}`
+                   : esc(w.scope_value || '');
+    const when = w.recurring
+      ? `${esc(_mwShortDays(w.recur_days))} \u00b7 ${esc(w.recur_start)}\u2013${esc(w.recur_end)}`
+      : `${_alPgRelTime(w.start_ts)} \u2192 ${_alPgRelTime(w.end_ts)}`;
+    return `
+      <div class="al-pg-mw-row ${active?'active':''}" onclick="_alertMaintOpen(${w.id})" title="Edit window">
+        <div class="al-pg-mw-dot ${active?'on':''}"></div>
+        <div class="al-pg-mw-body">
+          <div class="al-pg-mw-name">
+            ${esc(w.name)}
+            ${active ? '<span class="al-pg-mw-pill">In effect</span>' : ''}
+          </div>
+          <div class="al-pg-mw-meta mono">${esc(scopeLbl)} \u00b7 ${when}</div>
+        </div>
+        <button class="iconbtn rbac-admin" onclick="event.stopPropagation();_alertMaintDelete(${w.id},'${safeName}')" title="Delete">${icon('trash',12)}</button>
+      </div>`;
+  }).join('');
+  applyRbac();
+}
+
+function _mwLookupDevName(did) {
+  const d = Object.values(S.devices || {}).find(x => String(x.device_id) === String(did));
+  return d ? d.name : did;
+}
+
+function _mwShortDays(daysStr) {
+  // "1,3,5" \u2192 "Mon, Wed, Fri"
+  const map = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return String(daysStr || '').split(',')
+    .map(s => parseInt(s.trim()))
+    .filter(n => !isNaN(n) && n >= 0 && n <= 6)
+    .map(n => map[n])
+    .join(', ');
 }
 
 function _alertMaintRenderList(windows) {
@@ -1137,13 +1209,11 @@ async function _alertingPageInit() {
           <div id="al-pg-escalation"><div class="muted" style="padding:14px">Loading…</div></div>
         </section>
         <section class="al-pg-card">
-          <div class="al-pg-card-head">Quiet Hours</div>
-          <div id="al-pg-quiet" class="al-pg-quiet">
-            <div class="muted small" style="padding:14px;line-height:1.5">
-              Suppress notifications during scheduled maintenance via
-              <a class="al-pg-link" onclick="openSettings('alert-rules')">Settings → Alert Profiles → Maintenance Windows</a>.
-            </div>
+          <div class="al-pg-card-head">
+            <span>Maintenance Windows <span class="al-pg-badge" id="al-pg-mw-count">0</span></span>
+            <button class="iconbtn rbac-admin" onclick="_alertMaintOpen(null)" title="New maintenance window">${icon('plus',12)}</button>
           </div>
+          <div id="al-pg-maint"><div class="muted" style="padding:14px">Loading…</div></div>
         </section>
       </aside>
     </div>`;
@@ -1151,6 +1221,7 @@ async function _alertingPageInit() {
   await Promise.all([
     _alPgLoadProfilesAndChannels(),
     _alPgLoadDeliveries(),
+    _alertingLoadMaint(),
   ]);
 }
 

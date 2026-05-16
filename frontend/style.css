@@ -4885,3 +4885,48 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .al-pg-sev.warn, .al-pg-state.warn{ color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .al-pg-sev.ok,   .al-pg-state.ok  { color:var(--up);   background:var(--up-bg);   border-color:color-mix(in srgb, var(--up) 40%, var(--border)); }
 .al-pg-sev.info { color:var(--accent); background:var(--accent-soft); }
+
+/* ── Maintenance Window rows in the sidebar card ───────────── */
+.al-pg-mw-row{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  cursor:pointer;
+  transition:background var(--dur) var(--ease);
+}
+.al-pg-mw-row:last-child{ border-bottom:none; }
+.al-pg-mw-row:hover{ background:var(--card-hover); }
+.al-pg-mw-row.active{
+  background:color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.al-pg-mw-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--bg4);flex-shrink:0;
+}
+.al-pg-mw-dot.on{
+  background:var(--accent);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.al-pg-mw-body{ min-width:0;flex:1; }
+.al-pg-mw-name{
+  font-size:var(--fs-md);font-weight:500;color:var(--text);
+  display:flex;align-items:center;gap:6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.al-pg-mw-pill{
+  display:inline-block;padding:1px 7px;border-radius:var(--r-pill);
+  font-size:10px;font-weight:600;color:var(--accent);
+  background:var(--accent-soft);
+  border:1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  letter-spacing:.2px;flex-shrink:0;
+}
+.al-pg-mw-meta{
+  font-size:var(--fs-xs);color:var(--text3);margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.al-pg-mw-row .iconbtn{
+  width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;border:1px solid transparent;border-radius:var(--r-sm);
+  color:var(--text3);cursor:pointer;flex-shrink:0;
+  opacity:0;transition:opacity var(--dur) var(--ease),background var(--dur) var(--ease);
+}
+.al-pg-mw-row:hover .iconbtn{ opacity:.7; }
+.al-pg-mw-row .iconbtn:hover{ opacity:1;background:var(--card-hover);color:var(--down); }
