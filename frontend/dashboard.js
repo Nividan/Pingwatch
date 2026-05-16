@@ -179,6 +179,28 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
     refresh: (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
   },
+  fleet_status: {
+    label: 'Fleet Status',
+    icon:  icon('check', 14),
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshFleetStatus(wid),
+    refresh: (wid, _cfg) => _dwRefreshFleetStatus(wid),
+  },
+  latency_heatmap: {
+    label: 'Latency Heatmap',
+    icon:  icon('activity', 14),
+    defaultCols: 2,
+    followsGlobalRange: true,
+    fields: [
+      { key: 'limit',   label: 'Devices',   type: 'select',
+        options: [{v:10,l:'10'},{v:20,l:'20'},{v:30,l:'30'}], def: 20 },
+      { key: 'minutes', label: 'Time window', type: 'select',
+        options: [{v:'auto',l:'Follow dashboard range'},{v:30,l:'30 min'},{v:60,l:'1 h'},{v:360,l:'6 h'},{v:1440,l:'24 h'}], def: 'auto' },
+    ],
+    render:  (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
+    refresh: (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
+  },
 };
 
 // ── Persistence (server-side, per user, multi-dashboard) ─────────
@@ -235,6 +257,40 @@ async function _dwInit() {
   }
 }
 
+// ── Global time range (affects opt-in widgets) ──────────────────
+// Persist as 'pw_dw_range'. Widgets that want to follow it read
+// window._dwTimeRange (string) or _dwTimeRangeMinutes() (number).
+const _DW_RANGES = ['5m', '1h', '24h', '7d'];
+function _dwTimeRangeMinutes() {
+  switch (window._dwTimeRange) {
+    case '5m':  return 5;
+    case '1h':  return 60;
+    case '24h': return 1440;
+    case '7d':  return 10080;
+    default:    return 60;
+  }
+}
+function _dwSetTimeRange(r) {
+  if (!_DW_RANGES.includes(r)) return;
+  window._dwTimeRange = r;
+  try { localStorage.setItem('pw_dw_range', r); } catch (_) {}
+  // Update segmented control's active state
+  document.querySelectorAll('#dw-range-seg button').forEach(b => {
+    b.classList.toggle('active', b.dataset.range === r);
+  });
+  // Refresh widgets that follow the global range
+  _dwLoad().forEach(w => {
+    const reg = _DW_REG[w.type];
+    if (reg && reg.followsGlobalRange) reg.refresh(w.id, w.cfg);
+  });
+}
+// Bootstrap from localStorage (or default to 24h)
+(function () {
+  let r;
+  try { r = localStorage.getItem('pw_dw_range'); } catch (_) {}
+  window._dwTimeRange = _DW_RANGES.includes(r) ? r : '24h';
+})();
+
 // ── Tab bar ──────────────────────────────────────────────────────
 function _dwRenderTabBar() {
   const bar = document.getElementById('dw-tab-bar');
@@ -247,8 +303,13 @@ function _dwRenderTabBar() {
              title="${esc(d.name)}">${esc(d.name)}</button>`
   ).join('') +
   `<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">${icon('plus',12)}</button>`;
+  const rangeBtns = _DW_RANGES.map(r =>
+    `<button data-range="${r}" class="${window._dwTimeRange === r ? 'active' : ''}"
+             onclick="_dwSetTimeRange('${r}')">${r}</button>`
+  ).join('');
   bar.innerHTML =
     `<div class="dw-tab-bar-tabs">${tabs}</div>` +
+    `<div class="seg" id="dw-range-seg" title="Default time window for widgets that follow it">${rangeBtns}</div>` +
     `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">${icon('plus',13)} Add Widget</button>`;
 }
 
@@ -882,6 +943,139 @@ function _dwRefreshDeviceStatus(wid) {
     <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`);
 }
 
+// ── Widget: Fleet Status (donut breakdown of device statuses) ────
+function _dwRefreshFleetStatus(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const devs = Object.values(S.devices);
+  const cnt = { up: 0, warn: 0, down: 0, pause: 0 };
+  devs.forEach(d => {
+    let s = d.status || 'pause';
+    if (s === 'idle' || s === 'paused') s = 'pause';
+    if (s in cnt) cnt[s]++;
+  });
+  const total = devs.length;
+  if (!total) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No devices</div>';
+    return;
+  }
+  const segs = [
+    { value: cnt.up,    color: 'var(--up)',    label: 'Up' },
+    { value: cnt.warn,  color: 'var(--warn)',  label: 'Warning' },
+    { value: cnt.down,  color: 'var(--down)',  label: 'Down' },
+    { value: cnt.pause, color: 'var(--pause)', label: 'Paused' },
+  ];
+  const legendRows = segs.map(seg => `
+    <div class="donut-legend-row">
+      <span class="sw" style="background:${seg.color}"></span>
+      <span class="lbl">${seg.label}</span>
+      <span class="ct">${seg.value}</span>
+      <span class="pct">${(seg.value / total * 100).toFixed(1)}%</span>
+    </div>`).join('');
+  _dwSwap(body, `
+    <div class="donut-wrap" style="padding:6px 4px">
+      <div class="donut">${pwDonut(segs, { size: 130, stroke: 16 })}</div>
+      <div class="donut-legend">${legendRows}</div>
+    </div>`);
+}
+
+// ── Widget: Latency Heatmap (devices × time buckets) ──────────────
+// Caches per-widget so the 10s tick doesn't fire-storm /history requests.
+const _dwHeatCache = {};   // wid → { ts, html }
+const HEAT_CACHE_TTL = 30000;
+
+async function _dwRefreshLatencyHeatmap(wid, cfg) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const limit   = Number(cfg?.limit) || 20;
+  // Follow global dashboard range when widget is set to 'auto' (default)
+  const cfgMin  = cfg?.minutes;
+  const minutes = (cfgMin == null || cfgMin === 'auto') ? _dwTimeRangeMinutes() : Number(cfgMin);
+
+  // Serve from cache if fresh
+  const cached = _dwHeatCache[wid];
+  if (cached && (Date.now() - cached.ts) < HEAT_CACHE_TTL && cached.cfgKey === `${limit}/${minutes}`) {
+    if (body.innerHTML !== cached.html) body.innerHTML = cached.html;
+    return;
+  }
+
+  // Pick up to `limit` ping sensors, one per device (worst current latency wins ties)
+  const pingByDevice = {};
+  Object.values(S.sensors).forEach(s => {
+    if (s.stype !== 'ping') return;
+    const cur = pingByDevice[s.device_id];
+    if (!cur || (Number(s.last_ms) || 0) > (Number(cur.last_ms) || 0)) pingByDevice[s.device_id] = s;
+  });
+  const sensors = Object.values(pingByDevice).slice(0, limit);
+  if (!sensors.length) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No ping sensors yet</div>';
+    return;
+  }
+
+  // Fetch each sensor's recent history in parallel
+  // Limit small (~30 buckets) — server-side downsamples if needed
+  const results = await Promise.all(sensors.map(s =>
+    fetch(`/api/device/${s.device_id}/sensor/${s.sensor_id}/history?minutes=${minutes}&limit=120`)
+      .then(r => r.ok ? r.json() : { samples: [] })
+      .catch(() => ({ samples: [] }))
+  ));
+
+  const BUCKETS = 30;
+  const lo = 0, hi = 200; // ms scale; cells above hi clamp red
+  function colorFor(v) {
+    if (v == null || isNaN(v)) return 'var(--bg3)';
+    if (v < 20)  return 'var(--up)';
+    if (v < 60)  return 'color-mix(in srgb, var(--up) 60%, var(--warn))';
+    if (v < 100) return 'var(--warn)';
+    if (v < hi)  return 'color-mix(in srgb, var(--warn) 50%, var(--down))';
+    return 'var(--down)';
+  }
+  function alphaFor(v) {
+    if (v == null || isNaN(v)) return 0.3;
+    return Math.min(1, 0.30 + Math.min(1, v / 120) * 0.70);
+  }
+  function downsample(samples) {
+    if (!samples || !samples.length) return new Array(BUCKETS).fill(null);
+    // Take last N samples and bucket-average down to BUCKETS
+    const tail = samples.slice(-BUCKETS * 4);
+    const out = new Array(BUCKETS).fill(null);
+    const step = tail.length / BUCKETS;
+    for (let i = 0; i < BUCKETS; i++) {
+      const a = Math.floor(i * step), b = Math.floor((i + 1) * step);
+      let sum = 0, n = 0;
+      for (let k = a; k < b && k < tail.length; k++) {
+        const v = Number(tail[k].val);
+        if (!isNaN(v)) { sum += v; n++; }
+      }
+      out[i] = n ? sum / n : null;
+    }
+    return out;
+  }
+
+  const rowsHtml = sensors.map((s, i) => {
+    const dev = S.devices[s.device_id];
+    if (!dev) return '';
+    const series = downsample(results[i].samples);
+    const cells = series.map(v =>
+      `<div class="heatmap-cell" title="${v == null ? '—' : v.toFixed(1) + 'ms'}"
+         style="background:${colorFor(v)};opacity:${alphaFor(v)}"></div>`
+    ).join('');
+    const shortName = (dev.name || dev.host || '').split('.')[0];
+    return `<div class="dw-heat-row">
+      <span class="dw-heat-name" title="${esc(dev.name || dev.host || '')}">${esc(shortName)}</span>
+      <div class="heatmap" style="grid-template-columns:repeat(${BUCKETS},1fr)">${cells}</div>
+    </div>`;
+  }).filter(Boolean).join('');
+
+  const html = `
+    <div class="dw-heat-wrap">
+      ${rowsHtml}
+      <div class="heatmap-legend"><span>0ms</span><div class="grad"></div><span>${hi}ms+</span></div>
+    </div>`;
+  _dwHeatCache[wid] = { ts: Date.now(), cfgKey: `${limit}/${minutes}`, html };
+  if (body.innerHTML !== html) body.innerHTML = html;
+}
+
 // ── Reset dashboard state (called on re-authentication) ──────────
 function _dwReset() {
   _dwDataArrived = false;
@@ -937,6 +1131,7 @@ function _dwOnDeviceUpdate() {
     if (w.type === 'network_avail')   _dwRefreshNetAvail(w.id);
     if (w.type === 'down_devices')    _dwRefreshDownDevices(w.id);
     if (w.type === 'internet_health') _dwRefreshInternetHealth(w.id);
+    if (w.type === 'fleet_status')    _dwRefreshFleetStatus(w.id);
   });
 }
 function _dwOnFlapEvent() {

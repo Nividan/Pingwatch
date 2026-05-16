@@ -3915,3 +3915,16 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 [data-dev-layout="dense"] .dcard-tiles{ grid-template-columns:repeat(3, 1fr); }
 [data-dev-layout="dense"] .stile-spark{ height:14px; }
 [data-dev-layout="wide"] .dev-grid-pw{ grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); }
+
+/* Latency Heatmap widget — devices × time buckets */
+.dw-heat-wrap{ display:flex;flex-direction:column;gap:3px;font-size:var(--fs-xs); }
+.dw-heat-row{
+  display:grid;grid-template-columns:110px 1fr;gap:8px;
+  align-items:center;
+}
+.dw-heat-name{
+  font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--text3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.dw-heat-wrap .heatmap{ display:grid;gap:2px; }
+.dw-heat-wrap .heatmap-cell{ height:12px;border-radius:2px; }
