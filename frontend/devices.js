@@ -789,23 +789,84 @@ function cardHTML(dev){
   const adChip = _renderAutoDiscoveryChip(dev);
   const selCls = _selectedDids.has(dev.device_id) ? ' selected' : '';
   const cbCls  = _selectedDids.has(dev.device_id) ? 'dc-sel-cb checked' : 'dc-sel-cb';
+  const tilesHtml = _devCardTiles(dev.device_id);
+  const sensorCount = (S._devSensors?.[dev.device_id]?.size) || 0;
+  // Vendor chip — show the device's group as a tag (proxy for vendor since
+  // PingWatch doesn't track a vendor field on devices)
+  const grpChip = dev.group ? `<div class="dcard-vendor">${esc(dev.group)}</div>` : '';
   return `
-  <div class="dc ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+  <div class="dc dcard ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
     <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
-    <div class="dc-bar ${st}" id="dcbar-${dev.device_id}"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
-    <div class="dc-body">
-      <div>
-        <div class="dc-name">${esc(dev.name)}${adChip}</div>
-        <div class="dc-host">${esc(dev.host)}</div>
+    <div class="dcard-head">
+      <div class="dc-bar dcard-stripe ${st}" id="dcbar-${dev.device_id}"></div>
+      <div class="dcard-name-wrap">
+        <div class="dcard-name">${esc(dev.name)}${adChip}</div>
+        <div class="dcard-meta"><span>${esc(dev.host||'')}</span></div>
       </div>
-      <div class="dc-status ${st}" id="dcst-${dev.device_id}">
-        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}
-      </div>
-      <div class="dc-sensors" id="dcsnr-${dev.device_id}">
-        ${sSnrPreview(dev.device_id)}
-      </div>
+      ${grpChip}
     </div>
+    <div class="dcard-tiles" id="dcsnr-${dev.device_id}">${tilesHtml}</div>
+    <div class="dcard-foot">
+      <span class="dc-status ${st}" id="dcst-${dev.device_id}">
+        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}
+      </span>
+      <span class="seen">${sensorCount} sensor${sensorCount===1?'':'s'}</span>
+    </div>
+  </div>`;
+}
+
+// Build the .dcard-tiles content — up to 4 sensors as .stile tiles, respecting
+// the user's saved sensor-drag order. Preserves csv-/csd- ids so the existing
+// updateCardSensor() hook keeps targeting the right elements.
+function _devCardTiles(did){
+  const keys = S._devSensors?.[did] || new Set();
+  const snrs = [...keys].map(k => S.sensors[k]).filter(Boolean);
+  if (!snrs.length) {
+    return '<div class="dcard-empty" style="padding:16px;text-align:center;color:var(--text3);font-size:11px;grid-column:1/-1">No sensors yet</div>';
+  }
+  const ord = _lsGet(`pw_snr_order_${did}`, []);
+  if (ord.length) {
+    snrs.sort((a, b) => {
+      const ai = ord.indexOf(a.sensor_id), bi = ord.indexOf(b.sensor_id);
+      return (ai < 0 ? 9999 : ai) - (bi < 0 ? 9999 : bi);
+    });
+  }
+  return snrs.slice(0, 4).map(_stileHTML).join('');
+}
+
+function _stileHTML(s){
+  const isSnmp = s.stype === 'snmp' || s.stype === 'dns';
+  const isVmware = s.stype === 'vmware';
+  let st = 'up';
+  if (s.alive === false) st = 'down';
+  else if (isVmware || isSnmp) st = s.alive === true ? 'up' : 'pause';
+  else if (s.last_ms != null) {
+    const c = typeof msC === 'function' ? msC(s.last_ms, s) : 'g';
+    st = c === 'b' ? 'down' : c === 'w' ? 'warn' : c === 'g' ? 'up' : 'pause';
+  } else { st = 'pause'; }
+  let val = '—', unit = '';
+  if (isVmware) {
+    if (s.last_value != null) {
+      const v = parseFloat(s.last_value);
+      val = isNaN(v) ? (s.last_value+'').slice(0,8)
+                     : _fmtVmVal(v, _VM_UNITS[s.vmware_metric]||'');
+    }
+  } else if (s.stype === 'snmp' && typeof _snmpTileValue === 'function') {
+    val = _snmpTileValue(s);
+  } else if (isSnmp) {
+    val = s.alive === false ? 'FAIL' : (s.last_value || '—').slice(0,8);
+  } else if (s.last_ms != null) {
+    val = String(s.last_ms) + ' ms';   // unit baked into the string so updateCardSensor stays simple
+  } else if (s.alive === false) {
+    val = 'DOWN';
+  }
+  return `<div class="stile ${st}">
+    <div class="stile-head">
+      <span class="dot ${st}" id="csd-${s.device_id}_${s.sensor_id}"></span>
+      <span>${esc(s.name)}</span>
+    </div>
+    <div class="stile-val" id="csv-${s.device_id}_${s.sensor_id}">${esc(val)}</div>
   </div>`;
 }
 
@@ -864,9 +925,11 @@ function updateCardStatus(did,st){
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
   const card=document.getElementById(`dp-${did}`);
   if(card){
-    card.className=`dc ${st}`;
+    // Preserve selected + dcard classes when swapping status
+    const wasSel = card.classList.contains('selected');
+    card.className=`dc dcard ${st}${wasSel?' selected':''}`;
     const bar=document.getElementById(`dcbar-${did}`);
-    if(bar)bar.className=`dc-bar ${st}`;
+    if(bar)bar.className=`dc-bar dcard-stripe ${st}`;
     const badge=document.getElementById(`dcst-${did}`);
     if(badge){badge.className=`dc-status ${st}`;badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}`;}
   }
@@ -894,12 +957,27 @@ function updateCardSensor(s){
     } else if(isSnmp){
       v=full.alive===false?'FAIL':(full.last_value||'—').slice(0,10);
     } else {
-      v=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'—');
+      v=full.last_ms!=null?`${full.last_ms} ms`:(full.alive===false?'DOWN':'—');
     }
-    const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
-    vEl.textContent=v; vEl.className=`dc-snr-val ${c}`;
+    vEl.textContent=v;
+    // Detect new .stile-val vs legacy .dc-snr-val and update classes appropriately
+    if (vEl.classList.contains('stile-val')) {
+      let stStr = 'up';
+      if (full.alive === false) stStr = 'down';
+      else if (isVmware || isSnmp) stStr = full.alive === true ? 'up' : 'pause';
+      else if (full.last_ms != null) {
+        const cc = typeof msC === 'function' ? msC(full.last_ms, full) : 'g';
+        stStr = cc === 'b' ? 'down' : cc === 'w' ? 'warn' : cc === 'g' ? 'up' : 'pause';
+      } else { stStr = 'pause'; }
+      const tile = vEl.closest('.stile');
+      if (tile) tile.className = `stile ${stStr}`;
+      if (dEl) dEl.className = `dot ${stStr}`;
+    } else {
+      const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
+      vEl.className=`dc-snr-val ${c}`;
+      if (dEl) dEl.className = `dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
+    }
   }
-  if(dEl) dEl.className=`dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
   // Also update list row sensor value
   const lsv=document.getElementById(`lsv-${s.device_id}_${s.sensor_id}`);
   if(lsv){

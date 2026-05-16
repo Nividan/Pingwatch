@@ -4083,6 +4083,57 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .seg.view-toggle .vt-btn:hover{ color:var(--text);background:var(--card-hover); }
 .seg.view-toggle .vt-btn.active{ color:var(--accent);background:var(--accent-soft); }
 
+/* Device cards rewritten to .dcard chrome (v1.0) — suppress legacy .dc decoration
+   on cards that opt in to the new structure. .dc class is preserved on the same
+   element for JS selectors (querySelectorAll('.dc:not(.dc-add)')) and id hooks. */
+.dc.dcard{
+  min-height:auto;
+  border-radius:var(--r-md);
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+.dc.dcard::before{ display:none; }
+.dc.dcard:hover{
+  transform:translateY(-1px);
+  border-color:var(--border2);
+  box-shadow:none;
+}
+.dc.dcard:active{ transform:none; }
+/* .dc.up/.down/.warn outer glow looks heavy with the new tighter card — soften it */
+.dc.dcard.up   { box-shadow:none; border-color:color-mix(in srgb, var(--up)   28%, var(--border)); }
+.dc.dcard.warn { box-shadow:none; border-color:color-mix(in srgb, var(--warn) 38%, var(--border)); }
+.dc.dcard.down { box-shadow:none; border-color:color-mix(in srgb, var(--down) 48%, var(--border)); }
+/* The .dc-bar element is dual-classed with .dcard-stripe — reset the horizontal
+   top-bar look so it renders as the 4px vertical stripe inside .dcard-head. */
+.dc.dcard .dc-bar{
+  height:auto;width:4px;
+  box-shadow:none;
+}
+/* Drag handle moves to top-right corner of the new card */
+.dc.dcard .dc-drag-handle{
+  position:absolute;top:6px;right:6px;
+  font-size:11px;color:var(--text4);
+  opacity:0;transition:opacity var(--dur) var(--ease);
+  z-index:4;
+}
+.dc.dcard:hover .dc-drag-handle{ opacity:.7; }
+/* Multi-select checkbox stays clickable in the new layout */
+.dc.dcard .dc-sel-cb{ z-index:5; }
+/* Footer status badge — keep existing .dc-status pill chrome */
+.dcard-foot .dc-status{
+  font-size:10px;font-weight:600;
+  padding:2px 9px;border-radius:var(--r-pill);
+  border:1px solid var(--border);
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--card-soft);
+}
+.dcard-foot .dc-status .dc-sdot{
+  width:6px;height:6px;border-radius:50%;background:var(--pause);
+}
+.dcard-foot .dc-status .dc-sdot.up{ background:var(--up);box-shadow:0 0 5px var(--up-glow); }
+.dcard-foot .dc-status.up   { color:var(--up);  background:var(--up-bg);  border-color:var(--up-border); }
+.dcard-foot .dc-status.warn { color:var(--warn);background:var(--warn-bg);border-color:var(--warn-border); }
+.dcard-foot .dc-status.down { color:var(--down);background:var(--down-bg);border-color:var(--down-border); }
+
 /* Latency Heatmap widget — devices × time buckets */
 .dw-heat-wrap{ display:flex;flex-direction:column;gap:3px;font-size:var(--fs-xs); }
 .dw-heat-row{
