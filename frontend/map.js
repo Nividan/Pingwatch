@@ -5,6 +5,11 @@ let nodes = [], links = [], groups = [], nodeMap = {}, groupMap = {};
 let pwSiteFrames = [];
 let pwOverrides = {};      // { device_id: {x, y, color?} }  — persisted via /api/settings/pw_node_overrides
 let pwGroupOverrides = {}; // { groupName: {x, y, w, h, color?} } — persisted via /api/settings/pw_group_overrides
+// Per-group device-icon defaults (v1.0+) — set from the Devices tab's Edit
+// Group modal, applied on the NTM Live map for devices without a per-device
+// icon override. Keyed by plain group name (site-agnostic so the same group
+// name across sites shares the icon). Persisted via /api/settings/pw_group_icons.
+let pwGroupIcons = {};
 let pwLinks = [];          // [ {id, src_did, tgt_did, link_type, label?} ] — persisted via /api/settings/pw_links
 const PW_INTERNET_DID = '__internet__'; // synthetic Internet cloud node (always present)
 let linkDraw = null;
@@ -60,6 +65,14 @@ window.addEventListener('message', e => {
         }
       }
     }
+  }
+  // Per-group device-icon map updated from the parent SPA's Edit Group modal.
+  // Replace our in-memory cache and re-render so icons flip live without
+  // requiring a full tab re-load.
+  if (e.data?.type === 'pw_group_icons') {
+    const map = (e.data.value && typeof e.data.value === 'object') ? e.data.value : {};
+    pwGroupIcons = map;
+    if (typeof renderPingWatchCanvas === 'function') renderPingWatchCanvas();
   }
   // Parent-driven theme sync — flips the iframe to match the main app.
   if (e.data?.type === 'theme') {
@@ -293,11 +306,12 @@ async function switchToPingWatchPage() {
 async function loadPingWatchPage() {
   const gen = ++_pageGen;
   try {
-    const [data, ovrRes, grpRes, lnkRes] = await Promise.all([
+    const [data, ovrRes, grpRes, lnkRes, iconRes] = await Promise.all([
       fetch('/api/devices').then(r => r.json()),
       api('GET', '/api/settings/pw_node_overrides').catch(() => null),
       api('GET', '/api/settings/pw_group_overrides').catch(() => null),
       api('GET', '/api/settings/pw_links').catch(() => null),
+      api('GET', '/api/settings/pw_group_icons').catch(() => null),
     ]);
     if (gen !== _pageGen) return; // superseded by a newer tab switch
     pwDevices = data.devices || [];
@@ -305,6 +319,11 @@ async function loadPingWatchPage() {
     pwOverrides = ovrRes?.value || {};
     pwGroupOverrides = grpRes?.value || {};
     pwLinks = lnkRes?.value || [];
+    // Per-group icon defaults — may have been updated from the Devices tab's
+    // Edit Group modal between page loads; live updates from that modal also
+    // mutate `pwGroupIcons` directly + trigger renderPingWatchCanvas().
+    pwGroupIcons = (iconRes?.value && typeof iconRes.value === 'object') ? iconRes.value : {};
+    window._pwGroupIconsCache = pwGroupIcons;
   } catch(e) { if (gen !== _pageGen) return; pwDevices = []; _pwDevMap = {}; }
   renderPingWatchCanvas();
   startPwSSE();
@@ -344,8 +363,14 @@ function _pwApplyLinkEl(lineEl, lk, srcDev, tgtDev) {
 }
 
 function pwDeviceType(dev) {
+  // 1. Per-group default (admin-set via Edit Group modal in the Devices tab).
+  //    Keyed by exact group name. Empty/missing falls through to the heuristic.
+  const groupName = dev.group || '';
+  if (groupName && pwGroupIcons[groupName]) return pwGroupIcons[groupName];
+
+  // 2. Heuristic from name + lowercased group label.
   const n = (dev.name  || '').toLowerCase();
-  const g = (dev.group || '').toLowerCase();
+  const g = groupName.toLowerCase();
   // Group name is most reliable signal
   if (/cloud|internet|wan|isp/.test(g)) return 'cloud';
   if (/firewall|fortigate|fortinet|asa|checkpoint|palo.?alto/.test(g)) return 'firewall';

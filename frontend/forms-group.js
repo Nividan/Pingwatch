@@ -213,6 +213,37 @@ async function saveEditGroup(oldName) {
   const newName = (document.getElementById('eg-name')?.value || '').trim();
   if (!newName) { toast('Group name cannot be empty', 'err'); return; }
 
+  // Device-icon default (NTM Live map) — write BEFORE rename so we can also
+  // migrate the entry if the group is being renamed in the same save.
+  const iconSel = document.getElementById('eg-icon');
+  let _iconWrote = false, _wantIcon = '', _hadIcon = '';
+  if (iconSel && iconSel.dataset.initial !== undefined) {
+    _wantIcon = (iconSel.value || '').trim();
+    _hadIcon  = iconSel.dataset.initial || '';
+    if (_wantIcon !== _hadIcon || newName !== oldName) {
+      try {
+        const cur = await api('GET', '/api/settings/pw_group_icons').catch(() => null);
+        const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
+        // Remove the old name's entry first (handles both rename and clear).
+        delete map[oldName];
+        if (_wantIcon) map[newName] = _wantIcon;
+        await api('PATCH', '/api/settings/pw_group_icons', { value: map });
+        // NTM Live tab runs in an iframe — postMessage triggers an in-place
+        // re-render with the new icon map instead of waiting for the next
+        // full tab load.
+        const _mf = document.getElementById('map-frame');
+        _mf?.contentWindow?.postMessage(
+          { type: 'pw_group_icons', value: map },
+          window.location.origin
+        );
+        _iconWrote = true;
+      } catch (e) {
+        toast('Icon save failed: ' + (e.message || e), 'err');
+        return;
+      }
+    }
+  }
+
   // Site change — applies to every device in the group. We do this BEFORE
   // the rename so we can key the bulk-move on the pre-rename group name
   // (group_id-less API; we filter client-side by group name then PATCH).
