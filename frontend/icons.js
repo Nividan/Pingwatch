@@ -50,6 +50,10 @@
     shield:        '<path d="M12 3 L4 6 V12 a9 9 0 0 0 8 9 a9 9 0 0 0 8-9 V6 Z"/>',
     log_out:       '<path d="M15 17 L20 12 L15 7"/><line x1="20" y1="12" x2="9" y2="12"/><path d="M9 21 H5 a2 2 0 0 1-2-2 V5 a2 2 0 0 1 2-2 h4"/>',
     info:          '<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8.01" stroke-width="2.4"/>',
+    eye:           '<path d="M2 12 s4-7 10-7 10 7 10 7 -4 7-10 7 S2 12 2 12 z"/><circle cx="12" cy="12" r="3"/>',
+    edit:          '<path d="M12 20 H21"/><path d="M16.5 3.5 a2.1 2.1 0 0 1 3 3 L7 19 L3 20 L4 16 Z"/>',
+    mail:          '<rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/>',
+    trash:         '<polyline points="3 6 21 6"/><path d="M19 6 V20 a2 2 0 0 1-2 2 H7 a2 2 0 0 1-2-2 V6"/><path d="M8 6 V4 a2 2 0 0 1 2-2 h4 a2 2 0 0 1 2 2 V6"/>',
   };
 
   /**

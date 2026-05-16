@@ -297,9 +297,10 @@ function _rptInit(){
       <div class="pagehead">
         <div class="pagehead-l">
           <h1>Reports</h1>
-          <div class="sub">Templates, schedules, and run history.</div>
+          <div class="sub" id="rptSub">Templates, schedules, and run history.</div>
         </div>
         <div class="pagehead-r">
+          <button class="btn" id="rptSchedBtn" onclick="_rptSwitch('schedules')">${icon('plus',13)} Schedule</button>
           <button class="btn primary" id="rptNewBtn" onclick="_rptNew()">${icon('plus',13)} New</button>
         </div>
       </div>
@@ -315,6 +316,23 @@ function _rptInit(){
     _rptBooted = true;
   }
   _rptSwitch(_rptTab);
+  _rptRefreshSummary();
+}
+
+async function _rptRefreshSummary(){
+  const el = document.getElementById('rptSub');
+  if(!el) return;
+  try{
+    const [t, s, h] = await Promise.all([
+      api('GET','/api/reports/templates').catch(()=>({templates:[]})),
+      api('GET','/api/reports/schedules').catch(()=>({schedules:[]})),
+      api('GET','/api/reports/history').catch(()=>({history:[]})),
+    ]);
+    const nt = (t.templates||[]).length;
+    const ns = (s.schedules||[]).length;
+    const nh = (h.history||[]).length;
+    el.textContent = `${nt} template${nt===1?'':'s'} · ${nh} recent · ${ns} scheduled`;
+  }catch(_){ /* leave the default subtitle */ }
 }
 
 function _rptSwitch(tab){
@@ -337,6 +355,75 @@ function _rptNew(){
 
 /* ── Templates ─────────────────────────────────────────────────── */
 
+/* Kind → SVG thumbnail. Each is a stylised illustration that hints at
+   what the report contains. Stroke-only so they inherit the kind color. */
+function _rptThumbForKind(kind){
+  const k = (kind||'custom').toLowerCase();
+  const stroke = ({
+    executive: 'var(--accent)',
+    technical: 'var(--up)',
+    inventory: 'var(--warn)',
+    anomaly  : '#a78bfa',
+    custom   : 'var(--text3)',
+  })[k] || 'var(--text3)';
+  if (k === 'executive') {
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+      <path d="M10 70 L40 60 L70 55 L100 40 L130 35 L160 25 L190 18" fill="none" stroke="${stroke}" stroke-width="2"/>
+      <rect x="15"  y="78" width="22" height="6"  fill="${stroke}" opacity=".35"/>
+      <rect x="42"  y="78" width="32" height="6"  fill="${stroke}" opacity=".5"/>
+      <rect x="79"  y="78" width="48" height="6"  fill="${stroke}" opacity=".65"/>
+      <rect x="132" y="78" width="58" height="6"  fill="${stroke}" opacity=".8"/>
+    </svg>`;
+  }
+  if (k === 'technical') {
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+      <polyline points="10,70 30,55 50,62 70,40 90,48 110,30 130,38 150,25 170,32 190,20" fill="none" stroke="${stroke}" stroke-width="1.8"/>
+      <polyline points="10,80 30,72 50,75 70,68 90,70 110,60 130,62 150,55 170,58 190,48" fill="none" stroke="${stroke}" stroke-width="1.3" opacity=".5"/>
+      <polyline points="10,88 30,84 50,86 70,80 90,82 110,76 130,78 150,72 170,74 190,68" fill="none" stroke="${stroke}" stroke-width="1.3" opacity=".35"/>
+    </svg>`;
+  }
+  if (k === 'inventory') {
+    const cells = [];
+    for (let y=0; y<5; y++) for (let x=0; x<10; x++){
+      const a = .25 + (((x*7 + y*3) % 7) / 10);
+      cells.push(`<rect x="${10+x*18}" y="${10+y*16}" width="14" height="12" fill="${stroke}" opacity="${a.toFixed(2)}" rx="1"/>`);
+    }
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">${cells.join('')}</svg>`;
+  }
+  if (k === 'anomaly') {
+    const dots = [];
+    for (let i=0; i<20; i++){
+      const x = 12 + i*9;
+      const y = 55 + Math.sin(i*0.9)*8 + (Math.random()*4-2);
+      const sz = (i===5 || i===14) ? 4 : 2.2;
+      const c  = (i===5) ? 'var(--down)' : (i===14 ? 'var(--warn)' : stroke);
+      dots.push(`<circle cx="${x}" cy="${y.toFixed(1)}" r="${sz}" fill="${c}"/>`);
+    }
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+      <path d="M0 55 L200 55" stroke="${stroke}" stroke-width=".8" opacity=".25" stroke-dasharray="3 4"/>
+      ${dots.join('')}
+    </svg>`;
+  }
+  // custom — drop-zone illustration
+  return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+    <rect x="20"  y="20" width="70"  height="60" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="4 4" rx="3" opacity=".6"/>
+    <rect x="110" y="20" width="70"  height="60" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="4 4" rx="3" opacity=".6"/>
+    <text x="100" y="55" text-anchor="middle" fill="${stroke}" font-size="9" font-family="ui-monospace,monospace" opacity=".7" letter-spacing=".5">+ DROP WIDGETS</text>
+  </svg>`;
+}
+
+function _rptCardDescFor(t){
+  if (t.description) return t.description;
+  const d = ({
+    executive: 'High-level KPIs, SLA, top incidents.',
+    technical: 'Per-device sensors, thresholds, raw samples.',
+    inventory: 'Hardware, firmware, license, warranty.',
+    anomaly  : 'Outlier detection across CPU, ping, traffic.',
+    custom   : 'Build your own from widget templates.',
+  })[(t.kind||'').toLowerCase()];
+  return d || '';
+}
+
 async function _rptRenderTemplates(){
   const body = document.getElementById('rptBody');
   body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
@@ -358,25 +445,37 @@ async function _rptRenderTemplates(){
         </div>`;
       return;
     }
-    const rows = tpls.map(t=>`
-      <tr>
-        <td><strong>${esc(t.name)}</strong><div class="muted small">${esc(t.description||'')}</div></td>
-        <td><span class="rpt-kind rpt-kind-${esc(t.kind)}">${esc(t.kind)}</span></td>
-        <td class="muted small">${esc(t.created_by||'')}</td>
-        <td class="muted small">${_fmtDate(t.updated_at)}</td>
-        <td style="text-align:right;white-space:nowrap">
-          <button class="rpt-btn-sm" onclick="_rptPreview('${esc(t.id)}')">👁 Preview</button>
-          <button class="rpt-btn-sm" onclick="_rptRunNow('${esc(t.id)}')">▶ Run Now</button>
-          <button class="rpt-btn-sm" onclick="_rptEditTemplate('${esc(t.id)}')">✎ Edit</button>
-          <button class="rpt-btn-sm" onclick="_rptTestSend('${esc(t.id)}')">✉ Test</button>
-          <button class="rpt-btn-sm rpt-btn-danger" onclick="_rptDeleteTemplate('${esc(t.id)}','${esc(t.name)}')">🗑</button>
-        </td>
-      </tr>`).join('');
+    const cards = tpls.map(t=>{
+      const kind = (t.kind||'custom').toLowerCase();
+      const desc = _rptCardDescFor(t);
+      return `
+      <div class="rpt-tpl-card" data-kind="${esc(kind)}">
+        <div class="rpt-tpl-thumb">${_rptThumbForKind(kind)}</div>
+        <div class="rpt-tpl-body">
+          <div class="rpt-tpl-title">${esc(t.name)}</div>
+          <div class="rpt-tpl-desc">${esc(desc)}</div>
+          <div class="rpt-tpl-actions">
+            <button class="btn sm primary" onclick="_rptRunNow('${esc(t.id)}')">${icon('play',12)} Run</button>
+            <button class="btn sm" onclick="_rptPreview('${esc(t.id)}')" title="Preview">${icon('eye',12)}</button>
+            <button class="btn sm" onclick="_rptEditTemplate('${esc(t.id)}')" title="Edit">${icon('edit',12)}</button>
+            <button class="btn sm" onclick="_rptTestSend('${esc(t.id)}')" title="Send test">${icon('mail',12)}</button>
+            <button class="btn sm danger" onclick="_rptDeleteTemplate('${esc(t.id)}','${esc(t.name)}')" title="Delete">${icon('trash',12)}</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
     body.innerHTML = `
-      <table class="rpt-table">
-        <thead><tr><th>Name</th><th>Kind</th><th>Created By</th><th>Updated</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+      <div class="rpt-section-label">Templates</div>
+      <div class="rpt-tpl-grid">
+        ${cards}
+        <div class="rpt-tpl-card rpt-tpl-add" onclick="_rptEditTemplate(null)" title="New template">
+          <div class="rpt-tpl-thumb">${_rptThumbForKind('custom')}</div>
+          <div class="rpt-tpl-body">
+            <div class="rpt-tpl-title">+ New template</div>
+            <div class="rpt-tpl-desc">Start blank or from a preset.</div>
+          </div>
+        </div>
+      </div>`;
   }catch(e){
     body.innerHTML = `<div class="error" style="padding:20px">Failed to load templates</div>`;
   }
