@@ -52,19 +52,29 @@ function _logsInit() {
   _lvPrefsLoad();
   if (!_lvBooted) {
     root.innerHTML = `
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Logs</h1>
+          <div class="sub" id="lvSub">Application, sensors, audit, and backup streams.</div>
+        </div>
+        <div class="pagehead-r">
+          <button class="btn ghost sm lv-live" id="lvLiveBtn" onclick="_lvToggleLive()" title="Toggle live tail (l)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" opacity=".4"/></svg>
+            Live
+          </button>
+          <button class="btn ghost sm" onclick="_lvFetch(true)" title="Refresh (r)">${icon('refresh',13)} Refresh</button>
+        </div>
+      </div>
       <div class="lv-toolbar">
-        <div class="lv-streams">
+        <div class="lv-streams seg">
           <button class="lv-stream" data-stream="app"     onclick="_lvSwitchStream('app')">Application</button>
           <button class="lv-stream" data-stream="sensors" onclick="_lvSwitchStream('sensors')">Sensors</button>
           <button class="lv-stream" data-stream="audit"   onclick="_lvSwitchStream('audit')">Audit</button>
           <button class="lv-stream" data-stream="backup"  onclick="_lvSwitchStream('backup')">Backup</button>
         </div>
-        <div class="lv-spacer"></div>
-        <button class="btn-s lv-live" id="lvLiveBtn" onclick="_lvToggleLive()" title="Toggle live tail (l)">⊙ Live</button>
-        <button class="btn-s" onclick="_lvFetch(true)" title="Refresh (r)">↻ Refresh</button>
       </div>
       <div class="lv-filters">
-        <select id="lvFTime" onchange="_lvOnFilter()">
+        <select id="lvFTime" class="pw-select" onchange="_lvOnFilter()">
           <option value="all">All time</option>
           <option value="5m">Last 5 min</option>
           <option value="15m">Last 15 min</option>
@@ -76,11 +86,11 @@ function _logsInit() {
           <option value="custom">Custom range…</option>
         </select>
         <div id="lvFCustom" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
-          <input type="datetime-local" id="lvFCustomFrom" onchange="_lvOnFilter()">
+          <input type="datetime-local" id="lvFCustomFrom" class="pw-input" onchange="_lvOnFilter()">
           <span style="font-size:11px;color:var(--text3)">to</span>
-          <input type="datetime-local" id="lvFCustomTo" onchange="_lvOnFilter()">
+          <input type="datetime-local" id="lvFCustomTo" class="pw-input" onchange="_lvOnFilter()">
         </div>
-        <select id="lvFLevel" onchange="_lvOnFilter()" title="Minimum level to show">
+        <select id="lvFLevel" class="pw-select" onchange="_lvOnFilter()" title="Minimum level to show">
           <option value="">All Levels</option>
           <option value="DEBUG">DEBUG+</option>
           <option value="INFO">INFO+</option>
@@ -88,13 +98,16 @@ function _logsInit() {
           <option value="ERROR">ERROR+</option>
           <option value="CRITICAL">CRITICAL only</option>
         </select>
-        <input id="lvFSearch" type="search" placeholder="Search (e.g. timeout, FortiGate)… /" oninput="_lvOnFilter()" class="lv-search">
-        <button class="lv-iconbtn" onclick="_lvClearFilters()" title="Clear filters (Esc)">✕</button>
+        <div class="search" style="flex:1;max-width:320px">
+          ${icon('search',14)}
+          <input id="lvFSearch" type="search" placeholder="Search (e.g. timeout, FortiGate)… /" oninput="_lvOnFilter()" class="lv-search pw-input" style="width:100%">
+        </div>
+        <button class="iconbtn lv-iconbtn" onclick="_lvClearFilters()" title="Clear filters (Esc)">${icon('x',13)}</button>
         <div class="lv-spacer"></div>
-        <button class="lv-iconbtn" id="lvWrapBtn" onclick="_lvToggleWrap()" title="Toggle word wrap (w)">⤶ Wrap</button>
-        <button class="lv-iconbtn" onclick="_lvCopy()" title="Copy visible log lines">⎘ Copy</button>
-        <button class="lv-iconbtn" onclick="_lvExport('csv')" title="Export as CSV">⬇ CSV</button>
-        <button class="lv-iconbtn" onclick="_lvExport('json')" title="Export as JSON">⬇ JSON</button>
+        <button class="iconbtn lv-iconbtn" id="lvWrapBtn" onclick="_lvToggleWrap()" title="Toggle word wrap (w)">⤶</button>
+        <button class="iconbtn lv-iconbtn" onclick="_lvCopy()" title="Copy visible log lines">${icon('check',13)}</button>
+        <button class="iconbtn lv-iconbtn" onclick="_lvExport('csv')" title="Export as CSV">${icon('download',13)}</button>
+        <button class="iconbtn lv-iconbtn" onclick="_lvExport('json')" title="Export as JSON">${icon('download',13)}</button>
       </div>
       <div class="lv-status" id="lvStatus">—</div>
       <div class="lv-body-wrap">

@@ -253,18 +253,35 @@
           <button class="evt-inner-tab active" id="evtInnerActive" onclick="_evtSetInnerTab('active')">Active</button>
           <button class="evt-inner-tab" id="evtInnerHistory" onclick="_evtSetInnerTab('history')">History</button>
         </div>
-        <div class="evt-view-hdr">
-          <div>
-            <div class="evt-view-title">⚡ Events</div>
-            <div class="evt-view-sub">State changes detected across all monitored sensors <span id="evtCount" style="margin-left:8px;color:var(--text3)"></span></div>
+        <div class="evt-view-hdr pagehead">
+          <div class="pagehead-l">
+            <h1>Events</h1>
+            <div class="sub evt-view-sub">State changes detected across all monitored sensors <span id="evtCount" style="margin-left:8px;color:var(--text3)"></span></div>
           </div>
-          <div class="evt-hdr-actions">
-            <button class="evt-resolve-all-btn" onclick="_evtResolveAll()" title="Resolve all active alerts and flaps">✓ Resolve All</button>
-            <button class="evt-view-btn active" id="evtBtnCard"  onclick="_setEvtViewMode('card')">☰ Cards</button>
-            <button class="evt-view-btn"        id="evtBtnTable" onclick="_setEvtViewMode('table')">⊞ Table</button>
-            <div class="evt-export-group">
-              <button class="evt-export-btn" onclick="_evtExportCsv()">⬇ CSV</button>
-              <button class="evt-export-btn" onclick="_evtExportJson()">⬇ JSON</button>
+          <div class="pagehead-r evt-hdr-actions">
+            <button class="btn ghost sm evt-resolve-all-btn" onclick="_evtResolveAll()" title="Resolve all active alerts and flaps">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"/></svg>
+              Resolve All
+            </button>
+            <div class="seg">
+              <button class="evt-view-btn active" id="evtBtnCard"  onclick="_setEvtViewMode('card')" title="Card view">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg>
+                Cards
+              </button>
+              <button class="evt-view-btn" id="evtBtnTable" onclick="_setEvtViewMode('table')" title="Table view">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>
+                Table
+              </button>
+            </div>
+            <div class="seg evt-export-group">
+              <button class="evt-export-btn" onclick="_evtExportCsv()" title="Export CSV">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 V15"/><polyline points="7 10 12 15 17 10"/><line x1="4" y1="20" x2="20" y2="20"/></svg>
+                CSV
+              </button>
+              <button class="evt-export-btn" onclick="_evtExportJson()" title="Export JSON">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 V15"/><polyline points="7 10 12 15 17 10"/><line x1="4" y1="20" x2="20" y2="20"/></svg>
+                JSON
+              </button>
             </div>
           </div>
         </div>
@@ -323,34 +340,61 @@
       <div class="iip-panel"></div>
     </div>
     <div id="devActBar" style="display:none">
-      <div class="dev-act-left">
-        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">➕ Add Device</button>
-        <button id="btnDiscover" class="btn-sm rbac-op"            onclick="openDiscoverSubnet()" title="Scan a subnet for unmonitored devices">📡 Discover Subnet</button>
-        <button id="btnImport"   class="btn-sm rbac-op"            onclick="openBulkImport()" title="Import devices from JSON, CSV, PRTG, SolarWinds, or Zabbix">📥 Import from File</button>
-        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">🗂️ Add Group</button>
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Devices</h1>
+          <div class="sub" id="devSub">Loading…</div>
+        </div>
+        <div class="pagehead-r">
+          <button id="btnAdd"      class="btn primary rbac-op" onclick="openAddDevice()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Device
+          </button>
+          <button id="btnDiscover" class="btn rbac-op"         onclick="openDiscoverSubnet()" title="Scan a subnet for unmonitored devices">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            Discover
+          </button>
+          <button id="btnImport"   class="btn rbac-op"         onclick="openBulkImport()" title="Import devices from JSON, CSV, PRTG, SolarWinds, or Zabbix">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21 V9"/><polyline points="7 14 12 9 17 14"/><line x1="4" y1="4" x2="20" y2="4"/></svg>
+            Import
+          </button>
+          <button id="btnAddGroup" class="btn ghost rbac-op"   onclick="openAddGroup()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Group
+          </button>
+        </div>
       </div>
-      <div class="view-toggle">
-        <button class="vt-btn active" id="vtGrid" onclick="_setView('grid')" title="Grid view">&#x229E;</button>
-        <button class="vt-btn" id="vtList" onclick="_setView('list')" title="List view">&#x2630;</button>
-        <span class="vt-sep"></span>
-        <button class="vt-btn" onclick="_collapseAllGroups()" title="Collapse all groups">&#x229F;</button>
-        <button class="vt-btn" onclick="_expandAllGroups()"  title="Expand all groups">&#x229E;</button>
-      </div>
-      <button id="btnSelectMode" class="btn-sm rbac-op" onclick="_toggleSelectMode()" title="Multi-select devices for bulk actions">&#x2611; Select</button>
-      <div class="dev-act-sep"></div>
-      <div class="dev-pills">
-        <button class="dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="down"  onclick="_setStatusFilter('down')">Down <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="warn"  onclick="_setStatusFilter('warn')">Warn <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="up"    onclick="_setStatusFilter('up')">Up <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="pause" onclick="_setStatusFilter('pause')">Pause <span class="pill-ct">0</span></button>
-      </div>
-      <div class="dev-search-wrap">
-        <svg class="dev-search-ico" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/>
-          <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <input id="devSearch" type="search" placeholder="Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
+      <div class="dev-toolbar">
+        <div class="dev-status-row">
+          <button class="dev-status-btn dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="down"  onclick="_setStatusFilter('down')"><span class="dot"></span>Down <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="warn"  onclick="_setStatusFilter('warn')"><span class="dot"></span>Warn <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="up"    onclick="_setStatusFilter('up')"><span class="dot"></span>Up <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="pause" onclick="_setStatusFilter('pause')"><span class="dot"></span>Pause <span class="ct pill-ct">0</span></button>
+        </div>
+        <div class="dev-toolbar-spacer"></div>
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/></svg>
+          <input id="devSearch" type="search" placeholder="Search devices or sensors…" class="dev-search-inp pw-input" oninput="_applyDevFilter(this.value)"/>
+        </div>
+        <div class="seg view-toggle" title="Layout">
+          <button class="vt-btn active" id="vtGrid" onclick="_setView('grid')" title="Grid view">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>
+          </button>
+          <button class="vt-btn" id="vtList" onclick="_setView('list')" title="List view">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg>
+          </button>
+          <button class="vt-btn" onclick="_collapseAllGroups()" title="Collapse all groups">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <button class="vt-btn" onclick="_expandAllGroups()" title="Expand all groups">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg>
+          </button>
+        </div>
+        <button id="btnSelectMode" class="btn ghost sm rbac-op" onclick="_toggleSelectMode()" title="Multi-select devices for bulk actions">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"/></svg>
+          Select
+        </button>
       </div>
     </div>
     <div id="emptyMain" style="display:none">
@@ -409,15 +453,30 @@
     </div>
     <!-- Backups view -->
     <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
-      <div id="bk-toolbar">
-        <span class="bk-title">💾 Device Configuration Backups</span>
-        <div class="bk-gsrch-wrap">
-          <input id="bk-gsrch-inp" type="text" placeholder="🔍 Search all configs…" autocomplete="off"
-                 oninput="_bkGsrchInput()" onkeydown="if(event.key==='Escape')_bkGsrchClear()"/>
-          <button class="btn-sm bk-gsrch-clear" id="bk-gsrch-clear" onclick="_bkGsrchClear()" title="Clear search" style="display:none">✕</button>
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Device Configuration Backups</h1>
+          <div class="sub">Per-device config snapshots, scheduled or on-demand.</div>
         </div>
-        <button class="btn-sm rbac-op" id="bkRunAllBtn" onclick="_bkRunAll()">▶ Run All Enabled</button>
-        <button class="btn-sm" onclick="_bkInit()">↺ Refresh</button>
+        <div class="pagehead-r">
+          <button class="btn primary rbac-op" id="bkRunAllBtn" onclick="_bkRunAll()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            Run All Enabled
+          </button>
+          <button class="btn" onclick="_bkInit()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 4 20 10 14 10"/><polyline points="4 20 4 14 10 14"/><path d="M5 14 a8 8 0 0 1 12.7-3.7 L20 14 M4 10 L6.3 13.7 A8 8 0 0 0 19 17"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+      <div id="bk-toolbar">
+        <div class="search" style="flex:1;max-width:380px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/></svg>
+          <input id="bk-gsrch-inp" type="text" placeholder="Search all configs…" autocomplete="off"
+                 class="pw-input" style="width:100%"
+                 oninput="_bkGsrchInput()" onkeydown="if(event.key==='Escape')_bkGsrchClear()"/>
+          <button class="bk-gsrch-clear" id="bk-gsrch-clear" onclick="_bkGsrchClear()" title="Clear search" style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
+        </div>
       </div>
       <div id="bk-table-wrap"></div>
     </div>

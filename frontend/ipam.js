@@ -33,18 +33,28 @@ function _ipamRenderShell() {
   const view = document.getElementById('ipamView');
   if (!view) return;
   view.innerHTML = `
+    <div class="pagehead">
+      <div class="pagehead-l">
+        <h1>IP Addresses</h1>
+        <div class="sub" id="ipam-sub">Subnets and per-host allocation tracking.</div>
+      </div>
+      <div class="pagehead-r">
+        <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()">${icon('plus',13)} Add Subnet</button>
+        <button class="btn rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">${icon('settings',13)} Edit</button>
+        <button class="btn ghost rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">${icon('refresh',13)} Refresh DNS</button>
+        <button class="btn danger rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled>${icon('x',13)} Remove</button>
+      </div>
+    </div>
     <div class="ipam-hdr">
-      <select class="ipam-sel" id="ipam-sel" onchange="_ipamOnSubnetChange(this.value)">
+      <select class="ipam-sel pw-select" id="ipam-sel" onchange="_ipamOnSubnetChange(this.value)">
         <option value="">— Select a subnet —</option>
       </select>
-      <button class="btn-sm btn-accent rbac-op" onclick="_ipamOpenAddSubnet()">＋ Add Subnet</button>
-      <button class="btn-sm rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">⚙ Edit</button>
-      <button class="btn-sm rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled style="color:var(--down)">✕ Remove</button>
-      <button class="btn-sm rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">Refresh DNS</button>
-      <div style="width:1px;height:18px;background:var(--border);margin:0 4px"></div>
-      <input class="ipam-search" id="ipam-search" type="search" placeholder="🔍  Search IP, name or DNS…"
-             oninput="_ipamOnSearch(this.value)" autocomplete="off"/>
-      <div class="ipam-pg" id="ipam-pg"></div>
+      <div class="search" style="flex:1;max-width:320px">
+        ${icon('search',14)}
+        <input class="ipam-search pw-input" id="ipam-search" type="search" placeholder="Search IP, name or DNS…"
+               oninput="_ipamOnSearch(this.value)" autocomplete="off"/>
+      </div>
+      <div class="ipam-pg" id="ipam-pg" style="margin-left:auto"></div>
     </div>
     <div id="ipam-table-wrap">
       <div style="padding:40px;text-align:center;color:var(--text3);font-size:13px">

@@ -88,10 +88,27 @@ def pg_create_main_schema(cur):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            token    TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            expires  DOUBLE PRECISION NOT NULL
+            token        TEXT PRIMARY KEY,
+            username     TEXT NOT NULL,
+            expires      DOUBLE PRECISION NOT NULL,
+            ip           TEXT             DEFAULT '',
+            user_agent   TEXT             DEFAULT '',
+            device_label TEXT             DEFAULT '',
+            created_at   DOUBLE PRECISION DEFAULT 0,
+            last_active  DOUBLE PRECISION DEFAULT 0
         )""")
+    # v1.0+ — additive columns for the Active Sessions UI; idempotent on existing installs
+    for _sess_col in (
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip           TEXT             DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent   TEXT             DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_label TEXT             DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at   DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_active  DOUBLE PRECISION DEFAULT 0",
+    ):
+        try:
+            cur.execute(_sess_col)
+        except Exception:
+            pass
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (

@@ -523,6 +523,20 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
+        # Active-sessions UI (v1.0+) — lets the user menu list and revoke
+        # other browser/device sessions besides the current one.
+        for _sess_col in [
+            "ALTER TABLE sessions ADD COLUMN ip           TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN user_agent   TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN device_label TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN created_at   REAL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN last_active  REAL DEFAULT 0",
+        ]:
+            try:
+                con.execute(_sess_col)
+                con.commit()
+            except Exception:
+                pass  # column already exists
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (

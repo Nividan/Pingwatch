@@ -1423,15 +1423,24 @@ function _setStatusFilter(st){
 
 function _updateStatusPills(){
   const counts={all:0,up:0,down:0,warn:0,pause:0};
+  const groups=new Set();
   for(const did in S.devices){
     counts.all++;
     const st=(S.devices[did].status||'unknown').toLowerCase();
     if(counts[st]!==undefined) counts[st]++;
+    const g=S.devices[did].group||'Default Group';
+    groups.add(g);
   }
   document.querySelectorAll('.dev-status-pill').forEach(p=>{
     const ct=p.querySelector('.pill-ct');
     if(ct) ct.textContent=counts[p.dataset.st]??0;
   });
+  // Page-head sub line — shows live device + group count
+  const sub=document.getElementById('devSub');
+  if(sub){
+    const g=groups.size;
+    sub.textContent=`${counts.all} device${counts.all!==1?'s':''} across ${g} group${g!==1?'s':''}`;
+  }
 }
 
 // ── Device search / filter ────────────────────────────────────────

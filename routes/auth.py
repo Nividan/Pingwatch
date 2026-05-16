@@ -16,6 +16,8 @@ import time
 
 from core.auth   import (auth_check, auth_check_role, auth_login, auth_logout,
                          auth_revoke_user_sessions, auth_verify_current,
+                         auth_list_user_sessions, auth_revoke_session_by_id,
+                         auth_revoke_other_user_sessions,
                          radius_login_phase1, radius_login_phase2)
 from core.config import (_RE_USER, _RE_USER_PW, _RE_ME_PW,
                          _RE_ME_PROFILE, _RE_USER_PROFILE, _RE_READY)
@@ -31,6 +33,7 @@ import core.settings as _settings
 
 _RE_EMAIL         = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 _RE_TRUSTED_DEV   = re.compile(r'^/api/me/trusted-devices/(\d+)$')
+_RE_SESSION       = re.compile(r'^/api/me/sessions/([0-9a-f]+)$')
 _TRUSTED_COOKIE   = "pw_trusted"
 
 
@@ -489,7 +492,11 @@ def handle(h, method, path, body):
             return True
 
         # 2. Existing local/LDAP path
-        token = auth_login(username, password)
+        from core.auth import parse_user_agent_label as _parse_ua_local
+        _ua_raw_local = h.headers.get("User-Agent", "")
+        token = auth_login(username, password, ip=ip,
+                           user_agent=_ua_raw_local,
+                           device_label=_parse_ua_local(_ua_raw_local))
         if not token:
             # 3. RADIUS fallback for unknown users with auto-provisioning enabled.
             # Fires only when the user has no DB row at all — existing local/LDAP users
@@ -631,7 +638,10 @@ def handle(h, method, path, body):
         totp_consume_challenge(cid)
         with _FAIL_LOCK:
             _FAIL_LOG.pop(ip, None)
-        token = _create_session(username, role)
+        from core.auth import parse_user_agent_label as _parse_ua
+        _ua_raw = h.headers.get("User-Agent", "")
+        token = _create_session(username, role, ip=ip, user_agent=_ua_raw,
+                                device_label=_parse_ua(_ua_raw))
         db_log_audit(username, ip, 'login_ok', username)
         _sec = "; Secure" if tls_active else ""
         _session_cookie = (f"session={token}; HttpOnly; Path=/; "
@@ -873,6 +883,50 @@ def handle(h, method, path, body):
             ])
         else:
             h._json(200, {"ok": True})
+        return True
+
+    # ── /api/me/sessions GET — list active sessions for current user ──
+    if path == "/api/me/sessions" and method == "GET":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        from core.auth import _hash_token
+        current_id = _hash_token(h._get_token() or "")
+        sessions = auth_list_user_sessions(me)
+        for s in sessions:
+            s["current"] = (s["id"] == current_id)
+        h._json(200, {"sessions": sessions})
+        return True
+
+    # ── /api/me/sessions DELETE — revoke all OTHER sessions ───────
+    if path == "/api/me/sessions" and method == "DELETE":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        n = auth_revoke_other_user_sessions(me, h._get_token())
+        db_log_audit(me, h.client_address[0], 'sessions_revoke_others', me,
+                     f"count={n}")
+        h._json(200, {"ok": True, "revoked": n})
+        return True
+
+    # ── /api/me/sessions/{id} DELETE — revoke one session ─────────
+    _sess_match = _RE_SESSION.match(path)
+    if _sess_match and method == "DELETE":
+        me = auth_check(h._get_token())
+        if not me:
+            h._json(401, {"error": "unauthorized"}); return True
+        from core.auth import _hash_token
+        sid = _sess_match.group(1)
+        current_id = _hash_token(h._get_token() or "")
+        # Use POST /api/logout to end the current session — keeps cookie cleanup paths consistent
+        if sid == current_id:
+            h._json(400, {"error": "Use /api/logout to end the current session"}); return True
+        ok = auth_revoke_session_by_id(me, sid)
+        if not ok:
+            # Don't leak whether the row existed under another user — return 404
+            h._json(404, {"error": "Session not found"}); return True
+        db_log_audit(me, h.client_address[0], 'session_revoked', me, f"id={sid[:12]}")
+        h._json(200, {"ok": True})
         return True
 
     # ── /api/logout POST ──────────────────────────────────────────

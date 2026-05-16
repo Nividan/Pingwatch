@@ -294,15 +294,21 @@ function _rptInit(){
   if(!root) return;
   if(!_rptBooted){
     root.innerHTML = `
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Reports</h1>
+          <div class="sub">Templates, schedules, and run history.</div>
+        </div>
+        <div class="pagehead-r">
+          <button class="btn primary" id="rptNewBtn" onclick="_rptNew()">${icon('plus',13)} New</button>
+        </div>
+      </div>
       <div class="rpt-toolbar">
-        <span class="rpt-title">📊 Reports</span>
-        <div class="rpt-tabs">
+        <div class="rpt-tabs seg">
           <button class="rpt-subtab" id="rptTabTemplates" onclick="_rptSwitch('templates')">Templates</button>
           <button class="rpt-subtab" id="rptTabSchedules" onclick="_rptSwitch('schedules')">Schedules</button>
           <button class="rpt-subtab" id="rptTabHistory"   onclick="_rptSwitch('history')">History</button>
         </div>
-        <div style="flex:1"></div>
-        <button class="rpt-btn rpt-btn-primary" id="rptNewBtn" onclick="_rptNew()">+ New</button>
       </div>
       <div id="rptBody" class="rpt-body"></div>
     `;

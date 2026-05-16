@@ -106,7 +106,13 @@ curl -X DELETE -b cookies.txt http://localhost:7070/api/me/sessions
 - [ ] **Phase 1 — Design tokens & theme** — `:root` block in `style.css` replaced with refined token set; `[data-density]` overrides added; FOUC bootstrap extended.
 - [ ] **Phase 2 — Shell** — topbar redesigned, icon rail replaces tab bar, `icons.js` added.
 - [ ] **Phase 3 — Per-view migrations** — Dashboard, Devices, Events, Map (Live tab), IPAM, Alerting, Reports, Backups, Logs.
-- [ ] **Phase 4a — Sessions endpoint** — `GET/DELETE /api/me/sessions` added per spec above.
+- [x] **Phase 4a — Sessions endpoint** — `GET/DELETE /api/me/sessions` added per spec above. Implementation:
+  - Schema: 5 new columns added to `sessions` table (`ip`, `user_agent`, `device_label`, `created_at`, `last_active`) — idempotent migrations in [db/core.py](db/core.py) (SQLite) + [db/pg_schema.py](db/pg_schema.py) (PG).
+  - Login capture: `_create_session()` and `auth_login()` in [core/auth.py](core/auth.py) accept optional `ip` / `user_agent` / `device_label` kwargs. The main `/api/login` and `/api/login/totp` paths in [routes/auth.py](routes/auth.py) thread these through. SSO/LDAP/RADIUS auto-provision paths leave them blank for now (UI shows "Unknown device") — these can be enhanced incrementally.
+  - Helpers: `auth_list_user_sessions()`, `auth_revoke_session_by_id()`, `auth_revoke_other_user_sessions()` added to [core/auth.py](core/auth.py).
+  - Endpoints in [routes/auth.py](routes/auth.py): `GET /api/me/sessions`, `DELETE /api/me/sessions/{token_hash}`, `DELETE /api/me/sessions`. `id` is the SHA-256 token-hash (matches the row's primary key).
+  - **Single-session caveat**: the existing `_create_session()` does `DELETE FROM sessions WHERE username=?` before inserting, so each user can only have ONE active session at a time. The new endpoints work correctly — they'll just usually return 1 row. Removing the single-session enforcement is a separate decision (security trade-off) and out of scope for v1.0.
+  - Verification: see "curl smoke test" examples in the v1.0 spec block above.
 - [ ] **Phase 4b — Settings & User menu** — grouped Settings modal, new User menu with Sessions sub-modal.
 - [ ] **Phase 5 — Tweaks, polish, verification** — density tweaks, layout variants, RBAC sanity, golden-path smoke test.
 

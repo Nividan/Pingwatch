@@ -113,22 +113,38 @@ def _strip_domain(username: str) -> str:
     return username
 
 
-def _create_session(clean: str, role: str):
-    """Create session token, store in memory + DB. Returns token."""
+def _create_session(clean: str, role: str, ip: str = '', user_agent: str = '', device_label: str = ''):
+    """Create session token, store in memory + DB. Returns token.
+
+    `ip`, `user_agent`, `device_label` are optional metadata captured at login
+    for the Active Sessions UI. Callers from SSO/LDAP/RADIUS paths that don't
+    have ready access to the request can omit them — empty strings store
+    cleanly and the UI surfaces them as 'Unknown'.
+    """
     from db.backend import is_pg
     token   = secrets.token_hex(32)
-    expires = time.time() + _settings.get("session_ttl", 86400)
+    now     = time.time()
+    expires = now + _settings.get("session_ttl", 86400)
     with _SESSIONS_LOCK:
         _SESSIONS[token] = {"username": clean, "expires": expires, "role": role}
+
+    # Truncate UA to keep table rows reasonable
+    _ua  = (user_agent or '')[:512]
+    _lbl = (device_label or '')[:128]
+    _ip  = (ip or '')[:64]
 
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("main") as cur:
                 cur.execute("DELETE FROM sessions WHERE username=%s", (clean,))
-                cur.execute("INSERT INTO sessions VALUES (%s,%s,%s)",
-                            (_hash_token(token), clean, expires))
-                cur.execute("DELETE FROM sessions WHERE expires<%s", (time.time(),))
+                cur.execute(
+                    "INSERT INTO sessions "
+                    "(token, username, expires, ip, user_agent, device_label, created_at, last_active) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (_hash_token(token), clean, expires, _ip, _ua, _lbl, now, now)
+                )
+                cur.execute("DELETE FROM sessions WHERE expires<%s", (now,))
         except Exception as e:
             log.error(f"Session save error: {e}")
     else:
@@ -136,8 +152,13 @@ def _create_session(clean: str, role: str):
             con = sqlite3.connect(DB_PATH, timeout=15)
             try:
                 con.execute("DELETE FROM sessions WHERE username=?", (clean,))
-                con.execute("INSERT INTO sessions VALUES (?,?,?)", (_hash_token(token), clean, expires))
-                con.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
+                con.execute(
+                    "INSERT INTO sessions "
+                    "(token, username, expires, ip, user_agent, device_label, created_at, last_active) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (_hash_token(token), clean, expires, _ip, _ua, _lbl, now, now)
+                )
+                con.execute("DELETE FROM sessions WHERE expires<?", (now,))
                 con.commit()
             finally:
                 con.close()
@@ -228,8 +249,12 @@ def _ldap_login_sync(clean: str, ldap_result: dict, current_role: str,
     return new_role
 
 
-def auth_login(username: str, password: str):
-    """Return a session token on success, None on failure."""
+def auth_login(username: str, password: str, ip: str = '', user_agent: str = '', device_label: str = ''):
+    """Return a session token on success, None on failure.
+
+    `ip` / `user_agent` / `device_label` are optional and get plumbed through
+    to _create_session for the Active Sessions UI.
+    """
     from db.backend import is_pg
     clean = _strip_domain(username)
 
@@ -291,7 +316,7 @@ def auth_login(username: str, password: str):
                 return None
             _maybe_rehash(clean, password, pw_hash)
 
-        return _create_session(clean, _role)
+        return _create_session(clean, _role, ip=ip, user_agent=user_agent, device_label=device_label)
 
     # ── User NOT found → try LDAP auto-provision ──────────────────
     try:
@@ -368,7 +393,7 @@ def auth_login(username: str, password: str):
     except Exception:
         pass
 
-    return _create_session(clean, role)
+    return _create_session(clean, role, ip=ip, user_agent=user_agent, device_label=device_label)
 
 
 # ── RADIUS login flow ───────────────────────────────────────────────
@@ -646,6 +671,151 @@ def auth_logout(token: str):
                 con.close()
         except Exception:
             pass
+
+
+def auth_list_user_sessions(username: str) -> list:
+    """Return all active session rows for a user, sorted by most-recent activity.
+
+    Each row: {id, ip, user_agent, device_label, created_at, last_active, expires}.
+    `id` is the SHA-256 token-hash (the same value stored as the row's primary key)
+    so the frontend can pass it back to DELETE /api/me/sessions/{id} for revoke.
+    """
+    from db.backend import is_pg
+    now = time.time()
+    rows = []
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "SELECT token, ip, user_agent, device_label, created_at, last_active, expires "
+                    "FROM sessions WHERE username=%s AND expires>%s "
+                    "ORDER BY COALESCE(last_active, created_at, 0) DESC",
+                    (username, now)
+                )
+                for r in cur.fetchall():
+                    rows.append({
+                        "id":           r["token"],
+                        "ip":           r["ip"] or "",
+                        "user_agent":   r["user_agent"] or "",
+                        "device_label": r["device_label"] or "",
+                        "created_at":   r["created_at"] or 0,
+                        "last_active":  r["last_active"] or 0,
+                        "expires":      r["expires"],
+                    })
+        except Exception as e:
+            log.error(f"Session list error: {e}")
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            try:
+                cur = con.execute(
+                    "SELECT token, ip, user_agent, device_label, created_at, last_active, expires "
+                    "FROM sessions WHERE username=? AND expires>? "
+                    "ORDER BY COALESCE(last_active, created_at, 0) DESC",
+                    (username, now)
+                )
+                for r in cur.fetchall():
+                    rows.append({
+                        "id":           r[0],
+                        "ip":           r[1] or "",
+                        "user_agent":   r[2] or "",
+                        "device_label": r[3] or "",
+                        "created_at":   r[4] or 0,
+                        "last_active":  r[5] or 0,
+                        "expires":      r[6],
+                    })
+            finally:
+                con.close()
+        except Exception as e:
+            log.error(f"Session list error: {e}")
+    return rows
+
+
+def auth_revoke_session_by_id(username: str, session_id: str) -> bool:
+    """Revoke one session by its token-hash. Returns True if a row was deleted.
+
+    Username is enforced server-side: a user can never revoke another user's
+    session via this path (returns False if the row exists but doesn't match).
+    """
+    from db.backend import is_pg
+    deleted = False
+    # Drop from in-memory cache
+    with _SESSIONS_LOCK:
+        for tok, sess in list(_SESSIONS.items()):
+            if _hash_token(tok) == session_id and sess.get("username") == username:
+                del _SESSIONS[tok]
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "DELETE FROM sessions WHERE token=%s AND username=%s",
+                    (session_id, username)
+                )
+                deleted = (cur.rowcount or 0) > 0
+        except Exception as e:
+            log.error(f"Session revoke error: {e}")
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            try:
+                cur = con.execute(
+                    "DELETE FROM sessions WHERE token=? AND username=?",
+                    (session_id, username)
+                )
+                deleted = (cur.rowcount or 0) > 0
+                con.commit()
+            finally:
+                con.close()
+        except Exception as e:
+            log.error(f"Session revoke error: {e}")
+    return deleted
+
+
+def auth_revoke_other_user_sessions(username: str, current_token: str) -> int:
+    """Revoke all sessions for `username` EXCEPT the one identified by current_token.
+
+    Returns the number of rows deleted. Used by 'Sign out all other sessions'.
+    """
+    from db.backend import is_pg
+    keep_hash = _hash_token(current_token) if current_token else ""
+    n = 0
+    # Drop from in-memory cache
+    with _SESSIONS_LOCK:
+        for tok in list(_SESSIONS.keys()):
+            sess = _SESSIONS.get(tok)
+            if not sess or sess.get("username") != username:
+                continue
+            if _hash_token(tok) == keep_hash:
+                continue
+            del _SESSIONS[tok]
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "DELETE FROM sessions WHERE username=%s AND token<>%s",
+                    (username, keep_hash)
+                )
+                n = cur.rowcount or 0
+        except Exception as e:
+            log.error(f"Session revoke-others error: {e}")
+    else:
+        try:
+            con = sqlite3.connect(DB_PATH, timeout=15)
+            try:
+                cur = con.execute(
+                    "DELETE FROM sessions WHERE username=? AND token<>?",
+                    (username, keep_hash)
+                )
+                n = cur.rowcount or 0
+                con.commit()
+            finally:
+                con.close()
+        except Exception as e:
+            log.error(f"Session revoke-others error: {e}")
+    return n
 
 
 def auth_revoke_user_sessions(username: str):

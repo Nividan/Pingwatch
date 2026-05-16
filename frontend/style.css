@@ -3916,6 +3916,37 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 [data-dev-layout="dense"] .stile-spark{ height:14px; }
 [data-dev-layout="wide"] .dev-grid-pw{ grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); }
 
+/* Devices view — pagehead + toolbar + sub line */
+#devActBar > .pagehead{ padding-bottom:var(--sp-2); }
+#devActBar > .dev-toolbar{
+  display:flex;align-items:center;gap:var(--sp-2);
+  padding:0 var(--sp-6) var(--sp-3);
+  flex-wrap:wrap;
+}
+.dev-toolbar-spacer{ flex:1 1 8px; min-width:8px; }
+.dev-status-row{ display:flex;align-items:center;gap:6px;flex-wrap:wrap; }
+/* When dual-classed with .dev-status-pill, the existing pill rules handle */
+/* color/active state — keep .dev-status-btn purely as a layout class. */
+.search{
+  position:relative;display:inline-flex;align-items:center;
+}
+.search > svg{
+  position:absolute;left:8px;top:50%;transform:translateY(-50%);
+  color:var(--text3);pointer-events:none;
+}
+.search > .pw-input, .search > input.dev-search-inp{ padding-left:28px; }
+/* View-toggle dual-classed with .seg button — give vt-btn the seg button look */
+.seg.view-toggle .vt-btn{
+  padding:0 8px;color:var(--text2);background:transparent;
+  border:none;border-right:1px solid var(--border);
+  display:inline-flex;align-items:center;justify-content:center;
+  height:28px;cursor:pointer;font-family:inherit;
+  transition:all var(--dur) var(--ease);
+}
+.seg.view-toggle .vt-btn:last-child{ border-right:none; }
+.seg.view-toggle .vt-btn:hover{ color:var(--text);background:var(--card-hover); }
+.seg.view-toggle .vt-btn.active{ color:var(--accent);background:var(--accent-soft); }
+
 /* Latency Heatmap widget — devices × time buckets */
 .dw-heat-wrap{ display:flex;flex-direction:column;gap:3px;font-size:var(--fs-xs); }
 .dw-heat-row{
