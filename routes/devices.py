@@ -139,10 +139,19 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid action"}); return True
 
         target_group = None
+        target_site  = None
         if action == "move":
             target_group = (body.get("group") or "").strip()
-            if not target_group or len(target_group) > 80:
-                h._json(400, {"error": "group required (1-80 chars)"}); return True
+            # Site can be moved independently of group, or together with it.
+            # Empty string is a valid value meaning "Unsited" (clears the field).
+            if "site" in body:
+                target_site = str(body.get("site") or "").strip()
+                if len(target_site) > 80:
+                    h._json(400, {"error": "site too long (max 80 chars)"}); return True
+            if not target_group and target_site is None:
+                h._json(400, {"error": "group or site required for move"}); return True
+            if target_group and len(target_group) > 80:
+                h._json(400, {"error": "group too long (max 80 chars)"}); return True
 
         results = []
         applied = 0
@@ -166,12 +175,20 @@ def handle(h, method, path, body):
                 for did in valid_dids:
                     dev = STATE.devices.get(did)
                     if dev:
-                        dev.group = target_group
+                        if target_group:
+                            dev.group = target_group
+                        if target_site is not None:
+                            dev.site = target_site
                         applied += 1
                         results.append({"did": did, "ok": True})
             _db_enqueue(lambda: db_save(STATE))
             # Broadcast once so open tabs refresh grouping without reloading.
-            STATE._broadcast("devices_bulk_updated", {"action": "move", "group": target_group, "dids": valid_dids})
+            STATE._broadcast("devices_bulk_updated", {
+                "action": "move",
+                "group":  target_group,
+                "site":   target_site,
+                "dids":   valid_dids,
+            })
 
         elif action == "start":
             for did in valid_dids:
@@ -444,6 +461,11 @@ def handle(h, method, path, body):
             _old_host = dev.host
             _old_name = dev.name
             if "group" in body: dev.group = body["group"]
+            if "site" in body:
+                _site = str(body.get("site") or "").strip()
+                if len(_site) > 80:
+                    h._json(400, {"error": "site too long (max 80 chars)"}); return True
+                dev.site = _site
             if "name" in body:
                 _n = str(body["name"]).strip()
                 if len(_n) > 255:

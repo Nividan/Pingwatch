@@ -8,6 +8,17 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### Site hierarchy — Phase A: data model + sites API
+
+Introduces a **Site** level above Group on devices (`Site → Group → Device` hierarchy). Phase A is data-layer only — no UI change yet. Subsequent phases ship the UI nesting (B), additive alert cascade (C), NTM Live tab nesting (D), and auto-discovery propagation (E).
+
+- **New column `devices.site TEXT DEFAULT ''`** — idempotent `ALTER TABLE` on both backends ([db/core.py](db/core.py) try/except, [db/pg_schema.py](db/pg_schema.py) `ADD COLUMN IF NOT EXISTS`). Mirrors the existing `ipam_subnets.site` pattern. Empty = "Unsited"; no separate sites table.
+- **`Device.site` field** ([core/state.py](core/state.py)) added to `__init__` (kwarg, defaults to `""`). Surfaced in `Device.to_dict()` so `/api/devices` returns it.
+- **Persistence plumbed end-to-end** ([db/persistence.py](db/persistence.py)) — `site` added to PG INSERT column list + ON CONFLICT UPDATE clause, SQLite INSERT OR REPLACE (placeholder count bumped 22 → 23), and both load paths (`_pg_load` + SQLite `db_load`). `site` is appended to the end of the SELECT column list so existing positional reads aren't disrupted by the new column.
+- **`PATCH /api/device/{did}` accepts `site`** ([routes/devices.py:463](routes/devices.py#L463)) — whitelisted alongside `group`, with length validation (max 80 chars).
+- **`POST /api/devices/bulk` accepts `site`** for the `move` action — `group` and `site` are independently optional; at least one required. Allows bulk move-to-site without changing group, and vice versa.
+- **New endpoint `GET /api/sites`** ([routes/ipam.py](routes/ipam.py)) — returns `{"sites": [...]}` as a case-insensitively sorted UNION of distinct non-empty values from `ipam_subnets.site` and `devices.site`. Used by upcoming Phase B autocomplete on the device editor, plus Phase C alert profile + maintenance window editors. Viewer-level (read-only).
+
 ### Design tokens & theme — [frontend/style.css](frontend/style.css)
 - New `:root` palette: deeper black `--bg` (#0a0d12 vs #0d1117), brighter accent `--accent` (#4d9eff vs #2f81f7), refined status colors (`--up` #2ee5a3, `--down` #ff5c5c). Glow variants (`--up-glow`, `--warn-glow`, `--down-glow`, `--accent-glow`) added for new components
 - Additive tokens: `--card`/`--card-soft`/`--card-strong`/`--card-hover`, `--inset`/`--inset-soft`, `--overlay`, `--text4`, `--border3`, `--accent-soft`, radii `--r-xs..xl/pill`, type scale `--fs-xs..3xl`, spacing `--sp-1..7`, motion `--ease/--dur/--dur-fast`, shadows `--shadow-sm/md/lg`, layout heights `--topbar-h/--rail-w/--tabbar-h`

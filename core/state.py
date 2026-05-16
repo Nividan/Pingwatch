@@ -579,11 +579,15 @@ class Sensor:
 
 
 class Device:
-    def __init__(self, device_id, name, host, group="Default Group"):
+    def __init__(self, device_id, name, host, group="Default Group", site=""):
         self.device_id   = device_id
         self.name        = name
         self.host        = host
         self.group       = group
+        # Site tag (v1.0+) — parent of Group in the Site → Group → Device
+        # hierarchy. Free-text; sourced via /api/sites from UNION(ipam_subnets,
+        # devices). Empty = "Unsited" bucket on the Devices tab.
+        self.site        = site
         self.webhook_url  = ""
         self.alerts_muted = False
         self.secondary_ips = []
@@ -650,6 +654,7 @@ class Device:
             "host":         self.host,
             "secondary_ips": self.secondary_ips or [],
             "group":        self.group,
+            "site":         getattr(self, "site", ""),
             "webhook_url":  self.webhook_url,
             "alerts_muted": self.alerts_muted,
             "status":       self.status,
@@ -837,10 +842,10 @@ class MonitorState:
         self._did_ctr += 1
         return f"d{self._did_ctr}"
 
-    def add_device(self, name, host, group="Default Group"):
+    def add_device(self, name, host, group="Default Group", site=""):
         with self._lock:
             did = self._next_did()
-            self.devices[did] = Device(did, name, host, group)
+            self.devices[did] = Device(did, name, host, group, site=site)
         return did
 
     def remove_device(self, did):

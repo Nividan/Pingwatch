@@ -86,6 +86,31 @@ def _dns_refresh_worker(subnet_id, ip_list):
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+    # ── GET /api/sites ───────────────────────────────────────────
+    # Returns sorted UNION of distinct, non-empty site names from both
+    # ipam_subnets and devices. Used by autocomplete (device editor, alert
+    # profile editor, maintenance window editor). Lives in ipam.py because
+    # IPAM was the original home of the `site` concept; devices joined later.
+    if path == '/api/sites' and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        from db.helpers import db_query
+        sites = set()
+        try:
+            for r in db_query('main', "SELECT DISTINCT site FROM ipam_subnets WHERE site <> ''"):
+                v = (r['site'] or '').strip()
+                if v: sites.add(v)
+        except Exception as e:
+            log.warning(f"/api/sites ipam_subnets query failed: {e}")
+        try:
+            for r in db_query('main', "SELECT DISTINCT site FROM devices WHERE site <> ''"):
+                v = (r['site'] or '').strip()
+                if v: sites.add(v)
+        except Exception as e:
+            log.warning(f"/api/sites devices query failed: {e}")
+        h._json(200, {'sites': sorted(sites, key=str.lower)})
+        return True
+
     # ── GET /api/ipam/subnets ─────────────────────────────────────
     if _RE_IPAM_SUBNETS.match(path) and method == 'GET':
         user, _ = h._require('viewer')

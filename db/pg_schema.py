@@ -116,6 +116,7 @@ def pg_create_main_schema(cur):
             name                     TEXT,
             host                     TEXT,
             grp                      TEXT,
+            site                     TEXT DEFAULT '',
             did_ctr                  INTEGER DEFAULT 0,
             webhook_url              TEXT DEFAULT '',
             alerts_muted             INTEGER DEFAULT 0,
@@ -139,6 +140,8 @@ def pg_create_main_schema(cur):
             END IF;
         END $$
     """)
+    # Site grouping (v1.0+) — Site → Group → Device hierarchy.
+    cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
     # Partial unique index — NULL external_ids don't collide.
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_external_id

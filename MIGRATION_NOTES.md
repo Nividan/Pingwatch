@@ -253,6 +253,79 @@ Manual UI check: open IPAM tab, sidebar shows collapsible groups; click a header
 - Legacy subnet rows have `site = ''` until a user edits them, in which case they land under "Ungrouped" — never lost.
 - API callers that don't send `site` in POST/PATCH still work — the field stays empty.
 
+## Backend changes — Phase 4e spec (Site hierarchy on devices — Phase A only)
+
+### Need
+
+PingWatch devices today live in a single flat `group` field (`devices.grp`, free-text). For enterprise-scale deployments we want a parent **Site** axis (Site → Group → Device) so:
+- The Devices tab can nest groups under sites for clearer visual organization.
+- Alert profiles can fire at the Site level (e.g. NOC for HQ-Site) additively with Group-level profiles (e.g. server team for Servers) — see Phase C.
+- Auto-discovery can auto-tag new devices with the subnet's site — see Phase E.
+
+This entry covers **Phase A only** (data model + autocomplete endpoint, zero user-visible change). Phases B/C/D/E ship in follow-up commits and will get their own entries.
+
+### Schema additions
+
+One new column on `devices`, idempotent migration in both DB paths:
+
+```sql
+ALTER TABLE devices ADD COLUMN site TEXT DEFAULT ''
+```
+
+- SQLite: try/except ALTER in [db/core.py](db/core.py) right after the existing `ipam_subnets.site` migration.
+- PG: `ADD COLUMN IF NOT EXISTS` in [db/pg_schema.py](db/pg_schema.py) plus column in fresh-install `CREATE TABLE`.
+- Empty-string default = "Unsited" — Phase B UI renders these under an "Unsited" bucket (last in sort order).
+
+### State + persistence ([core/state.py](core/state.py), [db/persistence.py](db/persistence.py))
+
+- `Device.__init__(..., site="")` — new kwarg, defaults to empty string.
+- `Device.to_dict()` exposes `"site"` so `/api/devices` returns it.
+- `dev_rows` tuple (used by both PG `execute_values` and SQLite `executemany`) gains `site` between `grp` and `_sid_ctr`.
+- PG INSERT column list adds `,site`; ON CONFLICT clause adds `site=EXCLUDED.site`.
+- SQLite INSERT OR REPLACE column list adds `,site`; placeholder count 22 → 23.
+- Both load paths (`_pg_load`, SQLite `db_load`) append `COALESCE(site,'') AS site` at the END of the SELECT — positional reads of earlier columns unchanged. New column accessed via `row[22]` or via the tuple unpack with `site` as the last element.
+
+### API ([routes/devices.py](routes/devices.py), [routes/ipam.py](routes/ipam.py))
+
+- `PATCH /api/device/{did}` whitelists `site` alongside `group` (max 80 chars).
+- `POST /api/devices/bulk` action=`move` accepts `site` independently of `group` — at least one required. Empty string is a valid `site` value meaning "Unsited" (clears the field).
+- **New endpoint** `GET /api/sites` (viewer-level): returns `{"sites": ["DR-Site-2","HQ", ...]}`, case-insensitively sorted UNION of distinct non-empty values from `ipam_subnets.site` and `devices.site`. Lives in [routes/ipam.py](routes/ipam.py) since IPAM was the original home of the `site` concept.
+
+### Verification
+
+```bash
+# /api/sites returns IPAM sites (devices still empty)
+curl -s http://localhost:7070/api/sites -b cookies.txt
+# {"sites":["DR-Site-2","HQ"]}
+
+# PATCH a device with a site, GET it back
+curl -X PATCH http://localhost:7070/api/devices/d3 -b cookies.txt \
+     -H "Content-Type: application/json" -d '{"site":"HQ"}'
+curl -s http://localhost:7070/api/devices/d3 -b cookies.txt | grep site
+# "site": "HQ"
+
+# /api/sites now reflects the device assignment too
+curl -s http://localhost:7070/api/sites -b cookies.txt
+# {"sites":["DR-Site-2","HQ"]}
+
+# Bulk move 3 devices to a new site without touching group
+curl -X POST http://localhost:7070/api/devices/bulk -b cookies.txt \
+     -H "Content-Type: application/json" \
+     -d '{"action":"move","device_ids":["d3","d5","d8"],"site":"Branch-3"}'
+```
+
+### Backwards compatibility
+
+- Pre-1.0 clients ignore the new `site` field on GET — purely additive.
+- Existing `devices.grp` values untouched; only the new column is added.
+- API callers that don't send `site` in PATCH/bulk still work.
+- Upgrade path: idempotent migration runs on next start; existing devices keep `site=''` until edited.
+
+### From → to version
+
+- Source: v1.0 (post-Phase 4d, IPAM site grouping shipped)
+- Target: v1.0 (Phase A is intra-release; the full Site Hierarchy completes across Phases A–E, each a separate commit but all under v1.0)
+
 ## Deferred (NOT in this release)
 
 | # | Need | Notes |

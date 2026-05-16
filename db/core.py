@@ -553,6 +553,13 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Site grouping on devices (v1.0+) — Site → Group → Device hierarchy.
+        # Free-text; sourced via autocomplete from UNION(ipam_subnets.site, devices.site).
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN site TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (
