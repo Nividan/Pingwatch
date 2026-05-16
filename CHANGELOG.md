@@ -44,11 +44,18 @@ Major visual refresh based on a hi-fi design prototype exported from claude.ai/d
 - **Address heatmap** — grid of 22×22 cells (18×18 on narrow viewports), colored by classification: free / in-use (device-linked) / gateway / reserved / conflict. Clicking a cell filters the table to that IP. Legend renders above the grid
 - **Collapsible per-site groups in sidebar** — subnets bucket by their `site` field. Each group renders as a chevron + name + count header; clicking toggles. Group containing the active subnet always force-expands so users don't lose context. Collapsed state persists to `pw_ipam_grp_collapsed`. Subnets without a site land under "Ungrouped" (sorted to the bottom)
 - **Add Subnet / Edit Subnet modals** gain a Site / zone input with `<datalist>` autocomplete from existing site values
+- **Per-subnet search** — typing in the main search box now filters the currently-selected subnet (editable rows) instead of hijacking the view to a read-only cross-subnet result list. Global cross-subnet search remains as the fallback when no subnet is selected
+- **Allocation kind** — inline cell edit gains a kind picker (`Auto` / `Gateway` / `Reserved` / `Conflict`) below the name input. Status column in the IP table shows a colored kind pill (`Gateway` green, `Reserved` yellow, `Conflict` red) when set. Heatmap classification now prefers the explicit kind field; legacy auto-detection by name remains as fallback for untagged allocations
 
 ### Backend — IPAM site grouping ([db/ipam.py](db/ipam.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [routes/ipam.py](routes/ipam.py))
 - **Schema** — additive `site TEXT DEFAULT ''` column on `ipam_subnets`. Idempotent migrations in both SQLite (try/except `ALTER TABLE`) and PG (`ADD COLUMN IF NOT EXISTS`); fresh-install `CREATE TABLE` blocks updated to match. Empty string default = "Ungrouped" in the UI
 - **DB layer** — `_SUBNET_COLS` selects `COALESCE(site, '') AS site`; both row mappers surface it. `db_add_subnet(cidr, name, user, site='')` accepts the optional value. `_SUBNET_UPDATABLE_FIELDS` adds `site: ('TEXT', 40)` so the existing whitelisted PATCH path picks it up
-- **API** — `POST /api/ipam/subnets` reads `site` from the body (trimmed, max 40 chars). `PATCH` already handles it via the field whitelist. `GET` returns `site` on every subnet row alongside the other columns
+- **API** — `POST /api/ipam/subnets` reads `site` from the body (trimmed, max 40 chars). `PATCH /api/ipam/subnets/{id}` adds a `site` block (modal sends it on save). `GET` returns `site` on every subnet row alongside the other columns
+
+### Backend — IPAM allocation kind ([db/ipam.py](db/ipam.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [routes/ipam.py](routes/ipam.py))
+- **Schema** — additive `kind TEXT DEFAULT ''` column on `ip_allocations`. Idempotent migrations in both backends; fresh `CREATE TABLE` updated. Values: `''` (auto / used / free), `'gateway'`, `'reserved'`, `'conflict'`
+- **DB layer** — `db_get_subnet_ips` selects `COALESCE(kind,'') AS kind` and surfaces it in each allocation dict. `db_upsert_allocation(..., kind=None)` accepts an optional kind; `kind=None` (default) preserves any existing tag on UPDATE so device-sync paths can set just the name without clobbering a user-applied gateway/reserved label
+- **API** — `PUT /api/ipam/ips/{subnet_id}/{ip}` reads `kind` from the body, whitelists against `{'', 'gateway', 'reserved', 'conflict'}`, and only threads it to the upsert when the client included the key
 
 ### Reports — [frontend/reports.js](frontend/reports.js)
 - `_rptInit()` shell rewritten with `.pagehead` (title + sub + New button) + sub-tabs converted to `.seg`. The internal RPT sections catalogue is untouched

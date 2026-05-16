@@ -614,6 +614,7 @@ def db_init():
                 subnet_id   INTEGER NOT NULL REFERENCES ipam_subnets(id),
                 ip          TEXT NOT NULL,
                 name        TEXT DEFAULT '',
+                kind        TEXT DEFAULT '',
                 modified_by TEXT DEFAULT '',
                 modified_at REAL DEFAULT 0,
                 UNIQUE(subnet_id, ip)
@@ -644,6 +645,14 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
+        # Migration: allocation kind (v1.0+) — '' (default/used), 'gateway',
+        # 'reserved', 'conflict'. Drives the heatmap classification and pill
+        # color in the redesigned IPAM page.
+        try:
+            con.execute("ALTER TABLE ip_allocations ADD COLUMN kind TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # Migration: Auto-Discovery + per-subnet DNS columns on ipam_subnets (v0.9.3+)
         for _ad_col in [
             "ALTER TABLE ipam_subnets ADD COLUMN auto_discover       INTEGER DEFAULT 0",

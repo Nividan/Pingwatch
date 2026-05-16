@@ -428,6 +428,7 @@ def pg_create_main_schema(cur):
             subnet_id       INTEGER NOT NULL REFERENCES ipam_subnets(id),
             ip              TEXT NOT NULL,
             name            TEXT DEFAULT '',
+            kind            TEXT DEFAULT '',
             modified_by     TEXT DEFAULT '',
             modified_at     DOUBLE PRECISION DEFAULT 0,
             device_id       TEXT DEFAULT '',
@@ -435,6 +436,7 @@ def pg_create_main_schema(cur):
             dns_resolved_at DOUBLE PRECISION DEFAULT 0,
             UNIQUE(subnet_id, ip)
         )""")
+    cur.execute("ALTER TABLE ip_allocations ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT ''")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ip_alloc_subnet ON ip_allocations(subnet_id)"
     )

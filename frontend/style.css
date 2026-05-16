@@ -2399,6 +2399,41 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-hm-cell.rsv { background:var(--warn); }
 .ipam-hm-cell.cfl { background:var(--down); }
 
+/* Inline edit cell — name input + kind picker */
+.ipam-edit-row{
+  display:flex;flex-direction:column;gap:6px;
+}
+.ipam-name-cell .ipam-name-inp{
+  width:100%;box-sizing:border-box;
+  background:var(--bg2);border:1px solid var(--accent);border-radius:var(--r-sm);
+  color:var(--text);padding:4px 8px;font-size:var(--fs-md);outline:none;
+}
+.ipam-kind-picker{
+  display:inline-flex;gap:2px;flex-wrap:wrap;
+}
+.ipam-kind-btn{
+  font-family:var(--font-mono);font-size:10px;font-weight:600;
+  padding:2px 7px;border-radius:var(--r-pill);
+  border:1px solid var(--border);background:transparent;color:var(--text3);
+  cursor:pointer;letter-spacing:.3px;
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease),border-color var(--dur) var(--ease);
+}
+.ipam-kind-btn:hover{ color:var(--text);border-color:var(--border2); }
+.ipam-kind-btn.active{ color:var(--text);background:var(--card-soft);border-color:var(--border2); }
+.ipam-kind-btn.gw.active  { color:var(--up);   border-color:color-mix(in srgb, var(--up) 55%, var(--border));   background:var(--up-bg); }
+.ipam-kind-btn.rsv.active { color:var(--warn); border-color:color-mix(in srgb, var(--warn) 55%, var(--border)); background:var(--warn-bg); }
+.ipam-kind-btn.cfl.active { color:var(--down); border-color:color-mix(in srgb, var(--down) 55%, var(--border)); background:var(--down-bg); }
+
+/* Kind pill rendered in the Status column (read-only) */
+.ipam-kbadge{
+  display:inline-block;padding:2px 8px;border-radius:var(--r-pill);
+  font-size:10px;font-weight:700;white-space:nowrap;letter-spacing:.3px;
+  border:1px solid transparent;
+}
+.ipam-kbadge.gw  { color:var(--up);   background:var(--up-bg);   border-color:color-mix(in srgb, var(--up) 40%, var(--border)); }
+.ipam-kbadge.rsv { color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.ipam-kbadge.cfl { color:var(--down); background:var(--down-bg); border-color:color-mix(in srgb, var(--down) 40%, var(--border)); }
+
 /* ── Log viewer (top-level Logs tab) ──────────────────────────────────── */
 #logsView{flex:1;display:none;flex-direction:column;overflow:hidden;}
 

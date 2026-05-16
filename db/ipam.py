@@ -415,7 +415,8 @@ def db_get_allocations(subnet_id: int) -> dict:
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at
+                    """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at,
+                              COALESCE(kind,'') AS kind
                        FROM ip_allocations WHERE subnet_id=%s""",
                     (subnet_id,)
                 )
@@ -427,6 +428,7 @@ def db_get_allocations(subnet_id: int) -> dict:
                         "device_id":       r["device_id"] or '',
                         "dns_name":        r["dns_name"] or '',
                         "dns_resolved_at": r["dns_resolved_at"] or 0,
+                        "kind":            r.get("kind") or '',
                     }
                     for r in cur.fetchall()
                 }
@@ -437,7 +439,8 @@ def db_get_allocations(subnet_id: int) -> dict:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         rows = con.execute(
-            """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at
+            """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at,
+                      COALESCE(kind,'') AS kind
                FROM ip_allocations WHERE subnet_id=?""",
             (subnet_id,)
         ).fetchall()
@@ -449,6 +452,7 @@ def db_get_allocations(subnet_id: int) -> dict:
                 "device_id":       r[4] or '',
                 "dns_name":        r[5] or '',
                 "dns_resolved_at": r[6] or 0,
+                "kind":            (r[7] if len(r) > 7 else '') or '',
             }
             for r in rows
         }
@@ -490,47 +494,84 @@ def db_update_dns(subnet_id: int, ip: str, dns_name: str) -> None:
 
 
 def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
-                         device_id: str = '') -> None:
-    """Set the name for an IP (insert or update). Enqueued write."""
+                         device_id: str = '', kind=None) -> None:
+    """Set the name (and optionally the kind tag) for an IP. Enqueued write.
+
+    `kind` semantics:
+      - None (default)  → leave the existing kind untouched on UPDATE
+      - '' or 'gateway'/'reserved'/'conflict'/etc → overwrite the kind
+    This lets device-sync paths set just the name without clobbering a
+    user-applied gateway/reserved tag.
+    """
     now = time.time()
+    set_kind = kind is not None
+    kind_val = str(kind)[:24] if set_kind else ''
     def _do():
         if is_pg():
             from db.pg_pool import pg_cursor
             try:
                 with pg_cursor('main') as cur:
-                    cur.execute(
-                        """INSERT INTO ip_allocations
-                               (subnet_id, ip, name, modified_by, modified_at, device_id)
-                           VALUES (%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT(subnet_id, ip) DO UPDATE SET
-                             name=EXCLUDED.name,
-                             modified_by=EXCLUDED.modified_by,
-                             modified_at=EXCLUDED.modified_at,
-                             device_id=EXCLUDED.device_id""",
-                        (subnet_id, ip, name, user, now, device_id)
-                    )
+                    if set_kind:
+                        cur.execute(
+                            """INSERT INTO ip_allocations
+                                   (subnet_id, ip, name, modified_by, modified_at, device_id, kind)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                                 name=EXCLUDED.name,
+                                 modified_by=EXCLUDED.modified_by,
+                                 modified_at=EXCLUDED.modified_at,
+                                 device_id=EXCLUDED.device_id,
+                                 kind=EXCLUDED.kind""",
+                            (subnet_id, ip, name, user, now, device_id, kind_val)
+                        )
+                    else:
+                        cur.execute(
+                            """INSERT INTO ip_allocations
+                                   (subnet_id, ip, name, modified_by, modified_at, device_id)
+                               VALUES (%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                                 name=EXCLUDED.name,
+                                 modified_by=EXCLUDED.modified_by,
+                                 modified_at=EXCLUDED.modified_at,
+                                 device_id=EXCLUDED.device_id""",
+                            (subnet_id, ip, name, user, now, device_id)
+                        )
                 log.debug(f"IPAM allocation set: {ip} → {name!r} by {user!r} "
-                          f"(subnet={subnet_id}, device_id={device_id!r})")
+                          f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_val!r if set_kind else 'unchanged'})")
             except Exception as e:
                 log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
             return
 
         con = sqlite3.connect(DB_PATH, timeout=10)
         try:
-            con.execute(
-                """INSERT INTO ip_allocations
-                       (subnet_id, ip, name, modified_by, modified_at, device_id)
-                   VALUES (?,?,?,?,?,?)
-                   ON CONFLICT(subnet_id, ip) DO UPDATE SET
-                     name=excluded.name,
-                     modified_by=excluded.modified_by,
-                     modified_at=excluded.modified_at,
-                     device_id=excluded.device_id""",
-                (subnet_id, ip, name, user, now, device_id)
-            )
+            if set_kind:
+                con.execute(
+                    """INSERT INTO ip_allocations
+                           (subnet_id, ip, name, modified_by, modified_at, device_id, kind)
+                       VALUES (?,?,?,?,?,?,?)
+                       ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                         name=excluded.name,
+                         modified_by=excluded.modified_by,
+                         modified_at=excluded.modified_at,
+                         device_id=excluded.device_id,
+                         kind=excluded.kind""",
+                    (subnet_id, ip, name, user, now, device_id, kind_val)
+                )
+            else:
+                con.execute(
+                    """INSERT INTO ip_allocations
+                           (subnet_id, ip, name, modified_by, modified_at, device_id)
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                         name=excluded.name,
+                         modified_by=excluded.modified_by,
+                         modified_at=excluded.modified_at,
+                         device_id=excluded.device_id""",
+                    (subnet_id, ip, name, user, now, device_id)
+                )
             con.commit()
             log.debug(f"IPAM allocation set: {ip} → {name!r} by {user!r} "
-                      f"(subnet={subnet_id}, device_id={device_id!r})")
+                      f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_val!r if set_kind else 'unchanged'})")
         except Exception as e:
             log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
         finally:

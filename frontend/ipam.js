@@ -279,12 +279,14 @@ function _ipamRenderMain(subnet) {
 }
 
 // Classify each IP into one of: free | used | gw | rsv | cfl
-//   gw  → name/dns matches "gateway" or is the network's .1 address
-//   used → has device_id (device-linked allocation)
-//   rsv → manual name but no device link
-//   cfl → marked by backend (no field today — placeholder)
-//   free → no allocation
+// Priority: explicit `kind` from backend > heuristic on name/dns > device_id > name > free
 function _ipamClassify(entry) {
+  // Explicit user-set tag wins
+  const kind = (entry.kind || '').toLowerCase();
+  if (kind === 'gateway')  return 'gw';
+  if (kind === 'reserved') return 'rsv';
+  if (kind === 'conflict') return 'cfl';
+  // Heuristic fallback for legacy allocations without a kind tag
   const name = (entry.name || '').toLowerCase();
   const dns  = (entry.dns_name || '').toLowerCase();
   if (name === 'gateway' || dns === '_gateway' || name.startsWith('gw') || dns.startsWith('gw'))
@@ -406,8 +408,11 @@ async function _ipamOnSubnetChange(idVal) {
     const a = allocs[ip];
     return a
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
-          device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
-      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
+          device_id: a.device_id || '', dns_name: a.dns_name || '',
+          dns_resolved_at: a.dns_resolved_at || 0,
+          kind: a.kind || '' }
+      : { ip, name: '', modified_by: '', modified_at: 0,
+          device_id: '', dns_name: '', dns_resolved_at: 0, kind: '' };
   });
 
   _ipamRenderKPIs();
@@ -523,16 +528,17 @@ function _ipamThHtml(col, label) {
 async function _ipamOnSearch(val) {
   _ipamPage = 0;
   const q = (val || '').trim();
-  if (q) {
+  document.getElementById('ipam-table-wrap')?.classList.remove('ipam-global-results');
+  if (_ipamSelectedId) {
+    // Subnet selected: filter the current subnet's allocations (editable rows).
+    // The sidebar already gives users a clear way to pick a different subnet,
+    // so we no longer hijack the search box for cross-subnet search.
+    _ipamApplyFilter(q);
+  } else if (q) {
+    // No subnet selected: fall back to global cross-subnet search.
     await _ipamGlobalSearch(q);
   } else {
-    // Clear global results: restore subnet view (or empty prompt)
-    document.getElementById('ipam-table-wrap')?.classList.remove('ipam-global-results');
-    if (_ipamSelectedId) {
-      _ipamApplyFilter('');
-    } else {
-      _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
-    }
+    _ipamShowEmptyTable('Select a subnet on the left to view its IP addresses.');
   }
 }
 
@@ -659,7 +665,13 @@ function _ipamRenderTable() {
 
   const rows = page.map(e => {
     const used    = !!e.name;
-    const badge   = used
+    const kind    = (e.kind || '').toLowerCase();
+    // Status pill — kind takes precedence over the generic used/free label
+    let badge;
+    if      (kind === 'gateway')  badge = `<span class="ipam-kbadge gw">Gateway</span>`;
+    else if (kind === 'reserved') badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
+    else if (kind === 'conflict') badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
+    else                          badge = used
       ? `<span class="ipam-used">Used</span>`
       : `<span class="ipam-free">Free</span>`;
     const dateStr = e.modified_at
@@ -751,35 +763,66 @@ function _ipamNextPage() {
 // ── Inline name editing ────────────────────────────────────────────────────
 function _ipamEditCell(td, ip) {
   if (S.role !== 'operator' && S.role !== 'admin') return;
-  const entry  = _ipamAllIps.find(e => e.ip === ip);
-  const curVal = entry ? entry.name : '';
-  td.innerHTML = `<input class="ipam-name-inp" id="ipam-inp-${ip.replace(/\./g,'-')}"
-    value="${esc(curVal)}" placeholder="Enter name…" autocomplete="off"/>`;
+  const entry   = _ipamAllIps.find(e => e.ip === ip);
+  const curName = entry ? entry.name : '';
+  const curKind = (entry && entry.kind) || '';
+  let pendingKind = curKind;
+
+  const kindBtn = (k, lbl, cls) =>
+    `<button type="button" class="ipam-kind-btn ${cls}${pendingKind===k?' active':''}" data-kind="${k}" title="Mark as ${lbl}">${lbl}</button>`;
+
+  td.innerHTML = `
+    <div class="ipam-edit-row">
+      <input class="ipam-name-inp" value="${esc(curName)}" placeholder="Enter name…" autocomplete="off"/>
+      <div class="ipam-kind-picker">
+        ${kindBtn('',         'Auto',     '')}
+        ${kindBtn('gateway',  'Gateway',  'gw')}
+        ${kindBtn('reserved', 'Reserved', 'rsv')}
+        ${kindBtn('conflict', 'Conflict', 'cfl')}
+      </div>
+    </div>`;
+
   const inp = td.querySelector('input');
   if (!inp) return;
   inp.focus();
   inp.select();
 
+  // Picker click: mousedown.preventDefault keeps the input from blurring
+  // (which would otherwise commit + re-render before our click handler fires)
+  td.querySelectorAll('.ipam-kind-btn').forEach(b => {
+    b.addEventListener('mousedown', e => { e.preventDefault(); });
+    b.addEventListener('click', () => {
+      pendingKind = b.dataset.kind;
+      td.querySelectorAll('.ipam-kind-btn').forEach(bb =>
+        bb.classList.toggle('active', bb === b));
+      inp.focus();
+    });
+  });
+
   const commit = async () => {
     const newName = inp.value.trim().slice(0, 120);
-    if (newName === curVal) { _ipamRenderTable(); return; }
+    if (newName === curName && pendingKind === curKind) { _ipamRenderTable(); return; }
     const r = await fetch(`/api/ipam/ips/${_ipamSelectedId}/${encodeURIComponent(ip)}`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: newName}),
+      body: JSON.stringify({name: newName, kind: pendingKind}),
     });
     if (!r.ok) { toast('Failed to save', 'err'); _ipamRenderTable(); return; }
     // Update in-memory record; manual edit clears device link
     if (entry) {
       entry.name        = newName;
+      entry.kind        = pendingKind;
       entry.modified_by = S.username || '';
       entry.modified_at = Date.now() / 1000;
       entry.device_id   = '';   // user took ownership
     }
     _ipamGlobalCache = null;  // invalidate cross-subnet cache
+    _ipamRenderKPIs();        // counts may shift (reserved/gateway buckets)
+    _ipamRenderHeatmap();     // recolor the cell live
     const search = document.getElementById('ipam-search')?.value || '';
     _ipamApplyFilter(search);
-    toast(newName ? `${ip} → "${newName}"` : `${ip} cleared`, 'ok');
+    const kindLbl = pendingKind ? ` [${pendingKind}]` : '';
+    toast(newName ? `${ip} → "${newName}"${kindLbl}` : `${ip} cleared`, 'ok');
   };
 
   inp.addEventListener('keydown', e => {
@@ -1128,8 +1171,11 @@ async function _ipamReloadCurrentSubnet() {
     const a = allocs[ip];
     return a
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
-          device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
-      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
+          device_id: a.device_id || '', dns_name: a.dns_name || '',
+          dns_resolved_at: a.dns_resolved_at || 0,
+          kind: a.kind || '' }
+      : { ip, name: '', modified_by: '', modified_at: 0,
+          device_id: '', dns_name: '', dns_resolved_at: 0, kind: '' };
   });
   const search = document.getElementById('ipam-search')?.value || '';
   _ipamApplyFilter(search);

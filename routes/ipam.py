@@ -282,6 +282,14 @@ def handle(h, method, path, body):
         subnet_id = int(m.group(1))
         ip_str    = m.group(2)
         name      = (body.get('name') or '').strip()[:120]
+        # Optional `kind` — '' (default), 'gateway', 'reserved', 'conflict'.
+        # Anything not in the whitelist falls back to ''.
+        _KIND_OK  = {'', 'gateway', 'reserved', 'conflict'}
+        kind_raw  = (body.get('kind') or '').strip().lower()
+        kind      = kind_raw if kind_raw in _KIND_OK else ''
+        # Only pass kind to the upsert if the client included the key, so a
+        # name-only PUT doesn't wipe an existing gateway/reserved tag.
+        kind_arg  = kind if 'kind' in body else None
 
         # Validate subnet exists and IP belongs to it
         sub = db_get_subnet(subnet_id)
@@ -297,9 +305,9 @@ def handle(h, method, path, body):
             log.warning(f"IPAM assign IP rejected: {ip_str!r} not in subnet {sub['cidr']!r} (user={user!r})")
             h._json(400, {'error': f'{ip_str!r} is not in subnet {sub["cidr"]!r}'}); return True
 
-        if name:
-            log.debug(f"IPAM: {user!r} assigned {ip_str} → {name!r} (subnet={sub['cidr']!r})")
-            db_upsert_allocation(subnet_id, ip_str, name, user, device_id='')
+        if name or kind:
+            log.debug(f"IPAM: {user!r} assigned {ip_str} → {name!r} kind={kind!r} (subnet={sub['cidr']!r})")
+            db_upsert_allocation(subnet_id, ip_str, name, user, device_id='', kind=kind_arg)
         else:
             log.debug(f"IPAM: {user!r} cleared {ip_str} (subnet={sub['cidr']!r})")
             db_clear_allocation(subnet_id, ip_str)
