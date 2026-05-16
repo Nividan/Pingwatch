@@ -1487,74 +1487,6 @@ function _buildSettingsTab_autoDiscovery(sr) {
   </div>`;
 }
 
-function _buildSettingsTab_alertRules(sr) {
-  sr = sr || {};
-  const abEnabled = sr.alert_batch_enabled !== false;    // default on
-  const abWindow  = sr.alert_batch_window_s || 60;
-  const abMax     = sr.alert_batch_max_size || 20;
-  return `<div class="mbdy stab-fade" id="stab-alert-rules" style="display:none;overflow-y:auto;flex:1">
-      <div class="alrt-panel-hdr">
-        <div>
-          <div style="font-size:13px;font-weight:600;color:var(--text2)">📬 Notification Batching</div>
-          <div style="font-size:12px;color:var(--text3);margin-top:2px">When a burst of alerts fires at the same time (e.g. a switch dies and 12 sensors behind it page), send one combined email/webhook instead of N separate ones. Syslog and browser notifications are unaffected. Every event is still recorded individually in PingWatch.</div>
-        </div>
-      </div>
-      <div class="fgroup" style="padding:12px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:20px">
-        <div class="fr">
-          <label class="fl">Enable batching</label>
-          <label style="display:flex;align-items:center;gap:8px">
-            <input type="checkbox" id="st-ab-enabled" ${abEnabled ? 'checked' : ''}/>
-            <span style="font-size:12px;color:var(--text3)">When off, email and webhook alerts fire immediately as in earlier versions.</span>
-          </label>
-        </div>
-        <div class="fr">
-          <label class="fl" title="Hold the first alert in a bucket this long before flushing. Tune based on your typical alert-storm duration.">Batch window (seconds)</label>
-          <input type="number" id="st-ab-window" min="5" max="3600" value="${abWindow}" style="width:110px"/>
-          <span style="font-size:11px;color:var(--text3);margin-left:8px">5–3600s · default 60</span>
-        </div>
-        <div class="fr">
-          <label class="fl" title="Flush early when a bucket reaches this many events — useful for very large bursts.">Max batch size</label>
-          <input type="number" id="st-ab-max" min="2" max="500" value="${abMax}" style="width:110px"/>
-          <span style="font-size:11px;color:var(--text3);margin-left:8px">2–500 · default 20</span>
-        </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:4px;padding-top:8px;border-top:1px dashed var(--border)">
-          ℹ️ Down and recovery notifications are batched symmetrically: 12 sensors down → 1 down email; 12 recovered → 1 recovery email. Webhook batching is opt-in per action template — see the <strong>Batch-aware receiver</strong> checkbox in the webhook template editor.
-        </div>
-      </div>
-
-      <div class="alrt-panel-hdr">
-        <div>
-          <div style="font-size:13px;font-weight:600;color:var(--text2)">📋 Alert Profiles</div>
-          <div style="font-size:12px;color:var(--text3);margin-top:2px">Escalation policies cascade global → group → device → sensor. First match wins.</div>
-        </div>
-        <button class="btn-p rbac-admin" onclick="openProfileEditor(null)">＋ New Profile</button>
-      </div>
-      <div id="alrt-list"><div class="alrt-loading">Loading…</div></div>
-
-      <div style="margin:16px 0 8px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="alrt-panel-hdr">
-          <div>
-            <div style="font-size:13px;font-weight:600;color:var(--text2)">📨 Action Templates</div>
-            <div style="font-size:12px;color:var(--text3);margin-top:2px">Reusable notification targets. Define once, reference from any profile stage.</div>
-          </div>
-          <button class="btn-p rbac-admin" onclick="openTemplateEditor(null)">＋ New Template</button>
-        </div>
-        <div id="alrt-tpl-list"><div class="alrt-loading">Loading…</div></div>
-      </div>
-
-      <div style="margin:16px 0 8px;padding-top:16px;border-top:1px solid var(--border)">
-        <div class="alrt-panel-hdr">
-          <div>
-            <div style="font-size:13px;font-weight:600;color:var(--text2)">🛠 Maintenance Windows</div>
-            <div style="font-size:12px;color:var(--text3);margin-top:2px">Suppress notifications during scheduled maintenance. Profiles still evaluate.</div>
-          </div>
-          <button class="btn-p rbac-admin" onclick="_alertMaintOpen(null)">＋ New Window</button>
-        </div>
-        <div id="alrt-maint-list"><div class="alrt-loading">Loading…</div></div>
-      </div>
-    </div>`;
-}
-
 async function openSettings(initialTab){
   // Settings are admin-only — non-admins clicking the menu item previously
   // saw "nothing happen" because /api/users / /api/tls returned 403 and the
@@ -1593,7 +1525,6 @@ async function openSettings(initialTab){
       <div class="stab-section">Monitoring</div>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">${icon('activity',13)} Sensors</button>
       <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">${icon('zoom',13)} Auto-Discovery</button>
-      <button class="stab-nav" id="stab-btn-alert-rules" onclick="switchSettingsTab('alert-rules')">${icon('alerts',13)} Alert Profiles</button>
       <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">${icon('reports',13)} Reports</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">${icon('download',13)} Config Backup</button>
       <div class="stab-section">Connections</div>
@@ -1612,7 +1543,6 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_certificates(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
     ${_buildSettingsTab_autoDiscovery(sr)}
-    ${_buildSettingsTab_alertRules(sr)}
     ${_buildSettingsTab_diagnostics(sr)}
     <div class="mft" id="stab-footer-general">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
@@ -1663,10 +1593,6 @@ async function openSettings(initialTab){
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveAutoDiscoverySettings()">Save Auto-Discovery</button>
     </div>
-    <div class="mft" id="stab-footer-alert-rules" style="display:none">
-      <button class="btn-s" onclick="closeM('mset')">Close</button>
-      <button class="btn-p" onclick="_saveAlertBatching()">Save Batching</button>
-    </div>
     <div class="mft" id="stab-footer-diagnostics" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
@@ -1683,7 +1609,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','alert-rules','diagnostics'];
+  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','diagnostics'];
 
   // Find currently visible tab
   let cur = null;
@@ -1720,7 +1646,6 @@ function switchSettingsTab(tab){
             if (tab === 'sensors')        loadSensorsDefaultsTab();
             if (tab === 'backup')         _loadBackupScheduleSettings();
             if (tab === 'database')       _loadDbBackupSettings();
-            if (tab === 'alert-rules')    { _alertingLoadRules(); _alertingLoadMaint(); }
             if (tab === 'groups')         _groupsLoad();
             if (tab === 'integrations')   _loadIntegrationsStatus();
             if (tab === 'certificates')   _loadTrustedCAs();
@@ -1737,8 +1662,6 @@ function switchSettingsTab(tab){
     if (tab === 'sensors')       loadSensorsDefaultsTab();
     if (tab === 'backup')        _loadBackupScheduleSettings();
     if (tab === 'database')      _loadDbBackupSettings();
-    if (tab === 'alert-rules')   _alertingLoadRules();
-    if (tab === 'maint')         _alertingLoadMaint();
     if (tab === 'groups')        _groupsLoad();
     if (tab === 'integrations')  _loadIntegrationsStatus();
     if (tab === 'certificates')  _loadTrustedCAs();
@@ -2511,36 +2434,6 @@ async function _saveDebugMode(cb) {
   const r = await api('PATCH', '/api/settings', { debug_mode: cb.checked ? 1 : 0 });
   if (!r.ok) { toast('Failed to save debug mode', 'err'); cb.checked = !cb.checked; return; }
   toast(cb.checked ? 'Debug mode enabled' : 'Debug mode disabled', 'ok');
-}
-
-async function _saveAlertBatching() {
-  const enabled = document.getElementById('st-ab-enabled')?.checked ? 1 : 0;
-  const winRaw = parseInt(document.getElementById('st-ab-window')?.value);
-  const maxRaw = parseInt(document.getElementById('st-ab-max')?.value);
-  if (!Number.isFinite(winRaw) || winRaw < 5 || winRaw > 3600) {
-    toast('Batch window must be 5 - 3600 seconds', 'err'); return;
-  }
-  if (!Number.isFinite(maxRaw) || maxRaw < 2 || maxRaw > 500) {
-    toast('Max batch size must be 2 - 500', 'err'); return;
-  }
-  const body = {
-    alert_batch_enabled: enabled,
-    alert_batch_window_s: winRaw,
-    alert_batch_max_size: maxRaw,
-  };
-  const btn = document.querySelector('#stab-footer-alert-rules .btn-p');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
-  let r;
-  try {
-    r = await api('PATCH', '/api/settings', body);
-  } catch (e) {
-    toast('Failed to save batching settings', 'err');
-    return;
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save Batching'; }
-  }
-  if (!r || !r.ok) { toast('Failed to save batching settings', 'err'); return; }
-  toast('Notification batching saved', 'ok');
 }
 
 async function _saveRetention() {

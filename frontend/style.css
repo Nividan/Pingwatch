@@ -4961,3 +4961,22 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   color:var(--text3);background:var(--bg3);
   border:1px solid var(--border);
 }
+
+/* ── Notification Batching card (Alerting page sidebar) ─────── */
+.al-pg-batch-body{ padding:10px 14px; }
+.al-pg-batch-row{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:8px 0;border-bottom:1px solid var(--border);
+}
+.al-pg-batch-row:last-of-type{ border-bottom:none; }
+.al-pg-batch-lbl{ flex:1;min-width:0;font-size:var(--fs-sm);color:var(--text2); }
+.al-pg-batch-lbl .small{ font-size:11px;line-height:1.35;margin-top:2px; }
+.al-pg-batch-num{
+  width:70px;padding:4px 6px;font-size:var(--fs-sm);
+  background:var(--bg3);border:1px solid var(--border);border-radius:var(--r-sm);
+  color:var(--text);text-align:right;
+}
+.al-pg-batch-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 14px;border-top:1px solid var(--border);background:var(--card-soft);
+}

@@ -26,9 +26,14 @@ const _AP_DEFAULT_DELAYS = [60, 600, 0, 60, 600, 0];
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadProfiles() {
-  const list = document.getElementById('alrt-list');
-  if (!list) return;
-  list.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  // Fetch + cache profiles/templates regardless of which surface is mounted.
+  // Settings tab DOM was removed in v1.0 (#alrt-list no longer exists); the
+  // new top-level Alerting page (#al-pg-profiles) is the primary surface.
+  // Renders no-op if the target DOM is missing.
+  const settingsList = document.getElementById('alrt-list');
+  if (settingsList) {
+    settingsList.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  }
   applyRbac();
   try {
     const [pr, tr] = await Promise.all([
@@ -37,10 +42,18 @@ async function _alertingLoadProfiles() {
     ]);
     _alertProfiles  = pr.profiles  || [];
     _alertTemplates = tr.templates || [];
-    _alertingRenderProfiles();
-    _alertingRenderTemplates();
+    _alertingRenderProfiles();   // no-op if #alrt-list missing
+    _alertingRenderTemplates();  // no-op if #alrt-tpl-list missing
+    if (document.getElementById('al-pg-profiles')) {
+      _alPgRenderProfiles();
+      _alPgRenderChannels();
+      _alPgRenderEscalation();
+      _alPgRefreshSubtitle();
+    }
   } catch (e) {
-    list.innerHTML = `<div class="alrt-err">Failed to load profiles: ${esc(String(e))}</div>`;
+    if (settingsList) {
+      settingsList.innerHTML = `<div class="alrt-err">Failed to load profiles: ${esc(String(e))}</div>`;
+    }
   }
 }
 
@@ -1279,6 +1292,13 @@ async function _alertingPageInit() {
           </div>
           <div id="al-pg-maint"><div class="muted" style="padding:14px">Loading…</div></div>
         </section>
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">
+            <span>Notification Batching</span>
+            <span class="muted small" id="al-pg-batch-status">—</span>
+          </div>
+          <div id="al-pg-batch"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
       </aside>
     </div>`;
   applyRbac();
@@ -1286,7 +1306,96 @@ async function _alertingPageInit() {
     _alPgLoadProfilesAndChannels(),
     _alPgLoadDeliveries(),
     _alertingLoadMaint(),
+    _alPgLoadBatching(),
   ]);
+}
+
+// ── Notification Batching card ──────────────────────────────────
+// Reads + writes the three alert_batch_* fields on /api/settings.
+// Previously lived in Settings → Alert Profiles; moved here so the entire
+// alert domain (profiles, channels, escalation, maintenance, batching) is
+// configurable from one place.
+async function _alPgLoadBatching() {
+  const wrap = document.getElementById('al-pg-batch');
+  if (!wrap) return;
+  try {
+    const s = await api('GET', '/api/settings');
+    _alPgRenderBatching(s || {});
+  } catch (e) {
+    wrap.innerHTML = `<div class="error" style="padding:14px">Failed to load batching: ${esc(String(e))}</div>`;
+  }
+}
+
+function _alPgRenderBatching(sr) {
+  const wrap = document.getElementById('al-pg-batch');
+  if (!wrap) return;
+  const enabled = sr.alert_batch_enabled !== false;  // default on
+  const win     = sr.alert_batch_window_s || 60;
+  const max     = sr.alert_batch_max_size || 20;
+  const status  = document.getElementById('al-pg-batch-status');
+  if (status) status.textContent = enabled ? `on · ${win}s / ${max}` : 'off';
+  wrap.innerHTML = `
+    <div class="al-pg-batch-body">
+      <div class="al-pg-batch-row">
+        <label class="al-pg-toggle rbac-admin" title="${enabled?'Disable':'Enable'} batching">
+          <input type="checkbox" id="al-pg-batch-en" ${enabled?'checked':''}/>
+          <span class="al-pg-toggle-slider"></span>
+        </label>
+        <div class="al-pg-batch-lbl">
+          <div>Enable batching</div>
+          <div class="muted small">When off, alerts fire immediately as separate emails/webhooks.</div>
+        </div>
+      </div>
+      <div class="al-pg-batch-row">
+        <input type="number" id="al-pg-batch-win" min="5" max="3600" value="${win}" class="pw-input al-pg-batch-num"/>
+        <div class="al-pg-batch-lbl">
+          <div>Batch window <span class="muted small">5–3600s</span></div>
+          <div class="muted small">Hold the first alert this long before flushing.</div>
+        </div>
+      </div>
+      <div class="al-pg-batch-row">
+        <input type="number" id="al-pg-batch-max" min="2" max="500" value="${max}" class="pw-input al-pg-batch-num"/>
+        <div class="al-pg-batch-lbl">
+          <div>Max batch size <span class="muted small">2–500</span></div>
+          <div class="muted small">Flush early when this many events accumulate.</div>
+        </div>
+      </div>
+      <div class="al-pg-batch-foot">
+        <span class="muted small">Webhook batching is opt-in per template.</span>
+        <button class="btn-sm primary rbac-admin" id="al-pg-batch-save" onclick="_alPgSaveBatching()">Save</button>
+      </div>
+    </div>`;
+  applyRbac();
+}
+
+async function _alPgSaveBatching() {
+  const enabled = document.getElementById('al-pg-batch-en')?.checked ? 1 : 0;
+  const win     = parseInt(document.getElementById('al-pg-batch-win')?.value);
+  const max     = parseInt(document.getElementById('al-pg-batch-max')?.value);
+  if (!Number.isFinite(win) || win < 5 || win > 3600) {
+    toast('Batch window must be 5–3600 seconds', 'err'); return;
+  }
+  if (!Number.isFinite(max) || max < 2 || max > 500) {
+    toast('Max batch size must be 2–500', 'err'); return;
+  }
+  const btn = document.getElementById('al-pg-batch-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      alert_batch_enabled:  enabled,
+      alert_batch_window_s: win,
+      alert_batch_max_size: max,
+    });
+    if (!r || !r.ok) { toast('Failed to save batching', 'err'); return; }
+    toast('Notification batching saved', 'ok');
+    // Refresh the status pill in the card head
+    const status = document.getElementById('al-pg-batch-status');
+    if (status) status.textContent = enabled ? `on · ${win}s / ${max}` : 'off';
+  } catch (e) {
+    toast(e.message || 'Failed to save batching', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  }
 }
 
 async function _alPgLoadProfilesAndChannels() {
