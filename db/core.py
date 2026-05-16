@@ -754,6 +754,13 @@ def db_init():
             "ON alert_events(did, sid) "
             "WHERE state IN ('active','acknowledged')"
         )
+        # suppress_reason carries the human-readable cause when state='suppressed'
+        # (currently only maintenance windows). Idempotent ALTER for existing dbs.
+        try:
+            con.execute("ALTER TABLE alert_events ADD COLUMN suppress_reason TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS alert_profiles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -811,9 +818,17 @@ def db_init():
                 recur_days  TEXT    DEFAULT '',
                 recur_start TEXT    DEFAULT '',
                 recur_end   TEXT    DEFAULT '',
+                enabled     INTEGER DEFAULT 1,
                 created_by  TEXT    DEFAULT '',
                 created_at  REAL    DEFAULT 0
             )""")
+        # Migration: enabled flag on maintenance_windows so users can toggle
+        # a window off without deleting it. Legacy rows default to enabled.
+        try:
+            con.execute("ALTER TABLE maintenance_windows ADD COLUMN enabled INTEGER DEFAULT 1")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS user_groups (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,

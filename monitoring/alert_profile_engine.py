@@ -484,9 +484,10 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
 
     suppressed, mw_name = check_maintenance(ctx)
     if suppressed:
+        reason = f"Maintenance: {mw_name}" if mw_name else "Maintenance window"
         try:
             db_log_event(profile["id"], stage["id"], profile["name"],
-                         ctx, state="suppressed")
+                         ctx, state="suppressed", suppress_reason=reason)
         except Exception as e:
             log.warning(f"alert_profile_engine: db_log_event (suppressed) error: {e}")
         log.info(f"alert_profile_engine: stage {stage['id']} "

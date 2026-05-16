@@ -4886,6 +4886,22 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .al-pg-sev.ok,   .al-pg-state.ok  { color:var(--up);   background:var(--up-bg);   border-color:color-mix(in srgb, var(--up) 40%, var(--border)); }
 .al-pg-sev.info { color:var(--accent); background:var(--accent-soft); }
 
+/* Notes column — small chip, truncates long maintenance window names. */
+.al-pg-notes{
+  max-width:240px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.al-pg-note{
+  display:inline-block;font-size:var(--fs-xs);color:var(--text2);
+  padding:1px 8px;border-radius:var(--r-sm);
+  background:var(--bg3);border:1px solid var(--border);
+}
+.al-pg-note-mute{
+  color:var(--warn);
+  background:var(--warn-bg);
+  border-color:color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+
 /* ── Maintenance Window rows in the sidebar card ───────────── */
 .al-pg-mw-row{
   display:flex;align-items:center;gap:10px;
@@ -4930,3 +4946,18 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 }
 .al-pg-mw-row:hover .iconbtn{ opacity:.7; }
 .al-pg-mw-row .iconbtn:hover{ opacity:1;background:var(--card-hover);color:var(--down); }
+
+/* Disabled-state polish — dim the row body but keep the toggle vivid so it's
+ * always obvious how to bring it back. */
+.al-pg-mw-row.disabled .al-pg-mw-body{ opacity:.55; }
+.al-pg-mw-row.disabled .al-pg-mw-dot{ background:var(--bg4); box-shadow:none; }
+.al-pg-mw-pill-off{
+  color:var(--text3);background:var(--bg3);
+  border-color:var(--border);
+}
+/* Settings-tab card dim when disabled. */
+.alrt-card.alrt-maint-disabled .alrt-card-left{ opacity:.55; }
+.alrt-sev-muted{
+  color:var(--text3);background:var(--bg3);
+  border:1px solid var(--border);
+}

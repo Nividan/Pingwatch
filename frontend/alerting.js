@@ -852,15 +852,19 @@ function _alPgRenderMaintWindows(windows) {
     return;
   }
   const now = Date.now() / 1000;
-  // Show active windows first, then upcoming, then past
+  // Show enabled+active first, then enabled, then disabled (so live windows stay on top
+  // and explicitly-disabled ones sink so they don't read as ambient/forgotten).
   const sorted = windows.slice().sort((a, b) => {
-    const aActive = a.start_ts <= now && a.end_ts >= now;
-    const bActive = b.start_ts <= now && b.end_ts >= now;
+    const aEn = a.enabled !== false, bEn = b.enabled !== false;
+    if (aEn !== bEn) return aEn ? -1 : 1;
+    const aActive = aEn && a.start_ts <= now && a.end_ts >= now;
+    const bActive = bEn && b.start_ts <= now && b.end_ts >= now;
     if (aActive !== bActive) return aActive ? -1 : 1;
     return (a.start_ts || 0) - (b.start_ts || 0);
   });
   wrap.innerHTML = sorted.map(w => {
-    const active = w.start_ts <= now && w.end_ts >= now;
+    const enabled  = w.enabled !== false;
+    const active   = enabled && w.start_ts <= now && w.end_ts >= now;
     const safeName = esc(w.name).replace(/'/g, '&#39;');
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
                    : w.scope_type === 'group'  ? `Groups: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
@@ -870,19 +874,64 @@ function _alPgRenderMaintWindows(windows) {
       ? `${esc(_mwShortDays(w.recur_days))} \u00b7 ${esc(w.recur_start)}\u2013${esc(w.recur_end)}`
       : `${_alPgRelTime(w.start_ts)} \u2192 ${_alPgRelTime(w.end_ts)}`;
     return `
-      <div class="al-pg-mw-row ${active?'active':''}" onclick="_alertMaintOpen(${w.id})" title="Edit window">
+      <div class="al-pg-mw-row ${active?'active':''} ${enabled?'':'disabled'}" onclick="_alertMaintOpen(${w.id})" title="Edit window">
         <div class="al-pg-mw-dot ${active?'on':''}"></div>
         <div class="al-pg-mw-body">
           <div class="al-pg-mw-name">
             ${esc(w.name)}
             ${active ? '<span class="al-pg-mw-pill">In effect</span>' : ''}
+            ${!enabled ? '<span class="al-pg-mw-pill al-pg-mw-pill-off">Disabled</span>' : ''}
           </div>
           <div class="al-pg-mw-meta mono">${esc(scopeLbl)} \u00b7 ${when}</div>
         </div>
+        <label class="al-pg-toggle rbac-admin"
+               onclick="event.stopPropagation()"
+               title="${enabled ? 'Disable window' : 'Enable window'}">
+          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="_alPgMwToggle(${w.id})"/>
+          <span class="al-pg-toggle-slider"></span>
+        </label>
         <button class="iconbtn rbac-admin" onclick="event.stopPropagation();_alertMaintDelete(${w.id},'${safeName}')" title="Delete">${icon('trash',12)}</button>
       </div>`;
   }).join('');
   applyRbac();
+}
+
+// Flip a single window's enabled flag. We re-PATCH the whole window payload
+// because the backend's PATCH validator requires the full schema; this keeps
+// us on one endpoint without inventing a partial-update path.
+async function _alPgMwToggle(id) {
+  const w = _alertMaintWindows.find(x => x.id === id);
+  if (!w) return;
+  const next = !(w.enabled !== false);  // flip
+  // Optimistic local update so the row repaints immediately
+  w.enabled = next;
+  _alPgRenderMaintWindows(_alertMaintWindows);
+  if (document.getElementById('alrt-maint-list')) {
+    _alertMaintRenderList(_alertMaintWindows);
+  }
+  try {
+    await api('PATCH', `/api/alert/window/${id}`, {
+      name:        w.name,
+      scope_type:  w.scope_type,
+      scope_value: w.scope_value,
+      start_ts:    w.start_ts,
+      end_ts:      w.end_ts,
+      recurring:   !!w.recurring,
+      recur_days:  w.recur_days || '',
+      recur_start: w.recur_start || '',
+      recur_end:   w.recur_end   || '',
+      enabled:     next,
+    });
+    toast(`Window "${w.name}" ${next ? 'enabled' : 'disabled'}`, 'ok');
+  } catch (e) {
+    // Roll back on failure
+    w.enabled = !next;
+    _alPgRenderMaintWindows(_alertMaintWindows);
+    if (document.getElementById('alrt-maint-list')) {
+      _alertMaintRenderList(_alertMaintWindows);
+    }
+    toast(e.message || 'Toggle failed', 'err');
+  }
 }
 
 function _mwLookupDevName(did) {
@@ -909,7 +958,8 @@ function _alertMaintRenderList(windows) {
   }
   const now = Date.now() / 1000;
   wrap.innerHTML = windows.map(w => {
-    const active  = w.start_ts <= now && w.end_ts >= now;
+    const enabled = w.enabled !== false;
+    const active  = enabled && w.start_ts <= now && w.end_ts >= now;
     const start   = new Date(w.start_ts * 1000).toLocaleString();
     const end     = new Date(w.end_ts   * 1000).toLocaleString();
     const _devForScope = w.scope_type === 'device'
@@ -923,12 +973,13 @@ function _alertMaintRenderList(windows) {
       : 'One-time';
     const safeName = esc(w.name).replace(/'/g, '&#39;');
     return `
-      <div class="alrt-card ${active ? 'alrt-maint-active' : ''}">
+      <div class="alrt-card ${active ? 'alrt-maint-active' : ''} ${enabled?'':'alrt-maint-disabled'}">
         <div class="alrt-card-left">
           <div class="alrt-card-top">
             ${active ? '<span class="alrt-dot-on" title="Currently active">●</span>' : ''}
             <span class="alrt-name">${esc(w.name)}</span>
             ${active ? '<span class="alrt-sev-badge alrt-sev-effective">In effect</span>' : ''}
+            ${!enabled ? '<span class="alrt-sev-badge alrt-sev-muted">Disabled</span>' : ''}
           </div>
           <div class="alrt-card-info">
             <span class="alrt-info-pill">📅 ${start} → ${end}</span>
@@ -937,6 +988,10 @@ function _alertMaintRenderList(windows) {
           </div>
         </div>
         <div class="alrt-card-btns">
+          <label class="al-pg-toggle rbac-admin" title="${enabled?'Disable':'Enable'} window" style="margin-right:8px">
+            <input type="checkbox" ${enabled?'checked':''} onchange="_alPgMwToggle(${w.id})"/>
+            <span class="al-pg-toggle-slider"></span>
+          </label>
           <button class="btn-sm rbac-admin" onclick="_alertMaintOpen(${w.id})">Edit</button>
           <button class="btn-sm rbac-admin alrt-del-btn" onclick="_alertMaintDelete(${w.id},'${safeName}')">Delete</button>
         </div>
@@ -969,6 +1024,7 @@ function _alertMaintOpen(id) {
   const recurDays  = w?.recur_days  || '';
   const recurStart = w?.recur_start || '00:00';
   const recurEnd   = w?.recur_end   || '06:00';
+  const enabled    = w ? (w.enabled !== false) : true;
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'alrt-maint-modal';
@@ -984,6 +1040,12 @@ function _alertMaintOpen(id) {
         <div class="fr">
           <label class="fl">Name</label>
           <input type="text" id="mw-name" value="${esc(name)}" placeholder="e.g. Weekend Maintenance" autocomplete="off" maxlength="200"/>
+        </div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="mw-enabled" ${enabled ? 'checked' : ''}/>
+            <span class="fl" style="margin:0">Enabled <span style="color:var(--text3);font-size:10px">(disabled windows never suppress alerts)</span></span>
+          </label>
         </div>
         <div class="fr">
           <label class="fl">Scope</label>
@@ -1123,11 +1185,13 @@ async function _alertMaintSave(id) {
     const sel = document.getElementById('mw-scope-val');
     scopeVal = sel ? JSON.stringify([...sel.selectedOptions].map(o => o.value)) : '[]';
   }
+  const enabled = document.getElementById('mw-enabled')?.checked !== false;
   const payload = {
     name, scope_type: scopeType, scope_value: scopeVal,
     start_ts: startTs, end_ts: endTs,
     recurring, recur_days: activeDays,
     recur_start: recurStart, recur_end: recurEnd,
+    enabled,
   };
 
   const btn = document.getElementById('mw-save-btn');
@@ -1453,7 +1517,7 @@ async function _alPgLoadDeliveries() {
       <div class="al-pg-tbl-wrap">
         <table class="al-pg-tbl">
           <thead><tr>
-            <th>Time</th><th>Profile</th><th>Device</th><th>Severity</th><th>State</th>
+            <th>Time</th><th>Profile</th><th>Device</th><th>Severity</th><th>State</th><th>Notes</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -1474,6 +1538,7 @@ function _alPgDeliveryRow(e) {
   const sevLbl = ({down:'Down', warning:'Warning', down_recovered:'Recovered', warning_recovered:'Warn recovered', critical:'Critical', info:'Info'})[sev] || sev;
   const state = (e.state || '').toLowerCase();
   const stateCls = state === 'active' ? 'crit' : state === 'ack' ? 'warn' : 'ok';
+  const notes = _alPgDeliveryNotes(e, state);
   return `
     <tr>
       <td class="muted small mono">${esc(when)}</td>
@@ -1481,7 +1546,40 @@ function _alPgDeliveryRow(e) {
       <td>${esc(e.device_name || e.device_id || '—')}</td>
       <td><span class="al-pg-sev ${sevCls}">${esc(sevLbl)}</span></td>
       <td><span class="al-pg-state ${stateCls}">${esc(state || '—')}</span></td>
+      <td class="al-pg-notes" title="${esc(notes.tooltip)}">${notes.html}</td>
     </tr>`;
+}
+
+// Pick a useful one-line note per row. Today only "suppressed" has a structured
+// reason (always maintenance windows — see monitoring/alert_profile_engine.py),
+// but we synthesize light notes for ack/resolved too so the column stays useful.
+function _alPgDeliveryNotes(e, state) {
+  if (state === 'suppressed') {
+    const r = (e.suppress_reason || '').trim();
+    if (r) {
+      return { html: `<span class="al-pg-note al-pg-note-mute">${esc(r)}</span>`, tooltip: r };
+    }
+    return { html: '<span class="al-pg-note al-pg-note-mute">Maintenance window</span>',
+             tooltip: 'Suppressed by an active maintenance window' };
+  }
+  if (state === 'acknowledged' || state === 'ack') {
+    const who = (e.ack_by || '').trim();
+    const txt = who ? `Ack by ${who}` : 'Acknowledged';
+    return { html: `<span class="al-pg-note">${esc(txt)}</span>`, tooltip: txt };
+  }
+  if (state === 'resolved' && e.resolved_at && e.triggered_at) {
+    const dur = Math.max(0, e.resolved_at - e.triggered_at);
+    const lbl = dur < 60   ? `${Math.round(dur)}s`
+              : dur < 3600 ? `${Math.round(dur/60)}m`
+              :              `${Math.round(dur/3600)}h`;
+    const txt = `Recovered in ${lbl}`;
+    return { html: `<span class="al-pg-note">${esc(txt)}</span>`, tooltip: txt };
+  }
+  if ((e.repeat_count || 1) > 1) {
+    const txt = `${e.repeat_count}× repeats`;
+    return { html: `<span class="al-pg-note">${esc(txt)}</span>`, tooltip: txt };
+  }
+  return { html: '<span class="muted">—</span>', tooltip: '' };
 }
 
 function _alPgRelTime(epochSec) {

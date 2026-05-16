@@ -19,7 +19,7 @@ from db.backend  import is_pg
 _AE_COLS = (
     "id, profile_id, stage_id, profile_name, did, sid, dname, sname, "
     "severity, event_type, state, triggered_at, resolved_at, ack_by, "
-    "ack_at, detail, repeat_count"
+    "ack_at, detail, repeat_count, suppress_reason"
 )
 
 
@@ -36,7 +36,8 @@ def _row(r) -> dict:
 # ── Alert events ──────────────────────────────────────────────────
 
 def db_log_event(profile_id: int, stage_id: int, profile_name: str,
-                 ctx: dict, state: str = 'active') -> int:
+                 ctx: dict, state: str = 'active',
+                 suppress_reason: str = '') -> int:
     """
     Log a fired stage event. If an active OR acknowledged event already exists
     for the same device + sensor, updates that row in place (bump repeat_count,
@@ -94,12 +95,12 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                     cur.execute(
                         """INSERT INTO alert_events
                            (profile_id, stage_id, profile_name, did, sid, dname, sname,
-                            severity, event_type, state, triggered_at, detail)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                            severity, event_type, state, triggered_at, detail, suppress_reason)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (
                             profile_id, stage_id, profile_name,
                             did, sid, dname, sname,
-                            severity, event_type, state, now, detail,
+                            severity, event_type, state, now, detail, suppress_reason,
                         )
                     )
                     eid = cur.fetchone()['id']
@@ -145,12 +146,12 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
             cur = con.execute(
                 """INSERT INTO alert_events
                    (profile_id, stage_id, profile_name, did, sid, dname, sname,
-                    severity, event_type, state, triggered_at, detail)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    severity, event_type, state, triggered_at, detail, suppress_reason)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     profile_id, stage_id, profile_name,
                     did, sid, dname, sname,
-                    severity, event_type, state, now, detail,
+                    severity, event_type, state, now, detail, suppress_reason,
                 )
             )
             eid = cur.lastrowid

@@ -471,6 +471,10 @@ def pg_create_main_schema(cur):
         "ON alert_events(did, sid) "
         "WHERE state IN ('active','acknowledged')"
     )
+    # suppress_reason carries the human-readable cause when state='suppressed'
+    # (currently only maintenance windows; extend if other suppression sources
+    # ever start logging rows).
+    cur.execute("ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS suppress_reason TEXT DEFAULT ''")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_profiles (
             id          SERIAL PRIMARY KEY,
@@ -530,9 +534,11 @@ def pg_create_main_schema(cur):
             recur_days  TEXT DEFAULT '',
             recur_start TEXT DEFAULT '',
             recur_end   TEXT DEFAULT '',
+            enabled     INTEGER DEFAULT 1,
             created_by  TEXT DEFAULT '',
             created_at  DOUBLE PRECISION DEFAULT 0
         )""")
+    cur.execute("ALTER TABLE maintenance_windows ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 1")
 
     # ── User Groups ──────────────────────────────────────────────────
     cur.execute("""
