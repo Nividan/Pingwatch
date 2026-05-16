@@ -788,7 +788,7 @@ function _dwOpenFullscreen(wid) {
   if (!reg) return;
   _dwEnsureFullscreenModal();
   _dwCloseFullscreen(); // clear any previous
-  document.getElementById('dw-fs-icon').textContent  = reg.icon;
+  document.getElementById('dw-fs-icon').innerHTML    = reg.icon;
   document.getElementById('dw-fs-title').textContent = w.title;
   const fsBody = document.getElementById('dw-fs-body');
   fsBody.innerHTML = '';
