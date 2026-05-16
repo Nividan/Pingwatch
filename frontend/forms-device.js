@@ -169,7 +169,10 @@ async function submitAddDevice(){
   const role = document.getElementById('ad-role')?.value || '';
   if(role){
     try{ await api('PUT', `/api/device/${r.did}/role`, { role }); }
-    catch(_){ toast('Device added, role tag failed','err'); }
+    catch(err){
+      const msg = (err && err.message) ? err.message : 'unknown error';
+      toast(`Device added, role tag failed: ${msg}`,'err');
+    }
     window._pwRolesCache = null;  // invalidate map auto-link cache
   }
   closeM('mad');
@@ -210,89 +213,82 @@ function openEditDevice(did){
       <button class="mclose" onclick="closeM('med')">✕</button>
     </div>
     <div class="mbdy">
-      <div class="fr">
-        <label class="fl">Device Name</label>
-        <input type="text" id="ed-n" value="${esc(dev.name)}" autocomplete="off"/>
+      <div class="ed-tabs">
+        <button type="button" class="ed-tab itab itab-active" data-tab="general"     onclick="_edSwitchTab('general')">General</button>
+        <button type="button" class="ed-tab itab"             data-tab="networking"  onclick="_edSwitchTab('networking')">Networking <span class="ed-tab-cnt" id="ed-tab-net-count">${_edSecIps.length?'('+_edSecIps.length+')':''}</span></button>
+        <button type="button" class="ed-tab itab"             data-tab="credentials" onclick="_edSwitchTab('credentials')">Credentials</button>
+        <button type="button" class="ed-tab itab"             data-tab="licenses"    onclick="_edSwitchTab('licenses')">Licenses <span class="ed-tab-cnt" id="ed-tab-lic-count"></span></button>
       </div>
-      <div class="fgrid">
+
+      <!-- Tab: General -->
+      <div class="ed-tab-pane" id="ed-tab-general">
         <div class="fr">
-          <label class="fl">Host / IP Address</label>
-          <input type="text" id="ed-h" value="${esc(dev.host)}" autocomplete="off"/>
+          <label class="fl">Device Name</label>
+          <input type="text" id="ed-n" value="${esc(dev.name)}" autocomplete="off"/>
         </div>
-        <div class="fr">
-          <label class="fl">Site <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-          <input type="text" id="ed-site" value="${esc(dev.site||'')}" list="ed-site-dl"
-                 placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-          <datalist id="ed-site-dl"></datalist>
-        </div>
-      </div>
-      <div class="fr">
-        <label class="fl">Group</label>
-        <div style="position:relative">
-          <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" autocomplete="off"
-                 style="padding-right:28px"
-                 onfocus="_edgShow()" oninput="_edgFilter(this.value)"/>
-          <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_edgToggle()">▾</button>
-          <div id="ed-g-dd" class="grp-dd" style="display:none">${_edGroupItems}</div>
-        </div>
-      </div>
-      <div class="fr">
-        <label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional — anchors auto-links on the NTM Live map)</span></label>
-        <select id="ed-role" data-orig="">
-          <option value="">— None —</option>
-          <option value="switch">Switch (access — subnet members fan to it)</option>
-          <option value="backbone">Backbone (aggregation — between switches and core)</option>
-          <option value="core">Core (central L3 — between backbones and gateway)</option>
-          <option value="gateway">Gateway (edge / firewall — site exit)</option>
-        </select>
-      </div>
-      <details class="dev-creds" style="margin-top:10px"${_edSecIps.length?' open':''}>
-        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Secondary IPs <span style="color:var(--text3);font-weight:400">(${_edSecIps.length})</span></summary>
-        <div style="margin-top:8px">
-          <div id="ed-sip-list" style="max-height:160px;overflow-y:auto;margin-bottom:6px"></div>
-          <div style="display:flex;gap:6px">
-            <input type="text" id="ed-sip-input" placeholder="e.g. 10.0.0.5" autocomplete="off"
-                   style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_edSipAdd()}"/>
-            <button class="btn-s" type="button" onclick="_edSipAdd()" style="white-space:nowrap">+ Add</button>
+        <div class="fgrid">
+          <div class="fr">
+            <label class="fl">Host / IP Address</label>
+            <input type="text" id="ed-h" value="${esc(dev.host)}" autocomplete="off"/>
+          </div>
+          <div class="fr">
+            <label class="fl">Site <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
+            <input type="text" id="ed-site" value="${esc(dev.site||'')}" list="ed-site-dl"
+                   placeholder="HQ, DR-Site-2…" autocomplete="off"/>
+            <datalist id="ed-site-dl"></datalist>
           </div>
         </div>
-      </details>
-      <details class="dev-creds" style="margin-top:10px">
-        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Licenses <span id="ed-lic-count" style="color:var(--text3);font-weight:400">(0)</span></summary>
-        <div style="margin-top:8px">
-          <div id="ed-lic-list" style="max-height:220px;overflow-y:auto;margin-bottom:6px"></div>
-          <div style="border:1px solid var(--border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px">
-            <div class="fgrid">
-              <div class="fr" style="margin:0"><input type="text" id="ed-lic-name" placeholder="License name (e.g. FortiCare)" autocomplete="off"/></div>
-              <div class="fr" style="margin:0"><input type="date" id="ed-lic-date" autocomplete="off" class="lic-date-inp"/></div>
+        <div class="fgrid">
+          <div class="fr">
+            <label class="fl">Group</label>
+            <div style="position:relative">
+              <input type="text" id="ed-g" value="${esc(dev.group||'Default Group')}" autocomplete="off"
+                     style="padding-right:28px"
+                     onfocus="_edgShow()" oninput="_edgFilter(this.value)"/>
+              <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_edgToggle()">▾</button>
+              <div id="ed-g-dd" class="grp-dd" style="display:none">${_edGroupItems}</div>
             </div>
-            <div class="fgrid">
-              <div class="fr" style="margin:0"><input type="text" id="ed-lic-note" placeholder="Note (optional)" autocomplete="off"/></div>
-              <div class="fr" style="margin:0;display:flex;gap:6px;align-items:center">
-                <input type="number" id="ed-lic-warn" value="30" min="0" max="365" style="width:60px" title="Warn days before expiry"/>
-                <span style="font-size:10px;color:var(--text3)">warn days</span>
-                <input type="number" id="ed-lic-crit" value="0" min="0" max="365" style="width:60px" title="Crit days before expiry"/>
-                <span style="font-size:10px;color:var(--text3)">crit days</span>
-              </div>
-            </div>
-            <button class="btn-s" type="button" onclick="_edLicAdd('${did}')" style="align-self:flex-start">+ Add License</button>
+          </div>
+          <div class="fr">
+            <label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
+            <select id="ed-role" data-orig="">
+              <option value="">— None —</option>
+              <option value="switch">Switch (access)</option>
+              <option value="backbone">Backbone (aggregation)</option>
+              <option value="core">Core (central L3)</option>
+              <option value="gateway">Gateway (edge / firewall)</option>
+            </select>
           </div>
         </div>
-      </details>
-      <div class="fr" style="margin-top:4px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-          <input type="checkbox" id="ed-am" ${dev.alerts_muted?'checked':''}>
-          <span class="fl" style="margin:0">🔕 Mute all alerts for this device</span>
-        </label>
-        <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Silences DOWN / recovery / threshold alerts for every sensor in this device.</div>
+        <div class="fr" style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="ed-am" ${dev.alerts_muted?'checked':''}>
+            <span class="fl" style="margin:0">🔕 Mute all alerts for this device</span>
+          </label>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px;margin-left:24px">Silences DOWN / recovery / threshold alerts for every sensor in this device.</div>
+        </div>
+        <div class="alrt-section" style="margin-top:10px">
+          <div class="alrt-section-hdr">Alert Profile</div>
+          <div id="ed-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
+        </div>
       </div>
-      <div class="alrt-section" style="margin-top:10px">
-        <div class="alrt-section-hdr">Alert Profile</div>
-        <div id="ed-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
+
+      <!-- Tab: Networking -->
+      <div class="ed-tab-pane" id="ed-tab-networking" style="display:none">
+        <div class="ed-pane-hdr">Secondary IP Addresses</div>
+        <div class="ed-pane-sub">Additional IPs the device responds on. Used for IPAM allocation matching and topology role assignment.</div>
+        <div id="ed-sip-list" style="max-height:220px;overflow-y:auto;margin-bottom:8px"></div>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="ed-sip-input" placeholder="e.g. 10.0.0.5" autocomplete="off"
+                 style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_edSipAdd()}"/>
+          <button class="btn-s" type="button" onclick="_edSipAdd()" style="white-space:nowrap">+ Add</button>
+        </div>
       </div>
-      <details class="dev-creds" style="margin-top:10px"${(dev.snmp_community_default||dev.vmware_user_default||dev.has_vmware_password_default||dev.snmp_v3_user_default||dev.has_snmp_v3_auth_pass_default)?' open':''}>
-        <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(pre-fills new sensors)</span></summary>
-        <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+
+      <!-- Tab: Credentials -->
+      <div class="ed-tab-pane" id="ed-tab-credentials" style="display:none">
+        <div class="ed-pane-hdr">Default Credentials <span style="color:var(--text3);font-weight:400;font-size:12px">(pre-fills new sensors)</span></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
           <div class="fgrid">
             <div class="fr" id="ed-snmp-comm-row" style="${dev.snmp_version_default==='3'?'display:none':''};"><label class="fl">SNMP Community</label>
               <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
@@ -348,7 +344,31 @@ function openEditDevice(did){
               <input type="password" id="ed-vmw-pass" placeholder="${dev.has_vmware_password_default?'(unchanged)':''}" autocomplete="new-password"/></div>
           </div>
         </div>
-      </details>
+      </div>
+
+      <!-- Tab: Licenses -->
+      <div class="ed-tab-pane" id="ed-tab-licenses" style="display:none">
+        <div class="ed-pane-hdr">Licenses &amp; Subscriptions <span id="ed-lic-count" style="color:var(--text3);font-weight:400;font-size:12px"></span></div>
+        <div class="ed-pane-sub">Track expiry dates for device licenses (FortiCare, SmartNet, etc.). Warn/crit days trigger alerts before expiry.</div>
+        <div id="ed-lic-list" style="max-height:260px;overflow-y:auto;margin-bottom:10px"></div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px">
+          <div class="fgrid">
+            <div class="fr" style="margin:0"><input type="text" id="ed-lic-name" placeholder="License name (e.g. FortiCare)" autocomplete="off"/></div>
+            <div class="fr" style="margin:0"><input type="date" id="ed-lic-date" autocomplete="off" class="lic-date-inp"/></div>
+          </div>
+          <div class="fgrid">
+            <div class="fr" style="margin:0"><input type="text" id="ed-lic-note" placeholder="Note (optional)" autocomplete="off"/></div>
+            <div class="fr" style="margin:0;display:flex;gap:6px;align-items:center">
+              <input type="number" id="ed-lic-warn" value="30" min="0" max="365" style="width:60px" title="Warn days before expiry"/>
+              <span style="font-size:10px;color:var(--text3)">warn days</span>
+              <input type="number" id="ed-lic-crit" value="0" min="0" max="365" style="width:60px" title="Crit days before expiry"/>
+              <span style="font-size:10px;color:var(--text3)">crit days</span>
+            </div>
+          </div>
+          <button class="btn-s" type="button" onclick="_edLicAdd('${did}')" style="align-self:flex-start">+ Add License</button>
+        </div>
+      </div>
+    </div>
     </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('med')">Cancel</button>
@@ -368,6 +388,18 @@ function openEditDevice(did){
   _edLicLoad(did);
   _loadDeviceProfileSection(did);
   _loadDeviceRole(did);
+}
+
+// Tab switcher for the Edit Device modal. Hides every .ed-tab-pane in #med
+// and clears .itab-active on every .ed-tab, then shows the chosen pane and
+// marks its button active. Stateless — re-clicking the same tab is a no-op.
+function _edSwitchTab(name){
+  document.querySelectorAll('#med .ed-tab-pane').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('#med .ed-tab').forEach(el => el.classList.remove('itab-active'));
+  const pane = document.getElementById('ed-tab-' + name);
+  if (pane) pane.style.display = '';
+  const btn = document.querySelector(`#med .ed-tab[data-tab="${name}"]`);
+  if (btn) btn.classList.add('itab-active');
 }
 
 // Fetch the current topology role for the device and populate the dropdown.
@@ -578,8 +610,13 @@ async function submitEditDevice(did){
       try {
         await api('PUT', `/api/device/${did}/role`, { role: newRole });
         window._pwRolesCache = null;  // invalidate map cache
-      } catch(_) {
-        toast('Saved, but role tag failed', 'err');
+      } catch(err) {
+        // Common causes: server not restarted after pull (404 on endpoint),
+        // host isn't a plain IP (no IPAM allocation to tag), or no IPAM
+        // subnet covers the host IP. Surface the actual error so the user
+        // can diagnose without opening DevTools.
+        const msg = (err && err.message) ? err.message : 'unknown error';
+        toast(`Saved, but role tag failed: ${msg}`, 'err');
       }
     }
   }
@@ -596,16 +633,19 @@ async function submitEditDevice(did){
 function _edSipRender(){
   const el = document.getElementById('ed-sip-list');
   if(!el) return;
-  if(!_edSecIps.length){ el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No secondary IPs</div>'; return; }
-  el.innerHTML = _edSecIps.map((ip,i) =>
-    `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
-      <span style="flex:1;font-size:12px;font-family:monospace">${esc(ip)}</span>
-      <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edSipRemove(${i})">✕</button>
-    </div>`
-  ).join('');
-  // update count in summary
-  const summary = document.querySelector('#med details.dev-creds:first-of-type summary span');
-  if(summary) summary.textContent = `(${_edSecIps.length})`;
+  if(!_edSecIps.length){
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No secondary IPs</div>';
+  } else {
+    el.innerHTML = _edSecIps.map((ip,i) =>
+      `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
+        <span style="flex:1;font-size:12px;font-family:monospace">${esc(ip)}</span>
+        <button class="btn-s" style="padding:1px 6px;font-size:11px;color:var(--down)" onclick="_edSipRemove(${i})">✕</button>
+      </div>`
+    ).join('');
+  }
+  // Update Networking tab counter chip (was the <details> summary in the pre-tab layout)
+  const cnt = document.getElementById('ed-tab-net-count');
+  if(cnt) cnt.textContent = _edSecIps.length ? `(${_edSecIps.length})` : '';
 }
 function _edSipAdd(){
   const inp = document.getElementById('ed-sip-input');
@@ -648,17 +688,14 @@ async function _edLicLoad(did){
     _edLicenses = (r && r.licenses) || [];
   }catch(e){ _edLicenses = []; }
   _edLicRender(did);
-  // Open section if there are licenses
-  if(_edLicenses.length){
-    const det = document.getElementById('ed-lic-list')?.closest('details');
-    if(det) det.open = true;
-  }
 }
 
 function _edLicRender(did){
   const el = document.getElementById('ed-lic-list');
   const cnt = document.getElementById('ed-lic-count');
-  if(cnt) cnt.textContent = `(${_edLicenses.length})`;
+  if(cnt) cnt.textContent = _edLicenses.length ? `(${_edLicenses.length})` : '';
+  const tabCnt = document.getElementById('ed-tab-lic-count');
+  if(tabCnt) tabCnt.textContent = _edLicenses.length ? `(${_edLicenses.length})` : '';
   if(!el) return;
   if(!_edLicenses.length){
     el.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:4px 0">No licenses</div>';

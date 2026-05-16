@@ -8,6 +8,25 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### Edit Device modal — tabbed layout
+
+The Edit Device modal grew tall enough to scroll past one viewport once Topology Role, Secondary IPs, Licenses, Alert Profile, and Default Credentials all stacked vertically. Replaced the single-column scrolling form with four tabs (matches the Settings modal's nav pattern):
+
+- **General** — Device Name, Host/IP, Site, Group, Topology Role, Mute toggle, Alert Profile. The two paired fields per row (Host+Site, Group+Role) use `.fgrid` so the tab fits in one viewport.
+- **Networking** — Secondary IP Addresses (was an auto-opened `<details>` block on the General tab). Counter chip on the tab label ("Networking (3)") via [`ed-tab-net-count`](frontend/forms-device.js).
+- **Credentials** — Default Credentials section (SNMP community, SNMP version, v3 block, VMware user/pass) — was a `<details>` block below Alert Profile.
+- **Licenses** — License management (was a `<details>` block). Counter chip on tab label via `ed-tab-lic-count`.
+
+**Mechanics** ([forms-device.js](frontend/forms-device.js)):
+- New `_edSwitchTab(name)` toggles `.ed-tab-pane` visibility and `.itab-active` class on the matching `.ed-tab` button. Stateless re-click is a no-op.
+- `_edSipRender()` now updates the Networking tab counter (replaces the old details summary span lookup).
+- `_edLicRender()` updates both the in-pane `ed-lic-count` and the new tab-button `ed-tab-lic-count`.
+- `_edLicLoad()` no longer attempts to auto-open a `<details>` element — that section is now a tab and is reachable by user click.
+
+**Styling** ([style.css](frontend/style.css)): `.ed-tabs` (flex row, 14px bottom margin) reuses `.itab` / `.itab-active` pill style from elsewhere in the codebase. `.ed-pane-hdr` + `.ed-pane-sub` give each non-General tab a consistent title/description pair. `.ed-tab-cnt` colors the count chip per active/inactive state.
+
+All existing input IDs preserved (ed-n, ed-h, ed-site, ed-g, ed-role, ed-am, ed-snmp-comm, ed-snmp-ver, ed-v3-*, ed-vmw-*, ed-sip-*, ed-lic-*) so `submitEditDevice` and every cred/V3/lic helper continues to work without changes.
+
 ### NTM Live — auto-links from IPAM topology (4-tier enterprise model)
 
 The Live map now infers network topology automatically from IPAM subnet membership and four role tags on `ip_allocations.kind`: `switch` (access), `backbone` (aggregation/distribution), `core` (central L3), `gateway` (edge/FW). Models the standard 3/4-tier enterprise topology where backbones aggregate floor switches into the core, and core fronts the firewall. User-drawn manual links continue to win visually; auto-links render as a dim dashed layer underneath. Eliminates the need to hand-draw every cable for the 80% obvious "device → switch → backbone → core → gateway" topology.

@@ -1418,6 +1418,16 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
 .itab{display:flex;align-items:center;gap:5px;padding:5px 14px;font-size:12px;font-weight:500;color:var(--text2);background:var(--bg3);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all .15s}
 .itab:hover{background:var(--bg4);color:var(--text)}
 .itab.itab-active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* Edit Device modal — tabbed layout (v1.0+). Tabs sit at the top of .mbdy,
+   panes below. Empty count chips (e.g. "Networking ()") use opacity:0 via the
+   :empty wrapper so spacing stays consistent. */
+.ed-tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.ed-tab{font-family:inherit}
+.ed-tab-cnt{font-size:11px;color:var(--text3);font-weight:400}
+.ed-tab.itab-active .ed-tab-cnt{color:rgba(255,255,255,.85)}
+.ed-pane-hdr{font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px}
+.ed-pane-sub{font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.45}
 .mft {display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
 
 /* Upload Certificate tabs */
