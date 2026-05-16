@@ -37,6 +37,43 @@ async function openEditGroup(groupName) {
         </div>
 
         <div class="alrt-section">
+          <div class="alrt-section-hdr">Device Icon (NTM Live map)</div>
+          <div class="fr">
+            <select id="eg-icon">
+              <option value="">— Auto-detect from name / group —</option>
+              <option value="switch">Switch</option>
+              <option value="bb-switch">Backbone Switch</option>
+              <option value="firewall">Firewall</option>
+              <option value="wan-switch">WAN Switch</option>
+              <option value="server">Server</option>
+              <option value="pc">PC / Workstation</option>
+              <option value="laptop">Laptop</option>
+              <option value="ap">WiFi Access Point</option>
+              <option value="connector">Cato Connector</option>
+              <option value="remote-pc">Remote PC</option>
+              <option value="cloud">Cloud / Internet</option>
+              <option value="router">Router / Gateway</option>
+              <option value="vm">Virtual Machine</option>
+              <option value="appliance">Network Appliance</option>
+              <option value="storage">Storage / NAS</option>
+              <option value="phone">IP Phone / VoIP</option>
+              <option value="camera">IP Camera / CCTV</option>
+              <option value="printer">Printer / MFP</option>
+              <option value="load-balancer">Load Balancer</option>
+              <option value="hypervisor">Hypervisor / ESXi</option>
+              <option value="ups">UPS / PDU</option>
+              <option value="container">Container Host</option>
+              <option value="ipmi">IPMI / BMC</option>
+            </select>
+            <div class="fh">
+              Default icon for every device in this group on the NTM Live map.
+              Per-device icon overrides (set from the NTM panel) still take
+              precedence.
+            </div>
+          </div>
+        </div>
+
+        <div class="alrt-section">
           <div class="alrt-section-hdr">Alert Profile</div>
           <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">
             Loading\u2026
@@ -70,6 +107,22 @@ async function openEditGroup(groupName) {
   // Site picker: prefill from the unique sites currently used by devices in
   // this group. Populate the autocomplete datalist from /api/sites.
   _loadGroupSiteState(groupName);
+  // NTM device-icon default: pull the current setting and select the option.
+  _loadGroupIconState(groupName);
+}
+
+async function _loadGroupIconState(groupName) {
+  const sel = document.getElementById('eg-icon');
+  if (!sel) return;
+  try {
+    const r = await api('GET', '/api/settings/pw_group_icons');
+    const map = (r && r.value) || {};
+    const cur = map[groupName] || '';
+    sel.value = cur;
+    sel.dataset.initial = cur;
+  } catch {
+    sel.dataset.initial = '';
+  }
 }
 
 async function _loadGroupSiteState(groupName) {

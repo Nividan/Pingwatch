@@ -16,6 +16,14 @@ When auto-discovery creates a new device from an IPAM subnet, the subnet's `site
 - [`monitoring/auto_discovery.py:610`](monitoring/auto_discovery.py#L610) — `_build_device_specs()` gains `site=""` kwarg; threads through into each device spec dict.
 - [`core/device_importer.py:189, 207`](core/device_importer.py#L189) — `create_devices_batch()` reads `item.get("site")` and passes it as kwarg to `STATE.add_device(name, host, group, site=site)`. Truncated to 80 chars to match the PATCH/bulk validator.
 
+### Site hierarchy — Phase D++: per-site mini-grid placement (vertical stack)
+
+Follow-up to Phase D+. The backdrops worked but they were wrapping an old single-row layout that ran every group through one global 3-col grid regardless of site, leaving big sites sprawling 7500px wide while small sites became tiny dots on the far right. The placement engine now thinks in **site cells**: each site is its own self-contained block with a 3-col mini-grid inside, and sites stack vertically on the canvas (alphabetical, Unsited last). Sized to content — small sites don't waste space, big sites grow downward.
+
+- **Per-site mini-grid hint computation** in [`calcPwLayout`](frontend/map.js) — entries are grouped by site (siteBuckets), each site's groups laid out in a 3-col grid inside the site's content area, sites stack with `SITE_GAP=40px` vertical separation. `siteNaturalFrames` tracks each site's outer rectangle (header + content + padding) so backdrops align exactly with the placement.
+- **Phase 2 anchor changed** — un-positioned groups now use their natural per-site grid hint directly instead of the old "right of bounding box" anchor (which was what flattened every Reset Layout into one horizontal strip regardless of site). User-positioned groups (Phase 1, with saved x/y) still take precedence — existing custom layouts are preserved.
+- **Backdrop builder reuses placement constants** — `SITE_PAD` / `SITE_TITLE_H` are declared once at the top of the placement section and reused by the syntheticSites loop, so the rendered backdrop sits flush with the natural group layout.
+
 ### Site hierarchy — Phase D+: NTM Live tab site backdrops + Site Stats panel
 
 Builds on Phase D's composite-key bucketing (groups already distinct per site). Adds actual VISIBLE site representation on the canvas + a Site Stats sidebar so a glance at the Live tab tells you "HQ is 6/8, DR is 8/8" without clicking around. Inspired by the new design's site-card grid but evolves rather than replaces the operational layout — every device + connection line stays visible.

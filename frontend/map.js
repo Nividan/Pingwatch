@@ -440,25 +440,65 @@ function calcPwLayout(devices) {
     return (a.group || '').localeCompare(b.group || '');
   });
 
-  // Two-phase placement: anchor user-positioned groups first, then slide
-  // un-positioned groups out of any collision with the anchors.
+  // ── Per-site mini-grid placement (v1.0+) ─────────────────────────
+  // Each site becomes its own self-contained block: its groups flow in a
+  // 3-col mini-grid INSIDE the site's content area. Sites stack vertically
+  // on the canvas in alphabetical order (Unsited last). Sized to content —
+  // a small site doesn't waste space, a big site grows downward.
   //
-  // 1) Compute each entry's natural grid hint (used as starting position for
-  //    the slide search if the group has no override yet).
-  let gi = 0, rowY = STARTY;
-  const decorated = [];
-  for (let r = 0; r < entries.length; r += COLS) {
-    const row  = entries.slice(r, r + COLS);
-    const rowH = Math.max(...row.map(e => e.h));
-    let gx = STARTX;
-    for (const ent of row) {
-      decorated.push({ ...ent, gi: gi++, hint: { x: gx, y: rowY } });
-      gx += ent.w + GGAP;
-    }
-    rowY += rowH + ROWGAP;
+  // The COLS/GGAP/ROWGAP constants above still apply; SITE_PAD adds the
+  // breathing room between the site frame and its inner groups, and
+  // SITE_GAP separates one site block from the next.
+  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 40;
+
+  // Group entries by site (entries was already sorted site-then-name above,
+  // so siteOrder preserves alphabetical order with Unsited at the end).
+  const siteBuckets = new Map();   // site -> entries[]
+  for (const ent of entries) {
+    const s = ent.site || '';
+    if (!siteBuckets.has(s)) siteBuckets.set(s, []);
+    siteBuckets.get(s).push(ent);
   }
 
-  // 2) Phase 1 — fixed groups (have a saved x/y override).
+  let gi = 0;
+  let curY = STARTY;
+  const decorated = [];
+  // Computed during placement, consumed by syntheticSites build below.
+  // site -> {x, y, w, h} of the site frame (header + content area).
+  const siteNaturalFrames = {};
+
+  for (const [site, sEntries] of siteBuckets) {
+    const x0 = STARTX;
+    // Content origin inside the site frame
+    const contentX = x0 + SITE_PAD;
+    const contentY = curY + SITE_TITLE_H + SITE_PAD;
+    // Lay out this site's groups in a 3-col mini-grid
+    let innerRowY = contentY;
+    let maxInnerW = 0;
+    for (let r = 0; r < sEntries.length; r += COLS) {
+      const row  = sEntries.slice(r, r + COLS);
+      const rowH = Math.max(...row.map(e => e.h));
+      let gx = contentX;
+      for (const ent of row) {
+        decorated.push({ ...ent, gi: gi++, hint: { x: gx, y: innerRowY } });
+        gx += ent.w + GGAP;
+      }
+      // Width of this row (excluding the trailing GGAP after the last cell)
+      const rowWidth = (gx - GGAP) - contentX;
+      maxInnerW = Math.max(maxInnerW, rowWidth);
+      innerRowY += rowH + ROWGAP;
+    }
+    // Final innerRowY overshoots by one ROWGAP — strip it off the height
+    const innerH = (innerRowY - ROWGAP) - contentY;
+    const siteW  = maxInnerW + SITE_PAD * 2;
+    const siteH  = SITE_TITLE_H + SITE_PAD + innerH + SITE_PAD;
+    // Even Unsited gets a frame entry so block stacking lines up, but it
+    // won't be rendered as a backdrop (syntheticSites filters site === '').
+    siteNaturalFrames[site] = { x: x0, y: curY, w: siteW, h: siteH };
+    curY += siteH + SITE_GAP;
+  }
+
+  // ── Phase 1 — fixed groups (have a saved x/y override). ──────────
   const placedRects = [];
   const fixed = decorated.filter(d => {
     const o = pwGroupOverrides[d.gname];
@@ -471,19 +511,13 @@ function calcPwLayout(devices) {
     placedRects.push({ gname: d.gname, x: govr.x, y: govr.y, w: gw, h: gh });
   }
 
-  // 3) Phase 2 — un-positioned groups: anchor next to the existing layout
-  //    (right of bounding box, top-aligned) instead of the index-based grid,
-  //    then slide out of any remaining collisions. Persist so it sticks.
+  // ── Phase 2 — un-positioned groups: anchor at the natural hint
+  // (per-site mini-grid coords). _findFreeGroupSlot slides the group out of
+  // any collision with already-placed siblings. We DON'T do the
+  // "right-of-bounding-box" anchor anymore — that's what flattened every
+  // reset into one horizontal strip regardless of site.
   for (const d of newly) {
-    let hint;
-    if (placedRects.length === 0) {
-      hint = d.hint;  // pristine canvas → use natural grid hint
-    } else {
-      const maxX = Math.max(...placedRects.map(r => r.x + r.w));
-      const minY = Math.min(...placedRects.map(r => r.y));
-      hint = { x: maxX + GGAP, y: minY };
-    }
-    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, hint);
+    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, d.hint);
     pwGroupOverrides[d.gname] = { ...(pwGroupOverrides[d.gname] || {}),
                                    x: pos.x, y: pos.y, w: d.w, h: d.h };
     _pwGroupDirty = true;
@@ -662,10 +696,10 @@ function calcPwLayout(devices) {
   // Compute a bounding box per site from its constituent group rects, then
   // emit one synthetic "site" frame behind each cluster. Purely visual: no
   // user positioning, no resize handles — the backdrop tracks whatever the
-  // groups do. Skip the Unsited bucket entirely (rendering a wrapper around
-  // every unassigned group would just be noise).
-  const SITE_PAD = 24;          // gap between site border and inner groups
-  const SITE_TITLE_H = 34;      // header bar above the content area
+  // groups do (works whether groups are at their natural per-site grid
+  // positions or have been dragged elsewhere). SITE_PAD / SITE_TITLE_H are
+  // the same constants used by the placement engine above so the natural
+  // layout and the backdrops line up exactly.
   const syntheticSites = [];
   const bySiteBbox = {};
   for (const d of decorated) {
