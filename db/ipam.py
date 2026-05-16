@@ -24,7 +24,8 @@ _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "COALESCE(auto_discover,0)       AS auto_discover, "
                 "COALESCE(first_scan_approved,0) AS first_scan_approved, "
                 "last_auto_scan_ts, "
-                "COALESCE(dns_server,'')         AS dns_server")
+                "COALESCE(dns_server,'')         AS dns_server, "
+                "COALESCE(site,'')               AS site")
 
 
 def _fmt_ts(v) -> str:
@@ -47,7 +48,8 @@ def _row_to_subnet_pg(r) -> dict:
             "auto_discover":       int(r.get("auto_discover") or 0),
             "first_scan_approved": int(r.get("first_scan_approved") or 0),
             "last_auto_scan_ts":   _fmt_ts(r.get("last_auto_scan_ts")),
-            "dns_server":          (r.get("dns_server") or "")}
+            "dns_server":          (r.get("dns_server") or ""),
+            "site":                (r.get("site") or "")}
 
 
 def _row_to_subnet_sqlite(r) -> dict:
@@ -56,7 +58,8 @@ def _row_to_subnet_sqlite(r) -> dict:
             "auto_discover":       int(r[5] or 0),
             "first_scan_approved": int(r[6] or 0),
             "last_auto_scan_ts":   _fmt_ts(r[7]),
-            "dns_server":          (r[8] or "") if len(r) > 8 else ""}
+            "dns_server":          (r[8] or "") if len(r) > 8 else "",
+            "site":                (r[9] or "") if len(r) > 9 else ""}
 
 
 def db_list_subnets() -> list:
@@ -127,6 +130,7 @@ def db_get_subnet(subnet_id: int) -> dict | None:
 # Keep this whitelist tight — the PATCH route passes user input straight in.
 _SUBNET_UPDATABLE_FIELDS = {
     "name":                ("TEXT",    80),
+    "site":                ("TEXT",    40),
     "auto_discover":       ("INT",     None),
     "first_scan_approved": ("INT",     None),
     "dns_server":          ("TEXT",    255),
@@ -290,10 +294,12 @@ def db_set_subnet_last_scan(subnet_id: int, ts: str) -> bool:
         con.close()
 
 
-def db_add_subnet(cidr: str, name: str, user: str) -> int:
+def db_add_subnet(cidr: str, name: str, user: str, site: str = '') -> int:
     """
     Insert a new subnet. Returns the new row id.
     Raises ValueError on duplicate CIDR.
+
+    `site` is an optional free-form site/zone tag for sidebar grouping.
     """
     now = time.time()
     if is_pg():
@@ -301,9 +307,9 @@ def db_add_subnet(cidr: str, name: str, user: str) -> int:
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    "INSERT INTO ipam_subnets (cidr, name, created_by, created_at) "
-                    "VALUES (%s,%s,%s,%s) RETURNING id",
-                    (cidr, name, user, now)
+                    "INSERT INTO ipam_subnets (cidr, name, site, created_by, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s) RETURNING id",
+                    (cidr, name, site, user, now)
                 )
                 new_id = cur.fetchone()["id"]
             log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={new_id} by {user!r}")
@@ -318,8 +324,8 @@ def db_add_subnet(cidr: str, name: str, user: str) -> int:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         cur = con.execute(
-            "INSERT INTO ipam_subnets (cidr, name, created_by, created_at) VALUES (?,?,?,?)",
-            (cidr, name, user, now)
+            "INSERT INTO ipam_subnets (cidr, name, site, created_by, created_at) VALUES (?,?,?,?,?)",
+            (cidr, name, site, user, now)
         )
         con.commit()
         log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={cur.lastrowid} by {user!r}")

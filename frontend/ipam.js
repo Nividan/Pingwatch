@@ -137,6 +137,26 @@ function _ipamRenderSubnetSelect() {
 // Cache of per-subnet utilization stats: {subnet_id: {total, used}}
 const _ipamUtilCache = {};
 
+// Persisted collapsed-group state (site names)
+let _ipamGrpCollapsed = new Set();
+try {
+  const raw = localStorage.getItem('pw_ipam_grp_collapsed');
+  if (raw) _ipamGrpCollapsed = new Set(JSON.parse(raw));
+} catch {}
+function _ipamSaveGrpCollapsed() {
+  try { localStorage.setItem('pw_ipam_grp_collapsed', JSON.stringify([..._ipamGrpCollapsed])); } catch {}
+}
+
+// "Ungrouped" label for subnets without a site value
+const _IPAM_UNGROUPED = 'Ungrouped';
+
+function _ipamToggleGrp(site) {
+  if (_ipamGrpCollapsed.has(site)) _ipamGrpCollapsed.delete(site);
+  else _ipamGrpCollapsed.add(site);
+  _ipamSaveGrpCollapsed();
+  _ipamRenderSidebar();
+}
+
 function _ipamRenderSidebar() {
   const list = document.getElementById('ipam-subnet-list');
   if (!list) return;
@@ -151,7 +171,10 @@ function _ipamRenderSidebar() {
 
   const q = _ipamSidebarFilter;
   const visible = q
-    ? _ipamSubnets.filter(s => (s.cidr||'').toLowerCase().includes(q) || (s.name||'').toLowerCase().includes(q))
+    ? _ipamSubnets.filter(s =>
+        (s.cidr||'').toLowerCase().includes(q) ||
+        (s.name||'').toLowerCase().includes(q) ||
+        (s.site||'').toLowerCase().includes(q))
     : _ipamSubnets;
 
   if (!visible.length) {
@@ -159,18 +182,50 @@ function _ipamRenderSidebar() {
     return;
   }
 
-  list.innerHTML = visible.map(s => {
-    const u = _ipamUtilCache[s.id];
-    const pct = u && u.total ? Math.round((u.used / u.total) * 100) : 0;
-    const pctCls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
-    const active = s.id === _ipamSelectedId ? ' active' : '';
+  // Bucket by site, preserving CIDR order within each group
+  const groups = new Map();
+  for (const s of visible) {
+    const site = (s.site || '').trim() || _IPAM_UNGROUPED;
+    if (!groups.has(site)) groups.set(site, []);
+    groups.get(site).push(s);
+  }
+  // Sort groups alphabetically; push "Ungrouped" to the end
+  const sortedSites = [...groups.keys()].sort((a, b) => {
+    if (a === _IPAM_UNGROUPED) return  1;
+    if (b === _IPAM_UNGROUPED) return -1;
+    return a.localeCompare(b);
+  });
+
+  list.innerHTML = sortedSites.map(site => {
+    const subnets = groups.get(site);
+    // Force-expand any group that contains the active subnet so users
+    // never lose track of where they are
+    const containsActive = subnets.some(s => s.id === _ipamSelectedId);
+    const collapsed = _ipamGrpCollapsed.has(site) && !containsActive;
+    const arrCls = collapsed ? '' : ' open';
+    const bodyStyle = collapsed ? 'display:none' : '';
+    const cards = subnets.map(s => {
+      const u = _ipamUtilCache[s.id];
+      const pct = u && u.total ? Math.round((u.used / u.total) * 100) : 0;
+      const pctCls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+      const active = s.id === _ipamSelectedId ? ' active' : '';
+      return `
+        <div class="ipam-subnet-card${active}" onclick="_ipamOnSubnetChange(${s.id})">
+          <div class="ipam-subnet-card-l">
+            <div class="ipam-subnet-cidr mono">${esc(s.cidr)}</div>
+            <div class="ipam-subnet-meta">${esc(s.name || '—')}</div>
+          </div>
+          <div class="ipam-subnet-util ${pctCls}">${pct}%</div>
+        </div>`;
+    }).join('');
     return `
-      <div class="ipam-subnet-card${active}" onclick="_ipamOnSubnetChange(${s.id})">
-        <div class="ipam-subnet-card-l">
-          <div class="ipam-subnet-cidr mono">${esc(s.cidr)}</div>
-          <div class="ipam-subnet-meta">${esc(s.name || '—')}</div>
-        </div>
-        <div class="ipam-subnet-util ${pctCls}">${pct}%</div>
+      <div class="ipam-grp">
+        <button class="ipam-grp-hdr" onclick="_ipamToggleGrp('${esc(site).replace(/'/g,'&#39;')}')" title="Toggle ${esc(site)}">
+          <span class="ipam-grp-arr${arrCls}">${icon('chevron_right',12)}</span>
+          <span class="ipam-grp-name">${esc(site)}</span>
+          <span class="ipam-grp-cnt">${subnets.length}</span>
+        </button>
+        <div class="ipam-grp-body" style="${bodyStyle}">${cards}</div>
       </div>`;
   }).join('');
 }
@@ -756,6 +811,11 @@ function _ipamOpenAddSubnet() {
           <label class="fl">Label <span style="color:var(--text3);font-size:10px">(optional)</span></label>
           <input type="text" id="ipam-add-name" placeholder="e.g. Office LAN" autocomplete="off"/>
         </div>
+        <div class="fr">
+          <label class="fl">Site / zone <span style="color:var(--text3);font-size:10px">(optional — groups the sidebar)</span></label>
+          <input type="text" id="ipam-add-site" placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options" autocomplete="off" maxlength="40"/>
+          <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+        </div>
       </div>
       <div class="mft">
         <button class="btn-s" onclick="closeM('ipam-add-modal')">Cancel</button>
@@ -770,12 +830,26 @@ function _ipamOpenAddSubnet() {
   o.querySelector('#ipam-add-name').addEventListener('keydown', e => {
     if (e.key === 'Enter') _ipamSaveSubnet();
   });
+  o.querySelector('#ipam-add-site').addEventListener('keydown', e => {
+    if (e.key === 'Enter') _ipamSaveSubnet();
+  });
   setTimeout(() => o.querySelector('#ipam-add-cidr').focus(), 50);
+}
+
+// Build a <datalist> body of existing site values for autocomplete in the
+// Add / Edit modals. De-duplicates and sorts.
+function _ipamSiteDatalist() {
+  const set = new Set();
+  for (const s of (_ipamSubnets || [])) {
+    if (s.site) set.add(s.site);
+  }
+  return [...set].sort().map(v => `<option value="${esc(v)}"></option>`).join('');
 }
 
 async function _ipamSaveSubnet() {
   const cidr = (document.getElementById('ipam-add-cidr')?.value || '').trim();
   const name = (document.getElementById('ipam-add-name')?.value || '').trim();
+  const site = (document.getElementById('ipam-add-site')?.value || '').trim();
   if (!cidr) { toast('Please enter a CIDR', 'warn'); return; }
 
   const btn = document.getElementById('ipam-add-save');
@@ -784,7 +858,7 @@ async function _ipamSaveSubnet() {
   const r = await fetch('/api/ipam/subnets', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({cidr, name}),
+    body: JSON.stringify({cidr, name, site}),
   });
   const d = await r.json();
   if (btn) { btn.disabled = false; btn.textContent = 'Add Subnet'; }
@@ -836,6 +910,13 @@ function _ipamOpenEdit() {
             <label class="fl">Label</label>
             <input type="text" id="ipam-edit-name" value="${esc(sub.name||'')}"
                    placeholder="e.g. Office LAN" autocomplete="off" maxlength="80"/>
+          </div>
+          <div class="fr">
+            <label class="fl">Site / zone <span class="fh" style="margin-left:6px">(groups the sidebar)</span></label>
+            <input type="text" id="ipam-edit-site" value="${esc(sub.site||'')}"
+                   placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options"
+                   autocomplete="off" maxlength="40"/>
+            <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
           </div>
         </div>
 
@@ -955,6 +1036,7 @@ async function _ipamSaveEdit() {
   const modal = document.getElementById('ipam-edit-modal');
   const body = {
     name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
+    site:          (document.getElementById('ipam-edit-site')?.value || '').trim(),
     auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
     dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
   };

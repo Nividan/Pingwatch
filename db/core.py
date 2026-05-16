@@ -546,6 +546,13 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # IPAM site grouping (v1.0+) — optional site/zone tag so the redesigned
+        # IPAM sidebar can render collapsible per-site subnet groups.
+        try:
+            con.execute("ALTER TABLE ipam_subnets ADD COLUMN site TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (
@@ -594,6 +601,7 @@ def db_init():
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 cidr       TEXT UNIQUE NOT NULL,
                 name       TEXT DEFAULT '',
+                site       TEXT DEFAULT '',
                 created_by TEXT DEFAULT '',
                 created_at REAL DEFAULT 0
             )""")

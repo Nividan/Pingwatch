@@ -99,6 +99,7 @@ def handle(h, method, path, body):
         if not user: return True
         cidr = (body.get('cidr') or '').strip()
         name = (body.get('name') or '').strip()[:80]
+        site = (body.get('site') or '').strip()[:40]
         if not cidr:
             log.warning(f"IPAM add subnet rejected: empty CIDR (user={user!r})")
             h._json(400, {'error': 'cidr is required'}); return True
@@ -116,7 +117,7 @@ def handle(h, method, path, body):
         # Normalise to network address (e.g. 192.168.1.5/24 → 192.168.1.0/24)
         canonical = str(net)
         try:
-            new_id = db_add_subnet(canonical, name, user)
+            new_id = db_add_subnet(canonical, name, user, site=site)
         except ValueError as e:
             h._json(409, {'error': str(e)}); return True
         _sid, _cidr = new_id, canonical

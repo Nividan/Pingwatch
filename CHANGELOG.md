@@ -38,8 +38,17 @@ Major visual refresh based on a hi-fi design prototype exported from claude.ai/d
 ### Events — [frontend/index.html](frontend/index.html)
 - `.evt-view-hdr` dual-classed with `.pagehead`; "⚡ Events" emoji replaced with a `<h1>Events</h1>`. Action buttons (Resolve All / view-mode toggle / export) converted to `.btn ghost sm` + `.seg` with SVG icons
 
-### IPAM — [frontend/ipam.js](frontend/ipam.js)
-- `_ipamRenderShell()` rewritten with `.pagehead` (title + sub + Add Subnet/Edit/Refresh DNS/Remove buttons using `.btn primary`/`.btn`/`.btn ghost`/`.btn danger` with SVG icons) + `.ipam-hdr` toolbar (subnet selector + `.search`-styled search + pagination)
+### IPAM — [frontend/ipam.js](frontend/ipam.js), [frontend/style.css](frontend/style.css)
+- `_ipamRenderShell()` rewritten with `.pagehead` (title bumped to "IP Address Management" + sub + Add Subnet/Edit/Refresh DNS/Remove buttons using `.btn primary`/`.btn`/`.btn ghost`/`.btn danger` with SVG icons)
+- New 2-column layout (`.ipam-layout`): left **sidebar** with filter input + grouped subnet cards, right **main pane** with subnet header + 5-card KPI row (Total / In use / Reserved / Free / Utilization %) + Address heatmap + allocation table
+- **Address heatmap** — grid of 22×22 cells (18×18 on narrow viewports), colored by classification: free / in-use (device-linked) / gateway / reserved / conflict. Clicking a cell filters the table to that IP. Legend renders above the grid
+- **Collapsible per-site groups in sidebar** — subnets bucket by their `site` field. Each group renders as a chevron + name + count header; clicking toggles. Group containing the active subnet always force-expands so users don't lose context. Collapsed state persists to `pw_ipam_grp_collapsed`. Subnets without a site land under "Ungrouped" (sorted to the bottom)
+- **Add Subnet / Edit Subnet modals** gain a Site / zone input with `<datalist>` autocomplete from existing site values
+
+### Backend — IPAM site grouping ([db/ipam.py](db/ipam.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [routes/ipam.py](routes/ipam.py))
+- **Schema** — additive `site TEXT DEFAULT ''` column on `ipam_subnets`. Idempotent migrations in both SQLite (try/except `ALTER TABLE`) and PG (`ADD COLUMN IF NOT EXISTS`); fresh-install `CREATE TABLE` blocks updated to match. Empty string default = "Ungrouped" in the UI
+- **DB layer** — `_SUBNET_COLS` selects `COALESCE(site, '') AS site`; both row mappers surface it. `db_add_subnet(cidr, name, user, site='')` accepts the optional value. `_SUBNET_UPDATABLE_FIELDS` adds `site: ('TEXT', 40)` so the existing whitelisted PATCH path picks it up
+- **API** — `POST /api/ipam/subnets` reads `site` from the body (trimmed, max 40 chars). `PATCH` already handles it via the field whitelist. `GET` returns `site` on every subnet row alongside the other columns
 
 ### Reports — [frontend/reports.js](frontend/reports.js)
 - `_rptInit()` shell rewritten with `.pagehead` (title + sub + New button) + sub-tabs converted to `.seg`. The internal RPT sections catalogue is untouched

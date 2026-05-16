@@ -182,6 +182,77 @@ Manual UI check: open Backups tab, the strip column shows actual per-day bars, t
 - Legacy rows have `diff_lines = NULL` until their next successful run lands. No backfill needed; the next scheduled sweep populates them naturally.
 - Existing `db_save_backup_run` callers that don't pass `diff_lines` continue to work — column just stays NULL.
 
+## Backend changes — Phase 4d spec (IPAM site grouping)
+
+### Need
+
+The redesigned IPAM page ([frontend/ipam.js](frontend/ipam.js)) shows subnets in a left sidebar. With more than a handful of subnets the flat list gets unwieldy — users want to group subnets by location/site/zone (e.g. "NYC", "SJC", "DC1") and collapse groups they're not currently looking at.
+
+The existing `ipam_subnets` table only carries `cidr` + `name` + `dns_server` + auto-discovery flags — no concept of a site. We add one optional column rather than parsing the name.
+
+### Schema additions
+
+One new column on `ipam_subnets`, idempotent migration in both DB paths:
+
+```sql
+ALTER TABLE ipam_subnets ADD COLUMN site TEXT DEFAULT ''
+```
+
+- SQLite: try/except ALTER in [db/core.py](db/core.py) alongside the existing additive-column block.
+- PG: `ADD COLUMN IF NOT EXISTS` in [db/pg_schema.py](db/pg_schema.py).
+- Fresh-install `CREATE TABLE` blocks updated so new installs get the column.
+- Empty-string default = "ungrouped" — UI renders these under an "Other" / "Ungrouped" group.
+
+### DB layer ([db/ipam.py](db/ipam.py))
+
+- Add `site` to `_SUBNET_COLS` (`COALESCE(site, '') AS site`).
+- Surface `site` in `_row_to_subnet_pg` and the SQLite row mapper.
+- `db_add_subnet(cidr, name, user, site='')` accepts the optional site.
+- `db_update_subnet(...)` extended to accept site updates (same pattern as `dns_server`).
+
+### API ([routes/ipam.py](routes/ipam.py))
+
+- `POST /api/ipam/subnets` — accepts `{cidr, name, site}` (site optional, empty string default).
+- `PATCH /api/ipam/subnets/{id}` — accepts `site` alongside `name`/`dns_server`/`auto_discover`.
+- `GET /api/ipam/subnets` — payload already includes whatever columns `_SUBNET_COLS` selects; `site` rides along automatically.
+
+No new endpoint needed.
+
+### Frontend changes ([frontend/ipam.js](frontend/ipam.js), [frontend/style.css](frontend/style.css))
+
+- **Add Subnet modal** gets a free-form Site input + `<datalist>` of existing sites for autocomplete. Trimmed + uppercased on save for consistency.
+- **Edit Subnet modal** same input, pre-populated from the current value.
+- **Sidebar** groups subnets by `site` (case-insensitive). Each group renders a collapsible header (chevron + name + count); clicking toggles. Subnets without a site land under "Ungrouped".
+- Collapse state persisted to `pw_ipam_grp_collapsed` (localStorage; array of collapsed site names).
+- Subnet filter still works — when a filter narrows the list, groups with zero visible cards are hidden entirely.
+
+### Verification
+
+```bash
+# 1. Migration safety — re-running boot doesn't fail
+curl -s -b cookies.txt http://localhost:7070/api/ipam/subnets | jq '.subnets[0] | keys'
+# should include "site"
+
+# 2. Create + read back
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+     -X POST -d '{"cidr":"10.99.0.0/24","name":"test-net","site":"DC1"}' \
+     http://localhost:7070/api/ipam/subnets
+curl -s -b cookies.txt http://localhost:7070/api/ipam/subnets | jq '.subnets[] | select(.cidr=="10.99.0.0/24")'
+
+# 3. Update site via PATCH
+curl -s -b cookies.txt -H 'Content-Type: application/json' \
+     -X PATCH -d '{"site":"DC2"}' \
+     http://localhost:7070/api/ipam/subnets/<id>
+```
+
+Manual UI check: open IPAM tab, sidebar shows collapsible groups; click a header to toggle; filter shrinks groups; Add Subnet modal accepts a Site value that surfaces in the right group.
+
+### Backwards compatibility
+
+- Pre-1.0 clients ignore the new field — additive.
+- Legacy subnet rows have `site = ''` until a user edits them, in which case they land under "Ungrouped" — never lost.
+- API callers that don't send `site` in POST/PATCH still work — the field stays empty.
+
 ## Deferred (NOT in this release)
 
 | # | Need | Notes |

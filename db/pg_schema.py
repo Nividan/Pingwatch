@@ -410,6 +410,7 @@ def pg_create_main_schema(cur):
             id                  SERIAL PRIMARY KEY,
             cidr                TEXT UNIQUE NOT NULL,
             name                TEXT DEFAULT '',
+            site                TEXT DEFAULT '',
             created_by          TEXT DEFAULT '',
             created_at          DOUBLE PRECISION DEFAULT 0,
             auto_discover       INTEGER DEFAULT 0,
@@ -417,6 +418,7 @@ def pg_create_main_schema(cur):
             last_auto_scan_ts   TIMESTAMP DEFAULT NULL,
             dns_server          TEXT DEFAULT ''
         )""")
+    cur.execute("ALTER TABLE ipam_subnets ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ipam_subnets_cidr ON ipam_subnets(cidr)"
     )
