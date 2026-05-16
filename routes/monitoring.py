@@ -191,12 +191,21 @@ def handle(h, method, path, body):
         cutoff      = datetime.datetime.utcfromtimestamp(
             time.time() - minutes * 60).strftime("%Y-%m-%dT%H:%M:%SZ")
         events = []
+        # hour_ts -> set of (did, sid) with any down / threshold_crit event
+        # in that hour. Used below to dip the trend line proportional to how
+        # many distinct sensors were unhealthy, since the raw sample-based
+        # pct from db_load_availability is dominated by the huge denominator
+        # of healthy samples and treats threshold breaches as ok (the probe
+        # succeeded, the value just crossed a line).
+        hour_affected = {}
+        def _bucket(epoch):
+            return (epoch // 3600) * 3600
         if is_pg():
             from db.pg_pool import pg_cursor
             try:
                 with pg_cursor("logs") as cur:
                     cur.execute(
-                        "SELECT ts, direction, dname, sname FROM flap_log "
+                        "SELECT ts, direction, dname, sname, did, sid FROM flap_log "
                         "WHERE ts >= %s AND direction IN ('down','threshold_crit') ORDER BY ts",
                         (cutoff,)
                     )
@@ -212,6 +221,9 @@ def handle(h, method, path, body):
                             "type":  "outage" if r["direction"] == "down" else "alert",
                             "label": label,
                         })
+                        hour_affected.setdefault(_bucket(epoch), set()).add(
+                            (r["did"] or "", r["sid"] or "")
+                        )
             except Exception as e:
                 log.error(f"health/trend events error: {e}")
         else:
@@ -220,11 +232,11 @@ def handle(h, method, path, body):
             try:
                 con = sqlite3.connect(LOGS_DB_PATH)
                 rows = con.execute(
-                    "SELECT ts, direction, dname, sname FROM flap_log "
+                    "SELECT ts, direction, dname, sname, did, sid FROM flap_log "
                     "WHERE ts >= ? AND direction IN ('down','threshold_crit') ORDER BY ts",
                     (cutoff,)
                 ).fetchall()
-                for ts_str, direction, dname, sname in rows:
+                for ts_str, direction, dname, sname, did, sid in rows:
                     try:
                         dt = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
                         epoch = int((dt - datetime.datetime(1970, 1, 1)).total_seconds())
@@ -236,10 +248,37 @@ def handle(h, method, path, body):
                         "type":  "outage" if direction == "down" else "alert",
                         "label": label,
                     })
+                    hour_affected.setdefault(_bucket(epoch), set()).add(
+                        (did or "", sid or "")
+                    )
             except Exception as e:
                 log.error(f"health/trend events error: {e}")
             finally:
                 if con: con.close()
+
+        # Sensor-impact penalty: for each hour bucket with any flap, the pct
+        # becomes min(sample_pct, sensor_pct). sensor_pct treats each affected
+        # sensor as a 1/total reduction in fleet health — so 4 sensors out of
+        # 88 going down or breaching CRIT for an hour shows as ~95.5%, not
+        # the 99.8% the sample-aggregate would yield.
+        if pts and hour_affected:
+            total_active = 0
+            try:
+                with STATE._lock:
+                    for dev in STATE.devices.values():
+                        for s in dev.sensors.values():
+                            if getattr(s, "running", True):
+                                total_active += 1
+            except Exception:
+                total_active = 0
+            if total_active > 0:
+                for p in pts:
+                    affected = len(hour_affected.get(int(p["ts"]), ()))
+                    if affected:
+                        sensor_pct = round(100.0 * (1.0 - affected / total_active), 1)
+                        if sensor_pct < p["pct"]:
+                            p["pct"] = max(0.0, sensor_pct)
+
         h._json(200, {"points": pts, "events": events, "range": range_param})
         return True
 
