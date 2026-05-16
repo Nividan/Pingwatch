@@ -11,6 +11,12 @@ let pwGroupOverrides = {}; // { groupName: {x, y, w, h, color?} } — persisted 
 // name across sites shares the icon). Persisted via /api/settings/pw_group_icons.
 let pwGroupIcons = {};
 let pwLinks = [];          // [ {id, src_did, tgt_did, link_type, label?} ] — persisted via /api/settings/pw_links
+// Topology auto-links (v1.0+) — derived from IPAM subnet membership + the
+// ip_allocations.kind tags (switch / gateway / backbone). Rendered as a
+// subtle "implicit" layer beneath manual pwLinks so manual links visually
+// win. Loaded once per page; recomputed every renderPingWatchCanvas().
+let pwRoles    = {};       // { device_id: 'switch'|'gateway'|'backbone' }   from /api/topology/roles
+let pwSubnets  = [];       // [ {id, cidr, name, site, ...} ]                from /api/ipam/subnets
 const PW_INTERNET_DID = '__internet__'; // synthetic Internet cloud node (always present)
 let linkDraw = null;
 let selectedEl = null; // { type:'node'|'link'|'group', data }
@@ -306,12 +312,14 @@ async function switchToPingWatchPage() {
 async function loadPingWatchPage() {
   const gen = ++_pageGen;
   try {
-    const [data, ovrRes, grpRes, lnkRes, iconRes] = await Promise.all([
+    const [data, ovrRes, grpRes, lnkRes, iconRes, rolesRes, subnetsRes] = await Promise.all([
       fetch('/api/devices').then(r => r.json()),
       api('GET', '/api/settings/pw_node_overrides').catch(() => null),
       api('GET', '/api/settings/pw_group_overrides').catch(() => null),
       api('GET', '/api/settings/pw_links').catch(() => null),
       api('GET', '/api/settings/pw_group_icons').catch(() => null),
+      api('GET', '/api/topology/roles').catch(() => null),
+      api('GET', '/api/ipam/subnets').catch(() => null),
     ]);
     if (gen !== _pageGen) return; // superseded by a newer tab switch
     pwDevices = data.devices || [];
@@ -324,6 +332,9 @@ async function loadPingWatchPage() {
     // mutate `pwGroupIcons` directly + trigger renderPingWatchCanvas().
     pwGroupIcons = (iconRes?.value && typeof iconRes.value === 'object') ? iconRes.value : {};
     window._pwGroupIconsCache = pwGroupIcons;
+    // Topology auto-link inputs — roles map + subnet list.
+    pwRoles   = (rolesRes && rolesRes.roles) || {};
+    pwSubnets = (subnetsRes && subnetsRes.subnets) || (Array.isArray(subnetsRes) ? subnetsRes : []);
   } catch(e) { if (gen !== _pageGen) return; pwDevices = []; _pwDevMap = {}; }
   renderPingWatchCanvas();
   startPwSSE();
@@ -402,6 +413,178 @@ function deviceToNode(dev, x, y) {
       color: ovr?.color ?? (dev.status === 'down' ? '#ff3333' : dev.status === 'unknown' ? '#888888' : undefined),
     }
   };
+}
+
+// ── Topology auto-links (v1.0+) ─────────────────────────────────────────
+// Derive implicit network topology from IPAM subnet membership + role tags
+// (switch / backbone / core / gateway on ip_allocations.kind). Rendered as
+// a dim, dashed layer BENEATH manual pwLinks so user-drawn links visually
+// win.
+//
+// Tier model (downstream → upstream):
+//   Hosts → Switch (access) → Backbone (aggregation) → Core (central L3)
+//        → Gateway (edge / FW) → WAN
+//
+// Rule set (each uplink cascades through the next-up tier when an
+// intermediate tier isn't tagged in the site):
+//   1. Each device in a subnet fans out to that subnet's first
+//      switch | backbone | core | gateway (in that priority). Covers
+//      subnets without an explicit switch tag — e.g. the core/agg segment
+//      itself, where devices anchor to the core/BB/GW that lives there.
+//   2. Switch  → first backbone | core | gateway in the same site.
+//   3. Backbone → first core | gateway in the same site.
+//   4. Core    → first gateway in the same site.
+//   5. Cross-site mesh at the highest available shared tier — cores
+//      pairwise-linked across sites if cores exist anywhere, else
+//      backbones across sites.
+//
+// Pairs already covered by a manual pwLink are dropped — no double-drawing.
+
+function _pwIpv4ToInt(ip) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec((ip || '').trim());
+  if (!m) return null;
+  const a = +m[1], b = +m[2], c = +m[3], d = +m[4];
+  if (a > 255 || b > 255 || c > 255 || d > 255) return null;
+  return (a * 16777216 + b * 65536 + c * 256 + d) >>> 0;
+}
+function _pwSubnetForIp(ipStr, subnets) {
+  const ipInt = _pwIpv4ToInt(ipStr);
+  if (ipInt == null) return null;
+  let best = null, bestPrefix = -1;
+  for (const s of subnets) {
+    const m = /^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/.exec(s.cidr || '');
+    if (!m) continue;
+    const baseInt = _pwIpv4ToInt(m[1]);
+    const prefix  = +m[2];
+    if (baseInt == null || prefix < 0 || prefix > 32) continue;
+    const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+    if ((baseInt & mask) === (ipInt & mask) && prefix > bestPrefix) {
+      best = s; bestPrefix = prefix;
+    }
+  }
+  return best;
+}
+function _pwPairKey(a, b) { return String(a) < String(b) ? a + '|' + b : b + '|' + a; }
+
+function _pwComputeAutoLinks() {
+  if (!pwSubnets || !pwSubnets.length || !pwDevices || !pwDevices.length) return [];
+  // Bucket devices by their best-matching subnet (longest-prefix match).
+  const bySubnet = new Map();   // cidr -> { site, devs: [device] }
+  for (const dev of pwDevices) {
+    const s = _pwSubnetForIp(dev.host, pwSubnets);
+    if (!s) continue;
+    if (!bySubnet.has(s.cidr)) bySubnet.set(s.cidr, { site: s.site || dev.site || '', devs: [] });
+    bySubnet.get(s.cidr).devs.push(dev);
+  }
+  // Bucket role-tagged devices by site, per role, for uplink resolution.
+  const byRoleBySite = { switch: new Map(), backbone: new Map(), core: new Map(), gateway: new Map() };
+  for (const dev of pwDevices) {
+    const r = pwRoles[dev.device_id];
+    if (!r || !byRoleBySite[r]) continue;
+    const site = dev.site || '';
+    if (!byRoleBySite[r].has(site)) byRoleBySite[r].set(site, []);
+    byRoleBySite[r].get(site).push(dev);
+  }
+  // First device of a given role in a given site, walking the priority chain
+  // (e.g. switch's uplink is backbone → core → gateway). Returns null when
+  // none of the chain's tiers has a tagged device in that site.
+  function _firstInChain(site, chain) {
+    for (const role of chain) {
+      const arr = byRoleBySite[role].get(site) || [];
+      if (arr.length) return arr[0];
+    }
+    return null;
+  }
+  const out = [];
+
+  // Rule 1 — intra-subnet anchor (devices → first tagged role member in this
+  // subnet, with cascading priority switch > backbone > core > gateway).
+  for (const [, info] of bySubnet) {
+    const switches  = info.devs.filter(d => pwRoles[d.device_id] === 'switch');
+    const backbones = info.devs.filter(d => pwRoles[d.device_id] === 'backbone');
+    const cores     = info.devs.filter(d => pwRoles[d.device_id] === 'core');
+    const gateways  = info.devs.filter(d => pwRoles[d.device_id] === 'gateway');
+    const anchor    = switches[0] || backbones[0] || cores[0] || gateways[0];
+    if (!anchor) continue;  // no role-tagged device in this subnet → skip
+    for (const dev of info.devs) {
+      if (dev.device_id === anchor.device_id) continue;
+      // Tagged-role devices handled by their own uplink rule below.
+      if (pwRoles[dev.device_id]) continue;
+      out.push({ src_did: dev.device_id, tgt_did: anchor.device_id, kind: 'l2' });
+    }
+  }
+
+  // Rules 2-4 — uplink chains. Each tagged tier uplinks to the next-higher
+  // tagged tier in the same site, skipping unset tiers.
+  const UPLINK = {
+    switch:   ['backbone', 'core', 'gateway'],
+    backbone: ['core', 'gateway'],
+    core:     ['gateway'],
+  };
+  for (const dev of pwDevices) {
+    const role = pwRoles[dev.device_id];
+    if (!role || !UPLINK[role]) continue;
+    const up = _firstInChain(dev.site || '', UPLINK[role]);
+    if (up && up.device_id !== dev.device_id) {
+      out.push({ src_did: dev.device_id, tgt_did: up.device_id, kind: 'l3' });
+    }
+  }
+
+  // Rule 5 — cross-site mesh at the highest available shared tier. Prefer
+  // cores (pairwise across sites). If no cores anywhere, fall back to
+  // backbones. Mesh links rendered amber to read as WAN/inter-site.
+  const _meshTier = byRoleBySite.core.size > 0 ? 'core' : 'backbone';
+  const _meshMap  = byRoleBySite[_meshTier];
+  const _meshSites = [..._meshMap.keys()].filter(s => s);
+  for (let i = 0; i < _meshSites.length; i++) {
+    for (let j = i + 1; j < _meshSites.length; j++) {
+      const a = _meshMap.get(_meshSites[i]);
+      const b = _meshMap.get(_meshSites[j]);
+      if (a.length && b.length) {
+        out.push({ src_did: a[0].device_id, tgt_did: b[0].device_id, kind: 'wan' });
+      }
+    }
+  }
+
+  // Drop pairs already covered by a manual pwLink, dedup self-pairs.
+  const manualPairs = new Set((pwLinks || []).map(l => _pwPairKey(l.src_did, l.tgt_did)));
+  const seen = new Set();
+  const dedup = [];
+  for (const lk of out) {
+    const k = _pwPairKey(lk.src_did, lk.tgt_did);
+    if (manualPairs.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    dedup.push(lk);
+  }
+  return dedup;
+}
+
+function renderPwAutoLinks() {
+  const layer = document.getElementById('auto-links-layer');
+  if (!layer) return;
+  layer.innerHTML = '';
+  if (!isPingWatchPage) return;
+  const links = _pwComputeAutoLinks();
+  if (!links.length) return;
+  // Stroke palette — muted so they read as "implicit" vs. manual links.
+  // l2 = cyan (intra-subnet), l3 = violet (router uplink), wan = amber (inter-site).
+  const COL = { l2: '#22d3ee', l3: '#a78bfa', wan: '#f59e0b' };
+  for (const lk of links) {
+    const src = nodeMap[_pwNodeId(lk.src_did)];
+    const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
+    if (!src || !tgt) continue;
+    const sc = nodeCenter(src), tc = nodeCenter(tgt);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    path.setAttribute('x1', sc.x); path.setAttribute('y1', sc.y);
+    path.setAttribute('x2', tc.x); path.setAttribute('y2', tc.y);
+    path.setAttribute('stroke', COL[lk.kind] || '#888');
+    path.setAttribute('stroke-width', lk.kind === 'wan' ? '1.6' : '1.2');
+    path.setAttribute('stroke-dasharray', '6 5');
+    path.setAttribute('stroke-opacity', '0.35');
+    path.setAttribute('class', 'pw-auto-link');
+    path.setAttribute('pointer-events', 'none');
+    layer.appendChild(path);
+  }
 }
 
 function calcPwLayout(devices) {
@@ -492,36 +675,65 @@ function calcPwLayout(devices) {
   // site -> {x, y, w, h} of the site frame (header + content area).
   const siteNaturalFrames = {};
 
+  // PASS 1 — measure each site's natural size WITHOUT committing positions.
+  // Records the per-entry offset within the site's content area so PASS 2
+  // can place groups once the site's (x0, y0) is finalized by bin-packing.
+  const sitesArr = [];  // { site, sEntries, w, h, offsets: [{entry, offX, offY}] }
   for (const [site, sEntries] of siteBuckets) {
-    const x0 = STARTX;
-    // Content origin inside the site frame
-    const contentX = x0 + SITE_PAD;
-    const contentY = curY + SITE_TITLE_H + SITE_PAD;
-    // Lay out this site's groups in a 3-col mini-grid
-    let innerRowY = contentY;
+    let innerRowY = 0;
     let maxInnerW = 0;
+    const offsets = [];
     for (let r = 0; r < sEntries.length; r += COLS) {
       const row  = sEntries.slice(r, r + COLS);
       const rowH = Math.max(...row.map(e => e.h));
-      let gx = contentX;
+      let gx = 0;
       for (const ent of row) {
-        decorated.push({ ...ent, gi: gi++, hint: { x: gx, y: innerRowY } });
+        offsets.push({ entry: ent, offX: gx, offY: innerRowY });
         gx += ent.w + GGAP;
       }
-      // Width of this row (excluding the trailing GGAP after the last cell)
-      const rowWidth = (gx - GGAP) - contentX;
-      maxInnerW = Math.max(maxInnerW, rowWidth);
+      // Width of this row (excluding trailing GGAP after last cell)
+      maxInnerW = Math.max(maxInnerW, gx - GGAP);
       innerRowY += rowH + ROWGAP;
     }
-    // Final innerRowY overshoots by one ROWGAP — strip it off the height
-    const innerH = (innerRowY - ROWGAP) - contentY;
+    const innerH = innerRowY - ROWGAP;  // strip trailing ROWGAP
     const siteW  = maxInnerW + SITE_PAD * 2;
     const siteH  = SITE_TITLE_H + SITE_PAD + innerH + SITE_PAD;
+    sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets });
+  }
+
+  // PASS 2 — shelf-pack sites into rows so small sites fit beside or under
+  // a big one rather than stacking vertically with wasted right margin.
+  // maxRowW = widest site (typically the largest cluster), so small sites
+  // wrap into rows of their own beneath it. Preserves the alphabetical site
+  // order from siteBuckets.
+  const maxRowW = Math.max(...sitesArr.map(s => s.w), 0);
+  let curX = STARTX, rowH = 0;
+  for (const sInfo of sitesArr) {
+    // Wrap when adding this site would overflow the row (always place at
+    // least one site per row to avoid an infinite loop when sInfo.w > maxRowW).
+    if (curX !== STARTX && (curX + sInfo.w) > (STARTX + maxRowW)) {
+      curY += rowH + SITE_GAP;
+      curX  = STARTX;
+      rowH  = 0;
+    }
+    const x0 = curX;
+    const y0 = curY;
+    const contentX = x0 + SITE_PAD;
+    const contentY = y0 + SITE_TITLE_H + SITE_PAD;
+    // Replay the per-entry offsets recorded in PASS 1 to produce final hints.
+    for (const off of sInfo.offsets) {
+      decorated.push({ ...off.entry, gi: gi++,
+                       hint: { x: contentX + off.offX, y: contentY + off.offY } });
+    }
     // Even Unsited gets a frame entry so block stacking lines up, but it
     // won't be rendered as a backdrop (syntheticSites filters site === '').
-    siteNaturalFrames[site] = { x: x0, y: curY, w: siteW, h: siteH };
-    curY += siteH + SITE_GAP;
+    siteNaturalFrames[sInfo.site] = { x: x0, y: y0, w: sInfo.w, h: sInfo.h };
+    curX += sInfo.w + SITE_GAP;
+    rowH  = Math.max(rowH, sInfo.h);
   }
+  // Advance curY past the last row so any later layout (none today, but
+  // future-proof) starts beneath the packed sites.
+  curY += rowH + SITE_GAP;
 
   // ── Phase 1 — fixed groups (have a saved x/y override). ──────────
   const placedRects = [];
@@ -1859,7 +2071,10 @@ function renderLinks() {
       lblLayer.appendChild(lg);
     }
   });
-  if (isPingWatchPage) renderPwLinksInLayer(layer, lblLayer);
+  if (isPingWatchPage) {
+    renderPwAutoLinks();           // dim/dashed implicit topology — beneath manual
+    renderPwLinksInLayer(layer, lblLayer);
+  }
 }
 
 function _pwNodeId(did) {

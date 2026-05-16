@@ -19,6 +19,7 @@ from core.config import (
     _RE_IPAM_SUBNET_DNS,
     _RE_IPAM_IP,
     _RE_IPAM_AD_TOGGLE,
+    _RE_TOPOLOGY_ROLES,
 )
 from core.logger import log
 from core.validation import validate_host
@@ -36,6 +37,7 @@ from db import (
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
+    db_get_device_roles,
 )
 from db.ipam import ipam_sync_subnet_add
 
@@ -109,6 +111,21 @@ def handle(h, method, path, body):
         except Exception as e:
             log.warning(f"/api/sites devices query failed: {e}")
         h._json(200, {'sites': sorted(sites, key=str.lower)})
+        return True
+
+    # ── GET /api/topology/roles ──────────────────────────────────
+    # Returns {device_id: role} where role is 'switch' | 'gateway' | 'backbone'.
+    # Powers the NTM Live auto-link renderer (subnet → switch → gateway →
+    # backbone) and the device editor's Role dropdown. Source of truth is
+    # ip_allocations.kind; we expose only role-relevant kinds.
+    if _RE_TOPOLOGY_ROLES.match(path) and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        try:
+            h._json(200, {'roles': db_get_device_roles()})
+        except Exception as e:
+            log.warning(f"/api/topology/roles failed: {e}")
+            h._json(500, {'error': 'failed to load roles'})
         return True
 
     # ── GET /api/ipam/subnets ─────────────────────────────────────
@@ -307,9 +324,12 @@ def handle(h, method, path, body):
         subnet_id = int(m.group(1))
         ip_str    = m.group(2)
         name      = (body.get('name') or '').strip()[:120]
-        # Optional `kind` — '' (default), 'gateway', 'reserved', 'conflict'.
-        # Anything not in the whitelist falls back to ''.
-        _KIND_OK  = {'', 'gateway', 'reserved', 'conflict'}
+        # Optional `kind` — '' (default), 'gateway', 'switch', 'backbone',
+        # 'core', 'reserved', 'conflict'. Anything not in the whitelist falls
+        # back to ''. The first four anchor NTM Live auto-link rendering with
+        # tier model: switch (access) -> backbone (aggregation) -> core
+        # (central L3) -> gateway (edge/FW); cross-site mesh at core level.
+        _KIND_OK  = {'', 'gateway', 'switch', 'backbone', 'core', 'reserved', 'conflict'}
         kind_raw  = (body.get('kind') or '').strip().lower()
         kind      = kind_raw if kind_raw in _KIND_OK else ''
         # Only pass kind to the upsert if the client included the key, so a

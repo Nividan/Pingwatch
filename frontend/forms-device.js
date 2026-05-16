@@ -18,6 +18,14 @@ function openAddDevice(){
       </div>
       <div class="fr"><label class="fl">Group</label>
         <input type="text" id="ad-g" placeholder="Default Group" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional — anchors auto-links on the NTM Live map)</span></label>
+        <select id="ad-role">
+          <option value="" selected>— None —</option>
+          <option value="switch">Switch (access — subnet members fan to it)</option>
+          <option value="backbone">Backbone (aggregation — between switches and core)</option>
+          <option value="core">Core (central L3 — between backbones and gateway)</option>
+          <option value="gateway">Gateway (edge / firewall — site exit)</option>
+        </select></div>
       <details class="dev-creds" style="margin-top:10px">
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
@@ -153,6 +161,17 @@ async function submitAddDevice(){
   }
   if(!r.did){toast('Failed to add device','err');return;}
   if(site) window._pwSitesCache = null;  // invalidate so next opens see new site
+  // Topology role — applied AFTER device creation because role storage lives on
+  // ip_allocations.kind, which is populated by ipam_sync_device_add (enqueued).
+  // A brief race is possible (write enqueued while role PUT runs) but the role
+  // UPDATE is keyed by (subnet, ip) so it'll either match the row we just
+  // inserted or the row our sync inserts moments later — both are correct.
+  const role = document.getElementById('ad-role')?.value || '';
+  if(role){
+    try{ await api('PUT', `/api/device/${r.did}/role`, { role }); }
+    catch(_){ toast('Device added, role tag failed','err'); }
+    window._pwRolesCache = null;  // invalidate map auto-link cache
+  }
   closeM('mad');
   const devR=await fetch(`/api/device/${r.did}`);
   const dev=await devR.json();
@@ -216,6 +235,16 @@ function openEditDevice(did){
           <button class="grp-dd-arrow" tabindex="-1" onmousedown="event.preventDefault();_edgToggle()">▾</button>
           <div id="ed-g-dd" class="grp-dd" style="display:none">${_edGroupItems}</div>
         </div>
+      </div>
+      <div class="fr">
+        <label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional — anchors auto-links on the NTM Live map)</span></label>
+        <select id="ed-role" data-orig="">
+          <option value="">— None —</option>
+          <option value="switch">Switch (access — subnet members fan to it)</option>
+          <option value="backbone">Backbone (aggregation — between switches and core)</option>
+          <option value="core">Core (central L3 — between backbones and gateway)</option>
+          <option value="gateway">Gateway (edge / firewall — site exit)</option>
+        </select>
       </div>
       <details class="dev-creds" style="margin-top:10px"${_edSecIps.length?' open':''}>
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Secondary IPs <span style="color:var(--text3);font-weight:400">(${_edSecIps.length})</span></summary>
@@ -338,6 +367,31 @@ function openEditDevice(did){
   _edSipRender();
   _edLicLoad(did);
   _loadDeviceProfileSection(did);
+  _loadDeviceRole(did);
+}
+
+// Fetch the current topology role for the device and populate the dropdown.
+// Caches the roles map on window for 60s so consecutive opens skip the GET.
+// On failure, falls back to '' (None). data-orig records the loaded value so
+// submitEditDevice can detect a change and PUT only when needed.
+async function _loadDeviceRole(did){
+  const sel = document.getElementById('ed-role');
+  if (!sel) return;
+  let cache = window._pwRolesCache;
+  const fresh = cache && (Date.now() - cache._t < 60000);
+  if (!fresh){
+    try {
+      const r = await api('GET', '/api/topology/roles');
+      cache = r.roles || {};
+      cache._t = Date.now();
+      window._pwRolesCache = cache;
+    } catch(_) {
+      cache = {};
+    }
+  }
+  const role = (cache && cache[did]) || '';
+  sel.value = role;
+  sel.dataset.orig = role;
 }
 
 async function _loadDeviceProfileSection(did) {
@@ -513,6 +567,22 @@ async function submitEditDevice(did){
   }
   if(!r || r.error){ toast('Failed to save changes','err'); return; }
   if(site !== (S.devices[did]?.site || '')) window._pwSitesCache = null;
+  // Topology role — separate PUT only when changed. role is stored on
+  // ip_allocations.kind, not on the device row, so it doesn't ride along
+  // with the device PATCH.
+  const roleSel = document.getElementById('ed-role');
+  if (roleSel) {
+    const newRole = roleSel.value || '';
+    const oldRole = roleSel.dataset.orig || '';
+    if (newRole !== oldRole) {
+      try {
+        await api('PUT', `/api/device/${did}/role`, { role: newRole });
+        window._pwRolesCache = null;  // invalidate map cache
+      } catch(_) {
+        toast('Saved, but role tag failed', 'err');
+      }
+    }
+  }
   closeM('med');
   const dev = S.devices[did];
   if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }

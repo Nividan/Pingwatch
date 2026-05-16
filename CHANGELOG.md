@@ -8,6 +8,41 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### NTM Live — auto-links from IPAM topology (4-tier enterprise model)
+
+The Live map now infers network topology automatically from IPAM subnet membership and four role tags on `ip_allocations.kind`: `switch` (access), `backbone` (aggregation/distribution), `core` (central L3), `gateway` (edge/FW). Models the standard 3/4-tier enterprise topology where backbones aggregate floor switches into the core, and core fronts the firewall. User-drawn manual links continue to win visually; auto-links render as a dim dashed layer underneath. Eliminates the need to hand-draw every cable for the 80% obvious "device → switch → backbone → core → gateway" topology.
+
+**Role model.** Reuses `ip_allocations.kind` ([`_KIND_OK` in routes/ipam.py:312](routes/ipam.py#L312) extended to include all four). Tag the access switch in each subnet as `switch`, aggregation switches as `backbone`, central L3 switches as `core`, the firewall/exit router as `gateway`. Each tier is optional — auto-link cascade skips unused tiers.
+
+**Inference rules** (in [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js)):
+1. Each non-tagged device in a subnet fans out to the subnet's first tagged member, with priority **switch > backbone > core > gateway**. Covers the case where a "core subnet" has no `switch` tag — its devices anchor to a tagged core or backbone or gateway that lives in the same subnet.
+2. Each `switch` uplinks to the first **backbone → core → gateway** in the same site (cascading fallback).
+3. Each `backbone` uplinks to the first **core → gateway** in the same site.
+4. Each `core` uplinks to the first **gateway** in the same site.
+5. Cross-site mesh at the highest shared tier — `core ↔ core` across sites when any core exists anywhere, else `backbone ↔ backbone`.
+
+Pairs already covered by a manual `pwLink` are dropped — no duplicate drawing.
+
+**Backend additions** (all additive, no schema changes):
+- [`db/ipam.py`](db/ipam.py) — `db_set_device_role(did, host, role) -> int` finds the IPAM allocation(s) for a device's host IP and UPDATEs `kind`; `db_get_device_roles() -> {did: kind}` returns a single map for the renderer and editor.
+- [`routes/devices.py`](routes/devices.py) — new `PUT /api/device/{did}/role` accepts `{role: 'switch'|'gateway'|'backbone'|''}`, calls `db_set_device_role`, audited as `device_role`.
+- [`routes/ipam.py`](routes/ipam.py) — new `GET /api/topology/roles` returns `{roles: {did: kind}}`. Read by both the map renderer and the device editor's Role dropdown loader.
+- New regexes in [`core/config.py`](core/config.py): `_RE_TOPOLOGY_ROLES`, `_RE_DEVICE_ROLE`.
+
+**Frontend — device editor Role dropdown** ([frontend/forms-device.js](frontend/forms-device.js)):
+- Add modal: `<select id="ad-role">` with — None / Switch / Gateway / Backbone. PUTs after device creation only when non-empty.
+- Edit modal: `<select id="ed-role">` lazy-loaded via `_loadDeviceRole(did)`; `data-orig` snapshot lets submit detect changes and PUT only when the role actually changed. 60s cache on `window._pwRolesCache`, invalidated after any successful PUT.
+
+**Frontend — auto-link rendering** ([frontend/map.js](frontend/map.js), [frontend/map.html](frontend/map.html)):
+- New globals `pwRoles` + `pwSubnets`, loaded in `loadPingWatchPage` Promise.all alongside the other settings fetches.
+- Pure-JS IPv4-in-CIDR helpers (`_pwIpv4ToInt` / `_pwSubnetForIp`) — picks the most-specific (longest-prefix) matching subnet per device.
+- New SVG layer `<g id="auto-links-layer">` in [map.html](frontend/map.html) between `groups-layer` and `links-layer` so auto-links render BELOW manual links.
+- `renderPwAutoLinks()` draws each inferred link as a dashed line (`6 5` pattern), `stroke-opacity:0.35`, `pointer-events:none`. Colors: l2=cyan, l3=violet, wan=amber. Called from `renderLinks()` so auto-links auto-update on every drag/redraw.
+
+### NTM Live — side-by-side packing for small sites
+
+Replaces the strict vertical site stack (which left a huge empty right margin under small sites) with shelf-packing: small sites pack side-by-side under or beside larger ones, wrapping only when a row exceeds the widest site's width. Two-pass refactor in [`calcPwLayout()`](frontend/map.js): PASS 1 measures each site's natural width/height with per-entry offsets recorded but not committed; PASS 2 walks the sites in alphabetical order assigning final `(x, y)` and replaying offsets to produce group hints. `maxRowW = max(siteW)` so the widest site sets the wrap boundary. Preserves the user's "Reset Layout" deterministic ordering and all existing user-saved group positions (Phase 1 fixed-rect path is unchanged).
+
 ### Site hierarchy — Phase E: auto-discovery propagation
 
 When auto-discovery creates a new device from an IPAM subnet, the subnet's `site` tag is now propagated onto the new device automatically. Existing devices in the subnet are NOT touched — only new finds inherit (back-filling would require a separate one-shot tool).

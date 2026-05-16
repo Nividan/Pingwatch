@@ -617,6 +617,122 @@ def db_clear_allocation(subnet_id: int, ip: str) -> None:
     _db_enqueue(_do)
 
 
+# ── Topology role tagging (switch / backbone / core / gateway) ─────────────
+# Role tagging reuses the existing ip_allocations.kind column. The NTM Live
+# map reads these tags to render auto-links along the standard 3/4-tier
+# enterprise topology: subnet members fan out to the subnet's switch
+# (access), switch uplinks to a backbone (aggregation), backbone uplinks
+# to a core (central L3), core uplinks to the gateway (edge/FW). Tiers
+# that aren't tagged in a site are skipped via fallback to the next-up
+# tier. Cross-site connectivity meshes at the core level when present,
+# otherwise at the backbone level.
+
+_ROLE_KINDS = ('switch', 'backbone', 'core', 'gateway')
+
+
+def db_set_device_role(did: str, host: str, role: str) -> int:
+    """
+    Set/clear the topology role for a device. Returns the number of IPAM
+    allocation rows updated. Enqueued write.
+
+    `role` must be one of: '', 'switch', 'backbone', 'core', 'gateway'.
+    Other values are rejected (returns 0 without write). Silently no-ops if
+    host isn't a plain IP, or no IPAM subnet matches the IP.
+    """
+    role = (role or '').strip().lower()
+    if role not in ('', 'switch', 'backbone', 'core', 'gateway'):
+        log.warning(f"db_set_device_role: invalid role {role!r} for {did}")
+        return 0
+    try:
+        ip_obj = ipaddress.ip_address(host)
+    except ValueError:
+        log.debug(f"db_set_device_role: host {host!r} for {did} not a plain IP — skipping")
+        return 0
+    now = time.time()
+    ip_str = str(ip_obj)
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                matched = _ipam_subnets_for_ip(None, ip_obj)
+                if not matched:
+                    return 0
+                total = 0
+                for sid, _cidr in matched:
+                    cur.execute(
+                        """UPDATE ip_allocations
+                              SET kind=%s, modified_at=%s
+                            WHERE subnet_id=%s AND ip=%s
+                              AND (device_id=%s OR device_id='')""",
+                        (role, now, sid, ip_str, did)
+                    )
+                    total += cur.rowcount or 0
+                return total
+        except Exception as e:
+            log.error(f"db_set_device_role error (did={did}, host={host!r}, role={role!r}): {e}")
+            return 0
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        matched = _ipam_subnets_for_ip(con, ip_obj)
+        if not matched:
+            return 0
+        total = 0
+        for sid, _cidr in matched:
+            cur = con.execute(
+                """UPDATE ip_allocations
+                      SET kind=?, modified_at=?
+                    WHERE subnet_id=? AND ip=?
+                      AND (device_id=? OR device_id='')""",
+                (role, now, sid, ip_str, did)
+            )
+            total += cur.rowcount or 0
+        con.commit()
+        return total
+    except Exception as e:
+        log.error(f"db_set_device_role error (did={did}, host={host!r}, role={role!r}): {e}")
+        return 0
+    finally:
+        con.close()
+
+
+def db_get_device_roles() -> dict:
+    """
+    Return {device_id: kind} for every allocation tagged with a topology
+    role (switch / backbone / core / gateway) that has a device_id. Used by
+    the NTM Live map auto-link renderer and by the device editor to populate
+    the Role dropdown.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    """SELECT device_id, kind FROM ip_allocations
+                       WHERE kind IN ('switch','backbone','core','gateway')
+                         AND device_id <> ''"""
+                )
+                return {r["device_id"]: r["kind"] for r in cur.fetchall()}
+        except Exception as e:
+            log.error(f"db_get_device_roles error: {e}")
+            return {}
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        rows = con.execute(
+            """SELECT device_id, kind FROM ip_allocations
+               WHERE kind IN ('switch','backbone','core','gateway')
+                 AND device_id <> ''"""
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        log.error(f"db_get_device_roles error: {e}")
+        return {}
+    finally:
+        con.close()
+
+
 # ── Device-sync helpers (called INSIDE the DB writer thread) ───────────────
 # These functions must NOT call _db_enqueue — they run directly in the
 # single-writer thread and open/close their own connection.
