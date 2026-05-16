@@ -24,6 +24,19 @@ async function openEditGroup(groupName) {
         </div>
 
         <div class="alrt-section">
+          <div class="alrt-section-hdr">Site</div>
+          <div class="fr">
+            <input type="text" id="eg-site" list="eg-site-dl"
+                   placeholder="(loading…)" autocomplete="off"/>
+            <datalist id="eg-site-dl"></datalist>
+            <div class="fh" id="eg-site-hint">
+              Assigning a site here applies to every device in this group.
+              Leave empty to clear (Unsited).
+            </div>
+          </div>
+        </div>
+
+        <div class="alrt-section">
           <div class="alrt-section-hdr">Alert Profile</div>
           <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">
             Loading\u2026
@@ -54,6 +67,40 @@ async function openEditGroup(groupName) {
   _loadGroupProfileSection(groupName);
   // Async-load the current mute state (default: unchecked until it lands)
   _loadGroupMuteState(groupName);
+  // Site picker: prefill from the unique sites currently used by devices in
+  // this group. Populate the autocomplete datalist from /api/sites.
+  _loadGroupSiteState(groupName);
+}
+
+async function _loadGroupSiteState(groupName) {
+  const input = document.getElementById('eg-site');
+  const hint  = document.getElementById('eg-site-hint');
+  if (!input) return;
+  // Distinct sites across devices in this group (currently in memory)
+  const sitesInGroup = [...new Set(
+    Object.values(S.devices || {})
+      .filter(d => (d.group || 'Default Group') === groupName)
+      .map(d => (d.site || ''))
+  )];
+  let initial = '';
+  if (sitesInGroup.length === 1) {
+    initial = sitesInGroup[0];
+  } else if (sitesInGroup.length > 1) {
+    // Mixed — leave blank, surface the spread in the hint so the user knows
+    // what they're about to overwrite.
+    if (hint) {
+      const labeled = sitesInGroup.map(s => s || '(Unsited)').sort().join(', ');
+      hint.innerHTML = `<span style="color:var(--warn)">Currently mixed: ${esc(labeled)}.</span>
+        Saving will move every device to the value above.`;
+    }
+  }
+  input.value = initial;
+  input.dataset.initial = initial;
+  input.placeholder = 'HQ, DR-Site-2…';
+  // Populate the datalist from /api/sites (UNION of IPAM + devices).
+  if (typeof _populateSiteDatalist === 'function') {
+    _populateSiteDatalist('eg-site-dl');
+  }
 }
 
 async function _loadGroupMuteState(groupName){
@@ -112,6 +159,44 @@ async function _loadGroupProfileSection(groupName) {
 async function saveEditGroup(oldName) {
   const newName = (document.getElementById('eg-name')?.value || '').trim();
   if (!newName) { toast('Group name cannot be empty', 'err'); return; }
+
+  // Site change — applies to every device in the group. We do this BEFORE
+  // the rename so we can key the bulk-move on the pre-rename group name
+  // (group_id-less API; we filter client-side by group name then PATCH).
+  const siteInput = document.getElementById('eg-site');
+  if (siteInput && siteInput.dataset.initial !== undefined) {
+    const wantSite = (siteInput.value || '').trim();
+    const hadSite  = siteInput.dataset.initial;
+    // Treat the field as dirty when either the value changed OR the group's
+    // devices currently have mixed sites (initial was blank-as-placeholder
+    // for "mixed", but we want a blank submit to clear them all).
+    const devs = Object.values(S.devices).filter(
+      d => (d.group || 'Default Group') === oldName
+    );
+    const distinctSites = [...new Set(devs.map(d => d.site || ''))];
+    const wasMixed = distinctSites.length > 1;
+    if (wantSite.length > 80) {
+      toast('Site name too long (max 80)', 'err'); return;
+    }
+    if (wantSite !== hadSite || wasMixed) {
+      const dids = devs.map(d => d.device_id);
+      if (dids.length) {
+        try {
+          const r = await api('POST', '/api/devices/bulk',
+            { device_ids: dids, action: 'move', site: wantSite });
+          if (!r || !r.ok) { toast('Site update failed', 'err'); return; }
+          dids.forEach(d => { const dv = S.devices[d]; if (dv) dv.site = wantSite; });
+          window._pwSitesCache = null;  // refresh autocomplete next open
+          // Re-render moved devices so their .grp-wrap parents update.
+          dids.forEach(d => { const dv = S.devices[d]; if (dv) renderDp(dv); });
+          if (typeof pruneEmptyGroups === 'function') pruneEmptyGroups();
+        } catch (e) {
+          toast('Site update failed: ' + (e.message || e), 'err');
+          return;
+        }
+      }
+    }
+  }
 
   // Persist mute-state change first so it applies regardless of rename outcome.
   const muteBox = document.getElementById('eg-muted');
