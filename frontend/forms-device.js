@@ -369,7 +369,6 @@ function openEditDevice(did){
         </div>
       </div>
     </div>
-    </div>
     <div class="mft">
       <button class="btn-s" onclick="closeM('med')">Cancel</button>
       <button class="btn-p" onclick="submitEditDevice('${did}')">Save Changes</button>

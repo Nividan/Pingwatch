@@ -443,7 +443,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology, settings, backups, ipam, groups as _groups_mod
+        from routes import topology, settings, backups, ipam, groups as _groups_mod, devices
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
@@ -457,6 +457,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ipam.handle(self, 'PUT', p, body):
             return
         if _groups_mod.handle(self, 'PUT', p, body):
+            return
+        # devices handles PUT /api/device/{did}/role (topology role tagging)
+        if devices.handle(self, 'PUT', p, body):
             return
 
         self._json(404, {"error": "not found"})
