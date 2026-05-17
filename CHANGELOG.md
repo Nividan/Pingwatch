@@ -8,9 +8,14 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
-### NTM Live — auto-links suppress intra-group fan-out
+### NTM Live — auto-link suppression + bundling
 
-Auto-links now skip pairs where both devices share the same (site, group) bucket — the group frame already implies adjacency, so drawing N individual lines from every member to its in-group anchor was visual noise without information. Only cross-frame links render now (e.g. a switch in "Switches" group → backbone in "Core" group). Filter added to [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js) at the dedup step using a `_pwDevMap` lookup on both endpoints. Manual `pwLinks` are unaffected — they still render regardless of group membership (and continue to suppress matching auto-links).
+Two reductions applied at the dedup step of [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js) to keep the auto-link layer readable on a multi-group canvas:
+
+1. **Intra-group suppression** — pairs where src and tgt share the same `(site, group)` bucket are dropped. The group frame already implies adjacency; N individual fan-out lines inside one frame add noise without information.
+2. **Cross-group bundling** — for the lines that DO cross group boundaries, the renderer collapses every `(source-group, target-device)` fan-out into a single representative link (first device of that group as src endpoint). A 25-device cluster all anchored to a switch in another group now draws ONE line instead of 25 parallel lines converging on one tile.
+
+Together: a network with 80 devices in 10 groups all anchored to one switch goes from ~80 auto-links down to ~10 — typically a 80–90% line-count reduction while preserving the cross-group topology shape. Manual `pwLinks` are unaffected — they always render and continue to suppress matching auto-link pairs.
 
 ### Edit Device modal — tabbed layout
 

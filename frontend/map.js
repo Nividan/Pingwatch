@@ -546,15 +546,22 @@ function _pwComputeAutoLinks() {
     }
   }
 
-  // Drop pairs already covered by a manual pwLink, dedup self-pairs, and
-  // suppress intra-group fan-out. Two devices in the same site+group already
-  // share a visible frame on the map — drawing N lines from every member to
-  // the in-group anchor adds visual noise without adding information (the
-  // group boundary already implies "these things are connected"). We only
-  // emit an auto-link when src and tgt sit in DIFFERENT (site,group) buckets.
+  // Drop pairs already covered by a manual pwLink, dedup self-pairs, suppress
+  // intra-group fan-out, and BUNDLE cross-group fan-out down to one line per
+  // (source-group, target-device) pair.
+  //
+  // Without bundling, a 25-device cluster all anchored to a switch in another
+  // group draws 25 parallel lines all converging on one tile — a cyan haze
+  // that adds no information beyond "this cluster talks to that switch."
+  // Collapsing to one line per source group keeps the cross-group topology
+  // visible while killing 80-90% of the line count.
+  //
+  // The first device in each (src-group, tgt) bucket is the representative —
+  // the line still anchors to a real node center so it picks up node-drag
+  // motion for free.
   const manualPairs = new Set((pwLinks || []).map(l => _pwPairKey(l.src_did, l.tgt_did)));
   const seen = new Set();
-  const dedup = [];
+  const bundles = new Map();  // key: `${srcSite}${srcGroup}${tgt_did}` -> first matching link
   for (const lk of out) {
     const k = _pwPairKey(lk.src_did, lk.tgt_did);
     if (manualPairs.has(k) || seen.has(k)) continue;
@@ -566,9 +573,12 @@ function _pwComputeAutoLinks() {
       continue;  // same site+group bucket — suppress as intra-frame noise
     }
     seen.add(k);
-    dedup.push(lk);
+    const sSite  = (sDev && sDev.site)  || '';
+    const sGroup = (sDev && sDev.group) || '';
+    const bkey   = `${sSite}${sGroup}${lk.tgt_did}`;
+    if (!bundles.has(bkey)) bundles.set(bkey, lk);
   }
-  return dedup;
+  return [...bundles.values()];
 }
 
 function renderPwAutoLinks() {
