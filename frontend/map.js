@@ -1082,6 +1082,7 @@ function showPwDashboardPanel() {
       <button class="btn" style="flex:1;font-size:10px;letter-spacing:1px" onclick="document.getElementById('pw-layout-import-file').click()">⬆ IMPORT</button>
     </div>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
+    <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px;color:#f85149" onclick="clearPwManualLinks()">✕ CLEAR MANUAL LINKS</button>
   `;
   // Restart dashboard canvas (paused while node/link panel was showing)
   _resumeDashBg?.();
@@ -4903,6 +4904,21 @@ function resetPwLayout() {
   renderPingWatchCanvas();
   fitToView();
   toast('Layout reset to auto');
+}
+
+// Wipe every manually-drawn pwLink (VLAN trunks, VPN tunnels, etc.). Useful
+// when validating auto-link inference — manual links suppress matching
+// auto-links, so removing them surfaces what the auto-link engine actually
+// produces. Destructive — gated by confirm prompt.
+function clearPwManualLinks() {
+  const n = (pwLinks || []).length;
+  if (!n) { toast('No manual links to clear'); return; }
+  if (!confirm(`Delete all ${n} manual link${n === 1 ? '' : 's'}?\n\nThis only removes user-drawn links — auto-links (the dim dashed lines from IPAM topology) are unaffected.`)) return;
+  pwLinks = [];
+  selectedEl = null;
+  _pwSave('pw_links', pwLinks);
+  renderPingWatchCanvas();
+  toast(`Cleared ${n} manual link${n === 1 ? '' : 's'}`);
 }
 
 function setPwGroupColor(gkey, color) {
