@@ -8,6 +8,10 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### NTM Live — auto-links suppress intra-group fan-out
+
+Auto-links now skip pairs where both devices share the same (site, group) bucket — the group frame already implies adjacency, so drawing N individual lines from every member to its in-group anchor was visual noise without information. Only cross-frame links render now (e.g. a switch in "Switches" group → backbone in "Core" group). Filter added to [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js) at the dedup step using a `_pwDevMap` lookup on both endpoints. Manual `pwLinks` are unaffected — they still render regardless of group membership (and continue to suppress matching auto-links).
+
 ### Edit Device modal — tabbed layout
 
 The Edit Device modal grew tall enough to scroll past one viewport once Topology Role, Secondary IPs, Licenses, Alert Profile, and Default Credentials all stacked vertically. Replaced the single-column scrolling form with four tabs (matches the Settings modal's nav pattern):
