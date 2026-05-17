@@ -4,7 +4,7 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
-## v1.0 — UI redesign (pending release)
+## v1.0 — New UI Design
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
