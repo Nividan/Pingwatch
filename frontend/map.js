@@ -588,24 +588,40 @@ function renderPwAutoLinks() {
   if (!isPingWatchPage) return;
   const links = _pwComputeAutoLinks();
   if (!links.length) return;
-  // Stroke palette — muted so they read as "implicit" vs. manual links.
-  // l2 = cyan (intra-subnet), l3 = violet (router uplink), wan = amber (inter-site).
+  // Visibility tuning: bundling drops line count by 90%+, so each remaining
+  // line carries more meaning and should READ at a glance. We bumped opacity
+  // 0.35 → 0.7 and width 1.2 → 2.2, and added arrowheads so the direction of
+  // flow (downstream → upstream) is unambiguous: VM → ESXi → Switch → FW.
+  // Stroke palette: l2 = cyan (subnet member), l3 = violet (uplink),
+  // wan = amber (inter-site).
   const COL = { l2: '#22d3ee', l3: '#a78bfa', wan: '#f59e0b' };
+  const ARR = { l2: 'arr-blue', l3: 'arr-purple', wan: 'arr-gold' };
   for (const lk of links) {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
     if (!src || !tgt) continue;
+    // Shrink the line end-points to the node edges (not centers) so the
+    // arrowhead lands cleanly on the target's border instead of inside it.
     const sc = nodeCenter(src), tc = nodeCenter(tgt);
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    path.setAttribute('x1', sc.x); path.setAttribute('y1', sc.y);
-    path.setAttribute('x2', tc.x); path.setAttribute('y2', tc.y);
-    path.setAttribute('stroke', COL[lk.kind] || '#888');
-    path.setAttribute('stroke-width', lk.kind === 'wan' ? '1.6' : '1.2');
-    path.setAttribute('stroke-dasharray', '6 5');
-    path.setAttribute('stroke-opacity', '0.35');
-    path.setAttribute('class', 'pw-auto-link');
-    path.setAttribute('pointer-events', 'none');
-    layer.appendChild(path);
+    const dx = tc.x - sc.x, dy = tc.y - sc.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Approx half-tile inset; tile sizes are ~95x50, so 40px works for most.
+    const inset = 40;
+    const x1 = sc.x + (dx / len) * inset;
+    const y1 = sc.y + (dy / len) * inset;
+    const x2 = tc.x - (dx / len) * inset;
+    const y2 = tc.y - (dy / len) * inset;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', COL[lk.kind] || '#888');
+    line.setAttribute('stroke-width', lk.kind === 'wan' ? '2.8' : '2.2');
+    line.setAttribute('stroke-dasharray', '8 5');
+    line.setAttribute('stroke-opacity', '0.7');
+    line.setAttribute('class', 'pw-auto-link');
+    line.setAttribute('marker-end', `url(#${ARR[lk.kind] || 'arr-blue'})`);
+    line.setAttribute('pointer-events', 'none');
+    layer.appendChild(line);
   }
 }
 
@@ -4909,16 +4925,28 @@ function resetPwLayout() {
 // Wipe every manually-drawn pwLink (VLAN trunks, VPN tunnels, etc.). Useful
 // when validating auto-link inference — manual links suppress matching
 // auto-links, so removing them surfaces what the auto-link engine actually
-// produces. Destructive — gated by confirm prompt.
+// produces. Gated by the in-page `_confirm()` modal because Chrome blocks
+// native `confirm()` dialogs triggered from same-origin iframe button
+// clicks under some flag combinations (the issue that hid this dialog the
+// first time around).
 function clearPwManualLinks() {
   const n = (pwLinks || []).length;
   if (!n) { toast('No manual links to clear'); return; }
-  if (!confirm(`Delete all ${n} manual link${n === 1 ? '' : 's'}?\n\nThis only removes user-drawn links — auto-links (the dim dashed lines from IPAM topology) are unaffected.`)) return;
-  pwLinks = [];
-  selectedEl = null;
-  _pwSave('pw_links', pwLinks);
-  renderPingWatchCanvas();
-  toast(`Cleared ${n} manual link${n === 1 ? '' : 's'}`);
+  _confirm(
+    `Delete all <b>${n}</b> manual link${n === 1 ? '' : 's'}?<br><br>` +
+    `<span style="font-size:11px;color:var(--text3,#888)">` +
+    `Only removes user-drawn links. Auto-links (dim dashed lines from IPAM ` +
+    `topology) are unaffected.</span>`,
+    () => {
+      pwLinks = [];
+      selectedEl = null;
+      _pwSave('pw_links', pwLinks);
+      renderPingWatchCanvas();
+      toast(`Cleared ${n} manual link${n === 1 ? '' : 's'}`);
+    },
+    `Delete ${n} link${n === 1 ? '' : 's'}`,
+    true   // danger styling (red confirm button)
+  );
 }
 
 function setPwGroupColor(gkey, color) {
