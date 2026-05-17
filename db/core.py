@@ -232,7 +232,8 @@ def db_init():
                 size_bytes INTEGER DEFAULT 0,
                 sha256     TEXT    DEFAULT '',
                 config     TEXT    DEFAULT '',
-                error_msg  TEXT    DEFAULT ''
+                error_msg  TEXT    DEFAULT '',
+                diff_lines INTEGER DEFAULT NULL
             )""")
         con.execute(
             "CREATE INDEX IF NOT EXISTS ix_backup_runs_did_ts "
@@ -523,6 +524,68 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
+        # Active-sessions UI (v1.0+) — lets the user menu list and revoke
+        # other browser/device sessions besides the current one.
+        for _sess_col in [
+            "ALTER TABLE sessions ADD COLUMN ip           TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN user_agent   TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN device_label TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN created_at   REAL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN last_active  REAL DEFAULT 0",
+        ]:
+            try:
+                con.execute(_sess_col)
+                con.commit()
+            except Exception:
+                pass  # column already exists
+        # Backups page enrichment (v1.0+) — surface a per-row "lines changed
+        # vs previous successful backup" count so the redesigned Backups view
+        # can populate its Diff column without computing diffs on the fly.
+        try:
+            con.execute("ALTER TABLE backup_runs ADD COLUMN diff_lines INTEGER DEFAULT NULL")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        # IPAM site grouping (v1.0+) — optional site/zone tag so the redesigned
+        # IPAM sidebar can render collapsible per-site subnet groups.
+        try:
+            con.execute("ALTER TABLE ipam_subnets ADD COLUMN site TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        # Site grouping on devices (v1.0+) — Site → Group → Device hierarchy.
+        # Free-text; sourced via autocomplete from UNION(ipam_subnets.site, devices.site).
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN site TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        # Exclusive flag on alert profiles (v1.0+) — when an exclusive profile
+        # matches the cascade, broader-scope profiles are not added. Lets users
+        # opt out of the new default-additive cascade per-profile.
+        try:
+            con.execute("ALTER TABLE alert_profiles ADD COLUMN exclusive INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        # One-shot migration: preserve "first-match wins" semantics for every
+        # pre-existing profile by setting exclusive=1 on each. Gated via the
+        # schema_version table so re-runs are no-ops. Fresh installs that
+        # populate the Default profile do so AFTER this block (line ~1080
+        # in this file) — fresh rows therefore stay exclusive=0 (additive).
+        try:
+            _existed = con.execute(
+                "SELECT 1 FROM schema_version WHERE notes='exclusive_v1=done'"
+            ).fetchone()
+            if not _existed:
+                con.execute("UPDATE alert_profiles SET exclusive=1")
+                con.execute(
+                    "INSERT OR IGNORE INTO schema_version VALUES (?, datetime('now'), ?)",
+                    (1001, 'exclusive_v1=done')
+                )
+                con.commit()
+        except Exception as _e:
+            log.warning(f"exclusive_v1 migration skipped: {_e}")
         # ── SNMP trap intelligence — new tables (v0.6.1) ─────────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS enterprise_oid_map (
@@ -571,6 +634,7 @@ def db_init():
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 cidr       TEXT UNIQUE NOT NULL,
                 name       TEXT DEFAULT '',
+                site       TEXT DEFAULT '',
                 created_by TEXT DEFAULT '',
                 created_at REAL DEFAULT 0
             )""")
@@ -583,6 +647,7 @@ def db_init():
                 subnet_id   INTEGER NOT NULL REFERENCES ipam_subnets(id),
                 ip          TEXT NOT NULL,
                 name        TEXT DEFAULT '',
+                kind        TEXT DEFAULT '',
                 modified_by TEXT DEFAULT '',
                 modified_at REAL DEFAULT 0,
                 UNIQUE(subnet_id, ip)
@@ -613,6 +678,14 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
+        # Migration: allocation kind (v1.0+) — '' (default/used), 'gateway',
+        # 'reserved', 'conflict'. Drives the heatmap classification and pill
+        # color in the redesigned IPAM page.
+        try:
+            con.execute("ALTER TABLE ip_allocations ADD COLUMN kind TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # Migration: Auto-Discovery + per-subnet DNS columns on ipam_subnets (v0.9.3+)
         for _ad_col in [
             "ALTER TABLE ipam_subnets ADD COLUMN auto_discover       INTEGER DEFAULT 0",
@@ -714,6 +787,13 @@ def db_init():
             "ON alert_events(did, sid) "
             "WHERE state IN ('active','acknowledged')"
         )
+        # suppress_reason carries the human-readable cause when state='suppressed'
+        # (currently only maintenance windows). Idempotent ALTER for existing dbs.
+        try:
+            con.execute("ALTER TABLE alert_events ADD COLUMN suppress_reason TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS alert_profiles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -771,9 +851,17 @@ def db_init():
                 recur_days  TEXT    DEFAULT '',
                 recur_start TEXT    DEFAULT '',
                 recur_end   TEXT    DEFAULT '',
+                enabled     INTEGER DEFAULT 1,
                 created_by  TEXT    DEFAULT '',
                 created_at  REAL    DEFAULT 0
             )""")
+        # Migration: enabled flag on maintenance_windows so users can toggle
+        # a window off without deleting it. Legacy rows default to enabled.
+        try:
+            con.execute("ALTER TABLE maintenance_windows ADD COLUMN enabled INTEGER DEFAULT 1")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS user_groups (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,

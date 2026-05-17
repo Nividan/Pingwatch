@@ -294,85 +294,167 @@ function _rptInit(){
   if(!root) return;
   if(!_rptBooted){
     root.innerHTML = `
-      <div class="rpt-toolbar">
-        <span class="rpt-title">📊 Reports</span>
-        <div class="rpt-tabs">
-          <button class="rpt-subtab" id="rptTabTemplates" onclick="_rptSwitch('templates')">Templates</button>
-          <button class="rpt-subtab" id="rptTabSchedules" onclick="_rptSwitch('schedules')">Schedules</button>
-          <button class="rpt-subtab" id="rptTabHistory"   onclick="_rptSwitch('history')">History</button>
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Reports</h1>
+          <div class="sub" id="rptSub">Templates, schedules, and run history.</div>
         </div>
-        <div style="flex:1"></div>
-        <button class="rpt-btn rpt-btn-primary" id="rptNewBtn" onclick="_rptNew()">+ New</button>
+        <div class="pagehead-r">
+          <button class="btn" onclick="_rptEditSchedule(null)">${icon('plus',13)} Schedule</button>
+          <button class="btn primary" onclick="_rptEditTemplate(null)">${icon('plus',13)} New Template</button>
+        </div>
       </div>
-      <div id="rptBody" class="rpt-body"></div>
+      <div id="rptBody" class="rpt-body">
+        <section id="rpt-section-templates"></section>
+        <section id="rpt-section-history"></section>
+        <section id="rpt-section-schedules"></section>
+      </div>
     `;
     _rptBooted = true;
   }
-  _rptSwitch(_rptTab);
+  _rptRenderTemplates();
+  _rptRenderHistory();
+  _rptRenderSchedules();
+  _rptRefreshSummary();
 }
 
+async function _rptRefreshSummary(){
+  const el = document.getElementById('rptSub');
+  if(!el) return;
+  try{
+    const [t, s, h] = await Promise.all([
+      api('GET','/api/reports/templates').catch(()=>({templates:[]})),
+      api('GET','/api/reports/schedules').catch(()=>({schedules:[]})),
+      api('GET','/api/reports/history').catch(()=>({history:[]})),
+    ]);
+    const nt = (t.templates||[]).length;
+    const ns = (s.schedules||[]).length;
+    const nh = (h.history||[]).length;
+    el.textContent = `${nt} template${nt===1?'':'s'} · ${nh} recent · ${ns} scheduled`;
+  }catch(_){ /* leave the default subtitle */ }
+}
+
+// Kept for backward compat with any external callers; now just re-renders
 function _rptSwitch(tab){
   _rptTab = tab;
-  ['Templates','Schedules','History'].forEach(k=>{
-    const el = document.getElementById('rptTab'+k);
-    if(el) el.classList.toggle('active', tab===k.toLowerCase());
-  });
-  const nb = document.getElementById('rptNewBtn');
-  if(nb) nb.style.display = (tab==='history') ? 'none' : '';
-  if(tab==='templates') _rptRenderTemplates();
-  else if(tab==='schedules') _rptRenderSchedules();
+  if (tab === 'templates') _rptRenderTemplates();
+  else if (tab === 'schedules') _rptRenderSchedules();
   else _rptRenderHistory();
 }
 
-function _rptNew(){
-  if(_rptTab==='templates') _rptEditTemplate(null);
-  else if(_rptTab==='schedules') _rptEditSchedule(null);
-}
+function _rptNew(){ _rptEditTemplate(null); }
 
 /* ── Templates ─────────────────────────────────────────────────── */
 
+/* Kind → SVG thumbnail. Each is a stylised illustration that hints at
+   what the report contains. Stroke-only so they inherit the kind color. */
+function _rptThumbForKind(kind){
+  const k = (kind||'custom').toLowerCase();
+  const stroke = ({
+    executive: 'var(--accent)',
+    technical: 'var(--up)',
+    inventory: 'var(--warn)',
+    anomaly  : '#a78bfa',
+    custom   : 'var(--text3)',
+  })[k] || 'var(--text3)';
+  if (k === 'executive') {
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+      <path d="M10 70 L40 60 L70 55 L100 40 L130 35 L160 25 L190 18" fill="none" stroke="${stroke}" stroke-width="2"/>
+      <rect x="15"  y="78" width="22" height="6"  fill="${stroke}" opacity=".35"/>
+      <rect x="42"  y="78" width="32" height="6"  fill="${stroke}" opacity=".5"/>
+      <rect x="79"  y="78" width="48" height="6"  fill="${stroke}" opacity=".65"/>
+      <rect x="132" y="78" width="58" height="6"  fill="${stroke}" opacity=".8"/>
+    </svg>`;
+  }
+  if (k === 'technical') {
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+      <polyline points="10,70 30,55 50,62 70,40 90,48 110,30 130,38 150,25 170,32 190,20" fill="none" stroke="${stroke}" stroke-width="1.8"/>
+      <polyline points="10,80 30,72 50,75 70,68 90,70 110,60 130,62 150,55 170,58 190,48" fill="none" stroke="${stroke}" stroke-width="1.3" opacity=".5"/>
+      <polyline points="10,88 30,84 50,86 70,80 90,82 110,76 130,78 150,72 170,74 190,68" fill="none" stroke="${stroke}" stroke-width="1.3" opacity=".35"/>
+    </svg>`;
+  }
+  if (k === 'inventory') {
+    const cells = [];
+    for (let y=0; y<5; y++) for (let x=0; x<10; x++){
+      const a = .25 + (((x*7 + y*3) % 7) / 10);
+      cells.push(`<rect x="${10+x*18}" y="${10+y*16}" width="14" height="12" fill="${stroke}" opacity="${a.toFixed(2)}" rx="1"/>`);
+    }
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">${cells.join('')}</svg>`;
+  }
+  if (k === 'anomaly') {
+    const dots = [];
+    for (let i=0; i<20; i++){
+      const x = 12 + i*9;
+      const y = 55 + Math.sin(i*0.9)*8 + (Math.random()*4-2);
+      const sz = (i===5 || i===14) ? 4 : 2.2;
+      const c  = (i===5) ? 'var(--down)' : (i===14 ? 'var(--warn)' : stroke);
+      dots.push(`<circle cx="${x}" cy="${y.toFixed(1)}" r="${sz}" fill="${c}"/>`);
+    }
+    return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+      <path d="M0 55 L200 55" stroke="${stroke}" stroke-width=".8" opacity=".25" stroke-dasharray="3 4"/>
+      ${dots.join('')}
+    </svg>`;
+  }
+  // custom — drop-zone illustration
+  return `<svg viewBox="0 0 200 100" preserveAspectRatio="none" style="width:100%;height:100%">
+    <rect x="20"  y="20" width="70"  height="60" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="4 4" rx="3" opacity=".6"/>
+    <rect x="110" y="20" width="70"  height="60" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="4 4" rx="3" opacity=".6"/>
+    <text x="100" y="55" text-anchor="middle" fill="${stroke}" font-size="9" font-family="ui-monospace,monospace" opacity=".7" letter-spacing=".5">+ DROP WIDGETS</text>
+  </svg>`;
+}
+
+function _rptCardDescFor(t){
+  if (t.description) return t.description;
+  const d = ({
+    executive: 'High-level KPIs, SLA, top incidents.',
+    technical: 'Per-device sensors, thresholds, raw samples.',
+    inventory: 'Hardware, firmware, license, warranty.',
+    anomaly  : 'Outlier detection across CPU, ping, traffic.',
+    custom   : 'Build your own from widget templates.',
+  })[(t.kind||'').toLowerCase()];
+  return d || '';
+}
+
 async function _rptRenderTemplates(){
-  const body = document.getElementById('rptBody');
-  body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
+  const body = document.getElementById('rpt-section-templates');
+  if(!body) return;
+  body.innerHTML = `<div class="rpt-section-label">Templates</div><div class="muted" style="padding:0 var(--sp-6) var(--sp-4)">Loading…</div>`;
   try{
     const r = await api('GET', '/api/reports/templates');
     const tpls = r.templates || [];
-    if(!tpls.length){
-      body.innerHTML = `
-        <div class="rpt-empty">
-          <div class="rpt-empty-icon">📄</div>
-          <div class="rpt-empty-title">No report templates yet</div>
-          <div class="rpt-empty-hint">Templates define what goes into a report. Start with one of the presets.</div>
-          <div class="rpt-empty-actions">
-            <button class="rpt-btn rpt-btn-primary" onclick="_rptEditTemplate(null,'executive')">+ Executive Summary</button>
-            <button class="rpt-btn" onclick="_rptEditTemplate(null,'technical')">+ Technical / Ops</button>
-            <button class="rpt-btn" onclick="_rptEditTemplate(null,'inventory')">+ Inventory &amp; Compliance</button>
-            <button class="rpt-btn" onclick="_rptEditTemplate(null,'anomaly')">+ Anomaly Detection</button>
+    const cards = tpls.map(t=>{
+      const kind = (t.kind||'custom').toLowerCase();
+      const desc = _rptCardDescFor(t);
+      return `
+      <div class="rpt-tpl-card" data-kind="${esc(kind)}">
+        <div class="rpt-tpl-thumb">${_rptThumbForKind(kind)}</div>
+        <div class="rpt-tpl-body">
+          <div class="rpt-tpl-title">${esc(t.name)}</div>
+          <div class="rpt-tpl-desc">${esc(desc)}</div>
+          <div class="rpt-tpl-actions">
+            <button class="btn sm primary" onclick="_rptRunNow('${esc(t.id)}')">${icon('play',12)} Run</button>
+            <button class="btn sm" onclick="_rptPreview('${esc(t.id)}')" title="Preview">${icon('eye',12)}</button>
+            <button class="btn sm" onclick="_rptEditTemplate('${esc(t.id)}')" title="Edit">${icon('edit',12)}</button>
+            <button class="btn sm" onclick="_rptTestSend('${esc(t.id)}')" title="Send test">${icon('mail',12)}</button>
+            <button class="btn sm danger" onclick="_rptDeleteTemplate('${esc(t.id)}','${esc(t.name)}')" title="Delete">${icon('trash',12)}</button>
           </div>
-        </div>`;
-      return;
-    }
-    const rows = tpls.map(t=>`
-      <tr>
-        <td><strong>${esc(t.name)}</strong><div class="muted small">${esc(t.description||'')}</div></td>
-        <td><span class="rpt-kind rpt-kind-${esc(t.kind)}">${esc(t.kind)}</span></td>
-        <td class="muted small">${esc(t.created_by||'')}</td>
-        <td class="muted small">${_fmtDate(t.updated_at)}</td>
-        <td style="text-align:right;white-space:nowrap">
-          <button class="rpt-btn-sm" onclick="_rptPreview('${esc(t.id)}')">👁 Preview</button>
-          <button class="rpt-btn-sm" onclick="_rptRunNow('${esc(t.id)}')">▶ Run Now</button>
-          <button class="rpt-btn-sm" onclick="_rptEditTemplate('${esc(t.id)}')">✎ Edit</button>
-          <button class="rpt-btn-sm" onclick="_rptTestSend('${esc(t.id)}')">✉ Test</button>
-          <button class="rpt-btn-sm rpt-btn-danger" onclick="_rptDeleteTemplate('${esc(t.id)}','${esc(t.name)}')">🗑</button>
-        </td>
-      </tr>`).join('');
+        </div>
+      </div>`;
+    }).join('');
     body.innerHTML = `
-      <table class="rpt-table">
-        <thead><tr><th>Name</th><th>Kind</th><th>Created By</th><th>Updated</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+      <div class="rpt-section-label">Templates</div>
+      <div class="rpt-tpl-grid">
+        ${cards}
+        <div class="rpt-tpl-card rpt-tpl-add" onclick="_rptEditTemplate(null)" title="New template">
+          <div class="rpt-tpl-thumb">${_rptThumbForKind('custom')}</div>
+          <div class="rpt-tpl-body">
+            <div class="rpt-tpl-title">+ New template</div>
+            <div class="rpt-tpl-desc">Start blank or from a preset.</div>
+          </div>
+        </div>
+      </div>`;
   }catch(e){
-    body.innerHTML = `<div class="error" style="padding:20px">Failed to load templates</div>`;
+    body.innerHTML = `<div class="rpt-section-label">Templates</div><div class="error" style="padding:0 var(--sp-6) var(--sp-4)">Failed to load templates</div>`;
   }
 }
 
@@ -605,6 +687,7 @@ async function _rptSaveTemplate(tid){
     }
     closeM('rptTplModal');
     _rptRenderTemplates();
+    _rptRefreshSummary();
   }catch(e){
     _rptNotify({title:'Save failed', message:(e.message||String(e)), kind:'error'});
   }
@@ -621,6 +704,7 @@ async function _rptDeleteTemplate(tid, name){
   try{
     await api('DELETE', '/api/reports/template/'+tid);
     _rptRenderTemplates();
+    _rptRefreshSummary();
   }catch(e){ _rptNotify({title:'Delete failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
@@ -659,9 +743,12 @@ async function _rptRunNow(tid){
         ? `PDF saved (${kb} KB). Open the History tab to download it.`
         : `Rendered ${kb} KB but the server could not save it to disk (check file permissions on backup/reports/). The entry still appears in History.`,
       kind:    hasFile ? 'success' : 'error',
-      secondary: { label: 'Go to History', onClick: ()=>{ _rptSwitch('history'); } },
+      secondary: { label: 'Scroll to Recently generated', onClick: ()=>{
+        document.getElementById('rpt-section-history')?.scrollIntoView({behavior:'smooth', block:'start'});
+      } },
     });
-    if(_rptTab==='history') _rptRenderHistory();
+    _rptRenderHistory();
+    _rptRefreshSummary();
   }catch(e){
     _rptHideProgress();
     _rptNotify({title:'Run failed', message:(e.message||String(e)), kind:'error'});
@@ -717,23 +804,30 @@ async function _rptDoTestSend(tid){
 
 /* ── Schedules ─────────────────────────────────────────────────── */
 
+function _rptSectionHead(title, actionsHtml){
+  return `<div class="rpt-section-head">
+    <div class="rpt-section-title">${esc(title)}</div>
+    <div class="rpt-section-actions">${actionsHtml||''}</div>
+  </div>`;
+}
+
 async function _rptRenderSchedules(){
-  const body = document.getElementById('rptBody');
-  body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
+  const body = document.getElementById('rpt-section-schedules');
+  if(!body) return;
+  const head = _rptSectionHead('Scheduled',
+    `<button class="btn sm" onclick="_rptEditSchedule(null)">${icon('plus',12)} New schedule</button>`);
+  body.innerHTML = head + `<div class="muted" style="padding:0 var(--sp-6) var(--sp-4)">Loading…</div>`;
   try{
     const [a,b] = await Promise.all([api('GET', '/api/reports/schedules'), api('GET', '/api/reports/templates')]);
     const schs = a.schedules || [];
     const tpls = b.templates || [];
     const tplById = {}; tpls.forEach(t=>tplById[t.id]=t);
     if(!schs.length){
-      body.innerHTML = `
-        <div class="rpt-empty">
+      body.innerHTML = head + `
+        <div class="rpt-empty" style="padding:40px 20px">
           <div class="rpt-empty-icon">📅</div>
           <div class="rpt-empty-title">No schedules yet</div>
           <div class="rpt-empty-hint">A schedule pairs a template with a cadence and recipient list.</div>
-          <div class="rpt-empty-actions">
-            <button class="rpt-btn rpt-btn-primary" onclick="_rptEditSchedule(null)">+ New Schedule</button>
-          </div>
         </div>`;
       return;
     }
@@ -743,24 +837,26 @@ async function _rptRenderSchedules(){
         <tr>
           <td><strong>${esc(s.name)}</strong></td>
           <td>${tpl?esc(tpl.name):'<span class="muted">(template missing)</span>'}</td>
-          <td>${esc(_fmtCadence(s))}</td>
+          <td class="mono">${esc(_fmtCadence(s))}</td>
           <td>${esc(s.period||'')}</td>
           <td class="muted small">${_fmtDate(s.last_run_ts) || '—'}</td>
           <td>${s.enabled ? '<span class="pill up">on</span>' : '<span class="pill muted">off</span>'}</td>
           <td style="text-align:right;white-space:nowrap">
-            <button class="rpt-btn-sm" onclick="_rptRunSchedule('${esc(s.id)}','${esc(s.name)}')">▶ Run</button>
-            <button class="rpt-btn-sm" onclick="_rptEditSchedule('${esc(s.id)}')">✎ Edit</button>
-            <button class="rpt-btn-sm rpt-btn-danger" onclick="_rptDeleteSchedule('${esc(s.id)}','${esc(s.name)}')">🗑</button>
+            <button class="btn sm" onclick="_rptRunSchedule('${esc(s.id)}','${esc(s.name)}')" title="Run now">${icon('play',12)}</button>
+            <button class="btn sm" onclick="_rptEditSchedule('${esc(s.id)}')" title="Edit">${icon('edit',12)}</button>
+            <button class="btn sm danger" onclick="_rptDeleteSchedule('${esc(s.id)}','${esc(s.name)}')" title="Delete">${icon('trash',12)}</button>
           </td>
         </tr>`;
     }).join('');
-    body.innerHTML = `
-      <table class="rpt-table">
-        <thead><tr><th>Name</th><th>Template</th><th>Cadence</th><th>Period</th><th>Last run</th><th>State</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+    body.innerHTML = head + `
+      <div class="rpt-table-wrap">
+        <table class="rpt-table">
+          <thead><tr><th>Schedule</th><th>Template</th><th>Cadence</th><th>Period</th><th>Last run</th><th>State</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
   }catch(e){
-    body.innerHTML = `<div class="error" style="padding:20px">Failed to load schedules</div>`;
+    body.innerHTML = head + `<div class="error" style="padding:0 var(--sp-6) var(--sp-4)">Failed to load schedules</div>`;
   }
 }
 
@@ -913,6 +1009,7 @@ async function _rptSaveSchedule(sid){
     else    await api('POST',  '/api/reports/schedule',      payload);
     closeM('rptSchModal');
     _rptRenderSchedules();
+    _rptRefreshSummary();
   }catch(e){ _rptNotify({title:'Save failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
@@ -923,7 +1020,7 @@ async function _rptDeleteSchedule(sid, name){
     confirmLabel:'Delete', danger:true,
   });
   if(!ok) return;
-  try{ await api('DELETE', '/api/reports/schedule/'+sid); _rptRenderSchedules(); }
+  try{ await api('DELETE', '/api/reports/schedule/'+sid); _rptRenderSchedules(); _rptRefreshSummary(); }
   catch(e){ _rptNotify({title:'Delete failed', message:(e.message||String(e)), kind:'error'}); }
 }
 
@@ -955,17 +1052,20 @@ async function _rptRunSchedule(sid, name){
 /* ── History ───────────────────────────────────────────────────── */
 
 async function _rptRenderHistory(){
-  const body = document.getElementById('rptBody');
-  body.innerHTML = `<div class="muted" style="padding:20px">Loading…</div>`;
+  const body = document.getElementById('rpt-section-history');
+  if(!body) return;
+  const head = _rptSectionHead('Recently generated',
+    `<button class="btn sm" onclick="_rptRefreshSummary();_rptRenderHistory()" title="Refresh">${icon('refresh',12)}</button>`);
+  body.innerHTML = head + `<div class="muted" style="padding:0 var(--sp-6) var(--sp-4)">Loading…</div>`;
   try{
     const r = await api('GET', '/api/reports/history');
     const rows = r.history || [];
     if(!rows.length){
-      body.innerHTML = `
-        <div class="rpt-empty">
+      body.innerHTML = head + `
+        <div class="rpt-empty" style="padding:40px 20px">
           <div class="rpt-empty-icon">🗂</div>
           <div class="rpt-empty-title">No reports generated yet</div>
-          <div class="rpt-empty-hint">Hit "Run Now" on a template, or wait for a schedule to fire.</div>
+          <div class="rpt-empty-hint">Hit "Run" on a template, or wait for a schedule to fire.</div>
         </div>`;
       return;
     }
@@ -977,46 +1077,48 @@ async function _rptRenderHistory(){
       const ridBadge = h.report_id
         ? `<span class="rpt-fingerprint" title="${esc(ridTitle)}">${esc(h.report_id)}</span>`
         : '';
+      const sizeCell = ckb ? `${kb} KB <span class="muted">/ +${ckb} CSV</span>` : `${kb} KB`;
       return `
         <tr>
           <td style="width:28px;text-align:center">
             <input type="checkbox" class="rpt-hist-cb" data-hid="${esc(h.id)}" onchange="_rptHistSelChanged()">
           </td>
-          <td class="muted small">${_fmtDate(h.generated_at)}</td>
           <td>
             <strong>${esc(h.template_name||'(deleted)')}</strong>
             ${ridBadge ? `<div style="margin-top:2px">${ridBadge}</div>` : ''}
           </td>
-          <td>${esc(h.kind||'')}</td>
-          <td>${_fmtDate(h.period_start)} → ${_fmtDate(h.period_end)}</td>
+          <td class="mono">${esc(h.kind||'')}</td>
+          <td class="mono">${sizeCell}</td>
+          <td class="muted small">${_fmtDate(h.generated_at)}</td>
           <td>${statusPill}</td>
-          <td class="muted small">${kb} KB · ${(h.render_ms||0)} ms${ckb?`<br>+${ckb} KB CSV`:''}</td>
           <td style="text-align:right;white-space:nowrap">
-            ${(h.pdf_path && h.pdf_bytes)?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/download" target="_blank" title="Download PDF">⬇ PDF</a>`:'<span class="muted small">no file</span>'}
-            ${(h.csv_path && h.csv_bytes)?`<a class="rpt-btn-sm" href="/api/reports/history/${esc(h.id)}/csv" target="_blank" title="Download CSV sidecar">⬇ CSV</a>`:''}
-            <button class="rpt-btn-sm rpt-btn-danger" onclick="_rptDeleteHistory('${esc(h.id)}')">🗑</button>
+            ${(h.pdf_path && h.pdf_bytes)?`<a class="btn sm" href="/api/reports/history/${esc(h.id)}/download" target="_blank" title="Download PDF">${icon('download',12)}</a>`:'<span class="muted small">no file</span>'}
+            ${(h.csv_path && h.csv_bytes)?`<a class="btn sm" href="/api/reports/history/${esc(h.id)}/csv" target="_blank" title="Download CSV">${icon('download',12)} CSV</a>`:''}
+            <button class="btn sm danger" onclick="_rptDeleteHistory('${esc(h.id)}')" title="Delete">${icon('trash',12)}</button>
           </td>
         </tr>`;
     }).join('');
-    body.innerHTML = `
+    body.innerHTML = head + `
       <div id="rptHistActions" class="rpt-hist-actions" style="display:none">
         <span class="muted small" id="rptHistSelCount">0 selected</span>
-        <button class="rpt-btn rpt-btn-danger" onclick="_rptDeleteHistoryBulk()">Delete selected</button>
-        <button class="rpt-btn-sm" onclick="_rptHistClearSel()">Clear</button>
+        <button class="btn sm danger" onclick="_rptDeleteHistoryBulk()">Delete selected</button>
+        <button class="btn sm" onclick="_rptHistClearSel()">Clear</button>
       </div>
-      <table class="rpt-table">
-        <thead>
-          <tr>
-            <th style="width:28px;text-align:center">
-              <input type="checkbox" id="rptHistSelAll" onchange="_rptHistSelAll(this.checked)" title="Select all">
-            </th>
-            <th>Generated</th><th>Template</th><th>Kind</th><th>Period</th><th>Delivery</th><th>Size</th><th></th>
-          </tr>
-        </thead>
-        <tbody>${trs}</tbody>
-      </table>`;
+      <div class="rpt-table-wrap">
+        <table class="rpt-table">
+          <thead>
+            <tr>
+              <th style="width:28px;text-align:center">
+                <input type="checkbox" id="rptHistSelAll" onchange="_rptHistSelAll(this.checked)" title="Select all">
+              </th>
+              <th>Name</th><th>Template</th><th>Size</th><th>Generated</th><th>Delivery</th><th></th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>`;
   }catch(e){
-    body.innerHTML = `<div class="error" style="padding:20px">Failed to load history</div>`;
+    body.innerHTML = head + `<div class="error" style="padding:0 var(--sp-6) var(--sp-4)">Failed to load history</div>`;
   }
 }
 
@@ -1072,6 +1174,7 @@ async function _rptDeleteHistoryBulk(){
       kind: 'success',
     });
     _rptRenderHistory();
+    _rptRefreshSummary();
   }catch(e){
     _rptNotify({title:'Bulk delete failed', message:(e.message||String(e)), kind:'error'});
   }
@@ -1094,7 +1197,7 @@ async function _rptDeleteHistory(hid){
     confirmLabel:'Delete', danger:true,
   });
   if(!ok) return;
-  try{ await api('DELETE', '/api/reports/history/'+hid); _rptRenderHistory(); }
+  try{ await api('DELETE', '/api/reports/history/'+hid); _rptRenderHistory(); _rptRefreshSummary(); }
   catch(e){ _rptNotify({title:'Delete failed', message:(e.message||String(e)), kind:'error'}); }
 }
 

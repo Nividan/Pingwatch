@@ -126,6 +126,8 @@ from db.ipam        import (
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
+    db_set_device_role,
+    db_get_device_roles,
     db_update_dns,
     ipam_sync_device_add,
     ipam_sync_device_update,
@@ -209,6 +211,7 @@ from db.backups     import (
     db_get_backup_history,
     db_get_backup_run,
     db_save_backup_run,
+    db_get_last_successful_config,
     db_delete_backup_run,
     db_ensure_backup_device,
     db_write_config_file,
@@ -263,7 +266,8 @@ __all__ = [
     # ipam
     "db_list_subnets", "db_get_subnet", "db_add_subnet", "db_rename_subnet", "db_delete_subnet",
     "db_update_subnet", "db_set_auto_discover", "db_approve_first_scan", "db_set_subnet_last_scan",
-    "db_get_allocations", "db_upsert_allocation", "db_clear_allocation", "db_update_dns",
+    "db_get_allocations", "db_upsert_allocation", "db_clear_allocation",
+    "db_set_device_role", "db_get_device_roles", "db_update_dns",
     "ipam_sync_device_add", "ipam_sync_device_update",
     "ipam_sync_device_delete", "ipam_sync_subnet_add",
     # alert profiles
@@ -291,6 +295,7 @@ __all__ = [
     # backups
     "db_get_backup_list", "db_get_backup_settings", "db_save_backup_settings",
     "db_get_backup_history", "db_get_backup_run", "db_save_backup_run",
+    "db_get_last_successful_config",
     "db_delete_backup_run", "db_ensure_backup_device", "db_write_config_file",
     "db_search_configs", "encrypt_pw", "decrypt_pw",
 ]

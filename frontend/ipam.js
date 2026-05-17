@@ -33,25 +33,46 @@ function _ipamRenderShell() {
   const view = document.getElementById('ipamView');
   if (!view) return;
   view.innerHTML = `
-    <div class="ipam-hdr">
-      <select class="ipam-sel" id="ipam-sel" onchange="_ipamOnSubnetChange(this.value)">
-        <option value="">— Select a subnet —</option>
-      </select>
-      <button class="btn-sm btn-accent rbac-op" onclick="_ipamOpenAddSubnet()">＋ Add Subnet</button>
-      <button class="btn-sm rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">⚙ Edit</button>
-      <button class="btn-sm rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled style="color:var(--down)">✕ Remove</button>
-      <button class="btn-sm rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">Refresh DNS</button>
-      <div style="width:1px;height:18px;background:var(--border);margin:0 4px"></div>
-      <input class="ipam-search" id="ipam-search" type="search" placeholder="🔍  Search IP, name or DNS…"
-             oninput="_ipamOnSearch(this.value)" autocomplete="off"/>
-      <div class="ipam-pg" id="ipam-pg"></div>
-    </div>
-    <div id="ipam-table-wrap">
-      <div style="padding:40px;text-align:center;color:var(--text3);font-size:13px">
-        Add a subnet to get started.
+    <div class="pagehead">
+      <div class="pagehead-l">
+        <h1>IP Address Management</h1>
+        <div class="sub" id="ipam-sub">Subnets and per-host allocation tracking.</div>
       </div>
+      <div class="pagehead-r">
+        <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()">${icon('plus',13)} Add Subnet</button>
+        <button class="btn rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">${icon('edit',13)} Edit</button>
+        <button class="btn ghost rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">${icon('refresh',13)} Refresh DNS</button>
+        <button class="btn danger rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled title="Delete this subnet">${icon('trash',13)} Remove</button>
+      </div>
+    </div>
+    <div class="ipam-layout">
+      <aside class="ipam-sidebar">
+        <div class="ipam-sidebar-filter">
+          <div class="search" style="width:100%">
+            ${icon('search',14)}
+            <input class="pw-input" id="ipam-subnet-filter" type="search" placeholder="Filter subnets…" oninput="_ipamFilterSidebar(this.value)" autocomplete="off"/>
+          </div>
+        </div>
+        <div class="ipam-subnet-list" id="ipam-subnet-list">
+          <div class="ipam-empty">No subnets yet.</div>
+        </div>
+      </aside>
+      <main class="ipam-main" id="ipam-main">
+        <div class="ipam-main-empty">
+          <div class="ipam-main-empty-icon">${icon('ipam',32)}</div>
+          <div class="ipam-main-empty-title">Select a subnet to begin</div>
+          <div class="ipam-main-empty-hint">Pick a subnet from the left to see its KPIs, address heatmap, and per-IP allocations.</div>
+        </div>
+      </main>
     </div>`;
   applyRbac();
+}
+
+// Sidebar filter — narrow the visible subnet cards by CIDR or name match
+let _ipamSidebarFilter = '';
+function _ipamFilterSidebar(q) {
+  _ipamSidebarFilter = (q || '').toLowerCase().trim();
+  _ipamRenderSidebar();
 }
 
 // ── License status cache ───────────────────────────────────────────────────
@@ -102,21 +123,111 @@ async function _ipamLoadSubnets() {
   } else {
     _ipamSelectedId = null;
     document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
-    document.getElementById('ipam-ren-btn')?.setAttribute('disabled', '');
-    _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
+    document.getElementById('ipam-edit-btn')?.setAttribute('disabled', '');
+    // Main pane keeps its empty-state placeholder from the shell
   }
 }
 
+// Compatibility shim — old code paths called the select-based renderer.
+// Now routes to the new sidebar renderer.
 function _ipamRenderSubnetSelect() {
-  const sel = document.getElementById('ipam-sel');
-  if (!sel) return;
-  const cur = _ipamSelectedId;
-  sel.innerHTML = '<option value="">— Select a subnet —</option>' +
-    _ipamSubnets.map(s =>
-      `<option value="${s.id}" ${s.id === cur ? 'selected' : ''}>
-        ${esc(s.cidr)}${s.name ? '  —  ' + esc(s.name) : ''}
-       </option>`
-    ).join('');
+  _ipamRenderSidebar();
+}
+
+// Cache of per-subnet utilization stats: {subnet_id: {total, used}}
+const _ipamUtilCache = {};
+
+// Persisted collapsed-group state (site names)
+let _ipamGrpCollapsed = new Set();
+try {
+  const raw = localStorage.getItem('pw_ipam_grp_collapsed');
+  if (raw) _ipamGrpCollapsed = new Set(JSON.parse(raw));
+} catch {}
+function _ipamSaveGrpCollapsed() {
+  try { localStorage.setItem('pw_ipam_grp_collapsed', JSON.stringify([..._ipamGrpCollapsed])); } catch {}
+}
+
+// "Ungrouped" label for subnets without a site value
+const _IPAM_UNGROUPED = 'Ungrouped';
+
+function _ipamToggleGrp(site) {
+  if (_ipamGrpCollapsed.has(site)) _ipamGrpCollapsed.delete(site);
+  else _ipamGrpCollapsed.add(site);
+  _ipamSaveGrpCollapsed();
+  _ipamRenderSidebar();
+}
+
+function _ipamRenderSidebar() {
+  const list = document.getElementById('ipam-subnet-list');
+  if (!list) return;
+
+  // Refresh the top-bar subtitle with subnet count
+  const sub = document.getElementById('ipam-sub');
+  if (sub) {
+    const n = _ipamSubnets.length;
+    const conflicts = _ipamSubnets.filter(s => s._conflict).length;
+    sub.textContent = `${n} subnet${n===1?'':'s'} · auto-detected from monitored devices${conflicts?` · ${conflicts} conflict${conflicts===1?'':'s'}`:''}`;
+  }
+
+  const q = _ipamSidebarFilter;
+  const visible = q
+    ? _ipamSubnets.filter(s =>
+        (s.cidr||'').toLowerCase().includes(q) ||
+        (s.name||'').toLowerCase().includes(q) ||
+        (s.site||'').toLowerCase().includes(q))
+    : _ipamSubnets;
+
+  if (!visible.length) {
+    list.innerHTML = `<div class="ipam-empty">${q ? 'No subnets match.' : 'No subnets yet — click + Add Subnet.'}</div>`;
+    return;
+  }
+
+  // Bucket by site, preserving CIDR order within each group
+  const groups = new Map();
+  for (const s of visible) {
+    const site = (s.site || '').trim() || _IPAM_UNGROUPED;
+    if (!groups.has(site)) groups.set(site, []);
+    groups.get(site).push(s);
+  }
+  // Sort groups alphabetically; push "Ungrouped" to the end
+  const sortedSites = [...groups.keys()].sort((a, b) => {
+    if (a === _IPAM_UNGROUPED) return  1;
+    if (b === _IPAM_UNGROUPED) return -1;
+    return a.localeCompare(b);
+  });
+
+  list.innerHTML = sortedSites.map(site => {
+    const subnets = groups.get(site);
+    // Force-expand any group that contains the active subnet so users
+    // never lose track of where they are
+    const containsActive = subnets.some(s => s.id === _ipamSelectedId);
+    const collapsed = _ipamGrpCollapsed.has(site) && !containsActive;
+    const arrCls = collapsed ? '' : ' open';
+    const bodyStyle = collapsed ? 'display:none' : '';
+    const cards = subnets.map(s => {
+      const u = _ipamUtilCache[s.id];
+      const pct = u && u.total ? Math.round((u.used / u.total) * 100) : 0;
+      const pctCls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+      const active = s.id === _ipamSelectedId ? ' active' : '';
+      return `
+        <div class="ipam-subnet-card${active}" onclick="_ipamOnSubnetChange(${s.id})">
+          <div class="ipam-subnet-card-l">
+            <div class="ipam-subnet-cidr mono">${esc(s.cidr)}</div>
+            <div class="ipam-subnet-meta">${esc(s.name || '—')}</div>
+          </div>
+          <div class="ipam-subnet-util ${pctCls}">${pct}%</div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="ipam-grp">
+        <button class="ipam-grp-hdr" onclick="_ipamToggleGrp('${esc(site).replace(/'/g,'&#39;')}')" title="Toggle ${esc(site)}">
+          <span class="ipam-grp-arr${arrCls}">${icon('chevron_right',12)}</span>
+          <span class="ipam-grp-name">${esc(site)}</span>
+          <span class="ipam-grp-cnt">${subnets.length}</span>
+        </button>
+        <div class="ipam-grp-body" style="${bodyStyle}">${cards}</div>
+      </div>`;
+  }).join('');
 }
 
 function _ipamShowEmptyTable(msg) {
@@ -124,6 +235,139 @@ function _ipamShowEmptyTable(msg) {
   if (wrap) wrap.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text3);font-size:13px">${msg}</div>`;
   const pg = document.getElementById('ipam-pg');
   if (pg) pg.innerHTML = '';
+}
+
+// Render the full main pane (header + KPIs + heatmap container + table container)
+// for the currently-selected subnet. Called once per subnet switch.
+function _ipamRenderMain(subnet) {
+  const main = document.getElementById('ipam-main');
+  if (!main) return;
+  const meta = subnet.name || '—';
+  main.innerHTML = `
+    <div class="ipam-main-head">
+      <div class="ipam-main-head-l">
+        <div class="ipam-main-title mono">${esc(subnet.cidr)}</div>
+        <div class="ipam-main-sub">${esc(meta)}</div>
+      </div>
+      <div class="ipam-main-head-r">
+        <button class="btn ghost sm" onclick="_ipamRefreshDns()" title="Rescan subnet (refresh DNS + allocations)">${icon('refresh',12)} Rescan</button>
+        <button class="btn sm rbac-op" onclick="_ipamOpenReserve()" title="Reserve an IP">${icon('plus',12)} Reserve</button>
+      </div>
+    </div>
+    <div class="ipam-kpis" id="ipam-kpis"></div>
+    <div class="ipam-section">
+      <div class="ipam-section-head">
+        <div class="ipam-section-title">Address heatmap</div>
+        <div class="ipam-heatmap-legend">
+          <span><i class="ipam-leg free"></i>Free</span>
+          <span><i class="ipam-leg used"></i>In use</span>
+          <span><i class="ipam-leg gw"></i>Gateway</span>
+          <span><i class="ipam-leg rsv"></i>Reserved</span>
+          <span><i class="ipam-leg cfl"></i>Conflict</span>
+        </div>
+      </div>
+      <div class="ipam-heatmap" id="ipam-heatmap"></div>
+    </div>
+    <div class="ipam-hdr">
+      <div class="search" style="flex:1;max-width:380px">
+        ${icon('search',14)}
+        <input class="ipam-search pw-input" id="ipam-search" type="search" placeholder="Search IP, name or DNS…" oninput="_ipamOnSearch(this.value)" autocomplete="off"/>
+      </div>
+      <div class="ipam-pg" id="ipam-pg" style="margin-left:auto"></div>
+    </div>
+    <div id="ipam-table-wrap"></div>`;
+}
+
+// Classify each IP into one of: free | used | gw | rsv | cfl
+// Priority: explicit `kind` from backend > heuristic on name/dns > device_id > name > free
+function _ipamClassify(entry) {
+  // Explicit user-set tag wins
+  const kind = (entry.kind || '').toLowerCase();
+  if (kind === 'gateway')  return 'gw';
+  if (kind === 'reserved') return 'rsv';
+  if (kind === 'conflict') return 'cfl';
+  // Heuristic fallback for legacy allocations without a kind tag
+  const name = (entry.name || '').toLowerCase();
+  const dns  = (entry.dns_name || '').toLowerCase();
+  if (name === 'gateway' || dns === '_gateway' || name.startsWith('gw') || dns.startsWith('gw'))
+    return 'gw';
+  if (entry.device_id) return 'used';
+  if (entry.name)      return 'rsv';
+  return 'free';
+}
+
+// Render the 5 KPI cards from the current allocations
+function _ipamRenderKPIs() {
+  const wrap = document.getElementById('ipam-kpis');
+  if (!wrap) return;
+  let used = 0, rsv = 0, gw = 0, cfl = 0;
+  for (const e of _ipamAllIps) {
+    const k = _ipamClassify(e);
+    if (k === 'used') used++;
+    else if (k === 'gw') gw++;
+    else if (k === 'rsv') rsv++;
+    else if (k === 'cfl') cfl++;
+  }
+  const total = _ipamAllIps.length;
+  const filled = used + rsv + gw + cfl;
+  const free = total - filled;
+  const pct = total ? Math.round((filled / total) * 100) : 0;
+  wrap.innerHTML = `
+    <div class="ipam-kpi">
+      <div class="ipam-kpi-label">Total addresses</div>
+      <div class="ipam-kpi-val">${total}</div>
+    </div>
+    <div class="ipam-kpi">
+      <div class="ipam-kpi-label">In use</div>
+      <div class="ipam-kpi-val accent">${used}</div>
+    </div>
+    <div class="ipam-kpi">
+      <div class="ipam-kpi-label">Reserved</div>
+      <div class="ipam-kpi-val">${rsv + gw}</div>
+    </div>
+    <div class="ipam-kpi">
+      <div class="ipam-kpi-label">Free</div>
+      <div class="ipam-kpi-val">${free}</div>
+    </div>
+    <div class="ipam-kpi">
+      <div class="ipam-kpi-label">Utilization</div>
+      <div class="ipam-kpi-val ${pct>=90?'crit':pct>=75?'warn':''}">${pct}<span class="ipam-kpi-unit">%</span></div>
+    </div>`;
+
+  // Update cache so the sidebar utilization for this subnet refreshes too
+  if (_ipamSelectedId) {
+    _ipamUtilCache[_ipamSelectedId] = { total, used: filled };
+    _ipamRenderSidebar();
+  }
+}
+
+// Render the 16-wide square heatmap (/24 = 16×16; smaller masks shrink rows)
+function _ipamRenderHeatmap() {
+  const wrap = document.getElementById('ipam-heatmap');
+  if (!wrap) return;
+  if (!_ipamAllIps.length) { wrap.innerHTML = '<div class="ipam-empty">No addresses to display.</div>'; return; }
+  const cells = _ipamAllIps.map(e => {
+    const k = _ipamClassify(e);
+    const tip = `${e.ip}${e.name ? ' — ' + e.name : ''}${e.dns_name ? ' (' + e.dns_name + ')' : ''}`;
+    return `<button class="ipam-hm-cell ${k}" title="${esc(tip)}" onclick="_ipamFocusIp('${esc(e.ip)}')"></button>`;
+  }).join('');
+  wrap.innerHTML = cells;
+}
+
+function _ipamFocusIp(ip) {
+  // Set the search box to this IP so the table filters to just this row
+  const inp = document.getElementById('ipam-search');
+  if (inp) { inp.value = ip; _ipamOnSearch(ip); }
+}
+
+function _ipamOpenReserve() {
+  // Stub for now — the existing Edit-cell flow lets users assign a name to a row.
+  // A dedicated Reserve modal can come later; for now, focus the first free
+  // row's name cell so the user can type into it.
+  const free = _ipamAllIps.find(e => !e.name && !e.device_id);
+  if (free && typeof toast === 'function') {
+    toast(`Tip: click any "click to assign…" cell in the table to reserve an IP (next free: ${free.ip}).`, 'info');
+  }
 }
 
 // ── Subnet selection ───────────────────────────────────────────────────────
@@ -134,7 +378,6 @@ async function _ipamOnSubnetChange(idVal) {
     _ipamSelectedId = null;
     document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
     document.getElementById('ipam-edit-btn')?.setAttribute('disabled', '');
-    _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
     return;
   }
   _ipamSelectedId = id;
@@ -142,15 +385,18 @@ async function _ipamOnSubnetChange(idVal) {
   _ipamFilterStatus = ''; _ipamFilterLic = '';
   document.getElementById('ipam-rm-btn')?.removeAttribute('disabled');
   document.getElementById('ipam-edit-btn')?.removeAttribute('disabled');
-  // Keep select in sync
-  const sel = document.getElementById('ipam-sel');
-  if (sel) sel.value = id;
-  _ipamShowEmptyTable('Loading…');
+
+  // Refresh sidebar so the active card highlights immediately
+  _ipamRenderSidebar();
+
   const r = await fetch(`/api/ipam/subnets/${id}/ips`);
   if (!r.ok) { toast('Failed to load IPs', 'err'); return; }
   const d = await r.json();
   const subnet = d.subnet;
   const allocs = d.allocations || {};   // {ip: {name, modified_by, modified_at}}
+
+  // Build the full main pane now that we know the subnet
+  _ipamRenderMain(subnet);
 
   // Show Refresh DNS button for operators when a subnet is selected
   const dnsBtn = document.getElementById('ipam-dns-btn');
@@ -162,13 +408,17 @@ async function _ipamOnSubnetChange(idVal) {
     const a = allocs[ip];
     return a
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
-          device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
-      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
+          device_id: a.device_id || '', dns_name: a.dns_name || '',
+          dns_resolved_at: a.dns_resolved_at || 0,
+          kind: a.kind || '' }
+      : { ip, name: '', modified_by: '', modified_at: 0,
+          device_id: '', dns_name: '', dns_resolved_at: 0, kind: '' };
   });
 
-  const search = document.getElementById('ipam-search')?.value || '';
+  _ipamRenderKPIs();
+  _ipamRenderHeatmap();
   _ipamPage = 0;
-  _ipamApplyFilter(search);
+  _ipamApplyFilter('');
 }
 
 function _ipamIpCmp(a, b) {
@@ -278,16 +528,17 @@ function _ipamThHtml(col, label) {
 async function _ipamOnSearch(val) {
   _ipamPage = 0;
   const q = (val || '').trim();
-  if (q) {
+  document.getElementById('ipam-table-wrap')?.classList.remove('ipam-global-results');
+  if (_ipamSelectedId) {
+    // Subnet selected: filter the current subnet's allocations (editable rows).
+    // The sidebar already gives users a clear way to pick a different subnet,
+    // so we no longer hijack the search box for cross-subnet search.
+    _ipamApplyFilter(q);
+  } else if (q) {
+    // No subnet selected: fall back to global cross-subnet search.
     await _ipamGlobalSearch(q);
   } else {
-    // Clear global results: restore subnet view (or empty prompt)
-    document.getElementById('ipam-table-wrap')?.classList.remove('ipam-global-results');
-    if (_ipamSelectedId) {
-      _ipamApplyFilter('');
-    } else {
-      _ipamShowEmptyTable('Select a subnet above to view its IP addresses.');
-    }
+    _ipamShowEmptyTable('Select a subnet on the left to view its IP addresses.');
   }
 }
 
@@ -414,7 +665,13 @@ function _ipamRenderTable() {
 
   const rows = page.map(e => {
     const used    = !!e.name;
-    const badge   = used
+    const kind    = (e.kind || '').toLowerCase();
+    // Status pill — kind takes precedence over the generic used/free label
+    let badge;
+    if      (kind === 'gateway')  badge = `<span class="ipam-kbadge gw">Gateway</span>`;
+    else if (kind === 'reserved') badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
+    else if (kind === 'conflict') badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
+    else                          badge = used
       ? `<span class="ipam-used">Used</span>`
       : `<span class="ipam-free">Free</span>`;
     const dateStr = e.modified_at
@@ -506,35 +763,66 @@ function _ipamNextPage() {
 // ── Inline name editing ────────────────────────────────────────────────────
 function _ipamEditCell(td, ip) {
   if (S.role !== 'operator' && S.role !== 'admin') return;
-  const entry  = _ipamAllIps.find(e => e.ip === ip);
-  const curVal = entry ? entry.name : '';
-  td.innerHTML = `<input class="ipam-name-inp" id="ipam-inp-${ip.replace(/\./g,'-')}"
-    value="${esc(curVal)}" placeholder="Enter name…" autocomplete="off"/>`;
+  const entry   = _ipamAllIps.find(e => e.ip === ip);
+  const curName = entry ? entry.name : '';
+  const curKind = (entry && entry.kind) || '';
+  let pendingKind = curKind;
+
+  const kindBtn = (k, lbl, cls) =>
+    `<button type="button" class="ipam-kind-btn ${cls}${pendingKind===k?' active':''}" data-kind="${k}" title="Mark as ${lbl}">${lbl}</button>`;
+
+  td.innerHTML = `
+    <div class="ipam-edit-row">
+      <input class="ipam-name-inp" value="${esc(curName)}" placeholder="Enter name…" autocomplete="off"/>
+      <div class="ipam-kind-picker">
+        ${kindBtn('',         'Auto',     '')}
+        ${kindBtn('gateway',  'Gateway',  'gw')}
+        ${kindBtn('reserved', 'Reserved', 'rsv')}
+        ${kindBtn('conflict', 'Conflict', 'cfl')}
+      </div>
+    </div>`;
+
   const inp = td.querySelector('input');
   if (!inp) return;
   inp.focus();
   inp.select();
 
+  // Picker click: mousedown.preventDefault keeps the input from blurring
+  // (which would otherwise commit + re-render before our click handler fires)
+  td.querySelectorAll('.ipam-kind-btn').forEach(b => {
+    b.addEventListener('mousedown', e => { e.preventDefault(); });
+    b.addEventListener('click', () => {
+      pendingKind = b.dataset.kind;
+      td.querySelectorAll('.ipam-kind-btn').forEach(bb =>
+        bb.classList.toggle('active', bb === b));
+      inp.focus();
+    });
+  });
+
   const commit = async () => {
     const newName = inp.value.trim().slice(0, 120);
-    if (newName === curVal) { _ipamRenderTable(); return; }
+    if (newName === curName && pendingKind === curKind) { _ipamRenderTable(); return; }
     const r = await fetch(`/api/ipam/ips/${_ipamSelectedId}/${encodeURIComponent(ip)}`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: newName}),
+      body: JSON.stringify({name: newName, kind: pendingKind}),
     });
     if (!r.ok) { toast('Failed to save', 'err'); _ipamRenderTable(); return; }
     // Update in-memory record; manual edit clears device link
     if (entry) {
       entry.name        = newName;
+      entry.kind        = pendingKind;
       entry.modified_by = S.username || '';
       entry.modified_at = Date.now() / 1000;
       entry.device_id   = '';   // user took ownership
     }
     _ipamGlobalCache = null;  // invalidate cross-subnet cache
+    _ipamRenderKPIs();        // counts may shift (reserved/gateway buckets)
+    _ipamRenderHeatmap();     // recolor the cell live
     const search = document.getElementById('ipam-search')?.value || '';
     _ipamApplyFilter(search);
-    toast(newName ? `${ip} → "${newName}"` : `${ip} cleared`, 'ok');
+    const kindLbl = pendingKind ? ` [${pendingKind}]` : '';
+    toast(newName ? `${ip} → "${newName}"${kindLbl}` : `${ip} cleared`, 'ok');
   };
 
   inp.addEventListener('keydown', e => {
@@ -566,6 +854,11 @@ function _ipamOpenAddSubnet() {
           <label class="fl">Label <span style="color:var(--text3);font-size:10px">(optional)</span></label>
           <input type="text" id="ipam-add-name" placeholder="e.g. Office LAN" autocomplete="off"/>
         </div>
+        <div class="fr">
+          <label class="fl">Site / zone <span style="color:var(--text3);font-size:10px">(optional — groups the sidebar)</span></label>
+          <input type="text" id="ipam-add-site" placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options" autocomplete="off" maxlength="40"/>
+          <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+        </div>
       </div>
       <div class="mft">
         <button class="btn-s" onclick="closeM('ipam-add-modal')">Cancel</button>
@@ -580,12 +873,26 @@ function _ipamOpenAddSubnet() {
   o.querySelector('#ipam-add-name').addEventListener('keydown', e => {
     if (e.key === 'Enter') _ipamSaveSubnet();
   });
+  o.querySelector('#ipam-add-site').addEventListener('keydown', e => {
+    if (e.key === 'Enter') _ipamSaveSubnet();
+  });
   setTimeout(() => o.querySelector('#ipam-add-cidr').focus(), 50);
+}
+
+// Build a <datalist> body of existing site values for autocomplete in the
+// Add / Edit modals. De-duplicates and sorts.
+function _ipamSiteDatalist() {
+  const set = new Set();
+  for (const s of (_ipamSubnets || [])) {
+    if (s.site) set.add(s.site);
+  }
+  return [...set].sort().map(v => `<option value="${esc(v)}"></option>`).join('');
 }
 
 async function _ipamSaveSubnet() {
   const cidr = (document.getElementById('ipam-add-cidr')?.value || '').trim();
   const name = (document.getElementById('ipam-add-name')?.value || '').trim();
+  const site = (document.getElementById('ipam-add-site')?.value || '').trim();
   if (!cidr) { toast('Please enter a CIDR', 'warn'); return; }
 
   const btn = document.getElementById('ipam-add-save');
@@ -594,7 +901,7 @@ async function _ipamSaveSubnet() {
   const r = await fetch('/api/ipam/subnets', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({cidr, name}),
+    body: JSON.stringify({cidr, name, site}),
   });
   const d = await r.json();
   if (btn) { btn.disabled = false; btn.textContent = 'Add Subnet'; }
@@ -646,6 +953,13 @@ function _ipamOpenEdit() {
             <label class="fl">Label</label>
             <input type="text" id="ipam-edit-name" value="${esc(sub.name||'')}"
                    placeholder="e.g. Office LAN" autocomplete="off" maxlength="80"/>
+          </div>
+          <div class="fr">
+            <label class="fl">Site / zone <span class="fh" style="margin-left:6px">(groups the sidebar)</span></label>
+            <input type="text" id="ipam-edit-site" value="${esc(sub.site||'')}"
+                   placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options"
+                   autocomplete="off" maxlength="40"/>
+            <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
           </div>
         </div>
 
@@ -765,6 +1079,7 @@ async function _ipamSaveEdit() {
   const modal = document.getElementById('ipam-edit-modal');
   const body = {
     name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
+    site:          (document.getElementById('ipam-edit-site')?.value || '').trim(),
     auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
     dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
   };
@@ -856,8 +1171,11 @@ async function _ipamReloadCurrentSubnet() {
     const a = allocs[ip];
     return a
       ? { ip, name: a.name, modified_by: a.modified_by, modified_at: a.modified_at,
-          device_id: a.device_id || '', dns_name: a.dns_name || '', dns_resolved_at: a.dns_resolved_at || 0 }
-      : { ip, name: '', modified_by: '', modified_at: 0, device_id: '', dns_name: '', dns_resolved_at: 0 };
+          device_id: a.device_id || '', dns_name: a.dns_name || '',
+          dns_resolved_at: a.dns_resolved_at || 0,
+          kind: a.kind || '' }
+      : { ip, name: '', modified_by: '', modified_at: 0,
+          device_id: '', dns_name: '', dns_resolved_at: 0, kind: '' };
   });
   const search = document.getElementById('ipam-search')?.value || '';
   _ipamApplyFilter(search);

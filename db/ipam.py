@@ -24,7 +24,8 @@ _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "COALESCE(auto_discover,0)       AS auto_discover, "
                 "COALESCE(first_scan_approved,0) AS first_scan_approved, "
                 "last_auto_scan_ts, "
-                "COALESCE(dns_server,'')         AS dns_server")
+                "COALESCE(dns_server,'')         AS dns_server, "
+                "COALESCE(site,'')               AS site")
 
 
 def _fmt_ts(v) -> str:
@@ -47,7 +48,8 @@ def _row_to_subnet_pg(r) -> dict:
             "auto_discover":       int(r.get("auto_discover") or 0),
             "first_scan_approved": int(r.get("first_scan_approved") or 0),
             "last_auto_scan_ts":   _fmt_ts(r.get("last_auto_scan_ts")),
-            "dns_server":          (r.get("dns_server") or "")}
+            "dns_server":          (r.get("dns_server") or ""),
+            "site":                (r.get("site") or "")}
 
 
 def _row_to_subnet_sqlite(r) -> dict:
@@ -56,7 +58,8 @@ def _row_to_subnet_sqlite(r) -> dict:
             "auto_discover":       int(r[5] or 0),
             "first_scan_approved": int(r[6] or 0),
             "last_auto_scan_ts":   _fmt_ts(r[7]),
-            "dns_server":          (r[8] or "") if len(r) > 8 else ""}
+            "dns_server":          (r[8] or "") if len(r) > 8 else "",
+            "site":                (r[9] or "") if len(r) > 9 else ""}
 
 
 def db_list_subnets() -> list:
@@ -127,6 +130,7 @@ def db_get_subnet(subnet_id: int) -> dict | None:
 # Keep this whitelist tight — the PATCH route passes user input straight in.
 _SUBNET_UPDATABLE_FIELDS = {
     "name":                ("TEXT",    80),
+    "site":                ("TEXT",    40),
     "auto_discover":       ("INT",     None),
     "first_scan_approved": ("INT",     None),
     "dns_server":          ("TEXT",    255),
@@ -290,10 +294,12 @@ def db_set_subnet_last_scan(subnet_id: int, ts: str) -> bool:
         con.close()
 
 
-def db_add_subnet(cidr: str, name: str, user: str) -> int:
+def db_add_subnet(cidr: str, name: str, user: str, site: str = '') -> int:
     """
     Insert a new subnet. Returns the new row id.
     Raises ValueError on duplicate CIDR.
+
+    `site` is an optional free-form site/zone tag for sidebar grouping.
     """
     now = time.time()
     if is_pg():
@@ -301,9 +307,9 @@ def db_add_subnet(cidr: str, name: str, user: str) -> int:
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    "INSERT INTO ipam_subnets (cidr, name, created_by, created_at) "
-                    "VALUES (%s,%s,%s,%s) RETURNING id",
-                    (cidr, name, user, now)
+                    "INSERT INTO ipam_subnets (cidr, name, site, created_by, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s) RETURNING id",
+                    (cidr, name, site, user, now)
                 )
                 new_id = cur.fetchone()["id"]
             log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={new_id} by {user!r}")
@@ -318,8 +324,8 @@ def db_add_subnet(cidr: str, name: str, user: str) -> int:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         cur = con.execute(
-            "INSERT INTO ipam_subnets (cidr, name, created_by, created_at) VALUES (?,?,?,?)",
-            (cidr, name, user, now)
+            "INSERT INTO ipam_subnets (cidr, name, site, created_by, created_at) VALUES (?,?,?,?,?)",
+            (cidr, name, site, user, now)
         )
         con.commit()
         log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={cur.lastrowid} by {user!r}")
@@ -409,7 +415,8 @@ def db_get_allocations(subnet_id: int) -> dict:
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at
+                    """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at,
+                              COALESCE(kind,'') AS kind
                        FROM ip_allocations WHERE subnet_id=%s""",
                     (subnet_id,)
                 )
@@ -421,6 +428,7 @@ def db_get_allocations(subnet_id: int) -> dict:
                         "device_id":       r["device_id"] or '',
                         "dns_name":        r["dns_name"] or '',
                         "dns_resolved_at": r["dns_resolved_at"] or 0,
+                        "kind":            r.get("kind") or '',
                     }
                     for r in cur.fetchall()
                 }
@@ -431,7 +439,8 @@ def db_get_allocations(subnet_id: int) -> dict:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         rows = con.execute(
-            """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at
+            """SELECT ip, name, modified_by, modified_at, device_id, dns_name, dns_resolved_at,
+                      COALESCE(kind,'') AS kind
                FROM ip_allocations WHERE subnet_id=?""",
             (subnet_id,)
         ).fetchall()
@@ -443,6 +452,7 @@ def db_get_allocations(subnet_id: int) -> dict:
                 "device_id":       r[4] or '',
                 "dns_name":        r[5] or '',
                 "dns_resolved_at": r[6] or 0,
+                "kind":            (r[7] if len(r) > 7 else '') or '',
             }
             for r in rows
         }
@@ -484,47 +494,85 @@ def db_update_dns(subnet_id: int, ip: str, dns_name: str) -> None:
 
 
 def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
-                         device_id: str = '') -> None:
-    """Set the name for an IP (insert or update). Enqueued write."""
+                         device_id: str = '', kind=None) -> None:
+    """Set the name (and optionally the kind tag) for an IP. Enqueued write.
+
+    `kind` semantics:
+      - None (default)  → leave the existing kind untouched on UPDATE
+      - '' or 'gateway'/'reserved'/'conflict'/etc → overwrite the kind
+    This lets device-sync paths set just the name without clobbering a
+    user-applied gateway/reserved tag.
+    """
     now = time.time()
+    set_kind = kind is not None
+    kind_val = str(kind)[:24] if set_kind else ''
+    kind_log = repr(kind_val) if set_kind else 'unchanged'
     def _do():
         if is_pg():
             from db.pg_pool import pg_cursor
             try:
                 with pg_cursor('main') as cur:
-                    cur.execute(
-                        """INSERT INTO ip_allocations
-                               (subnet_id, ip, name, modified_by, modified_at, device_id)
-                           VALUES (%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT(subnet_id, ip) DO UPDATE SET
-                             name=EXCLUDED.name,
-                             modified_by=EXCLUDED.modified_by,
-                             modified_at=EXCLUDED.modified_at,
-                             device_id=EXCLUDED.device_id""",
-                        (subnet_id, ip, name, user, now, device_id)
-                    )
+                    if set_kind:
+                        cur.execute(
+                            """INSERT INTO ip_allocations
+                                   (subnet_id, ip, name, modified_by, modified_at, device_id, kind)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                                 name=EXCLUDED.name,
+                                 modified_by=EXCLUDED.modified_by,
+                                 modified_at=EXCLUDED.modified_at,
+                                 device_id=EXCLUDED.device_id,
+                                 kind=EXCLUDED.kind""",
+                            (subnet_id, ip, name, user, now, device_id, kind_val)
+                        )
+                    else:
+                        cur.execute(
+                            """INSERT INTO ip_allocations
+                                   (subnet_id, ip, name, modified_by, modified_at, device_id)
+                               VALUES (%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                                 name=EXCLUDED.name,
+                                 modified_by=EXCLUDED.modified_by,
+                                 modified_at=EXCLUDED.modified_at,
+                                 device_id=EXCLUDED.device_id""",
+                            (subnet_id, ip, name, user, now, device_id)
+                        )
                 log.debug(f"IPAM allocation set: {ip} → {name!r} by {user!r} "
-                          f"(subnet={subnet_id}, device_id={device_id!r})")
+                          f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_log})")
             except Exception as e:
                 log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
             return
 
         con = sqlite3.connect(DB_PATH, timeout=10)
         try:
-            con.execute(
-                """INSERT INTO ip_allocations
-                       (subnet_id, ip, name, modified_by, modified_at, device_id)
-                   VALUES (?,?,?,?,?,?)
-                   ON CONFLICT(subnet_id, ip) DO UPDATE SET
-                     name=excluded.name,
-                     modified_by=excluded.modified_by,
-                     modified_at=excluded.modified_at,
-                     device_id=excluded.device_id""",
-                (subnet_id, ip, name, user, now, device_id)
-            )
+            if set_kind:
+                con.execute(
+                    """INSERT INTO ip_allocations
+                           (subnet_id, ip, name, modified_by, modified_at, device_id, kind)
+                       VALUES (?,?,?,?,?,?,?)
+                       ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                         name=excluded.name,
+                         modified_by=excluded.modified_by,
+                         modified_at=excluded.modified_at,
+                         device_id=excluded.device_id,
+                         kind=excluded.kind""",
+                    (subnet_id, ip, name, user, now, device_id, kind_val)
+                )
+            else:
+                con.execute(
+                    """INSERT INTO ip_allocations
+                           (subnet_id, ip, name, modified_by, modified_at, device_id)
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(subnet_id, ip) DO UPDATE SET
+                         name=excluded.name,
+                         modified_by=excluded.modified_by,
+                         modified_at=excluded.modified_at,
+                         device_id=excluded.device_id""",
+                    (subnet_id, ip, name, user, now, device_id)
+                )
             con.commit()
             log.debug(f"IPAM allocation set: {ip} → {name!r} by {user!r} "
-                      f"(subnet={subnet_id}, device_id={device_id!r})")
+                      f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_log})")
         except Exception as e:
             log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
         finally:
@@ -567,6 +615,122 @@ def db_clear_allocation(subnet_id: int, ip: str) -> None:
         finally:
             con.close()
     _db_enqueue(_do)
+
+
+# ── Topology role tagging (switch / backbone / core / gateway) ─────────────
+# Role tagging reuses the existing ip_allocations.kind column. The NTM Live
+# map reads these tags to render auto-links along the standard 3/4-tier
+# enterprise topology: subnet members fan out to the subnet's switch
+# (access), switch uplinks to a backbone (aggregation), backbone uplinks
+# to a core (central L3), core uplinks to the gateway (edge/FW). Tiers
+# that aren't tagged in a site are skipped via fallback to the next-up
+# tier. Cross-site connectivity meshes at the core level when present,
+# otherwise at the backbone level.
+
+_ROLE_KINDS = ('switch', 'backbone', 'core', 'gateway')
+
+
+def db_set_device_role(did: str, host: str, role: str) -> int:
+    """
+    Set/clear the topology role for a device. Returns the number of IPAM
+    allocation rows updated. Enqueued write.
+
+    `role` must be one of: '', 'switch', 'backbone', 'core', 'gateway'.
+    Other values are rejected (returns 0 without write). Silently no-ops if
+    host isn't a plain IP, or no IPAM subnet matches the IP.
+    """
+    role = (role or '').strip().lower()
+    if role not in ('', 'switch', 'backbone', 'core', 'gateway'):
+        log.warning(f"db_set_device_role: invalid role {role!r} for {did}")
+        return 0
+    try:
+        ip_obj = ipaddress.ip_address(host)
+    except ValueError:
+        log.debug(f"db_set_device_role: host {host!r} for {did} not a plain IP — skipping")
+        return 0
+    now = time.time()
+    ip_str = str(ip_obj)
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                matched = _ipam_subnets_for_ip(None, ip_obj)
+                if not matched:
+                    return 0
+                total = 0
+                for sid, _cidr in matched:
+                    cur.execute(
+                        """UPDATE ip_allocations
+                              SET kind=%s, modified_at=%s
+                            WHERE subnet_id=%s AND ip=%s
+                              AND (device_id=%s OR device_id='')""",
+                        (role, now, sid, ip_str, did)
+                    )
+                    total += cur.rowcount or 0
+                return total
+        except Exception as e:
+            log.error(f"db_set_device_role error (did={did}, host={host!r}, role={role!r}): {e}")
+            return 0
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        matched = _ipam_subnets_for_ip(con, ip_obj)
+        if not matched:
+            return 0
+        total = 0
+        for sid, _cidr in matched:
+            cur = con.execute(
+                """UPDATE ip_allocations
+                      SET kind=?, modified_at=?
+                    WHERE subnet_id=? AND ip=?
+                      AND (device_id=? OR device_id='')""",
+                (role, now, sid, ip_str, did)
+            )
+            total += cur.rowcount or 0
+        con.commit()
+        return total
+    except Exception as e:
+        log.error(f"db_set_device_role error (did={did}, host={host!r}, role={role!r}): {e}")
+        return 0
+    finally:
+        con.close()
+
+
+def db_get_device_roles() -> dict:
+    """
+    Return {device_id: kind} for every allocation tagged with a topology
+    role (switch / backbone / core / gateway) that has a device_id. Used by
+    the NTM Live map auto-link renderer and by the device editor to populate
+    the Role dropdown.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    """SELECT device_id, kind FROM ip_allocations
+                       WHERE kind IN ('switch','backbone','core','gateway')
+                         AND device_id <> ''"""
+                )
+                return {r["device_id"]: r["kind"] for r in cur.fetchall()}
+        except Exception as e:
+            log.error(f"db_get_device_roles error: {e}")
+            return {}
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        rows = con.execute(
+            """SELECT device_id, kind FROM ip_allocations
+               WHERE kind IN ('switch','backbone','core','gateway')
+                 AND device_id <> ''"""
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        log.error(f"db_get_device_roles error: {e}")
+        return {}
+    finally:
+        con.close()
 
 
 # ── Device-sync helpers (called INSIDE the DB writer thread) ───────────────

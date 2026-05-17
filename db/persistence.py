@@ -36,7 +36,9 @@ def _pg_save(state):
     # Snapshot under lock — no I/O while holding it
     with state._lock:
         dev_rows = [
-            (dev.device_id, dev.name, dev.host, dev.group, dev._sid_ctr,
+            (dev.device_id, dev.name, dev.host, dev.group,
+             getattr(dev, "site", ""),
+             dev._sid_ctr,
              getattr(dev, "webhook_url", ""),
              int(getattr(dev, "alerts_muted", False)),
              getattr(dev, "snmp_community_default", ""),
@@ -128,7 +130,7 @@ def _pg_save(state):
             if dev_rows:
                 psycopg2.extras.execute_values(
                     cur,
-                    "INSERT INTO devices (did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
+                    "INSERT INTO devices (did,name,host,grp,site,did_ctr,webhook_url,alerts_muted,"
                     "snmp_community_default,snmp_version_default,vmware_user_default,"
                     "vmware_password_default,secondary_ips,external_id,"
                     "discovered_at,discovered_from_cidr,"
@@ -138,7 +140,7 @@ def _pg_save(state):
                     "snmp_v3_context_default) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
-                    "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, "
+                    "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, site=EXCLUDED.site, "
                     "did_ctr=EXCLUDED.did_ctr, webhook_url=EXCLUDED.webhook_url, "
                     "alerts_muted=EXCLUDED.alerts_muted, "
                     "snmp_community_default=EXCLUDED.snmp_community_default, "
@@ -260,7 +262,9 @@ def db_save(state):
     # Snapshot under lock — no I/O while holding it
     with state._lock:
         dev_rows = [
-            (dev.device_id, dev.name, dev.host, dev.group, dev._sid_ctr,
+            (dev.device_id, dev.name, dev.host, dev.group,
+             getattr(dev, "site", ""),
+             dev._sid_ctr,
              getattr(dev, "webhook_url", ""),
              int(getattr(dev, "alerts_muted", False)),
              getattr(dev, "snmp_community_default", ""),
@@ -351,7 +355,7 @@ def db_save(state):
         cur = con.cursor()
         cur.executemany(
             "INSERT OR REPLACE INTO devices "
-            "(did,name,host,grp,did_ctr,webhook_url,alerts_muted,"
+            "(did,name,host,grp,site,did_ctr,webhook_url,alerts_muted,"
             "snmp_community_default,snmp_version_default,vmware_user_default,"
             "vmware_password_default,secondary_ips,external_id,"
             "discovered_at,discovered_from_cidr,"
@@ -359,7 +363,7 @@ def db_save(state):
             "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
             "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
             "snmp_v3_context_default) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -427,7 +431,8 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_auth_pass_default,'') AS snmp_v3_auth_pass_default,"
                 "COALESCE(snmp_v3_priv_proto_default,'') AS snmp_v3_priv_proto_default,"
                 "COALESCE(snmp_v3_priv_pass_default,'') AS snmp_v3_priv_pass_default,"
-                "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default "
+                "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default,"
+                "COALESCE(site,'') AS site "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -492,7 +497,7 @@ def _pg_load(state):
     max_did = 0
     for row in devs:
         did, name, host, grp = row[0], row[1], row[2], row[3]
-        dev = Device(did, name, host, grp)
+        dev = Device(did, name, host, grp, site=(row[22] or "") if len(row) > 22 else "")
         try:
             n = int(did.replace("d", ""))
             if n > max_did: max_did = n
@@ -519,6 +524,7 @@ def _pg_load(state):
         dev.snmp_v3_priv_proto_default = (row[19] or "") if len(row) > 19 else ""
         dev.snmp_v3_priv_pass_default  = (row[20] or "") if len(row) > 20 else ""
         dev.snmp_v3_context_default    = (row[21] or "") if len(row) > 21 else ""
+        # dev.site set at Device() construction above (row[22])
         state.devices[did] = dev
 
     for row in srows:
@@ -663,7 +669,8 @@ def db_load(state):
             "COALESCE(snmp_v3_user_default,''),COALESCE(snmp_v3_level_default,''),"
             "COALESCE(snmp_v3_auth_proto_default,''),COALESCE(snmp_v3_auth_pass_default,''),"
             "COALESCE(snmp_v3_priv_proto_default,''),COALESCE(snmp_v3_priv_pass_default,''),"
-            "COALESCE(snmp_v3_context_default,'') "
+            "COALESCE(snmp_v3_context_default,''),"
+            "COALESCE(site,'') "
             "FROM devices"
         ).fetchall()
         srows = con.execute(
@@ -717,8 +724,8 @@ def db_load(state):
          v3_user_default, v3_level_default,
          v3_auth_proto_default, v3_auth_pass_default,
          v3_priv_proto_default, v3_priv_pass_default,
-         v3_context_default) = _row
-        dev = Device(did, name, host, grp)
+         v3_context_default, site) = _row
+        dev = Device(did, name, host, grp, site=site or "")
         try:
             n = int(did.replace("d", ""))
             if n > max_did: max_did = n

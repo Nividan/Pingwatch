@@ -39,7 +39,7 @@ from core.logger import log
 
 # ── Validation ───────────────────────────────────────────────────
 
-_VALID_SCOPES   = {"global", "group", "device", "sensor"}
+_VALID_SCOPES   = {"global", "site", "group", "device", "sensor"}
 _VALID_TRIGGERS = {"down", "warning", "down_recovered", "warning_recovered"}
 _VALID_ATYPES   = {"email", "webhook", "syslog", "browser"}
 
@@ -101,6 +101,10 @@ def _clean_profile_body(body: dict) -> dict:
         "scope_value": "" if scope_type == "global"
                        else str(body.get("scope_value", "") or "").strip(),
         "enabled":     bool(body.get("enabled", True)),
+        # Exclusive defaults to additive (False) when omitted — preserves
+        # the user-facing default. Migration sets pre-existing profiles to
+        # True so the cascade behaves identically until a user opts in.
+        "exclusive":   bool(body.get("exclusive", False)),
         "stages":      body.get("stages") or [],
     }
 

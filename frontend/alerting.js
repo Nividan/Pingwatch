@@ -26,9 +26,14 @@ const _AP_DEFAULT_DELAYS = [60, 600, 0, 60, 600, 0];
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadProfiles() {
-  const list = document.getElementById('alrt-list');
-  if (!list) return;
-  list.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  // Fetch + cache profiles/templates regardless of which surface is mounted.
+  // Settings tab DOM was removed in v1.0 (#alrt-list no longer exists); the
+  // new top-level Alerting page (#al-pg-profiles) is the primary surface.
+  // Renders no-op if the target DOM is missing.
+  const settingsList = document.getElementById('alrt-list');
+  if (settingsList) {
+    settingsList.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  }
   applyRbac();
   try {
     const [pr, tr] = await Promise.all([
@@ -37,10 +42,18 @@ async function _alertingLoadProfiles() {
     ]);
     _alertProfiles  = pr.profiles  || [];
     _alertTemplates = tr.templates || [];
-    _alertingRenderProfiles();
-    _alertingRenderTemplates();
+    _alertingRenderProfiles();   // no-op if #alrt-list missing
+    _alertingRenderTemplates();  // no-op if #alrt-tpl-list missing
+    if (document.getElementById('al-pg-profiles')) {
+      _alPgRenderProfiles();
+      _alPgRenderChannels();
+      _alPgRenderEscalation();
+      _alPgRefreshSubtitle();
+    }
   } catch (e) {
-    list.innerHTML = `<div class="alrt-err">Failed to load profiles: ${esc(String(e))}</div>`;
+    if (settingsList) {
+      settingsList.innerHTML = `<div class="alrt-err">Failed to load profiles: ${esc(String(e))}</div>`;
+    }
   }
 }
 
@@ -201,6 +214,10 @@ async function openProfileEditor(id, scopeDefaults = null) {
   const enabled     = prof ? prof.enabled : true;
   const scopeType   = prof?.scope_type  || scopeDefaults?.scope_type  || 'global';
   const scopeValue  = prof?.scope_value || scopeDefaults?.scope_value || '';
+  // Exclusive flag — v1.0+. Defaults to false (additive cascade) for new
+  // profiles. Migrated pre-existing profiles have exclusive=true so they
+  // continue to short-circuit broader matches like before.
+  const exclusive   = prof ? !!prof.exclusive : false;
 
   // Pre-fill stages by trigger position; if profile has fewer than 6, blanks
   const stagesByPos = _AP_TRIG_ORDER.map((trig, i) => {
@@ -252,6 +269,7 @@ async function openProfileEditor(id, scopeDefaults = null) {
             <label class="fl">Scope</label>
             <select id="ap-scope-type" onchange="_apScopeChange()">
               <option value="global" ${scopeType === 'global' ? 'selected' : ''}>Global</option>
+              <option value="site"   ${scopeType === 'site'   ? 'selected' : ''}>Site</option>
               <option value="group"  ${scopeType === 'group'  ? 'selected' : ''}>Group</option>
               <option value="device" ${scopeType === 'device' ? 'selected' : ''}>Device</option>
               <option value="sensor" ${scopeType === 'sensor' ? 'selected' : ''}>Sensor</option>
@@ -259,15 +277,22 @@ async function openProfileEditor(id, scopeDefaults = null) {
           </div>
           <div class="fr" id="ap-scope-val-row" style="${scopeType === 'global' ? 'display:none' : ''}">
             <label class="fl" id="ap-scope-val-lbl">${
-              scopeType === 'group' ? 'Group name' :
+              scopeType === 'site'   ? 'Site name' :
+              scopeType === 'group'  ? 'Group name' :
               scopeType === 'device' ? 'Device ID' : 'did/sid'
             }</label>
-            <input type="text" id="ap-scope-val" value="${esc(scopeValue)}" autocomplete="off"/>
+            <input type="text" id="ap-scope-val" value="${esc(scopeValue)}" list="ap-scope-val-dl" autocomplete="off"/>
+            <datalist id="ap-scope-val-dl"></datalist>
           </div>
-          <div class="fr" style="align-self:flex-end;padding-bottom:14px">
+          <div class="fr" style="align-self:flex-end;padding-bottom:14px;display:flex;flex-direction:column;gap:4px">
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
               <input type="checkbox" id="ap-enabled" ${enabled ? 'checked' : ''}/>
               <span style="font-size:12px;color:var(--text2)">Enabled</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"
+                   title="When checked, profiles at broader scopes (e.g. site or global) are SUPPRESSED when this one matches. Off = additive — every matching profile fires.">
+              <input type="checkbox" id="ap-exclusive" ${exclusive ? 'checked' : ''}/>
+              <span style="font-size:12px;color:var(--text2)">Exclusive</span>
             </label>
           </div>
         </div>
@@ -402,16 +427,31 @@ function _apScopeChange() {
   const sel  = document.getElementById('ap-scope-type')?.value;
   const row  = document.getElementById('ap-scope-val-row');
   const lbl  = document.getElementById('ap-scope-val-lbl');
+  const dl   = document.getElementById('ap-scope-val-dl');
   if (!row) return;
   row.style.display = sel === 'global' ? 'none' : '';
   if (lbl) lbl.textContent =
+    sel === 'site'   ? 'Site name'  :
     sel === 'group'  ? 'Group name' :
     sel === 'device' ? 'Device ID'  : 'did/sid';
+  // Populate the datalist with relevant suggestions per scope.
+  if (dl) {
+    if (sel === 'site') {
+      _populateSiteDatalist('ap-scope-val-dl');
+    } else if (sel === 'group') {
+      const groups = [...new Set(Object.values(S.devices || {})
+        .map(d => d.group || 'Default Group'))].sort();
+      dl.innerHTML = groups.map(g => `<option value="${esc(g)}"></option>`).join('');
+    } else {
+      dl.innerHTML = '';
+    }
+  }
 }
 
 async function _alertingSaveProfile() {
   const name       = (document.getElementById('ap-name')?.value || '').trim();
   const enabled    = !!document.getElementById('ap-enabled')?.checked;
+  const exclusive  = !!document.getElementById('ap-exclusive')?.checked;
   const scopeType  = document.getElementById('ap-scope-type')?.value || 'global';
   const scopeValue = (document.getElementById('ap-scope-val')?.value || '').trim();
 
@@ -437,7 +477,7 @@ async function _alertingSaveProfile() {
   });
 
   const payload = {
-    name, enabled,
+    name, enabled, exclusive,
     scope_type: scopeType,
     scope_value: scopeType === 'global' ? '' : scopeValue,
     stages,
@@ -815,17 +855,139 @@ async function _alertResolve(id) {
 // ═══════════════════════════════════════════════════════════════
 
 async function _alertingLoadMaint() {
-  const list = document.getElementById('alrt-maint-list');
-  if (!list) return;
-  list.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  // Used by BOTH the Settings \u2192 Alert Profiles tab (renders into
+  // #alrt-maint-list) and the new top-level Alerting page (renders into
+  // #al-pg-maint). Either or both containers may be present.
+  const listSettings = document.getElementById('alrt-maint-list');
+  const listPage     = document.getElementById('al-pg-maint');
+  if (!listSettings && !listPage) return;
+  if (listSettings) listSettings.innerHTML = '<div class="alrt-loading">Loading\u2026</div>';
+  if (listPage)     listPage.innerHTML     = '<div class="muted" style="padding:14px">Loading\u2026</div>';
   applyRbac();
   try {
     const d = await api('GET', '/api/alert/windows');
     _alertMaintWindows = d.windows || [];
-    _alertMaintRenderList(_alertMaintWindows);
+    if (listSettings) _alertMaintRenderList(_alertMaintWindows);
+    if (listPage)     _alPgRenderMaintWindows(_alertMaintWindows);
   } catch (e) {
-    list.innerHTML = `<div class="alrt-err">Error: ${esc(String(e))}</div>`;
+    const msg = `Error: ${esc(String(e))}`;
+    if (listSettings) listSettings.innerHTML = `<div class="alrt-err">${msg}</div>`;
+    if (listPage)     listPage.innerHTML     = `<div class="error" style="padding:14px">${msg}</div>`;
   }
+}
+
+// Compact maintenance-window renderer for the Alerting page's sidebar card.
+// Reuses the existing _alertMaintOpen / _alertMaintDelete handlers.
+function _alPgRenderMaintWindows(windows) {
+  const wrap = document.getElementById('al-pg-maint');
+  if (!wrap) return;
+  const cntEl = document.getElementById('al-pg-mw-count');
+  if (cntEl) cntEl.textContent = windows.length;
+  if (!windows.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      No maintenance windows. <a class="al-pg-link rbac-admin" onclick="_alertMaintOpen(null)">Create one</a>
+      to suppress notifications during scheduled work.
+    </div>`;
+    applyRbac();
+    return;
+  }
+  const now = Date.now() / 1000;
+  // Show enabled+active first, then enabled, then disabled (so live windows stay on top
+  // and explicitly-disabled ones sink so they don't read as ambient/forgotten).
+  const sorted = windows.slice().sort((a, b) => {
+    const aEn = a.enabled !== false, bEn = b.enabled !== false;
+    if (aEn !== bEn) return aEn ? -1 : 1;
+    const aActive = aEn && a.start_ts <= now && a.end_ts >= now;
+    const bActive = bEn && b.start_ts <= now && b.end_ts >= now;
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return (a.start_ts || 0) - (b.start_ts || 0);
+  });
+  wrap.innerHTML = sorted.map(w => {
+    const enabled  = w.enabled !== false;
+    const active   = enabled && w.start_ts <= now && w.end_ts >= now;
+    const safeName = esc(w.name).replace(/'/g, '&#39;');
+    const scopeLbl = w.scope_type === 'all'    ? 'All devices'
+                   : w.scope_type === 'site'   ? `Site: ${esc(w.scope_value || '')}`
+                   : w.scope_type === 'group'  ? `Groups: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
+                   : w.scope_type === 'device' ? `Device: ${esc(_mwLookupDevName(w.scope_value))}`
+                   : esc(w.scope_value || '');
+    const when = w.recurring
+      ? `${esc(_mwShortDays(w.recur_days))} \u00b7 ${esc(w.recur_start)}\u2013${esc(w.recur_end)}`
+      : `${_alPgRelTime(w.start_ts)} \u2192 ${_alPgRelTime(w.end_ts)}`;
+    return `
+      <div class="al-pg-mw-row ${active?'active':''} ${enabled?'':'disabled'}" onclick="_alertMaintOpen(${w.id})" title="Edit window">
+        <div class="al-pg-mw-dot ${active?'on':''}"></div>
+        <div class="al-pg-mw-body">
+          <div class="al-pg-mw-name">
+            ${esc(w.name)}
+            ${active ? '<span class="al-pg-mw-pill">In effect</span>' : ''}
+            ${!enabled ? '<span class="al-pg-mw-pill al-pg-mw-pill-off">Disabled</span>' : ''}
+          </div>
+          <div class="al-pg-mw-meta mono">${esc(scopeLbl)} \u00b7 ${when}</div>
+        </div>
+        <label class="al-pg-toggle rbac-admin"
+               onclick="event.stopPropagation()"
+               title="${enabled ? 'Disable window' : 'Enable window'}">
+          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="_alPgMwToggle(${w.id})"/>
+          <span class="al-pg-toggle-slider"></span>
+        </label>
+        <button class="iconbtn rbac-admin" onclick="event.stopPropagation();_alertMaintDelete(${w.id},'${safeName}')" title="Delete">${icon('trash',12)}</button>
+      </div>`;
+  }).join('');
+  applyRbac();
+}
+
+// Flip a single window's enabled flag. We re-PATCH the whole window payload
+// because the backend's PATCH validator requires the full schema; this keeps
+// us on one endpoint without inventing a partial-update path.
+async function _alPgMwToggle(id) {
+  const w = _alertMaintWindows.find(x => x.id === id);
+  if (!w) return;
+  const next = !(w.enabled !== false);  // flip
+  // Optimistic local update so the row repaints immediately
+  w.enabled = next;
+  _alPgRenderMaintWindows(_alertMaintWindows);
+  if (document.getElementById('alrt-maint-list')) {
+    _alertMaintRenderList(_alertMaintWindows);
+  }
+  try {
+    await api('PATCH', `/api/alert/window/${id}`, {
+      name:        w.name,
+      scope_type:  w.scope_type,
+      scope_value: w.scope_value,
+      start_ts:    w.start_ts,
+      end_ts:      w.end_ts,
+      recurring:   !!w.recurring,
+      recur_days:  w.recur_days || '',
+      recur_start: w.recur_start || '',
+      recur_end:   w.recur_end   || '',
+      enabled:     next,
+    });
+    toast(`Window "${w.name}" ${next ? 'enabled' : 'disabled'}`, 'ok');
+  } catch (e) {
+    // Roll back on failure
+    w.enabled = !next;
+    _alPgRenderMaintWindows(_alertMaintWindows);
+    if (document.getElementById('alrt-maint-list')) {
+      _alertMaintRenderList(_alertMaintWindows);
+    }
+    toast(e.message || 'Toggle failed', 'err');
+  }
+}
+
+function _mwLookupDevName(did) {
+  const d = Object.values(S.devices || {}).find(x => String(x.device_id) === String(did));
+  return d ? d.name : did;
+}
+
+function _mwShortDays(daysStr) {
+  // "1,3,5" \u2192 "Mon, Wed, Fri"
+  const map = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return String(daysStr || '').split(',')
+    .map(s => parseInt(s.trim()))
+    .filter(n => !isNaN(n) && n >= 0 && n <= 6)
+    .map(n => map[n])
+    .join(', ');
 }
 
 function _alertMaintRenderList(windows) {
@@ -837,13 +999,15 @@ function _alertMaintRenderList(windows) {
   }
   const now = Date.now() / 1000;
   wrap.innerHTML = windows.map(w => {
-    const active  = w.start_ts <= now && w.end_ts >= now;
+    const enabled = w.enabled !== false;
+    const active  = enabled && w.start_ts <= now && w.end_ts >= now;
     const start   = new Date(w.start_ts * 1000).toLocaleString();
     const end     = new Date(w.end_ts   * 1000).toLocaleString();
     const _devForScope = w.scope_type === 'device'
       ? Object.values(S.devices || {}).find(d => String(d.device_id) === String(w.scope_value))
       : null;
     const scopeLbl = w.scope_type === 'all'    ? 'All devices'
+                   : w.scope_type === 'site'   ? `Site: ${esc(w.scope_value || '')}`
                    : w.scope_type === 'group'  ? `Group: ${esc(_mwParseGroups(w.scope_value).join(', '))}`
                    : `Device: ${esc(_devForScope ? _devForScope.name : w.scope_value)}`;
     const recurLbl = w.recurring
@@ -851,12 +1015,13 @@ function _alertMaintRenderList(windows) {
       : 'One-time';
     const safeName = esc(w.name).replace(/'/g, '&#39;');
     return `
-      <div class="alrt-card ${active ? 'alrt-maint-active' : ''}">
+      <div class="alrt-card ${active ? 'alrt-maint-active' : ''} ${enabled?'':'alrt-maint-disabled'}">
         <div class="alrt-card-left">
           <div class="alrt-card-top">
             ${active ? '<span class="alrt-dot-on" title="Currently active">●</span>' : ''}
             <span class="alrt-name">${esc(w.name)}</span>
-            ${active ? '<span class="alrt-sev-badge alrt-sev-warn">ACTIVE</span>' : ''}
+            ${active ? '<span class="alrt-sev-badge alrt-sev-effective">In effect</span>' : ''}
+            ${!enabled ? '<span class="alrt-sev-badge alrt-sev-muted">Disabled</span>' : ''}
           </div>
           <div class="alrt-card-info">
             <span class="alrt-info-pill">📅 ${start} → ${end}</span>
@@ -865,6 +1030,10 @@ function _alertMaintRenderList(windows) {
           </div>
         </div>
         <div class="alrt-card-btns">
+          <label class="al-pg-toggle rbac-admin" title="${enabled?'Disable':'Enable'} window" style="margin-right:8px">
+            <input type="checkbox" ${enabled?'checked':''} onchange="_alPgMwToggle(${w.id})"/>
+            <span class="al-pg-toggle-slider"></span>
+          </label>
           <button class="btn-sm rbac-admin" onclick="_alertMaintOpen(${w.id})">Edit</button>
           <button class="btn-sm rbac-admin alrt-del-btn" onclick="_alertMaintDelete(${w.id},'${safeName}')">Delete</button>
         </div>
@@ -897,6 +1066,7 @@ function _alertMaintOpen(id) {
   const recurDays  = w?.recur_days  || '';
   const recurStart = w?.recur_start || '00:00';
   const recurEnd   = w?.recur_end   || '06:00';
+  const enabled    = w ? (w.enabled !== false) : true;
 
   const o = document.createElement('div');
   o.className = 'mo'; o.id = 'alrt-maint-modal';
@@ -914,15 +1084,25 @@ function _alertMaintOpen(id) {
           <input type="text" id="mw-name" value="${esc(name)}" placeholder="e.g. Weekend Maintenance" autocomplete="off" maxlength="200"/>
         </div>
         <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="mw-enabled" ${enabled ? 'checked' : ''}/>
+            <span class="fl" style="margin:0">Enabled <span style="color:var(--text3);font-size:10px">(disabled windows never suppress alerts)</span></span>
+          </label>
+        </div>
+        <div class="fr">
           <label class="fl">Scope</label>
           <select id="mw-scope" onchange="_mwScopeChange()">
             <option value="all"    ${scopeType==='all'   ?'selected':''}>All devices</option>
+            <option value="site"   ${scopeType==='site'  ?'selected':''}>Site</option>
             <option value="group"  ${scopeType==='group' ?'selected':''}>Device group</option>
             <option value="device" ${scopeType==='device'?'selected':''}>Specific device ID</option>
           </select>
         </div>
         <div class="fr" id="mw-scope-val-row" style="${scopeType==='all'?'display:none':''}">
-          <label class="fl" id="mw-scope-val-lbl">${scopeType==='group'?'Device group':'Device'}</label>
+          <label class="fl" id="mw-scope-val-lbl">${
+            scopeType==='site'  ? 'Site' :
+            scopeType==='group' ? 'Device group' : 'Device'
+          }</label>
           ${_mwScopeInner(scopeType, scopeVal)}
         </div>
         <div id="mw-onetime-row" style="${recurring?'display:none':'display:flex'};gap:12px;flex-wrap:wrap">
@@ -973,6 +1153,11 @@ function _alertMaintOpen(id) {
 
   document.body.appendChild(o);
   setTimeout(() => document.getElementById('mw-name')?.focus(), 60);
+  // If the window is already site-scoped, populate the datalist now so the
+  // existing value autocompletes correctly.
+  if (scopeType === 'site' && typeof _populateSiteDatalist === 'function') {
+    setTimeout(() => _populateSiteDatalist('mw-site-dl'), 80);
+  }
 }
 
 // Parse scope_value for group windows — supports both JSON array (new) and plain string (legacy).
@@ -996,6 +1181,11 @@ function _mwScopeInner(scopeType, curVal) {
     const opts    = groups.map(g => `<option value="${esc(g)}" ${selSet.has(g) ? 'selected' : ''}>${esc(g)}</option>`).join('');
     return `<select id="mw-scope-val" multiple size="${Math.min(groups.length, 6)}" style="width:100%">${opts || '<option value="">No groups</option>'}</select>`;
   }
+  if (scopeType === 'site') {
+    // Site picker — datalist autocomplete from /api/sites, populated async.
+    return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" list="mw-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
+            <datalist id="mw-site-dl"></datalist>`;
+  }
   return `<input type="text" id="mw-scope-val" value="${esc(curVal)}" autocomplete="off"/>`;
 }
 
@@ -1005,10 +1195,15 @@ function _mwScopeChange() {
   const lbl = document.getElementById('mw-scope-val-lbl');
   if (!row) return;
   row.style.display = sel === 'all' ? 'none' : '';
-  if (lbl) lbl.textContent = sel === 'group' ? 'Device group' : 'Device';
+  if (lbl) lbl.textContent =
+    sel === 'site'  ? 'Site' :
+    sel === 'group' ? 'Device group' : 'Device';
   // Replace the control with the appropriate dropdown for the new scope type
   const existing = document.getElementById('mw-scope-val');
   if (existing) existing.outerHTML = _mwScopeInner(sel, '');
+  if (sel === 'site' && typeof _populateSiteDatalist === 'function') {
+    _populateSiteDatalist('mw-site-dl');
+  }
 }
 
 function _mwRecurChange() {
@@ -1051,11 +1246,13 @@ async function _alertMaintSave(id) {
     const sel = document.getElementById('mw-scope-val');
     scopeVal = sel ? JSON.stringify([...sel.selectedOptions].map(o => o.value)) : '[]';
   }
+  const enabled = document.getElementById('mw-enabled')?.checked !== false;
   const payload = {
     name, scope_type: scopeType, scope_value: scopeVal,
     start_ts: startTs, end_ts: endTs,
     recurring, recur_days: activeDays,
     recur_start: recurStart, recur_end: recurEnd,
+    enabled,
   };
 
   const btn = document.getElementById('mw-save-btn');
@@ -1080,3 +1277,482 @@ async function _alertMaintSave(id) {
 // Backwards-compat shim — old call sites may still invoke _alertingLoadRules.
 // Map it to the new profiles loader so nothing breaks.
 function _alertingLoadRules() { _alertingLoadProfiles(); }
+
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTING TOP-LEVEL PAGE (#alertingView) — v1.0 redesign
+// Shell + profiles + recent deliveries + channels card + escalation card
+// Reuses existing CRUD endpoints under /api/alert/* so no backend changes.
+// ═══════════════════════════════════════════════════════════════
+
+let _alPgFilter = '';
+
+async function _alertingPageInit() {
+  const root = document.getElementById('alertingView');
+  if (!root) return;
+  root.innerHTML = `
+    <div class="pagehead">
+      <div class="pagehead-l">
+        <h1>Alerting</h1>
+        <div class="sub" id="al-pg-sub">Profiles, channels, escalation, and delivery history.</div>
+      </div>
+      <div class="pagehead-r">
+        <button class="btn" id="al-pg-test-btn" onclick="_alPgTestAlert()">${icon('play',12)} Test Alert</button>
+        <button class="btn primary rbac-admin" onclick="openProfileEditor(null)">${icon('plus',12)} New Profile</button>
+      </div>
+    </div>
+    <div class="al-pg-layout">
+      <div class="al-pg-main">
+        <section class="al-pg-section">
+          <div class="al-pg-sec-head">
+            <div class="al-pg-sec-title">Alert Profiles <span class="al-pg-badge" id="al-pg-pf-count">0</span></div>
+            <div class="search" style="max-width:260px">
+              ${icon('search',13)}
+              <input class="pw-input" id="al-pg-pf-filter" type="search" placeholder="Filter…" oninput="_alPgFilterChange(this.value)"/>
+            </div>
+          </div>
+          <div id="al-pg-profiles"><div class="muted" style="padding:18px 16px">Loading…</div></div>
+        </section>
+        <section class="al-pg-section">
+          <div class="al-pg-sec-head">
+            <div class="al-pg-sec-title">Recent Deliveries <span class="muted small">last 24h</span></div>
+            <button class="iconbtn" onclick="_alPgLoadDeliveries()" title="Refresh">${icon('refresh',12)}</button>
+          </div>
+          <div id="al-pg-deliveries"><div class="muted" style="padding:18px 16px">Loading…</div></div>
+        </section>
+      </div>
+      <aside class="al-pg-side">
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">
+            <span>Channels <span class="al-pg-badge" id="al-pg-ch-count">0</span></span>
+            <button class="iconbtn rbac-admin" onclick="openTemplateEditor(null)" title="New action template">${icon('plus',12)}</button>
+          </div>
+          <div id="al-pg-channels"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">Escalation Policy <span class="muted small" id="al-pg-esc-sub"></span></div>
+          <div id="al-pg-escalation"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">
+            <span>Maintenance Windows <span class="al-pg-badge" id="al-pg-mw-count">0</span></span>
+            <button class="iconbtn rbac-admin" onclick="_alertMaintOpen(null)" title="New maintenance window">${icon('plus',12)}</button>
+          </div>
+          <div id="al-pg-maint"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
+        <section class="al-pg-card">
+          <div class="al-pg-card-head">
+            <span>Notification Batching</span>
+            <span class="muted small" id="al-pg-batch-status">—</span>
+          </div>
+          <div id="al-pg-batch"><div class="muted" style="padding:14px">Loading…</div></div>
+        </section>
+      </aside>
+    </div>`;
+  applyRbac();
+  await Promise.all([
+    _alPgLoadProfilesAndChannels(),
+    _alPgLoadDeliveries(),
+    _alertingLoadMaint(),
+    _alPgLoadBatching(),
+  ]);
+}
+
+// ── Notification Batching card ──────────────────────────────────
+// Reads + writes the three alert_batch_* fields on /api/settings.
+// Previously lived in Settings → Alert Profiles; moved here so the entire
+// alert domain (profiles, channels, escalation, maintenance, batching) is
+// configurable from one place.
+async function _alPgLoadBatching() {
+  const wrap = document.getElementById('al-pg-batch');
+  if (!wrap) return;
+  try {
+    const s = await api('GET', '/api/settings');
+    _alPgRenderBatching(s || {});
+  } catch (e) {
+    wrap.innerHTML = `<div class="error" style="padding:14px">Failed to load batching: ${esc(String(e))}</div>`;
+  }
+}
+
+function _alPgRenderBatching(sr) {
+  const wrap = document.getElementById('al-pg-batch');
+  if (!wrap) return;
+  const enabled = sr.alert_batch_enabled !== false;  // default on
+  const win     = sr.alert_batch_window_s || 60;
+  const max     = sr.alert_batch_max_size || 20;
+  const status  = document.getElementById('al-pg-batch-status');
+  if (status) status.textContent = enabled ? `on · ${win}s / ${max}` : 'off';
+  wrap.innerHTML = `
+    <div class="al-pg-batch-body">
+      <div class="al-pg-batch-toggle-row">
+        <label class="al-pg-toggle rbac-admin" title="${enabled?'Disable':'Enable'} batching">
+          <input type="checkbox" id="al-pg-batch-en" ${enabled?'checked':''}/>
+          <span class="al-pg-toggle-slider"></span>
+        </label>
+        <div class="al-pg-batch-lbl">
+          <div>Enable batching</div>
+          <div class="muted small">When off, alerts fire immediately as separate emails/webhooks.</div>
+        </div>
+      </div>
+      <div class="al-pg-batch-field">
+        <div class="al-pg-batch-field-head">
+          <span>Batch window <span class="muted small">5–3600s</span></span>
+          <input type="number" id="al-pg-batch-win" min="5" max="3600" value="${win}" class="al-pg-batch-num"/>
+        </div>
+        <div class="muted small">Hold the first alert this long before flushing.</div>
+      </div>
+      <div class="al-pg-batch-field">
+        <div class="al-pg-batch-field-head">
+          <span>Max batch size <span class="muted small">2–500</span></span>
+          <input type="number" id="al-pg-batch-max" min="2" max="500" value="${max}" class="al-pg-batch-num"/>
+        </div>
+        <div class="muted small">Flush early when this many events accumulate.</div>
+      </div>
+      <div class="al-pg-batch-foot">
+        <span class="muted small">Webhook batching is opt-in per template.</span>
+        <button class="btn-sm primary rbac-admin" id="al-pg-batch-save" onclick="_alPgSaveBatching()">Save</button>
+      </div>
+    </div>`;
+  applyRbac();
+}
+
+async function _alPgSaveBatching() {
+  const enabled = document.getElementById('al-pg-batch-en')?.checked ? 1 : 0;
+  const win     = parseInt(document.getElementById('al-pg-batch-win')?.value);
+  const max     = parseInt(document.getElementById('al-pg-batch-max')?.value);
+  if (!Number.isFinite(win) || win < 5 || win > 3600) {
+    toast('Batch window must be 5–3600 seconds', 'err'); return;
+  }
+  if (!Number.isFinite(max) || max < 2 || max > 500) {
+    toast('Max batch size must be 2–500', 'err'); return;
+  }
+  const btn = document.getElementById('al-pg-batch-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const r = await api('PATCH', '/api/settings', {
+      alert_batch_enabled:  enabled,
+      alert_batch_window_s: win,
+      alert_batch_max_size: max,
+    });
+    if (!r || !r.ok) { toast('Failed to save batching', 'err'); return; }
+    toast('Notification batching saved', 'ok');
+    // Refresh the status pill in the card head
+    const status = document.getElementById('al-pg-batch-status');
+    if (status) status.textContent = enabled ? `on · ${win}s / ${max}` : 'off';
+  } catch (e) {
+    toast(e.message || 'Failed to save batching', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  }
+}
+
+async function _alPgLoadProfilesAndChannels() {
+  try {
+    const [pr, tr] = await Promise.all([
+      api('GET', '/api/alert/profiles'),
+      api('GET', '/api/alert/action-templates'),
+    ]);
+    _alertProfiles  = pr.profiles  || [];
+    _alertTemplates = tr.templates || [];
+    _alPgRenderProfiles();
+    _alPgRenderChannels();
+    _alPgRenderEscalation();
+    _alPgRefreshSubtitle();
+  } catch (e) {
+    const pf = document.getElementById('al-pg-profiles');
+    if (pf) pf.innerHTML = `<div class="error" style="padding:16px">Failed to load profiles: ${esc(String(e))}</div>`;
+  }
+}
+
+function _alPgFilterChange(v) {
+  _alPgFilter = (v || '').trim().toLowerCase();
+  _alPgRenderProfiles();
+}
+
+function _alPgRefreshSubtitle() {
+  const sub = document.getElementById('al-pg-sub');
+  if (!sub) return;
+  const total  = _alertProfiles.length;
+  const active = _alertProfiles.filter(p => p.enabled).length;
+  const chans  = _alertTemplates.length;
+  sub.textContent = `${active} of ${total} profile${total===1?'':'s'} active · ${chans} channel${chans===1?'':'s'} configured`;
+}
+
+// ── Profile rows ────────────────────────────────────────────────────
+function _alPgRenderProfiles() {
+  const wrap = document.getElementById('al-pg-profiles');
+  if (!wrap) return;
+
+  const tplById = {};
+  _alertTemplates.forEach(t => { tplById[t.id] = t; });
+
+  let arr = _alertProfiles;
+  if (_alPgFilter) {
+    arr = arr.filter(p =>
+      (p.name||'').toLowerCase().includes(_alPgFilter) ||
+      (p.scope_type||'').toLowerCase().includes(_alPgFilter) ||
+      (p.scope_value||'').toLowerCase().includes(_alPgFilter));
+  }
+  const cntEl = document.getElementById('al-pg-pf-count');
+  if (cntEl) cntEl.textContent = _alertProfiles.length;
+
+  if (!arr.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:18px 16px;text-align:center">
+      ${_alPgFilter ? 'No profiles match the filter.' : 'No alert profiles yet — click + New Profile.'}
+    </div>`;
+    return;
+  }
+
+  // Stable order: global → site → group → device → sensor, then by name
+  const rank = {global: 0, site: 1, group: 2, device: 3, sensor: 4};
+  const sorted = arr.slice().sort((a, b) =>
+    (rank[a.scope_type] - rank[b.scope_type]) || a.name.localeCompare(b.name));
+
+  wrap.innerHTML = sorted.map(p => _alPgProfileRow(p, tplById)).join('');
+  applyRbac();
+}
+
+function _alPgProfileRow(p, tplById) {
+  // Build a condition summary from triggers + scope
+  const triggers = [...new Set((p.stages||[]).map(s => s.trigger_state))];
+  const trigStr  = triggers.length
+    ? triggers.map(t => ({down:'down', warning:'warning', down_recovered:'recovered', warning_recovered:'warn-recovered'})[t] || t).join(' ∨ ')
+    : '—';
+  const scopeStr = p.scope_type === 'global'
+    ? 'Global'
+    : `${p.scope_type[0].toUpperCase()}${p.scope_type.slice(1)}: ${esc(p.scope_value || '')}`;
+
+  // Unique channel types across all stages
+  const chanTypes = new Set();
+  (p.stages || []).forEach(s => {
+    (s.action_ids || []).forEach(aid => {
+      const t = tplById[aid];
+      if (t) chanTypes.add(t.atype);
+    });
+  });
+  const chanPills = [...chanTypes].map(at =>
+    `<span class="al-pg-chan-pill" data-at="${esc(at)}">${esc(at)}</span>`).join('');
+
+  const safeName = esc(p.name).replace(/'/g, '&#39;');
+  return `
+    <div class="al-pg-pf-row" data-pid="${p.id}">
+      <label class="al-pg-toggle rbac-op" title="${p.enabled?'Disable':'Enable'} profile">
+        <input type="checkbox" ${p.enabled?'checked':''} onchange="_alPgProfToggle(${p.id})"/>
+        <span class="al-pg-toggle-slider"></span>
+      </label>
+      <div class="al-pg-pf-body">
+        <div class="al-pg-pf-name">
+          ${esc(p.name)}
+          ${p.exclusive ? '<span class="al-pg-excl-pill" title="Exclusive — suppresses parent-scope profiles when matched">Exclusive</span>' : ''}
+        </div>
+        <div class="al-pg-pf-cond mono">
+          <span class="al-pg-cond-trig">${esc(trigStr)}</span>
+          <span class="al-pg-cond-sep">·</span>
+          <span class="al-pg-cond-scope">${scopeStr}</span>
+          <span class="al-pg-cond-sep">·</span>
+          <span class="al-pg-cond-stages">${(p.stages||[]).length} stage${(p.stages||[]).length===1?'':'s'}</span>
+        </div>
+      </div>
+      <div class="al-pg-pf-chans">${chanPills}</div>
+      <div class="al-pg-pf-acts">
+        <button class="iconbtn rbac-admin" onclick="openProfileEditor(${p.id})" title="Edit">${icon('edit',12)}</button>
+        <button class="iconbtn rbac-admin" onclick="_alertingProfTest(${p.id},'${safeName}')" title="Test fire">${icon('play',12)}</button>
+        <button class="iconbtn rbac-admin" onclick="_alertingProfDelete(${p.id},'${safeName}')" title="Delete">${icon('trash',12)}</button>
+      </div>
+    </div>`;
+}
+
+async function _alPgProfToggle(pid) {
+  try {
+    await api('POST', `/api/alert/profile/${pid}/toggle`);
+    const p = _alertProfiles.find(x => x.id === pid);
+    if (p) p.enabled = !p.enabled;
+    _alPgRenderProfiles();
+    _alPgRefreshSubtitle();
+  } catch (e) {
+    toast('Toggle failed: ' + (e.message || e), 'err');
+    _alPgRenderProfiles();   // revert visual state on error
+  }
+}
+
+// ── Channels card ───────────────────────────────────────────────────
+function _alPgRenderChannels() {
+  const wrap = document.getElementById('al-pg-channels');
+  if (!wrap) return;
+  const cntEl = document.getElementById('al-pg-ch-count');
+  if (cntEl) cntEl.textContent = _alertTemplates.length;
+  if (!_alertTemplates.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      No action templates yet — add one to start receiving alerts.
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = _alertTemplates.map(t => {
+    const ic = ({email:'mail', webhook:'ipam', syslog:'logs', browser:'bell'})[t.atype] || 'bell';
+    const detail = _alPgChannelDetail(t);
+    return `
+      <div class="al-pg-chan-row" onclick="openTemplateEditor(${t.id})">
+        <div class="al-pg-chan-ico">${icon(ic,14)}</div>
+        <div class="al-pg-chan-body">
+          <div class="al-pg-chan-name">${esc(t.name)}</div>
+          <div class="al-pg-chan-detail mono">${esc(detail)}</div>
+        </div>
+        <div class="al-pg-chan-type">${esc(t.atype)}</div>
+      </div>`;
+  }).join('');
+  applyRbac();
+}
+
+function _alPgChannelDetail(t) {
+  const c = t.config || {};
+  if (t.atype === 'email')   return c.to || c.recipients || '—';
+  if (t.atype === 'webhook') return c.url || '—';
+  if (t.atype === 'syslog')  return `${c.host || ''}:${c.port || 514}`;
+  if (t.atype === 'browser') return 'In-app notifications';
+  return '';
+}
+
+// ── Escalation Policy card ──────────────────────────────────────────
+function _alPgRenderEscalation() {
+  const wrap = document.getElementById('al-pg-escalation');
+  if (!wrap) return;
+  // Pick the default policy: a global profile (preferred), else the first profile
+  const def = _alertProfiles.find(p => p.scope_type === 'global') || _alertProfiles[0];
+  const sub = document.getElementById('al-pg-esc-sub');
+  if (!def) {
+    if (sub) sub.textContent = '';
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      No profile to derive policy from.
+    </div>`;
+    return;
+  }
+  if (sub) sub.textContent = esc(def.name);
+
+  const tplById = {};
+  _alertTemplates.forEach(t => { tplById[t.id] = t; });
+
+  const stages = (def.stages || []).slice().sort((a,b) => a.sort_order - b.sort_order);
+  if (!stages.length) {
+    wrap.innerHTML = `<div class="muted" style="padding:14px;text-align:center;font-size:12px">
+      Profile has no stages configured.
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = stages.map((s, i) => {
+    const delay = s.delay_s
+      ? (s.delay_s < 60 ? `+${s.delay_s}s` : `+${Math.round(s.delay_s/60)} min`)
+      : 'immediate';
+    const channels = (s.action_ids || []).map(aid => tplById[aid]).filter(Boolean);
+    const chanStr  = channels.map(t => t.name).join(' + ') || '—';
+    const trigLbl  = ({down:'Down', warning:'Warning', down_recovered:'Recovered', warning_recovered:'Warn recovered'})[s.trigger_state] || s.trigger_state;
+    return `
+      <div class="al-pg-esc-row">
+        <div class="al-pg-esc-num">${i+1}</div>
+        <div class="al-pg-esc-body">
+          <div class="al-pg-esc-name">${esc(chanStr)} <span class="muted small">· ${esc(trigLbl)}</span></div>
+          <div class="al-pg-esc-when">After ${esc(delay)}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Recent Deliveries ───────────────────────────────────────────────
+async function _alPgLoadDeliveries() {
+  const wrap = document.getElementById('al-pg-deliveries');
+  if (!wrap) return;
+  try {
+    const r = await api('GET', '/api/alert/events?state=all&limit=50');
+    const events = r.events || [];
+    if (!events.length) {
+      wrap.innerHTML = `<div class="muted" style="padding:18px 16px;text-align:center">
+        No deliveries in the recent window.
+      </div>`;
+      return;
+    }
+    // Last 24h cutoff (events are time-ordered desc)
+    const cutoff = Date.now()/1000 - 86400;
+    const recent = events.filter(e => (e.started_at || e.created_at || 0) >= cutoff);
+    const rows = (recent.length ? recent : events.slice(0, 12)).map(_alPgDeliveryRow).join('');
+    wrap.innerHTML = `
+      <div class="al-pg-tbl-wrap">
+        <table class="al-pg-tbl">
+          <thead><tr>
+            <th>Time</th><th>Profile</th><th>Device</th><th>Severity</th><th>State</th><th>Notes</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    wrap.innerHTML = `<div class="error" style="padding:16px">Failed to load deliveries: ${esc(String(e))}</div>`;
+  }
+}
+
+function _alPgDeliveryRow(e) {
+  const ts = e.started_at || e.created_at || 0;
+  const when = ts ? _alPgRelTime(ts) : '—';
+  const sev = (e.severity || e.trigger_state || 'info').toLowerCase();
+  const sevCls = sev.includes('down') || sev === 'critical' ? 'crit'
+              : sev.includes('warn') ? 'warn'
+              : sev.includes('recover') ? 'ok'
+              : 'info';
+  const sevLbl = ({down:'Down', warning:'Warning', down_recovered:'Recovered', warning_recovered:'Warn recovered', critical:'Critical', info:'Info'})[sev] || sev;
+  const state = (e.state || '').toLowerCase();
+  const stateCls = state === 'active' ? 'crit' : state === 'ack' ? 'warn' : 'ok';
+  const notes = _alPgDeliveryNotes(e, state);
+  return `
+    <tr>
+      <td class="muted small mono">${esc(when)}</td>
+      <td>${esc(e.profile_name || '—')}</td>
+      <td>${esc(e.device_name || e.device_id || '—')}</td>
+      <td><span class="al-pg-sev ${sevCls}">${esc(sevLbl)}</span></td>
+      <td><span class="al-pg-state ${stateCls}">${esc(state || '—')}</span></td>
+      <td class="al-pg-notes" title="${esc(notes.tooltip)}">${notes.html}</td>
+    </tr>`;
+}
+
+// Pick a useful one-line note per row. Today only "suppressed" has a structured
+// reason (always maintenance windows — see monitoring/alert_profile_engine.py),
+// but we synthesize light notes for ack/resolved too so the column stays useful.
+function _alPgDeliveryNotes(e, state) {
+  if (state === 'suppressed') {
+    const r = (e.suppress_reason || '').trim();
+    if (r) {
+      return { html: `<span class="al-pg-note al-pg-note-mute">${esc(r)}</span>`, tooltip: r };
+    }
+    return { html: '<span class="al-pg-note al-pg-note-mute">Maintenance window</span>',
+             tooltip: 'Suppressed by an active maintenance window' };
+  }
+  if (state === 'acknowledged' || state === 'ack') {
+    const who = (e.ack_by || '').trim();
+    const txt = who ? `Ack by ${who}` : 'Acknowledged';
+    return { html: `<span class="al-pg-note">${esc(txt)}</span>`, tooltip: txt };
+  }
+  if (state === 'resolved' && e.resolved_at && e.triggered_at) {
+    const dur = Math.max(0, e.resolved_at - e.triggered_at);
+    const lbl = dur < 60   ? `${Math.round(dur)}s`
+              : dur < 3600 ? `${Math.round(dur/60)}m`
+              :              `${Math.round(dur/3600)}h`;
+    const txt = `Recovered in ${lbl}`;
+    return { html: `<span class="al-pg-note">${esc(txt)}</span>`, tooltip: txt };
+  }
+  if ((e.repeat_count || 1) > 1) {
+    const txt = `${e.repeat_count}× repeats`;
+    return { html: `<span class="al-pg-note">${esc(txt)}</span>`, tooltip: txt };
+  }
+  return { html: '<span class="muted">—</span>', tooltip: '' };
+}
+
+function _alPgRelTime(epochSec) {
+  const diff = Date.now()/1000 - epochSec;
+  if (diff < 60)    return `${Math.round(diff)}s ago`;
+  if (diff < 3600)  return `${Math.round(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.round(diff/3600)}h ago`;
+  return `${Math.round(diff/86400)}d ago`;
+}
+
+// ── Test Alert button — picks the first enabled profile to fire ─────
+function _alPgTestAlert() {
+  const target = _alertProfiles.find(p => p.enabled) || _alertProfiles[0];
+  if (!target) { toast('No profile to test — create one first', 'warn'); return; }
+  _alertingProfTest(target.id, target.name);
+}

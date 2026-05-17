@@ -24,7 +24,7 @@ from db.helpers  import db_query, db_query_one, db_execute, db_cursor
 
 # Column lists — kept in sync with CREATE TABLE statements in db/core.py and
 # db/pg_schema.py. Decouples query code from schema column order.
-_AP_COLS = "id, name, scope_type, scope_value, enabled, created_at, updated_at"
+_AP_COLS = "id, name, scope_type, scope_value, enabled, exclusive, created_at, updated_at"
 _APS_COLS = (
     "id, profile_id, trigger_state, delay_s, repeat_min, action_ids, sort_order"
 )
@@ -44,6 +44,11 @@ def _profile_row(row) -> dict:
         "scope_type":  r["scope_type"],
         "scope_value": r.get("scope_value") or "",
         "enabled":     bool(r["enabled"]),
+        # exclusive=True suppresses broader-scope profiles in the cascade.
+        # Defaults to False for new profiles (additive); pre-existing profiles
+        # are set to True by the exclusive_v1 migration to preserve the old
+        # first-match-wins behavior.
+        "exclusive":   bool(r.get("exclusive", 0)),
         "created_at":  r.get("created_at") or 0,
         "updated_at":  r.get("updated_at") or 0,
         "stages":      [],
@@ -169,6 +174,10 @@ def db_save_profile(data: dict, profile_id: int | None = None) -> int:
     scope_type  = data.get("scope_type") or "global"
     scope_value = (data.get("scope_value") or "") if scope_type != "global" else ""
     enabled     = 1 if data.get("enabled", True) else 0
+    # Exclusive defaults to False (additive) for newly created profiles. The
+    # editor's "Exclusive" checkbox sets this; pre-existing profiles inherit
+    # exclusive=1 from the exclusive_v1 migration.
+    exclusive   = 1 if data.get("exclusive", False) else 0
     stages      = data.get("stages") or []
 
     try:
@@ -177,8 +186,8 @@ def db_save_profile(data: dict, profile_id: int | None = None) -> int:
             if profile_id:
                 cur.execute(
                     f"UPDATE alert_profiles SET name={ph}, scope_type={ph}, "
-                    f"scope_value={ph}, enabled={ph}, updated_at={ph} WHERE id={ph}",
-                    (name, scope_type, scope_value, enabled, now, profile_id)
+                    f"scope_value={ph}, enabled={ph}, exclusive={ph}, updated_at={ph} WHERE id={ph}",
+                    (name, scope_type, scope_value, enabled, exclusive, now, profile_id)
                 )
                 cur.execute(
                     f"DELETE FROM alert_profile_stages WHERE profile_id={ph}",
@@ -189,16 +198,16 @@ def db_save_profile(data: dict, profile_id: int | None = None) -> int:
                 if is_pg():
                     cur.execute(
                         "INSERT INTO alert_profiles (name, scope_type, scope_value, "
-                        "enabled, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s) "
+                        "enabled, exclusive, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s) "
                         "RETURNING id",
-                        (name, scope_type, scope_value, enabled, now, now)
+                        (name, scope_type, scope_value, enabled, exclusive, now, now)
                     )
                     pid = cur.fetchone()["id"]
                 else:
                     cur.execute(
                         "INSERT INTO alert_profiles (name, scope_type, scope_value, "
-                        "enabled, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                        (name, scope_type, scope_value, enabled, now, now)
+                        "enabled, exclusive, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                        (name, scope_type, scope_value, enabled, exclusive, now, now)
                     )
                     pid = cur.lastrowid
             _write_stages(cur, pid, stages, is_pg())

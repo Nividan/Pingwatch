@@ -425,6 +425,35 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 .dash-bar-fill  { height:100%; border-radius:2px; transition:width 0.5s ease; opacity:0.75; }
 .dash-bar-count { font-family:'Share Tech Mono',monospace; font-size:8px; color:rgba(255,255,255,0.25); width:14px; text-align:right; flex-shrink:0; }
 
+/* ── Site stats (v1.0+ — per-site row in the Live dashboard panel) ── */
+.pw-site-stats { display:flex; flex-direction:column; gap:5px; }
+.pw-site-stat-row {
+  display:flex; align-items:center; gap:8px;
+  padding:5px 7px; border-radius:4px;
+  background:rgba(255,255,255,0.02);
+  border:1px solid rgba(255,255,255,0.04);
+}
+.pw-site-stat-dot {
+  width:8px; height:8px; border-radius:50%; flex-shrink:0;
+  box-shadow:0 0 6px currentColor;
+}
+.pw-site-stat-name {
+  flex:1; min-width:0; font-family:'Share Tech Mono',monospace;
+  font-size:11px; color:rgba(255,255,255,0.78);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  letter-spacing:.5px;
+}
+.pw-site-stat-val {
+  font-family:'Orbitron',monospace; font-size:11px; font-weight:700;
+  color:rgba(255,255,255,0.85); flex-shrink:0;
+}
+/* Light-theme softening */
+[data-theme="light"] .pw-site-stat-row {
+  background:rgba(0,0,0,0.02); border-color:rgba(0,0,0,0.05);
+}
+[data-theme="light"] .pw-site-stat-name { color:rgba(0,0,0,0.7); }
+[data-theme="light"] .pw-site-stat-val  { color:rgba(0,0,0,0.85); }
+
 /* ── Incident cards (PingWatch Live panel) ───────────────────────── */
 .inc-list { display:flex; flex-direction:column; gap:7px; }
 .inc-card { border-radius:4px; padding:9px 11px; border-left:3px solid; }

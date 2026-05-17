@@ -4,15 +4,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PingWatch — Network Monitor</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
-<!-- Theme bootstrap — runs BEFORE CSS paints to prevent FOUC -->
+<!-- Theme + density bootstrap — runs BEFORE CSS paints to prevent FOUC -->
 <script>
   (function () {
+    var d = document.documentElement;
     try {
       var t = localStorage.getItem('pw_theme');
       if (t !== 'dark' && t !== 'light') t = 'dark';
-      document.documentElement.setAttribute('data-theme', t);
+      d.setAttribute('data-theme', t);
     } catch (_) {
-      document.documentElement.setAttribute('data-theme', 'dark');
+      d.setAttribute('data-theme', 'dark');
+    }
+    try {
+      var dn = localStorage.getItem('pw_density');
+      if (dn !== 'compact' && dn !== 'comfortable') dn = 'compact';
+      d.setAttribute('data-density', dn);
+    } catch (_) {
+      d.setAttribute('data-density', 'compact');
     }
   })();
 </script>
@@ -83,38 +91,62 @@
 
 <!-- Top bar -->
 <div id="topbar">
-  <div class="tb-brand" onclick="switchMainTab('dashboard')" title="Go to Dashboard" style="cursor:pointer">
-    <div class="tb-logo">
-      <img src="/favicon.ico" width="28" height="28" alt="PingWatch">
+  <div class="brand" onclick="switchMainTab('dashboard')" title="Go to Dashboard">
+    <div class="brand-mark">
+      <svg width="28" height="28" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <defs><radialGradient id="bm-glow" cx=".5" cy=".5" r=".5">
+          <stop offset="0" stop-color="currentColor" stop-opacity=".6"/>
+          <stop offset="1" stop-color="currentColor" stop-opacity="0"/>
+        </radialGradient></defs>
+        <circle cx="10" cy="10" r="9" fill="url(#bm-glow)" opacity=".4"/>
+        <circle cx="10" cy="10" r="8.5" stroke="currentColor" stroke-width="1" opacity=".30"/>
+        <circle cx="10" cy="10" r="5"   stroke="currentColor" stroke-width="1" opacity=".55"/>
+        <circle cx="10" cy="10" r="2"   fill="currentColor"/>
+        <g class="radar-sweep" opacity=".75">
+          <path d="M10 10 L18.5 10 A 8.5 8.5 0 0 1 14.5 17 Z" fill="currentColor" opacity=".18"/>
+          <line x1="10" y1="10" x2="18.5" y2="10" stroke="currentColor" stroke-width="1.2"/>
+        </g>
+        <line x1="1.5" y1="10" x2="4"    y2="10" stroke="currentColor" stroke-width="1.2" opacity=".4"/>
+        <line x1="10"  y1="1.5" x2="10" y2="4"   stroke="currentColor" stroke-width="1.2" opacity=".4"/>
+        <line x1="10"  y1="16"  x2="10" y2="18.5" stroke="currentColor" stroke-width="1.2" opacity=".4"/>
+      </svg>
     </div>
-    <div>
-      <div class="tb-wordmark">
-        <span class="tw-ping">Ping</span><span class="tw-watch">Watch</span>
-      </div>
-      <div class="tb-ver" id="tbVer">Network Monitor v0.5</div>
-    </div>
-  </div>
-  <div class="tb-mid">
-    <div id="healthBar" style="display:none">
-      <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
-      <span id="hb-pct" class="hb-pct-healthy">—</span>
-      <span id="hb-label" class="hb-lbl-healthy">—</span>
-      <span id="hb-devices-sep" class="hb-sep"></span>
-      <span id="hb-devices-lbl" class="hb-spark-lbl">Devices:</span>
-      <div id="hb-pills">
-        <span class="hb-pill up"   id="hb-up"></span>
-        <span class="hb-pill down" id="hb-dn" style="display:none"></span>
-        <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
-      </div>
-      <span id="hb-spark-sep" class="hb-sep" style="display:none"></span>
-      <span id="hb-spark-lbl" class="hb-spark-lbl" style="display:none">24h Trend</span>
-      <span id="hb-trend-arrow" style="display:none"></span>
-      <canvas id="hb-spark" height="22" style="display:none;cursor:pointer" title="Health trend — click to expand"></canvas>
+    <div class="brand-text">
+      <div class="brand-word"><span class="b-ping">Ping</span><span class="b-watch">Watch</span></div>
+      <div class="brand-tag" id="tbVer">Network Monitor v0.5</div>
     </div>
   </div>
+
+  <!-- Command palette — Ctrl+K. Jumps to devices / sensors by fuzzy match. -->
+  <button class="cmd" id="tbCmd" type="button"
+          onclick="_openCmdPalette()"
+          title="Search devices, sensors, or IPs (Ctrl+K)">
+    <span class="cmd-ico" id="tbCmdIco" aria-hidden="true"></span>
+    <span class="cmd-placeholder">Search devices, sensors, or IPs…</span>
+    <span class="cmd-kbd">Ctrl K</span>
+  </button>
+
+  <!-- Health bar — preserved IDs, restyled by new .healthbar rules -->
+  <div id="healthBar" class="healthbar" style="display:none">
+    <div id="hb-bar-wrap"><div id="hb-bar-fill"></div></div>
+    <span id="hb-pct" class="hb-pct-healthy">—</span>
+    <span id="hb-label" class="hb-lbl-healthy">—</span>
+    <span id="hb-devices-sep" class="hb-sep"></span>
+    <span id="hb-devices-lbl" class="hb-spark-lbl">Devices:</span>
+    <div id="hb-pills">
+      <span class="hb-pill up"   id="hb-up"></span>
+      <span class="hb-pill down" id="hb-dn" style="display:none"></span>
+      <span class="hb-pill warn" id="hb-wn" style="display:none"></span>
+    </div>
+    <span id="hb-spark-sep" class="hb-sep" style="display:none"></span>
+    <span id="hb-spark-lbl" class="hb-spark-lbl" style="display:none">24h Trend</span>
+    <span id="hb-trend-arrow" style="display:none"></span>
+    <canvas id="hb-spark" height="22" style="display:none;cursor:pointer" title="Health trend — click to expand"></canvas>
+  </div>
+
   <div class="tb-right">
-    <div class="tb-time" id="clk"></div>
-    <div class="tb-db-badge"><div class="tb-db-dot"></div>DB</div>
+    <div class="tb-time tabular" id="clk"></div>
+    <div class="tb-db-badge" title="Database connection"><div class="tb-db-dot"></div>DB</div>
     <div class="tb-badges" id="tbBadges">
       <div class="tb-badge tb-badge-crit" id="badgeCrit" style="display:none"
            onclick="_openBadgeCrit()" title="Active critical/down events">
@@ -137,6 +169,12 @@
          onclick="_openLogBadge()" title="New log entries (WARNING+)">
       New Log Entries <span id="logBadgeCnt">0</span>
     </div>
+    <!-- Theme toggle: moved out of user menu per design refinement -->
+    <button class="tb-iconbtn" id="tbThemeBtn" type="button"
+            onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"></button>
+    <!-- Bell: visual stub. Click jumps to active events list -->
+    <button class="tb-iconbtn" id="tbBellBtn" type="button"
+            onclick="switchMainTab('events')" title="Notifications" aria-label="Notifications"></button>
     <div class="usr-dd" id="usrDd" style="display:none">
       <button class="usr-dd-trigger" id="usrDdBtn" onclick="_usrDdToggle(event)" aria-haspopup="true" aria-expanded="false">
         <span class="usr-dd-dot"></span>
@@ -144,38 +182,86 @@
         <span class="usr-dd-caret">▾</span>
       </button>
       <div class="usr-dd-menu" id="usrDdMenu" role="menu">
-        <div class="usr-dd-header">
-          <div class="usr-dd-name" id="usr-dd-name"></div>
-          <div class="usr-dd-badge" id="usr-dd-badge"></div>
+        <div class="usr-dd-header usr-menu-head">
+          <div class="usr-menu-av" id="usr-menu-av">—</div>
+          <div class="usr-menu-id">
+            <div class="usr-dd-name usr-menu-name" id="usr-dd-name"></div>
+            <div class="usr-menu-email" id="usr-menu-email" style="display:none"></div>
+          </div>
+          <div class="usr-dd-badge usr-menu-role" id="usr-dd-badge"></div>
+        </div>
+        <div class="usr-menu-session" id="usr-menu-session" style="display:none">
+          <span class="dot"></span>
+          <span id="usr-menu-session-text">—</span>
         </div>
         <div class="usr-dd-sep"></div>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openSettings()"><span class="usr-dd-ico">⚙</span>Settings</button>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_openProfileModal()"><span class="usr-dd-ico">👤</span>Edit Profile</button>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_openChangePwModal()"><span class="usr-dd-ico">🔑</span>Change Password</button>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();_open2faModal()"><span class="usr-dd-ico">🔐</span>Two-Factor Authentication</button>
-        <button class="usr-dd-item" id="usrThemeBtn" role="menuitem" onclick="_usrDdClose();toggleTheme()" title="Toggle between dark and light themes"><span class="usr-dd-ico">☀</span>Switch to Light</button>
+        <button class="usr-dd-item" role="menuitem" data-icon="settings" onclick="_usrDdClose();openSettings()">
+          <span class="usr-dd-ico"></span>Settings
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="user" onclick="_usrDdClose();_openProfileModal()">
+          <span class="usr-dd-ico"></span>Edit Profile
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="lock" onclick="_usrDdClose();_openChangePwModal()">
+          <span class="usr-dd-ico"></span>Change Password
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="shield" onclick="_usrDdClose();_open2faModal()">
+          <span class="usr-dd-ico"></span>Two-Factor Authentication
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="activity" onclick="_usrDdClose();_openSessionsModal()">
+          <span class="usr-dd-ico"></span>Active Sessions
+        </button>
+        <button class="usr-dd-item" role="menuitem" data-icon="grid" id="usrDensityBtn"
+                onclick="_usrDdClose();_toggleDensity()" title="Switch between compact and comfortable spacing">
+          <span class="usr-dd-ico"></span><span id="usrDensityLabel">Density: Compact</span>
+        </button>
         <div class="usr-dd-sep"></div>
-        <button class="usr-dd-item" role="menuitem" onclick="_usrDdClose();openAbout()"><span class="usr-dd-ico">ⓘ</span>About PingWatch</button>
-        <button class="usr-dd-item usr-dd-item--danger" role="menuitem" onclick="_usrDdClose();doLogout()"><span class="usr-dd-ico">⏻</span>Sign Out</button>
+        <button class="usr-dd-item" role="menuitem" data-icon="info" onclick="_usrDdClose();openAbout()">
+          <span class="usr-dd-ico"></span>About PingWatch
+        </button>
+        <button class="usr-dd-item usr-dd-item--danger" role="menuitem" data-icon="log_out" onclick="_usrDdClose();doLogout()">
+          <span class="usr-dd-ico"></span>Sign Out
+        </button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Layout -->
+<!-- Layout: icon rail + main content -->
 <div id="layout">
+  <nav id="rail" class="rail" aria-label="Main navigation">
+    <button class="rail-btn" id="tabDashboard" onclick="switchMainTab('dashboard')" title="Dashboard">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Dashboard</span>
+    </button>
+    <button class="rail-btn" id="tabDevices" onclick="switchMainTab('devices')" title="Devices">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Devices</span>
+    </button>
+    <button class="rail-btn" id="tabEvents" onclick="switchMainTab('events')" title="Events">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Events</span>
+    </button>
+    <button class="rail-btn" id="tabAlerting" onclick="switchMainTab('alerting')" title="Alerting">
+      <span class="rail-ico" aria-hidden="true" data-icon="alerts"></span><span class="rail-tip">Alerting</span>
+    </button>
+    <button class="rail-btn" id="tabMap" onclick="switchMainTab('map')" title="Topology Map">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Topology</span>
+    </button>
+    <button class="rail-btn" id="tabIpam" onclick="switchMainTab('ipam')" title="IP Addresses">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">IPAM</span>
+    </button>
+    <button class="rail-btn" id="tabReports" onclick="switchMainTab('reports')" title="Reports">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Reports</span>
+    </button>
+    <button class="rail-btn" id="tabBackups" onclick="switchMainTab('backups')" title="Backups">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Backups</span>
+    </button>
+    <button class="rail-btn rbac-admin" id="tabLogs" onclick="switchMainTab('logs')" title="Logs">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Logs</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn rail-btn--settings" id="railSettings" onclick="openSettings()" title="Settings">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Settings</span>
+    </button>
+  </nav>
   <div id="main">
-    <!-- Tab bar -->
-    <div id="mainTabs">
-      <button class="mtab" id="tabDashboard" onclick="switchMainTab('dashboard')">📊 Dashboard</button>
-      <button class="mtab" id="tabDevices" onclick="switchMainTab('devices')">🖧 Devices</button>
-      <button class="mtab" id="tabEvents" onclick="switchMainTab('events')">⚡ Events</button>
-      <button class="mtab" id="tabMap" onclick="switchMainTab('map')">🌐 Map</button>
-      <button class="mtab" id="tabBackups" onclick="switchMainTab('backups')">💾 Backups</button>
-      <button class="mtab" id="tabIpam" onclick="switchMainTab('ipam')">📋 IP Addresses</button>
-      <button class="mtab" id="tabReports" onclick="switchMainTab('reports')">📊 Reports</button>
-      <button class="mtab rbac-admin" id="tabLogs" onclick="switchMainTab('logs')">📜 Logs</button>
-    </div>
     <!-- Dashboard view -->
     <div id="dashboardView" style="display:none;flex:1;overflow-y:auto;flex-direction:column;">
       <div id="dw-tab-bar" class="dw-tab-bar"></div>
@@ -197,18 +283,35 @@
           <button class="evt-inner-tab active" id="evtInnerActive" onclick="_evtSetInnerTab('active')">Active</button>
           <button class="evt-inner-tab" id="evtInnerHistory" onclick="_evtSetInnerTab('history')">History</button>
         </div>
-        <div class="evt-view-hdr">
-          <div>
-            <div class="evt-view-title">⚡ Events</div>
-            <div class="evt-view-sub">State changes detected across all monitored sensors <span id="evtCount" style="margin-left:8px;color:var(--text3)"></span></div>
+        <div class="evt-view-hdr pagehead">
+          <div class="pagehead-l">
+            <h1>Events</h1>
+            <div class="sub evt-view-sub">State changes detected across all monitored sensors <span id="evtCount" style="margin-left:8px;color:var(--text3)"></span></div>
           </div>
-          <div class="evt-hdr-actions">
-            <button class="evt-resolve-all-btn" onclick="_evtResolveAll()" title="Resolve all active alerts and flaps">✓ Resolve All</button>
-            <button class="evt-view-btn active" id="evtBtnCard"  onclick="_setEvtViewMode('card')">☰ Cards</button>
-            <button class="evt-view-btn"        id="evtBtnTable" onclick="_setEvtViewMode('table')">⊞ Table</button>
-            <div class="evt-export-group">
-              <button class="evt-export-btn" onclick="_evtExportCsv()">⬇ CSV</button>
-              <button class="evt-export-btn" onclick="_evtExportJson()">⬇ JSON</button>
+          <div class="pagehead-r evt-hdr-actions">
+            <button class="btn ghost sm evt-resolve-all-btn" onclick="_evtResolveAll()" title="Resolve all active alerts and flaps">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"/></svg>
+              Resolve All
+            </button>
+            <div class="seg">
+              <button class="evt-view-btn active" id="evtBtnCard"  onclick="_setEvtViewMode('card')" title="Card view">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg>
+                Cards
+              </button>
+              <button class="evt-view-btn" id="evtBtnTable" onclick="_setEvtViewMode('table')" title="Table view">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>
+                Table
+              </button>
+            </div>
+            <div class="seg evt-export-group">
+              <button class="evt-export-btn" onclick="_evtExportCsv()" title="Export CSV">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 V15"/><polyline points="7 10 12 15 17 10"/><line x1="4" y1="20" x2="20" y2="20"/></svg>
+                CSV
+              </button>
+              <button class="evt-export-btn" onclick="_evtExportJson()" title="Export JSON">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 V15"/><polyline points="7 10 12 15 17 10"/><line x1="4" y1="20" x2="20" y2="20"/></svg>
+                JSON
+              </button>
             </div>
           </div>
         </div>
@@ -267,34 +370,61 @@
       <div class="iip-panel"></div>
     </div>
     <div id="devActBar" style="display:none">
-      <div class="dev-act-left">
-        <button id="btnAdd"      class="btn-sm btn-accent rbac-op" onclick="openAddDevice()">➕ Add Device</button>
-        <button id="btnDiscover" class="btn-sm rbac-op"            onclick="openDiscoverSubnet()" title="Scan a subnet for unmonitored devices">📡 Discover Subnet</button>
-        <button id="btnImport"   class="btn-sm rbac-op"            onclick="openBulkImport()" title="Import devices from JSON, CSV, PRTG, SolarWinds, or Zabbix">📥 Import from File</button>
-        <button id="btnAddGroup" class="btn-sm rbac-op"            onclick="openAddGroup()">🗂️ Add Group</button>
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Devices</h1>
+          <div class="sub" id="devSub">Loading…</div>
+        </div>
+        <div class="pagehead-r">
+          <button id="btnAdd"      class="btn primary rbac-op" onclick="openAddDevice()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Device
+          </button>
+          <button id="btnDiscover" class="btn rbac-op"         onclick="openDiscoverSubnet()" title="Scan a subnet for unmonitored devices">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            Discover
+          </button>
+          <button id="btnImport"   class="btn rbac-op"         onclick="openBulkImport()" title="Import devices from JSON, CSV, PRTG, SolarWinds, or Zabbix">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21 V9"/><polyline points="7 14 12 9 17 14"/><line x1="4" y1="4" x2="20" y2="4"/></svg>
+            Import
+          </button>
+          <button id="btnAddGroup" class="btn ghost rbac-op"   onclick="openAddGroup()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Group
+          </button>
+        </div>
       </div>
-      <div class="view-toggle">
-        <button class="vt-btn active" id="vtGrid" onclick="_setView('grid')" title="Grid view">&#x229E;</button>
-        <button class="vt-btn" id="vtList" onclick="_setView('list')" title="List view">&#x2630;</button>
-        <span class="vt-sep"></span>
-        <button class="vt-btn" onclick="_collapseAllGroups()" title="Collapse all groups">&#x229F;</button>
-        <button class="vt-btn" onclick="_expandAllGroups()"  title="Expand all groups">&#x229E;</button>
-      </div>
-      <button id="btnSelectMode" class="btn-sm rbac-op" onclick="_toggleSelectMode()" title="Multi-select devices for bulk actions">&#x2611; Select</button>
-      <div class="dev-act-sep"></div>
-      <div class="dev-pills">
-        <button class="dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="down"  onclick="_setStatusFilter('down')">Down <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="warn"  onclick="_setStatusFilter('warn')">Warn <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="up"    onclick="_setStatusFilter('up')">Up <span class="pill-ct">0</span></button>
-        <button class="dev-status-pill"        data-st="pause" onclick="_setStatusFilter('pause')">Pause <span class="pill-ct">0</span></button>
-      </div>
-      <div class="dev-search-wrap">
-        <svg class="dev-search-ico" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/>
-          <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <input id="devSearch" type="search" placeholder="Search devices or sensors…" class="dev-search-inp" oninput="_applyDevFilter(this.value)"/>
+      <div class="dev-toolbar">
+        <div class="dev-status-row">
+          <button class="dev-status-btn dev-status-pill active" data-st="all"   onclick="_setStatusFilter('all')">All <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="down"  onclick="_setStatusFilter('down')"><span class="dot"></span>Down <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="warn"  onclick="_setStatusFilter('warn')"><span class="dot"></span>Warn <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="up"    onclick="_setStatusFilter('up')"><span class="dot"></span>Up <span class="ct pill-ct">0</span></button>
+          <button class="dev-status-btn dev-status-pill"        data-st="pause" onclick="_setStatusFilter('pause')"><span class="dot"></span>Pause <span class="ct pill-ct">0</span></button>
+        </div>
+        <div class="dev-toolbar-spacer"></div>
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/></svg>
+          <input id="devSearch" type="search" placeholder="Search devices or sensors…" class="dev-search-inp pw-input" oninput="_applyDevFilter(this.value)"/>
+        </div>
+        <div class="seg view-toggle" title="Layout">
+          <button class="vt-btn active" id="vtGrid" onclick="_setView('grid')" title="Grid view">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>
+          </button>
+          <button class="vt-btn" id="vtList" onclick="_setView('list')" title="List view">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg>
+          </button>
+          <button class="vt-btn" onclick="_collapseAllGroups()" title="Collapse all groups">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <button class="vt-btn" onclick="_expandAllGroups()" title="Expand all groups">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg>
+          </button>
+        </div>
+        <button id="btnSelectMode" class="btn ghost sm rbac-op" onclick="_toggleSelectMode()" title="Multi-select devices for bulk actions">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"/></svg>
+          Select
+        </button>
       </div>
     </div>
     <div id="emptyMain" style="display:none">
@@ -344,6 +474,12 @@
           <datalist id="bulkGroupList"></datalist>
           <button class="btn-p" onclick="_bulkApplyMove()">Apply</button>
         </div>
+        <div class="bulk-move">
+          <label for="bulkSiteInput">Move to site:</label>
+          <input list="bulkSiteList" id="bulkSiteInput" autocomplete="off" placeholder="Pick or type new…"/>
+          <datalist id="bulkSiteList"></datalist>
+          <button class="btn-p" onclick="_bulkApplySiteMove()">Apply</button>
+        </div>
         <div class="bulk-ops">
           <button class="btn-s" onclick="_bulkAction('start')" title="Resume monitoring for selected devices">&#x25B6; Resume</button>
           <button class="btn-s" onclick="_bulkAction('stop')" title="Pause monitoring for selected devices">&#x23F8; Pause</button>
@@ -353,21 +489,38 @@
     </div>
     <!-- Backups view -->
     <div id="backupsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
-      <div id="bk-toolbar">
-        <span class="bk-title">💾 Device Configuration Backups</span>
-        <div class="bk-gsrch-wrap">
-          <input id="bk-gsrch-inp" type="text" placeholder="🔍 Search all configs…" autocomplete="off"
-                 oninput="_bkGsrchInput()" onkeydown="if(event.key==='Escape')_bkGsrchClear()"/>
-          <button class="btn-sm bk-gsrch-clear" id="bk-gsrch-clear" onclick="_bkGsrchClear()" title="Clear search" style="display:none">✕</button>
+      <div class="pagehead">
+        <div class="pagehead-l">
+          <h1>Device Configuration Backups</h1>
+          <div class="sub" id="bkSub">Per-device config snapshots, scheduled or on-demand.</div>
         </div>
-        <button class="btn-sm rbac-op" id="bkRunAllBtn" onclick="_bkRunAll()">▶ Run All Enabled</button>
-        <button class="btn-sm" onclick="_bkInit()">↺ Refresh</button>
+        <div class="pagehead-r">
+          <button class="btn primary rbac-op" id="bkRunAllBtn" onclick="_bkRunAll()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            Run All Enabled
+          </button>
+          <button class="btn" onclick="_bkInit()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 4 20 10 14 10"/><polyline points="4 20 4 14 10 14"/><path d="M5 14 a8 8 0 0 1 12.7-3.7 L20 14 M4 10 L6.3 13.7 A8 8 0 0 0 19 17"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+      <div class="bk-kpi-row" id="bk-kpi-row"></div>
+      <div id="bk-toolbar">
+        <div class="search" style="flex:1;max-width:380px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/></svg>
+          <input id="bk-gsrch-inp" type="text" placeholder="Search all configs…" autocomplete="off"
+                 class="pw-input" style="width:100%"
+                 oninput="_bkGsrchInput()" onkeydown="if(event.key==='Escape')_bkGsrchClear()"/>
+          <button class="bk-gsrch-clear" id="bk-gsrch-clear" onclick="_bkGsrchClear()" title="Clear search" style="display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text3);cursor:pointer">✕</button>
+        </div>
       </div>
       <div id="bk-table-wrap"></div>
     </div>
     <!-- IP Addresses (IPAM) view -->
     <div id="ipamView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="reportsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
+    <div id="alertingView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="logsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
   </div>
 </div>

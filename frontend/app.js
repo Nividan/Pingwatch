@@ -574,7 +574,207 @@ function _usrDdToggle(e){
   const btn=document.getElementById('usrDdBtn');
   const open=menu.classList.toggle('usr-dd-menu--open');
   btn.setAttribute('aria-expanded',open);
-  if(open){const first=menu.querySelector('.usr-dd-item:not([disabled])');if(first)first.focus();}
+  if(open){
+    _refreshUsrMenuHeader();
+    const first=menu.querySelector('.usr-dd-item:not([disabled])');if(first)first.focus();
+  }
+}
+function _toggleDensity(){
+  const d = document.documentElement;
+  const cur = d.getAttribute('data-density') === 'comfortable' ? 'comfortable' : 'compact';
+  const next = cur === 'compact' ? 'comfortable' : 'compact';
+  d.setAttribute('data-density', next);
+  try { localStorage.setItem('pw_density', next); } catch (_) {}
+  if (typeof showToast === 'function') showToast('Density: ' + (next === 'compact' ? 'Compact' : 'Comfortable'));
+}
+
+// ── Command palette (Ctrl+K) ─────────────────────────────────────
+// Live search across devices + sensors + IPAM allocations.
+// Click or Enter on a result → jump to the device's detail window
+// (or the events-tab filter if it's an event-related hit).
+let _cmdPaletteOpen = false;
+let _cmdResults     = [];
+let _cmdSelIdx      = 0;
+
+function _openCmdPalette(){
+  if (_cmdPaletteOpen) return;
+  _cmdPaletteOpen = true;
+  const o = document.createElement('div');
+  o.id = 'pw-cmd-overlay';
+  o.innerHTML = `
+    <div class="pw-cmd-box" onclick="event.stopPropagation()">
+      <div class="pw-cmd-input-row">
+        <span class="pw-cmd-input-ico">${typeof icon==='function'?icon('search',14):''}</span>
+        <input id="pw-cmd-inp" type="text" placeholder="Search devices, sensors, IPs…  (Esc to close)"
+               autocomplete="off" spellcheck="false">
+        <span class="pw-cmd-input-kbd">Esc</span>
+      </div>
+      <div id="pw-cmd-results" class="pw-cmd-results"></div>
+      <div class="pw-cmd-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span><kbd>Enter</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  o.addEventListener('click', _closeCmdPalette);
+  const inp = document.getElementById('pw-cmd-inp');
+  inp.addEventListener('input', _cmdPaletteSearch);
+  inp.addEventListener('keydown', _cmdPaletteKey);
+  inp.focus();
+  _cmdPaletteSearch();
+}
+
+function _closeCmdPalette(){
+  const o = document.getElementById('pw-cmd-overlay');
+  if (o) o.remove();
+  _cmdPaletteOpen = false;
+  _cmdResults = [];
+  _cmdSelIdx = 0;
+}
+
+function _cmdPaletteSearch(){
+  const inp = document.getElementById('pw-cmd-inp');
+  const q = (inp?.value || '').trim().toLowerCase();
+  const out = [];
+  const devs = Object.values(S.devices || {});
+  // Devices — match on name, host, vendor, group
+  for (const d of devs) {
+    const hay = [(d.name||''), (d.host||''), (d.vendor||''), (d.group||'')].join(' ').toLowerCase();
+    if (!q || hay.includes(q)) {
+      out.push({ kind:'device', did:d.device_id, name:d.name, host:d.host||'',
+                 vendor:d.vendor||'', status:d.status||'unknown', group:d.group||'' });
+      if (out.length >= 40) break;
+    }
+  }
+  // Sensors — match on name (only if query non-empty; otherwise we'd flood)
+  if (q) {
+    const sens = Object.values(S.sensors || {});
+    let sensorAdded = 0;
+    for (const s of sens) {
+      const nm = (s.name||'').toLowerCase();
+      if (nm.includes(q)) {
+        const dev = S.devices[s.device_id];
+        out.push({ kind:'sensor', did:s.device_id, sid:s.sensor_id,
+                   name:s.name, stype:s.stype||'',
+                   parent:(dev && dev.name) || s.device_id });
+        sensorAdded++;
+        if (sensorAdded >= 20) break;
+      }
+    }
+  }
+  _cmdResults = out.slice(0, 40);
+  _cmdSelIdx = 0;
+  _cmdPaletteRender();
+}
+
+function _cmdPaletteRender(){
+  const wrap = document.getElementById('pw-cmd-results');
+  if (!wrap) return;
+  if (!_cmdResults.length) {
+    wrap.innerHTML = '<div class="pw-cmd-empty">No matches.</div>';
+    return;
+  }
+  const devs = _cmdResults.filter(r => r.kind==='device');
+  const sens = _cmdResults.filter(r => r.kind==='sensor');
+  let html = '';
+  if (devs.length) {
+    html += '<div class="pw-cmd-section">Devices</div>';
+    devs.forEach((r,i) => {
+      const idx = _cmdResults.indexOf(r);
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-dot ${r.status}"></span>
+        <span class="pw-cmd-name">${esc(r.name)}</span>
+        <span class="pw-cmd-meta">${esc(r.host)}${r.vendor?' · '+esc(r.vendor):''}</span>
+      </div>`;
+    });
+  }
+  if (sens.length) {
+    html += '<div class="pw-cmd-section">Sensors</div>';
+    sens.forEach(r => {
+      const idx = _cmdResults.indexOf(r);
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-stype">${esc(r.stype)}</span>
+        <span class="pw-cmd-name">${esc(r.name)}</span>
+        <span class="pw-cmd-meta">on ${esc(r.parent)}</span>
+      </div>`;
+    });
+  }
+  wrap.innerHTML = html;
+  // Scroll the selected row into view
+  const sel = wrap.querySelector('.pw-cmd-row.sel');
+  if (sel) sel.scrollIntoView({block:'nearest'});
+}
+
+function _cmdPaletteKey(e){
+  if (e.key === 'Escape') { e.preventDefault(); _closeCmdPalette(); return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (_cmdResults.length) _cmdSelIdx = (_cmdSelIdx + 1) % _cmdResults.length;
+    _cmdPaletteRender();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (_cmdResults.length) _cmdSelIdx = (_cmdSelIdx - 1 + _cmdResults.length) % _cmdResults.length;
+    _cmdPaletteRender();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    _cmdPickIdx(_cmdSelIdx);
+  }
+}
+
+function _cmdPickIdx(idx){
+  const r = _cmdResults[idx];
+  if (!r) return;
+  _closeCmdPalette();
+  // Switch to Devices tab so the user lands somewhere coherent
+  if (typeof switchMainTab === 'function') switchMainTab('devices');
+  // Open the device's detail window
+  if (typeof openDevWin === 'function' && r.did) {
+    setTimeout(() => openDevWin(r.did), 50);
+  }
+}
+
+// Ctrl+K / Cmd+K global shortcut
+document.addEventListener('keydown', function(e){
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    _openCmdPalette();
+  }
+});
+function _refreshDensityLabel(){
+  const cur = document.documentElement.getAttribute('data-density') === 'comfortable' ? 'Comfortable' : 'Compact';
+  const lbl = document.getElementById('usrDensityLabel');
+  if (lbl) lbl.textContent = 'Density: ' + cur;
+}
+function _refreshUsrMenuHeader(){
+  _refreshDensityLabel();
+  const me = S.me || {};
+  const uname = me.username || S.user || '';
+  // Avatar — first 2 chars of full_name or username
+  const avText = (me.full_name || uname || '?').replace(/[^A-Za-z0-9]/g,'').slice(0,2).toUpperCase() || '?';
+  const av = document.getElementById('usr-menu-av');     if(av) av.textContent = avText;
+  // Name = full_name with username fallback
+  const dn = document.getElementById('usr-dd-name');
+  if(dn) dn.textContent = me.full_name || uname;
+  // Email
+  const em = document.getElementById('usr-menu-email');
+  if(em){
+    if(me.email){ em.textContent = me.email; em.style.display=''; }
+    else        { em.style.display='none'; }
+  }
+  // Session row — "Session expires in Xh Ym · signed in via Local"
+  const sess = document.getElementById('usr-menu-session');
+  const txt  = document.getElementById('usr-menu-session-text');
+  if(sess && txt){
+    const remainSec = Math.max(0, _sessionTtl - Math.round((Date.now()-_lastActivity)/1000));
+    const h = Math.floor(remainSec/3600);
+    const m = Math.floor((remainSec%3600)/60);
+    const remStr = h>0 ? `${h}h ${String(m).padStart(2,'0')}m` : `${m}m`;
+    // Auth method label (Local / LDAP / SAML / OIDC / RADIUS) — best-effort from S.me
+    const method = me.auth_method || me.auth_type || 'Local';
+    txt.textContent = `Session expires in ${remStr} · signed in via ${method[0].toUpperCase()+method.slice(1)}`;
+    sess.style.display = '';
+  }
 }
 function _usrDdClose(){
   const menu=document.getElementById('usrDdMenu');
@@ -1037,7 +1237,7 @@ async function checkAuth(){
   document.getElementById('usrDd').style.display='none';
   try{
     const r=await fetch('/api/me');
-    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}
+    if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; S.me=d; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}
     else{showLogin();}
   }catch(e){showLogin();}
 }
@@ -1497,12 +1697,12 @@ async function _refreshFlapList(){
 }
 
 function switchMainTab(tab){
-  if(tab==='alerting') tab='events';
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
   document.getElementById('tabDashboard').classList.toggle('active',tab==='dashboard');
   document.getElementById('tabDevices').classList.toggle('active',tab==='devices');
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
+  { const _ab=document.getElementById('tabAlerting'); if(_ab) _ab.classList.toggle('active',tab==='alerting'); }
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
@@ -1514,6 +1714,7 @@ function switchMainTab(tab){
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
   const reportsView  =document.getElementById('reportsView');
+  const alertingView =document.getElementById('alertingView');
   const logsView     =document.getElementById('logsView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
@@ -1522,8 +1723,9 @@ function switchMainTab(tab){
   mapView.style.display      ='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
-  if(reportsView) reportsView.style.display='none';
-  if(logsView)    logsView.style.display   ='none';
+  if(reportsView)  reportsView.style.display ='none';
+  if(alertingView) alertingView.style.display='none';
+  if(logsView)     logsView.style.display    ='none';
   // Deactivate logs polling when switching away from the Logs tab
   if(tab!=='logs' && typeof _logsDeactivate==='function') _logsDeactivate();
   document.getElementById('devActBar').style.display='none';
@@ -1579,6 +1781,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _rptInit==='function') _rptInit();
+  } else if(tab==='alerting'){
+    if(alertingView) alertingView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _alertingPageInit==='function') _alertingPageInit();
   } else if(tab==='logs'){
     if(logsView) logsView.style.display='flex';
     emptyMain.style.display='none';
@@ -1773,8 +1981,8 @@ async function loadAll(){
   _restoreViewToggle();
   // Clear dashboard loading shimmer now that device/sensor data is ready
   if (typeof _dwClearLoading === 'function') _dwClearLoading();
-  // Update group summaries for collapsed groups
-  document.querySelectorAll('.grp-grid.collapsed').forEach(g=>{
+  // Update status-pill summaries for every group (always visible now)
+  document.querySelectorAll('.grp-grid').forEach(g=>{
     if(g.dataset.group) _updateGrpSummary(g.dataset.group);
   });
   // Backfill per-device trap log from historical FLAPS (devices now loaded)

@@ -206,11 +206,55 @@ def _con():
 
 # ── Public API ───────────────────────────────────────────────────────
 
+def _build_14d_strip(rows, dids):
+    """
+    Reduce raw (did, ts_iso, success) rows from the last 14 days into a
+    {did: [status_per_day, ...]} map where each list is exactly 14 entries
+    in oldest→newest UTC-day order. Status per day:
+        'ok'   — any successful run that day
+        'fail' — only failures that day, no success
+        'none' — no run that day
+    """
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.timezone.utc).date()
+    days = [today - _dt.timedelta(days=i) for i in range(13, -1, -1)]
+    # bucket[(did, date)] = 'ok' | 'fail'
+    bucket = {}
+    for did, ts_iso, success in rows:
+        if not ts_iso:
+            continue
+        try:
+            # ts column is ISO string; tolerate either Z or +HH:MM or naive
+            s = ts_iso
+            if s.endswith('Z'):
+                s = s[:-1] + '+00:00'
+            d = _dt.datetime.fromisoformat(s)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=_dt.timezone.utc)
+            day = d.astimezone(_dt.timezone.utc).date()
+        except Exception:
+            continue
+        key = (did, day)
+        if success:
+            bucket[key] = 'ok'  # any success wins
+        elif key not in bucket:
+            bucket[key] = 'fail'
+    out = {}
+    for did in dids:
+        out[did] = [bucket.get((did, d), 'none') for d in days]
+    return out
+
+
 def db_get_backup_list() -> list:
     """
     Return list of all devices joined with their latest backup run metadata.
-    Never includes decrypted passwords.
+    Never includes decrypted passwords. Each entry also carries
+    `last_diff_lines` (int or None) and `strip_14d` (14-entry list of
+    'ok'/'fail'/'none' for the Backups page strip chart).
     """
+    import datetime as _dt
+    cutoff_iso = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=14)).isoformat()
+
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -224,7 +268,7 @@ def db_get_backup_list() -> list:
                 cfg_map = {r["did"]: r for r in cur.fetchall()}
 
                 cur.execute(
-                    "SELECT did, id, ts, success, size_bytes, error_msg "
+                    "SELECT did, id, ts, success, size_bytes, error_msg, diff_lines "
                     "FROM backup_runs "
                     "WHERE id IN (SELECT MAX(id) FROM backup_runs GROUP BY did)"
                 )
@@ -232,6 +276,14 @@ def db_get_backup_list() -> list:
 
                 cur.execute("SELECT did, COUNT(*) AS cnt FROM backup_runs GROUP BY did")
                 count_map = {r["did"]: r["cnt"] for r in cur.fetchall()}
+
+                cur.execute(
+                    "SELECT did, ts, success FROM backup_runs WHERE ts >= %s",
+                    (cutoff_iso,)
+                )
+                strip_rows = [(r["did"], r["ts"], bool(r["success"])) for r in cur.fetchall()]
+
+            strip_map = _build_14d_strip(strip_rows, cfg_map.keys())
 
             result = []
             for did, cfg in cfg_map.items():
@@ -253,7 +305,9 @@ def db_get_backup_list() -> list:
                     "last_success": bool(lr["success"]) if lr else None,
                     "last_size": lr["size_bytes"] if lr else None,
                     "last_error": lr["error_msg"] if lr else None,
+                    "last_diff_lines": (lr["diff_lines"] if lr else None),
                     "run_count": count_map.get(did, 0),
+                    "strip_14d": strip_map.get(did, ['none']*14),
                 })
             return result
         except Exception as e:
@@ -271,7 +325,7 @@ def db_get_backup_list() -> list:
         cfg_map = {r[0]: r for r in rows}
 
         latest = con.execute(
-            "SELECT did, id, ts, success, size_bytes, error_msg "
+            "SELECT did, id, ts, success, size_bytes, error_msg, diff_lines "
             "FROM backup_runs "
             "WHERE id IN (SELECT MAX(id) FROM backup_runs GROUP BY did)"
         ).fetchall()
@@ -281,6 +335,15 @@ def db_get_backup_list() -> list:
             "SELECT did, COUNT(*) FROM backup_runs GROUP BY did"
         ).fetchall()
         count_map = {r[0]: r[1] for r in counts}
+
+        strip_rows = con.execute(
+            "SELECT did, ts, success FROM backup_runs WHERE ts >= ?",
+            (cutoff_iso,)
+        ).fetchall()
+        strip_map = _build_14d_strip(
+            [(r[0], r[1], bool(r[2])) for r in strip_rows],
+            cfg_map.keys()
+        )
 
         result = []
         for did, cfg in cfg_map.items():
@@ -304,7 +367,9 @@ def db_get_backup_list() -> list:
                 "last_success": bool(lr[3]) if lr else None,
                 "last_size": lr[4] if lr else None,
                 "last_error": lr[5] if lr else None,
+                "last_diff_lines": (lr[6] if lr else None),
                 "run_count": count_map.get(did, 0),
+                "strip_14d": strip_map.get(did, ['none']*14),
             })
         return result
     finally:
@@ -557,22 +622,61 @@ def db_get_backup_run(run_id: int) -> dict | None:
         con.close()
 
 
+def db_get_last_successful_config(did: str) -> str | None:
+    """
+    Return the `config` text of the most recent successful backup for `did`,
+    or None when no successful run exists yet. Used by the engine to compute
+    the per-run `diff_lines` count without re-fetching device output.
+    """
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    "SELECT config FROM backup_runs "
+                    "WHERE did=%s AND success=1 "
+                    "ORDER BY ts DESC LIMIT 1",
+                    (did,)
+                )
+                r = cur.fetchone()
+            return r["config"] if r else None
+        except Exception as e:
+            log.error(f"backup get_last_successful_config error (did={did}): {e}")
+            return None
+
+    con = _con()
+    try:
+        r = con.execute(
+            "SELECT config FROM backup_runs "
+            "WHERE did=? AND success=1 ORDER BY ts DESC LIMIT 1",
+            (did,)
+        ).fetchone()
+        return r[0] if r else None
+    finally:
+        con.close()
+
+
 def db_save_backup_run(did: str, result: dict) -> int:
     """
     INSERT a backup run result. Enforces per-device retention based on
     the global 'backup_keep' setting (default 3).
     Returns the new run's id.
+
+    Optional `diff_lines` key in `result` stores the number of lines that
+    changed vs the previous successful run. When omitted, the column stays
+    NULL (legacy callers + first backups + failed runs).
     """
     from core.settings import get as _cfg
     keep = max(1, int(_cfg('backup_keep', 3)))
+    diff_lines = result.get('diff_lines')  # None or int
 
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    "INSERT INTO backup_runs (did, ts, success, method, size_bytes, sha256, config, error_msg) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    "INSERT INTO backup_runs (did, ts, success, method, size_bytes, sha256, config, error_msg, diff_lines) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                     (
                         did,
                         result.get('ts', ''),
@@ -582,6 +686,7 @@ def db_save_backup_run(did: str, result: dict) -> int:
                         result.get('sha256', ''),
                         result.get('config', ''),
                         result.get('error_msg', ''),
+                        diff_lines,
                     )
                 )
                 new_id = cur.fetchone()["id"]
@@ -599,8 +704,8 @@ def db_save_backup_run(did: str, result: dict) -> int:
     con = _con()
     try:
         cur = con.execute(
-            "INSERT INTO backup_runs (did, ts, success, method, size_bytes, sha256, config, error_msg) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO backup_runs (did, ts, success, method, size_bytes, sha256, config, error_msg, diff_lines) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 did,
                 result.get('ts', ''),
@@ -610,6 +715,7 @@ def db_save_backup_run(did: str, result: dict) -> int:
                 result.get('sha256', ''),
                 result.get('config', ''),
                 result.get('error_msg', ''),
+                diff_lines,
             )
         )
         new_id = cur.lastrowid

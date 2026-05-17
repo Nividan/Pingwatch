@@ -19,6 +19,7 @@ from core.config import (
     _RE_IPAM_SUBNET_DNS,
     _RE_IPAM_IP,
     _RE_IPAM_AD_TOGGLE,
+    _RE_TOPOLOGY_ROLES,
 )
 from core.logger import log
 from core.validation import validate_host
@@ -36,6 +37,7 @@ from db import (
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
+    db_get_device_roles,
 )
 from db.ipam import ipam_sync_subnet_add
 
@@ -86,6 +88,46 @@ def _dns_refresh_worker(subnet_id, ip_list):
 
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
+    # ── GET /api/sites ───────────────────────────────────────────
+    # Returns sorted UNION of distinct, non-empty site names from both
+    # ipam_subnets and devices. Used by autocomplete (device editor, alert
+    # profile editor, maintenance window editor). Lives in ipam.py because
+    # IPAM was the original home of the `site` concept; devices joined later.
+    if path == '/api/sites' and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        from db.helpers import db_query
+        sites = set()
+        try:
+            for r in db_query('main', "SELECT DISTINCT site FROM ipam_subnets WHERE site <> ''"):
+                v = (r['site'] or '').strip()
+                if v: sites.add(v)
+        except Exception as e:
+            log.warning(f"/api/sites ipam_subnets query failed: {e}")
+        try:
+            for r in db_query('main', "SELECT DISTINCT site FROM devices WHERE site <> ''"):
+                v = (r['site'] or '').strip()
+                if v: sites.add(v)
+        except Exception as e:
+            log.warning(f"/api/sites devices query failed: {e}")
+        h._json(200, {'sites': sorted(sites, key=str.lower)})
+        return True
+
+    # ── GET /api/topology/roles ──────────────────────────────────
+    # Returns {device_id: role} where role is 'switch' | 'gateway' | 'backbone'.
+    # Powers the NTM Live auto-link renderer (subnet → switch → gateway →
+    # backbone) and the device editor's Role dropdown. Source of truth is
+    # ip_allocations.kind; we expose only role-relevant kinds.
+    if _RE_TOPOLOGY_ROLES.match(path) and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        try:
+            h._json(200, {'roles': db_get_device_roles()})
+        except Exception as e:
+            log.warning(f"/api/topology/roles failed: {e}")
+            h._json(500, {'error': 'failed to load roles'})
+        return True
+
     # ── GET /api/ipam/subnets ─────────────────────────────────────
     if _RE_IPAM_SUBNETS.match(path) and method == 'GET':
         user, _ = h._require('viewer')
@@ -99,6 +141,7 @@ def handle(h, method, path, body):
         if not user: return True
         cidr = (body.get('cidr') or '').strip()
         name = (body.get('name') or '').strip()[:80]
+        site = (body.get('site') or '').strip()[:40]
         if not cidr:
             log.warning(f"IPAM add subnet rejected: empty CIDR (user={user!r})")
             h._json(400, {'error': 'cidr is required'}); return True
@@ -116,7 +159,7 @@ def handle(h, method, path, body):
         # Normalise to network address (e.g. 192.168.1.5/24 → 192.168.1.0/24)
         canonical = str(net)
         try:
-            new_id = db_add_subnet(canonical, name, user)
+            new_id = db_add_subnet(canonical, name, user, site=site)
         except ValueError as e:
             h._json(409, {'error': str(e)}); return True
         _sid, _cidr = new_id, canonical
@@ -149,7 +192,7 @@ def handle(h, method, path, body):
         return True
 
     # ── PATCH /api/ipam/subnets/<id> — multi-field edit ───────────
-    # Accepts any subset of: name, auto_discover, dns_server. The
+    # Accepts any subset of: name, site, auto_discover, dns_server. The
     # editor modal builds a single payload with only changed fields.
     m = _RE_IPAM_SUBNET.match(path)
     if m and method == 'PATCH':
@@ -168,6 +211,12 @@ def handle(h, method, path, body):
             if new_name != (sub.get('name') or ''):
                 updates['name'] = new_name
                 audit_parts.append(f"name={new_name!r}")
+
+        if 'site' in body:
+            new_site = (body.get('site') or '').strip()[:40]
+            if new_site != (sub.get('site') or ''):
+                updates['site'] = new_site
+                audit_parts.append(f"site={new_site!r}")
 
         if 'auto_discover' in body:
             new_ad = 1 if body.get('auto_discover') else 0
@@ -275,6 +324,17 @@ def handle(h, method, path, body):
         subnet_id = int(m.group(1))
         ip_str    = m.group(2)
         name      = (body.get('name') or '').strip()[:120]
+        # Optional `kind` — '' (default), 'gateway', 'switch', 'backbone',
+        # 'core', 'reserved', 'conflict'. Anything not in the whitelist falls
+        # back to ''. The first four anchor NTM Live auto-link rendering with
+        # tier model: switch (access) -> backbone (aggregation) -> core
+        # (central L3) -> gateway (edge/FW); cross-site mesh at core level.
+        _KIND_OK  = {'', 'gateway', 'switch', 'backbone', 'core', 'reserved', 'conflict'}
+        kind_raw  = (body.get('kind') or '').strip().lower()
+        kind      = kind_raw if kind_raw in _KIND_OK else ''
+        # Only pass kind to the upsert if the client included the key, so a
+        # name-only PUT doesn't wipe an existing gateway/reserved tag.
+        kind_arg  = kind if 'kind' in body else None
 
         # Validate subnet exists and IP belongs to it
         sub = db_get_subnet(subnet_id)
@@ -290,9 +350,9 @@ def handle(h, method, path, body):
             log.warning(f"IPAM assign IP rejected: {ip_str!r} not in subnet {sub['cidr']!r} (user={user!r})")
             h._json(400, {'error': f'{ip_str!r} is not in subnet {sub["cidr"]!r}'}); return True
 
-        if name:
-            log.debug(f"IPAM: {user!r} assigned {ip_str} → {name!r} (subnet={sub['cidr']!r})")
-            db_upsert_allocation(subnet_id, ip_str, name, user, device_id='')
+        if name or kind:
+            log.debug(f"IPAM: {user!r} assigned {ip_str} → {name!r} kind={kind!r} (subnet={sub['cidr']!r})")
+            db_upsert_allocation(subnet_id, ip_str, name, user, device_id='', kind=kind_arg)
         else:
             log.debug(f"IPAM: {user!r} cleared {ip_str} (subnet={sub['cidr']!r})")
             db_clear_allocation(subnet_id, ip_str)

@@ -4,6 +4,265 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.0 — New UI Design
+
+Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
+
+### NTM Live — auto-link suppression + bundling
+
+Two reductions applied at the dedup step of [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js) to keep the auto-link layer readable on a multi-group canvas:
+
+1. **Intra-group suppression** — pairs where src and tgt share the same `(site, group)` bucket are dropped. The group frame already implies adjacency; N individual fan-out lines inside one frame add noise without information.
+2. **Cross-group bundling** — for the lines that DO cross group boundaries, the renderer collapses every `(source-group, target-device)` fan-out into a single representative link (first device of that group as src endpoint). A 25-device cluster all anchored to a switch in another group now draws ONE line instead of 25 parallel lines converging on one tile.
+
+Together: a network with 80 devices in 10 groups all anchored to one switch goes from ~80 auto-links down to ~10 — typically a 80–90% line-count reduction while preserving the cross-group topology shape. Manual `pwLinks` are unaffected — they always render and continue to suppress matching auto-link pairs.
+
+### Edit Device modal — tabbed layout
+
+The Edit Device modal grew tall enough to scroll past one viewport once Topology Role, Secondary IPs, Licenses, Alert Profile, and Default Credentials all stacked vertically. Replaced the single-column scrolling form with four tabs (matches the Settings modal's nav pattern):
+
+- **General** — Device Name, Host/IP, Site, Group, Topology Role, Mute toggle, Alert Profile. The two paired fields per row (Host+Site, Group+Role) use `.fgrid` so the tab fits in one viewport.
+- **Networking** — Secondary IP Addresses (was an auto-opened `<details>` block on the General tab). Counter chip on the tab label ("Networking (3)") via [`ed-tab-net-count`](frontend/forms-device.js).
+- **Credentials** — Default Credentials section (SNMP community, SNMP version, v3 block, VMware user/pass) — was a `<details>` block below Alert Profile.
+- **Licenses** — License management (was a `<details>` block). Counter chip on tab label via `ed-tab-lic-count`.
+
+**Mechanics** ([forms-device.js](frontend/forms-device.js)):
+- New `_edSwitchTab(name)` toggles `.ed-tab-pane` visibility and `.itab-active` class on the matching `.ed-tab` button. Stateless re-click is a no-op.
+- `_edSipRender()` now updates the Networking tab counter (replaces the old details summary span lookup).
+- `_edLicRender()` updates both the in-pane `ed-lic-count` and the new tab-button `ed-tab-lic-count`.
+- `_edLicLoad()` no longer attempts to auto-open a `<details>` element — that section is now a tab and is reachable by user click.
+
+**Styling** ([style.css](frontend/style.css)): `.ed-tabs` (flex row, 14px bottom margin) reuses `.itab` / `.itab-active` pill style from elsewhere in the codebase. `.ed-pane-hdr` + `.ed-pane-sub` give each non-General tab a consistent title/description pair. `.ed-tab-cnt` colors the count chip per active/inactive state.
+
+All existing input IDs preserved (ed-n, ed-h, ed-site, ed-g, ed-role, ed-am, ed-snmp-comm, ed-snmp-ver, ed-v3-*, ed-vmw-*, ed-sip-*, ed-lic-*) so `submitEditDevice` and every cred/V3/lic helper continues to work without changes.
+
+### NTM Live — auto-links from IPAM topology (4-tier enterprise model)
+
+The Live map now infers network topology automatically from IPAM subnet membership and four role tags on `ip_allocations.kind`: `switch` (access), `backbone` (aggregation/distribution), `core` (central L3), `gateway` (edge/FW). Models the standard 3/4-tier enterprise topology where backbones aggregate floor switches into the core, and core fronts the firewall. User-drawn manual links continue to win visually; auto-links render as a dim dashed layer underneath. Eliminates the need to hand-draw every cable for the 80% obvious "device → switch → backbone → core → gateway" topology.
+
+**Role model.** Reuses `ip_allocations.kind` ([`_KIND_OK` in routes/ipam.py:312](routes/ipam.py#L312) extended to include all four). Tag the access switch in each subnet as `switch`, aggregation switches as `backbone`, central L3 switches as `core`, the firewall/exit router as `gateway`. Each tier is optional — auto-link cascade skips unused tiers.
+
+**Inference rules** (in [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js)):
+1. Each non-tagged device in a subnet fans out to the subnet's first tagged member, with priority **switch > backbone > core > gateway**. Covers the case where a "core subnet" has no `switch` tag — its devices anchor to a tagged core or backbone or gateway that lives in the same subnet.
+2. Each `switch` uplinks to the first **backbone → core → gateway** in the same site (cascading fallback).
+3. Each `backbone` uplinks to the first **core → gateway** in the same site.
+4. Each `core` uplinks to the first **gateway** in the same site.
+5. Cross-site mesh at the highest shared tier — `core ↔ core` across sites when any core exists anywhere, else `backbone ↔ backbone`.
+
+Pairs already covered by a manual `pwLink` are dropped — no duplicate drawing.
+
+**Backend additions** (all additive, no schema changes):
+- [`db/ipam.py`](db/ipam.py) — `db_set_device_role(did, host, role) -> int` finds the IPAM allocation(s) for a device's host IP and UPDATEs `kind`; `db_get_device_roles() -> {did: kind}` returns a single map for the renderer and editor.
+- [`routes/devices.py`](routes/devices.py) — new `PUT /api/device/{did}/role` accepts `{role: 'switch'|'gateway'|'backbone'|''}`, calls `db_set_device_role`, audited as `device_role`.
+- [`routes/ipam.py`](routes/ipam.py) — new `GET /api/topology/roles` returns `{roles: {did: kind}}`. Read by both the map renderer and the device editor's Role dropdown loader.
+- New regexes in [`core/config.py`](core/config.py): `_RE_TOPOLOGY_ROLES`, `_RE_DEVICE_ROLE`.
+
+**Frontend — device editor Role dropdown** ([frontend/forms-device.js](frontend/forms-device.js)):
+- Add modal: `<select id="ad-role">` with — None / Switch / Gateway / Backbone. PUTs after device creation only when non-empty.
+- Edit modal: `<select id="ed-role">` lazy-loaded via `_loadDeviceRole(did)`; `data-orig` snapshot lets submit detect changes and PUT only when the role actually changed. 60s cache on `window._pwRolesCache`, invalidated after any successful PUT.
+
+**Frontend — auto-link rendering** ([frontend/map.js](frontend/map.js), [frontend/map.html](frontend/map.html)):
+- New globals `pwRoles` + `pwSubnets`, loaded in `loadPingWatchPage` Promise.all alongside the other settings fetches.
+- Pure-JS IPv4-in-CIDR helpers (`_pwIpv4ToInt` / `_pwSubnetForIp`) — picks the most-specific (longest-prefix) matching subnet per device.
+- New SVG layer `<g id="auto-links-layer">` in [map.html](frontend/map.html) between `groups-layer` and `links-layer` so auto-links render BELOW manual links.
+- `renderPwAutoLinks()` draws each inferred link as a dashed line (`6 5` pattern), `stroke-opacity:0.35`, `pointer-events:none`. Colors: l2=cyan, l3=violet, wan=amber. Called from `renderLinks()` so auto-links auto-update on every drag/redraw.
+
+### NTM Live — side-by-side packing for small sites
+
+Replaces the strict vertical site stack (which left a huge empty right margin under small sites) with shelf-packing: small sites pack side-by-side under or beside larger ones, wrapping only when a row exceeds the widest site's width. Two-pass refactor in [`calcPwLayout()`](frontend/map.js): PASS 1 measures each site's natural width/height with per-entry offsets recorded but not committed; PASS 2 walks the sites in alphabetical order assigning final `(x, y)` and replaying offsets to produce group hints. `maxRowW = max(siteW)` so the widest site sets the wrap boundary. Preserves the user's "Reset Layout" deterministic ordering and all existing user-saved group positions (Phase 1 fixed-rect path is unchanged).
+
+### Site hierarchy — Phase E: auto-discovery propagation
+
+When auto-discovery creates a new device from an IPAM subnet, the subnet's `site` tag is now propagated onto the new device automatically. Existing devices in the subnet are NOT touched — only new finds inherit (back-filling would require a separate one-shot tool).
+
+- [`monitoring/auto_discovery.py:545`](monitoring/auto_discovery.py#L545) — read `subnet["site"]` and pass it through to `_build_device_specs(..., site=_subnet_site)`.
+- [`monitoring/auto_discovery.py:610`](monitoring/auto_discovery.py#L610) — `_build_device_specs()` gains `site=""` kwarg; threads through into each device spec dict.
+- [`core/device_importer.py:189, 207`](core/device_importer.py#L189) — `create_devices_batch()` reads `item.get("site")` and passes it as kwarg to `STATE.add_device(name, host, group, site=site)`. Truncated to 80 chars to match the PATCH/bulk validator.
+
+### Site hierarchy — Phase D++: per-site mini-grid placement (vertical stack)
+
+Follow-up to Phase D+. The backdrops worked but they were wrapping an old single-row layout that ran every group through one global 3-col grid regardless of site, leaving big sites sprawling 7500px wide while small sites became tiny dots on the far right. The placement engine now thinks in **site cells**: each site is its own self-contained block with a 3-col mini-grid inside, and sites stack vertically on the canvas (alphabetical, Unsited last). Sized to content — small sites don't waste space, big sites grow downward.
+
+- **Per-site mini-grid hint computation** in [`calcPwLayout`](frontend/map.js) — entries are grouped by site (siteBuckets), each site's groups laid out in a 3-col grid inside the site's content area, sites stack with `SITE_GAP=40px` vertical separation. `siteNaturalFrames` tracks each site's outer rectangle (header + content + padding) so backdrops align exactly with the placement.
+- **Phase 2 anchor changed** — un-positioned groups now use their natural per-site grid hint directly instead of the old "right of bounding box" anchor (which was what flattened every Reset Layout into one horizontal strip regardless of site). User-positioned groups (Phase 1, with saved x/y) still take precedence — existing custom layouts are preserved.
+- **Backdrop builder reuses placement constants** — `SITE_PAD` / `SITE_TITLE_H` are declared once at the top of the placement section and reused by the syntheticSites loop, so the rendered backdrop sits flush with the natural group layout.
+
+### Site hierarchy — Phase D+: NTM Live tab site backdrops + Site Stats panel
+
+Builds on Phase D's composite-key bucketing (groups already distinct per site). Adds actual VISIBLE site representation on the canvas + a Site Stats sidebar so a glance at the Live tab tells you "HQ is 6/8, DR is 8/8" without clicking around. Inspired by the new design's site-card grid but evolves rather than replaces the operational layout — every device + connection line stays visible.
+
+- **calcPwLayout — entries sorted by site first** ([frontend/map.js:430](frontend/map.js#L430)) so "Reset Layout" naturally clusters groups belonging to the same site instead of interleaving them. Unsited entries sort last via a high-codepoint sentinel.
+- **Per-site bounding box computation** in calcPwLayout: after group placement finalizes, walks `placedRects` and builds a min/max bbox per site, then emits `syntheticSites` entries with x/y/w/h padded for the title bar and breathing room (24px gap + 34px header). Unsited groups stay unwrapped — rendering a backdrop around them would just be noise.
+- **Deterministic site colors** from an 8-color palette indexed by sort order, so identity is stable across reloads. Colors are muted purples/cyans/greens to stay distinct from the cyan/accent palette used by group frames.
+- **New SVG layer `#sites-layer`** ([frontend/map.html:81](frontend/map.html#L81)) inserted between `bg-layer` and `groups-layer` so site backdrops render BEHIND group frames.
+- **`renderSites()`** ([frontend/map.js](frontend/map.js)) — draws a tinted rounded rectangle per site with a solid header bar across the top carrying the site name (Orbitron, uppercase) and a device-count chip on the right (`N devices`). Non-interactive in v1 — positions track the underlying groups; no resize/drag handles to compete with the group-frame interactions.
+- **`SITE STATS` panel** in the right dashboard ([frontend/map.js `_buildSiteStatsSection`](frontend/map.js)) — one row per site with a coloured status dot (green=all up, yellow=mixed, red=any down) + site name + `up/total` count. Section is omitted entirely when there are no sites, so single-site / all-Unsited fleets see the cleaner pre-existing layout.
+- **CSS** in [frontend/map.css](frontend/map.css) — `.pw-site-stats` + `.pw-site-stat-row` + `.pw-site-stat-dot` + `.pw-site-stat-name` + `.pw-site-stat-val`, with light-theme softening.
+
+### Site hierarchy — Phase D: NTM Live tab visible site separation
+
+The Live map's auto-laid-out group frames now distinguish Site → Group buckets visibly. Same group name under different sites renders as distinct frames (mirroring the Devices tab), and each frame's title carries the site prefix (`HQ → Servers`). For v1, the layout stays single-axis — no nested outer site frame (that would require a bigger placement rewrite).
+
+- [`frontend/map.js:379` `calcPwLayout()`](frontend/map.js#L379) — bucket key changes from bare `group` to composite `"<site><group>"`. New `gtitle` carries the human label (`HQ → Servers` or just `Servers` for Unsited). `syntheticGroup.name` now holds the friendly title; new `syntheticGroup.key` carries the composite for downstream lookups.
+- **`pwGroupOverrides` keying** becomes composite. One-shot migration on first run: bare-key entries are re-keyed with leading `` (Unsited bucket) so saved positions are preserved. Gated via `localStorage.pw_group_overrides_site_v1='1'`.
+- **Cleanup pass** (`_pwCleanupOrphanGroups`) — live key set now built as composite keys; stale entries evict correctly.
+- **Color/reset handlers** (`setPwGroupColor` / `resetPwGroupColor`) — parameter renamed to `gkey` (composite); `groups.find(x => (x.key || x.name) === gkey)` falls back to `.name` for backwards-compat. Panel rendering reads `g.key || g.name` for `pwGroupOverrides` lookups.
+- **Placement bookkeeping** at lines 573 + 594 — compares `sg.key === gname || sg.name === gname` so post-grow size/position updates target the right synthetic entry.
+
+### Site hierarchy — Phase C: additive alert cascade + Site scope
+
+The load-bearing piece of the Site hierarchy: alert profiles can now target a **Site** scope, and the cascade is **additive by default** so a NOC site-profile fires alongside a server-team group-profile on the same incident. Pre-existing profiles are migrated to `exclusive=true` so today's first-match behavior is preserved byte-for-byte until users explicitly opt in.
+
+- **New column `alert_profiles.exclusive INTEGER NOT NULL DEFAULT 0`** on both backends. Idempotent `ALTER TABLE` ([db/core.py:567-572](db/core.py), [db/pg_schema.py:493](db/pg_schema.py) `ADD COLUMN IF NOT EXISTS`).
+- **One-shot migration** (`exclusive_v1`) runs once per DB: `UPDATE alert_profiles SET exclusive=1` on all pre-existing rows, then `INSERT INTO schema_version (1001, …, 'exclusive_v1=done')` so re-runs are no-ops. Fresh-install Default profile is seeded AFTER the migration, so it stays exclusive=0 (additive).
+- **`_VALID_SCOPES` extended to include `'site'`** in [routes/alert_profiles.py:42](routes/alert_profiles.py#L42). `_clean_profile_body` plumbs the new `exclusive` flag (defaults to False for new profiles).
+- **DB layer** ([db/alert_profiles.py](db/alert_profiles.py)) — `_AP_COLS` extended; `_profile_row()` returns `exclusive: bool`; `db_save_profile()` writes the new column in both INSERT and UPDATE paths.
+- **Engine cascade rewrite** ([monitoring/alert_profile_engine.py](monitoring/alert_profile_engine.py)):
+  - New `resolve_profiles_for_sensor()` returns a **list** of matching profiles, narrowest → broadest (sensor → device → group → **site** → global). Walks every level, collecting every match. After each match, if `profile.exclusive` is True, broader-scope profiles are NOT added (narrower siblings already collected stay).
+  - Old `resolve_profile_for_sensor()` kept as a back-compat wrapper returning the first (narrowest) match — no external caller signature broken.
+  - Per-sensor cache fields: new `_resolved_profile_ids` / `_resolved_profiles` (lists), back-compat aliases `_resolved_profile_id` / `_resolved_profile` point at the first match.
+  - `evaluate_and_fire()` iterates the cascade list, extracted per-profile stage logic into new `_evaluate_profile_stages()` helper. Post-recovery cleanup uses the narrowest profile as the representative (db_log_event dedups by `(did, sid)` so multi-profile fires share one event row, but dispatch fan-out is preserved — separate emails to separate recipients).
+  - `_build_ctx()` now surfaces `dev.site` in the ctx dict so email/webhook templates and maintenance-window matching can use it.
+- **Maintenance windows ride along** ([routes/maintenance_windows.py:19](routes/maintenance_windows.py#L19), [monitoring/alert_dispatchers.py:81-83](monitoring/alert_dispatchers.py)) — `_VALID_SCOPES` adds `'site'`; `check_maintenance()` matches `ctx['site']` for site-scoped windows. No DB change (scope_value is already free-text TEXT).
+- **Frontend — profile editor** ([frontend/alerting.js](frontend/alerting.js)) — scope dropdown adds `Site`; scope_value input gets a `<datalist>` populated from `/api/sites` when scope is Site (or from in-memory groups when Group). New **Exclusive** checkbox with tooltip explaining the additive vs suppressive semantics. Profile list rows show an "Exclusive" pill next to the name when set.
+- **Frontend — maintenance window editor** — scope dropdown adds `Site`; `_mwScopeInner()` renders a site datalist autocomplete for site scope. Window list rows show `Site: <name>` for site-scoped windows.
+- **Sort order updated** in `_alPgRenderProfiles()`: `global → site → group → device → sensor`.
+
+### Site hierarchy — Phase B: Devices tab UI nesting
+
+Layers a collapsible **Site** wrapper above the existing Group rows on the Devices tab. Same group name under different sites renders as separate buckets (e.g. `HQ → Servers` and `DR-Site-2 → Servers` are two distinct visual sections — intentional per the user's enterprise model). Site assignment is via the device editor or new bulk-move-to-site action.
+
+- **Device editor — Site input** ([frontend/forms-device.js](frontend/forms-device.js)) — both Add and Edit modals get a `Site` text input alongside the existing `Group` field. Uses a native `<datalist>` populated from `GET /api/sites` (cached on `window._pwSitesCache` with 60s TTL). Empty value = "Unsited". `POST /api/device` now accepts `site` ([routes/devices.py:287, 295, 327](routes/devices.py)); `STATE.add_device()` takes the new kwarg.
+- **Site wrapper rendering** ([frontend/devices.js](frontend/devices.js)) — new helpers `_dgKey(site, group)`, `siteId(s)`, `sitebId(s)`, `_siteLabel(s)`. `ensureSiteSection(site)` builds `.site-wrap > .site-hdr + .site-body` and is called from `ensureGroupSection(group, site)` so each `.grp-wrap` nests inside its parent site's body instead of `#dpanels` directly. Composite `(site, group)` key is used for all `grpId/gridId/cntId` lookups — same group name under different sites becomes distinct DOM buckets. Empty `site` = "Unsited" sentinel.
+- **Per-site collapse state** — new localStorage key `pw-site-collapsed` (Set of site values), mirrors the existing `pw-grp-collapsed` mechanic. Click site header to toggle. Group-level collapse state now keyed by composite (site,group) — a one-time reset of `pw-grp-collapsed`/`pw-grp-order` is expected on first load.
+- **Drag-drop across sites** ([frontend/devices.js:1224](frontend/devices.js#L1224)) — `onDrop` now reads `dataset.site` AND `dataset.group` from the target grid. If either differs from the dragged device, both fields are PATCHed in a single request. Sites cache is invalidated on cross-site moves.
+- **Group reorder constrained to within-site** ([frontend/devices.js:1281](frontend/devices.js#L1281)) — `onGrpDragOver` only allows reordering within the same `.site-body` parent. Cross-site moves require explicit Edit Device / bulk-move-to-site (avoids the complexity of inferring intent from a drag).
+- **Rename group cascades across all sites** ([frontend/devices.js:1357](frontend/devices.js#L1357)) — `renameGroup()` iterates every `.grp-wrap[data-grp-name=oldName]` (possibly one per site that contains the group). Mute badges and selection checkboxes mirror the same multi-wrap pattern.
+- **Bulk move to site** ([frontend/index.html:478](frontend/index.html#L478), [frontend/devices.js:343](frontend/devices.js#L343)) — bulk action bar gets a second `Move to site:` input alongside `Move to group:`. New handler `_bulkApplySiteMove()` POSTs `{action:'move', site:'<name>'}` (empty string is valid — clears to Unsited). Reuses the same `/api/devices/bulk` endpoint extended in Phase A.
+- **Site editor in Edit Group modal** ([frontend/forms-group.js](frontend/forms-group.js)) — new "Site" section between Group Name and Alert Profile. Prefills from the group's devices: if they all share one site, that value shows; if mixed, the input stays blank and the helper text warns the user that saving will consolidate every device in the group to a single site. Datalist autocomplete from `/api/sites`. On save, bulk-PATCHes every device in the group via the existing `/api/devices/bulk` action=move with site (runs before the rename so the bulk-move keys on the pre-rename group name).
+- **Group-level device icon default for NTM Live map** ([frontend/forms-group.js](frontend/forms-group.js), [frontend/map.js](frontend/map.js)) — new "Device Icon (NTM Live map)" dropdown in the Edit Group modal. Picks from the full 23-option icon list (Switch, Firewall, Server, Router, VM, Storage, IPMI, etc.). Persisted in a new top-level setting `pw_group_icons` keyed by plain group name (site-agnostic so the same group name across sites shares the icon). Resolution order on the Live map: per-device override → group default → existing name/group heuristic. Live-syncs to the open NTM iframe via a new `postMessage` `{type:'pw_group_icons'}` handler so the icon flips without a tab reload. Rename migration: when a group is renamed in the same save, the icon entry is re-keyed atomically (old name deleted, new name written).
+- **CSS** ([frontend/style.css](frontend/style.css)) — `.site-wrap` / `.site-hdr` / `.site-arr` / `.site-label` / `.site-count` / `.site-body`. Bold larger header in `var(--card-soft)` chrome, collapsible body, count pill showing "N groups · M devices".
+
+### Site hierarchy — Phase A: data model + sites API
+
+Introduces a **Site** level above Group on devices (`Site → Group → Device` hierarchy). Phase A is data-layer only — no UI change yet. Subsequent phases ship the UI nesting (B), additive alert cascade (C), NTM Live tab nesting (D), and auto-discovery propagation (E).
+
+- **New column `devices.site TEXT DEFAULT ''`** — idempotent `ALTER TABLE` on both backends ([db/core.py](db/core.py) try/except, [db/pg_schema.py](db/pg_schema.py) `ADD COLUMN IF NOT EXISTS`). Mirrors the existing `ipam_subnets.site` pattern. Empty = "Unsited"; no separate sites table.
+- **`Device.site` field** ([core/state.py](core/state.py)) added to `__init__` (kwarg, defaults to `""`). Surfaced in `Device.to_dict()` so `/api/devices` returns it.
+- **Persistence plumbed end-to-end** ([db/persistence.py](db/persistence.py)) — `site` added to PG INSERT column list + ON CONFLICT UPDATE clause, SQLite INSERT OR REPLACE (placeholder count bumped 22 → 23), and both load paths (`_pg_load` + SQLite `db_load`). `site` is appended to the end of the SELECT column list so existing positional reads aren't disrupted by the new column.
+- **`PATCH /api/device/{did}` accepts `site`** ([routes/devices.py:463](routes/devices.py#L463)) — whitelisted alongside `group`, with length validation (max 80 chars).
+- **`POST /api/devices/bulk` accepts `site`** for the `move` action — `group` and `site` are independently optional; at least one required. Allows bulk move-to-site without changing group, and vice versa.
+- **New endpoint `GET /api/sites`** ([routes/ipam.py](routes/ipam.py)) — returns `{"sites": [...]}` as a case-insensitively sorted UNION of distinct non-empty values from `ipam_subnets.site` and `devices.site`. Used by upcoming Phase B autocomplete on the device editor, plus Phase C alert profile + maintenance window editors. Viewer-level (read-only).
+
+### Design tokens & theme — [frontend/style.css](frontend/style.css)
+- New `:root` palette: deeper black `--bg` (#0a0d12 vs #0d1117), brighter accent `--accent` (#4d9eff vs #2f81f7), refined status colors (`--up` #2ee5a3, `--down` #ff5c5c). Glow variants (`--up-glow`, `--warn-glow`, `--down-glow`, `--accent-glow`) added for new components
+- Additive tokens: `--card`/`--card-soft`/`--card-strong`/`--card-hover`, `--inset`/`--inset-soft`, `--overlay`, `--text4`, `--border3`, `--accent-soft`, radii `--r-xs..xl/pill`, type scale `--fs-xs..3xl`, spacing `--sp-1..7`, motion `--ease/--dur/--dur-fast`, shadows `--shadow-sm/md/lg`, layout heights `--topbar-h/--rail-w/--tabbar-h`
+- Density-aware overrides via `[data-density="compact"]` (default) and `[data-density="comfortable"]` on `<html>`. Toggle in user dropdown menu. Persisted as `pw_density` in localStorage, applied before paint via the FOUC bootstrap in `index.html`
+- Light theme palette updated with parallel tokens. Theme switch still flips `<html data-theme>`; moved out of the user menu to a dedicated topbar icon button (`#tbThemeBtn`)
+- Existing legacy tokens (`--card-bg`, `--panel-bg`, `--header-h`, etc.) kept as aliases pointing at the new tokens so every pre-v1.0 rule keeps resolving
+
+### Shell — topbar + icon rail — [frontend/index.html](frontend/index.html), [frontend/icons.js](frontend/icons.js), [frontend/style.css](frontend/style.css)
+- New topbar layout: brand wordmark with animated radar mark · command-palette stub · health bar (pill chrome) · clock · DB badge · status badges · log badge · theme toggle (sun/moon) · bell · user dropdown. Every internal id preserved (`tbVer`, `healthBar`, `hb-*`, `badgeCrit/Warn/Ack/Muted`, `logBadge`, `tb-user`, `usrDd`, etc.) so [app.js](frontend/app.js) selectors keep targeting the right elements
+- Horizontal tab bar (`#mainTabs`) replaced with a **left icon rail** (`#rail`). Each rail button is `class="rail-btn"` with stroked-SVG icon, accent left-stripe + soft fill on active, hover tooltip. Tab IDs (`tabDashboard`, `tabDevices`, etc.) moved onto the rail buttons so `switchMainTab()` keeps toggling `.active` on the same elements. RBAC class hooks (`.rbac-admin` on Logs button) preserved
+- New [frontend/icons.js](frontend/icons.js) — lucide-style SVG icon library (~40 icons). Single export `icon(name, size=16, attrs={})` returning an SVG string. Loaded first in the inline-JS chain ([server.py:69](server.py#L69)) so every later module can call it at module-load time. `_pwShellInit()` runs on DOMContentLoaded to populate rail/topbar/menu glyphs by id and `data-icon` attribute; re-runs on `themechange` for the topbar theme button
+- New [frontend/charts.js](frontend/charts.js) — vanilla SVG `sparkline()`, `donut()`, `heatmap()` helpers (`PWChart` global plus `pwSparkline`/`pwDonut`/`pwHeatmap` shortcuts). Replaces the prototype's React-based chart components with pure-string SVG generators. No chart library
+- `#layout` switched from flexbox to CSS grid (`grid-template-columns: var(--rail-w) minmax(0, 1fr)`)
+
+### Dashboard — [frontend/dashboard.js](frontend/dashboard.js)
+- All 17 widget types in `_DW_REG` get SVG icons (was emoji); icons render in widget headers and the Add Widget picker
+- Widget chrome (`.dw-card` / `.dw-hdr` / `.dw-body`) dual-classed with new design vocabulary (`.widget` / `.widget-head` / `.widget-body`) — slightly more rounded corners (10px vs 8px), refined padding, hover accent. Header action buttons (✎ ⤢ ×) replaced with sharp SVG icons via `icon()`
+- **New widget type: Fleet Status** — donut breakdown of Up/Warning/Down/Paused with legend rows. Auto-refreshes on device-status updates. Uses `pwDonut()`
+- **New widget type: Latency Heatmap** — N devices × 30 time-buckets, color-ramped (green → amber → red). Configurable device limit (10/20/30). Caches per-widget for 30s to avoid request storms across the per-sensor `/history` fetches. Reads `p.ms` (or `p.value` fallback) and surfaces failed probes (`ok === false`) as red max-clamped cells
+- **Global dashboard time-range** — `5m / 1h / 24h / 7d` segmented control in the dashboard tab bar. Persisted as `pw_dw_range`. Affects all time-aware widgets: `sensor_chart`, `sla_report`, `flap_detect`, `latency_heatmap` now read `_dwTimeRangeMinutes()` instead of per-widget config. Per-widget time fields removed from those registry entries. `_dwSetTimeRange()` re-renders every widget on change. Internal pill bar inside `sensor_chart` removed (global control is the single source of truth). `network_avail` (purpose-built 24h) and `event_count` (multi-period table) keep their hardcoded ranges
+- Bugfix: fullscreen widget icon now uses `.innerHTML = reg.icon` (not `.textContent`) so SVG icons render rather than appear as raw markup
+
+### Devices — [frontend/index.html](frontend/index.html), [frontend/devices.js](frontend/devices.js)
+- `#devActBar` split into `.pagehead` (title "Devices" + live device-count sub + Add Device/Discover/Import/Group buttons) and `.dev-toolbar` (status pills + search + view toggle + select)
+- Action buttons converted to `.btn primary` / `.btn` / `.btn ghost` with inline SVG icons (plus/zoom/upload). `.dev-status-pill` markup dual-classed with `.dev-status-btn` for new layout while keeping the existing `[data-st]`-driven styling. View toggle dual-classed `.seg view-toggle`. Search uses `.search` design with leading SVG glyph
+- `_updateStatusPills()` now also fills `#devSub` with a live "N devices across M groups" line
+
+### Events — [frontend/index.html](frontend/index.html)
+- `.evt-view-hdr` dual-classed with `.pagehead`; "⚡ Events" emoji replaced with a `<h1>Events</h1>`. Action buttons (Resolve All / view-mode toggle / export) converted to `.btn ghost sm` + `.seg` with SVG icons
+
+### Alerting — new top-level page ([frontend/alerting.js](frontend/alerting.js), [frontend/index.html](frontend/index.html), [frontend/icons.js](frontend/icons.js), [frontend/app.js](frontend/app.js), [frontend/style.css](frontend/style.css))
+- New "Alerting" rail item between Events and Map, opens dedicated `#alertingView` page. Replaces the old "alerting → events" redirect
+- Page-head with live subtitle (`N of M profiles active · K channels configured`) + `Test Alert` / `New Profile` buttons
+- **2-column layout**: profiles + recent deliveries on left; channels card + escalation policy + quiet-hours hint on right
+- **Alert Profiles section** — each row has a toggle switch, name, condition summary (`down ∨ warning · Global · 3 stages`), channel pills colored per atype (email/webhook/syslog/browser), and inline Edit / Test / Delete icon buttons. Filter input narrows by name/scope. Reuses existing CRUD via `openProfileEditor`/`_alertingProfTest`/`_alertingProfDelete`
+- **Recent Deliveries table** — Time / Profile / Device / Severity / State columns pulled from `/api/alert/events?state=all&limit=50`. Refresh icon button reloads
+- **Channels card** — lists action templates from `/api/alert/action-templates` with type icon (mail/webhook/syslog/bell), connection detail (to / url / host:port), and uppercase type label. Click a row to edit; `+` in the card head creates new
+- **Escalation Policy card** — picks the default global profile (or first available) and renders its stages as numbered rows showing channel names + trigger + delay (`immediate` / `+30s` / `+10 min`)
+- **Maintenance Windows card** — full live list (status dot, name, "In effect" pill, scope + cadence). Click row → edit modal. Plus button creates a new window. Reuses existing `/api/alert/window*` CRUD endpoints. Both the page card (`#al-pg-maint`) and the Settings tab (`#alrt-maint-list`) re-render from a single `_alertingLoadMaint()` so they stay in sync
+- **Enable/Disable toggle on maintenance windows** — new `enabled` column on `maintenance_windows` (idempotent migration in both SQLite [db/core.py](db/core.py) and PG [db/pg_schema.py](db/pg_schema.py); legacy rows default to enabled=1). Per-row toggle switch on both surfaces; modal also gets an "Enabled" checkbox. `db_active_windows()` now filters out disabled windows so the alert dispatcher and auto-discovery never honor them. Toggle is optimistic with rollback on PATCH failure
+- **Suppression reason on Recent Deliveries** — new `suppress_reason` column on `alert_events` (idempotent ALTER on both SQLite and PG). When `_fire()` in [monitoring/alert_profile_engine.py](monitoring/alert_profile_engine.py) suppresses a dispatch via the maintenance-window path, it now records `"Maintenance: <window name>"` alongside the existing `state="suppressed"` row. The Recent Deliveries table on the new Alerting page gets a **Notes** column that surfaces that reason (warn-tinted chip). Resolved rows show "Recovered in Xm/Xs/Xh", acked rows show "Ack by <user>", and rows with `repeat_count > 1` show "N× repeats" so the column stays useful for non-suppressed states too
+- **24h health trend now reflects sensor impact** — [routes/monitoring.py](routes/monitoring.py) `/api/health/trend` previously returned `pct = sum(ok)/count(*)` from `sensor_samples` per hour, which was dominated by the healthy-sample denominator (a few sensors going down per hour barely moved the needle) and ignored threshold_crit events entirely (probe succeeded → ok=1, even though the metric value crossed a CRIT threshold). The handler now also queries `flap_log` for `direction IN ('down','threshold_crit')`, builds a per-hour distinct-(did,sid) set, and computes `sensor_pct = 100 × (1 − affected_sensors / total_active_sensors)` using the live `STATE.devices` running-sensor count as the denominator. Final `pct = min(sample_pct, sensor_pct)` so the bar visibly dips proportional to how many distinct sensors had issues that hour. `db_load_availability()` itself is unchanged — penalty is applied only in the trend endpoint to avoid affecting per-device availability and report chart consumers
+- **Settings → Alert Profiles tab removed** — every section (profiles list, action templates, maintenance windows) is now duplicated on the new top-level Alerting page, so the Settings tab was redundant. Removed the sidebar button (`#stab-btn-alert-rules`), tab content (`_buildSettingsTab_alertRules()`), footer, `switchSettingsTab` plumbing, and the orphaned `_saveAlertBatching()` handler. **Notification Batching moved to a new sidebar card on the Alerting page** (`_alPgLoadBatching` / `_alPgRenderBatching` / `_alPgSaveBatching`) — same three fields (enabled toggle + window seconds + max size), same `/api/settings` PATCH contract, plus a status pill in the card head (`on · 60s / 20`) so the current config is visible without expanding the card. `_alertingLoadProfiles()` now also refreshes the Alerting page's `_alPgRender*` functions when mounted, so profile/template CRUD from any surface keeps the page in sync
+- Existing Settings → Alert Profiles tab remains during the transition; the new top-level page is the recommended surface
+
+### IPAM — [frontend/ipam.js](frontend/ipam.js), [frontend/style.css](frontend/style.css)
+- `_ipamRenderShell()` rewritten with `.pagehead` (title bumped to "IP Address Management" + sub + Add Subnet/Edit/Refresh DNS/Remove buttons using `.btn primary`/`.btn`/`.btn ghost`/`.btn danger` with SVG icons)
+- New 2-column layout (`.ipam-layout`): left **sidebar** with filter input + grouped subnet cards, right **main pane** with subnet header + 5-card KPI row (Total / In use / Reserved / Free / Utilization %) + Address heatmap + allocation table
+- **Address heatmap** — grid of 22×22 cells (18×18 on narrow viewports), colored by classification: free / in-use (device-linked) / gateway / reserved / conflict. Clicking a cell filters the table to that IP. Legend renders above the grid
+- **Collapsible per-site groups in sidebar** — subnets bucket by their `site` field. Each group renders as a chevron + name + count header; clicking toggles. Group containing the active subnet always force-expands so users don't lose context. Collapsed state persists to `pw_ipam_grp_collapsed`. Subnets without a site land under "Ungrouped" (sorted to the bottom)
+- **Add Subnet / Edit Subnet modals** gain a Site / zone input with `<datalist>` autocomplete from existing site values
+- **Per-subnet search** — typing in the main search box now filters the currently-selected subnet (editable rows) instead of hijacking the view to a read-only cross-subnet result list. Global cross-subnet search remains as the fallback when no subnet is selected
+- **Allocation kind** — inline cell edit gains a kind picker (`Auto` / `Gateway` / `Reserved` / `Conflict`) below the name input. Status column in the IP table shows a colored kind pill (`Gateway` green, `Reserved` yellow, `Conflict` red) when set. Heatmap classification now prefers the explicit kind field; legacy auto-detection by name remains as fallback for untagged allocations
+
+### Backend — IPAM site grouping ([db/ipam.py](db/ipam.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [routes/ipam.py](routes/ipam.py))
+- **Schema** — additive `site TEXT DEFAULT ''` column on `ipam_subnets`. Idempotent migrations in both SQLite (try/except `ALTER TABLE`) and PG (`ADD COLUMN IF NOT EXISTS`); fresh-install `CREATE TABLE` blocks updated to match. Empty string default = "Ungrouped" in the UI
+- **DB layer** — `_SUBNET_COLS` selects `COALESCE(site, '') AS site`; both row mappers surface it. `db_add_subnet(cidr, name, user, site='')` accepts the optional value. `_SUBNET_UPDATABLE_FIELDS` adds `site: ('TEXT', 40)` so the existing whitelisted PATCH path picks it up
+- **API** — `POST /api/ipam/subnets` reads `site` from the body (trimmed, max 40 chars). `PATCH /api/ipam/subnets/{id}` adds a `site` block (modal sends it on save). `GET` returns `site` on every subnet row alongside the other columns
+
+### Backend — IPAM allocation kind ([db/ipam.py](db/ipam.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [routes/ipam.py](routes/ipam.py))
+- **Schema** — additive `kind TEXT DEFAULT ''` column on `ip_allocations`. Idempotent migrations in both backends; fresh `CREATE TABLE` updated. Values: `''` (auto / used / free), `'gateway'`, `'reserved'`, `'conflict'`
+- **DB layer** — `db_get_subnet_ips` selects `COALESCE(kind,'') AS kind` and surfaces it in each allocation dict. `db_upsert_allocation(..., kind=None)` accepts an optional kind; `kind=None` (default) preserves any existing tag on UPDATE so device-sync paths can set just the name without clobbering a user-applied gateway/reserved label
+- **API** — `PUT /api/ipam/ips/{subnet_id}/{ip}` reads `kind` from the body, whitelists against `{'', 'gateway', 'reserved', 'conflict'}`, and only threads it to the upsert when the client included the key
+
+### Reports — [frontend/reports.js](frontend/reports.js)
+- `_rptInit()` shell rewritten with `.pagehead` (title + sub + New button) + sub-tabs converted to `.seg`. The internal RPT sections catalogue is untouched
+
+### Backups — [frontend/index.html](frontend/index.html), [frontend/backups.js](frontend/backups.js), [frontend/style.css](frontend/style.css)
+- `#backupsView` toolbar split into `.pagehead` (title + Run All Enabled/Refresh buttons with SVG icons) + `#bk-toolbar` with `.search`-styled config search
+- New design-style page: dynamic subtitle (`N configs tracked · last sweep Xm ago · Y succeeded · Z failed`), 5-card KPI row (Successful 24h / Failed 24h / Disabled / Avg size / Storage used)
+- Table restructured to 8 design columns: **Device** (name + host + vendor chip) / **Last success** / **Size** / **Version** / **14-day history** (strip chart) / **Diff since** / **Status** (pill) / **Actions** (Run/View/Settings icon buttons). Status pill replaces the old text status; icon-only actions replace the three separate columns
+- 14-day strip paints per-day status (ok/fail/none) from the backend's new `strip_14d` field; falls back to a single-bar placeholder for legacy installs
+- "Diff since" cell shows real `last_diff_lines` count (`no changes` / `N lines changed`) computed at backup time; clicking opens the History modal so the user can pick which two runs to diff
+
+### Logs — [frontend/logs.js](frontend/logs.js)
+- `_logsInit()` rewritten with `.pagehead` (title + Live toggle / Refresh buttons), stream tabs converted to `.seg`, filters use `.pw-select`/`.search`/`.iconbtn` design
+
+### User menu + Active Sessions — [frontend/index.html](frontend/index.html), [frontend/app.js](frontend/app.js), [frontend/forms-users.js](frontend/forms-users.js)
+- New menu header: avatar (initials), name + email, role pill. New session row: "Session expires in Xh Ym · signed in via Local". Menu items have SVG icons (settings/user/lock/shield/activity/info/log_out) via `data-icon` attribute populated by `_pwShellInit`. Theme toggle removed (lives in topbar). New "Active Sessions" item between 2FA and the separator. New "Density: Compact/Comfortable" toggle replacing the old theme toggle slot
+- `_refreshUsrMenuHeader()` runs on every menu open — avatar, name, email, role badge, session-expiry countdown. `S.me` populated from `/api/me` so name/email/role are available without re-fetching
+- New `_openSessionsModal()` ([forms-users.js](frontend/forms-users.js)) — fetches `GET /api/me/sessions`, renders one row per session with device label + IP + last-active + revoke button. Current session shows a CURRENT pill and "— this session —" instead of revoke. "Sign out all other sessions" button calls `DELETE /api/me/sessions` (disabled when only the current session exists)
+- New `_toggleDensity()` — flips `<html data-density>` between `compact` and `comfortable`, persists as `pw_density`. Density label in menu refreshes on each menu open
+
+### Settings — [frontend/forms-settings.js](frontend/forms-settings.js)
+- Modal title and all 14 sidebar tabs swapped from emoji to SVG icons via `icon()`. Internal tab content unchanged
+
+### Backend — Active Sessions endpoint (the only `/api/*` change)
+- **Schema** — 5 additive columns on `sessions` table: `ip`, `user_agent`, `device_label`, `created_at`, `last_active`. Idempotent migrations in both [db/core.py](db/core.py) (SQLite) and [db/pg_schema.py](db/pg_schema.py) (PG) per dual-backend pattern
+- **Login capture** — [core/auth.py::_create_session()](core/auth.py) and `auth_login()` accept optional `ip`/`user_agent`/`device_label` kwargs. The main `/api/login` and `/api/login/totp` paths in [routes/auth.py](routes/auth.py) thread these through (parsed via `parse_user_agent_label` for the friendly "Chrome on Windows" label). SSO/LDAP/RADIUS auto-provision paths leave the fields blank for now
+- **New helpers** in core/auth.py: `auth_list_user_sessions()`, `auth_revoke_session_by_id()` (enforces `username` server-side — cross-user revoke returns 404, no info leak), `auth_revoke_other_user_sessions()`
+- **New endpoints** in [routes/auth.py](routes/auth.py): `GET /api/me/sessions` (returns `[{id, current, ip, user_agent, device_label, created_at, last_active, expires}, ...]`, `id` = SHA-256 token-hash matching the row's primary key), `DELETE /api/me/sessions/{id}` (returns 400 if trying to revoke the current session — use `/api/logout` instead), `DELETE /api/me/sessions` (revokes all but the current session, returns `{revoked: N}`)
+- **Single-session caveat documented**: `_create_session()` still does `DELETE FROM sessions WHERE username=?` before inserting on each login. The new endpoints work — they just typically return 1 row. Removing single-session enforcement is a future security trade-off
+- **Audit trail** — `session_revoked` and `sessions_revoke_others` audit events emitted to `db_log_audit`
+
+### Backend — Backups page enrichment ([db/backups.py](db/backups.py), [backup/engine.py](backup/engine.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py))
+- **Schema** — additive `diff_lines INTEGER DEFAULT NULL` column on `backup_runs`. Idempotent migrations in both SQLite (try/except `ALTER TABLE`) and PG (`ADD COLUMN IF NOT EXISTS`); fresh-install `CREATE TABLE` blocks updated to match. NULL on legacy rows = "we don't know" — new runs populate the value naturally
+- **Engine** — `do_backup()` now fetches the previous successful run's config via new `db_get_last_successful_config()` helper and stores `diff_lines = _count_diff_lines(prev, current)` on each new successful run. Uses stdlib `difflib.unified_diff` (no new dep). Identical configs → `0`; first backups + failed runs → NULL. Failure during diff computation is logged and doesn't break the save
+- **List endpoint** — `db_get_backup_list()` (powers `GET /api/backups`) now returns two extra fields per device: `last_diff_lines` (int or null) and `strip_14d` (14-entry array of `ok`/`fail`/`none` in oldest→newest UTC-day order). Strip computed via one extra query per call (4th query in the existing function) bucketed in Python by `_build_14d_strip()`
+- **Cost** — one extra SELECT per `/api/backups` call (~14-day window, indexed on `(did, ts DESC)`), one extra `db_get_last_successful_config()` query per backup run. Both bounded and cheap
+
+### Out of scope (deferred to a future release)
+- Map view (Live tab) — kept as-is per scope decision; the existing builder app inside the iframe inherits the new theme tokens but its chrome wasn't redesigned
+- Alerting view — lives inside Settings; gets icon refresh only
+- Notification stream behind the topbar bell — currently jumps to the Events tab as a stub
+- Topology snapshots / version diff, drawio export, topology-vs-monitored discrepancy detection — all noted in MIGRATION_NOTES.md as future endpoints
+- Full Settings modal rewrite to the prototype's grouped Platform/Identity/Monitoring/Connections layout — surface area too large for v1.0; tabs swapped from emoji to SVG icons only
+
+---
+
 ## v0.9.6
 
 ### 🔌 Typed SNMP transitions — alert-profile + map + live-panel integration

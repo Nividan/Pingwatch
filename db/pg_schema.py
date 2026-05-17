@@ -88,10 +88,27 @@ def pg_create_main_schema(cur):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            token    TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            expires  DOUBLE PRECISION NOT NULL
+            token        TEXT PRIMARY KEY,
+            username     TEXT NOT NULL,
+            expires      DOUBLE PRECISION NOT NULL,
+            ip           TEXT             DEFAULT '',
+            user_agent   TEXT             DEFAULT '',
+            device_label TEXT             DEFAULT '',
+            created_at   DOUBLE PRECISION DEFAULT 0,
+            last_active  DOUBLE PRECISION DEFAULT 0
         )""")
+    # v1.0+ — additive columns for the Active Sessions UI; idempotent on existing installs
+    for _sess_col in (
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip           TEXT             DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent   TEXT             DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_label TEXT             DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at   DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_active  DOUBLE PRECISION DEFAULT 0",
+    ):
+        try:
+            cur.execute(_sess_col)
+        except Exception:
+            pass
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (
@@ -99,6 +116,7 @@ def pg_create_main_schema(cur):
             name                     TEXT,
             host                     TEXT,
             grp                      TEXT,
+            site                     TEXT DEFAULT '',
             did_ctr                  INTEGER DEFAULT 0,
             webhook_url              TEXT DEFAULT '',
             alerts_muted             INTEGER DEFAULT 0,
@@ -122,6 +140,8 @@ def pg_create_main_schema(cur):
             END IF;
         END $$
     """)
+    # Site grouping (v1.0+) — Site → Group → Device hierarchy.
+    cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
     # Partial unique index — NULL external_ids don't collide.
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_external_id
@@ -329,8 +349,10 @@ def pg_create_main_schema(cur):
             size_bytes INTEGER DEFAULT 0,
             sha256     TEXT    DEFAULT '',
             config     TEXT    DEFAULT '',
-            error_msg  TEXT    DEFAULT ''
+            error_msg  TEXT    DEFAULT '',
+            diff_lines INTEGER DEFAULT NULL
         )""")
+    cur.execute("ALTER TABLE backup_runs ADD COLUMN IF NOT EXISTS diff_lines INTEGER DEFAULT NULL")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS ix_backup_runs_did_ts "
         "ON backup_runs(did, ts DESC)"
@@ -391,6 +413,7 @@ def pg_create_main_schema(cur):
             id                  SERIAL PRIMARY KEY,
             cidr                TEXT UNIQUE NOT NULL,
             name                TEXT DEFAULT '',
+            site                TEXT DEFAULT '',
             created_by          TEXT DEFAULT '',
             created_at          DOUBLE PRECISION DEFAULT 0,
             auto_discover       INTEGER DEFAULT 0,
@@ -398,6 +421,7 @@ def pg_create_main_schema(cur):
             last_auto_scan_ts   TIMESTAMP DEFAULT NULL,
             dns_server          TEXT DEFAULT ''
         )""")
+    cur.execute("ALTER TABLE ipam_subnets ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ipam_subnets_cidr ON ipam_subnets(cidr)"
     )
@@ -407,6 +431,7 @@ def pg_create_main_schema(cur):
             subnet_id       INTEGER NOT NULL REFERENCES ipam_subnets(id),
             ip              TEXT NOT NULL,
             name            TEXT DEFAULT '',
+            kind            TEXT DEFAULT '',
             modified_by     TEXT DEFAULT '',
             modified_at     DOUBLE PRECISION DEFAULT 0,
             device_id       TEXT DEFAULT '',
@@ -414,6 +439,7 @@ def pg_create_main_schema(cur):
             dns_resolved_at DOUBLE PRECISION DEFAULT 0,
             UNIQUE(subnet_id, ip)
         )""")
+    cur.execute("ALTER TABLE ip_allocations ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT ''")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ip_alloc_subnet ON ip_allocations(subnet_id)"
     )
@@ -448,6 +474,10 @@ def pg_create_main_schema(cur):
         "ON alert_events(did, sid) "
         "WHERE state IN ('active','acknowledged')"
     )
+    # suppress_reason carries the human-readable cause when state='suppressed'
+    # (currently only maintenance windows; extend if other suppression sources
+    # ever start logging rows).
+    cur.execute("ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS suppress_reason TEXT DEFAULT ''")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_profiles (
             id          SERIAL PRIMARY KEY,
@@ -455,6 +485,7 @@ def pg_create_main_schema(cur):
             scope_type  TEXT NOT NULL DEFAULT 'global',
             scope_value TEXT DEFAULT '',
             enabled     INTEGER NOT NULL DEFAULT 1,
+            exclusive   INTEGER NOT NULL DEFAULT 0,
             created_at  DOUBLE PRECISION DEFAULT 0,
             updated_at  DOUBLE PRECISION DEFAULT 0,
             UNIQUE(scope_type, scope_value)
@@ -463,6 +494,19 @@ def pg_create_main_schema(cur):
         "CREATE INDEX IF NOT EXISTS idx_alert_profiles_scope "
         "ON alert_profiles(scope_type, scope_value)"
     )
+    # Idempotent ALTER for existing PG installs (CREATE TABLE IF NOT EXISTS
+    # above skips when the table already exists, missing the new column).
+    cur.execute("ALTER TABLE alert_profiles ADD COLUMN IF NOT EXISTS exclusive INTEGER NOT NULL DEFAULT 0")
+    # One-shot migration: set exclusive=1 on every pre-existing profile to
+    # preserve "first-match wins" semantics. Gated via schema_version notes
+    # so re-runs are no-ops.
+    cur.execute("SELECT 1 FROM schema_version WHERE notes='exclusive_v1=done'")
+    if not cur.fetchone():
+        cur.execute("UPDATE alert_profiles SET exclusive=1")
+        cur.execute(
+            "INSERT INTO schema_version (version, applied, notes) "
+            "VALUES (1001, NOW()::text, 'exclusive_v1=done') ON CONFLICT (version) DO NOTHING"
+        )
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alert_action_templates (
             id         SERIAL PRIMARY KEY,
@@ -507,9 +551,11 @@ def pg_create_main_schema(cur):
             recur_days  TEXT DEFAULT '',
             recur_start TEXT DEFAULT '',
             recur_end   TEXT DEFAULT '',
+            enabled     INTEGER DEFAULT 1,
             created_by  TEXT DEFAULT '',
             created_at  DOUBLE PRECISION DEFAULT 0
         )""")
+    cur.execute("ALTER TABLE maintenance_windows ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 1")
 
     # ── User Groups ──────────────────────────────────────────────────
     cur.execute("""

@@ -24,7 +24,7 @@ from core.config import (
     _RE_SENSOR, _RE_SENSOR_ACTION, _RE_SENSOR_ITEM,
     _RE_SENSOR_HISTORY, _RE_SENSOR_SUMMARY, _RE_DEVICE_SCAN,
     _RE_SENSOR_LOGS, _RE_AVAILABILITY, _RE_DEV_GROUP_MUTE,
-    _RE_DEV_GROUPS_MUTED,
+    _RE_DEV_GROUPS_MUTED, _RE_DEVICE_ROLE,
 )
 from db     import (
     _db_enqueue, db_save, db_log_audit,
@@ -34,7 +34,7 @@ from db     import (
     db_clear_stage_state_for_sensor,
     db_reset_anomaly_baseline,
 )
-from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete
+from db.ipam import ipam_sync_device_add, ipam_sync_device_update, ipam_sync_device_delete, db_set_device_role
 from monitoring.network_map import topo_prune_pw_links
 from core.logger import log
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_tls, probe_banner
@@ -139,10 +139,19 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid action"}); return True
 
         target_group = None
+        target_site  = None
         if action == "move":
             target_group = (body.get("group") or "").strip()
-            if not target_group or len(target_group) > 80:
-                h._json(400, {"error": "group required (1-80 chars)"}); return True
+            # Site can be moved independently of group, or together with it.
+            # Empty string is a valid value meaning "Unsited" (clears the field).
+            if "site" in body:
+                target_site = str(body.get("site") or "").strip()
+                if len(target_site) > 80:
+                    h._json(400, {"error": "site too long (max 80 chars)"}); return True
+            if not target_group and target_site is None:
+                h._json(400, {"error": "group or site required for move"}); return True
+            if target_group and len(target_group) > 80:
+                h._json(400, {"error": "group too long (max 80 chars)"}); return True
 
         results = []
         applied = 0
@@ -166,12 +175,20 @@ def handle(h, method, path, body):
                 for did in valid_dids:
                     dev = STATE.devices.get(did)
                     if dev:
-                        dev.group = target_group
+                        if target_group:
+                            dev.group = target_group
+                        if target_site is not None:
+                            dev.site = target_site
                         applied += 1
                         results.append({"did": did, "ok": True})
             _db_enqueue(lambda: db_save(STATE))
             # Broadcast once so open tabs refresh grouping without reloading.
-            STATE._broadcast("devices_bulk_updated", {"action": "move", "group": target_group, "dids": valid_dids})
+            STATE._broadcast("devices_bulk_updated", {
+                "action": "move",
+                "group":  target_group,
+                "site":   target_site,
+                "dids":   valid_dids,
+            })
 
         elif action == "start":
             for did in valid_dids:
@@ -269,6 +286,7 @@ def handle(h, method, path, body):
         name        = body.get("name", "").strip()
         host        = body.get("host", "").lower().strip()
         group       = body.get("group", "Default Group")
+        site        = str(body.get("site", "") or "").strip()
         webhook_url = body.get("webhook_url", "").strip()
         if not name or not host:
             h._json(400, {"error": "name and host required"}); return True
@@ -276,6 +294,8 @@ def handle(h, method, path, body):
             h._json(400, {"error": "name too long (max 255)"}); return True
         if len(host) > 253:
             h._json(400, {"error": "host too long (max 253)"}); return True
+        if len(site) > 80:
+            h._json(400, {"error": "site too long (max 80 chars)"}); return True
         if webhook_url and len(webhook_url) > 2048:
             h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
@@ -307,7 +327,7 @@ def handle(h, method, path, body):
             from db.backups import encrypt_pw
             _v3_auth_pw_default = encrypt_pw(_v3_auth_pw_default) if _v3_auth_pw_default else ""
             _v3_priv_pw_default = encrypt_pw(_v3_priv_pw_default) if _v3_priv_pw_default else ""
-        did = STATE.add_device(name, host, group)
+        did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
                 STATE.devices[did].webhook_url = webhook_url
@@ -444,6 +464,11 @@ def handle(h, method, path, body):
             _old_host = dev.host
             _old_name = dev.name
             if "group" in body: dev.group = body["group"]
+            if "site" in body:
+                _site = str(body.get("site") or "").strip()
+                if len(_site) > 80:
+                    h._json(400, {"error": "site too long (max 80 chars)"}); return True
+                dev.site = _site
             if "name" in body:
                 _n = str(body["name"]).strip()
                 if len(_n) > 255:
@@ -568,6 +593,38 @@ def handle(h, method, path, body):
         _db_enqueue(lambda: db_save(STATE))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_name)
         h._json(200, {"status": "added", "secondary_ips": sips})
+        return True
+
+    # ── /api/device/{did}/role PUT ─────────────────────────────────
+    # Topology role tag for NTM Live auto-links. Whitelist: '', 'switch',
+    # 'gateway', 'backbone'. Persisted on ip_allocations.kind for the device's
+    # host IP (one row per matching subnet). Silent no-op if host isn't a
+    # plain IP or no IPAM subnet covers it.
+    m_role = _RE_DEVICE_ROLE.match(path)
+    if m_role and method == "PUT":
+        user, _ = h._require("operator")
+        if not user: return True
+        did_r = m_role.group(1)
+        role  = (body.get("role") or "").strip().lower()
+        if role not in ("", "switch", "backbone", "core", "gateway"):
+            h._json(400, {"error": "role must be one of: switch, backbone, core, gateway, or empty"})
+            return True
+        with STATE._lock:
+            devr = STATE.devices.get(did_r)
+            if not devr:
+                h._json(404, {"error": "device not found"}); return True
+            host_r = devr.host
+            name_r = devr.name
+        # Enqueue the IPAM write — db_set_device_role enqueues internally? No,
+        # it opens its own connection. Call inline so we can return rowcount.
+        try:
+            n = db_set_device_role(did_r, host_r, role)
+        except Exception as e:
+            log.error(f"PUT /api/device/{did_r}/role failed: {e}")
+            h._json(500, {"error": "failed to update role"}); return True
+        db_log_audit(user, h.client_address[0], 'device_role',
+                     f"{name_r} role={role or 'none'}")
+        h._json(200, {"status": "ok", "role": role, "updated": n})
         return True
 
     # ── /api/devices/{did} DELETE ─────────────────────────────────

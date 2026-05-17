@@ -17,25 +17,23 @@ function _dwSwap(body, html) {
 }
 
 // ── Dashboard widget system ───────────────────────────────────────
-// Widget registry — add entries here to support new widget types
+// Widget registry — add entries here to support new widget types.
+// Icons use icon() from icons.js (loaded earlier in inline-script chain).
 const _DW_REG = {
   sensor_chart: {
     label: 'Sensor History Chart',
-    icon:  '📈',
+    icon:  icon('activity', 14),
     defaultCols: 2,
     fields: [
-      { key: 'did',     label: 'Device', type: 'device-select' },
-      { key: 'sid',     label: 'Sensor', type: 'sensor-select' },
-      { key: 'minutes', label: 'Period', type: 'select',
-        options: [{v:60,l:'1h'},{v:360,l:'6h'},{v:1440,l:'24h'},{v:10080,l:'7d'},{v:43200,l:'30d'}],
-        def: 1440 },
+      { key: 'did', label: 'Device', type: 'device-select' },
+      { key: 'sid', label: 'Sensor', type: 'sensor-select' },
     ],
     render:  (wid, cfg) => _dwRenderSensorChart(wid, cfg),
-    refresh: (wid, cfg) => _dwLoadSensorChart(wid, cfg.did, cfg.sid, cfg.minutes),
+    refresh: (wid, cfg) => _dwLoadSensorChart(wid, cfg.did, cfg.sid, _dwTimeRangeMinutes()),
   },
   device_status: {
     label: 'Device Status',
-    icon:  '⊞',
+    icon:  icon('devices', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, cfg) => _dwRenderDeviceStatus(wid),
@@ -43,7 +41,7 @@ const _DW_REG = {
   },
   network_avail: {
     label: 'Network Availability History (24h)',
-    icon:  '✦',
+    icon:  icon('shield', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderNetAvail(wid),
@@ -51,7 +49,7 @@ const _DW_REG = {
   },
   sensor_gauge: {
     label: 'Sensor Gauge',
-    icon:  '◉',
+    icon:  icon('cpu', 14),
     defaultCols: 1,
     fields: [
       { key: 'did', label: 'Device', type: 'device-select' },
@@ -62,7 +60,7 @@ const _DW_REG = {
   },
   flap_events: {
     label: 'Recent Flap Events',
-    icon:  '⚡',
+    icon:  icon('events', 14),
     defaultCols: 2,
     fields: [
       { key: 'limit', label: 'Max events', type: 'select',
@@ -73,7 +71,7 @@ const _DW_REG = {
   },
   system_status: {
     label: 'System Status',
-    icon:  '⚙',
+    icon:  icon('settings', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderSystemStatus(wid),
@@ -81,7 +79,7 @@ const _DW_REG = {
   },
   server_perf: {
     label: 'Server Performance',
-    icon:  '🖥',
+    icon:  icon('cpu', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderServerPerf(wid),
@@ -89,7 +87,7 @@ const _DW_REG = {
   },
   down_devices: {
     label: 'Down & Warning Devices',
-    icon:  '⚠',
+    icon:  icon('alerts', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshDownDevices(wid),
@@ -97,7 +95,7 @@ const _DW_REG = {
   },
   top_latency: {
     label: 'Slowest Ping Devices',
-    icon:  '⏱',
+    icon:  icon('activity', 14),
     defaultCols: 1,
     fields: [
       { key: 'limit', label: 'Show top', type: 'select',
@@ -108,7 +106,7 @@ const _DW_REG = {
   },
   event_count: {
     label: 'Event Summary',
-    icon:  '📊',
+    icon:  icon('reports', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshEventCount(wid),
@@ -116,7 +114,7 @@ const _DW_REG = {
   },
   packet_loss: {
     label: 'Packet Loss',
-    icon:  '◎',
+    icon:  icon('activity', 14),
     defaultCols: 1,
     fields: [
       { key: 'limit',     label: 'Max sensors', type: 'select',
@@ -129,26 +127,21 @@ const _DW_REG = {
   },
   sla_report: {
     label: 'SLA Report',
-    icon:  '◈',
+    icon:  icon('check', 14),
     defaultCols: 1,
     fields: [
-      { key: 'did',    label: 'Device', type: 'device-select' },
-      { key: 'sid',    label: 'Sensor', type: 'sensor-select' },
-      { key: 'period', label: 'Period', type: 'select',
-        options: [{v:1440,l:'24h'},{v:10080,l:'7d'},{v:43200,l:'30d'},{v:129600,l:'90d'}],
-        def: 10080 },
+      { key: 'did', label: 'Device', type: 'device-select' },
+      { key: 'sid', label: 'Sensor', type: 'sensor-select' },
     ],
     render:  (wid, cfg) => _dwRenderSLA(wid, cfg),
     refresh: (wid, cfg) => _dwFetchSLA(wid, cfg),
   },
   flap_detect: {
     label: 'Flapping Devices',
-    icon:  '🔁',
+    icon:  icon('refresh', 14),
     defaultCols: 1,
     fields: [
-      { key: 'window',    label: 'Time window', type: 'select',
-        options: [{v:1,l:'1h'},{v:6,l:'6h'},{v:24,l:'24h'}], def: 6 },
-      { key: 'min_flaps', label: 'Min flaps',   type: 'select',
+      { key: 'min_flaps', label: 'Min flaps', type: 'select',
         options: [{v:3,l:'3 events'},{v:5,l:'5 events'},{v:10,l:'10 events'}], def: 3 },
     ],
     render:  (wid, cfg) => _dwRefreshFlapDetect(wid, cfg),
@@ -156,7 +149,7 @@ const _DW_REG = {
   },
   internet_health: {
     label: 'Internet Health',
-    icon:  '🌐',
+    icon:  icon('map', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshInternetHealth(wid),
@@ -164,7 +157,7 @@ const _DW_REG = {
   },
   ncm_status: {
     label: 'Backup Status',
-    icon:  '💾',
+    icon:  icon('backups', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwNcmStatusRefresh(wid),
@@ -172,11 +165,30 @@ const _DW_REG = {
   },
   license_overview: {
     label: 'License Overview',
-    icon:  '📋',
+    icon:  icon('reports', 14),
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
     refresh: (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
+  },
+  fleet_status: {
+    label: 'Fleet Status',
+    icon:  icon('check', 14),
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshFleetStatus(wid),
+    refresh: (wid, _cfg) => _dwRefreshFleetStatus(wid),
+  },
+  latency_heatmap: {
+    label: 'Latency Heatmap',
+    icon:  icon('activity', 14),
+    defaultCols: 2,
+    fields: [
+      { key: 'limit', label: 'Devices', type: 'select',
+        options: [{v:10,l:'10'},{v:20,l:'20'},{v:30,l:'30'}], def: 20 },
+    ],
+    render:  (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
+    refresh: (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
   },
 };
 
@@ -234,6 +246,43 @@ async function _dwInit() {
   }
 }
 
+// ── Global time range (affects opt-in widgets) ──────────────────
+// Persist as 'pw_dw_range'. Widgets that want to follow it read
+// window._dwTimeRange (string) or _dwTimeRangeMinutes() (number).
+const _DW_RANGES = ['5m', '1h', '24h', '7d'];
+function _dwTimeRangeMinutes() {
+  switch (window._dwTimeRange) {
+    case '5m':  return 5;
+    case '1h':  return 60;
+    case '24h': return 1440;
+    case '7d':  return 10080;
+    default:    return 60;
+  }
+}
+function _dwSetTimeRange(r) {
+  if (!_DW_RANGES.includes(r)) return;
+  window._dwTimeRange = r;
+  try { localStorage.setItem('pw_dw_range', r); } catch (_) {}
+  // Update segmented control's active state
+  document.querySelectorAll('#dw-range-seg button').forEach(b => {
+    b.classList.toggle('active', b.dataset.range === r);
+  });
+  // Time-aware widgets re-render fully so their internal toolbars / labels reflect
+  // the new period. Stateless widgets (gauges, status pills) re-refresh idempotently.
+  _dwLoad().forEach(w => {
+    const reg = _DW_REG[w.type];
+    if (!reg) return;
+    if (reg.render) reg.render(w.id, w.cfg);
+    else            reg.refresh(w.id, w.cfg);
+  });
+}
+// Bootstrap from localStorage (or default to 24h)
+(function () {
+  let r;
+  try { r = localStorage.getItem('pw_dw_range'); } catch (_) {}
+  window._dwTimeRange = _DW_RANGES.includes(r) ? r : '24h';
+})();
+
 // ── Tab bar ──────────────────────────────────────────────────────
 function _dwRenderTabBar() {
   const bar = document.getElementById('dw-tab-bar');
@@ -245,10 +294,15 @@ function _dwRenderTabBar() {
              oncontextmenu="_dwTabCtxMenu(event,${d.id})"
              title="${esc(d.name)}">${esc(d.name)}</button>`
   ).join('') +
-  '<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">＋</button>';
+  `<button class="dw-dash-tab dw-dash-add" onclick="_dwCreateDashboard()" title="New dashboard">${icon('plus',12)}</button>`;
+  const rangeBtns = _DW_RANGES.map(r =>
+    `<button data-range="${r}" class="${window._dwTimeRange === r ? 'active' : ''}"
+             onclick="_dwSetTimeRange('${r}')">${r}</button>`
+  ).join('');
   bar.innerHTML =
     `<div class="dw-tab-bar-tabs">${tabs}</div>` +
-    `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">＋ Add Widget</button>`;
+    `<div class="seg" id="dw-range-seg" title="Default time window for widgets that follow it">${rangeBtns}</div>` +
+    `<button class="dw-add-btn" onclick="_dwOpenPicker()" title="Add a widget to this dashboard">${icon('plus',13)} Add Widget</button>`;
 }
 
 async function _dwSwitchTo(id) {
@@ -494,7 +548,7 @@ function _dwRenderAll() {
   grid.querySelectorAll('.dw-card').forEach(c => { if (c._interval) { clearInterval(c._interval); c._interval = null; } });
   const widgets = _dwLoad();
   if (!widgets.length) {
-    grid.innerHTML = '<div class="dw-empty">No widgets yet. Click <strong>＋ Add Widget</strong> to get started.</div>';
+    grid.innerHTML = '<div class="dw-empty">No widgets yet. Click <strong>+ Add Widget</strong> to get started.</div>';
     grid.classList.remove('grid-stack');
     return;
   }
@@ -511,13 +565,13 @@ function _dwRenderAll() {
     return `
       <div class="grid-stack-item" gs-id="${esc(w.id)}" ${posAttrs} gs-w="${gw}" gs-h="${gh}">
         <div class="grid-stack-item-content">
-          <div class="dw-card" id="dw-${w.id}" data-wid="${w.id}">
-            <div class="dw-hdr">
-              <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||'◧'}</span>
+          <div class="dw-card widget" id="dw-${w.id}" data-wid="${w.id}">
+            <div class="dw-hdr widget-head">
+              <span class="dw-icon">${(_DW_REG[w.type]||{}).icon||icon('cpu',14)}</span>
               <span class="dw-title">${esc(w.title)}</span>
-              <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">✎</button>
-              <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">⤢</button>
-              <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">×</button>
+              <button class="dw-edit rbac-op" onclick="_dwOpenEdit('${w.id}')" title="Edit widget">${icon('settings',13)}</button>
+              <button class="dw-exp"          onclick="_dwOpenFullscreen('${w.id}')" title="Expand widget">${icon('expand',13)}</button>
+              <button class="dw-rm"           onclick="_dwRemove('${w.id}')" title="Remove widget">${icon('x',13)}</button>
             </div>
             <div class="dw-body" id="dw-body-${w.id}"></div>
           </div>
@@ -787,7 +841,7 @@ function _dwOpenFullscreen(wid) {
   if (!reg) return;
   _dwEnsureFullscreenModal();
   _dwCloseFullscreen(); // clear any previous
-  document.getElementById('dw-fs-icon').textContent  = reg.icon;
+  document.getElementById('dw-fs-icon').innerHTML    = reg.icon;
   document.getElementById('dw-fs-title').textContent = w.title;
   const fsBody = document.getElementById('dw-fs-body');
   fsBody.innerHTML = '';
@@ -810,37 +864,18 @@ function _dwCloseFullscreen() {
 }
 
 // ── Widget: Sensor History Chart ──────────────────────────────────
+// Time window now follows the global dashboard range (set in the tab bar).
 function _dwRenderSensorChart(wid, cfg) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
-  const periodOpts = [{v:60,l:'1h'},{v:360,l:'6h'},{v:1440,l:'24h'},{v:10080,l:'7d'},{v:43200,l:'30d'}];
-  const mins = cfg.minutes || 1440;
   body.innerHTML = `
     <div class="dw-chart-toolbar">
-      <div class="dm-hist-pills" style="margin:0">
-        ${periodOpts.map(p =>
-          `<button class="dm-hist-pill${p.v === mins ? ' active' : ''}"
-             onclick="_dwChartPick('${wid}','${cfg.did}','${cfg.sid}',${p.v})">${p.l}</button>`
-        ).join('')}
-      </div>
       <span class="dm-hist-stats" id="dw-stats-${wid}"></span>
     </div>
     <canvas id="dw-canvas-${wid}" class="dm-hist-canvas dw-canvas" height="180"></canvas>
     <div id="dw-sum-${wid}" class="dm-hist-summary"></div>`;
-  _dwLoadSensorChart(wid, cfg.did, cfg.sid, mins);
+  _dwLoadSensorChart(wid, cfg.did, cfg.sid, _dwTimeRangeMinutes());
 }
-
-function _dwChartPick(wid, did, sid, minutes) {
-  document.querySelectorAll(`#dw-body-${wid} .dm-hist-pill`)
-    .forEach(b => b.classList.toggle('active', +b.dataset.m === minutes || b.textContent === _dwMinLabel(minutes)));
-  // Update stored cfg
-  const widgets = _dwLoad();
-  const w = widgets.find(w => w.id === wid);
-  if (w) { w.cfg.minutes = minutes; _dwSave(widgets); }
-  _dwLoadSensorChart(wid, did, sid, minutes);
-}
-
-function _dwMinLabel(m) { return m<=60?'1h':m<=360?'6h':m<=1440?'24h':m<=10080?'7d':'30d'; }
 
 async function _dwLoadSensorChart(wid, did, sid, minutes) {
   const canvas  = document.getElementById(`dw-canvas-${wid}`);
@@ -879,6 +914,147 @@ function _dwRefreshDeviceStatus(wid) {
       ${cnt.idle ? `<span class="dw-ds-pill idle">${cnt.idle} Idle</span>` : ''}
     </div>
     <div class="dw-ds-list">${rows || '<div style="color:var(--text3);font-size:11px;padding:8px">No devices</div>'}</div>`);
+}
+
+// ── Widget: Fleet Status (donut breakdown of device statuses) ────
+function _dwRefreshFleetStatus(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const devs = Object.values(S.devices);
+  const cnt = { up: 0, warn: 0, down: 0, pause: 0 };
+  devs.forEach(d => {
+    let s = d.status || 'pause';
+    if (s === 'idle' || s === 'paused') s = 'pause';
+    if (s in cnt) cnt[s]++;
+  });
+  const total = devs.length;
+  if (!total) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No devices</div>';
+    return;
+  }
+  const segs = [
+    { value: cnt.up,    color: 'var(--up)',    label: 'Up' },
+    { value: cnt.warn,  color: 'var(--warn)',  label: 'Warning' },
+    { value: cnt.down,  color: 'var(--down)',  label: 'Down' },
+    { value: cnt.pause, color: 'var(--pause)', label: 'Paused' },
+  ];
+  const legendRows = segs.map(seg => `
+    <div class="donut-legend-row">
+      <span class="sw" style="background:${seg.color}"></span>
+      <span class="lbl">${seg.label}</span>
+      <span class="ct">${seg.value}</span>
+      <span class="pct">${(seg.value / total * 100).toFixed(1)}%</span>
+    </div>`).join('');
+  _dwSwap(body, `
+    <div class="donut-wrap" style="padding:6px 4px">
+      <div class="donut">${pwDonut(segs, { size: 130, stroke: 16 })}</div>
+      <div class="donut-legend">${legendRows}</div>
+    </div>`);
+}
+
+// ── Widget: Latency Heatmap (devices × time buckets) ──────────────
+// Caches per-widget so the 10s tick doesn't fire-storm /history requests.
+const _dwHeatCache = {};   // wid → { ts, html }
+const HEAT_CACHE_TTL = 30000;
+
+async function _dwRefreshLatencyHeatmap(wid, cfg) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  const limit   = Number(cfg?.limit) || 20;
+  const minutes = _dwTimeRangeMinutes();   // follows global dashboard range
+
+  // Serve from cache if fresh
+  const cached = _dwHeatCache[wid];
+  if (cached && (Date.now() - cached.ts) < HEAT_CACHE_TTL && cached.cfgKey === `${limit}/${minutes}`) {
+    if (body.innerHTML !== cached.html) body.innerHTML = cached.html;
+    return;
+  }
+
+  // Pick up to `limit` ping sensors, one per device (worst current latency wins ties)
+  const pingByDevice = {};
+  Object.values(S.sensors).forEach(s => {
+    if (s.stype !== 'ping') return;
+    const cur = pingByDevice[s.device_id];
+    if (!cur || (Number(s.last_ms) || 0) > (Number(cur.last_ms) || 0)) pingByDevice[s.device_id] = s;
+  });
+  const sensors = Object.values(pingByDevice).slice(0, limit);
+  if (!sensors.length) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No ping sensors yet</div>';
+    return;
+  }
+
+  // Fetch each sensor's recent history in parallel
+  // Limit small (~30 buckets) — server-side downsamples if needed
+  const results = await Promise.all(sensors.map(s =>
+    fetch(`/api/device/${s.device_id}/sensor/${s.sensor_id}/history?minutes=${minutes}&limit=120`)
+      .then(r => r.ok ? r.json() : { samples: [] })
+      .catch(() => ({ samples: [] }))
+  ));
+
+  const BUCKETS = 30;
+  const lo = 0, hi = 200; // ms scale; cells above hi clamp red
+  function colorFor(v) {
+    if (v == null || isNaN(v)) return 'var(--bg3)';
+    if (v < 20)  return 'var(--up)';
+    if (v < 60)  return 'color-mix(in srgb, var(--up) 60%, var(--warn))';
+    if (v < 100) return 'var(--warn)';
+    if (v < hi)  return 'color-mix(in srgb, var(--warn) 50%, var(--down))';
+    return 'var(--down)';
+  }
+  function alphaFor(v) {
+    if (v == null || isNaN(v)) return 0.3;
+    return Math.min(1, 0.30 + Math.min(1, v / 120) * 0.70);
+  }
+  function downsample(samples) {
+    if (!samples || !samples.length) return new Array(BUCKETS).fill(null);
+    // Bucket-average across the time window. Failed samples (ok=false) count
+    // as a red marker (240ms+) so outages show up dramatically.
+    const tail = samples.slice(-BUCKETS * 8);
+    const out = new Array(BUCKETS).fill(null);
+    const step = Math.max(1, Math.floor(tail.length / BUCKETS));
+    for (let i = 0; i < BUCKETS; i++) {
+      const a = i * step;
+      const b = (i === BUCKETS - 1) ? tail.length : Math.min(tail.length, a + step);
+      let sum = 0, n = 0;
+      for (let k = a; k < b; k++) {
+        const p = tail[k];
+        if (!p) continue;
+        // Ping samples carry the latency in `ms`; failed probes (ok === false)
+        // surface as 240ms (max-clamped red) to indicate the outage visually.
+        let v;
+        if (p.ok === false) v = 240;
+        else if (p.ms != null) v = Number(p.ms);
+        else if (p.value != null) v = Number(p.value);
+        else continue;
+        if (!isNaN(v)) { sum += v; n++; }
+      }
+      out[i] = n ? sum / n : null;
+    }
+    return out;
+  }
+
+  const rowsHtml = sensors.map((s, i) => {
+    const dev = S.devices[s.device_id];
+    if (!dev) return '';
+    const series = downsample(results[i].samples);
+    const cells = series.map(v =>
+      `<div class="heatmap-cell" title="${v == null ? '—' : v.toFixed(1) + 'ms'}"
+         style="background:${colorFor(v)};opacity:${alphaFor(v)}"></div>`
+    ).join('');
+    const shortName = (dev.name || dev.host || '').split('.')[0];
+    return `<div class="dw-heat-row">
+      <span class="dw-heat-name" title="${esc(dev.name || dev.host || '')}">${esc(shortName)}</span>
+      <div class="heatmap" style="grid-template-columns:repeat(${BUCKETS},1fr)">${cells}</div>
+    </div>`;
+  }).filter(Boolean).join('');
+
+  const html = `
+    <div class="dw-heat-wrap">
+      ${rowsHtml}
+      <div class="heatmap-legend"><span>0ms</span><div class="grad"></div><span>${hi}ms+</span></div>
+    </div>`;
+  _dwHeatCache[wid] = { ts: Date.now(), cfgKey: `${limit}/${minutes}`, html };
+  if (body.innerHTML !== html) body.innerHTML = html;
 }
 
 // ── Reset dashboard state (called on re-authentication) ──────────
@@ -936,6 +1112,7 @@ function _dwOnDeviceUpdate() {
     if (w.type === 'network_avail')   _dwRefreshNetAvail(w.id);
     if (w.type === 'down_devices')    _dwRefreshDownDevices(w.id);
     if (w.type === 'internet_health') _dwRefreshInternetHealth(w.id);
+    if (w.type === 'fleet_status')    _dwRefreshFleetStatus(w.id);
   });
 }
 function _dwOnFlapEvent() {
@@ -1387,7 +1564,7 @@ async function _dwFetchSLA(wid, cfg) {
   if (!wrap) return;
   const did  = cfg?.did;
   const sid  = cfg?.sid;
-  const mins = Number(cfg?.period) || 10080;
+  const mins = _dwTimeRangeMinutes();   // follows global dashboard range
   if (!did || !sid) {
     wrap.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px">Select a device and sensor.</div>';
     return;
@@ -1410,16 +1587,18 @@ async function _dwFetchSLA(wid, cfg) {
     return;
   }
   const slaPct  = totalOk / totalAll * 100;
-  const slaFixed = slaPct.toFixed(3);
-  const slaColor = slaPct >= 99.5 ? 'var(--up)' : slaPct >= 99 ? 'var(--warn)' : 'var(--down)';
-  const slaLabel = slaPct >= 99.9 ? 'SLA 99.9%' : slaPct >= 99.5 ? 'SLA 99.5%' : slaPct >= 99 ? 'SLA 99%' : 'Below 99%';
+  const target  = 99;
+  const delta   = slaPct - target;
+  // crit only when more than 1 point below target or actively losing samples
+  const state   = delta >= 0.5 ? 'ok' : delta >= -1 ? 'warn' : 'crit';
+  const arrow   = delta >= 0 ? '▲' : '▼';
   const dtSec = Math.round(totalFail / totalAll * mins * 60);
   const dtH   = Math.floor(dtSec / 3600);
   const dtM   = String(Math.floor((dtSec % 3600) / 60)).padStart(2, '0');
   _dwSwap(wrap, `
-    <div class="dw-sla-pct" style="color:${slaColor}">${slaFixed}<span class="dw-sla-sym">%</span></div>
-    <div class="dw-sla-tier" style="color:${slaColor}">${slaLabel}</div>
-    <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" style="width:${Math.min(100,slaPct).toFixed(2)}%;background:${slaColor}"></div></div>
+    <div class="dw-sla-pct">${slaPct.toFixed(3)}<span class="dw-sla-sym">%</span></div>
+    <div class="dw-sla-delta" data-state="${state}">${arrow} ${Math.abs(delta).toFixed(2)} from ${target}% target</div>
+    <div class="dw-sla-bar-wrap"><div class="dw-sla-bar" data-state="${state}" style="width:${Math.min(100,slaPct).toFixed(2)}%"></div></div>
     <div class="dw-sla-stats">
       <span><span class="dw-sla-key">Downtime</span>${dtH}h ${dtM}m</span>
       <span><span class="dw-sla-key">Samples</span>${totalAll}</span>
@@ -1438,7 +1617,7 @@ function _dwTimeAgo(epochMs) {
 function _dwRefreshFlapDetect(wid, cfg) {
   const body      = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
-  const windowH   = Number(cfg?.window)    || 6;
+  const windowH   = Math.max(1, _dwTimeRangeMinutes() / 60);   // follows global range, hours
   const minFlaps  = Number(cfg?.min_flaps) || 3;
   const cutoff    = Date.now() - windowH * 3600 * 1000;
   const allFlaps  = (typeof FLAPS !== 'undefined' ? FLAPS : []);

@@ -399,6 +399,31 @@ def _parse_commands(raw) -> list:
         return [raw] if raw else ['show running-config']
 
 
+def _count_diff_lines(old_cfg: str, new_cfg: str) -> int:
+    """
+    Count lines that changed between two config snapshots using difflib's
+    unified diff. Returns 0 for byte-identical inputs; otherwise the sum of
+    added + removed lines (excluding the `+++` / `---` file headers and `@@`
+    hunk markers). Caller is expected to handle exceptions; we don't catch
+    here so unusual stdlib errors surface to the engine's logger.
+    """
+    if old_cfg == new_cfg:
+        return 0
+    import difflib
+    a = old_cfg.splitlines()
+    b = new_cfg.splitlines()
+    n = 0
+    for line in difflib.unified_diff(a, b, n=0, lineterm=''):
+        if not line:
+            continue
+        # Skip headers and hunk markers — only count actual added/removed lines
+        if line.startswith('+++') or line.startswith('---') or line.startswith('@@'):
+            continue
+        if line[0] == '+' or line[0] == '-':
+            n += 1
+    return n
+
+
 # ── Shared execution helper (used by manual API and scheduler) ───────
 
 def do_backup(did: str):
@@ -408,7 +433,7 @@ def do_backup(did: str):
     """
     import core.app_state as _as
     from db.backups import (db_get_backup_settings, db_save_backup_run,
-                            db_write_config_file)
+                            db_write_config_file, db_get_last_successful_config)
 
     device = _as.STATE.devices.get(did)
     if not device:
@@ -421,6 +446,19 @@ def do_backup(did: str):
         return
 
     result = run_backup(device, settings)
+
+    # Compute lines-changed vs the previous successful run so the redesigned
+    # Backups view can populate its "Diff since" column without re-running
+    # difflib on every API call. Failed runs and first-time backups get NULL.
+    if result.get('success') and result.get('config'):
+        try:
+            prev_cfg = db_get_last_successful_config(did)
+            if prev_cfg is not None:
+                result['diff_lines'] = _count_diff_lines(prev_cfg, result['config'])
+            # else: first backup — leave diff_lines unset (NULL)
+        except Exception as e:
+            log.warning(f"Backup: diff computation failed for {did}: {e}")
+
     run_id = db_save_backup_run(did, result)
 
     if result.get('success') and result.get('config'):

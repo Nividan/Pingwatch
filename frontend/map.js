@@ -1,8 +1,22 @@
 // ═══════════════════════════ STATE ═══════════════════════════
 let nodes = [], links = [], groups = [], nodeMap = {}, groupMap = {};
+// Site backdrops (v1.0+) — purely-visual rectangles wrapping the group
+// frames belonging to each site. Populated each render from calcPwLayout.
+let pwSiteFrames = [];
 let pwOverrides = {};      // { device_id: {x, y, color?} }  — persisted via /api/settings/pw_node_overrides
 let pwGroupOverrides = {}; // { groupName: {x, y, w, h, color?} } — persisted via /api/settings/pw_group_overrides
+// Per-group device-icon defaults (v1.0+) — set from the Devices tab's Edit
+// Group modal, applied on the NTM Live map for devices without a per-device
+// icon override. Keyed by plain group name (site-agnostic so the same group
+// name across sites shares the icon). Persisted via /api/settings/pw_group_icons.
+let pwGroupIcons = {};
 let pwLinks = [];          // [ {id, src_did, tgt_did, link_type, label?} ] — persisted via /api/settings/pw_links
+// Topology auto-links (v1.0+) — derived from IPAM subnet membership + the
+// ip_allocations.kind tags (switch / gateway / backbone). Rendered as a
+// subtle "implicit" layer beneath manual pwLinks so manual links visually
+// win. Loaded once per page; recomputed every renderPingWatchCanvas().
+let pwRoles    = {};       // { device_id: 'switch'|'gateway'|'backbone' }   from /api/topology/roles
+let pwSubnets  = [];       // [ {id, cidr, name, site, ...} ]                from /api/ipam/subnets
 const PW_INTERNET_DID = '__internet__'; // synthetic Internet cloud node (always present)
 let linkDraw = null;
 let selectedEl = null; // { type:'node'|'link'|'group', data }
@@ -57,6 +71,14 @@ window.addEventListener('message', e => {
         }
       }
     }
+  }
+  // Per-group device-icon map updated from the parent SPA's Edit Group modal.
+  // Replace our in-memory cache and re-render so icons flip live without
+  // requiring a full tab re-load.
+  if (e.data?.type === 'pw_group_icons') {
+    const map = (e.data.value && typeof e.data.value === 'object') ? e.data.value : {};
+    pwGroupIcons = map;
+    if (typeof renderPingWatchCanvas === 'function') renderPingWatchCanvas();
   }
   // Parent-driven theme sync — flips the iframe to match the main app.
   if (e.data?.type === 'theme') {
@@ -290,11 +312,14 @@ async function switchToPingWatchPage() {
 async function loadPingWatchPage() {
   const gen = ++_pageGen;
   try {
-    const [data, ovrRes, grpRes, lnkRes] = await Promise.all([
+    const [data, ovrRes, grpRes, lnkRes, iconRes, rolesRes, subnetsRes] = await Promise.all([
       fetch('/api/devices').then(r => r.json()),
       api('GET', '/api/settings/pw_node_overrides').catch(() => null),
       api('GET', '/api/settings/pw_group_overrides').catch(() => null),
       api('GET', '/api/settings/pw_links').catch(() => null),
+      api('GET', '/api/settings/pw_group_icons').catch(() => null),
+      api('GET', '/api/topology/roles').catch(() => null),
+      api('GET', '/api/ipam/subnets').catch(() => null),
     ]);
     if (gen !== _pageGen) return; // superseded by a newer tab switch
     pwDevices = data.devices || [];
@@ -302,6 +327,14 @@ async function loadPingWatchPage() {
     pwOverrides = ovrRes?.value || {};
     pwGroupOverrides = grpRes?.value || {};
     pwLinks = lnkRes?.value || [];
+    // Per-group icon defaults — may have been updated from the Devices tab's
+    // Edit Group modal between page loads; live updates from that modal also
+    // mutate `pwGroupIcons` directly + trigger renderPingWatchCanvas().
+    pwGroupIcons = (iconRes?.value && typeof iconRes.value === 'object') ? iconRes.value : {};
+    window._pwGroupIconsCache = pwGroupIcons;
+    // Topology auto-link inputs — roles map + subnet list.
+    pwRoles   = (rolesRes && rolesRes.roles) || {};
+    pwSubnets = (subnetsRes && subnetsRes.subnets) || (Array.isArray(subnetsRes) ? subnetsRes : []);
   } catch(e) { if (gen !== _pageGen) return; pwDevices = []; _pwDevMap = {}; }
   renderPingWatchCanvas();
   startPwSSE();
@@ -341,8 +374,14 @@ function _pwApplyLinkEl(lineEl, lk, srcDev, tgtDev) {
 }
 
 function pwDeviceType(dev) {
+  // 1. Per-group default (admin-set via Edit Group modal in the Devices tab).
+  //    Keyed by exact group name. Empty/missing falls through to the heuristic.
+  const groupName = dev.group || '';
+  if (groupName && pwGroupIcons[groupName]) return pwGroupIcons[groupName];
+
+  // 2. Heuristic from name + lowercased group label.
   const n = (dev.name  || '').toLowerCase();
-  const g = (dev.group || '').toLowerCase();
+  const g = groupName.toLowerCase();
   // Group name is most reliable signal
   if (/cloud|internet|wan|isp/.test(g)) return 'cloud';
   if (/firewall|fortigate|fortinet|asa|checkpoint|palo.?alto/.test(g)) return 'firewall';
@@ -376,48 +415,365 @@ function deviceToNode(dev, x, y) {
   };
 }
 
+// ── Topology auto-links (v1.0+) ─────────────────────────────────────────
+// Derive implicit network topology from IPAM subnet membership + role tags
+// (switch / backbone / core / gateway on ip_allocations.kind). Rendered as
+// a dim, dashed layer BENEATH manual pwLinks so user-drawn links visually
+// win.
+//
+// Tier model (downstream → upstream):
+//   Hosts → Switch (access) → Backbone (aggregation) → Core (central L3)
+//        → Gateway (edge / FW) → WAN
+//
+// Rule set (each uplink cascades through the next-up tier when an
+// intermediate tier isn't tagged in the site):
+//   1. Each device in a subnet fans out to that subnet's first
+//      switch | backbone | core | gateway (in that priority). Covers
+//      subnets without an explicit switch tag — e.g. the core/agg segment
+//      itself, where devices anchor to the core/BB/GW that lives there.
+//   2. Switch  → first backbone | core | gateway in the same site.
+//   3. Backbone → first core | gateway in the same site.
+//   4. Core    → first gateway in the same site.
+//   5. Cross-site mesh at the highest available shared tier — cores
+//      pairwise-linked across sites if cores exist anywhere, else
+//      backbones across sites.
+//
+// Pairs already covered by a manual pwLink are dropped — no double-drawing.
+
+function _pwIpv4ToInt(ip) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec((ip || '').trim());
+  if (!m) return null;
+  const a = +m[1], b = +m[2], c = +m[3], d = +m[4];
+  if (a > 255 || b > 255 || c > 255 || d > 255) return null;
+  return (a * 16777216 + b * 65536 + c * 256 + d) >>> 0;
+}
+function _pwSubnetForIp(ipStr, subnets) {
+  const ipInt = _pwIpv4ToInt(ipStr);
+  if (ipInt == null) return null;
+  let best = null, bestPrefix = -1;
+  for (const s of subnets) {
+    const m = /^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/.exec(s.cidr || '');
+    if (!m) continue;
+    const baseInt = _pwIpv4ToInt(m[1]);
+    const prefix  = +m[2];
+    if (baseInt == null || prefix < 0 || prefix > 32) continue;
+    const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+    if ((baseInt & mask) === (ipInt & mask) && prefix > bestPrefix) {
+      best = s; bestPrefix = prefix;
+    }
+  }
+  return best;
+}
+function _pwPairKey(a, b) { return String(a) < String(b) ? a + '|' + b : b + '|' + a; }
+
+function _pwComputeAutoLinks() {
+  if (!pwSubnets || !pwSubnets.length || !pwDevices || !pwDevices.length) return [];
+  // Bucket devices by their best-matching subnet (longest-prefix match).
+  const bySubnet = new Map();   // cidr -> { site, devs: [device] }
+  for (const dev of pwDevices) {
+    const s = _pwSubnetForIp(dev.host, pwSubnets);
+    if (!s) continue;
+    if (!bySubnet.has(s.cidr)) bySubnet.set(s.cidr, { site: s.site || dev.site || '', devs: [] });
+    bySubnet.get(s.cidr).devs.push(dev);
+  }
+  // Bucket role-tagged devices by site, per role, for uplink resolution.
+  const byRoleBySite = { switch: new Map(), backbone: new Map(), core: new Map(), gateway: new Map() };
+  for (const dev of pwDevices) {
+    const r = pwRoles[dev.device_id];
+    if (!r || !byRoleBySite[r]) continue;
+    const site = dev.site || '';
+    if (!byRoleBySite[r].has(site)) byRoleBySite[r].set(site, []);
+    byRoleBySite[r].get(site).push(dev);
+  }
+  // First device of a given role in a given site, walking the priority chain
+  // (e.g. switch's uplink is backbone → core → gateway). Returns null when
+  // none of the chain's tiers has a tagged device in that site.
+  function _firstInChain(site, chain) {
+    for (const role of chain) {
+      const arr = byRoleBySite[role].get(site) || [];
+      if (arr.length) return arr[0];
+    }
+    return null;
+  }
+  const out = [];
+
+  // Rule 1 — intra-subnet anchor (devices → first tagged role member in this
+  // subnet, with cascading priority switch > backbone > core > gateway).
+  for (const [, info] of bySubnet) {
+    const switches  = info.devs.filter(d => pwRoles[d.device_id] === 'switch');
+    const backbones = info.devs.filter(d => pwRoles[d.device_id] === 'backbone');
+    const cores     = info.devs.filter(d => pwRoles[d.device_id] === 'core');
+    const gateways  = info.devs.filter(d => pwRoles[d.device_id] === 'gateway');
+    const anchor    = switches[0] || backbones[0] || cores[0] || gateways[0];
+    if (!anchor) continue;  // no role-tagged device in this subnet → skip
+    for (const dev of info.devs) {
+      if (dev.device_id === anchor.device_id) continue;
+      // Tagged-role devices handled by their own uplink rule below.
+      if (pwRoles[dev.device_id]) continue;
+      out.push({ src_did: dev.device_id, tgt_did: anchor.device_id, kind: 'l2' });
+    }
+  }
+
+  // Rules 2-4 — uplink chains. Each tagged tier uplinks to the next-higher
+  // tagged tier in the same site, skipping unset tiers.
+  const UPLINK = {
+    switch:   ['backbone', 'core', 'gateway'],
+    backbone: ['core', 'gateway'],
+    core:     ['gateway'],
+  };
+  for (const dev of pwDevices) {
+    const role = pwRoles[dev.device_id];
+    if (!role || !UPLINK[role]) continue;
+    const up = _firstInChain(dev.site || '', UPLINK[role]);
+    if (up && up.device_id !== dev.device_id) {
+      out.push({ src_did: dev.device_id, tgt_did: up.device_id, kind: 'l3' });
+    }
+  }
+
+  // Rule 5 — cross-site mesh at the highest available shared tier. Prefer
+  // cores (pairwise across sites). If no cores anywhere, fall back to
+  // backbones. Mesh links rendered amber to read as WAN/inter-site.
+  const _meshTier = byRoleBySite.core.size > 0 ? 'core' : 'backbone';
+  const _meshMap  = byRoleBySite[_meshTier];
+  const _meshSites = [..._meshMap.keys()].filter(s => s);
+  for (let i = 0; i < _meshSites.length; i++) {
+    for (let j = i + 1; j < _meshSites.length; j++) {
+      const a = _meshMap.get(_meshSites[i]);
+      const b = _meshMap.get(_meshSites[j]);
+      if (a.length && b.length) {
+        out.push({ src_did: a[0].device_id, tgt_did: b[0].device_id, kind: 'wan' });
+      }
+    }
+  }
+
+  // Drop pairs already covered by a manual pwLink, dedup self-pairs, suppress
+  // intra-group fan-out, and BUNDLE cross-group fan-out down to one line per
+  // (source-group, target-device) pair.
+  //
+  // Without bundling, a 25-device cluster all anchored to a switch in another
+  // group draws 25 parallel lines all converging on one tile — a cyan haze
+  // that adds no information beyond "this cluster talks to that switch."
+  // Collapsing to one line per source group keeps the cross-group topology
+  // visible while killing 80-90% of the line count.
+  //
+  // The first device in each (src-group, tgt) bucket is the representative —
+  // the line still anchors to a real node center so it picks up node-drag
+  // motion for free.
+  const manualPairs = new Set((pwLinks || []).map(l => _pwPairKey(l.src_did, l.tgt_did)));
+  const seen = new Set();
+  const bundles = new Map();  // key: `${srcSite}${srcGroup}${tgt_did}` -> first matching link
+  for (const lk of out) {
+    const k = _pwPairKey(lk.src_did, lk.tgt_did);
+    if (manualPairs.has(k) || seen.has(k)) continue;
+    const sDev = _pwDevMap[lk.src_did];
+    const tDev = _pwDevMap[lk.tgt_did];
+    if (sDev && tDev
+        && (sDev.site  || '') === (tDev.site  || '')
+        && (sDev.group || '') === (tDev.group || '')) {
+      continue;  // same site+group bucket — suppress as intra-frame noise
+    }
+    seen.add(k);
+    const sSite  = (sDev && sDev.site)  || '';
+    const sGroup = (sDev && sDev.group) || '';
+    const bkey   = `${sSite}${sGroup}${lk.tgt_did}`;
+    if (!bundles.has(bkey)) bundles.set(bkey, lk);
+  }
+  return [...bundles.values()];
+}
+
+function renderPwAutoLinks() {
+  const layer = document.getElementById('auto-links-layer');
+  if (!layer) return;
+  layer.innerHTML = '';
+  if (!isPingWatchPage) return;
+  const links = _pwComputeAutoLinks();
+  if (!links.length) return;
+  // Visibility tuning: bundling drops line count by 90%+, so each remaining
+  // line carries more meaning and should READ at a glance. We bumped opacity
+  // 0.35 → 0.7 and width 1.2 → 2.2, and added arrowheads so the direction of
+  // flow (downstream → upstream) is unambiguous: VM → ESXi → Switch → FW.
+  // Stroke palette: l2 = cyan (subnet member), l3 = violet (uplink),
+  // wan = amber (inter-site).
+  const COL = { l2: '#22d3ee', l3: '#a78bfa', wan: '#f59e0b' };
+  const ARR = { l2: 'arr-blue', l3: 'arr-purple', wan: 'arr-gold' };
+  for (const lk of links) {
+    const src = nodeMap[_pwNodeId(lk.src_did)];
+    const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
+    if (!src || !tgt) continue;
+    // Shrink the line end-points to the node edges (not centers) so the
+    // arrowhead lands cleanly on the target's border instead of inside it.
+    const sc = nodeCenter(src), tc = nodeCenter(tgt);
+    const dx = tc.x - sc.x, dy = tc.y - sc.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Approx half-tile inset; tile sizes are ~95x50, so 40px works for most.
+    const inset = 40;
+    const x1 = sc.x + (dx / len) * inset;
+    const y1 = sc.y + (dy / len) * inset;
+    const x2 = tc.x - (dx / len) * inset;
+    const y2 = tc.y - (dy / len) * inset;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', COL[lk.kind] || '#888');
+    line.setAttribute('stroke-width', lk.kind === 'wan' ? '2.8' : '2.2');
+    line.setAttribute('stroke-dasharray', '8 5');
+    line.setAttribute('stroke-opacity', '0.7');
+    line.setAttribute('class', 'pw-auto-link');
+    line.setAttribute('marker-end', `url(#${ARR[lk.kind] || 'arr-blue'})`);
+    line.setAttribute('pointer-events', 'none');
+    layer.appendChild(line);
+  }
+}
+
 function calcPwLayout(devices) {
-  const byGroup = {};
+  // v1.0+: bucket by (site, group) composite key so the same group name under
+  // different sites renders as distinct frames — matches the Devices tab's
+  // approach. Site is just a prefix on the visible label (no outer site
+  // frame in v1; that would require a bigger layout rewrite).
+  // Key uses the unit-separator like the Devices tab does. Empty site →
+  // "Unsited" prefix in the label, key "<US>Servers".
+  //
+  // One-shot migration: existing pwGroupOverrides keyed by bare group name
+  // (pre-v1.0) get re-keyed to "<US><group>" (Unsited bucket) so saved
+  // positions don't evaporate. Marker is the localStorage flag below.
+  try { if (!localStorage.getItem('pw_group_overrides_site_v1')) {
+    let migrated = false;
+    for (const oldKey of Object.keys(pwGroupOverrides)) {
+      if (!oldKey.includes('')) {
+        pwGroupOverrides[`${oldKey}`] = pwGroupOverrides[oldKey];
+        delete pwGroupOverrides[oldKey];
+        migrated = true;
+      }
+    }
+    if (migrated) _pwSave('pw_group_overrides', pwGroupOverrides);
+    localStorage.setItem('pw_group_overrides_site_v1', '1');
+  } } catch (_) { /* localStorage unavailable — skip migration, accept reset */ }
+
+  const byKey = {};
   for (const dev of devices) {
     const g = dev.group || 'Default Group';
-    (byGroup[g] = byGroup[g] || []).push(dev);
+    const s = dev.site  || '';
+    const key = `${s}${g}`;
+    (byKey[key] = byKey[key] || { site: s, group: g, devs: [] }).devs.push(dev);
   }
   const COLS = 3, PAD = 50, GGAP = 90, ROWGAP = 80, STARTX = 60, STARTY = 60, MAX_ROWS = 5;
   const syntheticNodes = [], syntheticGroups = [];
   // Smart-placement dirty flags — batched save at end of pass
   let _pwNodeDirty = false, _pwGroupDirty = false;
 
-  // Pre-compute each group's slot dimensions based on actual device types
-  const entries = Object.entries(byGroup).map(([gname, devs]) => {
+  // Pre-compute each group's slot dimensions based on actual device types.
+  // gname (the bucket key) is the COMPOSITE; gtitle is the human-friendly
+  // label that includes the site prefix when present.
+  const entries = Object.entries(byKey).map(([gkey, { site, group, devs }]) => {
     const sizes = devs.map(d => nsize(pwDeviceType(d), null) || { w: 170, h: 95 });
-    const NW    = Math.max(...sizes.map(s => s.w)) + 30;   // slot width  = widest node + gap
-    const NH    = Math.max(...sizes.map(s => s.h)) + 28;   // slot height = tallest node + gap
-    const nrows = Math.min(devs.length, MAX_ROWS);          // column-major: max 5 rows per column
+    const NW    = Math.max(...sizes.map(s => s.w)) + 30;
+    const NH    = Math.max(...sizes.map(s => s.h)) + 28;
+    const nrows = Math.min(devs.length, MAX_ROWS);
     const ncols = Math.ceil(devs.length / MAX_ROWS);
-    return { gname, devs, NW, NH,
+    const gtitle = site ? `${site} → ${group}` : group;
+    return { gname: gkey, gtitle, site, group, devs, NW, NH,
              w: ncols * NW + PAD * 2,
-             h: nrows * NH + PAD * 2 + 28 };   // 28px = group title bar
+             h: nrows * NH + PAD * 2 + 28 };
+  });
+  // Sort entries so groups belonging to the same site are placed consecutively
+  // in the index-based grid. This makes "Reset Layout" naturally cluster groups
+  // by site, which lets the site backdrops fit tightly around their contents.
+  // Unsited groups sort last so they don't break up real site clusters.
+  entries.sort((a, b) => {
+    const aS = a.site || '￿';   // Unsited → end
+    const bS = b.site || '￿';
+    if (aS !== bS) return aS.localeCompare(bS);
+    return (a.group || '').localeCompare(b.group || '');
   });
 
-  // Two-phase placement: anchor user-positioned groups first, then slide
-  // un-positioned groups out of any collision with the anchors.
+  // ── Per-site mini-grid placement (v1.0+) ─────────────────────────
+  // Each site becomes its own self-contained block: its groups flow in a
+  // 3-col mini-grid INSIDE the site's content area. Sites stack vertically
+  // on the canvas in alphabetical order (Unsited last). Sized to content —
+  // a small site doesn't waste space, a big site grows downward.
   //
-  // 1) Compute each entry's natural grid hint (used as starting position for
-  //    the slide search if the group has no override yet).
-  let gi = 0, rowY = STARTY;
-  const decorated = [];
-  for (let r = 0; r < entries.length; r += COLS) {
-    const row  = entries.slice(r, r + COLS);
-    const rowH = Math.max(...row.map(e => e.h));
-    let gx = STARTX;
-    for (const ent of row) {
-      decorated.push({ ...ent, gi: gi++, hint: { x: gx, y: rowY } });
-      gx += ent.w + GGAP;
-    }
-    rowY += rowH + ROWGAP;
+  // The COLS/GGAP/ROWGAP constants above still apply; SITE_PAD adds the
+  // breathing room between the site frame and its inner groups, and
+  // SITE_GAP separates one site block from the next.
+  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 40;
+
+  // Group entries by site (entries was already sorted site-then-name above,
+  // so siteOrder preserves alphabetical order with Unsited at the end).
+  const siteBuckets = new Map();   // site -> entries[]
+  for (const ent of entries) {
+    const s = ent.site || '';
+    if (!siteBuckets.has(s)) siteBuckets.set(s, []);
+    siteBuckets.get(s).push(ent);
   }
 
-  // 2) Phase 1 — fixed groups (have a saved x/y override).
+  let gi = 0;
+  let curY = STARTY;
+  const decorated = [];
+  // Computed during placement, consumed by syntheticSites build below.
+  // site -> {x, y, w, h} of the site frame (header + content area).
+  const siteNaturalFrames = {};
+
+  // PASS 1 — measure each site's natural size WITHOUT committing positions.
+  // Records the per-entry offset within the site's content area so PASS 2
+  // can place groups once the site's (x0, y0) is finalized by bin-packing.
+  const sitesArr = [];  // { site, sEntries, w, h, offsets: [{entry, offX, offY}] }
+  for (const [site, sEntries] of siteBuckets) {
+    let innerRowY = 0;
+    let maxInnerW = 0;
+    const offsets = [];
+    for (let r = 0; r < sEntries.length; r += COLS) {
+      const row  = sEntries.slice(r, r + COLS);
+      const rowH = Math.max(...row.map(e => e.h));
+      let gx = 0;
+      for (const ent of row) {
+        offsets.push({ entry: ent, offX: gx, offY: innerRowY });
+        gx += ent.w + GGAP;
+      }
+      // Width of this row (excluding trailing GGAP after last cell)
+      maxInnerW = Math.max(maxInnerW, gx - GGAP);
+      innerRowY += rowH + ROWGAP;
+    }
+    const innerH = innerRowY - ROWGAP;  // strip trailing ROWGAP
+    const siteW  = maxInnerW + SITE_PAD * 2;
+    const siteH  = SITE_TITLE_H + SITE_PAD + innerH + SITE_PAD;
+    sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets });
+  }
+
+  // PASS 2 — shelf-pack sites into rows so small sites fit beside or under
+  // a big one rather than stacking vertically with wasted right margin.
+  // maxRowW = widest site (typically the largest cluster), so small sites
+  // wrap into rows of their own beneath it. Preserves the alphabetical site
+  // order from siteBuckets.
+  const maxRowW = Math.max(...sitesArr.map(s => s.w), 0);
+  let curX = STARTX, rowH = 0;
+  for (const sInfo of sitesArr) {
+    // Wrap when adding this site would overflow the row (always place at
+    // least one site per row to avoid an infinite loop when sInfo.w > maxRowW).
+    if (curX !== STARTX && (curX + sInfo.w) > (STARTX + maxRowW)) {
+      curY += rowH + SITE_GAP;
+      curX  = STARTX;
+      rowH  = 0;
+    }
+    const x0 = curX;
+    const y0 = curY;
+    const contentX = x0 + SITE_PAD;
+    const contentY = y0 + SITE_TITLE_H + SITE_PAD;
+    // Replay the per-entry offsets recorded in PASS 1 to produce final hints.
+    for (const off of sInfo.offsets) {
+      decorated.push({ ...off.entry, gi: gi++,
+                       hint: { x: contentX + off.offX, y: contentY + off.offY } });
+    }
+    // Even Unsited gets a frame entry so block stacking lines up, but it
+    // won't be rendered as a backdrop (syntheticSites filters site === '').
+    siteNaturalFrames[sInfo.site] = { x: x0, y: y0, w: sInfo.w, h: sInfo.h };
+    curX += sInfo.w + SITE_GAP;
+    rowH  = Math.max(rowH, sInfo.h);
+  }
+  // Advance curY past the last row so any later layout (none today, but
+  // future-proof) starts beneath the packed sites.
+  curY += rowH + SITE_GAP;
+
+  // ── Phase 1 — fixed groups (have a saved x/y override). ──────────
   const placedRects = [];
   const fixed = decorated.filter(d => {
     const o = pwGroupOverrides[d.gname];
@@ -430,19 +786,13 @@ function calcPwLayout(devices) {
     placedRects.push({ gname: d.gname, x: govr.x, y: govr.y, w: gw, h: gh });
   }
 
-  // 3) Phase 2 — un-positioned groups: anchor next to the existing layout
-  //    (right of bounding box, top-aligned) instead of the index-based grid,
-  //    then slide out of any remaining collisions. Persist so it sticks.
+  // ── Phase 2 — un-positioned groups: anchor at the natural hint
+  // (per-site mini-grid coords). _findFreeGroupSlot slides the group out of
+  // any collision with already-placed siblings. We DON'T do the
+  // "right-of-bounding-box" anchor anymore — that's what flattened every
+  // reset into one horizontal strip regardless of site.
   for (const d of newly) {
-    let hint;
-    if (placedRects.length === 0) {
-      hint = d.hint;  // pristine canvas → use natural grid hint
-    } else {
-      const maxX = Math.max(...placedRects.map(r => r.x + r.w));
-      const minY = Math.min(...placedRects.map(r => r.y));
-      hint = { x: maxX + GGAP, y: minY };
-    }
-    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, hint);
+    const pos = _findFreeGroupSlot(placedRects, d.w, d.h, d.hint);
     pwGroupOverrides[d.gname] = { ...(pwGroupOverrides[d.gname] || {}),
                                    x: pos.x, y: pos.y, w: d.w, h: d.h };
     _pwGroupDirty = true;
@@ -491,11 +841,13 @@ function calcPwLayout(devices) {
   }
 
   // 4) Render every group + its devices using the resolved positions.
-  for (const { gname, devs, NW, NH, w, h, gi } of decorated) {
+  for (const { gname, gtitle, devs, NW, NH, w, h, gi } of decorated) {
     const govr = pwGroupOverrides[gname] || {};
     const gax = govr.x, gay = govr.y;
     const gw  = govr.w ?? w, gh = govr.h ?? h;
-    syntheticGroups.push({ id: 'pw_g_' + gi, name: gname,
+    // .name is the displayed title (Site → Group); .key keeps the composite
+    // bucket key for downstream lookups (overrides, rename, color, etc).
+    syntheticGroups.push({ id: 'pw_g_' + gi, name: gtitle || gname, key: gname,
                            x: gax, y: gay,
                            w: gw, h: gh,
                            color: govr.color || '#00d4ff' });
@@ -555,9 +907,11 @@ function calcPwLayout(devices) {
                                       x: groupRect.x, y: groupRect.y,
                                       w: groupRect.w, h: groupRect.h };
           _pwGroupDirty = true;
-          // Patch the syntheticGroups entry so this render reflects the new size
+          // Patch the syntheticGroups entry so this render reflects the new size.
+          // syntheticGroup.name is now the friendly title (Site → Group); compare
+          // by .key which holds the composite bucket key.
           const sg = syntheticGroups[syntheticGroups.length - 1];
-          if (sg && sg.name === gname) { sg.w = groupRect.w; sg.h = groupRect.h; }
+          if (sg && (sg.key === gname || sg.name === gname)) { sg.w = groupRect.w; sg.h = groupRect.h; }
 
           // Keep placedRects coherent for later iterations' overlap checks
           const myIdx = placedRects.findIndex(r => r.gname === gname);
@@ -578,7 +932,7 @@ function calcPwLayout(devices) {
               groupRect.x = np.x; groupRect.y = np.y;
               pwGroupOverrides[gname].x = np.x;
               pwGroupOverrides[gname].y = np.y;
-              if (sg && sg.name === gname) { sg.x = np.x; sg.y = np.y; }
+              if (sg && (sg.key === gname || sg.name === gname)) { sg.x = np.x; sg.y = np.y; }
               if (myIdx >= 0) {
                 placedRects[myIdx].x = np.x;
                 placedRects[myIdx].y = np.y;
@@ -613,20 +967,66 @@ function calcPwLayout(devices) {
     }
   }
 
+  // ── Site backdrops (v1.0+) ───────────────────────────────────────
+  // Compute a bounding box per site from its constituent group rects, then
+  // emit one synthetic "site" frame behind each cluster. Purely visual: no
+  // user positioning, no resize handles — the backdrop tracks whatever the
+  // groups do (works whether groups are at their natural per-site grid
+  // positions or have been dragged elsewhere). SITE_PAD / SITE_TITLE_H are
+  // the same constants used by the placement engine above so the natural
+  // layout and the backdrops line up exactly.
+  const syntheticSites = [];
+  const bySiteBbox = {};
+  for (const d of decorated) {
+    const site = d.site;
+    if (!site) continue;        // Unsited stays unwrapped
+    const rect = placedRects.find(r => r.gname === d.gname);
+    if (!rect) continue;
+    const b = bySiteBbox[site] || { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    b.minX = Math.min(b.minX, rect.x);
+    b.minY = Math.min(b.minY, rect.y);
+    b.maxX = Math.max(b.maxX, rect.x + rect.w);
+    b.maxY = Math.max(b.maxY, rect.y + rect.h);
+    bySiteBbox[site] = b;
+  }
+  // Deterministic color per site name so the visual identity is stable across
+  // reloads. Sites get muted distinct hues; group frames stay on the cyan/
+  // accent palette so the two layers don't compete.
+  const SITE_PALETTE = ['#7a5cff', '#22d3ee', '#22c55e', '#f59e0b',
+                        '#ec4899', '#06b6d4', '#a78bfa', '#10b981'];
+  let _sIdx = 0;
+  for (const site of Object.keys(bySiteBbox).sort()) {
+    const b = bySiteBbox[site];
+    const color = SITE_PALETTE[_sIdx % SITE_PALETTE.length];
+    syntheticSites.push({
+      id:    'pw_site_' + _sIdx,
+      name:  site,
+      x:     b.minX - SITE_PAD,
+      y:     b.minY - SITE_PAD - SITE_TITLE_H,
+      w:     (b.maxX - b.minX) + SITE_PAD * 2,
+      h:     (b.maxY - b.minY) + SITE_PAD * 2 + SITE_TITLE_H,
+      color,
+      device_count: decorated.filter(d => d.site === site)
+                             .reduce((n, d) => n + d.devs.length, 0),
+    });
+    _sIdx++;
+  }
+
   // Batched persistence — one PATCH per settings key per layout pass
   if (_pwNodeDirty)  _pwSave('pw_node_overrides',  pwOverrides);
   if (_pwGroupDirty) _pwSave('pw_group_overrides', pwGroupOverrides);
 
-  return { syntheticNodes, syntheticGroups };
+  return { syntheticNodes, syntheticGroups, syntheticSites };
 }
 
 function renderPingWatchCanvas() {
   if (!isPingWatchPage) return;
   if (dragNode || groupDrag || linkDraw) { _pwRenderPending = true; return; }
-  const { syntheticNodes, syntheticGroups } = calcPwLayout(pwDevices);
+  const { syntheticNodes, syntheticGroups, syntheticSites } = calcPwLayout(pwDevices);
   nodes = syntheticNodes;
   links = [];
   groups = syntheticGroups;
+  pwSiteFrames = syntheticSites || [];
   nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
   groupMap = Object.fromEntries(groups.map(g => [g.id, g]));
   // Inject internet cloud only when at least one link connects to it
@@ -683,6 +1083,7 @@ function showPwDashboardPanel() {
         <div class="dash-stat-label">UNKNOWN</div>
       </div>
     </div>
+    ${_buildSiteStatsSection()}
     <div class="dash-section" style="margin-top:12px">
       <div class="dash-section-title" style="margin-bottom:8px">ACTIVE INCIDENTS</div>
       <div id="pw-incident-list">${_buildIncidentList()}</div>
@@ -697,6 +1098,7 @@ function showPwDashboardPanel() {
       <button class="btn" style="flex:1;font-size:10px;letter-spacing:1px" onclick="document.getElementById('pw-layout-import-file').click()">⬆ IMPORT</button>
     </div>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
+    <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px;color:#f85149" onclick="clearPwManualLinks()">✕ CLEAR MANUAL LINKS</button>
   `;
   // Restart dashboard canvas (paused while node/link panel was showing)
   _resumeDashBg?.();
@@ -730,6 +1132,34 @@ function _pwSensorIncidentVal(s) {
     }
   }
   return String(s.last_value);
+}
+
+// SITE STATS section for the right dashboard panel — modeled after the new
+// design's "Site Stats" sidebar. One row per site with up-count vs total and
+// a coloured dot reflecting overall health. Sites are sourced from the
+// computed site frames so the list matches what's drawn on the canvas.
+// Returns '' (no section) when there are no sites — single-site / all-Unsited
+// fleets stay focused on the UP/DOWN tiles + incident list above.
+function _buildSiteStatsSection() {
+  if (!pwSiteFrames || !pwSiteFrames.length) return '';
+  const rows = pwSiteFrames.slice().sort((a, b) => a.name.localeCompare(b.name)).map(s => {
+    const devsInSite = pwDevices.filter(d => (d.site || '') === s.name);
+    const up   = devsInSite.filter(d => d.status === 'up').length;
+    const down = devsInSite.filter(d => d.status === 'down').length;
+    const tot  = devsInSite.length;
+    const cls  = down ? 'down' : (up === tot && tot > 0 ? 'ok' : 'warn');
+    return `
+      <div class="pw-site-stat-row">
+        <span class="pw-site-stat-dot pw-site-stat-${cls}" style="background:${s.color}"></span>
+        <span class="pw-site-stat-name">${escXml(s.name)}</span>
+        <span class="pw-site-stat-val">${up}/${tot}</span>
+      </div>`;
+  }).join('');
+  return `
+    <div class="dash-section" style="margin-top:12px">
+      <div class="dash-section-title" style="margin-bottom:8px">SITE STATS</div>
+      <div class="pw-site-stats">${rows}</div>
+    </div>`;
 }
 
 function _buildIncidentList() {
@@ -981,13 +1411,17 @@ function startPwSSE() {
   } catch(e) {}
 }
 
-// Drop pwGroupOverrides entries whose group no longer has any live devices.
-// Prevents stale positions from snapping a re-added group back to its old spot.
+// Drop pwGroupOverrides entries whose (site,group) bucket no longer has any
+// live devices. Prevents stale positions from snapping a re-added bucket back
+// to its old spot. v1.0+: live keys are composite "<site><US><group>" to
+// match calcPwLayout's bucketing.
 function _pwCleanupOrphanGroups() {
-  const live = new Set(pwDevices.map(d => d.group || 'Default Group'));
+  const live = new Set(pwDevices.map(d =>
+    `${d.site || ''}${d.group || 'Default Group'}`
+  ));
   let dirty = false;
-  for (const gname of Object.keys(pwGroupOverrides)) {
-    if (!live.has(gname)) { delete pwGroupOverrides[gname]; dirty = true; }
+  for (const gkey of Object.keys(pwGroupOverrides)) {
+    if (!live.has(gkey)) { delete pwGroupOverrides[gkey]; dirty = true; }
   }
   if (dirty) _pwSave('pw_group_overrides', pwGroupOverrides);
 }
@@ -1511,6 +1945,7 @@ function _findFreeSlotInGroup(groupRect, occupied, newW, newH) {
 // ═══════════════════════════ RENDER ═══════════════════════════
 function render() {
   resizeSVG();
+  renderSites();    // backdrop layer, behind groups
   renderGroups();
   renderLinks();
   renderNodes();
@@ -1675,7 +2110,10 @@ function renderLinks() {
       lblLayer.appendChild(lg);
     }
   });
-  if (isPingWatchPage) renderPwLinksInLayer(layer, lblLayer);
+  if (isPingWatchPage) {
+    renderPwAutoLinks();           // dim/dashed implicit topology — beneath manual
+    renderPwLinksInLayer(layer, lblLayer);
+  }
 }
 
 function _pwNodeId(did) {
@@ -4172,6 +4610,68 @@ function endRubberBand(e) {
 }
 
 // ═══════════════════════════ GROUPS ═══════════════════════════
+// Site backdrops (v1.0+) — draw a tinted rectangle behind each site's
+// cluster of group frames, with a header bar carrying the site name and a
+// device-count chip. Sites are non-interactive in v1: positions track the
+// underlying group rects (computed in calcPwLayout from placedRects). Empty
+// `pwSiteFrames` is fine — the layer is just empty.
+function renderSites() {
+  const layer = document.getElementById('sites-layer');
+  if (!layer) return;
+  layer.innerHTML = '';
+  pwSiteFrames.forEach(s => {
+    const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    gg.setAttribute('class', 'site-g');
+    gg.setAttribute('id', 'site-' + s.id);
+
+    // Outer rect — tinted fill + thin solid stroke (distinct from groups'
+    // dashed cyan borders so the two layers don't compete).
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', s.x); rect.setAttribute('y', s.y);
+    rect.setAttribute('width',  s.w); rect.setAttribute('height', s.h);
+    rect.setAttribute('rx', '12');
+    rect.setAttribute('fill',   s.color + '14');   // ~8% opacity
+    rect.setAttribute('stroke', s.color + 'aa');
+    rect.setAttribute('stroke-width', '1.5');
+    gg.appendChild(rect);
+
+    // Header bar across the top — solid colour for legibility against the
+    // varied content beneath.
+    const TITLE_H = 30;
+    const hdr = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    hdr.setAttribute('x', s.x); hdr.setAttribute('y', s.y);
+    hdr.setAttribute('width',  s.w); hdr.setAttribute('height', TITLE_H);
+    hdr.setAttribute('rx', '12');
+    hdr.setAttribute('fill', s.color + '33');
+    gg.appendChild(hdr);
+
+    // Site name label
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    lbl.setAttribute('x', s.x + 14);
+    lbl.setAttribute('y', s.y + 20);
+    lbl.setAttribute('fill', s.color);
+    lbl.setAttribute('font-size', '14');
+    lbl.setAttribute('font-family', "'Orbitron',monospace");
+    lbl.setAttribute('font-weight', '800');
+    lbl.setAttribute('letter-spacing', '1.5');
+    lbl.textContent = s.name.toUpperCase();
+    gg.appendChild(lbl);
+
+    // Device count chip on the right of the header
+    const cnt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    cnt.setAttribute('x', s.x + s.w - 12);
+    cnt.setAttribute('y', s.y + 20);
+    cnt.setAttribute('text-anchor', 'end');
+    cnt.setAttribute('fill', s.color + 'cc');
+    cnt.setAttribute('font-size', '11');
+    cnt.setAttribute('font-family', "'Share Tech Mono',monospace");
+    cnt.textContent = `${s.device_count} device${s.device_count === 1 ? '' : 's'}`;
+    gg.appendChild(cnt);
+
+    layer.appendChild(gg);
+  });
+}
+
 function renderGroups() {
   const layer = document.getElementById('groups-layer');
   if (!layer) return;
@@ -4342,9 +4842,13 @@ function showGroupPanel(g) {
   if (isPwGroup) _selectedPwDid = null;
   document.getElementById('panel-title').textContent = g.name.toUpperCase();
   document.getElementById('panel-icon').textContent = '◧';
-  const curColor = isPwGroup ? (pwGroupOverrides[g.name]?.color || g.color) : g.color;
-  // Escape name for safe embedding inside a JS string in an HTML attribute
-  const jsGname = g.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  // For v1.0 Site → Group buckets, g.key is the composite bucket key used
+  // as the pwGroupOverrides index; g.name is the friendly title shown to
+  // the user. Older code paths that don't set g.key fall back to g.name.
+  const gkey = g.key || g.name;
+  const curColor = isPwGroup ? (pwGroupOverrides[gkey]?.color || g.color) : g.color;
+  // Escape key for safe embedding inside a JS string in an HTML attribute
+  const jsGkey = gkey.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
     <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'Share Tech Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
@@ -4354,10 +4858,10 @@ function showGroupPanel(g) {
       <div class="field-label">COLOR OVERRIDE</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="color" value="${curColor}"
-               onchange="setPwGroupColor('${jsGname}',this.value)"
+               onchange="setPwGroupColor('${jsGkey}',this.value)"
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
-        ${pwGroupOverrides[g.name]?.color
-          ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGname}')">Reset</button>`
+        ${pwGroupOverrides[gkey]?.color
+          ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGkey}')">Reset</button>`
           : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
       </div>
     </div>` : ''}
@@ -4418,23 +4922,52 @@ function resetPwLayout() {
   toast('Layout reset to auto');
 }
 
-function setPwGroupColor(gname, color) {
-  pwGroupOverrides[gname] = { ...(pwGroupOverrides[gname] || {}), color };
+// Wipe every manually-drawn pwLink (VLAN trunks, VPN tunnels, etc.). Useful
+// when validating auto-link inference — manual links suppress matching
+// auto-links, so removing them surfaces what the auto-link engine actually
+// produces. Gated by the in-page `_confirm()` modal because Chrome blocks
+// native `confirm()` dialogs triggered from same-origin iframe button
+// clicks under some flag combinations (the issue that hid this dialog the
+// first time around).
+function clearPwManualLinks() {
+  const n = (pwLinks || []).length;
+  if (!n) { toast('No manual links to clear'); return; }
+  _confirm(
+    `Delete all <b>${n}</b> manual link${n === 1 ? '' : 's'}?<br><br>` +
+    `<span style="font-size:11px;color:var(--text3,#888)">` +
+    `Only removes user-drawn links. Auto-links (dim dashed lines from IPAM ` +
+    `topology) are unaffected.</span>`,
+    () => {
+      pwLinks = [];
+      selectedEl = null;
+      _pwSave('pw_links', pwLinks);
+      renderPingWatchCanvas();
+      toast(`Cleared ${n} manual link${n === 1 ? '' : 's'}`);
+    },
+    `Delete ${n} link${n === 1 ? '' : 's'}`,
+    true   // danger styling (red confirm button)
+  );
+}
+
+function setPwGroupColor(gkey, color) {
+  // gkey is the composite bucket key (site<US>group). Lookup against the
+  // synthetic group uses .key first, then falls back to .name for older
+  // pre-v1.0 entries that may still be in the overrides dict.
+  pwGroupOverrides[gkey] = { ...(pwGroupOverrides[gkey] || {}), color };
   _pwSave('pw_group_overrides', pwGroupOverrides);
   renderPingWatchCanvas();
-  // Re-show panel with updated color
-  const g = groups.find(x => x.name === gname);
+  const g = groups.find(x => (x.key || x.name) === gkey);
   if (g) showGroupPanel(g);
 }
 
-function resetPwGroupColor(gname) {
-  if (pwGroupOverrides[gname]) {
-    delete pwGroupOverrides[gname].color;
-    if (!Object.keys(pwGroupOverrides[gname]).length) delete pwGroupOverrides[gname];
+function resetPwGroupColor(gkey) {
+  if (pwGroupOverrides[gkey]) {
+    delete pwGroupOverrides[gkey].color;
+    if (!Object.keys(pwGroupOverrides[gkey]).length) delete pwGroupOverrides[gkey];
   }
   _pwSave('pw_group_overrides', pwGroupOverrides);
   renderPingWatchCanvas();
-  const g = groups.find(x => x.name === gname);
+  const g = groups.find(x => (x.key || x.name) === gkey);
   if (g) showGroupPanel(g);
 }
 

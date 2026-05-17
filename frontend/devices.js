@@ -4,6 +4,20 @@ function grpId(g){ return 'grp-'+btoa(unescape(encodeURIComponent(g))).replace(/
 function gridId(g){ return 'gg-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 function cntId(g){  return 'gc-'+btoa(unescape(encodeURIComponent(g))).replace(/[^a-z0-9]/gi,''); }
 
+// ── Site → Group → Device hierarchy helpers (v1.0+) ───────────────
+// Devices have an optional `site` tag above their `group`. The visual
+// bucket is keyed by the (site, group) tuple — same group name under
+// different sites renders as separate buckets ("HQ → Servers" and
+// "DR → Servers" are two visual sections, intentionally).
+//
+// We encode the tuple as `<site><group>` (unit-separator) and feed
+// that into grpId/gridId/cntId. Empty site → "Unsited" bucket.
+function _siteLabel(s){ return (s && String(s).trim()) || 'Unsited'; }
+function _dgKey(site, group){ return `${site || ''}${group || 'Default Group'}`; }
+function siteId(s){    return 'site-'+btoa(unescape(encodeURIComponent(s || '__unsited__'))).replace(/[^a-z0-9]/gi,''); }
+function sitebId(s){   return 'sb-'  +btoa(unescape(encodeURIComponent(s || '__unsited__'))).replace(/[^a-z0-9]/gi,''); }
+function siteCntId(s){ return 'sc-'  +btoa(unescape(encodeURIComponent(s || '__unsited__'))).replace(/[^a-z0-9]/gi,''); }
+
 // Muted-group set — populated once at boot from /api/device-groups/muted
 // and kept in sync whenever the Edit Group modal toggles the flag. Used
 // to decorate group headers with a 🔕 badge.
@@ -24,20 +38,23 @@ function _setGroupMutedLocal(group, muted){
 }
 
 function _refreshGroupMuteBadge(group){
-  const wrap = document.getElementById(grpId(group));
-  if (!wrap) return;
+  // Same group name may appear under multiple sites — update every wrap.
+  const wraps = document.querySelectorAll(`.grp-wrap[data-grp-name="${CSS.escape(group)}"]`);
+  if (!wraps.length) return;
   const muted = window._mutedGroups && window._mutedGroups.has(group);
-  let badge = wrap.querySelector('.grp-mute-badge');
-  if (muted && !badge){
-    badge = document.createElement('span');
-    badge.className = 'grp-mute-badge';
-    badge.textContent = '🔕';
-    badge.title = 'Alerts muted for this group';
-    const label = wrap.querySelector('.grp-label');
-    if (label && label.parentNode) label.parentNode.insertBefore(badge, label.nextSibling);
-  } else if (!muted && badge){
-    badge.remove();
-  }
+  wraps.forEach(wrap => {
+    let badge = wrap.querySelector('.grp-mute-badge');
+    if (muted && !badge){
+      badge = document.createElement('span');
+      badge.className = 'grp-mute-badge';
+      badge.textContent = '🔕';
+      badge.title = 'Alerts muted for this group';
+      const label = wrap.querySelector('.grp-label');
+      if (label && label.parentNode) label.parentNode.insertBefore(badge, label.nextSibling);
+    } else if (!muted && badge){
+      badge.remove();
+    }
+  });
 }
 
 // Tiny origin chip shown next to the device name on cards/rows when the
@@ -240,16 +257,26 @@ function _refreshAllCardSelVisuals(){
 }
 
 function _refreshGroupSelVisual(group){
-  const wrap = document.getElementById(grpId(group));
-  if (!wrap) return;
-  const cb = wrap.querySelector('.grp-sel-cb');
-  if (!cb) return;
+  // Selection state is computed per group name globally (across all sites
+  // that have that group). Mirror onto every matching .grp-wrap.
+  const wraps = document.querySelectorAll(`.grp-wrap[data-grp-name="${CSS.escape(group)}"]`);
+  if (!wraps.length) return;
   const dids = _didsInGroup(group);
   const sel  = dids.filter(d => _selectedDids.has(d)).length;
-  cb.classList.remove('checked','partial');
-  if (sel === 0)                  { /* empty */ }
-  else if (sel === dids.length)   cb.classList.add('checked');
-  else                            cb.classList.add('partial');
+  wraps.forEach(wrap => {
+    const cb = wrap.querySelector('.grp-sel-cb');
+    if (!cb) return;
+    cb.classList.remove('checked','partial');
+    _applyGroupSelClasses(cb, sel, dids.length);
+  });
+}
+
+// Extracted helper so the loop above stays compact. Sets the right class
+// (checked / partial / none) based on count.
+function _applyGroupSelClasses(cb, sel, total){
+  if (sel === 0)            { /* empty */ }
+  else if (sel === total)   cb.classList.add('checked');
+  else                      cb.classList.add('partial');
 }
 
 function _refreshAllGroupSelVisuals(){
@@ -282,6 +309,17 @@ function _updateBulkBar(){
     const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
     list.innerHTML = groups.map(g => `<option value="${esc(g)}"></option>`).join('');
   }
+  // Site datalist — fetched from /api/sites (UNION of IPAM + devices).
+  // Falls back to in-memory devices list on fetch failure.
+  const siteList = document.getElementById('bulkSiteList');
+  if (siteList){
+    if (typeof _populateSiteDatalist === 'function') {
+      _populateSiteDatalist('bulkSiteList');
+    } else {
+      const sites = [...new Set(Object.values(S.devices).map(d => d.site).filter(Boolean))].sort();
+      siteList.innerHTML = sites.map(s => `<option value="${esc(s)}"></option>`).join('');
+    }
+  }
 }
 
 async function _bulkApplyMove(){
@@ -308,6 +346,35 @@ async function _bulkApplyMove(){
     pruneEmptyGroups();
     if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
     else              toast(`${r.applied} device(s) moved to "${target}"`,'ok');
+    if (input) input.value = '';
+  } catch {
+    toast('Network error','err');
+  }
+}
+
+// Bulk move selected devices to a different site. Empty input is a valid
+// value meaning "Unsited" (clears the field) — we pass site:'' to the API.
+async function _bulkApplySiteMove(){
+  const input = document.getElementById('bulkSiteInput');
+  const target = (input?.value || '').trim();
+  if (target.length > 80){ toast('Site name too long (max 80)','err'); return; }
+  const dids = [..._selectedDids];
+  if (!dids.length) return;
+  try {
+    const r = await api('POST','/api/devices/bulk',{device_ids:dids, action:'move', site:target});
+    if (!r || !r.ok){ toast('Bulk site move failed','err'); return; }
+    _clearSelection();
+    dids.forEach(d => {
+      const dev = S.devices[d];
+      if (!dev) return;
+      dev.site = target;
+      renderDp(dev);
+    });
+    pruneEmptyGroups();
+    window._pwSitesCache = null;  // next autocomplete fetch picks up the new site
+    const lbl = target || 'Unsited';
+    if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
+    else              toast(`${r.applied} device(s) moved to "${lbl}"`,'ok');
     if (input) input.value = '';
   } catch {
     toast('Network error','err');
@@ -376,10 +443,77 @@ async function _bulkDeleteConfirmed(){
 
 // _lsGet / _lsSet moved to forms-utils.js (canonical location)
 
-function ensureGroupSection(group){
-  const id=grpId(group);
+// Build (or return) the .site-body element that should contain group wraps
+// for the given site. Site headers carry a collapse arrow + label + child
+// count; collapsed state persists in `pw-site-collapsed` localStorage.
+function ensureSiteSection(site){
+  const sid=siteId(site), sbid=sitebId(site), scid=siteCntId(site);
+  const existing=document.getElementById(sid);
+  if(existing) return document.getElementById(sbid);
+
+  const wrap=document.createElement('div');
+  wrap.className='site-wrap'; wrap.id=sid;
+  wrap.dataset.site = site || '';
+
+  const _siteCol=new Set(_lsGet('pw-site-collapsed', []));
+  const isCol=_siteCol.has(site || '');
+
+  const hdr=document.createElement('div');
+  hdr.className='site-hdr';
+  hdr.addEventListener('click', function(){ toggleSite(site); });
+
+  const arr=document.createElement('div');
+  arr.className='site-arr'+(isCol?'':' open');
+  arr.textContent='▶';
+
+  const label=document.createElement('div');
+  label.className='site-label';
+  label.textContent=_siteLabel(site);
+
+  const cnt=document.createElement('div');
+  cnt.className='site-count'; cnt.id=scid; cnt.textContent='';
+
+  hdr.appendChild(arr); hdr.appendChild(label); hdr.appendChild(cnt);
+
+  const body=document.createElement('div');
+  body.className='site-body'+(isCol?' collapsed':'');
+  body.id=sbid;
+
+  wrap.appendChild(hdr); wrap.appendChild(body);
+  document.getElementById('dpanels').appendChild(wrap);
+  return body;
+}
+
+function toggleSite(site){
+  const body=document.getElementById(sitebId(site));
+  const arr=document.querySelector('#'+siteId(site)+' .site-arr');
+  if(!body) return;
+  const nowCol=body.classList.toggle('collapsed');
+  if(arr){ arr.classList.toggle('open',!nowCol); }
+  const set=new Set(_lsGet('pw-site-collapsed', []));
+  if(nowCol) set.add(site || ''); else set.delete(site || '');
+  _lsSet('pw-site-collapsed', [...set]);
+}
+
+function refreshSiteCounts(){
+  document.querySelectorAll('.site-wrap').forEach(sw=>{
+    const cnt=sw.querySelector('.site-count');
+    if(!cnt) return;
+    const n=sw.querySelectorAll('.dc:not(.dc-add)').length;
+    const groups=sw.querySelectorAll('.grp-wrap').length;
+    cnt.textContent = `${groups} group${groups===1?'':'s'} · ${n} device${n===1?'':'s'}`;
+  });
+}
+
+function ensureGroupSection(group, site){
+  // Composite key: same group name under different sites → distinct buckets.
+  // site defaults to '' (Unsited) so any pre-existing single-arg callers keep
+  // working — they all land under the Unsited site.
+  if (site === undefined) site = '';
+  const key=_dgKey(site, group);
+  const id=grpId(key);
   if(document.getElementById(id)) return;
-  const gid=gridId(group), gcid=cntId(group);
+  const gid=gridId(key), gcid=cntId(key);
 
   const wrap=document.createElement('div');
   wrap.className='grp-wrap'; wrap.id=id;
@@ -389,7 +523,7 @@ function ensureGroupSection(group){
   hdr.className='grp-hdr';
 
   const _grpCol=new Set(_lsGet('pw-grp-collapsed', []));
-  const isCol=_grpCol.has(group);
+  const isCol=_grpCol.has(key);
 
   const dragH=document.createElement('div');
   dragH.className='grp-drag-handle'; dragH.textContent='⠿'; dragH.title='Drag to reorder groups';
@@ -411,7 +545,7 @@ function ensureGroupSection(group){
   arr.className='grp-arr'+(isCol?'':' open');
   arr.title=isCol?'Expand':'Collapse';
   arr.textContent='▶';
-  arr.addEventListener('click',function(){ toggleGroup(group); });
+  arr.addEventListener('click',function(){ toggleGroup(group, site || ''); });
 
   const label=document.createElement('div');
   label.className='grp-label';
@@ -436,21 +570,27 @@ function ensureGroupSection(group){
   });
 
   const cnt=document.createElement('div');
-  cnt.className='grp-count'; cnt.id=gcid; cnt.textContent='0';
+  cnt.className='grp-count'; cnt.id=gcid; cnt.textContent='0 total';
 
   const line2=document.createElement('div');
   line2.className='grp-line';
 
   const summary=document.createElement('span');
-  summary.className='grp-summary'; summary.id='gsum-'+gridId(group).replace('gg-','');
+  summary.className='grp-summary'; summary.id='gsum-'+gridId(key).replace('gg-','');
 
+  // Order matches the design: drag · checkbox · arrow · label · gear · spacer · pills · count
+  // (summary status pills come BEFORE the total count to read "●6 ●1 ●1   8 total")
   hdr.appendChild(dragH); hdr.appendChild(grpCb); hdr.appendChild(line1); hdr.appendChild(arr); hdr.appendChild(label);
   if (muteBadge) hdr.appendChild(muteBadge);
-  hdr.appendChild(editBtn); hdr.appendChild(cnt); hdr.appendChild(summary); hdr.appendChild(line2);
+  hdr.appendChild(editBtn); hdr.appendChild(summary); hdr.appendChild(cnt); hdr.appendChild(line2);
 
   // Grid
   const grid=document.createElement('div');
-  grid.className='grp-grid'+(isCol?' collapsed':'')+((_devView==='list')?' list-view':''); grid.id=gid; grid.dataset.group=group;
+  grid.className='grp-grid'+(isCol?' collapsed':'')+((_devView==='list')?' list-view':'');
+  grid.id=gid;
+  grid.dataset.group=group;
+  grid.dataset.site=site || '';
+  grid.dataset.dgkey=key;
   grid.addEventListener('dragover',onDragOver);
   grid.addEventListener('drop',onDrop);
   grid.addEventListener('dragleave',onDragLeave);
@@ -465,8 +605,10 @@ function ensureGroupSection(group){
   wrap.appendChild(hdr);
   wrap.appendChild(grid);
   wrap.dataset.grpName=group;
+  wrap.dataset.site=site || '';
+  wrap.dataset.dgkey=key;
   applyGrpDrag(wrap);
-  document.getElementById('dpanels').appendChild(wrap);
+  ensureSiteSection(site || '').appendChild(wrap);
 
   // The muted-groups set may be stale (e.g. auto-discovery just muted this
   // brand-new group server-side after the last _loadMutedGroups() fetch).
@@ -476,70 +618,95 @@ function ensureGroupSection(group){
 
 function refreshGroupCounts(){
   document.querySelectorAll('.grp-grid').forEach(grid=>{
-    const group=grid.dataset.group;
-    const cnt=document.getElementById(cntId(group));
-    if(cnt) cnt.textContent=grid.querySelectorAll('.dc:not(.dc-add)').length;
+    const key=grid.dataset.dgkey || grid.dataset.group;
+    const cnt=document.getElementById(cntId(key));
+    if(cnt){
+      const n=grid.querySelectorAll('.dc:not(.dc-add)').length;
+      cnt.textContent=`${n} total`;
+    }
   });
+  refreshSiteCounts();
 }
 
-function toggleGroup(group){
-  const grid=document.getElementById(gridId(group));
-  const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+function toggleGroup(group, site){
+  // Tolerate single-arg legacy callers: try to find the first .grp-wrap with
+  // this group name (we may have multiple — one per site) and toggle that.
+  let key;
+  if (site === undefined) {
+    const w = document.querySelector(`.grp-wrap[data-grp-name="${CSS.escape(group)}"]`);
+    if (!w) return;
+    key = w.dataset.dgkey;
+    site = w.dataset.site || '';
+  } else {
+    key = _dgKey(site, group);
+  }
+  const grid=document.getElementById(gridId(key));
+  const arr=document.querySelector('#'+grpId(key)+' .grp-arr');
   if(!grid) return;
   const nowCol=grid.classList.toggle('collapsed');
   if(arr){arr.classList.toggle('open',!nowCol);arr.title=nowCol?'Expand':'Collapse';}
   const set=new Set(_lsGet('pw-grp-collapsed', []));
-  if(nowCol) set.add(group); else set.delete(group);
+  if(nowCol) set.add(key); else set.delete(key);
   _lsSet('pw-grp-collapsed', [...set]);
-  _updateGrpSummary(group);
+  _updateGrpSummary(group, site);
 }
 
 function _collapseAllGroups(){
-  const groups=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.group).filter(Boolean);
-  const set=new Set(groups);
-  groups.forEach(group=>{
-    const grid=document.getElementById(gridId(group));
-    const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+  // Iterate by composite key (dgkey) so groups with the same name under
+  // different sites collapse independently — each is its own bucket.
+  const keys=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.dgkey).filter(Boolean);
+  const set=new Set(keys);
+  keys.forEach(key=>{
+    const grid=document.getElementById(gridId(key));
+    const arr=document.querySelector('#'+grpId(key)+' .grp-arr');
     if(!grid) return;
     grid.classList.add('collapsed');
     if(arr){arr.classList.remove('open');arr.title='Expand';}
-    _updateGrpSummary(group);
+    _updateGrpSummary(grid.dataset.group, grid.dataset.site || '');
   });
   _lsSet('pw-grp-collapsed',[...set]);
 }
 
 function _expandAllGroups(){
-  const groups=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.group).filter(Boolean);
-  groups.forEach(group=>{
-    const grid=document.getElementById(gridId(group));
-    const arr=document.querySelector('#'+grpId(group)+' .grp-arr');
+  const keys=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.dgkey).filter(Boolean);
+  keys.forEach(key=>{
+    const grid=document.getElementById(gridId(key));
+    const arr=document.querySelector('#'+grpId(key)+' .grp-arr');
     if(!grid) return;
     grid.classList.remove('collapsed');
     if(arr){arr.classList.add('open');arr.title='Collapse';}
-    _updateGrpSummary(group);
+    _updateGrpSummary(grid.dataset.group, grid.dataset.site || '');
   });
   _lsSet('pw-grp-collapsed',[]);
 }
 
-function _updateGrpSummary(group){
-  const gid=gridId(group).replace('gg-','');
+function _updateGrpSummary(group, site){
+  // Legacy callers that pass only group: find any matching wrap and
+  // recurse into the per-site variant. Cheap and only used in one path.
+  if (site === undefined) {
+    document.querySelectorAll(`.grp-wrap[data-grp-name="${CSS.escape(group)}"]`).forEach(w=>{
+      _updateGrpSummary(group, w.dataset.site || '');
+    });
+    return;
+  }
+  const key=_dgKey(site, group);
+  const gid=gridId(key).replace('gg-','');
   const el=document.getElementById('gsum-'+gid);
   if(!el) return;
-  const grid=document.getElementById(gridId(group));
-  if(!grid||!grid.classList.contains('collapsed')){el.style.display='none';return;}
-  // Count devices by status in this group
+  const grid=document.getElementById(gridId(key));
+  if(!grid){ el.innerHTML=''; return; }
+  // Count devices by status in this group (always show, regardless of collapsed state)
   const counts={up:0,down:0,warn:0};
   grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
     const did=card.id.replace('dp-','');
     const dev=S.devices[did];
     if(dev){const st=dev.status||'unknown';if(counts[st]!==undefined)counts[st]++;}
   });
-  let html='';
-  if(counts.up)   html+=`<span class="grp-sum-dot up"></span> ${counts.up}`;
-  if(counts.down)  html+=`${html?' ':''}  <span class="grp-sum-dot down"></span> ${counts.down}`;
-  if(counts.warn)  html+=`${html?' ':''}  <span class="grp-sum-dot warn"></span> ${counts.warn}`;
-  el.innerHTML=html;
-  el.style.display=html?'inline-flex':'none';
+  const parts=[];
+  if(counts.up)   parts.push(`<span class="grp-sum-pill up"><span class="grp-sum-dot"></span>${counts.up}</span>`);
+  if(counts.warn) parts.push(`<span class="grp-sum-pill warn"><span class="grp-sum-dot"></span>${counts.warn}</span>`);
+  if(counts.down) parts.push(`<span class="grp-sum-pill down"><span class="grp-sum-dot"></span>${counts.down}</span>`);
+  el.innerHTML=parts.join('');
 }
 
 function _devSnrSummaryHtml(did){
@@ -675,6 +842,12 @@ function pruneEmptyGroups(){
     const n=grid?grid.querySelectorAll('.dc:not(.dc-add)').length:0;
     if(n===0) w.remove();
   });
+  // Then prune site wrappers that have no groups left in their body.
+  document.querySelectorAll('.site-wrap').forEach(sw=>{
+    const body=sw.querySelector('.site-body');
+    if(body && body.querySelectorAll('.grp-wrap').length===0) sw.remove();
+  });
+  refreshSiteCounts();
 }
 
 function renderDp(dev){
@@ -683,8 +856,9 @@ function renderDp(dev){
   const old=document.getElementById('dp-'+dev.device_id);
   const oldLr=document.getElementById('dpl-'+dev.device_id);
   const group=dev.group||'Default Group';
-  ensureGroupSection(group);
-  const grid=document.getElementById(gridId(group));
+  const site=dev.site||'';
+  ensureGroupSection(group, site);
+  const grid=document.getElementById(gridId(_dgKey(site, group)));
   const addBtn=grid.querySelector('.dc-add');
   // If the device is staying in its current group, replace cards in place to
   // preserve position. If the group changed, fall back to remove + append at end.
@@ -789,23 +963,99 @@ function cardHTML(dev){
   const adChip = _renderAutoDiscoveryChip(dev);
   const selCls = _selectedDids.has(dev.device_id) ? ' selected' : '';
   const cbCls  = _selectedDids.has(dev.device_id) ? 'dc-sel-cb checked' : 'dc-sel-cb';
+  const tilesHtml = _devCardTiles(dev.device_id);
+  const sensorCount = (S._devSensors?.[dev.device_id]?.size) || 0;
+  // Vendor chip — show the device's group as a tag (proxy for vendor since
+  // PingWatch doesn't track a vendor field on devices)
+  const grpChip = dev.group ? `<div class="dcard-vendor">${esc(dev.group)}</div>` : '';
   return `
-  <div class="dc ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+  <div class="dc dcard ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
     <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
-    <div class="dc-bar ${st}" id="dcbar-${dev.device_id}"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
-    <div class="dc-body">
-      <div>
-        <div class="dc-name">${esc(dev.name)}${adChip}</div>
-        <div class="dc-host">${esc(dev.host)}</div>
+    <div class="dcard-head">
+      <div class="dc-bar dcard-stripe ${st}" id="dcbar-${dev.device_id}"></div>
+      <div class="dcard-name-wrap">
+        <div class="dcard-name">${esc(dev.name)}${adChip}</div>
+        <div class="dcard-meta"><span>${esc(dev.host||'')}</span></div>
       </div>
-      <div class="dc-status ${st}" id="dcst-${dev.device_id}">
-        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}
-      </div>
-      <div class="dc-sensors" id="dcsnr-${dev.device_id}">
-        ${sSnrPreview(dev.device_id)}
-      </div>
+      ${grpChip}
     </div>
+    <div class="dcard-tiles" id="dcsnr-${dev.device_id}">${tilesHtml}</div>
+    <div class="dcard-foot">
+      <span class="dc-status ${st}" id="dcst-${dev.device_id}">
+        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}
+      </span>
+      <span class="seen">${sensorCount} sensor${sensorCount===1?'':'s'}</span>
+    </div>
+  </div>`;
+}
+
+// Build the .dcard-tiles content — up to 4 sensors as .stile tiles, respecting
+// the user's saved sensor-drag order. Preserves csv-/csd- ids so the existing
+// updateCardSensor() hook keeps targeting the right elements.
+function _devCardTiles(did){
+  const keys = S._devSensors?.[did] || new Set();
+  const snrs = [...keys].map(k => S.sensors[k]).filter(Boolean);
+  if (!snrs.length) {
+    return '<div class="dcard-empty" style="padding:16px;text-align:center;color:var(--text3);font-size:11px;grid-column:1/-1">No sensors yet</div>';
+  }
+  const ord = _lsGet(`pw_snr_order_${did}`, []);
+  if (ord.length) {
+    snrs.sort((a, b) => {
+      const ai = ord.indexOf(a.sensor_id), bi = ord.indexOf(b.sensor_id);
+      return (ai < 0 ? 9999 : ai) - (bi < 0 ? 9999 : bi);
+    });
+  }
+  return snrs.slice(0, 4).map(_stileHTML).join('');
+}
+
+function _stileHTML(s){
+  const isSnmp = s.stype === 'snmp' || s.stype === 'dns';
+  const isVmware = s.stype === 'vmware';
+  let st = 'up';
+  if (s.alive === false) st = 'down';
+  else if (isVmware || isSnmp) st = s.alive === true ? 'up' : 'pause';
+  else if (s.last_ms != null) {
+    const c = typeof msC === 'function' ? msC(s.last_ms, s) : 'g';
+    st = c === 'b' ? 'down' : c === 'w' ? 'warn' : c === 'g' ? 'up' : 'pause';
+  } else { st = 'pause'; }
+  let val = '—', unit = '';
+  if (isVmware) {
+    if (s.last_value != null) {
+      const v = parseFloat(s.last_value);
+      val = isNaN(v) ? (s.last_value+'').slice(0,8)
+                     : _fmtVmVal(v, _VM_UNITS[s.vmware_metric]||'');
+    }
+  } else if (s.stype === 'snmp' && typeof _snmpTileValue === 'function') {
+    val = _snmpTileValue(s);
+  } else if (isSnmp) {
+    val = s.alive === false ? 'FAIL' : (s.last_value || '—').slice(0,8);
+  } else if (s.last_ms != null) {
+    val = String(s.last_ms) + ' ms';   // unit baked into the string so updateCardSensor stays simple
+  } else if (s.alive === false) {
+    val = 'DOWN';
+  }
+  const sparkColor = st === 'down' ? 'var(--down)'
+                    : st === 'warn' ? 'var(--warn)'
+                    : st === 'pause' ? 'var(--pause)'
+                    : 'var(--up)';
+  let sparkHtml = '<div class="stile-spark empty"></div>';
+  if (typeof pwSparkline === 'function' && Array.isArray(s.history) && s.history.length > 1) {
+    const series = s.history.slice(-20).map(v => {
+      const n = typeof v === 'number' ? v : parseFloat(v);
+      return isNaN(n) ? 0 : n;
+    });
+    try {
+      sparkHtml = `<div class="stile-spark">${pwSparkline(series, { color: sparkColor, h: 18, w: 100, fill: true })}</div>`;
+    } catch (_) { /* keep empty placeholder */ }
+  }
+  return `<div class="stile ${st}">
+    <div class="stile-head">
+      <span class="dot ${st}" id="csd-${s.device_id}_${s.sensor_id}"></span>
+      <span>${esc(s.name)}</span>
+    </div>
+    <div class="stile-val" id="csv-${s.device_id}_${s.sensor_id}">${esc(val)}</div>
+    ${sparkHtml}
   </div>`;
 }
 
@@ -864,9 +1114,11 @@ function updateCardStatus(did,st){
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
   const card=document.getElementById(`dp-${did}`);
   if(card){
-    card.className=`dc ${st}`;
+    // Preserve selected + dcard classes when swapping status
+    const wasSel = card.classList.contains('selected');
+    card.className=`dc dcard ${st}${wasSel?' selected':''}`;
     const bar=document.getElementById(`dcbar-${did}`);
-    if(bar)bar.className=`dc-bar ${st}`;
+    if(bar)bar.className=`dc-bar dcard-stripe ${st}`;
     const badge=document.getElementById(`dcst-${did}`);
     if(badge){badge.className=`dc-status ${st}`;badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}`;}
   }
@@ -876,6 +1128,9 @@ function updateCardStatus(did,st){
   // Refresh summary badge
   const sumEl=document.getElementById(`dlr-sum-${did}`);
   if(sumEl){ const h=_devSnrSummaryHtml(did); if(h) sumEl.outerHTML=h; }
+  // Refresh the group header status-pill summary (live)
+  const dev=S.devices[did];
+  if(dev?.group && typeof _updateGrpSummary==='function') _updateGrpSummary(dev.group);
 }
 
 function updateCardSensor(s){
@@ -894,12 +1149,27 @@ function updateCardSensor(s){
     } else if(isSnmp){
       v=full.alive===false?'FAIL':(full.last_value||'—').slice(0,10);
     } else {
-      v=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'—');
+      v=full.last_ms!=null?`${full.last_ms} ms`:(full.alive===false?'DOWN':'—');
     }
-    const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
-    vEl.textContent=v; vEl.className=`dc-snr-val ${c}`;
+    vEl.textContent=v;
+    // Detect new .stile-val vs legacy .dc-snr-val and update classes appropriately
+    if (vEl.classList.contains('stile-val')) {
+      let stStr = 'up';
+      if (full.alive === false) stStr = 'down';
+      else if (isVmware || isSnmp) stStr = full.alive === true ? 'up' : 'pause';
+      else if (full.last_ms != null) {
+        const cc = typeof msC === 'function' ? msC(full.last_ms, full) : 'g';
+        stStr = cc === 'b' ? 'down' : cc === 'w' ? 'warn' : cc === 'g' ? 'up' : 'pause';
+      } else { stStr = 'pause'; }
+      const tile = vEl.closest('.stile');
+      if (tile) tile.className = `stile ${stStr}`;
+      if (dEl) dEl.className = `dot ${stStr}`;
+    } else {
+      const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
+      vEl.className=`dc-snr-val ${c}`;
+      if (dEl) dEl.className = `dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
+    }
   }
-  if(dEl) dEl.className=`dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
   // Also update list row sensor value
   const lsv=document.getElementById(`lsv-${s.device_id}_${s.sensor_id}`);
   if(lsv){
@@ -995,6 +1265,7 @@ function onDrop(e){
   e.preventDefault();
   const grid=e.currentTarget;
   const group=grid.dataset.group;
+  const site =grid.dataset.site || '';
   grid.classList.remove('grp-grid-over');
   if(dropIndicator){
     // insert real card where indicator is
@@ -1005,12 +1276,18 @@ function onDrop(e){
   dragEl.classList.remove('dc-dragging');
   const did=dragDid;
   const dev=S.devices[did]; if(!dev) return;
-  if((dev.group||'Default Group')!==group){
-    dev.group=group;
-    api('PATCH','/api/device/'+did,{group});
+  const groupChanged = (dev.group||'Default Group')!==group;
+  const siteChanged  = (dev.site||'')!==site;
+  if (groupChanged || siteChanged) {
+    const patch = {};
+    if (groupChanged) { dev.group = group; patch.group = group; }
+    if (siteChanged)  { dev.site  = site;  patch.site  = site;  }
+    api('PATCH','/api/device/'+did, patch);
+    if (siteChanged) window._pwSitesCache = null;
   }
   refreshGroupCounts();
   pruneEmptyGroups();
+  refreshSiteCounts();
 }
 
 // ── Group drag-to-reorder ─────────────────────────────────────────
@@ -1048,12 +1325,15 @@ function onGrpDragOver(e){
   _grpEdgeScroll(e.clientY); // scroll container when near its edges
   const target=e.currentTarget;
   if(target===_dragGrpEl) return;
+  // Group reorder is constrained to within a single site for v1.
+  // Cross-site moves require explicit Edit Device / bulk-move flows.
+  if(target.parentNode !== _dragGrpEl.parentNode) return;
+  const parent=target.parentNode;  // .site-body
   const rect=target.getBoundingClientRect();
-  const dpanels=document.getElementById('dpanels');
   if(e.clientY<rect.top+rect.height/2){
-    dpanels.insertBefore(_dragGrpEl,target);
+    parent.insertBefore(_dragGrpEl,target);
   } else {
-    dpanels.insertBefore(_dragGrpEl,target.nextSibling);
+    parent.insertBefore(_dragGrpEl,target.nextSibling);
   }
 }
 
@@ -1063,9 +1343,11 @@ function onGrpDrop(e){
 }
 
 function saveGroupOrder(){
+  // Order key is the composite (site,group) — same group name across sites
+  // can be reordered independently within each site's body.
   const order=[...document.querySelectorAll('.grp-wrap')].map(w=>{
     const g=w.querySelector('.grp-grid');
-    return g?g.dataset.group:null;
+    return g?(g.dataset.dgkey || g.dataset.group):null;
   }).filter(Boolean);
   _lsSet('pw-grp-order', order);
 }
@@ -1074,25 +1356,21 @@ function restoreGroupOrder(){
   const dpanels=document.getElementById('dpanels');
   if(!dpanels) return;
   const order=_lsGet('pw-grp-order', []);
-  // Snapshot current DOM order BEFORE any appendChild reflow, so we can
-  // identify which groups are not yet in the saved order (newly created or
-  // SSE-arrived).
+  if (!order.length) return;
+  // Reorder groups within each site body — the site wrapper is the parent
+  // now, not #dpanels. Group keys are composite (sitegroup) so the
+  // saved key uniquely identifies which site's wrap to move.
+  const knownIds=new Set(order.map(k => grpId(k)));
   const beforeWraps=[...dpanels.querySelectorAll('.grp-wrap')];
-  const knownIds=new Set(order.map(g => grpId(g)));
-  // 1) Saved groups first, in their saved order. appendChild moves elements
-  //    to the end, so iterating in order builds the saved sequence at the
-  //    bottom of dpanels.
-  order.forEach(grp=>{
-    const wrap=document.getElementById(grpId(grp));
-    if(wrap) dpanels.appendChild(wrap);
+  order.forEach(key=>{
+    const wrap=document.getElementById(grpId(key));
+    if(!wrap) return;
+    const parent=wrap.parentNode; // .site-body
+    if(parent) parent.appendChild(wrap);
   });
-  // 2) Then any UNSAVED groups (not in pw-grp-order), preserving their
-  //    pre-restore DOM order. Without this step, unsaved newcomers got
-  //    "left behind" at the top of dpanels because saved groups were
-  //    moved past them — that's why a freshly-added group appeared at the
-  //    very top of the device list.
+  // Newcomers stay in their pre-existing parent order.
   beforeWraps.forEach(w => {
-    if(!knownIds.has(w.id)) dpanels.appendChild(w);
+    if(!knownIds.has(w.id) && w.parentNode) w.parentNode.appendChild(w);
   });
 }
 // ─────────────────────────────────────────────────────────────────
@@ -1122,47 +1400,53 @@ function getDragAfter(grid,x,y){
 function renameGroup(labelEl, oldName){
   const newName=prompt('Rename group:',oldName);
   if(!newName||newName===oldName) return;
-  // Update all devices in this group
+  // Update all devices that carry this group name (across any sites).
   Object.values(S.devices).filter(d=>(d.group||'Default Group')===oldName).forEach(d=>{
     d.group=newName;
     api('PATCH','/api/device/'+d.device_id,{group:newName});
   });
-  // Patch the DOM without re-rendering
-  const wrap=document.getElementById(grpId(oldName));
-  if(wrap){
-    const grid=wrap.querySelector('.grp-grid');
-    if(grid) grid.dataset.group=newName;
-    wrap.id=grpId(newName);
-    labelEl.textContent=newName;
+  // Patch the DOM without re-rendering — there may be one wrap per site
+  // that previously contained this group name.
+  document.querySelectorAll(`.grp-wrap[data-grp-name="${CSS.escape(oldName)}"]`).forEach(wrap => {
+    const site = wrap.dataset.site || '';
+    const newKey = _dgKey(site, newName);
+    const grid = wrap.querySelector('.grp-grid');
+    if (grid) {
+      grid.dataset.group = newName;
+      grid.dataset.dgkey = newKey;
+      grid.id = gridId(newKey);
+    }
+    wrap.dataset.grpName = newName;
+    wrap.dataset.dgkey   = newKey;
+    wrap.id = grpId(newKey);
     // Update the click handler on the add-device card
-    const addCard=wrap.querySelector('.dc-add');
-    if(addCard){
-      addCard.replaceWith(addCard.cloneNode(true)); // remove old listener
-      const fresh=wrap.querySelector('.dc-add');
-      fresh.addEventListener('click',function(){ openAddDeviceGroup(newName); });
+    const addCard = wrap.querySelector('.dc-add');
+    if (addCard) {
+      addCard.replaceWith(addCard.cloneNode(true));
+      const fresh = wrap.querySelector('.dc-add');
+      fresh.addEventListener('click', function(){ openAddDeviceGroup(newName); });
     }
     // Update the label text
-    labelEl.replaceWith(labelEl.cloneNode(true));
-    const newLabel=wrap.querySelector('.grp-label');
-    newLabel.textContent=newName;
+    const lbl = wrap.querySelector('.grp-label');
+    if (lbl) { lbl.replaceWith(lbl.cloneNode(true)); wrap.querySelector('.grp-label').textContent = newName; }
     // Rebind gear button so it carries the new group name
-    const gear=wrap.querySelector('.grp-edit-btn');
-    if(gear){
+    const gear = wrap.querySelector('.grp-edit-btn');
+    if (gear) {
       gear.replaceWith(gear.cloneNode(true));
-      const freshGear=wrap.querySelector('.grp-edit-btn');
-      freshGear.addEventListener('click',function(e){
+      const freshGear = wrap.querySelector('.grp-edit-btn');
+      freshGear.addEventListener('click', function(e){
         e.stopPropagation();
         if (typeof openEditGroup === 'function') openEditGroup(newName);
       });
     }
-    cntId_refresh(wrap, newName);
-  }
+    cntId_refresh(wrap, newKey);
+  });
   toast('Group renamed to "'+newName+'"','ok');
 }
 
-function cntId_refresh(wrap, group){
+function cntId_refresh(wrap, key){
   const oldCnt=wrap.querySelector('.grp-count');
-  if(oldCnt){ oldCnt.id=cntId(group); }
+  if(oldCnt){ oldCnt.id=cntId(key); }
 }
 
 // ── Add Device pre-filled with a group ───────────────────────────
@@ -1208,11 +1492,12 @@ function openAddGroup(){
 function submitAddGroup(){
   const name=(document.getElementById('ag-n')?.value||'').trim();
   if(!name){ toast('Group name is required','err'); return; }
-  // Check if already exists
-  const exists=document.getElementById(grpId(name));
+  // New groups land in the Unsited site by default — user can drag devices
+  // in and reassign sites via the Edit Device modal.
+  const site='';
+  const exists=document.getElementById(grpId(_dgKey(site, name)));
   if(exists){ toast('Group already exists','err'); return; }
-  // Create the section (empty)
-  ensureGroupSection(name);
+  ensureGroupSection(name, site);
   // Persist the new group at the END of the saved order. Without this, the
   // group is unsaved and the next restoreGroupOrder() pass would push every
   // saved group past it (appendChild reflow), making the new group jump to
@@ -1226,9 +1511,9 @@ function submitAddGroup(){
   }
   closeM('mag');
   toast('Group "'+name+'" created','ok');
-  // Scroll the new group into view
+  // Scroll the new group into view (Unsited bucket by default)
   setTimeout(()=>{
-    const wrap=document.getElementById(grpId(name));
+    const wrap=document.getElementById(grpId(_dgKey('', name)));
     if(wrap) wrap.scrollIntoView({behavior:'smooth',block:'start'});
   },80);
 }
@@ -1423,15 +1708,24 @@ function _setStatusFilter(st){
 
 function _updateStatusPills(){
   const counts={all:0,up:0,down:0,warn:0,pause:0};
+  const groups=new Set();
   for(const did in S.devices){
     counts.all++;
     const st=(S.devices[did].status||'unknown').toLowerCase();
     if(counts[st]!==undefined) counts[st]++;
+    const g=S.devices[did].group||'Default Group';
+    groups.add(g);
   }
   document.querySelectorAll('.dev-status-pill').forEach(p=>{
     const ct=p.querySelector('.pill-ct');
     if(ct) ct.textContent=counts[p.dataset.st]??0;
   });
+  // Page-head sub line — shows live device + group count
+  const sub=document.getElementById('devSub');
+  if(sub){
+    const g=groups.size;
+    sub.textContent=`${counts.all} device${counts.all!==1?'s':''} across ${g} group${g!==1?'s':''}`;
+  }
 }
 
 // ── Device search / filter ────────────────────────────────────────

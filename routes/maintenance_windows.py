@@ -16,7 +16,7 @@ from db.maintenance_windows import (
 )
 from db import db_log_audit
 
-_VALID_SCOPES = {"all", "group", "device"}
+_VALID_SCOPES = {"all", "site", "group", "device"}
 
 
 def _validate(body: dict) -> str | None:
@@ -48,6 +48,9 @@ def _clean(body: dict) -> dict:
         "recur_days":  str(body.get("recur_days", "")).strip(),
         "recur_start": str(body.get("recur_start", "")).strip(),
         "recur_end":   str(body.get("recur_end", "")).strip(),
+        # Default new windows to enabled. PATCH callers that omit the
+        # field implicitly leave it enabled (same as legacy behavior).
+        "enabled":     bool(body.get("enabled", True)),
     }
 
 

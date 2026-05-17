@@ -78,6 +78,10 @@ def check_maintenance(ctx: dict) -> tuple:
             continue
         if scope == "device" and ctx.get("did", "") != w.get("scope_value", ""):
             continue
+        # Site scope was added in v1.0 alongside Site → Group → Device hierarchy.
+        # ctx["site"] is populated by _build_ctx in alert_profile_engine.
+        if scope == "site" and ctx.get("site", "") != w.get("scope_value", ""):
+            continue
 
         return True, w.get("name", "")
 

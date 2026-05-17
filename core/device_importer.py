@@ -186,6 +186,7 @@ def create_devices_batch(devices: list, default_group: str = "Imported") -> dict
             name  = str(item.get("name", "")).strip()[:255]
             host  = str(item.get("host", "")).lower().strip()[:253]
             group = (str(item.get("group", "")).strip() or default_group)[:255]
+            site  = str(item.get("site", "") or "").strip()[:80]
 
             if not name or not host:
                 errors.append({"index": idx, "host": host,
@@ -201,7 +202,7 @@ def create_devices_batch(devices: list, default_group: str = "Imported") -> dict
                                "error": "already monitored"})
                 continue
 
-            did = STATE.add_device(name, host, group)
+            did = STATE.add_device(name, host, group, site=site)
             if not did:
                 errors.append({"index": idx, "host": host, "error": "create failed"})
                 continue
