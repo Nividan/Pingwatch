@@ -553,6 +553,14 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # IPAM VLAN tagging (v1.0+) — optional VLAN ID (1..4094) for cross-ref
+        # with switch port config + topology. Sidebar shows "[VLAN N]" chip;
+        # subnet search filter includes vlan text. 0/NULL = untagged.
+        try:
+            con.execute("ALTER TABLE ipam_subnets ADD COLUMN vlan INTEGER DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # Site grouping on devices (v1.0+) — Site → Group → Device hierarchy.
         # Free-text; sourced via autocomplete from UNION(ipam_subnets.site, devices.site).
         try:

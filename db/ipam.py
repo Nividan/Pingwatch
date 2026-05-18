@@ -25,7 +25,8 @@ _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "COALESCE(first_scan_approved,0) AS first_scan_approved, "
                 "last_auto_scan_ts, "
                 "COALESCE(dns_server,'')         AS dns_server, "
-                "COALESCE(site,'')               AS site")
+                "COALESCE(site,'')               AS site, "
+                "COALESCE(vlan,0)                AS vlan")
 
 
 def _fmt_ts(v) -> str:
@@ -49,7 +50,8 @@ def _row_to_subnet_pg(r) -> dict:
             "first_scan_approved": int(r.get("first_scan_approved") or 0),
             "last_auto_scan_ts":   _fmt_ts(r.get("last_auto_scan_ts")),
             "dns_server":          (r.get("dns_server") or ""),
-            "site":                (r.get("site") or "")}
+            "site":                (r.get("site") or ""),
+            "vlan":                int(r.get("vlan") or 0)}
 
 
 def _row_to_subnet_sqlite(r) -> dict:
@@ -59,7 +61,8 @@ def _row_to_subnet_sqlite(r) -> dict:
             "first_scan_approved": int(r[6] or 0),
             "last_auto_scan_ts":   _fmt_ts(r[7]),
             "dns_server":          (r[8] or "") if len(r) > 8 else "",
-            "site":                (r[9] or "") if len(r) > 9 else ""}
+            "site":                (r[9] or "") if len(r) > 9 else "",
+            "vlan":                int(r[10] or 0) if len(r) > 10 else 0}
 
 
 def db_list_subnets() -> list:
@@ -134,6 +137,11 @@ _SUBNET_UPDATABLE_FIELDS = {
     "auto_discover":       ("INT",     None),
     "first_scan_approved": ("INT",     None),
     "dns_server":          ("TEXT",    255),
+    # VLAN (v1.0+): valid IEEE 802.1Q range is 1..4094. 0 = untagged / no VLAN.
+    # INT_RANGE clamps out-of-range to 0 rather than silently dropping the field
+    # so the user gets a stable result ("invalid -> untagged" is recoverable;
+    # silent drop leaves the previous VLAN in place which is surprising).
+    "vlan":                ("INT_RANGE", (0, 4094)),
 }
 
 
@@ -154,6 +162,13 @@ def db_update_subnet(subnet_id: int, fields: dict) -> bool:
                 clean[k] = 1 if int(v) else 0
             except (TypeError, ValueError):
                 continue
+        elif kind == "INT_RANGE":
+            lo, hi = maxlen  # spec[1] holds (lo, hi)
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                continue
+            clean[k] = iv if (lo <= iv <= hi) else 0
         else:
             s = "" if v is None else str(v).strip()
             if maxlen:
@@ -294,25 +309,32 @@ def db_set_subnet_last_scan(subnet_id: int, ts: str) -> bool:
         con.close()
 
 
-def db_add_subnet(cidr: str, name: str, user: str, site: str = '') -> int:
+def db_add_subnet(cidr: str, name: str, user: str, site: str = '', vlan: int = 0) -> int:
     """
     Insert a new subnet. Returns the new row id.
     Raises ValueError on duplicate CIDR.
 
     `site` is an optional free-form site/zone tag for sidebar grouping.
+    `vlan` is an optional 802.1Q VLAN ID (1..4094; 0 = untagged).
     """
     now = time.time()
+    try:
+        vlan_i = int(vlan or 0)
+    except (TypeError, ValueError):
+        vlan_i = 0
+    if not (0 <= vlan_i <= 4094):
+        vlan_i = 0
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor('main') as cur:
                 cur.execute(
-                    "INSERT INTO ipam_subnets (cidr, name, site, created_by, created_at) "
-                    "VALUES (%s,%s,%s,%s,%s) RETURNING id",
-                    (cidr, name, site, user, now)
+                    "INSERT INTO ipam_subnets (cidr, name, site, vlan, created_by, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (cidr, name, site, vlan_i, user, now)
                 )
                 new_id = cur.fetchone()["id"]
-            log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={new_id} by {user!r}")
+            log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={new_id} vlan={vlan_i} by {user!r}")
             return new_id
         except Exception as e:
             if "unique" in str(e).lower() or "duplicate" in str(e).lower():
@@ -324,8 +346,8 @@ def db_add_subnet(cidr: str, name: str, user: str, site: str = '') -> int:
     con = sqlite3.connect(DB_PATH, timeout=10)
     try:
         cur = con.execute(
-            "INSERT INTO ipam_subnets (cidr, name, site, created_by, created_at) VALUES (?,?,?,?,?)",
-            (cidr, name, site, user, now)
+            "INSERT INTO ipam_subnets (cidr, name, site, vlan, created_by, created_at) VALUES (?,?,?,?,?,?)",
+            (cidr, name, site, vlan_i, user, now)
         )
         con.commit()
         log.debug(f"IPAM subnet inserted: cidr={cidr!r} id={cur.lastrowid} by {user!r}")

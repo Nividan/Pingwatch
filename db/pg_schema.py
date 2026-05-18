@@ -273,6 +273,8 @@ def pg_create_main_schema(cur):
         ("ipam_subnets", "first_scan_approved",     "INTEGER DEFAULT 0"),
         ("ipam_subnets", "last_auto_scan_ts",       "TIMESTAMP DEFAULT NULL"),
         ("ipam_subnets", "dns_server",              "TEXT DEFAULT ''"),
+        # IPAM VLAN tagging (v1.0+) — see db/core.py for rationale
+        ("ipam_subnets", "vlan",                    "INTEGER DEFAULT 0"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:

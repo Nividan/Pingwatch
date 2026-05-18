@@ -17,6 +17,25 @@ Two reductions applied at the dedup step of [`_pwComputeAutoLinks()` in frontend
 
 Together: a network with 80 devices in 10 groups all anchored to one switch goes from ~80 auto-links down to ~10 — typically a 80–90% line-count reduction while preserving the cross-group topology shape. Manual `pwLinks` are unaffected — they always render and continue to suppress matching auto-link pairs.
 
+### IPAM — VLAN ID per subnet
+
+Each subnet can now carry an optional 802.1Q VLAN ID (1..4094) for cross-reference with switch port config and topology. The sidebar shows a small `V{id}` chip next to the CIDR, and the subnet filter at the top of the sidebar matches against VLAN text (`vlan 100` or just `100` both work).
+
+**Schema** ([db/core.py:557-563](db/core.py#L557), [db/pg_schema.py:276](db/pg_schema.py#L276)): idempotent `ALTER TABLE ipam_subnets ADD COLUMN vlan INTEGER DEFAULT 0` on both backends. `0` = untagged / no VLAN.
+
+**Backend** ([db/ipam.py](db/ipam.py)):
+- `_SUBNET_COLS` SELECT extended with `COALESCE(vlan,0) AS vlan`; row mappers return `vlan: int`.
+- `db_add_subnet(...)` gains `vlan: int = 0` kwarg with 0..4094 clamping.
+- `_SUBNET_UPDATABLE_FIELDS` gains `"vlan": ("INT_RANGE", (0, 4094))`; new `INT_RANGE` field kind clamps out-of-range values to 0 rather than dropping the field (recoverable behavior — silent drop would leave the old VLAN in place).
+
+**Routes** ([routes/ipam.py](routes/ipam.py)): POST `/api/ipam/subnets` reads `body.vlan`; PATCH `/api/ipam/subnets/{id}` accepts `vlan` and audits as `vlan={N|untagged}`. Both validate to 1..4094 with out-of-range → 0 fallback.
+
+**Frontend** ([frontend/ipam.js](frontend/ipam.js), [frontend/style.css](frontend/style.css)):
+- Add/Edit Subnet modals get a number input (`min=1 max=4094`, blank = untagged).
+- Sidebar card renders `<span class="ipam-subnet-vlan">V{id}</span>` chip inline next to the CIDR.
+- Search filter matches `vlan {id}` and `{id}` against the VLAN field.
+- Active card inverts the chip colors so the chip stays readable on the accent background.
+
 ### Edit Device modal — tabbed layout
 
 The Edit Device modal grew tall enough to scroll past one viewport once Topology Role, Secondary IPs, Licenses, Alert Profile, and Default Credentials all stacked vertically. Replaced the single-column scrolling form with four tabs (matches the Settings modal's nav pattern):
