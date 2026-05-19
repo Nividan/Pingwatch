@@ -132,7 +132,12 @@ def db_clear_sensor_err_logs(did, sid):
 # ── Flap log ─────────────────────────────────────────────────────
 
 def db_log_flap(flap):
-    """Append a flap/recovery event; keep at most 500 total."""
+    """Append a flap/recovery event.
+
+    Retention: cleanup trims resolved entries down to `max_flap_entries`
+    (default 2000, settable in Settings → Retention). Active and acknowledged
+    rows are never evicted — they must stay visible until resolved.
+    """
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -271,23 +276,65 @@ def db_auto_resolve_flap(did, sid, resolved_ts, directions=("down",)):
 
 
 def db_load_flaps():
-    """Return last 500 flap events, newest first.  Excludes legacy recovery rows."""
-    _filter = "WHERE direction NOT IN ('recovered','threshold_ok','state_up') "
+    """Return flap events, newest first, excluding legacy recovery rows.
+
+    Inclusion policy (regression-fix; matches the DELETE side at L154/L177):
+      - ALL active + acknowledged rows are returned regardless of age. ACK
+        means "keep visible until resolved", and a chronic problem (e.g. a
+        license_crit that the operator acked but never resolved) must not
+        silently drop out of the Events tab once the resolved-history cap
+        fills with newer noise.
+      - Resolved rows capped at `max_flap_entries` (default 2000) for
+        history depth — same setting the DELETE-side cleanup uses, so
+        load and purge stay aligned.
+    """
+    # Read the same setting the writer uses for purge cap. Clamp to a sane
+    # minimum (50) and a ceiling that protects the browser from rendering
+    # tens of thousands of cards (10000 is generous; users wanting deeper
+    # history should use the History tab's pagination / CSV export instead).
+    _resolved_cap = max(50, min(10000, int(_settings.get('max_flap_entries', 2000))))
+    _dir_ok = "direction NOT IN ('recovered','threshold_ok','state_up')"
+    _select_cols_pg = (
+        "id,ts,did,sid,dname,sname,host,stype,detail,direction,"
+        "COALESCE(ack_state,'active') AS ack_state,"
+        "COALESCE(ack_by,'') AS ack_by,"
+        "COALESCE(ack_at,0) AS ack_at,"
+        "COALESCE(resolved_at,0) AS resolved_at,"
+        "COALESCE(duration,0) AS duration,"
+        "raw_data"
+    )
+    _select_cols_sl = (
+        "id,ts,did,sid,dname,sname,host,stype,detail,direction,"
+        "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0),"
+        "COALESCE(resolved_at,0),COALESCE(duration,0),raw_data"
+    )
+    # CTE form scopes ORDER BY / LIMIT correctly inside each named query so
+    # the resolved cap doesn't accidentally trim the unbounded active+acked
+    # set. CTEs supported in PG and SQLite ≥ 3.8.3 (2014).
+    _cte_pg = (
+        f"WITH active_acked AS ("
+        f"  SELECT {_select_cols_pg} FROM flap_log "
+        f"  WHERE {_dir_ok} "
+        f"    AND COALESCE(ack_state,'active') IN ('active','acknowledged')"
+        f"),"
+        f" recent_resolved AS ("
+        f"  SELECT {_select_cols_pg} FROM flap_log "
+        f"  WHERE {_dir_ok} "
+        f"    AND COALESCE(ack_state,'active') = 'resolved' "
+        f"  ORDER BY id DESC LIMIT {_resolved_cap}"
+        f") "
+        f"SELECT * FROM active_acked "
+        f"UNION ALL "
+        f"SELECT * FROM recent_resolved "
+        f"ORDER BY id DESC"
+    )
+    _cte_sl = _cte_pg.replace(_select_cols_pg, _select_cols_sl)
+
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("logs") as cur:
-                cur.execute(
-                    "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
-                    "COALESCE(ack_state,'active') AS ack_state,"
-                    "COALESCE(ack_by,'') AS ack_by,"
-                    "COALESCE(ack_at,0) AS ack_at,"
-                    "COALESCE(resolved_at,0) AS resolved_at,"
-                    "COALESCE(duration,0) AS duration,"
-                    "raw_data "
-                    "FROM flap_log " + _filter +
-                    "ORDER BY id DESC LIMIT 500"
-                )
+                cur.execute(_cte_pg)
                 rows = cur.fetchall()
             return [{"id": r["id"], "ts": r["ts"], "did": r["did"], "sid": r["sid"],
                      "dname": r["dname"], "sname": r["sname"], "host": r["host"],
@@ -303,13 +350,7 @@ def db_load_flaps():
     # SQLite
     con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
     try:
-        rows = con.execute(
-            "SELECT id,ts,did,sid,dname,sname,host,stype,detail,direction,"
-            "COALESCE(ack_state,'active'),COALESCE(ack_by,''),COALESCE(ack_at,0),"
-            "COALESCE(resolved_at,0),COALESCE(duration,0),raw_data "
-            "FROM flap_log " + _filter +
-            "ORDER BY id DESC LIMIT 500"
-        ).fetchall()
+        rows = con.execute(_cte_sl).fetchall()
         return [{"id": r[0], "ts": r[1], "did": r[2], "sid": r[3],
                  "dname": r[4], "sname": r[5], "host": r[6], "stype": r[7],
                  "detail": r[8], "direction": r[9] or "down",

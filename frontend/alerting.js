@@ -1604,10 +1604,21 @@ function _alPgRenderChannels() {
 }
 
 function _alPgChannelDetail(t) {
+  // Mirror the existing _tplSummary() logic — earlier draft only looked at
+  // c.to / c.recipients which the template editor never writes (it stores
+  // to_users / to_groups / to_emails), so email rows always showed "—".
+  // Syslog config stores .host only if non-empty (see save handler L693),
+  // so empty host means "use the system's default syslog target".
   const c = t.config || {};
-  if (t.atype === 'email')   return c.to || c.recipients || '—';
+  if (t.atype === 'email') {
+    const parts = [];
+    if (c.to_users)  parts.push((Array.isArray(c.to_users)  ? c.to_users  : [c.to_users]).join(', '));
+    if (c.to_groups) parts.push((Array.isArray(c.to_groups) ? c.to_groups : [c.to_groups]).map(g => `group:${g}`).join(', '));
+    if (c.to_emails || c.to) parts.push(c.to_emails || c.to);
+    return parts.join(' · ') || '(no recipients)';
+  }
   if (t.atype === 'webhook') return c.url || '—';
-  if (t.atype === 'syslog')  return `${c.host || ''}:${c.port || 514}`;
+  if (t.atype === 'syslog')  return `${c.host || '(default host)'}:${c.port || 514}${c.proto ? ' / ' + c.proto : ''}`;
   if (t.atype === 'browser') return 'In-app notifications';
   return '';
 }
@@ -1688,7 +1699,11 @@ async function _alPgLoadDeliveries() {
 }
 
 function _alPgDeliveryRow(e) {
-  const ts = e.started_at || e.created_at || 0;
+  // Field names match the actual /api/alert/events payload (see _AE_COLS in
+  // db/alert_events.py): triggered_at + dname/did. Earlier draft used
+  // started_at/device_name which never existed → TIME and DEVICE rendered
+  // as "—" for every row.
+  const ts = e.triggered_at || 0;
   const when = ts ? _alPgRelTime(ts) : '—';
   const sev = (e.severity || e.trigger_state || 'info').toLowerCase();
   const sevCls = sev.includes('down') || sev === 'critical' ? 'crit'
@@ -1699,11 +1714,14 @@ function _alPgDeliveryRow(e) {
   const state = (e.state || '').toLowerCase();
   const stateCls = state === 'active' ? 'crit' : state === 'ack' ? 'warn' : 'ok';
   const notes = _alPgDeliveryNotes(e, state);
+  // dname is the snapshot at fire time; if a device was renamed since, did is
+  // the fallback so the column stays useful for forensic lookups.
+  const dev = e.dname || e.did || '—';
   return `
     <tr>
       <td class="muted small mono">${esc(when)}</td>
       <td>${esc(e.profile_name || '—')}</td>
-      <td>${esc(e.device_name || e.device_id || '—')}</td>
+      <td>${esc(dev)}</td>
       <td><span class="al-pg-sev ${sevCls}">${esc(sevLbl)}</span></td>
       <td><span class="al-pg-state ${stateCls}">${esc(state || '—')}</span></td>
       <td class="al-pg-notes" title="${esc(notes.tooltip)}">${notes.html}</td>

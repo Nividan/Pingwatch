@@ -2323,6 +2323,19 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   color:var(--text);
 }
 .ipam-subnet-card.active .ipam-subnet-cidr{ color:var(--accent); }
+/* VLAN chip on the sidebar subnet card (v1.0+). Sits inline next to the CIDR
+   so a glance reveals 802.1Q tagging without opening the editor. */
+.ipam-subnet-vlan{
+  display:inline-block;margin-left:6px;padding:1px 6px;
+  font-family:var(--font-mono);font-size:10px;font-weight:600;
+  color:var(--accent);background:var(--accent-bg, rgba(47,129,247,0.12));
+  border:1px solid var(--accent-border, rgba(47,129,247,0.35));
+  border-radius:4px;vertical-align:middle;letter-spacing:.3px;
+}
+.ipam-subnet-card.active .ipam-subnet-vlan{
+  background:rgba(255,255,255,0.18); border-color:rgba(255,255,255,0.4);
+  color:#fff;
+}
 .ipam-subnet-meta{
   font-size:var(--fs-xs);color:var(--text3);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;

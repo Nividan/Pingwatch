@@ -170,11 +170,17 @@ function _ipamRenderSidebar() {
   }
 
   const q = _ipamSidebarFilter;
+  // Filter matches: cidr, label, site, and VLAN (numeric ID + the literal
+  // "vlan" prefix so a user can type "vlan 100" or just "100" to find it).
   const visible = q
-    ? _ipamSubnets.filter(s =>
-        (s.cidr||'').toLowerCase().includes(q) ||
-        (s.name||'').toLowerCase().includes(q) ||
-        (s.site||'').toLowerCase().includes(q))
+    ? _ipamSubnets.filter(s => {
+        const v = (s.vlan|0);
+        const vlanStr = v ? `vlan ${v} ${v}` : '';
+        return (s.cidr||'').toLowerCase().includes(q) ||
+               (s.name||'').toLowerCase().includes(q) ||
+               (s.site||'').toLowerCase().includes(q) ||
+               vlanStr.includes(q);
+      })
     : _ipamSubnets;
 
   if (!visible.length) {
@@ -209,10 +215,12 @@ function _ipamRenderSidebar() {
       const pct = u && u.total ? Math.round((u.used / u.total) * 100) : 0;
       const pctCls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
       const active = s.id === _ipamSelectedId ? ' active' : '';
+      const v = s.vlan|0;
+      const vlanChip = v ? `<span class="ipam-subnet-vlan" title="VLAN ${v}">V${v}</span>` : '';
       return `
         <div class="ipam-subnet-card${active}" onclick="_ipamOnSubnetChange(${s.id})">
           <div class="ipam-subnet-card-l">
-            <div class="ipam-subnet-cidr mono">${esc(s.cidr)}</div>
+            <div class="ipam-subnet-cidr mono">${esc(s.cidr)}${vlanChip}</div>
             <div class="ipam-subnet-meta">${esc(s.name || '—')}</div>
           </div>
           <div class="ipam-subnet-util ${pctCls}">${pct}%</div>
@@ -859,6 +867,10 @@ function _ipamOpenAddSubnet() {
           <input type="text" id="ipam-add-site" placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options" autocomplete="off" maxlength="40"/>
           <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
         </div>
+        <div class="fr">
+          <label class="fl">VLAN ID <span style="color:var(--text3);font-size:10px">(optional — 1..4094, leave blank for untagged)</span></label>
+          <input type="number" id="ipam-add-vlan" min="1" max="4094" placeholder="e.g. 100" autocomplete="off" style="width:140px"/>
+        </div>
       </div>
       <div class="mft">
         <button class="btn-s" onclick="closeM('ipam-add-modal')">Cancel</button>
@@ -893,6 +905,8 @@ async function _ipamSaveSubnet() {
   const cidr = (document.getElementById('ipam-add-cidr')?.value || '').trim();
   const name = (document.getElementById('ipam-add-name')?.value || '').trim();
   const site = (document.getElementById('ipam-add-site')?.value || '').trim();
+  const vlanRaw = (document.getElementById('ipam-add-vlan')?.value || '').trim();
+  const vlan = vlanRaw ? Math.max(0, Math.min(4094, parseInt(vlanRaw, 10) || 0)) : 0;
   if (!cidr) { toast('Please enter a CIDR', 'warn'); return; }
 
   const btn = document.getElementById('ipam-add-save');
@@ -901,7 +915,7 @@ async function _ipamSaveSubnet() {
   const r = await fetch('/api/ipam/subnets', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({cidr, name, site}),
+    body: JSON.stringify({cidr, name, site, vlan}),
   });
   const d = await r.json();
   if (btn) { btn.disabled = false; btn.textContent = 'Add Subnet'; }
@@ -960,6 +974,13 @@ function _ipamOpenEdit() {
                    placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options"
                    autocomplete="off" maxlength="40"/>
             <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+          </div>
+          <div class="fr">
+            <label class="fl">VLAN ID <span class="fh" style="margin-left:6px">(optional — 1..4094)</span></label>
+            <input type="number" id="ipam-edit-vlan" min="1" max="4094"
+                   value="${sub.vlan ? Number(sub.vlan) : ''}"
+                   placeholder="e.g. 100 (leave blank for untagged)"
+                   autocomplete="off" style="width:160px"/>
           </div>
         </div>
 
@@ -1077,9 +1098,11 @@ async function _ipamSaveEdit() {
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   const modal = document.getElementById('ipam-edit-modal');
+  const vlanRaw = (document.getElementById('ipam-edit-vlan')?.value || '').trim();
   const body = {
     name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
     site:          (document.getElementById('ipam-edit-site')?.value || '').trim(),
+    vlan:          vlanRaw ? Math.max(0, Math.min(4094, parseInt(vlanRaw, 10) || 0)) : 0,
     auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
     dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
   };

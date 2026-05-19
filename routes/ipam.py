@@ -158,8 +158,18 @@ def handle(h, method, path, body):
             }); return True
         # Normalise to network address (e.g. 192.168.1.5/24 → 192.168.1.0/24)
         canonical = str(net)
+        # VLAN ID (optional). IEEE 802.1Q valid range is 1..4094; 0 = untagged.
+        # Out-of-range / non-int falls back to 0 silently so the subnet still
+        # gets created — frontend already clamps in the input, so this is just
+        # defense-in-depth for API consumers.
         try:
-            new_id = db_add_subnet(canonical, name, user, site=site)
+            vlan_id = int(body.get('vlan') or 0)
+        except (TypeError, ValueError):
+            vlan_id = 0
+        if not (0 <= vlan_id <= 4094):
+            vlan_id = 0
+        try:
+            new_id = db_add_subnet(canonical, name, user, site=site, vlan=vlan_id)
         except ValueError as e:
             h._json(409, {'error': str(e)}); return True
         _sid, _cidr = new_id, canonical
@@ -217,6 +227,17 @@ def handle(h, method, path, body):
             if new_site != (sub.get('site') or ''):
                 updates['site'] = new_site
                 audit_parts.append(f"site={new_site!r}")
+
+        if 'vlan' in body:
+            try:
+                new_vlan = int(body.get('vlan') or 0)
+            except (TypeError, ValueError):
+                new_vlan = 0
+            if not (0 <= new_vlan <= 4094):
+                new_vlan = 0
+            if new_vlan != int(sub.get('vlan') or 0):
+                updates['vlan'] = new_vlan
+                audit_parts.append(f"vlan={new_vlan or 'untagged'}")
 
         if 'auto_discover' in body:
             new_ad = 1 if body.get('auto_discover') else 0
