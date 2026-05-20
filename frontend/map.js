@@ -2009,7 +2009,7 @@ function _computeBundlesFromEdges(edges) {
   };
   for (const e of edges) {
     if (!e.src || !e.tgt) continue;
-    if (e.link_type === 'tunnel') continue;
+    if (_TUNNEL_TYPES.has(e.link_type)) continue;
     const ga = _groupContainingNode(e.src);
     const gb = _groupContainingNode(e.tgt);
     if (ga && gb && ga.id === gb.id) continue;
@@ -2248,7 +2248,7 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null)
   const c1 = nodeCenter(src);
   const c2 = nodeCenter(tgt);
 
-  if (lk.link_type === 'tunnel') {
+  if (_TUNNEL_TYPES.has(lk.link_type)) {
     return buildTunnel(c1, c2, lk);
   }
   const cfg = lcfg(lk.link_type);
@@ -2345,7 +2345,7 @@ function _pickLabelPos(c1, c2, lbw, tPrefer, qx, qy) {
 }
 
 function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
-  if (!lk.label || lk.link_type === 'tunnel') return '';
+  if (!lk.label || _TUNNEL_TYPES.has(lk.link_type)) return '';
   // Bundle with one shared label across all members → render once on the trunk segment.
   if (bundle && bundle.commonLabel != null) {
     if (lk.id !== bundle.trunkLabelLkId) return '';
@@ -2381,7 +2381,22 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
   return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
 }
 
+// Tunnel-style link variants. `buildTunnel()` renders the twin-line +
+// ties + lock + label-box look; the variant picks colors and the label
+// shown in the box. Add a new variant here to introduce a new tunnel
+// type — the dropdowns + the _TUNNEL_TYPES set below pick it up
+// automatically.
+const TUNNEL_VARIANTS = {
+  // ZTNA = purple (Zero-Trust Network Access — overlay tunnels)
+  tunnel: { stroke: '#a855f7', accent: '#c084fc', label: 'ZTNA TUNNEL' },
+  ztna:   { stroke: '#a855f7', accent: '#c084fc', label: 'ZTNA TUNNEL' },
+  // IPSEC = orange (legacy site-to-site VPN — distinct from ZTNA)
+  ipsec:  { stroke: '#f59e0b', accent: '#fbbf24', label: 'IPSEC TUNNEL' },
+};
+const _TUNNEL_TYPES = new Set(Object.keys(TUNNEL_VARIANTS));
+
 function buildTunnel(p1, p2, lk) {
+  const v = TUNNEL_VARIANTS[lk.link_type] || TUNNEL_VARIANTS.tunnel;
   const dx=p2.x-p1.x, dy=p2.y-p1.y, len=Math.sqrt(dx*dx+dy*dy)||1;
   const nx=-dy/len*7, ny=dx/len*7;
   const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
@@ -2391,28 +2406,33 @@ function buildTunnel(p1, p2, lk) {
   for(let i=1;i<nties;i++){
     const t=i/nties;
     const tx=p1.x+dx*t, ty=p1.y+dy*t;
-    ties+=`<line x1="${(tx+nx).toFixed(1)}" y1="${(ty+ny).toFixed(1)}" x2="${(tx-nx).toFixed(1)}" y2="${(ty-ny).toFixed(1)}" stroke="#a855f7" stroke-width="1" opacity="0.4"/>`;
+    ties+=`<line x1="${(tx+nx).toFixed(1)}" y1="${(ty+ny).toFixed(1)}" x2="${(tx-nx).toFixed(1)}" y2="${(ty-ny).toFixed(1)}" stroke="${v.stroke}" stroke-width="1" opacity="0.4"/>`;
   }
   const ax1=(p2.x-ux*10+nx*0.9).toFixed(1), ay1=(p2.y-uy*10+ny*0.9).toFixed(1);
   const ax2=(p2.x-ux*10-nx*0.9).toFixed(1), ay2=(p2.y-uy*10-ny*0.9).toFixed(1);
   const bx=(mx+ny*10+15).toFixed(1), by=(my-nx*10-20).toFixed(1);
+  // rgba border for the label-box is derived from the stroke; eyeball the
+  // hex → rgba conversion to keep the per-variant feel without a real
+  // color-parse pass (fine for our 2 known variants).
+  const boxBorder = v.stroke === '#f59e0b' ? 'rgba(245,158,11,0.5)' : 'rgba(168,85,247,0.5)';
+  const subColor  = v.stroke === '#f59e0b' ? 'rgba(251,191,36,0.6)'  : 'rgba(168,85,247,0.6)';
   return `
     <line class="link-hit" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="16"/>
-    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="#c084fc" stroke-width="14" opacity="0.05"/>
-    <line class="link-main link-tunnel"  x1="${(p1.x+nx).toFixed(1)}" y1="${(p1.y+ny).toFixed(1)}" x2="${(p2.x+nx).toFixed(1)}" y2="${(p2.y+ny).toFixed(1)}" stroke="#a855f7" stroke-width="1.5" opacity="0.7"/>
-    <line class="link-tunnel2" x1="${(p1.x-nx).toFixed(1)}" y1="${(p1.y-ny).toFixed(1)}" x2="${(p2.x-nx).toFixed(1)}" y2="${(p2.y-ny).toFixed(1)}" stroke="#a855f7" stroke-width="1.5" opacity="0.7"/>
+    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${v.accent}" stroke-width="14" opacity="0.05"/>
+    <line class="link-main link-tunnel"  x1="${(p1.x+nx).toFixed(1)}" y1="${(p1.y+ny).toFixed(1)}" x2="${(p2.x+nx).toFixed(1)}" y2="${(p2.y+ny).toFixed(1)}" stroke="${v.stroke}" stroke-width="1.5" opacity="0.7"/>
+    <line class="link-tunnel2" x1="${(p1.x-nx).toFixed(1)}" y1="${(p1.y-ny).toFixed(1)}" x2="${(p2.x-nx).toFixed(1)}" y2="${(p2.y-ny).toFixed(1)}" stroke="${v.stroke}" stroke-width="1.5" opacity="0.7"/>
     ${ties}
-    <polygon points="${p2.x.toFixed(1)},${p2.y.toFixed(1)} ${ax1},${ay1} ${ax2},${ay2}" fill="#a855f7" opacity="0.85"/>
+    <polygon points="${p2.x.toFixed(1)},${p2.y.toFixed(1)} ${ax1},${ay1} ${ax2},${ay2}" fill="${v.stroke}" opacity="0.85"/>
     <g transform="translate(${(mx-20).toFixed(1)},${(my-13).toFixed(1)})">
-      <rect x="0" y="0" width="40" height="26" rx="3" fill="rgba(10,5,25,0.92)" stroke="#a855f7" stroke-width="1.5"/>
-      <path d="M11,0 Q11,-10 20,-10 Q29,-10 29,0" fill="none" stroke="#a855f7" stroke-width="2"/>
-      <circle cx="20" cy="13" r="4" fill="none" stroke="#c084fc" stroke-width="1.5"/>
-      <rect x="18" y="13" width="4" height="6" rx="1" fill="#c084fc" opacity="0.7"/>
+      <rect x="0" y="0" width="40" height="26" rx="3" fill="rgba(10,5,25,0.92)" stroke="${v.stroke}" stroke-width="1.5"/>
+      <path d="M11,0 Q11,-10 20,-10 Q29,-10 29,0" fill="none" stroke="${v.stroke}" stroke-width="2"/>
+      <circle cx="20" cy="13" r="4" fill="none" stroke="${v.accent}" stroke-width="1.5"/>
+      <rect x="18" y="13" width="4" height="6" rx="1" fill="${v.accent}" opacity="0.7"/>
     </g>
     <g transform="translate(${bx},${by})">
-      <rect x="0" y="0" width="90" height="34" rx="3" fill="rgba(10,5,25,0.85)" stroke="rgba(168,85,247,0.5)" stroke-width="1"/>
-      <text x="45" y="13" text-anchor="middle" fill="#c084fc" font-family="Orbitron" font-size="8" letter-spacing="1">ZTNA TUNNEL</text>
-      <text x="45" y="26" text-anchor="middle" fill="rgba(168,85,247,0.6)" font-family="Share Tech Mono" font-size="8">🔒 ENCRYPTED</text>
+      <rect x="0" y="0" width="90" height="34" rx="3" fill="rgba(10,5,25,0.85)" stroke="${boxBorder}" stroke-width="1"/>
+      <text x="45" y="13" text-anchor="middle" fill="${v.accent}" font-family="Orbitron" font-size="8" letter-spacing="1">${v.label}</text>
+      <text x="45" y="26" text-anchor="middle" fill="${subColor}" font-family="Share Tech Mono" font-size="8">🔒 ENCRYPTED</text>
     </g>
   `;
 }
@@ -4329,7 +4349,7 @@ function _pwLinkModal(src, tgt, onSave) {
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_pwlm_type" class="field-select">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}">${t}</option>`).join('')}
+        ${['trunk','access','internet','ztna','ipsec','ha_cluster'].map(t=>`<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
@@ -4415,7 +4435,7 @@ function openBulkLinkModal() {
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_blm_type" class="field-select">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
+        ${['access','trunk','internet','ztna','ipsec','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
@@ -4492,7 +4512,7 @@ function bulkLinkSelectedTo(tgtDid) {
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_blm2_type" class="field-select">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
+        ${['access','trunk','internet','ztna','ipsec','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
@@ -4983,7 +5003,7 @@ function showPwLinkPanel(lkId) {
     <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
     <div class="field-group"><div class="field-label">TYPE</div>
       <select onchange="setPwLinkType('${lkId}',this.value)" class="field-select">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
+        ${['trunk','access','internet','ztna','ipsec','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
     <div class="field-group"><div class="field-label">LABEL</div>
