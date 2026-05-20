@@ -1456,22 +1456,88 @@ function openAddDeviceGroup(group){
 }
 
 // ── Add Group modal ──────────────────────────────────────────────
+// Mirrors the Edit Group modal's field set (Site, Device Icon, Mute) so a
+// user can fully configure a group at creation time instead of having to
+// reopen it for editing. Alert Profile is omitted — it's an inheritance
+// viewer that needs an existing group to scope against.
 function openAddGroup(){
   closeM('mag');
   const o=document.createElement('div');
   o.className='mo';o.id='mag';
   _overlayClose(o, ()=>closeM('mag'));
   o.innerHTML=`
-  <div class="mbox" style="min-width:360px;max-width:420px">
+  <div class="mbox" style="min-width:520px;max-width:600px">
     <div class="mhd">
       <div class="mttl">Add Group</div>
       <button class="mclose" onclick="closeM('mag')">✕</button>
     </div>
     <div class="mbdy">
-      <div class="fr">
-        <label class="fl">Group Name</label>
-        <input type="text" id="ag-n" placeholder="e.g. Production, Office, Lab…" autocomplete="off"/>
-        <div class="fh">A new empty group section will appear on the dashboard.</div>
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Group Name</div>
+        <div class="fr">
+          <input type="text" id="ag-n" placeholder="e.g. Production, Office, Lab…" autocomplete="off"/>
+          <div class="fh">A new empty group section will appear on the dashboard.</div>
+        </div>
+      </div>
+
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Site</div>
+        <div class="fr">
+          <input type="text" id="ag-site" list="ag-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
+          <datalist id="ag-site-dl"></datalist>
+          <div class="fh">
+            Where the empty group section will live in the sidebar. Leave blank for Unsited.
+            Future devices added to this group will not auto-inherit this — set per-device on Add Device.
+          </div>
+        </div>
+      </div>
+
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Device Icon (NTM Live map)</div>
+        <div class="fr">
+          <select id="ag-icon">
+            <option value="">— Auto-detect from name / group —</option>
+            <option value="switch">Switch</option>
+            <option value="bb-switch">Backbone Switch</option>
+            <option value="firewall">Firewall</option>
+            <option value="wan-switch">WAN Switch</option>
+            <option value="server">Server</option>
+            <option value="pc">PC / Workstation</option>
+            <option value="laptop">Laptop</option>
+            <option value="ap">WiFi Access Point</option>
+            <option value="connector">Cato Connector</option>
+            <option value="remote-pc">Remote PC</option>
+            <option value="cloud">Cloud / Internet</option>
+            <option value="router">Router / Gateway</option>
+            <option value="vm">Virtual Machine</option>
+            <option value="appliance">Network Appliance</option>
+            <option value="storage">Storage / NAS</option>
+            <option value="phone">IP Phone / VoIP</option>
+            <option value="camera">IP Camera / CCTV</option>
+            <option value="printer">Printer / MFP</option>
+            <option value="load-balancer">Load Balancer</option>
+            <option value="hypervisor">Hypervisor / ESXi</option>
+            <option value="ups">UPS / PDU</option>
+            <option value="container">Container Host</option>
+            <option value="ipmi">IPMI / BMC</option>
+          </select>
+          <div class="fh">
+            Default icon for every device in this group on the NTM Live map.
+            Per-device icon overrides (set from the NTM panel) still take precedence.
+          </div>
+        </div>
+      </div>
+
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Alerts</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="ag-muted"/>
+          <span>🔕 Mute alerts for this group</span>
+        </label>
+        <div class="fh" style="margin-top:4px">
+          Suppresses alert dispatch and flap events for every device and sensor in this group.
+          Probes still run and device cards still reflect their real status.
+        </div>
       </div>
     </div>
     <div class="mft">
@@ -1480,6 +1546,8 @@ function openAddGroup(){
     </div>
   </div>`;
   document.body.appendChild(o);
+  // Populate the Site datalist from /api/sites (UNION of IPAM + devices)
+  if (typeof _populateSiteDatalist === 'function') _populateSiteDatalist('ag-site-dl');
   setTimeout(()=>{
     const inp=document.getElementById('ag-n');
     if(inp){
@@ -1489,14 +1557,16 @@ function openAddGroup(){
   },40);
 }
 
-function submitAddGroup(){
-  const name=(document.getElementById('ag-n')?.value||'').trim();
+async function submitAddGroup(){
+  const name = (document.getElementById('ag-n')?.value || '').trim();
   if(!name){ toast('Group name is required','err'); return; }
-  // New groups land in the Unsited site by default — user can drag devices
-  // in and reassign sites via the Edit Device modal.
-  const site='';
-  const exists=document.getElementById(grpId(_dgKey(site, name)));
+  const site  = (document.getElementById('ag-site')?.value || '').trim().slice(0, 80);
+  const icon  = (document.getElementById('ag-icon')?.value || '').trim();
+  const muted = !!document.getElementById('ag-muted')?.checked;
+
+  const exists = document.getElementById(grpId(_dgKey(site, name)));
   if(exists){ toast('Group already exists','err'); return; }
+
   ensureGroupSection(name, site);
   // Persist the new group at the END of the saved order. Without this, the
   // group is unsaved and the next restoreGroupOrder() pass would push every
@@ -1509,11 +1579,40 @@ function submitAddGroup(){
     document.getElementById('dpanels').style.display='';
     document.getElementById('devActBar').style.display='';
   }
+
+  // Persist the group-level Device Icon default (if set). Same payload shape
+  // the Edit Group modal uses (pw_group_icons settings key + postMessage to
+  // the NTM iframe so it re-renders without a page reload).
+  if (icon) {
+    try {
+      const cur = await api('GET', '/api/settings/pw_group_icons').catch(() => null);
+      const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
+      map[name] = icon;
+      await api('PATCH', '/api/settings/pw_group_icons', { value: map });
+      const _mf = document.getElementById('map-frame');
+      _mf?.contentWindow?.postMessage({ type: 'pw_group_icons', value: map }, window.location.origin);
+    } catch (e) {
+      toast('Icon save failed: ' + (e.message || e), 'err');
+      // Still proceed — the group exists; the user can re-set the icon later
+    }
+  }
+
+  // Persist the mute state if requested. The mute API keys on the group name
+  // (no group_id), so we just POST with the freshly chosen name.
+  if (muted) {
+    try {
+      await api('POST', '/api/device-group/' + encodeURIComponent(name) + '/mute', { muted: true });
+      if (typeof _setGroupMutedLocal === 'function') _setGroupMutedLocal(name, true);
+    } catch (e) {
+      toast('Mute save failed: ' + (e.message || e), 'err');
+    }
+  }
+
   closeM('mag');
   toast('Group "'+name+'" created','ok');
-  // Scroll the new group into view (Unsited bucket by default)
+  // Scroll the new group into view (at the chosen site, or Unsited bucket)
   setTimeout(()=>{
-    const wrap=document.getElementById(grpId(_dgKey('', name)));
+    const wrap=document.getElementById(grpId(_dgKey(site, name)));
     if(wrap) wrap.scrollIntoView({behavior:'smooth',block:'start'});
   },80);
 }

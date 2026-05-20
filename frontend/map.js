@@ -1847,10 +1847,16 @@ function nsize(type, node) {
   if (type === 'info-box' && node) {
     const p = node.properties || {};
     const lines = Array.isArray(p.lines) ? p.lines : [];
+    // Notes: each \n-separated row counts toward the auto-fit height.
+    // Empty / missing notes contribute 0 so layout doesn't change for boxes
+    // that don't use the feature.
+    const notesText = (p.notes || '').toString().trim();
+    const noteRows  = notesText ? notesText.split('\n').length : 0;
+    const notesH    = noteRows ? (12 /* gap */ + 14 /* header */ + noteRows * 14 + 4 /* pad */) : 0;
     const wOverride = (typeof p.w === 'number' && p.w >= 140) ? p.w : null;
     const hOverride = (typeof p.h === 'number' && p.h >= 60)  ? p.h : null;
     const w = wOverride || 240;
-    const h = hOverride || Math.max(80, 28 + lines.length * 18 + 14);
+    const h = hOverride || Math.max(80, 28 + lines.length * 18 + 14 + notesH);
     return { w, h };
   }
   if (!node) return NODE_SIZE[type] || { w: 160, h: 60 };
@@ -2900,6 +2906,26 @@ function renderInfoBox(node, p, sf) {
   // Title sits at top with a fatter font; lines flow at 18px row height.
   const titleCharPx = 8.5;
   const titleAvail  = Math.max(40, w - 18);
+  // Notes: rendered as a small block below the colored lines. Multi-line
+  // (each \n-separated row gets its own SVG <text>). A faint divider sets
+  // the section apart from the colored lines above.
+  const notesText = (p.notes || '').toString().trim();
+  const noteRows  = notesText ? notesText.split('\n') : [];
+  const linesBottomY = 30 + lines.length * 18;  // y just below the last line
+  let notesSvg = '';
+  if (noteRows.length) {
+    const dividerY = linesBottomY + 6;
+    const headerY  = dividerY + 14;
+    let body = '';
+    noteRows.forEach((row, i) => {
+      const yy = headerY + 4 + (i + 1) * 14;
+      body += `<text x="10" y="${yy}" fill="rgba(255,255,255,0.75)" font-family="Share Tech Mono" font-size="11">${escXml(row)}</text>`;
+    });
+    notesSvg = `
+      <line x1="8" y1="${dividerY}" x2="${w - 8}" y2="${dividerY}" stroke="rgba(255,107,107,0.25)" stroke-width="1" stroke-dasharray="2,3"/>
+      <text x="10" y="${headerY + 4}" fill="rgba(255,107,107,0.7)" font-family="Orbitron" font-size="9" letter-spacing="1">📝 NOTES</text>
+      ${body}`;
+  }
   return `<g ${sf}>
     <rect x="0" y="0" width="${w}" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
@@ -2914,6 +2940,7 @@ function renderInfoBox(node, p, sf) {
         <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="12">${escXml(text)}</text>
       `;
     }).join('')}
+    ${notesSvg}
     <rect data-info-resize="1" x="${w - 12}" y="${h - 12}" width="12" height="12" rx="2"
       fill="rgba(255,107,107,0.7)" stroke="rgba(255,107,107,0.9)" stroke-width="0.7"
       style="cursor:nwse-resize"/>
@@ -3438,6 +3465,10 @@ async function saveNodeNotes(nodeId, text) {
   node.properties = newProps;
   try {
     await api('PUT', `/api/nodes/${nodeId}`, { name: node.name, type: node.type, x: node.x, y: node.y, properties: newProps });
+    // Info-box renders notes inline on the canvas, so a re-render is needed
+    // for the notes to appear/update without a full reload. Other node types
+    // don't surface notes on the canvas — render() is cheap, just call it.
+    if (node.type === 'info-box') render();
   } catch(e) { toast('⚠ Failed to save notes'); }
 }
 
@@ -3702,6 +3733,8 @@ async function saveNode() {
         if (fwStatus !== null) applyField(props, 'status', fwStatus);
       } else {
         props.lines = infoLines || [];
+        const _n = (infoNotes || '').trim();
+        if (_n) props.notes = _n;
       }
       const newNX = 200 + Math.random() * 400, newNY = 200 + Math.random() * 300;
       const newN = await api('POST', '/api/nodes', { name, type, x:newNX, y:newNY, properties:props, page_id:currentPageId });
@@ -4079,7 +4112,8 @@ function setInfoEditorVisible(type) {
     sub.style.display = '';
     vlan.style.display = '';
     if (fwStatus) fwStatus.style.display = (type === 'firewall' || type === 'switch' || type === 'bb-switch') ? '' : 'none';
-	clearInfoLines();
+    clearInfoLines();
+    clearInfoNotes();
   }
 }
 
