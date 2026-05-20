@@ -2416,12 +2416,11 @@ function buildTunnel(p1, p2, lk) {
   }
   const ax1=(p2.x-ux*10+nx*0.9).toFixed(1), ay1=(p2.y-uy*10+ny*0.9).toFixed(1);
   const ax2=(p2.x-ux*10-nx*0.9).toFixed(1), ay2=(p2.y-uy*10-ny*0.9).toFixed(1);
-  const bx=(mx+ny*10+15).toFixed(1), by=(my-nx*10-20).toFixed(1);
-  // rgba border for the label-box is derived from the stroke; eyeball the
-  // hex → rgba conversion to keep the per-variant feel without a real
-  // color-parse pass (fine for our 2 known variants).
-  const boxBorder = v.stroke === '#f59e0b' ? 'rgba(245,158,11,0.5)' : 'rgba(168,85,247,0.5)';
-  const subColor  = v.stroke === '#f59e0b' ? 'rgba(251,191,36,0.6)'  : 'rgba(168,85,247,0.6)';
+  // The mid-link floating "ZTNA TUNNEL / ENCRYPTED" + "IPSEC TUNNEL /
+  // ENCRYPTED" label boxes were removed — they stacked when multiple
+  // tunnels ran in parallel and obscured the topology. The mid-link lock
+  // icon stays as a tunnel-type indicator (color = variant), which is
+  // enough to read at a glance without taking ~90×34 px per link.
   return `
     <line class="link-hit" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="16"/>
     <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${v.accent}" stroke-width="14" opacity="0.05"/>
@@ -2434,11 +2433,6 @@ function buildTunnel(p1, p2, lk) {
       <path d="M11,0 Q11,-10 20,-10 Q29,-10 29,0" fill="none" stroke="${v.stroke}" stroke-width="2"/>
       <circle cx="20" cy="13" r="4" fill="none" stroke="${v.accent}" stroke-width="1.5"/>
       <rect x="18" y="13" width="4" height="6" rx="1" fill="${v.accent}" opacity="0.7"/>
-    </g>
-    <g transform="translate(${bx},${by})">
-      <rect x="0" y="0" width="90" height="34" rx="3" fill="rgba(10,5,25,0.85)" stroke="${boxBorder}" stroke-width="1"/>
-      <text x="45" y="13" text-anchor="middle" fill="${v.accent}" font-family="Orbitron" font-size="8" letter-spacing="1">${v.label}</text>
-      <text x="45" y="26" text-anchor="middle" fill="${subColor}" font-family="Share Tech Mono" font-size="8">🔒 ENCRYPTED</text>
     </g>
   `;
 }
@@ -4230,14 +4224,23 @@ window.addEventListener('keydown', e => {
     closeModal('modal-node'); closeModal('modal-link'); closeModal('modal-group');
     multiSelect.clear(); deselect();
   }
+  // Skip canvas shortcuts when the user is typing in a form control. The
+  // earlier guard only covered <input>, so Ctrl+A inside a <textarea> (e.g.
+  // the Notes editor in the Info Box modal) would hijack "select all text"
+  // into "select all nodes". Same applied to Ctrl+Z/Y and Delete/Backspace.
+  const t = e.target;
+  const tag = t && t.tagName;
+  const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+                  || (t && t.isContentEditable);
+
   if (e.ctrlKey && e.key === '0') { e.preventDefault(); vp={scale:1,tx:0,ty:0}; applyViewport(); }
-  if (e.ctrlKey && e.key === 'a' && e.target.tagName !== 'INPUT') {
+  if (e.ctrlKey && e.key === 'a' && !inField) {
     e.preventDefault(); nodes.forEach(n => multiSelect.add(n.id));
     renderNodes(); showMultiPanel();
   }
-  if (e.ctrlKey && e.key === 'z' && !e.shiftKey && e.target.tagName !== 'INPUT') { e.preventDefault(); doUndo(); }
-  if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && e.target.tagName !== 'INPUT') { e.preventDefault(); doRedo(); }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && e.target.tagName !== 'INPUT') {
+  if (e.ctrlKey && e.key === 'z' && !e.shiftKey && !inField) { e.preventDefault(); doUndo(); }
+  if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && !inField) { e.preventDefault(); doRedo(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !inField) {
     if (multiSelect.size > 0) { deleteSelectedNodes(); return; }
     if (selectedEl?.type === 'node') deleteNode(selectedEl.data.id);
     if (selectedEl?.type === 'link') deleteLink(selectedEl.data.id);
