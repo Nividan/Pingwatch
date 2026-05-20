@@ -229,14 +229,17 @@
       </div>
       <div id="info-editor">
         <div class="field-label">INFO BOX CONTENT</div>
-      
+
         <div id="info-lines"></div>
-      
+
         <div style="display:flex; gap:10px; margin-top:10px;">
           <button class="btn btn-primary" type="button" onclick="addInfoLine()">+ ADD LINE</button>
           <button class="btn btn-danger" type="button" onclick="clearInfoLines()">CLEAR</button>
         </div>
-      
+
+        <div class="field-label" style="margin-top:16px">NOTES <span style="opacity:.55;font-weight:normal">(optional — shown inside the info box)</span></div>
+        <textarea id="info-notes-ta" class="node-notes-ta" placeholder="Add notes…" style="width:100%;min-height:60px;box-sizing:border-box"></textarea>
+
         <div class="mini-hint">
         </div>
       </div>

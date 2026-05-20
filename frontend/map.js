@@ -3578,6 +3578,7 @@ function openAddNode() {
   document.getElementById('node-color').value = '#00d4ff';
   setInfoEditorVisible(document.getElementById('node-type').value);
   clearInfoLines(); // reset
+  clearInfoNotes();
   if (document.getElementById('node-type').value === 'info-box') {
     loadInfoLines([], { blankTemplate: true });
   }
@@ -3609,8 +3610,13 @@ function openEditNode(id) {
   document.getElementById('node-color-enabled').checked = !!_nc;
   document.getElementById('node-color').value = _nc || '#00d4ff';
   setInfoEditorVisible(node.type);
-  if (node.type === 'info-box') loadInfoLines(node.properties?.lines || []);
-  else clearInfoLines();
+  if (node.type === 'info-box') {
+    loadInfoLines(node.properties?.lines || []);
+    loadInfoNotes(node.properties?.notes || '');
+  } else {
+    clearInfoLines();
+    clearInfoNotes();
+  }
   openModal('modal-node');
 }
 
@@ -3631,6 +3637,7 @@ async function saveNode() {
   const nodeColor = nodeColorEnabled ? document.getElementById('node-color').value : null;
 
   const infoLines = (type === 'info-box') ? collectInfoLinesFromUI() : null;
+  const infoNotes = (type === 'info-box') ? collectInfoNotesFromUI() : null;
   const fwStatus = (type === 'firewall' || type === 'switch' || type === 'bb-switch')
     ? (document.getElementById('node-fw-status')?.value || '')
     : null;
@@ -3666,6 +3673,11 @@ async function saveNode() {
         delete nextProps.subtitle_color;
         delete nextProps.vlan;
         nextProps.lines = infoLines || [];
+        // Notes — keep alongside lines so the info-box renderer can show them.
+        // Empty string trims the key so the SVG doesn't render an empty section.
+        const _n = (infoNotes || '').trim();
+        if (_n) nextProps.notes = _n;
+        else    delete nextProps.notes;
       }
 
       const before_n = { ...existing, properties: { ...(existing.properties || {}) } };
@@ -4120,6 +4132,24 @@ function collectInfoLinesFromUI() {
     if (text) out.push({ text, color });
   });
   return out;
+}
+
+// ── Info-box notes (v1.0+) ──────────────────────────────────────────
+// Notes live in `properties.notes` and are also editable from the side
+// panel (where they appear for every node type). For info-box nodes we
+// surface them inline in the editor modal too, AND render them inside
+// the info-box on the canvas — they were previously invisible.
+function loadInfoNotes(text) {
+  const ta = document.getElementById('info-notes-ta');
+  if (ta) ta.value = String(text || '');
+}
+function clearInfoNotes() {
+  const ta = document.getElementById('info-notes-ta');
+  if (ta) ta.value = '';
+}
+function collectInfoNotesFromUI() {
+  const ta = document.getElementById('info-notes-ta');
+  return ta ? ta.value : '';
 }
 
 function hexToRgb(hex) {
