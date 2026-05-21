@@ -1708,9 +1708,13 @@ async function _refreshFlapList(){
 // so the user's preference survives reloads.
 function _railToggle(){
   const rail = document.getElementById('rail');
+  const layout = document.getElementById('layout');
   if (!rail) return;
   const expand = !rail.classList.contains('expanded');
   rail.classList.toggle('expanded', expand);
+  // Mirror the class on #layout for the grid-column override (fallback for
+  // browsers that don't support :has()).
+  if (layout) layout.classList.toggle('rail-expanded', expand);
   try { localStorage.setItem('pw_rail_expanded', expand ? '1' : '0'); } catch(_) {}
   const btn = document.getElementById('railToggle');
   if (btn) btn.title = expand ? 'Collapse sidebar' : 'Expand sidebar';
@@ -1720,7 +1724,9 @@ function _railToggle(){
     if (localStorage.getItem('pw_rail_expanded') === '1') {
       document.addEventListener('DOMContentLoaded', function(){
         const rail = document.getElementById('rail');
-        if (rail) rail.classList.add('expanded');
+        const layout = document.getElementById('layout');
+        if (rail)   rail.classList.add('expanded');
+        if (layout) layout.classList.add('rail-expanded');
         const btn = document.getElementById('railToggle');
         if (btn) btn.title = 'Collapse sidebar';
       });
