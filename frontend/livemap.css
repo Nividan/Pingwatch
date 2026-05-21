@@ -145,7 +145,12 @@ body {
   margin: 10px 4px 2px;
 }
 .lm-list { display: flex; flex-direction: column; gap: 3px; }
-.lm-sidebar-foot { padding: 12px 4px 14px; margin-top: auto; }
+.lm-sidebar-foot { padding: 12px 8px 14px; margin-top: auto; }
+.lm-sidebar-hint {
+  font-family: 'Share Tech Mono', monospace; font-size: 9px;
+  letter-spacing: 1.5px; color: rgba(255,255,255,0.35);
+  text-align: center; line-height: 1.6;
+}
 .lm-btn {
   width: 100%;
   padding: 6px 10px;

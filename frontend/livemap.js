@@ -114,17 +114,13 @@ function renderScopeBar() {
     '<span class="pill dev"><span class="pill-dot" style="background:var(--accent)"></span>' + devs + ' DEVICES</span>';
 }
 
-function _siteRow(site, opts) {
-  opts = opts || {};
+function _siteRow(site) {
   const status = worstStatus(site);
   const kind = (site.kind || 'lab').toLowerCase();
   const abbrev = kindAbbrev(kind);
   const selClass = (LM.currentRoute.view === 'site' && LM.currentRoute.site === site.name) ? ' sel' : '';
   const alerts = site.alerts ? '<span class="sr-alerts">' + site.alerts + '</span>' : '';
   const display = site.display_name || site.name;
-  const editBtn = opts.editable
-    ? '<button class="sr-edit" title="Edit site" data-site="' + esc(site.name) + '">⚙</button>'
-    : '';
   return '<div class="site-row' + selClass + '" data-site="' + esc(site.name) + '">' +
            '<span class="sr-dot ' + status + '"></span>' +
            '<span class="sr-kind ' + esc(kind) + '">' + esc(abbrev) + '</span>' +
@@ -133,7 +129,6 @@ function _siteRow(site, opts) {
               '<span class="sr-count">' + site.devices + '</span>' +
               alerts +
            '</span>' +
-           editBtn +
          '</div>';
 }
 
@@ -158,27 +153,20 @@ function renderSidebar() {
 
   $('lm-list-view').innerHTML   = _viewRow();
   $('lm-list-pinned').innerHTML = pinned.length
-    ? pinned.map(function(s) { return _siteRow(s, { editable: true }); }).join('')
+    ? pinned.map(function(s) { return _siteRow(s); }).join('')
     : '<div class="lm-empty" style="padding:6px;text-align:left">— none</div>';
   $('lm-list-all').innerHTML    = rest.length
-    ? rest.map(function(s) { return _siteRow(s, { editable: true }); }).join('')
+    ? rest.map(function(s) { return _siteRow(s); }).join('')
     : '<div class="lm-empty" style="padding:6px;text-align:left">— no sites yet</div>';
 
   $('lm-search-count').textContent = String(LM.sites.length);
 }
 
-// Sidebar event delegation — runs once
+// Sidebar event delegation — runs once. Site CRUD lives in the Devices tab
+// now; the Live Map sidebar is read-only.
 function bindSidebar() {
   const sb = $('lm-sidebar');
   sb.addEventListener('click', function(e) {
-    // Edit-cog button takes priority
-    const ed = e.target.closest('.sr-edit');
-    if (ed) {
-      e.stopPropagation();
-      const name = ed.getAttribute('data-site');
-      window._lmOpenSiteModal && window._lmOpenSiteModal('edit', name);
-      return;
-    }
     const row = e.target.closest('.site-row');
     if (!row) return;
     if (row.getAttribute('data-view') === 'noc') {
@@ -189,9 +177,6 @@ function bindSidebar() {
     }
   });
   $('lm-search').addEventListener('input', debounce(renderSidebar, 120));
-  $('lm-add-site').addEventListener('click', function() {
-    window._lmOpenSiteModal && window._lmOpenSiteModal('add');
-  });
 }
 
 // ─── NOC overview rendering ─────────────────────────────────

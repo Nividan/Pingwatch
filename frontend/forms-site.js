@@ -1,5 +1,15 @@
-/* PingWatch — Site CRUD modal (Live Map).
- * Loaded by livemap.html before livemap.js. Exposes window._lmOpenSiteModal.
+/* PingWatch — Site CRUD modal.
+ *
+ * Loaded by both the main app (index.html via server.py's _JS_FILES injector)
+ * and the Live Map iframe (livemap.html via <script src=>). Exposes:
+ *
+ *   openSiteModal(mode, name)  — primary entry point used by Devices tab
+ *   _lmOpenSiteModal           — legacy alias kept for the Live Map sidebar
+ *
+ * Refresh-after-save: calls every known callback that's wired up in the
+ * current context — _refreshDevices (Devices tab), _lmRefresh (Live Map
+ * iframe), and posts lm_refresh to the livemap-frame so a hidden iframe
+ * picks up changes too.
  */
 (function() {
 'use strict';
@@ -34,13 +44,46 @@ function buildOptions(selected) {
   }).join('');
 }
 
-function openModal(mode, name) {
+function _broadcastRefresh() {
+  // Try every refresh hook the current context might have. Each is optional.
+  try { if (typeof window._refreshDevices === 'function') window._refreshDevices(); } catch (_) {}
+  try { if (typeof window._lmRefresh === 'function')      window._lmRefresh();      } catch (_) {}
+  // Also poke the Live Map iframe (if loaded) so it re-fetches even when the
+  // user is currently on a different tab.
+  try {
+    const f = document.getElementById('livemap-frame');
+    if (f && f.contentWindow) {
+      f.contentWindow.postMessage({ type: 'lm_refresh' }, window.location.origin);
+    }
+  } catch (_) {}
+}
+
+async function _fetchSiteMeta(name) {
+  // Fall back to the API when running outside the Live Map (no _lmGetSite).
+  try {
+    const r = await fetch('/api/sites/meta', { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.sites || []).find(function(s) { return s.name === name; }) || null;
+  } catch (_) { return null; }
+}
+
+async function openModal(mode, name) {
   closeModal();
 
-  // For "edit", pull the current site object from livemap state
+  // For "edit", pull the current site object. Prefer the in-memory Live Map
+  // cache when we're loaded inside the iframe; otherwise hit the API.
   let existing = null;
-  if (mode === 'edit' && name && typeof window._lmGetSite === 'function') {
-    existing = window._lmGetSite(name) || { name: name, kind: 'lab', pinned: 0, display_name: '' };
+  if (mode === 'edit' && name) {
+    if (typeof window._lmGetSite === 'function') {
+      existing = window._lmGetSite(name);
+    }
+    if (!existing) {
+      existing = await _fetchSiteMeta(name);
+    }
+    if (!existing) {
+      existing = { name: name, kind: 'lab', pinned: 0, display_name: '' };
+    }
   }
 
   const title = mode === 'edit' ? 'EDIT SITE' : 'ADD SITE';
@@ -149,7 +192,7 @@ function openModal(mode, name) {
         });
       }
       closeModal();
-      if (typeof window._lmRefresh === 'function') window._lmRefresh();
+      _broadcastRefresh();
     } catch (e) {
       alert('Failed to save site: ' + (e.message || e));
     }
@@ -227,13 +270,17 @@ function _openDeleteConfirm(name, usage) {
       }
       closeConfirm();
       closeModal();
-      if (typeof window._lmRefresh === 'function') window._lmRefresh();
+      _broadcastRefresh();
     } catch (e) {
       alert('Failed to delete: ' + (e.message || e));
     }
   };
 }
 
+// Primary entry point — used by Devices tab (and anywhere else).
+window.openSiteModal   = openModal;
+// Legacy alias kept for the Live Map sidebar; remove once both surfaces use
+// the canonical name.
 window._lmOpenSiteModal = openModal;
 
 })();

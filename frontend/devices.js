@@ -473,7 +473,20 @@ function ensureSiteSection(site){
   const cnt=document.createElement('div');
   cnt.className='site-count'; cnt.id=scid; cnt.textContent='';
 
-  hdr.appendChild(arr); hdr.appendChild(label); hdr.appendChild(cnt);
+  // Edit cog — opens the same modal as the toolbar "+ Site" button but in
+  // "edit" mode. Hidden for the synthetic Unsited bucket (no metadata to edit).
+  const editBtn=document.createElement('button');
+  editBtn.className='site-edit-btn rbac-op';
+  editBtn.title='Edit site';
+  editBtn.innerHTML='⚙';
+  editBtn.style.cssText='background:transparent;border:0;cursor:pointer;color:rgba(255,255,255,0.4);font-size:14px;padding:2px 6px;margin-left:6px;line-height:1';
+  if (!site) editBtn.style.display='none';
+  editBtn.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    if (typeof window.openSiteModal === 'function') window.openSiteModal('edit', site);
+  });
+
+  hdr.appendChild(arr); hdr.appendChild(label); hdr.appendChild(cnt); hdr.appendChild(editBtn);
 
   const body=document.createElement('div');
   body.className='site-body'+(isCol?' collapsed':'');
