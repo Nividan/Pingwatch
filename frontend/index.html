@@ -229,39 +229,46 @@
 <!-- Layout: icon rail + main content -->
 <div id="layout">
   <nav id="rail" class="rail" aria-label="Main navigation">
+    <button class="rail-btn rail-toggle" id="railToggle" onclick="_railToggle()" title="Expand sidebar">
+      <span class="rail-ico" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </span>
+      <span class="rail-tip">Expand</span>
+      <span class="rail-label">Menu</span>
+    </button>
     <button class="rail-btn" id="tabDashboard" onclick="switchMainTab('dashboard')" title="Dashboard">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Dashboard</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Dashboard</span><span class="rail-label">Dashboard</span>
     </button>
     <button class="rail-btn" id="tabDevices" onclick="switchMainTab('devices')" title="Devices">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Devices</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Devices</span><span class="rail-label">Devices</span>
     </button>
     <button class="rail-btn" id="tabEvents" onclick="switchMainTab('events')" title="Events">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Events</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Events</span><span class="rail-label">Events</span>
     </button>
     <button class="rail-btn" id="tabAlerting" onclick="switchMainTab('alerting')" title="Alerting">
-      <span class="rail-ico" aria-hidden="true" data-icon="alerts"></span><span class="rail-tip">Alerting</span>
+      <span class="rail-ico" aria-hidden="true" data-icon="alerts"></span><span class="rail-tip">Alerting</span><span class="rail-label">Alerting</span>
     </button>
     <button class="rail-btn" id="tabLiveMap" onclick="switchMainTab('livemap')" title="Live Map (NOC Console)">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Live Map</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Live Map</span><span class="rail-label">Live Map</span>
     </button>
     <button class="rail-btn" id="tabMap" onclick="switchMainTab('map')" title="Topology Design (manual editor)">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Topology Design</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Topology Design</span><span class="rail-label">Topology</span>
     </button>
     <button class="rail-btn" id="tabIpam" onclick="switchMainTab('ipam')" title="IP Addresses">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">IPAM</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">IPAM</span><span class="rail-label">IPAM</span>
     </button>
     <button class="rail-btn" id="tabReports" onclick="switchMainTab('reports')" title="Reports">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Reports</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Reports</span><span class="rail-label">Reports</span>
     </button>
     <button class="rail-btn" id="tabBackups" onclick="switchMainTab('backups')" title="Backups">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Backups</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Backups</span><span class="rail-label">Backups</span>
     </button>
     <button class="rail-btn rbac-admin" id="tabLogs" onclick="switchMainTab('logs')" title="Logs">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Logs</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Logs</span><span class="rail-label">Logs</span>
     </button>
     <div class="rail-spacer"></div>
     <button class="rail-btn rail-btn--settings" id="railSettings" onclick="openSettings()" title="Settings">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Settings</span>
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Settings</span><span class="rail-label">Settings</span>
     </button>
   </nav>
   <div id="main">

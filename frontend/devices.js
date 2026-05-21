@@ -767,6 +767,7 @@ function _initDevCtxMenu(){
     const card=e.target.closest('.dc:not(.dc-add)');
     const row =e.target.closest('.dc-list-row');
     const grpHdr=e.target.closest('.grp-hdr');
+    const siteHdr=e.target.closest('.site-hdr');
     const raw =(card?.id||row?.id||'');
     const did =raw.replace(/^dp-|^dpl-/,'') || null;
     if(did&&S.devices[did]){
@@ -791,10 +792,24 @@ function _initDevCtxMenu(){
         ${_isDefault ? '' : `
         <div class="dci-sep"></div>
         <div class="dci dci-danger rbac-op" onclick="_hideDcm();_deleteGroup(${JSON.stringify(_ctxGrp)})">🗑️ Delete Group</div>`}`;
+    } else if(siteHdr){
+      // Right-click on a site header — offer Edit / Add Site. We grab the
+      // site name from the wrapping .site-wrap[data-site]. Unsited bucket
+      // (empty data-site) only gets "Add Site".
+      const siteName = siteHdr.closest('.site-wrap')?.dataset.site || '';
+      const editItem = siteName
+        ? `<div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('edit',${JSON.stringify(siteName)})">⚙️ Edit Site</div>
+           <div class="dci-sep"></div>`
+        : '';
+      _dcm.innerHTML=`
+        ${editItem}
+        <div class="dci rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('add')">📍 Add Site</div>`;
     } else {
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
-        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup()">👥 Add Group</div>`;
+        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup()">👥 Add Group</div>
+        <div class="dci-sep"></div>
+        <div class="dci rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('add')">📍 Add Site</div>`;
     }
     _showDcm(e.clientX+2,e.clientY+2);
   });

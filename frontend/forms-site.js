@@ -14,6 +14,48 @@
 (function() {
 'use strict';
 
+// Inject the modal CSS exactly once. livemap.css carries these rules for the
+// Live Map iframe; when this script runs in the main app the styles aren't
+// loaded, so the modal would render unstyled at top-left of the page.
+function _injectModalCss() {
+  if (document.getElementById('forms-site-css')) return;
+  const css = '' +
+    '.lm-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);' +
+      'backdrop-filter:blur(4px);display:flex;align-items:center;' +
+      'justify-content:center;z-index:10000;font-family:"Exo 2",sans-serif}' +
+    '.lm-modal{width:min(460px,92vw);background:#0a1118;color:#e2e8f0;' +
+      'border:1px solid #00d4ff;box-shadow:0 0 30px rgba(0,212,255,0.2);' +
+      'display:flex;flex-direction:column}' +
+    '.lm-modal-head{padding:12px 16px;border-bottom:1px solid rgba(0,212,255,0.2);' +
+      'font-family:"Orbitron",monospace;font-size:13px;font-weight:900;' +
+      'letter-spacing:3px;color:#00d4ff}' +
+    '.lm-modal-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px}' +
+    '.lm-modal-foot{padding:12px 16px;border-top:1px solid rgba(0,212,255,0.2);' +
+      'display:flex;gap:8px;justify-content:flex-end;align-items:center}' +
+    '.lm-modal .lm-field{display:flex;flex-direction:column;gap:4px}' +
+    '.lm-modal .lm-field label{font-family:"Share Tech Mono",monospace;font-size:10px;' +
+      'letter-spacing:1.5px;color:rgba(255,255,255,0.6)}' +
+    '.lm-modal .lm-field input,.lm-modal .lm-field select{padding:7px 9px;' +
+      'background:rgba(0,0,0,0.4);border:1px solid rgba(0,212,255,0.2);color:#e2e8f0;' +
+      'font-family:"Share Tech Mono",monospace;font-size:11px;border-radius:2px;outline:none}' +
+    '.lm-modal .lm-field input:focus,.lm-modal .lm-field select:focus{border-color:#00d4ff}' +
+    '.lm-modal .lm-field .hint{font-family:"Share Tech Mono",monospace;font-size:9px;' +
+      'color:rgba(255,255,255,0.4);letter-spacing:0.5px;line-height:1.45}' +
+    '.lm-modal .lm-field .check{display:flex;align-items:center;gap:6px;' +
+      'font-family:"Share Tech Mono",monospace;font-size:10px;color:rgba(255,255,255,0.85)}' +
+    '.lm-modal .lm-btn{padding:6px 14px;background:rgba(0,212,255,0.05);' +
+      'border:1px solid rgba(0,212,255,0.25);color:#00d4ff;' +
+      'font-family:"Share Tech Mono",monospace;font-size:10px;letter-spacing:1.5px;' +
+      'cursor:pointer;border-radius:2px;transition:background .12s,border-color .12s}' +
+    '.lm-modal .lm-btn:hover{background:rgba(0,212,255,0.1);border-color:#00d4ff}' +
+    '.lm-modal .lm-btn.danger{color:#ff3366;border-color:rgba(255,51,102,0.4)}' +
+    '.lm-modal .lm-btn.danger:hover{background:rgba(255,51,102,0.08);border-color:#ff3366}';
+  const style = document.createElement('style');
+  style.id = 'forms-site-css';
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
 const KINDS = [
   { v: 'lab',      l: 'LAB · Lab / staging' },
   { v: 'dc',       l: 'DC · Data center' },
@@ -70,6 +112,7 @@ async function _fetchSiteMeta(name) {
 
 async function openModal(mode, name) {
   closeModal();
+  _injectModalCss();
 
   // For "edit", pull the current site object. Prefer the in-memory Live Map
   // cache when we're loaded inside the iframe; otherwise hit the API.
@@ -217,6 +260,7 @@ async function openModal(mode, name) {
 }
 
 function _openDeleteConfirm(name, usage) {
+  _injectModalCss();
   // Reuse the same overlay class; rendered on top of the edit modal.
   const overlay = document.createElement('div');
   overlay.className = 'lm-modal-overlay';

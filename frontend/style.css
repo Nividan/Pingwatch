@@ -4228,6 +4228,13 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   gap:2px;
   align-items:center;
   position:relative;z-index:10;
+  width:56px;
+  transition:width var(--dur) var(--ease);
+}
+.rail.expanded{
+  width:180px;
+  align-items:stretch;
+  padding-left:8px;padding-right:8px;
 }
 .rail-btn{
   width:40px;height:40px;
@@ -4236,8 +4243,32 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   color:var(--text3);
   background:transparent;border:none;
   position:relative;cursor:pointer;
-  transition:color var(--dur) var(--ease), background var(--dur) var(--ease);
+  transition:color var(--dur) var(--ease), background var(--dur) var(--ease), width var(--dur) var(--ease);
 }
+.rail.expanded .rail-btn{
+  width:100%;height:36px;
+  grid-template-columns:24px 1fr;
+  justify-items:start;
+  padding:0 10px;
+  gap:10px;
+}
+.rail-label{
+  display:none;
+  font-size:var(--fs-sm);
+  color:inherit;
+  white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;
+  font-weight:500;
+  letter-spacing:0.2px;
+}
+.rail.expanded .rail-label{ display:block; }
+/* Tooltips only make sense in collapsed mode */
+.rail.expanded .rail-tip{ display:none; }
+
+/* Expand/collapse toggle button at the top of the rail */
+.rail-toggle{ color:var(--text2); margin-bottom:2px; }
+.rail-toggle:hover{ color:var(--accent); }
+.rail.expanded .rail-toggle .rail-ico svg{ transform:rotate(180deg); transition:transform var(--dur) var(--ease); }
 .rail-btn:hover{ color:var(--text); background:var(--card-soft); }
 .rail-btn.active{
   color:var(--accent);

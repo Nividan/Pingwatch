@@ -1703,6 +1703,31 @@ async function _refreshFlapList(){
   }catch(_){}
 }
 
+// ── Rail expand/collapse ────────────────────────────────────────
+// Toggles a label column next to each rail icon. Persisted to localStorage
+// so the user's preference survives reloads.
+function _railToggle(){
+  const rail = document.getElementById('rail');
+  if (!rail) return;
+  const expand = !rail.classList.contains('expanded');
+  rail.classList.toggle('expanded', expand);
+  try { localStorage.setItem('pw_rail_expanded', expand ? '1' : '0'); } catch(_) {}
+  const btn = document.getElementById('railToggle');
+  if (btn) btn.title = expand ? 'Collapse sidebar' : 'Expand sidebar';
+}
+(function _railRestore(){
+  try {
+    if (localStorage.getItem('pw_rail_expanded') === '1') {
+      document.addEventListener('DOMContentLoaded', function(){
+        const rail = document.getElementById('rail');
+        if (rail) rail.classList.add('expanded');
+        const btn = document.getElementById('railToggle');
+        if (btn) btn.title = 'Collapse sidebar';
+      });
+    }
+  } catch(_) {}
+})();
+
 function switchMainTab(tab){
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
