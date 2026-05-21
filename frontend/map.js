@@ -546,6 +546,36 @@ function _pwComputeAutoLinks() {
     }
   }
 
+  // Rule 7 — group fallback. For every group whose devices were NOT picked
+  // up by Rule 1 (because the subnet has no role-tagged anchor, or the
+  // subnet isn't tracked in IPAM at all), link the group's first device to
+  // the first role-tagged device in the same site (any tier). Ensures
+  // every group has at least one visible "this is on the site's network"
+  // line — otherwise large clusters of un-IPAM'd devices appear floating
+  // and disconnected from the topology.
+  const _groupsAnchored = new Set();
+  for (const lk of out) {
+    const sDev = _pwDevMap[lk.src_did];
+    if (sDev) _groupsAnchored.add(`${sDev.site || ''}${sDev.group || ''}`);
+  }
+  const _orphanGroupFirst = new Map();
+  for (const dev of pwDevices) {
+    if (pwRoles[dev.device_id]) continue;  // tagged devices handled by uplink rules
+    const key = `${dev.site || ''}${dev.group || ''}`;
+    if (_groupsAnchored.has(key)) continue;
+    if (!_orphanGroupFirst.has(key)) _orphanGroupFirst.set(key, dev);
+  }
+  for (const [, firstDev] of _orphanGroupFirst) {
+    const site = firstDev.site || '';
+    for (const role of ['switch', 'backbone', 'core', 'gateway']) {
+      const arr = byRoleBySite[role].get(site) || [];
+      if (arr.length && arr[0].device_id !== firstDev.device_id) {
+        out.push({ src_did: firstDev.device_id, tgt_did: arr[0].device_id, kind: 'l2' });
+        break;
+      }
+    }
+  }
+
   // Rule 6 — gateway → Internet. Each gateway in a non-WAN site links to one
   // representative device in a WAN-named site (Internet / OFF-Site / WAN /
   // Cloud / External / Edge). Makes "the network reaches the public Internet"
@@ -766,7 +796,7 @@ function calcPwLayout(devices) {
   // The COLS/GGAP/ROWGAP constants above still apply; SITE_PAD adds the
   // breathing room between the site frame and its inner groups, and
   // SITE_GAP separates one site block from the next.
-  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 40, TIER_ROWGAP = 30;
+  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 80, TIER_ROWGAP = 30;
 
   // Group entries by site (entries was already sorted site → tier → size
   // by the comparator above; siteOrder preserves that order with Unsited last).
@@ -841,16 +871,22 @@ function calcPwLayout(devices) {
     sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets, rank });
   }
 
-  // Site ordering: WAN/Internet sites anchor the top (rank 0), then sites
-  // containing only gateway/core groups (rank 1), then internal sites (rank 2).
-  // Within rank, larger sites first (so the biggest cluster gets the most room),
-  // then alphabetical. Unsited site ('') uses its rank as computed.
+  // Site ordering for corner-pack placement (left to right, top to bottom):
+  //   1. The single largest internal site anchors the top-left as the visual
+  //      backbone of the canvas (most groups → most attention).
+  //   2. WAN/Internet sites (rank 0) come next — they pack to the right of
+  //      the anchor, acting as the "bridge" between the main LAN and other
+  //      small internal LANs.
+  //   3. Remaining sites by area descending — small LANs (like a lab/branch)
+  //      end up to the right of the WAN site, completing a left-to-right
+  //      "Big LAN → Internet → Small LAN" reading order.
+  const _largestSite = sitesArr.reduce(
+    (best, s) => (!best || s.w * s.h > best.w * best.h) ? s : best, null);
   sitesArr.sort((a, b) => {
+    if (a === _largestSite) return -1;
+    if (b === _largestSite) return 1;
     if (a.rank !== b.rank) return a.rank - b.rank;
-    const aDev = a.sEntries.reduce((n, e) => n + e.devs.length, 0);
-    const bDev = b.sEntries.reduce((n, e) => n + e.devs.length, 0);
-    if (aDev !== bDev) return bDev - aDev;
-    return String(a.site || '￿').localeCompare(String(b.site || '￿'));
+    return (b.w * b.h) - (a.w * a.h);
   });
 
   // PASS 2 — pack sites onto the canvas using 2D corner-based bin packing.
