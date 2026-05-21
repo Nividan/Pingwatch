@@ -89,10 +89,11 @@ def _dns_refresh_worker(subnet_id, ip_list):
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     # ── GET /api/sites ───────────────────────────────────────────
-    # Returns sorted UNION of distinct, non-empty site names from both
-    # ipam_subnets and devices. Used by autocomplete (device editor, alert
-    # profile editor, maintenance window editor). Lives in ipam.py because
-    # IPAM was the original home of the `site` concept; devices joined later.
+    # Returns sorted UNION of distinct, non-empty site names from
+    # ipam_subnets, devices, AND the sites metadata table (Live Map sites
+    # added via /api/sites/meta should show up in the device-editor /
+    # group-editor / alert-profile-editor autocomplete even when no device
+    # has been assigned to them yet).
     if path == '/api/sites' and method == 'GET':
         user, _ = h._require('viewer')
         if not user: return True
@@ -110,6 +111,12 @@ def handle(h, method, path, body):
                 if v: sites.add(v)
         except Exception as e:
             log.warning(f"/api/sites devices query failed: {e}")
+        try:
+            for r in db_query('main', "SELECT name FROM sites"):
+                v = (r['name'] or '').strip()
+                if v: sites.add(v)
+        except Exception as e:
+            log.warning(f"/api/sites sites query failed: {e}")
         h._json(200, {'sites': sorted(sites, key=str.lower)})
         return True
 

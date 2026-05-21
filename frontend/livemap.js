@@ -86,20 +86,6 @@ const LM = {
   liveTickTimer: null,      // periodic time-ago refresh
 };
 
-// Tier Y constants (from the design reference, topology-variations.jsx)
-const SD = {
-  Y_FW:  56,    // firewall row top
-  Y_SW:  168,
-  Y_HYP: 286,
-  Y_VM:  416,
-  H_FW:  60,
-  H_SW:  56,
-  H_HYP: 116,
-  H_VM:  100,
-  ML:    80,    // left margin (after tier-tag column)
-  MR:    80,    // right margin reserved for IPMI pillar
-};
-
 // Inline SVG icons (Heroicons-ish), kept tiny + cyan-tinted
 const ICONS = {
   fw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z"/></svg>',
@@ -282,8 +268,12 @@ function renderNOC() {
     sub: s.flaps_24h + ' flaps · ' + s.incidents_24h + ' incidents',
   });
 
-  // Mosaic — site cells with sqrt-sized spans
-  const cells = LM.sites.map(function(site) {
+  // Mosaic — site cells with sqrt-sized spans.
+  // Exclude internet/pinned sites — they have their own OFF-SITE widget so
+  // including them here would double-display the same info.
+  const cells = LM.sites.filter(function(site) {
+    return (site.kind || '').toLowerCase() !== 'internet';
+  }).map(function(site) {
     const status = worstStatus(site);
     const span = _mosaicCellSpans(site.devices);
     const kind = (site.kind || 'lab').toLowerCase();
@@ -429,8 +419,7 @@ function _devCard(d, opts) {
   const status = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
   const icon = opts.icon || ICONS.sw;
   const role = opts.role ? '<span class="dev-role">' + esc(opts.role) + '</span>' : '';
-  return '<div class="dev ' + status + '" data-did="' + esc(d.did) + '" ' +
-              'style="left:' + opts.x + 'px;top:' + opts.y + 'px;width:' + opts.w + 'px">' +
+  return '<div class="dev ' + status + '" data-did="' + esc(d.did) + '">' +
            '<div class="dev-row">' + icon +
              '<span class="dev-name">' + esc(d.name) + '</span>' +
              role +
@@ -440,15 +429,15 @@ function _devCard(d, opts) {
 }
 
 function _clusterCard(c, opts) {
+  opts = opts || {};
   const status = c.status === 'up' ? 'up' : (c.status === 'warn' ? 'warn' : (c.status === 'down' ? 'down' : 'unknown'));
   const icon = opts.icon || ICONS.hyp;
-  // Mini status grid: one cell per child device. Auto-fit columns.
+  // Mini status grid: one cell per child device. Auto-fit columns based on count.
   const cols = Math.max(4, Math.min(10, Math.ceil(Math.sqrt(c.cells.length))));
   const cells = c.cells.map(function(cell) {
     return '<div class="d-' + (cell.status || 'unknown') + '" title="' + esc(cell.name) + '"></div>';
   }).join('');
-  return '<div class="cluster ' + status + '" data-cluster="' + esc(c.name) + '" ' +
-              'style="left:' + opts.x + 'px;top:' + opts.y + 'px;width:' + opts.w + 'px;height:' + opts.h + 'px">' +
+  return '<div class="cluster ' + status + '" data-cluster="' + esc(c.name) + '">' +
            '<div class="cluster-head">' + icon +
              '<span class="cluster-title">' + esc(c.name) + '</span>' +
              '<span class="cluster-count">' + c.count + '</span>' +
@@ -473,11 +462,13 @@ function renderSite(name) {
   });
 }
 
-function _offsiteBand(s) {
-  // Render the OFF-Site band at the top of every site-detail view.
-  if (!s || !s.off_site || !s.off_site.length) {
-    return '';
-  }
+function _offsiteBand(s, currentSite) {
+  // Render the OFF-Site band at the top of every site-detail view EXCEPT
+  // when the user is drilled into the off-site itself (avoid showing the
+  // same internet checks twice — once as the band and once as the main tree).
+  if (!s || !s.off_site || !s.off_site.length) return '';
+  const cur = (currentSite || '').toLowerCase();
+  if (cur === 'off-site' || cur === 'offsite' || cur === 'internet') return '';
   const cards = s.off_site.map(function(o) {
     const cls = o.status === 'up' ? 'up' : (o.status === 'warn' ? 'warn' : (o.status === 'down' ? 'down' : 'unknown'));
     const ms = (o.latency_ms == null)
@@ -502,11 +493,50 @@ function _offsiteBand(s) {
 
 function _renderSiteTree(name, tree) {
   const main = $('lm-main');
-  // Compose the wrap. The .site container is a flex:1 region; tier devices
-  // are positioned absolutely inside it relative to its bounding box.
+  const fws  = tree.firewalls   || [];
+  const sws  = tree.switches    || [];
+  const hyps = tree.hypervisors || [];
+  const vms  = tree.vm_clusters || [];
+  const ipmi = tree.ipmi        || [];
+
+  function tierRow(cls, label, items, opts) {
+    if (!items.length) return '';
+    const tagCls   = opts.tagCls || cls;
+    const rowAlign = opts.center ? ' center' : ' spread';
+    return '<div class="sd-tier">' +
+             '<span class="tier-tag ' + tagCls + '">' + esc(label) + '</span>' +
+             '<div class="sd-tier-row' + rowAlign + '">' +
+               items.map(opts.render).join('') +
+             '</div>' +
+           '</div>';
+  }
+
+  function _fwRow(d) {
+    return _devCard(d, { icon: ICONS.fw, role: 'PRIMARY' });
+  }
+  function _swRow(d) {
+    return _devCard(d, { icon: ICONS.sw });
+  }
+  function _hypRow(c) {
+    return _clusterCard(c, { icon: ICONS.hyp });
+  }
+  function _vmRow(c) {
+    return _clusterCard(c, { icon: ICONS.vm });
+  }
+  function _ipmiRow(c) {
+    return _clusterCard(c, { icon: ICONS.ipmi });
+  }
+
+  const ipmiBlock = ipmi.length
+    ? '<div class="sd-tier-ipmi">' +
+        '<span class="tier-tag ipmi right">IPMI · OOB</span>' +
+        ipmi.map(_ipmiRow).join('') +
+      '</div>'
+    : '';
+
   main.innerHTML =
     '<div class="sd-wrap">' +
-      _offsiteBand(LM.summary) +
+      _offsiteBand(LM.summary, name) +
       '<div class="site">' +
         '<div class="site-corners"><span></span><span></span><span></span><span></span></div>' +
         '<div class="site-tab">' +
@@ -514,15 +544,20 @@ function _renderSiteTree(name, tree) {
           '<span class="site-tab-n">' + esc(name) + '</span>' +
           '<span class="site-tab-s">› SELECTED · MAIN INFRASTRUCTURE</span>' +
         '</div>' +
-        '<svg class="conn-svg"></svg>' +
-        '<div class="site-canvas" style="position:absolute;inset:0"></div>' +
+        '<div class="sd-canvas">' +
+          tierRow('fw',  'FIREWALL',    fws,  { render: _fwRow,  center: true }) +
+          tierRow('sw',  'SWITCHES',    sws,  { render: _swRow,  center: false }) +
+          tierRow('hyp', 'HYPERVISORS', hyps, { render: _hypRow }) +
+          tierRow('vm',  'VM CLUSTERS', vms,  { render: _vmRow }) +
+          ipmiBlock +
+        '</div>' +
       '</div>' +
       (tree.other && tree.other.length
-        ? '<div class="sd-other"><div class="sd-other-h">OTHER · UNCLASSIFIED DEVICES</div>' +
+        ? '<div class="sd-other"><div class="sd-other-h">OTHER · UNCLASSIFIED DEVICES (' + tree.other.length + ')</div>' +
           '<div class="sd-other-grid">' +
             tree.other.map(function(d) {
               const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
-              return '<div class="dev ' + st + '" data-did="' + esc(d.did) + '" style="position:static">' +
+              return '<div class="dev ' + st + '" data-did="' + esc(d.did) + '">' +
                        '<div class="dev-row">' + ICONS.sw + '<span class="dev-name">' + esc(d.name) + '</span></div>' +
                        '<div class="dev-ip">' + esc(d.host) + '</div>' +
                      '</div>';
@@ -530,232 +565,8 @@ function _renderSiteTree(name, tree) {
           '</div></div>'
         : '');
 
-  // Tier tags
-  const canvas = main.querySelector('.site-canvas');
-  const fws  = tree.firewalls   || [];
-  const sws  = tree.switches    || [];
-  const hyps = tree.hypervisors || [];
-  const vms  = tree.vm_clusters || [];
-  const ipmi = tree.ipmi        || [];
-
-  // Add tier-tag labels at left margin
-  function tag(cls, label, y) {
-    const t = ce('div', 'tier-tag ' + cls, esc(label));
-    t.style.left = '16px';
-    t.style.top  = y + 'px';
-    canvas.appendChild(t);
-  }
-  if (fws.length)  tag('fw',   'FIREWALL',    SD.Y_FW  - 18);
-  if (sws.length)  tag('sw',   'SWITCHES',    SD.Y_SW  - 18);
-  if (hyps.length) tag('hyp',  'HYPERVISORS', SD.Y_HYP - 18);
-  if (vms.length)  tag('vm',   'VM CLUSTERS', SD.Y_VM  - 18);
-  if (ipmi.length) {
-    const t = ce('div', 'tier-tag ipmi', 'IPMI · OOB');
-    t.style.right = '14px';
-    t.style.top   = (SD.Y_HYP - 18) + 'px';
-    canvas.appendChild(t);
-  }
-
-  // Lay out firewall row (centered)
-  const canvasRect = function() { return canvas.getBoundingClientRect(); };
-  // We need to wait until layout has happened. Use requestAnimationFrame.
-  requestAnimationFrame(function() {
-    const rect = canvas.getBoundingClientRect();
-    const W = rect.width;
-    if (W < 200) {
-      // Layout not ready yet, retry once
-      requestAnimationFrame(function() { _layoutTiers(canvas, name, tree); });
-    } else {
-      _layoutTiers(canvas, name, tree);
-    }
-  });
-
   // Cluster click → side panel
   main.addEventListener('click', _siteCanvasClick);
-}
-
-function _layoutTiers(canvas, name, tree) {
-  // Wipe any device/cluster cards from a previous render
-  canvas.querySelectorAll('.dev, .cluster').forEach(function(n) { n.remove(); });
-  const rect = canvas.getBoundingClientRect();
-  const W = rect.width;
-  const fws  = tree.firewalls   || [];
-  const sws  = tree.switches    || [];
-  const hyps = tree.hypervisors || [];
-  const vms  = tree.vm_clusters || [];
-  const ipmi = tree.ipmi        || [];
-
-  const usableW = W - SD.ML - SD.MR;        // body width between tier-tag and IPMI pillar
-  const cx      = SD.ML + usableW / 2;
-
-  const cardsHtml = [];
-
-  // Firewall(s): single row centered. If multiple, distribute.
-  const fwW = Math.min(260, Math.max(180, usableW * 0.42));
-  if (fws.length === 1) {
-    cardsHtml.push(_devCard(fws[0], { x: Math.round(cx - fwW / 2), y: SD.Y_FW, w: fwW, icon: ICONS.fw, role: 'PRIMARY' }));
-  } else {
-    fws.forEach(function(d, i) {
-      const slot = usableW / fws.length;
-      cardsHtml.push(_devCard(d, {
-        x: Math.round(SD.ML + slot * i + (slot - fwW) / 2),
-        y: SD.Y_FW, w: fwW, icon: ICONS.fw,
-        role: i === 0 ? 'PRIMARY' : 'SECONDARY'
-      }));
-    });
-  }
-
-  // Switches: spread evenly across the usable width
-  const swW = Math.min(220, Math.max(160, usableW * 0.32));
-  sws.forEach(function(d, i) {
-    const slot = sws.length ? usableW / sws.length : usableW;
-    const x = SD.ML + slot * i + (slot - swW) / 2;
-    cardsHtml.push(_devCard(d, { x: Math.round(x), y: SD.Y_SW, w: swW, icon: ICONS.sw }));
-  });
-
-  // Hypervisor clusters: evenly across usable width
-  const hypW = Math.min(190, Math.max(150, usableW / Math.max(1, hyps.length) - 12));
-  hyps.forEach(function(c, i) {
-    const slot = hyps.length ? usableW / hyps.length : usableW;
-    const x = SD.ML + slot * i + (slot - hypW) / 2;
-    cardsHtml.push(_clusterCard(c, { x: Math.round(x), y: SD.Y_HYP, w: hypW, h: SD.H_HYP, icon: ICONS.hyp }));
-  });
-
-  // VM clusters: align under hypervisors when count matches; else distribute
-  const vmW = Math.min(190, Math.max(150, usableW / Math.max(1, vms.length) - 12));
-  vms.forEach(function(c, i) {
-    const slot = vms.length ? usableW / vms.length : usableW;
-    const x = SD.ML + slot * i + (slot - vmW) / 2;
-    cardsHtml.push(_clusterCard(c, { x: Math.round(x), y: SD.Y_VM, w: vmW, h: SD.H_VM, icon: ICONS.vm }));
-  });
-
-  // IPMI pillar: vertical card on the right that spans hyp + vm rows
-  if (ipmi.length) {
-    const pillarH = (SD.Y_VM + SD.H_VM) - SD.Y_HYP;
-    const pillarW = 110;
-    // Stack IPMI clusters vertically inside the pillar slot
-    ipmi.forEach(function(c, i) {
-      const slotH = pillarH / ipmi.length;
-      cardsHtml.push(_clusterCard(c, {
-        x: Math.round(W - SD.MR + 6),
-        y: SD.Y_HYP + slotH * i,
-        w: pillarW,
-        h: Math.max(80, slotH - 8),
-        icon: ICONS.ipmi,
-      }));
-    });
-  }
-
-  // Append all cards in one operation (so a DocumentFragment isn't needed)
-  const wrap = document.createElement('div');
-  wrap.innerHTML = cardsHtml.join('');
-  while (wrap.firstChild) canvas.appendChild(wrap.firstChild);
-
-  // Build SVG connection paths
-  _drawConnections(canvas, { fws: fws.length, sws: sws.length, hyps: hyps.length, vms: vms.length, ipmi: ipmi.length, W: W });
-}
-
-function _drawConnections(canvas, ctx) {
-  const svg = canvas.parentElement.querySelector('.conn-svg');
-  if (!svg) return;
-  svg.setAttribute('viewBox', '0 0 ' + ctx.W + ' 600');
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.innerHTML = '';
-
-  const cx = SD.ML + (ctx.W - SD.ML - SD.MR) / 2;
-  const fwBottom = SD.Y_FW + SD.H_FW;
-  const swTop    = SD.Y_SW;
-  const swBottom = SD.Y_SW + SD.H_SW;
-  const hypTop   = SD.Y_HYP;
-  const hypBottom= SD.Y_HYP + SD.H_HYP;
-  const vmTop    = SD.Y_VM;
-
-  function path(d, attrs) {
-    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    p.setAttribute('d', d);
-    for (const k in attrs) p.setAttribute(k, attrs[k]);
-    svg.appendChild(p);
-  }
-
-  // Uplink from top into FortiGate (gold, animated dashed)
-  if (ctx.fws) {
-    path('M ' + cx + ' 0 L ' + cx + ' ' + SD.Y_FW,
-         { stroke: 'rgba(255,215,0,0.65)', 'stroke-width': '1.5',
-           'stroke-dasharray': '4 6', class: 'flow' });
-  }
-
-  // FortiGate → switches
-  if (ctx.fws && ctx.sws) {
-    const slot = (ctx.W - SD.ML - SD.MR) / ctx.sws;
-    for (let i = 0; i < ctx.sws; i++) {
-      const sx = SD.ML + slot * i + slot / 2;
-      const my = (fwBottom + swTop) / 2;
-      const d = 'M ' + cx + ' ' + fwBottom +
-                ' L ' + cx + ' ' + my +
-                ' L ' + sx + ' ' + my +
-                ' L ' + sx + ' ' + swTop;
-      const attrs = {
-        stroke: 'rgba(0,212,255,0.6)', 'stroke-width': '1.5',
-        'stroke-dasharray': '6 4'
-      };
-      if (i === 0) attrs.class = 'flow';
-      path(d, attrs);
-    }
-  }
-
-  // Switches → hypervisors (split evenly: each switch feeds an equal slice)
-  if (ctx.sws && ctx.hyps) {
-    const swSlot = (ctx.W - SD.ML - SD.MR) / ctx.sws;
-    const hypSlot = (ctx.W - SD.ML - SD.MR) / ctx.hyps;
-    const perSwitch = Math.ceil(ctx.hyps / ctx.sws);
-    for (let i = 0; i < ctx.hyps; i++) {
-      const hx = SD.ML + hypSlot * i + hypSlot / 2;
-      const swIdx = Math.min(ctx.sws - 1, Math.floor(i / perSwitch));
-      const sx = SD.ML + swSlot * swIdx + swSlot / 2;
-      const my = (swBottom + hypTop) / 2;
-      const d = 'M ' + sx + ' ' + swBottom +
-                ' L ' + sx + ' ' + my +
-                ' L ' + hx + ' ' + my +
-                ' L ' + hx + ' ' + hypTop;
-      const attrs = {
-        stroke: 'rgba(0,255,157,0.55)', 'stroke-width': '1.4',
-        'stroke-dasharray': '4 4'
-      };
-      if (i < 2) attrs.class = 'flow';
-      path(d, attrs);
-    }
-  }
-
-  // Hypervisors → VM clusters (vertical)
-  if (ctx.hyps && ctx.vms) {
-    const hypSlot = (ctx.W - SD.ML - SD.MR) / ctx.hyps;
-    const vmSlot  = (ctx.W - SD.ML - SD.MR) / ctx.vms;
-    for (let i = 0; i < Math.max(ctx.hyps, ctx.vms); i++) {
-      const hx = SD.ML + hypSlot * Math.min(i, ctx.hyps - 1) + hypSlot / 2;
-      const vx = SD.ML + vmSlot  * Math.min(i, ctx.vms - 1)  + vmSlot  / 2;
-      const my = (hypBottom + vmTop) / 2;
-      const d = 'M ' + hx + ' ' + hypBottom +
-                ' L ' + hx + ' ' + my +
-                ' L ' + vx + ' ' + my +
-                ' L ' + vx + ' ' + vmTop;
-      path(d, { stroke: 'rgba(0,212,255,0.5)', 'stroke-width': '1.3',
-                'stroke-dasharray': '3 5' });
-    }
-  }
-
-  // IPMI: dashed purple from the right-most switch
-  if (ctx.sws && ctx.ipmi) {
-    const swSlot = (ctx.W - SD.ML - SD.MR) / ctx.sws;
-    const sx = SD.ML + swSlot * (ctx.sws - 1) + swSlot / 2;
-    const ix = ctx.W - SD.MR + 6 + 55;
-    const my = (swBottom + hypTop) / 2;
-    path('M ' + sx + ' ' + swBottom +
-         ' L ' + sx + ' ' + my +
-         ' L ' + ix + ' ' + my +
-         ' L ' + ix + ' ' + hypTop,
-         { stroke: 'rgba(168,85,247,0.55)', 'stroke-width': '1.3',
-           'stroke-dasharray': '2 6' });
-  }
 }
 
 function _siteCanvasClick(e) {

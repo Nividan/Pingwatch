@@ -26,31 +26,40 @@ TIER_VM         = "vm"
 TIER_IPMI       = "ipmi"
 TIER_OTHER      = "other"
 
-# Order matters — first match wins.
+# Order matters — first match wins. IPMI / firewall / switch use narrower rules
+# (they have distinctive vendor markers); VM and hypervisor get broader.
 _TIER_RULES = [
     (TIER_IPMI,       re.compile(r"\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b", re.I)),
     (TIER_FIREWALL,   re.compile(r"\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|"
-                                 r"checkpoint|firewall|fw\d|asa\d|edgewall)\b", re.I)),
+                                 r"checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|"
+                                 r"opnsense|untangle|fw-)\b", re.I)),
     (TIER_SWITCH,     re.compile(r"\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|"
-                                 r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw)\b", re.I)),
+                                 r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw|"
+                                 r"l3|l2|router|rtr-)\b", re.I)),
+    (TIER_VM,         re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|nive|"
+                                 r"pingwatch|guest|tenant)\b", re.I)),
     (TIER_HYPERVISOR, re.compile(r"\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|"
-                                 r"blade|bladecenter|esx-)\b", re.I)),
-    (TIER_VM,         re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|nive|pingwatch)\b", re.I)),
+                                 r"blade|bladecenter|esx-|hypervisor|host\d)\b", re.I)),
 ]
 
 
 def infer_tier(device) -> str:
     """Best-effort tier classification for a device.
 
-    Inspects the device name plus its host string. Returns one of the
-    TIER_* constants. Falls back to TIER_OTHER if no rule matches."""
+    Inspects the device name plus its host string + group name. Returns
+    one of the TIER_* constants. Falls back to TIER_HYPERVISOR so generic
+    servers ("srv-01", "win-prod-db", etc.) still show up as cluster cards
+    in the drill-in instead of being lost in an OTHER bucket."""
     name = (device.name or "")
     host = (device.host or "")
     blob = f"{name} {host} {(device.group or '')}"
     for tier, rx in _TIER_RULES:
         if rx.search(blob):
             return tier
-    return TIER_OTHER
+    # Default fallback: treat unknown devices as servers (hypervisor tier).
+    # Better to surface them as cluster cards than to drop them into a hidden
+    # OTHER section. Admin can later refine with manual tier overrides.
+    return TIER_HYPERVISOR
 
 
 def _device_card(d, alerts_by_did: dict) -> dict:

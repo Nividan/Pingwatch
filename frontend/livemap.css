@@ -223,11 +223,13 @@ body {
   position: absolute; inset: 0;
   padding: 14px;
   display: grid;
-  grid-template-rows: 152px 1fr 1fr;
+  /* min-content for hero row so it expands to fit content instead of clipping
+     when the legend + bar push past a hard-coded height. */
+  grid-template-rows: minmax(170px, auto) minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
-  overflow: hidden;
+  overflow: auto;
 }
-.noc-hero { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.noc-hero { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .hero-stat {
   position: relative;
   padding: 12px 14px;
@@ -236,6 +238,7 @@ body {
   border-radius: 2px;
   display: flex; flex-direction: column; gap: 4px;
   overflow: hidden;
+  min-width: 0;
 }
 .hero-stat.up    { border-color: var(--up); }
 .hero-stat.warn  { border-color: var(--warn); }
@@ -252,8 +255,9 @@ body {
   letter-spacing: 3px; opacity: 0.85;
 }
 .hero-value {
-  font-family: 'Orbitron', monospace; font-size: 40px; font-weight: 900;
-  letter-spacing: 2px; line-height: 1;
+  font-family: 'Orbitron', monospace; font-size: 38px; font-weight: 900;
+  letter-spacing: 2px; line-height: 1.05;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .hero-value.up   { color: var(--up); }
 .hero-value.dev  { color: var(--accent); }
@@ -541,6 +545,7 @@ body {
 .sd-offsite-card.down  { border-color: var(--down); }
 .sd-offsite-card.unknown { border-color: var(--dim); }
 .sd-oc-row { display: flex; align-items: center; gap: 7px; font-family: 'Exo 2', sans-serif; font-weight: 600; font-size: 11.5px; }
+.sd-oc-row svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent); }
 .sd-oc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sd-oc-host { font-family: 'Share Tech Mono', monospace; font-size: 9.5px; opacity: 0.85; }
 .sd-oc-host .latency { color: var(--up); margin-left: 8px; }
@@ -555,8 +560,8 @@ body {
     linear-gradient(180deg, rgba(0,212,255,0.018) 0%, rgba(0,0,0,0.0) 60%),
     rgba(8,16,30,0.18);
   backdrop-filter: blur(2px);
-  min-height: 0;
-  overflow: hidden;
+  min-height: 520px;
+  overflow: auto;
 }
 .site::before {
   content: ''; position: absolute; inset: 0;
@@ -602,9 +607,34 @@ body {
 .conn-svg path { fill: none; }
 .conn-svg path.flow { animation: dashFlow 1s linear infinite; }
 
-/* Tier-tag (vertical label inside SiteDetail) */
+/* Tier rows (replace absolute positioning with a vertical flex stack
+   that wraps gracefully when there are many cluster cards) */
+.sd-canvas { position: absolute; inset: 50px 16px 16px; display: flex; flex-direction: column; gap: 16px; pointer-events: none; }
+.sd-canvas > * { pointer-events: auto; }
+.sd-tier {
+  position: relative;
+  display: flex; flex-direction: column; gap: 6px;
+  padding-left: 110px;             /* leave room for the tier-tag column */
+  min-height: 60px;
+}
+.sd-tier-row {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: stretch;
+}
+.sd-tier-row.center  { justify-content: center; }
+.sd-tier-row.spread  { justify-content: space-around; }
+.sd-tier-ipmi {
+  position: absolute; right: 0; top: 0;
+  width: 130px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 2;
+}
+
+/* Tier-tag (vertical label inside SiteDetail) — sits at left of each row */
 .tier-tag {
   position: absolute;
+  left: 16px;
+  top: 8px;
   padding: 3px 9px;
   font-family: 'Share Tech Mono', monospace; font-size: 9px;
   letter-spacing: 2px;
@@ -614,6 +644,7 @@ body {
   background: rgba(6,10,15,0.7);
   z-index: 2;
 }
+.tier-tag.right { left: auto; right: 16px; }
 .tier-tag.fw   { color: var(--down);    border-color: var(--down);    }
 .tier-tag.sw   { color: var(--accent);  border-color: var(--accent);  }
 .tier-tag.hyp  { color: var(--accent2); border-color: var(--accent2); }
@@ -623,7 +654,7 @@ body {
 
 /* Device card (firewall + switches) */
 .dev {
-  position: absolute;
+  position: relative;
   border: 1px solid;
   border-radius: 3px;
   padding: 8px 10px;
@@ -632,6 +663,8 @@ body {
   cursor: pointer;
   z-index: 2;
   transition: transform .12s;
+  flex: 0 1 240px;
+  min-width: 180px;
 }
 .dev:hover { transform: translateY(-1px); }
 .dev.up    { border-color: var(--up); }
@@ -659,7 +692,7 @@ body {
 
 /* Cluster card (hypervisor / VM / IPMI) */
 .cluster {
-  position: absolute;
+  position: relative;
   border: 1px solid;
   border-radius: 4px;
   padding: 8px 10px 6px;
@@ -668,7 +701,11 @@ body {
   cursor: pointer;
   z-index: 2;
   transition: transform .12s;
+  flex: 0 1 200px;
+  min-width: 160px;
+  min-height: 110px;
 }
+.sd-tier-ipmi .cluster { flex: 0 0 auto; min-width: 0; }
 .cluster:hover { transform: translateY(-2px); }
 .cluster.up    { border-color: var(--up);   box-shadow: 0 0 8px rgba(0,255,157,0.18); }
 .cluster.warn  { border-color: var(--warn); box-shadow: 0 0 10px rgba(255,107,53,0.25); }
@@ -679,7 +716,7 @@ body {
   font-family: 'Orbitron', monospace; font-size: 10px;
   font-weight: 700; letter-spacing: 1px;
 }
-.cluster-head .cluster-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent); }
+.cluster-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent); }
 .cluster-head .cluster-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .cluster-count {
   font-family: 'Share Tech Mono', monospace; font-size: 11px;
@@ -715,14 +752,15 @@ body {
   font-family: 'Share Tech Mono', monospace; font-size: 8px; letter-spacing: 1.5px;
 }
 
-/* "Other" row at the bottom for unmatched-tier devices */
+/* "Other" row for unmatched-tier devices — rendered as a flex item in
+   .sd-wrap (not absolutely positioned, so it doesn't get clipped behind
+   the .site container or pushed off the iframe bottom). */
 .sd-other {
-  position: absolute; left: 16px; right: 16px; bottom: 10px;
+  flex-shrink: 0;
   padding: 8px 10px;
   background: rgba(0,0,0,0.25);
   border: 1px dashed var(--dim);
   display: flex; flex-direction: column; gap: 4px;
-  z-index: 2;
 }
 .sd-other-h {
   font-family: 'Share Tech Mono', monospace; font-size: 9px;
@@ -730,7 +768,7 @@ body {
   margin-bottom: 4px;
 }
 .sd-other-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; }
-.sd-other-grid .dev { position: static; }
+.sd-other-grid .dev { flex: none; min-width: 0; }
 
 /* ─── Side panel ──────────────────────────────────── */
 .lm-sidepanel {
