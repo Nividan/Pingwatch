@@ -644,6 +644,31 @@ function _siteRank(siteName, groupTiers) {
   if (groupTiers.length && Math.max(...groupTiers) <= 2) return 1;
   return 2;
 }
+// 2D corner-based bin packer: find topmost-leftmost (x, y) where rect (w, h)
+// fits without overlapping any rect in `placed`, with hgap/vgap clearance.
+// Used both for packing groups inside a site's tier band AND for packing
+// sites on the canvas. Eliminates dead whitespace by letting small items
+// slot into corners next to large ones instead of starting fresh rows.
+function _fitFreeCorner(placed, w, h, hgap, vgap, originX, originY) {
+  if (!placed.length) return { x: originX, y: originY };
+  const candidates = [{ x: originX, y: originY }];
+  for (const p of placed) {
+    candidates.push({ x: p.x + p.w + hgap, y: p.y });
+    candidates.push({ x: p.x, y: p.y + p.h + vgap });
+  }
+  candidates.sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const c of candidates) {
+    if (c.x < originX || c.y < originY) continue;
+    const fits = !placed.some(p => {
+      const xClear = (c.x + w + hgap <= p.x) || (p.x + p.w + hgap <= c.x);
+      const yClear = (c.y + h + vgap <= p.y) || (p.y + p.h + vgap <= c.y);
+      return !xClear && !yClear;
+    });
+    if (fits) return c;
+  }
+  const maxBottom = placed.reduce((m, p) => Math.max(m, p.y + p.h), originY);
+  return { x: originX, y: maxBottom + vgap };
+}
 
 function calcPwLayout(devices) {
   // v1.0+: bucket by (site, group) composite key so the same group name under
@@ -739,10 +764,11 @@ function calcPwLayout(devices) {
   // committing positions. Records each entry's offset within the site's
   // content area so PASS 2 can finalize after bin-packing.
   //
-  // NEW: groups inside a site are bucketed by tier, then laid out as tier
-  // rows (tier 1 at top, tier 5 at bottom). Within a tier, groups flow
-  // left-to-right wrapping at COLS. Different tiers always start a fresh
-  // row separated by TIER_ROWGAP for visual layering.
+  // Groups inside a site are bucketed by tier (1=gateway → 5=endpoint), then
+  // each tier band is packed using 2D corner-based bin packing — small groups
+  // slot into corners alongside larger ones instead of starting fresh narrow
+  // rows. Each tier band has its own vertical region within the site; tiers
+  // are separated by TIER_ROWGAP for visual layering.
   const sitesArr = [];  // { site, sEntries, w, h, offsets, rank }
   for (const [site, sEntries] of siteBuckets) {
     // Bucket this site's groups by tier (1..5)
@@ -758,24 +784,21 @@ function calcPwLayout(devices) {
     let maxInnerW = 0;
     const offsets = [];
     for (const tier of tiersPresent) {
-      const tierEnts = byTier.get(tier);
-      for (let r = 0; r < tierEnts.length; r += COLS) {
-        const row  = tierEnts.slice(r, r + COLS);
-        const rowH = Math.max(...row.map(e => e.h));
-        let gx = 0;
-        for (const ent of row) {
-          offsets.push({ entry: ent, offX: gx, offY: innerRowY });
-          gx += ent.w + GGAP;
-        }
-        maxInnerW = Math.max(maxInnerW, gx - GGAP);
-        innerRowY += rowH + ROWGAP;
+      // Largest first so they anchor row tops; small groups slot beside them.
+      const tierEnts = [...byTier.get(tier)].sort((a, b) => (b.w * b.h) - (a.w * a.h));
+      const tierStartY = innerRowY;
+      const tierPlaced = [];
+      let tierMaxY = tierStartY;
+      for (const ent of tierEnts) {
+        const pos = _fitFreeCorner(tierPlaced, ent.w, ent.h, GGAP, ROWGAP, 0, tierStartY);
+        offsets.push({ entry: ent, offX: pos.x, offY: pos.y });
+        tierPlaced.push({ x: pos.x, y: pos.y, w: ent.w, h: ent.h });
+        maxInnerW = Math.max(maxInnerW, pos.x + ent.w);
+        tierMaxY  = Math.max(tierMaxY,  pos.y + ent.h);
       }
-      // Extra vertical break between tier groups (in addition to ROWGAP).
-      innerRowY += TIER_ROWGAP;
+      innerRowY = tierMaxY + TIER_ROWGAP;
     }
-    // Strip the trailing ROWGAP (after last row of last tier) and trailing
-    // TIER_ROWGAP (after last tier).
-    const innerH = Math.max(0, innerRowY - ROWGAP - TIER_ROWGAP);
+    const innerH = Math.max(0, innerRowY - TIER_ROWGAP);
     const siteW  = maxInnerW + SITE_PAD * 2;
     const siteH  = SITE_TITLE_H + SITE_PAD + innerH + SITE_PAD;
     const rank   = _siteRank(site, tiersPresent);
@@ -794,30 +817,19 @@ function calcPwLayout(devices) {
     return String(a.site || '￿').localeCompare(String(b.site || '￿'));
   });
 
-  // PASS 2 — shelf-pack sites into rows so small sites fit beside or under
-  // a big one rather than stacking vertically with wasted right margin.
-  // maxRowW = widest site (typically the largest cluster), so small sites
-  // wrap into rows of their own beneath it.
-  //
-  // Rank separation: when site rank changes (e.g. WAN sites → internal sites),
-  // force a row break so edge sites visually anchor the top of the canvas
-  // instead of being lined up next to internal sites.
-  const maxRowW = Math.max(...sitesArr.map(s => s.w), 0);
-  let curX = STARTX, rowH = 0;
-  let prevRank = sitesArr.length ? sitesArr[0].rank : 0;
+  // PASS 2 — pack sites onto the canvas using 2D corner-based bin packing.
+  // sitesArr is already sorted (rank asc → size desc → name); the corner
+  // packer places each site at the topmost-leftmost free corner, so small
+  // rank-0 sites (WAN/Internet) anchor the top-left and the next-rank sites
+  // fill the empty horizontal space beside them instead of starting a fresh
+  // row below. Eliminates the "L-shape" wasted whitespace.
+  const placedSitesPos = [];
+  let maxBottom = STARTY;
   for (const sInfo of sitesArr) {
-    const rankChanged = sInfo.rank !== prevRank;
-    // Wrap when adding this site would overflow the row (always place at
-    // least one site per row to avoid an infinite loop when sInfo.w > maxRowW),
-    // OR when site rank changed (start a fresh row for the new rank tier).
-    if (curX !== STARTX && ((curX + sInfo.w) > (STARTX + maxRowW) || rankChanged)) {
-      curY += rowH + SITE_GAP;
-      curX  = STARTX;
-      rowH  = 0;
-    }
-    prevRank = sInfo.rank;
-    const x0 = curX;
-    const y0 = curY;
+    const pos = _fitFreeCorner(placedSitesPos, sInfo.w, sInfo.h, SITE_GAP, SITE_GAP, STARTX, STARTY);
+    const x0 = pos.x;
+    const y0 = pos.y;
+    placedSitesPos.push({ x: x0, y: y0, w: sInfo.w, h: sInfo.h });
     const contentX = x0 + SITE_PAD;
     const contentY = y0 + SITE_TITLE_H + SITE_PAD;
     // Replay the per-entry offsets recorded in PASS 1 to produce final hints.
@@ -828,12 +840,10 @@ function calcPwLayout(devices) {
     // Even Unsited gets a frame entry so block stacking lines up, but it
     // won't be rendered as a backdrop (syntheticSites filters site === '').
     siteNaturalFrames[sInfo.site] = { x: x0, y: y0, w: sInfo.w, h: sInfo.h };
-    curX += sInfo.w + SITE_GAP;
-    rowH  = Math.max(rowH, sInfo.h);
+    maxBottom = Math.max(maxBottom, y0 + sInfo.h);
   }
-  // Advance curY past the last row so any later layout (none today, but
-  // future-proof) starts beneath the packed sites.
-  curY += rowH + SITE_GAP;
+  // Advance curY past the last placed site (future-proof; no caller today).
+  curY = maxBottom + SITE_GAP;
 
   // ── Phase 1 — fixed groups (have a saved x/y override). ──────────
   const placedRects = [];
