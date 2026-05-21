@@ -8,6 +8,20 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### NTM Live — professional auto-layout (tier-ordered + orthogonal links)
+
+The auto-layout that the NTM Live tab produces on a pristine canvas was redesigned to look like a NOC tool instead of a shelf-packed grid. Three changes work together:
+
+1. **Orthogonal link routing.** Every link — manual + auto-discovered + bundled — now draws as a right-angle elbow (`<path d="M.. L.. L.. L..">`) instead of a straight `<line>`/cubic Bezier. Endpoints anchor on the rect edges facing the partner via `_edgeAnchor()`, so arrowheads land cleanly at the node boundary instead of stabbing inward. The `_orthoPath(x1,y1,x2,y2)` helper picks H-V, V-H, H-V-H, or V-H-V automatically based on the dx/dy ratio. Bundled links share the bundle's midX so N siblings collapse into one trunk — preserving the bundling effect the old cubic Bezier provided. Tunnel links (ZTNA / IPsec) keep their curved style as a distinct visual cue for encrypted overlays.
+2. **Tier-ordered groups within each site.** Each group gets a tier 1..5 derived from the highest-priority topology role of any device in it (gateway=1, core=2, backbone=3, switch=4, endpoint=5 via `_groupTier()`). Inside a site frame, groups now stack as tier rows — gateway/FW groups anchor the top, switches mid, endpoint groups (VMs, IPMI, servers) at the bottom — with a `TIER_ROWGAP` of 30px between tiers for visual separation. The existing `COLS=3` wrap behavior still applies within a tier.
+3. **Site ranking — WAN/edge sites anchor the top.** Sites named `Internet`, `OFF-SITE`, `WAN`, `Cloud`, `External`, or `Edge` (case-insensitive) get rank 0; sites containing only gateway/core groups get rank 1; internal sites rank 2 (via `_siteRank()`). The PASS 2 shelf-pack sorts by rank then by device count descending, and forces a row break on rank change so edge sites visually anchor the top of the canvas instead of being lined up next to internal sites.
+
+**New button**: `⚡ AUTO-ARRANGE` in the dashboard panel actions ([frontend/map.js](frontend/map.js)). One click → confirmation dialog → wipes both `pwGroupOverrides` and `pwOverrides` → re-renders into the tier-based layout. Manual drags between clicks are preserved (existing `RESET LAYOUT` behavior reused via `autoArrangePwLayout()` wrapper that adds a position-count-aware confirmation).
+
+**Out of scope for this redesign**: A* link routing that avoids crossing group rects (naive dogleg may cross intermediate groups — flag as follow-up if it looks bad in practice); tier-band background colors (deferred polish); Auto-Arrange undo (manual re-drag covers it).
+
+**Files**: [frontend/map.js](frontend/map.js) (`_orthoPath`, `_edgeAnchor`, `_TIER_BY_ROLE`, `_groupTier`, `_WAN_KEYWORDS`, `_siteRank`, `autoArrangePwLayout`, rewrites of `renderPwAutoLinks`, `renderPwLinksInLayer`, `buildLink`, and `calcPwLayout` PASS 1+2). Pure frontend — no backend, no DB, no API changes.
+
 ### NTM Live — auto-link suppression + bundling
 
 Two reductions applied at the dedup step of [`_pwComputeAutoLinks()` in frontend/map.js](frontend/map.js) to keep the auto-link layer readable on a multi-group canvas:

@@ -600,29 +600,49 @@ function renderPwAutoLinks() {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
     if (!src || !tgt) continue;
-    // Shrink the line end-points to the node edges (not centers) so the
-    // arrowhead lands cleanly on the target's border instead of inside it.
+    // Orthogonal routing: anchor endpoints on the rect edges facing each other
+    // so elbows form clean T-junctions; arrowhead lands on the boundary.
     const sc = nodeCenter(src), tc = nodeCenter(tgt);
-    const dx = tc.x - sc.x, dy = tc.y - sc.y;
-    const len = Math.hypot(dx, dy) || 1;
-    // Approx half-tile inset; tile sizes are ~95x50, so 40px works for most.
-    const inset = 40;
-    const x1 = sc.x + (dx / len) * inset;
-    const y1 = sc.y + (dy / len) * inset;
-    const x2 = tc.x - (dx / len) * inset;
-    const y2 = tc.y - (dy / len) * inset;
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
-    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-    line.setAttribute('stroke', COL[lk.kind] || '#888');
-    line.setAttribute('stroke-width', lk.kind === 'wan' ? '2.8' : '2.2');
-    line.setAttribute('stroke-dasharray', '8 5');
-    line.setAttribute('stroke-opacity', '0.7');
-    line.setAttribute('class', 'pw-auto-link');
-    line.setAttribute('marker-end', `url(#${ARR[lk.kind] || 'arr-blue'})`);
-    line.setAttribute('pointer-events', 'none');
-    layer.appendChild(line);
+    const a = _edgeAnchor(src, tc.x, tc.y);
+    const b = _edgeAnchor(tgt, sc.x, sc.y);
+    const d = _orthoPath(a.x, a.y, b.x, b.y, 'auto');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', COL[lk.kind] || '#888');
+    path.setAttribute('stroke-width', lk.kind === 'wan' ? '2.8' : '2.2');
+    path.setAttribute('stroke-dasharray', '8 5');
+    path.setAttribute('stroke-opacity', '0.7');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('class', 'pw-auto-link');
+    path.setAttribute('marker-end', `url(#${ARR[lk.kind] || 'arr-blue'})`);
+    path.setAttribute('pointer-events', 'none');
+    layer.appendChild(path);
   }
+}
+
+// ═══════════════════════════ TIER COMPUTATION ═══════════════════════════
+// Each group gets a tier 1..5 based on the highest-priority topology role of
+// any device in it. Drives the new tier-row layout inside each site frame:
+// gateway/FW groups anchor the top, switches mid, endpoint groups at bottom.
+const _TIER_BY_ROLE = { gateway: 1, core: 2, backbone: 3, switch: 4 };
+function _groupTier(devs) {
+  let best = 5;
+  for (const d of devs) {
+    const r = (pwRoles && pwRoles[d.device_id]) || '';
+    const t = _TIER_BY_ROLE[r];
+    if (t && t < best) best = t;
+  }
+  return best;
+}
+// WAN/Internet sites anchor the top of the canvas (rank 0). Sites containing
+// only gateway/core groups anchor rank 1. Internal sites rank 2.
+const _WAN_KEYWORDS = /^(internet|off.?site|wan|cloud|external|edge)$/i;
+function _siteRank(siteName, groupTiers) {
+  if (_WAN_KEYWORDS.test(String(siteName || '').trim())) return 0;
+  if (groupTiers.length && Math.max(...groupTiers) <= 2) return 1;
+  return 2;
 }
 
 function calcPwLayout(devices) {
@@ -672,17 +692,19 @@ function calcPwLayout(devices) {
     const ncols = Math.ceil(devs.length / MAX_ROWS);
     const gtitle = site ? `${site} → ${group}` : group;
     return { gname: gkey, gtitle, site, group, devs, NW, NH,
+             tier: _groupTier(devs),
              w: ncols * NW + PAD * 2,
              h: nrows * NH + PAD * 2 + 28 };
   });
-  // Sort entries so groups belonging to the same site are placed consecutively
-  // in the index-based grid. This makes "Reset Layout" naturally cluster groups
-  // by site, which lets the site backdrops fit tightly around their contents.
-  // Unsited groups sort last so they don't break up real site clusters.
+  // Sort entries: within a site, tier-ascending (gateway top → endpoint bottom),
+  // then larger groups first, then alphabetical tiebreak. Across sites, sort
+  // by site rank (WAN/edge sites first) then by name. Unsited sites last.
   entries.sort((a, b) => {
-    const aS = a.site || '￿';   // Unsited → end
+    const aS = a.site || '￿';
     const bS = b.site || '￿';
     if (aS !== bS) return aS.localeCompare(bS);
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    if (b.devs.length !== a.devs.length) return b.devs.length - a.devs.length;
     return (a.group || '').localeCompare(b.group || '');
   });
 
@@ -695,10 +717,10 @@ function calcPwLayout(devices) {
   // The COLS/GGAP/ROWGAP constants above still apply; SITE_PAD adds the
   // breathing room between the site frame and its inner groups, and
   // SITE_GAP separates one site block from the next.
-  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 40;
+  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 40, TIER_ROWGAP = 30;
 
-  // Group entries by site (entries was already sorted site-then-name above,
-  // so siteOrder preserves alphabetical order with Unsited at the end).
+  // Group entries by site (entries was already sorted site → tier → size
+  // by the comparator above; siteOrder preserves that order with Unsited last).
   const siteBuckets = new Map();   // site -> entries[]
   for (const ent of entries) {
     const s = ent.site || '';
@@ -713,47 +735,87 @@ function calcPwLayout(devices) {
   // site -> {x, y, w, h} of the site frame (header + content area).
   const siteNaturalFrames = {};
 
-  // PASS 1 — measure each site's natural size WITHOUT committing positions.
-  // Records the per-entry offset within the site's content area so PASS 2
-  // can place groups once the site's (x0, y0) is finalized by bin-packing.
-  const sitesArr = [];  // { site, sEntries, w, h, offsets: [{entry, offX, offY}] }
+  // PASS 1 — measure each site's natural size and tier ranking WITHOUT
+  // committing positions. Records each entry's offset within the site's
+  // content area so PASS 2 can finalize after bin-packing.
+  //
+  // NEW: groups inside a site are bucketed by tier, then laid out as tier
+  // rows (tier 1 at top, tier 5 at bottom). Within a tier, groups flow
+  // left-to-right wrapping at COLS. Different tiers always start a fresh
+  // row separated by TIER_ROWGAP for visual layering.
+  const sitesArr = [];  // { site, sEntries, w, h, offsets, rank }
   for (const [site, sEntries] of siteBuckets) {
+    // Bucket this site's groups by tier (1..5)
+    const byTier = new Map();
+    const tiersPresent = [];
+    for (const ent of sEntries) {
+      if (!byTier.has(ent.tier)) { byTier.set(ent.tier, []); tiersPresent.push(ent.tier); }
+      byTier.get(ent.tier).push(ent);
+    }
+    tiersPresent.sort((a, b) => a - b);
+
     let innerRowY = 0;
     let maxInnerW = 0;
     const offsets = [];
-    for (let r = 0; r < sEntries.length; r += COLS) {
-      const row  = sEntries.slice(r, r + COLS);
-      const rowH = Math.max(...row.map(e => e.h));
-      let gx = 0;
-      for (const ent of row) {
-        offsets.push({ entry: ent, offX: gx, offY: innerRowY });
-        gx += ent.w + GGAP;
+    for (const tier of tiersPresent) {
+      const tierEnts = byTier.get(tier);
+      for (let r = 0; r < tierEnts.length; r += COLS) {
+        const row  = tierEnts.slice(r, r + COLS);
+        const rowH = Math.max(...row.map(e => e.h));
+        let gx = 0;
+        for (const ent of row) {
+          offsets.push({ entry: ent, offX: gx, offY: innerRowY });
+          gx += ent.w + GGAP;
+        }
+        maxInnerW = Math.max(maxInnerW, gx - GGAP);
+        innerRowY += rowH + ROWGAP;
       }
-      // Width of this row (excluding trailing GGAP after last cell)
-      maxInnerW = Math.max(maxInnerW, gx - GGAP);
-      innerRowY += rowH + ROWGAP;
+      // Extra vertical break between tier groups (in addition to ROWGAP).
+      innerRowY += TIER_ROWGAP;
     }
-    const innerH = innerRowY - ROWGAP;  // strip trailing ROWGAP
+    // Strip the trailing ROWGAP (after last row of last tier) and trailing
+    // TIER_ROWGAP (after last tier).
+    const innerH = Math.max(0, innerRowY - ROWGAP - TIER_ROWGAP);
     const siteW  = maxInnerW + SITE_PAD * 2;
     const siteH  = SITE_TITLE_H + SITE_PAD + innerH + SITE_PAD;
-    sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets });
+    const rank   = _siteRank(site, tiersPresent);
+    sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets, rank });
   }
+
+  // Site ordering: WAN/Internet sites anchor the top (rank 0), then sites
+  // containing only gateway/core groups (rank 1), then internal sites (rank 2).
+  // Within rank, larger sites first (so the biggest cluster gets the most room),
+  // then alphabetical. Unsited site ('') uses its rank as computed.
+  sitesArr.sort((a, b) => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    const aDev = a.sEntries.reduce((n, e) => n + e.devs.length, 0);
+    const bDev = b.sEntries.reduce((n, e) => n + e.devs.length, 0);
+    if (aDev !== bDev) return bDev - aDev;
+    return String(a.site || '￿').localeCompare(String(b.site || '￿'));
+  });
 
   // PASS 2 — shelf-pack sites into rows so small sites fit beside or under
   // a big one rather than stacking vertically with wasted right margin.
   // maxRowW = widest site (typically the largest cluster), so small sites
-  // wrap into rows of their own beneath it. Preserves the alphabetical site
-  // order from siteBuckets.
+  // wrap into rows of their own beneath it.
+  //
+  // Rank separation: when site rank changes (e.g. WAN sites → internal sites),
+  // force a row break so edge sites visually anchor the top of the canvas
+  // instead of being lined up next to internal sites.
   const maxRowW = Math.max(...sitesArr.map(s => s.w), 0);
   let curX = STARTX, rowH = 0;
+  let prevRank = sitesArr.length ? sitesArr[0].rank : 0;
   for (const sInfo of sitesArr) {
+    const rankChanged = sInfo.rank !== prevRank;
     // Wrap when adding this site would overflow the row (always place at
-    // least one site per row to avoid an infinite loop when sInfo.w > maxRowW).
-    if (curX !== STARTX && (curX + sInfo.w) > (STARTX + maxRowW)) {
+    // least one site per row to avoid an infinite loop when sInfo.w > maxRowW),
+    // OR when site rank changed (start a fresh row for the new rank tier).
+    if (curX !== STARTX && ((curX + sInfo.w) > (STARTX + maxRowW) || rankChanged)) {
       curY += rowH + SITE_GAP;
       curX  = STARTX;
       rowH  = 0;
     }
+    prevRank = sInfo.rank;
     const x0 = curX;
     const y0 = curY;
     const contentX = x0 + SITE_PAD;
@@ -1097,6 +1159,7 @@ function showPwDashboardPanel() {
       <button class="btn" style="flex:1;font-size:10px;letter-spacing:1px" onclick="exportPwLayout()">⬇ EXPORT</button>
       <button class="btn" style="flex:1;font-size:10px;letter-spacing:1px" onclick="document.getElementById('pw-layout-import-file').click()">⬆ IMPORT</button>
     </div>
+    <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px;color:#22d3ee" onclick="autoArrangePwLayout()" title="Re-layout sites by tier (gateway → switch → endpoint) with orthogonal links">⚡ AUTO-ARRANGE</button>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px;color:#f85149" onclick="clearPwManualLinks()">✕ CLEAR MANUAL LINKS</button>
   `;
@@ -1806,6 +1869,37 @@ function applyVlanStyles() {
   ).join('\n');
   refreshVlanDatalist();
 }
+// ═══════════════════════════ ORTHOGONAL LINK ROUTING ═══════════════════════════
+// Manhattan / elbow path generator. Replaces straight diagonals with right-angle
+// elbows for a NOC-style professional look. Used by both manual links and auto-links.
+// strategy: 'auto' | 'h-v' | 'v-h' | 'h-v-h' (dogleg through midX) | 'v-h-v' (dogleg through midY)
+function _orthoPath(x1, y1, x2, y2, strategy) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  let mode = strategy || 'auto';
+  if (mode === 'auto') {
+    if (adx > 40 && ady > 40) mode = (adx >= ady) ? 'h-v-h' : 'v-h-v';
+    else mode = (adx >= ady) ? 'h-v' : 'v-h';
+  }
+  if (mode === 'h-v')   return `M${x1},${y1} L${x2},${y1} L${x2},${y2}`;
+  if (mode === 'v-h')   return `M${x1},${y1} L${x1},${y2} L${x2},${y2}`;
+  if (mode === 'h-v-h') { const mx = ((x1+x2)/2).toFixed(1); return `M${x1},${y1} L${mx},${y1} L${mx},${y2} L${x2},${y2}`; }
+  if (mode === 'v-h-v') { const my = ((y1+y2)/2).toFixed(1); return `M${x1},${y1} L${x1},${my} L${x2},${my} L${x2},${y2}`; }
+  return `M${x1},${y1} L${x2},${y2}`;
+}
+// Edge anchor: pick the side of a node's rect that faces the partner point,
+// so elbows form clean T-junctions at the node boundary rather than the center.
+function _edgeAnchor(node, towardX, towardY) {
+  const s = nsize(node.type, node);
+  const r = { x: node.x, y: node.y, w: s.w, h: s.h };
+  const cx = r.x + r.w/2, cy = r.y + r.h/2;
+  const dx = towardX - cx, dy = towardY - cy;
+  if (Math.abs(dx) * r.h > Math.abs(dy) * r.w) {
+    return { x: dx > 0 ? r.x + r.w : r.x, y: cy };
+  }
+  return { x: cx, y: dy > 0 ? r.y + r.h : r.y };
+}
+
 const LINK_CFG = {
   trunk:    { stroke:'#00ff9d', cls:'link-trunk',    marker:'arr-green',  width:2.5 },
   access:   { stroke:'#00d4ff', cls:'link-access',   marker:'arr-blue',   width:2   },
@@ -2164,20 +2258,25 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
+    // Orthogonal routing — endpoints anchor on rect edges facing the partner.
+    // Bundled siblings share the same midX (the bundle waypoint's X), so their
+    // H-V-H doglegs collapse visually into one trunk — preserving the bundling
+    // effect that the cubic Bezier used to provide.
+    const sa = _edgeAnchor(src, tc.x, tc.y);
+    const tb = _edgeAnchor(tgt, sc.x, sc.y);
+    let d;
     if (bundle && bundle.waypoint) {
-      const qx = bundle.waypoint.x.toFixed(1), qy = bundle.waypoint.y.toFixed(1);
-      gg.innerHTML = `
-        <path class="link-hit" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}" fill="none" stroke="transparent" stroke-width="12"/>
-        <path class="link-main ${cfg.cls} ${bwCls}" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}"
-          fill="none" stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      `;
+      const mx = bundle.waypoint.x.toFixed(1);
+      d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
     } else {
-      gg.innerHTML = `
-        <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
-        <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-          stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      `;
+      d = _orthoPath(sa.x, sa.y, tb.x, tb.y, 'auto');
     }
+    gg.innerHTML = `
+      <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
+      <path class="link-main ${cfg.cls} ${bwCls}" d="${d}"
+        fill="none" stroke="${stroke}" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round"
+        marker-end="url(#${cfg.marker})" opacity="0.8"/>
+    `;
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);
     // Label in top layer
@@ -2261,59 +2360,55 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null)
   const sel = (selectedEl?.type==='link' && selectedEl?.data.id===lk.id);
   const w = sel ? cfg.width+2 : cfg.width;
 
-  // Bundled link — route through the shared waypoint regardless of pair-index.
+  // Orthogonal endpoints (anchor on rect edges facing partner)
+  const sa = _edgeAnchor(src, c2.x, c2.y);
+  const tb = _edgeAnchor(tgt, c1.x, c1.y);
+
+  // Bundled link — share the bundle's midX so all siblings collapse into one trunk.
   if (bundle && bundle.waypoint) {
-    const qx = bundle.waypoint.x, qy = bundle.waypoint.y;
-    // Stagger label t along the tendril side so each label sits near its own target,
-    // not stacked at the waypoint with all its bundle siblings.
-    const n = bundle.count || 1;
-    const ordIdx = (bundle.order && bundle.order[lk.id] != null) ? bundle.order[lk.id] : 0;
-    const tL = n > 1 ? (0.68 + 0.22 * (ordIdx / (n - 1))) : 0.78;
-    const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x).toFixed(1);
-    const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y - 4).toFixed(1);
+    const mx = bundle.waypoint.x.toFixed(1);
+    const d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
+    const lbx = (Number(mx) + 6).toFixed(1);
+    const lby = ((sa.y + tb.y) / 2 - 4).toFixed(1);
     const lbwB = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
     return `
-      <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
-      <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
-        fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
+      <path class="link-main ${cfg.cls}" d="${d}"
+        fill="none" stroke="${cfg.stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"
+        marker-end="url(#${cfg.marker})" opacity="0.8"/>
       ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwB, cfg.stroke, lk.label) : ''}
     `;
   }
 
-  if (idx === 0) {
-    // First (or only) link — always straight
-    const tArr = [0.30, 0.50, 0.70];
-    const tL   = tArr[globalIdx % 3];
-    const ldx  = c2.x - c1.x, ldy = c2.y - c1.y;
-    const llen = Math.sqrt(ldx*ldx + ldy*ldy) || 1;
-    const lnx  = -ldy/llen, lny = ldx/llen;
-    const lbx  = (c1.x + ldx*tL + lnx*10).toFixed(1);
-    const lby  = (c1.y + ldy*tL + lny*10 - 2).toFixed(1);
-    const lbw  = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
-    return `
-      <line class="link-hit" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}" stroke="transparent" stroke-width="12"/>
-      <line class="link-main ${cfg.cls}" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}"
-        stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbw, cfg.stroke, lk.label) : ''}
-    `;
+  // For parallel links between the same node pair, offset the dogleg's midpoint
+  // so the elbows form parallel trunks instead of overlapping.
+  const adx = Math.abs(tb.x - sa.x), ady = Math.abs(tb.y - sa.y);
+  const horizontalDogleg = adx >= ady; // h-v-h vs v-h-v
+  const offset = idx * 30;
+  let d;
+  if (horizontalDogleg) {
+    const mx = (((sa.x + tb.x) / 2) + offset).toFixed(1);
+    d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
+  } else {
+    const my = (((sa.y + tb.y) / 2) + offset).toFixed(1);
+    d = `M${sa.x},${sa.y} L${sa.x},${my} L${tb.x},${my} L${tb.x},${tb.y}`;
   }
-
-  // Subsequent parallel links — curve away from the straight one, one side only
-  const dx = c2.x-c1.x, dy = c2.y-c1.y;
-  const len = Math.sqrt(dx*dx+dy*dy)||1;
-  const nx = -dy/len, ny = dx/len;
-  const off = idx * 50;
-  const qx = (c1.x+c2.x)/2 + nx*off;
-  const qy = (c1.y+c2.y)/2 + ny*off;
-  const tL = 0.65;
-  const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x + nx*12 + 4).toFixed(1);
-  const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y + ny*12 - 4).toFixed(1);
-  const lbwP = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
+  // Label sits on the horizontal segment center (or vertical for v-h-v)
+  let lbx, lby;
+  if (horizontalDogleg) {
+    lbx = ((sa.x + tb.x) / 2 + offset + 6).toFixed(1);
+    lby = ((sa.y + tb.y) / 2 - 4).toFixed(1);
+  } else {
+    lbx = ((sa.x + tb.x) / 2 + 6).toFixed(1);
+    lby = ((sa.y + tb.y) / 2 + offset - 4).toFixed(1);
+  }
+  const lbw = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
   return `
-    <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
-    <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
-      fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-    ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwP, cfg.stroke, lk.label) : ''}
+    <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
+    <path class="link-main ${cfg.cls}" d="${d}"
+      fill="none" stroke="${cfg.stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"
+      marker-end="url(#${cfg.marker})" opacity="0.8"/>
+    ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbw, cfg.stroke, lk.label) : ''}
   `;
 }
 
@@ -5007,6 +5102,34 @@ function resetPwLayout() {
   renderPingWatchCanvas();
   fitToView();
   toast('Layout reset to auto');
+}
+
+// Re-layout from scratch using the tier-based algorithm: gateway/FW groups
+// anchor the top of each site, switches mid, endpoint groups (VMs, IPMI,
+// servers) at the bottom. WAN/Internet sites anchor the top of the canvas.
+// Confirmation-gated because it wipes all manual drag positions.
+function autoArrangePwLayout() {
+  const nGroupOvr = Object.keys(pwGroupOverrides || {}).length;
+  const nNodeOvr  = Object.keys(pwOverrides || {}).length;
+  const total = nGroupOvr + nNodeOvr;
+  const msg = total === 0
+    ? `Re-layout all sites and groups by topology tier?`
+    : `Auto-Arrange will reset <b>${total}</b> manual position${total === 1 ? '' : 's'} ` +
+      `(${nGroupOvr} group${nGroupOvr === 1 ? '' : 's'}, ${nNodeOvr} device${nNodeOvr === 1 ? '' : 's'}) ` +
+      `and re-layout everything by topology tier.<br><br>` +
+      `<span style="font-size:11px;color:var(--text3,#888)">` +
+      `Gateway/firewall groups anchor the top of each site, switches in the ` +
+      `middle, endpoint groups at the bottom. WAN/Internet sites move to the ` +
+      `top of the canvas. Links become orthogonal elbows.</span>`;
+  _confirm(
+    msg,
+    () => {
+      resetPwLayout();
+      toast('Auto-Arrange applied — sites and groups re-tiered');
+    },
+    'Auto-Arrange',
+    false
+  );
 }
 
 // Wipe every manually-drawn pwLink (VLAN trunks, VPN tunnels, etc.). Useful
