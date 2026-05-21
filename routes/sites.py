@@ -13,18 +13,19 @@ display name). Deleting metadata does not remove the site itself.
 from __future__ import annotations
 
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse, parse_qs
 
 from db import (
     db_log_audit,
     db_list_sites, db_get_site_meta, db_upsert_site_meta,
     db_rename_site_meta, db_delete_site_meta, db_distinct_site_names,
-    KNOWN_KINDS,
+    db_site_usage, KNOWN_KINDS,
 )
 
 
-_RE_SITE_META_COLL = re.compile(r"^/api/sites/meta/?$")
-_RE_SITE_META_ITEM = re.compile(r"^/api/sites/meta/([^/]+)/?$")
+_RE_SITE_META_COLL  = re.compile(r"^/api/sites/meta/?$")
+_RE_SITE_META_ITEM  = re.compile(r"^/api/sites/meta/([^/]+)/?$")
+_RE_SITE_META_USAGE = re.compile(r"^/api/sites/meta/([^/]+)/usage/?$")
 
 
 def _validate_kind(kind) -> bool:
@@ -32,17 +33,43 @@ def _validate_kind(kind) -> bool:
 
 
 def _name_from_path(path: str) -> str:
-    m = _RE_SITE_META_ITEM.match(path)
+    # Strip query string first so we don't carry "?cascade=1" into the name
+    base = path.split("?", 1)[0]
+    m = _RE_SITE_META_ITEM.match(base)
+    if not m:
+        m = _RE_SITE_META_USAGE.match(base)
     if not m:
         return ""
     return unquote(m.group(1)).strip()
 
 
+def _query_flag(path: str, key: str) -> bool:
+    q = urlparse(path).query
+    if not q:
+        return False
+    vals = parse_qs(q).get(key, [])
+    return bool(vals) and vals[0] not in ("0", "false", "")
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
 
+    # Strip query string for path matching (so /api/sites/meta/X?cascade=1 still matches)
+    base_path = path.split("?", 1)[0]
+
+    # GET /api/sites/meta/<name>/usage — counts for delete-confirm UI
+    if _RE_SITE_META_USAGE.match(base_path) and method == "GET":
+        user, _ = h._require("viewer")
+        if not user:
+            return True
+        name = _name_from_path(base_path)
+        if not name:
+            h._json(400, {"error": "invalid name"}); return True
+        h._json(200, db_site_usage(name))
+        return True
+
     # GET /api/sites/meta — list metadata + the set of known site names.
-    if _RE_SITE_META_COLL.match(path) and method == "GET":
+    if _RE_SITE_META_COLL.match(base_path) and method == "GET":
         user, _ = h._require("viewer")
         if not user:
             return True
@@ -70,7 +97,7 @@ def handle(h, method, path, body):
         return True
 
     # POST /api/sites/meta — create
-    if _RE_SITE_META_COLL.match(path) and method == "POST":
+    if _RE_SITE_META_COLL.match(base_path) and method == "POST":
         user, _ = h._require("operator")
         if not user:
             return True
@@ -98,7 +125,7 @@ def handle(h, method, path, body):
         return True
 
     # PUT /api/sites/meta/<name> — update / rename
-    if _RE_SITE_META_ITEM.match(path) and method == "PUT":
+    if _RE_SITE_META_ITEM.match(base_path) and method == "PUT":
         user, _ = h._require("operator")
         if not user:
             return True
@@ -148,19 +175,21 @@ def handle(h, method, path, body):
         h._json(200, {"ok": True, "site": db_get_site_meta(target_name)})
         return True
 
-    # DELETE /api/sites/meta/<name>
-    if _RE_SITE_META_ITEM.match(path) and method == "DELETE":
+    # DELETE /api/sites/meta/<name>?cascade=1
+    if _RE_SITE_META_ITEM.match(base_path) and method == "DELETE":
         user, _ = h._require("operator")
         if not user:
             return True
-        name = _name_from_path(path)
+        name = _name_from_path(base_path)
         if not name:
             h._json(400, {"error": "invalid name"}); return True
-        ok = db_delete_site_meta(name)
-        # 200 even if the row didn't exist — metadata is a sidecar; this is
-        # the user's intent to "have no metadata for this site".
-        db_log_audit(user, h.client_address[0], "site_delete", f"{name} ok={ok}")
-        h._json(200, {"ok": True, "deleted": ok})
+        cascade = _query_flag(path, "cascade")
+        ok = db_delete_site_meta(name, cascade=cascade)
+        # 200 even if nothing changed — the user's intent is "have no
+        # metadata / no assignments for this site"; either way that's true now.
+        db_log_audit(user, h.client_address[0], "site_delete",
+                     f"{name} cascade={cascade} ok={ok}")
+        h._json(200, {"ok": True, "deleted": ok, "cascade": cascade})
         return True
 
     return False

@@ -108,12 +108,25 @@ async function _ipamOnLicenseUpdate() {
 }
 
 // ── Subnet loading ─────────────────────────────────────────────────────────
+// Cache of all known site names (UNION of devices.site + ipam_subnets.site +
+// sites metadata table). Populated each time we load subnets so empty Live
+// Map-added sites still appear as collapsible IPAM sections with 0 subnets.
+let _ipamKnownSites = [];
+
 async function _ipamLoadSubnets() {
   const r = await fetch('/api/ipam/subnets');
   if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
   if (!r.ok) { toast('Failed to load subnets', 'err'); return; }
   const d = await r.json();
   _ipamSubnets = d.subnets || [];
+  // Refresh the known-sites list in parallel — best-effort, ignore errors.
+  try {
+    const sr = await fetch('/api/sites');
+    if (sr.ok) {
+      const sd = await sr.json();
+      _ipamKnownSites = sd.sites || [];
+    }
+  } catch (_) {}
   _ipamRenderSubnetSelect();
   // Restore previously selected subnet if still present
   if (_ipamSelectedId && _ipamSubnets.find(s => s.id === _ipamSelectedId)) {
@@ -195,6 +208,14 @@ function _ipamRenderSidebar() {
     if (!groups.has(site)) groups.set(site, []);
     groups.get(site).push(s);
   }
+  // Surface known sites that have no subnets yet (created in Live Map but
+  // not yet assigned). Only do this when the user isn't actively searching —
+  // a search should filter to matches, not add empty placeholders.
+  if (!q) {
+    for (const name of (_ipamKnownSites || [])) {
+      if (!groups.has(name)) groups.set(name, []);
+    }
+  }
   // Sort groups alphabetically; push "Ungrouped" to the end
   const sortedSites = [...groups.keys()].sort((a, b) => {
     if (a === _IPAM_UNGROUPED) return  1;
@@ -210,6 +231,9 @@ function _ipamRenderSidebar() {
     const collapsed = _ipamGrpCollapsed.has(site) && !containsActive;
     const arrCls = collapsed ? '' : ' open';
     const bodyStyle = collapsed ? 'display:none' : '';
+    const emptyPlaceholder = subnets.length === 0
+      ? '<div class="ipam-empty" style="padding:8px 12px;opacity:.6;font-size:11px">No subnets in this site yet.</div>'
+      : '';
     const cards = subnets.map(s => {
       const u = _ipamUtilCache[s.id];
       const pct = u && u.total ? Math.round((u.used / u.total) * 100) : 0;
@@ -233,7 +257,7 @@ function _ipamRenderSidebar() {
           <span class="ipam-grp-name">${esc(site)}</span>
           <span class="ipam-grp-cnt">${subnets.length}</span>
         </button>
-        <div class="ipam-grp-body" style="${bodyStyle}">${cards}</div>
+        <div class="ipam-grp-body" style="${bodyStyle}">${cards}${emptyPlaceholder}</div>
       </div>`;
   }).join('');
 }

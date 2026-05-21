@@ -1848,6 +1848,16 @@ async function _refreshDevices(){
       });
       renderDp(dev);
     });
+    // Surface known sites that have no devices yet (sites added via Live Map
+    // but not yet assigned). They render as empty collapsible sections so the
+    // user can see at a glance which sites exist before assigning devices.
+    try {
+      const sd = await (await fetch('/api/sites')).json();
+      (sd.sites||[]).forEach(name=>{
+        if (typeof ensureSiteSection==='function') ensureSiteSection(name);
+      });
+      if (typeof refreshSiteCounts==='function') refreshSiteCounts();
+    } catch(_) {}
     updatePills();
   }catch(e){}
 }

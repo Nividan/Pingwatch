@@ -118,6 +118,7 @@ from db.sites       import (
     db_rename_site_meta,
     db_delete_site_meta,
     db_distinct_site_names,
+    db_site_usage,
     KNOWN_KINDS,
 )
 

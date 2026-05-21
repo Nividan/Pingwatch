@@ -155,25 +155,83 @@ function openModal(mode, name) {
     }
   };
 
-  // Delete handler (edit mode only)
+  // Delete handler (edit mode only) — opens a secondary confirm modal that
+  // shows usage counts (N devices, M subnets) and offers a cascade checkbox
+  // (default ON, since the typical "delete this site" intent is to also
+  // clear the assignment from devices and subnets).
   const delBtn = document.getElementById('lm-f-delete');
   if (delBtn) {
     delBtn.onclick = async function() {
-      if (!confirm('Delete metadata for "' + nameVal + '"?\n\nDevices keep their site string; only kind/pinned/display_name are cleared.')) return;
+      let usage = { devices: 0, subnets: 0 };
       try {
-        await fetch('/api/sites/meta/' + encodeURIComponent(nameVal), {
-          method: 'DELETE',
-          credentials: 'same-origin',
-        }).then(async function(r) {
-          if (!r.ok) { const j = await r.json().catch(function(){return{};}); throw new Error(j.error || r.statusText); }
-        });
-        closeModal();
-        if (typeof window._lmRefresh === 'function') window._lmRefresh();
-      } catch (e) {
-        alert('Failed to delete: ' + (e.message || e));
-      }
+        const r = await fetch('/api/sites/meta/' + encodeURIComponent(nameVal) + '/usage',
+                              { credentials: 'same-origin' });
+        if (r.ok) usage = await r.json();
+      } catch (_) {}
+      _openDeleteConfirm(nameVal, usage);
     };
   }
+}
+
+function _openDeleteConfirm(name, usage) {
+  // Reuse the same overlay class; rendered on top of the edit modal.
+  const overlay = document.createElement('div');
+  overlay.className = 'lm-modal-overlay';
+  overlay.id = 'lm-site-confirm';
+  const hasUsage = (usage.devices > 0 || usage.subnets > 0);
+  const usageLine = hasUsage
+    ? '<strong>' + usage.devices + ' device' + (usage.devices === 1 ? '' : 's') + '</strong> and ' +
+      '<strong>' + usage.subnets + ' subnet' + (usage.subnets === 1 ? '' : 's') + '</strong> currently use this site.'
+    : 'No devices or subnets are currently assigned to this site.';
+  overlay.innerHTML =
+    '<div class="lm-modal" style="width:min(460px,92vw)">' +
+      '<div class="lm-modal-head">DELETE SITE</div>' +
+      '<div class="lm-modal-body">' +
+        '<div style="font-family:\'Share Tech Mono\',monospace;font-size:11px;line-height:1.55;color:var(--text)">' +
+          'Delete <strong style="color:var(--accent)">' + esc(name) + '</strong>?<br/><br/>' +
+          usageLine +
+        '</div>' +
+        (hasUsage
+          ? '<div class="lm-field">' +
+              '<label class="check">' +
+                '<input id="lm-f-cascade" type="checkbox" checked/> ' +
+                'Also clear this site from devices and subnets' +
+              '</label>' +
+              '<span class="hint">When ON, devices.site and ipam_subnets.site fields are reset to blank for any row tagged with this name. When OFF, only the metadata row (kind / pinned / display name) is removed; the site continues to appear via those references.</span>' +
+            '</div>'
+          : '<input id="lm-f-cascade" type="hidden" value="0"/>') +
+      '</div>' +
+      '<div class="lm-modal-foot">' +
+        '<div style="flex:1"></div>' +
+        '<button class="lm-btn" id="lm-f-cancel-del">CANCEL</button>' +
+        '<button class="lm-btn danger" id="lm-f-confirm-del">DELETE</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  function closeConfirm() {
+    const m = document.getElementById('lm-site-confirm');
+    if (m) m.remove();
+  }
+  overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) closeConfirm(); });
+  document.getElementById('lm-f-cancel-del').onclick = closeConfirm;
+  document.getElementById('lm-f-confirm-del').onclick = async function() {
+    const cascadeEl = document.getElementById('lm-f-cascade');
+    const cascade = cascadeEl && cascadeEl.type === 'checkbox' ? cascadeEl.checked : false;
+    try {
+      const url = '/api/sites/meta/' + encodeURIComponent(name) + (cascade ? '?cascade=1' : '');
+      const r = await fetch(url, { method: 'DELETE', credentials: 'same-origin' });
+      if (!r.ok) {
+        const j = await r.json().catch(function(){return{};});
+        throw new Error(j.error || r.statusText);
+      }
+      closeConfirm();
+      closeModal();
+      if (typeof window._lmRefresh === 'function') window._lmRefresh();
+    } catch (e) {
+      alert('Failed to delete: ' + (e.message || e));
+    }
+  };
 }
 
 window._lmOpenSiteModal = openModal;

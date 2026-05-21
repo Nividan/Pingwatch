@@ -153,20 +153,58 @@ def db_rename_site_meta(old_name: str, new_name: str,
         return False
 
 
-def db_delete_site_meta(name: str) -> bool:
-    """Delete a metadata row. Devices keep their site string.
-    Returns True if deleted, False if not found or on error."""
+def db_delete_site_meta(name: str, cascade: bool = False) -> bool:
+    """Delete a metadata row. By default devices/IPAM subnets keep their
+    site string. If cascade=True, also clear devices.site and
+    ipam_subnets.site for this name (the typical "remove this site
+    everywhere" intent).
+
+    Returns True if anything was changed, False otherwise."""
     n = (name or "").strip()
     if not n:
         return False
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
+            changed = False
             cur.execute(f"DELETE FROM sites WHERE name={ph}", (n,))
-            return cur.rowcount > 0
+            if cur.rowcount > 0:
+                changed = True
+            if cascade:
+                cur.execute(f"UPDATE devices SET site='' WHERE site={ph}", (n,))
+                if cur.rowcount > 0:
+                    changed = True
+                cur.execute(f"UPDATE ipam_subnets SET site='' WHERE site={ph}", (n,))
+                if cur.rowcount > 0:
+                    changed = True
+            return changed
     except Exception as e:
         log.error(f"db_delete_site_meta error: {type(e).__name__}: {e}")
         return False
+
+
+def db_site_usage(name: str) -> dict:
+    """Return {devices: N, subnets: M} — how many devices/subnets are
+    currently tagged with this site name. Used by the delete-confirm
+    UI to show 'Also clear from N devices, M subnets'."""
+    n = (name or "").strip()
+    if not n:
+        return {"devices": 0, "subnets": 0}
+    devs = 0
+    subs = 0
+    try:
+        row = db_query_one("main",
+            "SELECT COUNT(*) AS c FROM devices WHERE site=?", (n,))
+        devs = int(row["c"]) if row else 0
+    except Exception as e:
+        log.debug(f"db_site_usage devices query failed: {e}")
+    try:
+        row = db_query_one("main",
+            "SELECT COUNT(*) AS c FROM ipam_subnets WHERE site=?", (n,))
+        subs = int(row["c"]) if row else 0
+    except Exception as e:
+        log.debug(f"db_site_usage subnets query failed: {e}")
+    return {"devices": devs, "subnets": subs}
 
 
 def db_distinct_site_names() -> list:
