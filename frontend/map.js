@@ -546,6 +546,28 @@ function _pwComputeAutoLinks() {
     }
   }
 
+  // Rule 6 — gateway → Internet. Each gateway in a non-WAN site links to one
+  // representative device in a WAN-named site (Internet / OFF-Site / WAN /
+  // Cloud / External / Edge). Makes "the network reaches the public Internet"
+  // explicit on the canvas without requiring a manual link. Picks the first
+  // device of the first WAN site (alphabetical) as the representative.
+  const _wanSiteName = pwDevices
+    .map(d => d.site || '')
+    .filter(s => s && _WAN_KEYWORDS.test(s.trim()))
+    .sort()[0];
+  if (_wanSiteName) {
+    const wanRep = pwDevices.find(d => (d.site || '') === _wanSiteName);
+    if (wanRep) {
+      for (const [, gws] of byRoleBySite.gateway) {
+        for (const gw of gws) {
+          if ((gw.site || '') === _wanSiteName) continue;  // gateway already in WAN site
+          if (gw.device_id === wanRep.device_id) continue;
+          out.push({ src_did: gw.device_id, tgt_did: wanRep.device_id, kind: 'wan' });
+        }
+      }
+    }
+  }
+
   // Drop pairs already covered by a manual pwLink, dedup self-pairs, suppress
   // intra-group fan-out, and BUNDLE cross-group fan-out down to one line per
   // (source-group, target-device) pair.
@@ -600,12 +622,11 @@ function renderPwAutoLinks() {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
     if (!src || !tgt) continue;
-    // Orthogonal routing: anchor endpoints on the rect edges facing each other
-    // so elbows form clean T-junctions; arrowhead lands on the boundary.
-    const sc = nodeCenter(src), tc = nodeCenter(tgt);
-    const a = _edgeAnchor(src, tc.x, tc.y);
-    const b = _edgeAnchor(tgt, sc.x, sc.y);
-    const d = _orthoPath(a.x, a.y, b.x, b.y, 'auto');
+    // Orthogonal routing — endpoints + mode picked together so anchors align
+    // with elbow direction (top/bottom for vertical exit, left/right for
+    // horizontal). Cross-tier links exit vertically through the tier gap.
+    const { mode, sa, tb } = _orthoEndpoints(src, tgt);
+    const d = _orthoPath(sa.x, sa.y, tb.x, tb.y, mode);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', d);
     path.setAttribute('fill', 'none');
@@ -649,7 +670,9 @@ function _siteRank(siteName, groupTiers) {
 // Used both for packing groups inside a site's tier band AND for packing
 // sites on the canvas. Eliminates dead whitespace by letting small items
 // slot into corners next to large ones instead of starting fresh rows.
-function _fitFreeCorner(placed, w, h, hgap, vgap, originX, originY) {
+// `maxX` (optional) caps placement so a tier with many groups wraps to
+// multiple rows instead of stretching into one infinitely-wide row.
+function _fitFreeCorner(placed, w, h, hgap, vgap, originX, originY, maxX) {
   if (!placed.length) return { x: originX, y: originY };
   const candidates = [{ x: originX, y: originY }];
   for (const p of placed) {
@@ -659,6 +682,7 @@ function _fitFreeCorner(placed, w, h, hgap, vgap, originX, originY) {
   candidates.sort((a, b) => a.y - b.y || a.x - b.x);
   for (const c of candidates) {
     if (c.x < originX || c.y < originY) continue;
+    if (maxX != null && c.x + w > maxX) continue;
     const fits = !placed.some(p => {
       const xClear = (c.x + w + hgap <= p.x) || (p.x + p.w + hgap <= c.x);
       const yClear = (c.y + h + vgap <= p.y) || (p.y + p.h + vgap <= c.y);
@@ -789,8 +813,20 @@ function calcPwLayout(devices) {
       const tierStartY = innerRowY;
       const tierPlaced = [];
       let tierMaxY = tierStartY;
+      // Width cap for this tier: aim for ~2:1 aspect ratio so a tier with many
+      // groups wraps to multiple rows instead of stretching into a single
+      // 10000+ px row (which would make the whole site frame wider than the
+      // canvas). Floor at (2 × widest + GGAP) so at least two large groups
+      // can sit side-by-side.
+      const totalArea  = tierEnts.reduce((s, e) => s + e.w * e.h, 0);
+      const widestEnt  = Math.max(...tierEnts.map(e => e.w));
+      const smallestEnt = Math.min(...tierEnts.map(e => e.w));
+      const TIER_TARGET_W = Math.max(
+        Math.sqrt(totalArea * 2.0),
+        widestEnt + smallestEnt + GGAP
+      );
       for (const ent of tierEnts) {
-        const pos = _fitFreeCorner(tierPlaced, ent.w, ent.h, GGAP, ROWGAP, 0, tierStartY);
+        const pos = _fitFreeCorner(tierPlaced, ent.w, ent.h, GGAP, ROWGAP, 0, tierStartY, TIER_TARGET_W);
         offsets.push({ entry: ent, offX: pos.x, offY: pos.y });
         tierPlaced.push({ x: pos.x, y: pos.y, w: ent.w, h: ent.h });
         maxInnerW = Math.max(maxInnerW, pos.x + ent.w);
@@ -1888,7 +1924,11 @@ function _orthoPath(x1, y1, x2, y2, strategy) {
   const adx = Math.abs(dx), ady = Math.abs(dy);
   let mode = strategy || 'auto';
   if (mode === 'auto') {
-    if (adx > 40 && ady > 40) mode = (adx >= ady) ? 'h-v-h' : 'v-h-v';
+    // Prefer vertical exit when there's significant vertical separation —
+    // this routes cross-tier links through the gap BETWEEN tier rows instead
+    // of horizontally across adjacent groups in the same tier.
+    if (ady > 60) mode = (adx > 60) ? 'v-h-v' : 'v-h';
+    else if (adx > 60) mode = 'h-v';
     else mode = (adx >= ady) ? 'h-v' : 'v-h';
   }
   if (mode === 'h-v')   return `M${x1},${y1} L${x2},${y1} L${x2},${y2}`;
@@ -1897,8 +1937,32 @@ function _orthoPath(x1, y1, x2, y2, strategy) {
   if (mode === 'v-h-v') { const my = ((y1+y2)/2).toFixed(1); return `M${x1},${y1} L${x1},${my} L${x2},${my} L${x2},${y2}`; }
   return `M${x1},${y1} L${x2},${y2}`;
 }
-// Edge anchor: pick the side of a node's rect that faces the partner point,
-// so elbows form clean T-junctions at the node boundary rather than the center.
+// Pick orthogonal endpoints + mode in one pass. Returns { mode, sa, tb }.
+// Anchors are placed on the rect edges that match the elbow's exit/entry
+// direction (top/bottom for vertical, left/right for horizontal), so the
+// path visually connects to the node boundary instead of stopping in midair.
+function _orthoEndpoints(src, tgt) {
+  const sc = nodeCenter(src), tc = nodeCenter(tgt);
+  const dx = tc.x - sc.x, dy = tc.y - sc.y;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  let mode;
+  if (ady > 60) mode = (adx > 60) ? 'v-h-v' : 'v-h';
+  else if (adx > 60) mode = 'h-v';
+  else mode = (adx >= ady) ? 'h-v' : 'v-h';
+  const ss = nsize(src.type, src), ts = nsize(tgt.type, tgt);
+  const firstH = mode.startsWith('h');
+  const lastH  = mode.endsWith('h');
+  const sa = firstH
+    ? { x: dx > 0 ? src.x + ss.w : src.x, y: src.y + ss.h/2 }
+    : { x: src.x + ss.w/2, y: dy > 0 ? src.y + ss.h : src.y };
+  const tb = lastH
+    ? { x: dx > 0 ? tgt.x : tgt.x + ts.w, y: tgt.y + ts.h/2 }
+    : { x: tgt.x + ts.w/2, y: dy > 0 ? tgt.y : tgt.y + ts.h };
+  return { mode, sa, tb };
+}
+// Legacy single-endpoint anchor — kept for callers that don't have a partner
+// node (e.g. rubber-band line during link draw). New link renderers should
+// use _orthoEndpoints() to get both endpoints aligned with the elbow mode.
 function _edgeAnchor(node, towardX, towardY) {
   const s = nsize(node.type, node);
   const r = { x: node.x, y: node.y, w: s.w, h: s.h };
@@ -2268,18 +2332,20 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
-    // Orthogonal routing — endpoints anchor on rect edges facing the partner.
-    // Bundled siblings share the same midX (the bundle waypoint's X), so their
-    // H-V-H doglegs collapse visually into one trunk — preserving the bundling
-    // effect that the cubic Bezier used to provide.
-    const sa = _edgeAnchor(src, tc.x, tc.y);
-    const tb = _edgeAnchor(tgt, sc.x, sc.y);
-    let d;
+    // Orthogonal routing — endpoints + mode picked together so anchors align
+    // with elbow direction. Bundled siblings share the same midX (the bundle
+    // waypoint's X) so their H-V-H doglegs collapse visually into one trunk.
+    let d, sa, tb;
     if (bundle && bundle.waypoint) {
+      // Force h-v-h through the shared waypoint x so all bundle siblings overlap
+      sa = _edgeAnchor(src, tc.x, tc.y);
+      tb = _edgeAnchor(tgt, sc.x, sc.y);
       const mx = bundle.waypoint.x.toFixed(1);
       d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
     } else {
-      d = _orthoPath(sa.x, sa.y, tb.x, tb.y, 'auto');
+      const eps = _orthoEndpoints(src, tgt);
+      sa = eps.sa; tb = eps.tb;
+      d = _orthoPath(sa.x, sa.y, tb.x, tb.y, eps.mode);
     }
     gg.innerHTML = `
       <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
@@ -2370,12 +2436,10 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null)
   const sel = (selectedEl?.type==='link' && selectedEl?.data.id===lk.id);
   const w = sel ? cfg.width+2 : cfg.width;
 
-  // Orthogonal endpoints (anchor on rect edges facing partner)
-  const sa = _edgeAnchor(src, c2.x, c2.y);
-  const tb = _edgeAnchor(tgt, c1.x, c1.y);
-
   // Bundled link — share the bundle's midX so all siblings collapse into one trunk.
   if (bundle && bundle.waypoint) {
+    const sa = _edgeAnchor(src, c2.x, c2.y);
+    const tb = _edgeAnchor(tgt, c1.x, c1.y);
     const mx = bundle.waypoint.x.toFixed(1);
     const d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
     const lbx = (Number(mx) + 6).toFixed(1);
@@ -2390,20 +2454,21 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null)
     `;
   }
 
-  // For parallel links between the same node pair, offset the dogleg's midpoint
-  // so the elbows form parallel trunks instead of overlapping.
-  const adx = Math.abs(tb.x - sa.x), ady = Math.abs(tb.y - sa.y);
-  const horizontalDogleg = adx >= ady; // h-v-h vs v-h-v
+  // Mode-aware endpoints (anchor edges aligned with elbow direction).
+  const { mode, sa, tb } = _orthoEndpoints(src, tgt);
+  const horizontalDogleg = (mode === 'h-v-h' || mode === 'h-v');
   const offset = idx * 30;
   let d;
-  if (horizontalDogleg) {
+  if (mode === 'h-v-h') {
     const mx = (((sa.x + tb.x) / 2) + offset).toFixed(1);
     d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
-  } else {
+  } else if (mode === 'v-h-v') {
     const my = (((sa.y + tb.y) / 2) + offset).toFixed(1);
     d = `M${sa.x},${sa.y} L${sa.x},${my} L${tb.x},${my} L${tb.x},${tb.y}`;
+  } else {
+    d = _orthoPath(sa.x, sa.y, tb.x, tb.y, mode);
   }
-  // Label sits on the horizontal segment center (or vertical for v-h-v)
+  // Label sits on the mid-segment of the dogleg.
   let lbx, lby;
   if (horizontalDogleg) {
     lbx = ((sa.x + tb.x) / 2 + offset + 6).toFixed(1);
