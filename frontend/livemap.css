@@ -88,7 +88,9 @@ body {
   border: 1px solid; border-radius: 2px;
   background: rgba(0,0,0,0.3);
   display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap; flex-shrink: 0;
 }
+.scope-counts { flex-wrap: wrap; justify-content: flex-end; }
 .pill-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .pill.up   { color: var(--up);   border-color: var(--up); }
 .pill.warn { color: var(--warn); border-color: var(--warn); }
@@ -285,9 +287,9 @@ body {
 .hero-legend span { display: inline-flex; align-items: center; gap: 4px; }
 .hero-legend .ld { width: 6px; height: 6px; border-radius: 50%; }
 
-.noc-mid { display: grid; grid-template-columns: 1fr 360px; gap: 12px; min-height: 0; }
-.noc-side { display: grid; grid-template-rows: 1fr 1fr; gap: 12px; min-height: 0; }
-.noc-bot { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+.noc-mid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; min-height: 0; }
+.noc-side { display: grid; grid-template-rows: minmax(160px, 1fr) minmax(180px, 1fr); gap: 12px; min-height: 0; }
+.noc-bot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
 
 .noc-block, .noc-mosaic, .noc-internet, .noc-bykind, .noc-problems, .noc-feed {
   padding: 12px 14px;
@@ -296,6 +298,10 @@ body {
   border-radius: 2px;
   display: flex; flex-direction: column;
   min-height: 0;
+  /* Clip when the assigned row gets squeezed below content size (zoom-out /
+     small viewport). Inner lists get their own overflow-y:auto so the user
+     can scroll within a widget. */
+  overflow: hidden;
 }
 .noc-internet { border-color: rgba(255,215,0,0.25); }
 .noc-block-head {
@@ -354,7 +360,7 @@ body {
 .mc-alerts { color: var(--down); margin-left: auto; }
 
 /* ─── Internet widget ──────────────────────────────── */
-.ni-rows { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.ni-rows { display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0; overflow-y: auto; }
 .ni-row {
   display: flex; align-items: center; gap: 8px;
   padding: 5px 8px;
@@ -376,7 +382,7 @@ body {
 .ni-ms.timeout { color: var(--down); }
 
 /* ─── Sites by kind ─────────────────────────────────── */
-.bk-rows { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.bk-rows { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; }
 .bk-row { display: flex; align-items: center; gap: 8px; }
 .bk-tag {
   font-family: 'Share Tech Mono', monospace; font-size: 9px;
@@ -609,8 +615,10 @@ body {
 
 /* Tier rows (replace absolute positioning with a vertical flex stack
    that wraps gracefully when there are many cluster cards) */
-.sd-canvas { position: absolute; inset: 50px 16px 16px; display: flex; flex-direction: column; gap: 16px; pointer-events: none; }
-.sd-canvas > * { pointer-events: auto; }
+.sd-canvas {
+  padding: 50px 16px 16px;
+  display: flex; flex-direction: column; gap: 16px;
+}
 .sd-tier {
   position: relative;
   display: flex; flex-direction: column; gap: 6px;
@@ -623,12 +631,26 @@ body {
 }
 .sd-tier-row.center  { justify-content: center; }
 .sd-tier-row.spread  { justify-content: space-around; }
-.sd-tier-ipmi {
-  position: absolute; right: 0; top: 0;
-  width: 130px;
-  display: flex; flex-direction: column; gap: 8px;
-  z-index: 2;
+/* IPMI lives at the right end of the HYPERVISORS row (vertically aligned
+   with the hypervisor cluster cards, not floating at the canvas top). */
+.sd-ipmi-inline {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-left: auto; padding-left: 12px;
+  border-left: 1px dashed rgba(168,85,247,0.3);
+  position: relative;
 }
+.tier-tag.inline {
+  position: static; display: inline-block; margin-bottom: 4px;
+}
+
+/* Internet-kind site drill-in: flat grid of reachability checks, no tiers. */
+.sd-internet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+.sd-internet-grid .sd-offsite-card { min-height: 64px; }
 
 /* Tier-tag (vertical label inside SiteDetail) — sits at left of each row */
 .tier-tag {

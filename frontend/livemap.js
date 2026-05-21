@@ -493,6 +493,18 @@ function _offsiteBand(s, currentSite) {
 
 function _renderSiteTree(name, tree) {
   const main = $('lm-main');
+  const site = LM.sitesByName[name] || {};
+  const kind = (site.kind || '').toLowerCase();
+
+  // Internet-kind sites are conceptually a flat list of reachability checks,
+  // not a multi-tier infrastructure. Render them as a clean grid of device
+  // cards so the user doesn't see a "HYPERVISORS" label with one weird
+  // cluster of 3 internet probes.
+  if (kind === 'internet') {
+    _renderInternetSite(name, tree);
+    return;
+  }
+
   const fws  = tree.firewalls   || [];
   const sws  = tree.switches    || [];
   const hyps = tree.hypervisors || [];
@@ -500,13 +512,15 @@ function _renderSiteTree(name, tree) {
   const ipmi = tree.ipmi        || [];
 
   function tierRow(cls, label, items, opts) {
-    if (!items.length) return '';
+    if (!items.length && !opts.alwaysShow) return '';
     const tagCls   = opts.tagCls || cls;
     const rowAlign = opts.center ? ' center' : ' spread';
+    const trailing = opts.trailing || '';
     return '<div class="sd-tier">' +
              '<span class="tier-tag ' + tagCls + '">' + esc(label) + '</span>' +
              '<div class="sd-tier-row' + rowAlign + '">' +
                items.map(opts.render).join('') +
+               trailing +
              '</div>' +
            '</div>';
   }
@@ -527,9 +541,12 @@ function _renderSiteTree(name, tree) {
     return _clusterCard(c, { icon: ICONS.ipmi });
   }
 
-  const ipmiBlock = ipmi.length
-    ? '<div class="sd-tier-ipmi">' +
-        '<span class="tier-tag ipmi right">IPMI · OOB</span>' +
+  // IPMI inline at the right end of the HYPERVISORS row, with its own
+  // tier-tag above the card. Sharing the row aligns IPMI vertically with
+  // the hypervisor cluster cards (which is what the design intends).
+  const ipmiTrailing = ipmi.length
+    ? '<div class="sd-ipmi-inline">' +
+        '<span class="tier-tag ipmi inline">IPMI · OOB</span>' +
         ipmi.map(_ipmiRow).join('') +
       '</div>'
     : '';
@@ -547,9 +564,8 @@ function _renderSiteTree(name, tree) {
         '<div class="sd-canvas">' +
           tierRow('fw',  'FIREWALL',    fws,  { render: _fwRow,  center: true }) +
           tierRow('sw',  'SWITCHES',    sws,  { render: _swRow,  center: false }) +
-          tierRow('hyp', 'HYPERVISORS', hyps, { render: _hypRow }) +
+          tierRow('hyp', 'HYPERVISORS', hyps, { render: _hypRow, trailing: ipmiTrailing }) +
           tierRow('vm',  'VM CLUSTERS', vms,  { render: _vmRow }) +
-          ipmiBlock +
         '</div>' +
       '</div>' +
       (tree.other && tree.other.length
@@ -566,6 +582,54 @@ function _renderSiteTree(name, tree) {
         : '');
 
   // Cluster click → side panel
+  main.addEventListener('click', _siteCanvasClick);
+}
+
+function _renderInternetSite(name, tree) {
+  const main = $('lm-main');
+  // Collect every device in the site (flattened across whatever tiers
+  // the heuristic put them in).
+  const all = [].concat(
+    tree.firewalls   || [],
+    tree.switches    || [],
+    tree.other       || [],
+    [].concat.apply([], (tree.hypervisors || []).map(function(c) { return c.cells; })),
+    [].concat.apply([], (tree.vm_clusters || []).map(function(c) { return c.cells; })),
+    [].concat.apply([], (tree.ipmi        || []).map(function(c) { return c.cells; }))
+  );
+  // Pull latency from the noc summary's off_site block when names match.
+  const offsite = (LM.summary && LM.summary.off_site) || [];
+  const latencyByDid = {};
+  offsite.forEach(function(o) { if (o.did) latencyByDid[o.did] = o.latency_ms; });
+
+  const cards = all.map(function(d) {
+    const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
+    const ms = latencyByDid[d.did];
+    const lat = (ms == null)
+      ? '<span class="latency down">— timeout</span>'
+      : '<span class="latency">' + ms + 'ms</span>';
+    return '<div class="sd-offsite-card ' + st + '" data-did="' + esc(d.did) + '">' +
+             '<div class="sd-oc-row">' + ICONS.cloud +
+               '<span class="sd-oc-name">' + esc(d.name) + '</span>' +
+             '</div>' +
+             '<div class="sd-oc-host">' + esc(d.host) + lat + '</div>' +
+           '</div>';
+  }).join('');
+
+  main.innerHTML =
+    '<div class="sd-wrap">' +
+      '<div class="site">' +
+        '<div class="site-corners"><span></span><span></span><span></span><span></span></div>' +
+        '<div class="site-tab">' +
+          '<span class="site-tab-k">SITE</span>' +
+          '<span class="site-tab-n">' + esc(name) + '</span>' +
+          '<span class="site-tab-s">› INTERNET REACHABILITY (PINNED)</span>' +
+        '</div>' +
+        '<div class="sd-canvas">' +
+          '<div class="sd-internet-grid">' + (cards || '<div class="lm-empty">No reachability checks configured</div>') + '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   main.addEventListener('click', _siteCanvasClick);
 }
 
@@ -709,20 +773,39 @@ async function refreshAll() {
   await fetchSitesAndSummary();
   // Invalidate site tree cache (status may have changed)
   LM.treeCache = {};
+  LM._lastHash = _payloadHash();
   handleRoute();
 }
 
 // ─── SSE / postMessage from parent ──────────────────────────
+// We re-render via innerHTML — cheap to write but visibly flashes if we do it
+// too often. Bump the debounce to 2s and skip re-renders when the data hash
+// hasn't actually changed (most SSE batches are no-ops for the NOC view).
+function _payloadHash() {
+  // Cheap fingerprint: sites' (name, status, devices, alerts) + summary totals.
+  if (!LM.summary) return '';
+  const sitePart = LM.sites.map(function(s) {
+    return s.name + ':' + s.up + '/' + s.warn + '/' + s.down + '/' + s.alerts;
+  }).join('|');
+  const sum = LM.summary;
+  const sumPart = [
+    sum.sites.up,    sum.sites.warn,    sum.sites.down,
+    sum.devices.up,  sum.devices.warn,  sum.devices.down,
+    sum.alerts.active, sum.flaps_24h,
+    (sum.recent_alerts || []).length,
+    (sum.recent_alerts && sum.recent_alerts[0] && sum.recent_alerts[0].ts) || 0,
+  ].join(',');
+  return sitePart + '#' + sumPart;
+}
 function _flushSseBatch() {
-  // Coalesce: any update → refetch summary + sites in the background
-  // (debounced flushes happen at 250ms via _scheduleFlush).
   LM.ssePending = [];
   fetchSitesAndSummary().then(function() {
-    // Re-render current view in place
+    const h = _payloadHash();
+    if (h === LM._lastHash) return;       // nothing meaningful changed
+    LM._lastHash = h;
     if (LM.currentRoute.view === 'noc') {
       renderNOC();
     } else {
-      // Bust the per-site tree cache and re-render
       LM.treeCache = {};
       renderSite(LM.currentRoute.site);
     }
@@ -735,7 +818,7 @@ function _scheduleFlush() {
   LM.sseTimer = setTimeout(function() {
     LM.sseTimer = null;
     _flushSseBatch();
-  }, 250);
+  }, 2000);   // was 250 — coarser cadence eliminates visible flicker
 }
 
 window.addEventListener('message', function(e) {
