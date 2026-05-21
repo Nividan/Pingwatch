@@ -7,6 +7,7 @@ consumes. Every function here is read-only.
 """
 from __future__ import annotations
 
+import datetime
 import time
 from collections import defaultdict
 
@@ -17,6 +18,30 @@ from db             import (
     db_count_active_flaps, db_load_flaps,
 )
 from db.helpers     import db_query
+
+
+def _iso_utc(epoch_sec: int) -> str:
+    """Format an epoch second as the ISO string flap_log.ts uses."""
+    return datetime.datetime.fromtimestamp(epoch_sec, datetime.timezone.utc) \
+                            .strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso_ts(s) -> int:
+    """Parse an ISO-Z timestamp (or pass-through epoch number) into epoch seconds.
+    Returns 0 on failure so callers don't blow up on legacy or malformed rows."""
+    if s is None:
+        return 0
+    if isinstance(s, (int, float)):
+        return int(s)
+    try:
+        # The format we store is "%Y-%m-%dT%H:%M:%SZ"
+        return int(datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+                     .replace(tzinfo=datetime.timezone.utc).timestamp())
+    except Exception:
+        try:
+            return int(float(s))   # fallback for old numeric-string rows
+        except Exception:
+            return 0
 
 
 # ── Constants ───────────────────────────────────────────────────
@@ -161,21 +186,27 @@ def site_summary_list() -> list:
 
 def _uptime_24h() -> float:
     """Rough 24h availability = 1 - (active_down_seconds / device_seconds).
-    Uses the flap_log: each unresolved 'down' contributes (now-ts) seconds;
-    each resolved 'down' contributes (resolved_ts-ts). Returns a float
-    0..1, defaulting to 1.0 when no devices."""
+    Uses flap_log: each unresolved 'down' contributes (now-ts) seconds; each
+    resolved 'down' contributes (resolved_at-ts). Returns a float 0..1,
+    defaulting to 1.0 when no devices.
+
+    flap_log.ts is TEXT (ISO 'YYYY-MM-DDTHH:MM:SSZ'); resolved_at is REAL/
+    DOUBLE PRECISION epoch seconds. We compare ts as TEXT to keep both PG
+    and SQLite happy.
+    """
     devices = list(STATE.devices.values())
     if not devices:
         return 1.0
     window = 86400
     now = int(time.time())
     cutoff = now - window
+    cutoff_iso = _iso_utc(cutoff)
     try:
         rows = db_query(
             "logs",
-            "SELECT ts, COALESCE(resolved_ts,0) AS rts, direction "
+            "SELECT ts, COALESCE(resolved_at,0) AS rts, direction "
             "FROM flap_log WHERE ts >= ? AND direction IN ('down','recovered')",
-            (cutoff,)
+            (cutoff_iso,)
         )
     except Exception as e:
         log.debug(f"_uptime_24h query failed: {e}")
@@ -184,8 +215,9 @@ def _uptime_24h() -> float:
     for r in rows:
         if (r["direction"] or "").lower() != "down":
             continue
-        start = max(int(r["ts"] or 0), cutoff)
-        end   = int(r["rts"]) if int(r["rts"] or 0) > 0 else now
+        start = max(_parse_iso_ts(r["ts"]), cutoff)
+        rts = int(float(r["rts"] or 0))
+        end = rts if rts > 0 else now
         if end > start:
             down_sec += (end - start)
     total_sec = len(devices) * window
@@ -196,12 +228,12 @@ def _uptime_24h() -> float:
 
 def _flaps_24h() -> int:
     """Count of 'down' flap events in the last 24h."""
-    cutoff = int(time.time()) - 86400
+    cutoff_iso = _iso_utc(int(time.time()) - 86400)
     try:
         row = db_query(
             "logs",
             "SELECT COUNT(*) AS c FROM flap_log WHERE ts >= ? AND direction='down'",
-            (cutoff,)
+            (cutoff_iso,)
         )
         return int(row[0]["c"]) if row else 0
     except Exception as e:
@@ -211,13 +243,13 @@ def _flaps_24h() -> int:
 
 def _incidents_24h() -> int:
     """Count of unique devices that experienced a down in the last 24h."""
-    cutoff = int(time.time()) - 86400
+    cutoff_iso = _iso_utc(int(time.time()) - 86400)
     try:
         row = db_query(
             "logs",
             "SELECT COUNT(DISTINCT did) AS c FROM flap_log "
             "WHERE ts >= ? AND direction='down'",
-            (cutoff,)
+            (cutoff_iso,)
         )
         return int(row[0]["c"]) if row else 0
     except Exception as e:
@@ -235,12 +267,13 @@ def _recent_alerts(limit: int = 8) -> list:
         return []
     out = []
     for f in flaps or []:
-        # Map flap_log row → feed row
+        # Map flap_log row → feed row. flap_log.ts is stored as ISO TEXT;
+        # convert to epoch int so the frontend's time-ago renderer works.
         direction = (f.get("direction") or "").lower()
         severity  = "down" if direction in ("down",) else (
                     "warn" if direction in ("threshold_warn", "threshold_crit") else "ok")
         out.append({
-            "ts":        int(f.get("ts") or 0),
+            "ts":        _parse_iso_ts(f.get("ts")),
             "severity":  severity,
             "direction": direction,
             "did":       f.get("did") or "",
