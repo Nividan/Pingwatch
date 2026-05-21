@@ -109,6 +109,18 @@ from db.groups      import (
     db_get_oidc_mapped_groups,
 )
 
+# sites (Live Map metadata sidecar)
+from db.sites       import (
+    db_list_sites,
+    db_get_site_meta,
+    db_upsert_site_meta,
+    db_ensure_site_meta,
+    db_rename_site_meta,
+    db_delete_site_meta,
+    db_distinct_site_names,
+    KNOWN_KINDS,
+)
+
 # audit
 from db.audit       import db_log_audit, db_get_audit
 

@@ -48,6 +48,13 @@ function _sseFlush(){
   }
   if(typeof _dwOnDeviceUpdate==='function'&&Object.keys(_sseBatch.devStatuses).length)
     _dwOnDeviceUpdate();
+  // Notify the Live Map iframe (if loaded) so it can refresh in place.
+  try {
+    const _lmf=document.getElementById('livemap-frame');
+    if(_lmf && _lmf.contentWindow && (Object.keys(_sseBatch.sensors).length || Object.keys(_sseBatch.devStatuses).length)) {
+      _lmf.contentWindow.postMessage({type:'lm_update'}, window.location.origin);
+    }
+  } catch(e) {}
   _sseBatch.sensors={};
   _sseBatch.devStatuses={};
 }
@@ -1704,6 +1711,7 @@ function switchMainTab(tab){
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
   { const _ab=document.getElementById('tabAlerting'); if(_ab) _ab.classList.toggle('active',tab==='alerting'); }
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
+  { const _lm=document.getElementById('tabLiveMap'); if(_lm) _lm.classList.toggle('active',tab==='livemap'); }
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
@@ -1711,6 +1719,7 @@ function switchMainTab(tab){
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
+  const liveMapView  =document.getElementById('liveMapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
   const reportsView  =document.getElementById('reportsView');
@@ -1721,6 +1730,7 @@ function switchMainTab(tab){
   dashboardView.style.display='none';
   eventsView.style.display   ='none';
   mapView.style.display      ='none';
+  if(liveMapView) liveMapView.style.display='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
   if(reportsView)  reportsView.style.display ='none';
@@ -1733,12 +1743,19 @@ function switchMainTab(tab){
   if(_devPg) _devPg.style.display='none';
   // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
   if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
-  const _mf=document.getElementById('map-frame');
+  const _mf =document.getElementById('map-frame');
+  const _lmf=document.getElementById('livemap-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
-  const _isMap = tab === 'map';
-  window._bgMapActive = _isMap;
-  document.getElementById('netbg').style.visibility = _isMap ? 'hidden' : '';
-  if (!_isMap) window._bgResume?.();
+  const _isMap     = tab === 'map';
+  const _isLiveMap = tab === 'livemap';
+  window._bgMapActive = _isMap || _isLiveMap;
+  document.getElementById('netbg').style.visibility = (_isMap || _isLiveMap) ? 'hidden' : '';
+  if (!_isMap && !_isLiveMap) window._bgResume?.();
+  // Sync theme to the livemap iframe on every tab switch (cheap, idempotent)
+  try {
+    const _th = localStorage.getItem('pw_theme') || 'dark';
+    _lmf?.contentWindow?.postMessage({type:'theme',value:_th},window.location.origin);
+  } catch(e){}
   if(tab==='dashboard'){
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
@@ -1763,6 +1780,13 @@ function switchMainTab(tab){
       type:'ntm_resume',
       devices:Object.values(S.devices).map(d=>({did:d.did||d.device_id,status:d.status}))
     },window.location.origin);
+  } else if(tab==='livemap'){
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    if(liveMapView) liveMapView.style.display='flex';
+    if(_lmf&&!_lmf.src&&_lmf.dataset.src) _lmf.src=_lmf.dataset.src;
+    else if(_lmf&&_lmf.contentWindow) _lmf.contentWindow.postMessage({type:'lm_refresh'},window.location.origin);
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
   } else if(tab==='backups'){
     backupsView.style.display='flex';
     emptyMain.style.display='none';

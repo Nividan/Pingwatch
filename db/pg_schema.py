@@ -148,6 +148,19 @@ def pg_create_main_schema(cur):
             ON devices(external_id) WHERE external_id IS NOT NULL
     """)
 
+    # Sites metadata sidecar (v1.0+, Live Map NOC console).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sites (
+            name         TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL DEFAULT 'lab',
+            pinned       INTEGER NOT NULL DEFAULT 0,
+            display_name TEXT NOT NULL DEFAULT '',
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            created_ts   BIGINT NOT NULL DEFAULT 0,
+            updated_ts   BIGINT NOT NULL DEFAULT 0
+        )
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sensors (
             did                  TEXT,

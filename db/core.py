@@ -568,6 +568,22 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Sites metadata sidecar (v1.0+, Live Map NOC console).
+        # Distinct site names still come from devices.site / ipam_subnets.site;
+        # this table stores presentation metadata (kind, pinned, display_name)
+        # so the new Live Map can colour the sidebar mosaic and sites-by-type
+        # widget. Rows are created lazily by the Live Map rollup.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sites (
+                name         TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL DEFAULT 'lab',
+                pinned       INTEGER NOT NULL DEFAULT 0,
+                display_name TEXT NOT NULL DEFAULT '',
+                sort_order   INTEGER NOT NULL DEFAULT 0,
+                created_ts   INTEGER NOT NULL DEFAULT 0,
+                updated_ts   INTEGER NOT NULL DEFAULT 0
+            )
+        """)
         # Exclusive flag on alert profiles (v1.0+) — when an exclusive profile
         # matches the cascade, broader-scope profiles are not added. Lets users
         # opt out of the new default-additive cascade per-profile.

@@ -50,11 +50,17 @@
     document.documentElement.setAttribute('data-theme', next);
     _write(next);
 
-    // Notify the topology-map iframe (same origin, optional listener)
+    // Notify both same-origin iframes (topology editor + live map)
     try {
       const f = document.getElementById('map-frame');
       if (f && f.contentWindow) {
         f.contentWindow.postMessage({ type: 'theme', value: next }, window.location.origin);
+      }
+    } catch (_) {}
+    try {
+      const f2 = document.getElementById('livemap-frame');
+      if (f2 && f2.contentWindow) {
+        f2.contentWindow.postMessage({ type: 'theme', value: next }, window.location.origin);
       }
     } catch (_) {}
 

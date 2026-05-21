@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PingWatch · Live Map</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script>
+  // Sync theme from parent (set by parent.app.js before iframe loads).
+  try {
+    var t = localStorage.getItem('pw_theme');
+    if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  } catch(e) {}
+</script>
+<link rel="stylesheet" href="/livemap.css">
+</head>
+<body>
+
+<header class="lm-scope">
+  <div class="scope-site">
+    <span class="scope-dot"></span>
+    <span class="scope-label">SITE</span>
+    <span class="scope-name" id="scope-name">— SITES · NOC</span>
+  </div>
+  <div class="scope-counts" id="scope-counts">
+    <!-- pills injected by JS -->
+  </div>
+</header>
+
+<div class="lm-wrap">
+  <aside class="lm-sidebar" id="lm-sidebar">
+    <div class="lm-search">
+      <span class="lm-search-icon">⌕</span>
+      <input id="lm-search" class="lm-search-in" placeholder="SEARCH SITES…" autocomplete="off"/>
+      <span class="lm-search-count" id="lm-search-count">0</span>
+    </div>
+    <div class="lm-section">
+      <div class="lm-section-label">VIEW</div>
+      <div class="lm-list" id="lm-list-view"></div>
+    </div>
+    <div class="lm-section">
+      <div class="lm-section-label">PINNED</div>
+      <div class="lm-list" id="lm-list-pinned"></div>
+    </div>
+    <div class="lm-section">
+      <div class="lm-section-label">ALL SITES</div>
+      <div class="lm-list" id="lm-list-all"></div>
+    </div>
+    <div class="lm-sidebar-foot">
+      <button class="lm-btn" id="lm-add-site" title="Add site">＋ ADD SITE</button>
+    </div>
+  </aside>
+
+  <main class="lm-main" id="lm-main">
+    <!-- Main content (NOC overview or site detail) rendered by JS -->
+  </main>
+
+  <aside class="lm-sidepanel" id="lm-sidepanel" aria-hidden="true">
+    <div class="lm-sp-head">
+      <div class="lm-sp-title" id="lm-sp-title">DETAILS</div>
+      <button class="lm-sp-close" id="lm-sp-close" title="Close">✕</button>
+    </div>
+    <div class="lm-sp-body" id="lm-sp-body"></div>
+  </aside>
+</div>
+
+<script src="/forms-site.js"></script>
+<script src="/livemap.js"></script>
+</body>
+</html>

@@ -241,8 +241,11 @@
     <button class="rail-btn" id="tabAlerting" onclick="switchMainTab('alerting')" title="Alerting">
       <span class="rail-ico" aria-hidden="true" data-icon="alerts"></span><span class="rail-tip">Alerting</span>
     </button>
-    <button class="rail-btn" id="tabMap" onclick="switchMainTab('map')" title="Topology Map">
-      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Topology</span>
+    <button class="rail-btn" id="tabLiveMap" onclick="switchMainTab('livemap')" title="Live Map (NOC Console)">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Live Map</span>
+    </button>
+    <button class="rail-btn" id="tabMap" onclick="switchMainTab('map')" title="Topology Design (manual editor)">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Topology Design</span>
     </button>
     <button class="rail-btn" id="tabIpam" onclick="switchMainTab('ipam')" title="IP Addresses">
       <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">IPAM</span>
@@ -267,7 +270,11 @@
       <div id="dw-tab-bar" class="dw-tab-bar"></div>
       <div id="dw-grid" class="dw-grid"></div>
     </div>
-    <!-- Map view -->
+    <!-- Live Map view (NOC console + Site drill-in) -->
+    <div id="liveMapView" style="display:none;flex:1;overflow:hidden;height:100%;">
+      <iframe id="livemap-frame" data-src="/livemap" allowfullscreen style="width:100%;height:100%;border:none;display:block;"></iframe>
+    </div>
+    <!-- Topology Design view (manual editor) -->
     <div id="mapView" style="display:none;flex:1;overflow:hidden;height:100%;">
       <iframe id="map-frame" data-src="/map" allowfullscreen style="width:100%;height:100%;border:none;display:block;"></iframe>
     </div>

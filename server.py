@@ -83,9 +83,11 @@ _VENDOR_CSS_FILES = [
 ]
 
 _MAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'map.html')
+_LIVEMAP_HTML_PATH = os.path.join(FRONTEND_DIR, 'livemap.html')
 
-_HTML_CACHE     = None   # cached assembled index.html bytes
-_MAP_HTML_CACHE = None   # cached map.html bytes
+_HTML_CACHE         = None   # cached assembled index.html bytes
+_MAP_HTML_CACHE     = None   # cached map.html bytes
+_LIVEMAP_HTML_CACHE = None   # cached livemap.html bytes
 
 # Shown when the web UI is reached before first-run setup completes.
 # Setup is driven exclusively by the launcher scripts (start.bat / start.sh),
@@ -129,6 +131,14 @@ def _load_map_html() -> bytes:
         with open(_MAP_HTML_PATH, 'rb') as f:
             _MAP_HTML_CACHE = f.read()
     return _MAP_HTML_CACHE
+
+
+def _load_livemap_html() -> bytes:
+    global _LIVEMAP_HTML_CACHE
+    if _LIVEMAP_HTML_CACHE is None:
+        with open(_LIVEMAP_HTML_PATH, 'rb') as f:
+            _LIVEMAP_HTML_CACHE = f.read()
+    return _LIVEMAP_HTML_CACHE
 
 
 def _load_html() -> bytes:
@@ -369,6 +379,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        # ── Live Map HTML (NOC console) ───────────────────────────
+        if p == '/livemap' or p == '/livemap.html':
+            if not self._auth(): return
+            data = _load_livemap_html()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', len(data))
+            self._sec_headers()
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         # ── Generic static files from frontend/ (CSS, JS, …) ─────
         ext = os.path.splitext(p)[1].lower()
         if ext in _STATIC_TYPES:
@@ -395,8 +417,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ad_mod, _diag_mod):
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -421,8 +443,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -443,7 +465,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PUT ───────────────────────────────────────────────────────
     def do_PUT(self):
-        from routes import topology, settings, backups, ipam, groups as _groups_mod, devices
+        from routes import topology, settings, backups, ipam, groups as _groups_mod, devices, sites as _sites_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
@@ -458,6 +480,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if _groups_mod.handle(self, 'PUT', p, body):
             return
+        if _sites_mod.handle(self, 'PUT', p, body):
+            return
         # devices handles PUT /api/device/{did}/role (topology role tagging)
         if devices.handle(self, 'PUT', p, body):
             return
@@ -469,8 +493,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 

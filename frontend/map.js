@@ -38,8 +38,10 @@ let VLAN_COLORS = { '10': '#00d4ff', '20': '#ff8c00', '30': '#a855f7', '40': '#f
 // loadPingWatchPage calls from a previous switch self-cancel when superseded.
 let _pageGen = 0;
 
-// ═══════════════════════════ PINGWATCH LIVE TAB ═══════════════════════════
-let isPingWatchPage = true;   // true while PingWatch live tab is active
+// ═══════════════════════════ PINGWATCH LIVE TAB (DISABLED) ════════════════
+// The live overlay was moved to /livemap.html. This page is now manual-only,
+// so isPingWatchPage stays false and the tab is omitted from renderPageBar.
+let isPingWatchPage = false;
 let pwDevices = [];           // cached device list from /api/devices
 let _pwDevMap = {};           // device_id → device object (O(1) lookup)
 let pwSSE = null;             // SSE EventSource for live status updates
@@ -206,17 +208,8 @@ async function loadPages() {
 function renderPageBar() {
   const bar = document.getElementById('page-bar');
   bar.innerHTML = '';
-  // ── PingWatch live tab (always first) ──────────────────────────
-  const pwTab = document.createElement('div');
-  pwTab.className = 'page-tab' + (isPingWatchPage ? ' active' : '');
-  const dot = document.createElement('span');
-  dot.id = 'pw-tab-dot';
-  dot.style.cssText = 'display:inline-block;width:7px;height:7px;border-radius:50%;background:#00ff9d;margin-right:5px;vertical-align:middle;box-shadow:0 0 5px #00ff9d;flex-shrink:0;';
-  pwTab.appendChild(dot);
-  pwTab.appendChild(document.createTextNode('PingWatch'));
-  pwTab.onclick = () => switchToPingWatchPage();
-  bar.appendChild(pwTab);
-  // ── DB topology pages ──────────────────────────────────────────
+  // ── DB topology pages (manual-editor only) ─────────────────────
+  // The PingWatch Live tab was removed — its NOC view moved to /livemap.
   for (const pg of pages) {
     const tab = document.createElement('div');
     tab.className = 'page-tab' + (pg.id === currentPageId && !isPingWatchPage ? ' active' : '');
@@ -6275,8 +6268,9 @@ loadPages().then(async () => {
   const pageIds = pages.map(p => String(p.id));
   if (saved && saved !== 'pw' && pageIds.includes(saved)) {
     await switchPage(parseInt(saved));
-  } else {
-    await switchToPingWatchPage();
+  } else if (pages.length) {
+    // PingWatch Live tab is gone — always open the first manual page.
+    await switchPage(pages[0].id);
   }
 }).then(() => {
   const wrap = document.getElementById('canvas-wrap');
@@ -6318,14 +6312,17 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 
-// Reload pages when PingWatch parent signals tab switch
+// Reload pages when parent signals tab switch
 window.addEventListener('message', e => {
   if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'pw_reload_pages') {
     loadPages().then(() => {
-      if (isPingWatchPage) switchToPingWatchPage();
-      else if (!pages.find(p => p.id === currentPageId)) switchToPingWatchPage();
-      else renderPageBar();
+      if (!pages.find(p => p.id === currentPageId) && pages.length) {
+        // Selected page was deleted on another tab — switch to first available.
+        switchPage(pages[0].id);
+      } else {
+        renderPageBar();
+      }
     });
   }
 });
