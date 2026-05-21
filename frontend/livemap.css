@@ -89,8 +89,11 @@ body {
   background: rgba(0,0,0,0.3);
   display: inline-flex; align-items: center; gap: 6px;
   white-space: nowrap; flex-shrink: 0;
+  line-height: 1;
 }
-.scope-counts { flex-wrap: wrap; justify-content: flex-end; }
+/* Pills stay on one horizontal row, matching the design.
+   No wrapping — the scope bar is wide enough at any reasonable viewport. */
+.scope-counts { flex-wrap: nowrap; justify-content: flex-end; }
 .pill-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .pill.up   { color: var(--up);   border-color: var(--up); }
 .pill.warn { color: var(--warn); border-color: var(--warn); }
@@ -225,13 +228,17 @@ body {
   position: absolute; inset: 0;
   padding: 14px;
   display: grid;
-  /* min-content for hero row so it expands to fit content instead of clipping
-     when the legend + bar push past a hard-coded height. */
+  /* All "1fr" rows use minmax(0,1fr) so they NEVER demand more space than
+     their share of the parent — that's what causes inner widgets to leak
+     downward into the next row. Inner content is clipped by overflow:hidden
+     on each widget; the inner lists have overflow-y:auto so users can still
+     scroll within a tight widget. */
   grid-template-rows: minmax(170px, auto) minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
-  overflow: auto;
+  overflow: hidden;
+  min-height: 0;
 }
-.noc-hero { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.noc-hero { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; min-height: 0; }
 .hero-stat {
   position: relative;
   padding: 12px 14px;
@@ -288,7 +295,7 @@ body {
 .hero-legend .ld { width: 6px; height: 6px; border-radius: 50%; }
 
 .noc-mid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; min-height: 0; }
-.noc-side { display: grid; grid-template-rows: minmax(160px, 1fr) minmax(180px, 1fr); gap: 12px; min-height: 0; }
+.noc-side { display: grid; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
 .noc-bot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
 
 .noc-block, .noc-mosaic, .noc-internet, .noc-bykind, .noc-problems, .noc-feed {
