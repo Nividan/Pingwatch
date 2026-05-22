@@ -23,6 +23,10 @@ const _DW_REG = {
   sensor_chart: {
     label: 'Sensor History Chart',
     icon:  icon('activity', 14),
+    cat: 'charts',
+    desc: "Time-series of any sensor's last 24h / 7d / 30d.",
+    meta: ['any sensor', 'live'],
+    popular: true,
     defaultCols: 2,
     fields: [
       { key: 'did', label: 'Device', type: 'device-select' },
@@ -34,6 +38,9 @@ const _DW_REG = {
   device_status: {
     label: 'Device Status',
     icon:  icon('devices', 14),
+    cat: 'status',
+    desc: 'Live list of selected devices with ping latency + state.',
+    meta: ['any device', 'live'],
     defaultCols: 1,
     fields: [],
     render:  (wid, cfg) => _dwRenderDeviceStatus(wid),
@@ -42,6 +49,10 @@ const _DW_REG = {
   network_avail: {
     label: 'Network Availability History (24h)',
     icon:  icon('shield', 14),
+    cat: 'charts',
+    desc: '24h availability bar — per-device uptime over time.',
+    meta: ['all devices', '24h'],
+    popular: true,
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderNetAvail(wid),
@@ -50,6 +61,9 @@ const _DW_REG = {
   sensor_gauge: {
     label: 'Sensor Gauge',
     icon:  icon('cpu', 14),
+    cat: 'charts',
+    desc: 'Real-time dial for a single sensor with thresholds.',
+    meta: ['any sensor', 'live'],
     defaultCols: 1,
     fields: [
       { key: 'did', label: 'Device', type: 'device-select' },
@@ -61,6 +75,10 @@ const _DW_REG = {
   flap_events: {
     label: 'Recent Flap Events',
     icon:  icon('events', 14),
+    cat: 'events',
+    desc: 'Stream of devices that flapped state recently.',
+    meta: ['live'],
+    popular: true,
     defaultCols: 2,
     fields: [
       { key: 'limit', label: 'Max events', type: 'select',
@@ -72,6 +90,9 @@ const _DW_REG = {
   system_status: {
     label: 'System Status',
     icon:  icon('settings', 14),
+    cat: 'status',
+    desc: 'Overall PingWatch health — sample lag, queue depth, workers.',
+    meta: ['self-monitor'],
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderSystemStatus(wid),
@@ -80,6 +101,9 @@ const _DW_REG = {
   server_perf: {
     label: 'Server Performance',
     icon:  icon('cpu', 14),
+    cat: 'charts',
+    desc: 'CPU / RAM / disk / network bars for a single host.',
+    meta: ['SNMP required', 'any host'],
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRenderServerPerf(wid),
@@ -88,6 +112,10 @@ const _DW_REG = {
   down_devices: {
     label: 'Down & Warning Devices',
     icon:  icon('alerts', 14),
+    cat: 'events',
+    desc: 'Live list of every device currently in a non-OK state.',
+    meta: ['live'],
+    popular: true,
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshDownDevices(wid),
@@ -96,6 +124,9 @@ const _DW_REG = {
   top_latency: {
     label: 'Slowest Ping Devices',
     icon:  icon('activity', 14),
+    cat: 'events',
+    desc: 'Top-N hosts by current ping latency.',
+    meta: ['top-N', 'live'],
     defaultCols: 1,
     fields: [
       { key: 'limit', label: 'Show top', type: 'select',
@@ -107,6 +138,9 @@ const _DW_REG = {
   event_count: {
     label: 'Event Summary',
     icon:  icon('reports', 14),
+    cat: 'reports',
+    desc: 'Aggregate event count by type and severity.',
+    meta: ['last 24h'],
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshEventCount(wid),
@@ -115,6 +149,9 @@ const _DW_REG = {
   packet_loss: {
     label: 'Packet Loss',
     icon:  icon('activity', 14),
+    cat: 'charts',
+    desc: 'Per-device packet loss over time.',
+    meta: ['any device'],
     defaultCols: 1,
     fields: [
       { key: 'limit',     label: 'Max sensors', type: 'select',
@@ -128,6 +165,9 @@ const _DW_REG = {
   sla_report: {
     label: 'SLA Report',
     icon:  icon('check', 14),
+    cat: 'reports',
+    desc: '% uptime per service against your SLA target.',
+    meta: ['30d', 'exportable'],
     defaultCols: 1,
     fields: [
       { key: 'did', label: 'Device', type: 'device-select' },
@@ -139,6 +179,9 @@ const _DW_REG = {
   flap_detect: {
     label: 'Flapping Devices',
     icon:  icon('refresh', 14),
+    cat: 'events',
+    desc: 'Devices with high flap counts in the window.',
+    meta: ['top-N', '24h'],
     defaultCols: 1,
     fields: [
       { key: 'min_flaps', label: 'Min flaps', type: 'select',
@@ -150,6 +193,9 @@ const _DW_REG = {
   internet_health: {
     label: 'Internet Health',
     icon:  icon('map', 14),
+    cat: 'network',
+    desc: 'External reachability checks (DNS, HTTP, well-known hosts).',
+    meta: ['live'],
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshInternetHealth(wid),
@@ -158,6 +204,9 @@ const _DW_REG = {
   ncm_status: {
     label: 'Backup Status',
     icon:  icon('backups', 14),
+    cat: 'status',
+    desc: 'Last backup result + size per device.',
+    meta: ['nightly'],
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwNcmStatusRefresh(wid),
@@ -166,6 +215,9 @@ const _DW_REG = {
   license_overview: {
     label: 'License Overview',
     icon:  icon('reports', 14),
+    cat: 'reports',
+    desc: 'Seats used, expiry, feature flags.',
+    meta: ['admin'],
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwLicenseOverviewRefresh(wid),
@@ -174,6 +226,10 @@ const _DW_REG = {
   fleet_status: {
     label: 'Fleet Status',
     icon:  icon('check', 14),
+    cat: 'status',
+    desc: 'All-devices health ring — up/warn/down summary.',
+    meta: ['live'],
+    popular: true,
     defaultCols: 1,
     fields: [],
     render:  (wid, _cfg) => _dwRefreshFleetStatus(wid),
@@ -182,6 +238,10 @@ const _DW_REG = {
   latency_heatmap: {
     label: 'Latency Heatmap',
     icon:  icon('activity', 14),
+    cat: 'charts',
+    desc: 'Heatmap of ping latencies across many devices.',
+    meta: ['top-60', 'live'],
+    isNew: true,
     defaultCols: 2,
     fields: [
       { key: 'limit', label: 'Devices', type: 'select',
@@ -191,6 +251,16 @@ const _DW_REG = {
     refresh: (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
   },
 };
+
+// ── Category palette + section order ──────────────────────────────
+const _DW_CATS = {
+  charts:  { name: 'Charts',  c: 'var(--accent)'  },   // cyan
+  status:  { name: 'Status',  c: 'var(--accent2)' },   // green
+  events:  { name: 'Events',  c: 'var(--warn)'    },   // orange
+  reports: { name: 'Reports', c: 'var(--purple)'  },   // purple
+  network: { name: 'Network', c: 'var(--gold)'    },   // gold
+};
+const _DW_CAT_ORDER = ['charts', 'status', 'events', 'reports', 'network'];
 
 // ── Persistence (server-side, per user, multi-dashboard) ─────────
 let _dwDashboards = null;   // [{id, name, sort_order}] metadata
@@ -614,27 +684,573 @@ function _dwRemove(wid) {
   _dwRenderAll();
 }
 
-// ── Add widget — picker + config ──────────────────────────────────
+// ── Add widget — redesigned picker (search + chips + popout) ──────
+// See design/handoff_add_widget_modal/README.md for the spec.
+
+// Mini-preview registry. Each entry returns a DOM Element to drop into the
+// 130px popout slot. Static renderers — no live data, no subscriptions —
+// they just hint at what the widget will look like.
+const _DW_PREVIEW = {
+  sensor_chart:    () => _mpSparkline('var(--accent)'),
+  device_status:   () => _mpDevicePills(),
+  network_avail:   () => _mpUptimeBar(),
+  sensor_gauge:    () => _mpGauge(),
+  flap_events:     () => _mpFlapList(),
+  system_status:   () => _mpSparkline('var(--accent2)'),
+  server_perf:     () => _mpBars(),
+  down_devices:    () => _mpDevicePills(),
+  top_latency:     () => _mpDevicePills(),
+  event_count:     () => _mpSla(),
+  packet_loss:     () => _mpSparkline('var(--down)'),
+  sla_report:      () => _mpSla(),
+  flap_detect:     () => _mpFlapList(),
+  internet_health: () => _mpInternet(),
+  ncm_status:      () => _mpDots(),
+  license_overview:() => _mpLicense(),
+  fleet_status:    () => _mpRing(),
+  latency_heatmap: () => _mpHeatmap(),
+};
+
+function _mpEl(html) {
+  const t = document.createElement('div');
+  t.className = 'mp';
+  t.innerHTML = html;
+  return t;
+}
+function _mpSparkline(color) {
+  return _mpEl(
+    `<span class="mw-po-preview-label">SENSOR · LAST 24H</span>
+     <svg class="mp-sparkline" viewBox="0 0 240 120" preserveAspectRatio="none">
+       <defs><linearGradient id="sg-${Math.random().toString(36).slice(2,7)}" x1="0" y1="0" x2="0" y2="1">
+         <stop offset="0%" stop-color="${color}" stop-opacity="0.4"/>
+         <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+       </linearGradient></defs>
+       ${[0,30,60,90].map(y => `<line x1="0" y1="${y+10}" x2="240" y2="${y+10}" stroke="rgba(0,212,255,0.07)" stroke-width="1"/>`).join('')}
+       <path d="M0,80 L20,75 L40,82 L60,40 L80,55 L100,30 L120,45 L140,25 L160,60 L180,35 L200,50 L220,28 L240,40 L240,120 L0,120 Z"
+             fill="${color}" fill-opacity="0.15"/>
+       <polyline points="0,80 20,75 40,82 60,40 80,55 100,30 120,45 140,25 160,60 180,35 200,50 220,28 240,40"
+                 fill="none" stroke="${color}" stroke-width="1.5"/>
+     </svg>`);
+}
+function _mpDevicePills() {
+  const rows = [
+    { n: 'core-sw-01',  c: 'var(--up)',   v: '12ms' },
+    { n: 'edge-rtr-01', c: 'var(--down)', v: 'DOWN' },
+    { n: 'fw-primary',  c: 'var(--up)',   v: '8ms'  },
+    { n: 'esx-9a',      c: 'var(--warn)', v: '320ms'},
+    { n: 'esx-1a',      c: 'var(--up)',   v: '4ms'  },
+  ];
+  const html = `<span class="mw-po-preview-label">9 DEVICES · 1 DOWN</span>
+    <div class="mp-pills" style="padding-top:18px">${
+    rows.map(d => `<div class="mp-pill" style="border-left-color:${d.c}">
+      <span class="mp-pill-dot" style="background:${d.c};box-shadow:0 0 4px ${d.c}"></span>
+      <span class="mp-pill-name">${d.n}</span>
+      <span class="mp-pill-val" style="color:${d.c}">${d.v}</span>
+    </div>`).join('')}</div>`;
+  return _mpEl(html);
+}
+function _mpUptimeBar() {
+  const bars = Array.from({length:48}, (_,i) => {
+    const s = (i===17||i===18) ? 'var(--down)' : (i===32 ? 'var(--warn)' : 'var(--up)');
+    return `<div style="flex:1;background:${s};opacity:.85;box-shadow:0 0 3px ${s}"></div>`;
+  }).join('');
+  return _mpEl(`
+    <span class="mw-po-preview-label">24H · 99.42% UP</span>
+    <div style="display:flex;flex-direction:column;padding:12px 6px;gap:10px;height:100%">
+      <div style="display:flex;gap:1px;height:32px;margin-top:14px">${bars}</div>
+      <div style="display:flex;justify-content:space-between;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">
+        <span>00:00</span><span>12:00</span><span>NOW</span>
+      </div>
+    </div>`);
+}
+function _mpGauge() {
+  return _mpEl(`<div class="mp-gauge">
+    <svg viewBox="0 0 200 120" width="100%" height="100%">
+      <defs><linearGradient id="gg-${Math.random().toString(36).slice(2,7)}" x1="0" x2="1">
+        <stop offset="0" stop-color="var(--up)"/>
+        <stop offset="0.5" stop-color="var(--warn)"/>
+        <stop offset="1" stop-color="var(--down)"/>
+      </linearGradient></defs>
+      <path d="M20 100 A80 80 0 0 1 180 100" fill="none" stroke="rgba(0,212,255,0.1)" stroke-width="10"/>
+      <path d="M20 100 A80 80 0 0 1 140 35" fill="none" stroke="var(--warn)" stroke-width="10" stroke-linecap="round"/>
+      <line x1="100" y1="100" x2="140" y2="50" stroke="var(--accent)" stroke-width="2"/>
+      <circle cx="100" cy="100" r="4" fill="var(--accent)"/>
+      <text x="100" y="80" font-family="Orbitron" font-weight="900" font-size="28" fill="#fff" text-anchor="middle">74</text>
+      <text x="100" y="95" font-family="Share Tech Mono" font-size="9" fill="rgba(255,255,255,0.4)" text-anchor="middle">CPU %</text>
+    </svg>
+  </div>`);
+}
+function _mpFlapList() {
+  const rows = [
+    { t:'3m',  n:'ESXI-Shrek',    s:'DOWN', c:'var(--down)' },
+    { t:'14m', n:'192.168.40.55', s:'DOWN', c:'var(--down)' },
+    { t:'42m', n:'ESX-9B.ipmi',   s:'DOWN', c:'var(--down)' },
+    { t:'1h',  n:'tlv-fw-01',     s:'UP',   c:'var(--up)'   },
+    { t:'2h',  n:'cnn.com',       s:'WARN', c:'var(--warn)' },
+  ];
+  const html = `<span class="mw-po-preview-label">LAST FLAPS · 24H</span>
+    <div class="mp-pills" style="padding-top:18px">${
+    rows.map(f => `<div class="mp-pill" style="border-left-color:${f.c}">
+      <span class="mp-pill-val" style="color:rgba(255,255,255,0.45);min-width:24px">${f.t}</span>
+      <span class="mp-pill-name">${f.n}</span>
+      <span class="mp-pill-val" style="color:${f.c}">● ${f.s}</span>
+    </div>`).join('')}</div>`;
+  return _mpEl(html);
+}
+function _mpBars() {
+  const bars = [
+    {n:'CPU', v:74, c:'var(--accent)'},
+    {n:'RAM', v:62, c:'var(--accent2)'},
+    {n:'DISK',v:48, c:'var(--gold)'},
+    {n:'NET', v:31, c:'var(--purple)'},
+  ];
+  return _mpEl(`<div class="mp-bars">
+    <span class="mw-po-preview-label" style="position:absolute;top:4px;left:6px">CPU · RAM · DISK · NET</span>
+    ${bars.map(b => `<div class="mp-bar-row">
+      <span class="mp-bar-name">${b.n}</span>
+      <div class="mp-bar-track"><div class="mp-bar-fill" style="width:${b.v}%;background:${b.c};box-shadow:0 0 4px ${b.c}"></div></div>
+      <span class="mp-bar-val">${b.v}%</span>
+    </div>`).join('')}
+  </div>`);
+}
+function _mpHeatmap() {
+  const cells = Array.from({length:60}, () => {
+    const r = Math.random();
+    let c;
+    if (r > 0.92) c = 'var(--down)';
+    else if (r > 0.78) c = 'var(--warn)';
+    else if (r > 0.4)  c = 'var(--accent)';
+    else c = 'var(--up)';
+    return `<div style="background:${c};opacity:${(0.3+r*0.7).toFixed(2)}"></div>`;
+  }).join('');
+  return _mpEl(`<span class="mw-po-preview-label">LATENCY · 10×6 DEVICES</span>
+    <div class="mp-heat" style="padding-top:18px">${cells}</div>`);
+}
+function _mpDots() {
+  const cells = Array.from({length:64}, (_,i) => {
+    let c = 'var(--up)';
+    if (i===4 || i===19) c = 'var(--down)';
+    else if (i===27 || i===50) c = 'var(--warn)';
+    return `<div style="background:${c};opacity:.85;box-shadow:0 0 3px ${c}"></div>`;
+  }).join('');
+  return _mpEl(`<span class="mw-po-preview-label">FLEET · 64 DEVICES</span>
+    <div class="mp-dots" style="padding-top:18px">${cells}</div>`);
+}
+function _mpSla() {
+  const rows = [
+    {n:'Core',  v:99.98, c:'var(--up)'},
+    {n:'Edge',  v:99.84, c:'var(--up)'},
+    {n:'VPN',   v:99.41, c:'var(--warn)'},
+    {n:'Backup',v:98.12, c:'var(--down)'},
+  ];
+  return _mpEl(`<div class="mp-bars">
+    <span class="mw-po-preview-label" style="position:absolute;top:4px;left:6px">SLA · LAST 30 DAYS</span>
+    ${rows.map(b => `<div class="mp-bar-row">
+      <span class="mp-bar-name">${b.n}</span>
+      <div class="mp-bar-track" style="background:rgba(0,255,157,0.05)">
+        <div class="mp-bar-fill" style="width:${b.v}%;background:${b.c};box-shadow:0 0 4px ${b.c}"></div>
+      </div>
+      <span class="mp-bar-val">${b.v}%</span>
+    </div>`).join('')}
+  </div>`);
+}
+function _mpInternet() {
+  const rows = [
+    {n:'Google-DNS', c:'var(--up)',   v:'14ms'   },
+    {n:'ynet.co.il', c:'var(--up)',   v:'42ms'   },
+    {n:'cnn.com',    c:'var(--warn)', v:'TIMEOUT'},
+    {n:'cloudflare', c:'var(--up)',   v:'11ms'   },
+  ];
+  const html = `<span class="mw-po-preview-label">INTERNET · 4 CHECKS</span>
+    <div class="mp-pills" style="padding-top:18px">${
+    rows.map(d => `<div class="mp-pill" style="border-left-color:${d.c}">
+      <span class="mp-pill-dot" style="background:${d.c};box-shadow:0 0 4px ${d.c}"></span>
+      <span class="mp-pill-name">${d.n}</span>
+      <span class="mp-pill-val" style="color:${d.c}">${d.v}</span>
+    </div>`).join('')}</div>`;
+  return _mpEl(html);
+}
+function _mpRing() {
+  return _mpEl(`<div class="mp-gauge">
+    <svg viewBox="0 0 200 130" width="100%" height="100%">
+      <circle cx="100" cy="65" r="48" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="14"/>
+      <circle cx="100" cy="65" r="48" fill="none" stroke="var(--up)" stroke-width="14"
+              stroke-dasharray="234 302" transform="rotate(-90 100 65)"/>
+      <circle cx="100" cy="65" r="48" fill="none" stroke="var(--warn)" stroke-width="14"
+              stroke-dasharray="14 302" stroke-dashoffset="-234" transform="rotate(-90 100 65)"/>
+      <circle cx="100" cy="65" r="48" fill="none" stroke="var(--down)" stroke-width="14"
+              stroke-dasharray="20 302" stroke-dashoffset="-248" transform="rotate(-90 100 65)"/>
+      <text x="100" y="60" font-family="Orbitron" font-weight="900" font-size="22" fill="#fff" text-anchor="middle">84</text>
+      <text x="100" y="76" font-family="Share Tech Mono" font-size="9" fill="rgba(255,255,255,0.45)" text-anchor="middle">DEVICES</text>
+      <text x="40"  y="125" font-family="Share Tech Mono" font-size="9" fill="var(--up)">● 78 UP</text>
+      <text x="100" y="125" font-family="Share Tech Mono" font-size="9" fill="var(--warn)" text-anchor="middle">● 2 WARN</text>
+      <text x="160" y="125" font-family="Share Tech Mono" font-size="9" fill="var(--down)" text-anchor="end">● 4 DOWN</text>
+    </svg>
+  </div>`);
+}
+function _mpLicense() {
+  return _mpEl(`<span class="mw-po-preview-label">SEATS · 64 / 100</span>
+    <div style="padding:22px 10px 0">
+      <div style="display:flex;gap:1px;height:22px;background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.2)">
+        <div style="width:64%;background:var(--accent);box-shadow:inset 0 0 8px rgba(255,255,255,0.2)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.45)">
+        <span>Used 64</span><span>Free 36</span><span>EXP 2027-03-15</span>
+      </div>
+      <div style="margin-top:10px;padding:6px 8px;border:1px dashed rgba(255,107,53,0.3);font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--warn)">
+        ⚠ Renewal in 287 days
+      </div>
+    </div>`);
+}
+
+// ── Recent-used tracking (localStorage, cap 6) ────────────────────
+function _dwGetRecent() {
+  try {
+    const v = JSON.parse(localStorage.getItem('pw_widget_recent') || '[]');
+    return Array.isArray(v) ? v.slice(0, 6) : [];
+  } catch(_) { return []; }
+}
+function _dwPushRecent(type) {
+  try {
+    const cur = _dwGetRecent().filter(t => t !== type);
+    cur.unshift(type);
+    localStorage.setItem('pw_widget_recent', JSON.stringify(cur.slice(0, 6)));
+  } catch(_) {}
+}
+
+// ── Open the redesigned Add Widget modal ──────────────────────────
 function _dwOpenPicker() {
-  const typeCards = Object.entries(_DW_REG).map(([type, reg]) => `
-    <div class="dw-type-card" onclick="_dwSelectType('${type}')">
-      <div class="dw-type-icon">${reg.icon}</div>
-      <div class="dw-type-label">${reg.label}</div>
-    </div>`).join('');
-  const html = `
-    <div class="mo" id="dw-picker-overlay">
-      <div class="mbox" style="width:440px">
-        <div class="mhd">
-          <span class="mttl">Add Widget</span>
-          <button class="mclose" onclick="document.getElementById('dw-picker-overlay').remove()">✕</button>
+  const STATE = {
+    query: '',
+    cat:   'all',     // 'all' | 'recent' | <cat key>
+    hover: null,      // type id of the currently-hovered tile
+  };
+
+  const overlay = document.createElement('div');
+  overlay.id = 'dw-picker-overlay';
+  overlay.className = 'mo mw-mo';
+  overlay.innerHTML = `
+    <div class="mw-stage" id="mw-stage">
+      <div class="mw-modal" id="mw-modal">
+        <div class="mw-head">
+          <span class="mw-title">ADD WIDGET</span>
+          <span class="mw-sub" id="mw-sub">› ${Object.keys(_DW_REG).length} types</span>
+          <button class="mw-x" type="button" onclick="_dwClosePicker()">✕</button>
         </div>
-        <div class="mbdy">
-          <div class="dw-type-grid">${typeCards}</div>
+        <div class="mw-search-wrap">
+          <div class="mw-search">
+            <span class="mw-search-icon">⌕</span>
+            <input id="mw-q" type="text" placeholder="Search widgets… (sensor, latency, sla, alert…)" autocomplete="off"/>
+            <span class="mw-clear" id="mw-clear" style="display:none">✕</span>
+            <span class="mw-kbd">Ctrl+K</span>
+          </div>
+        </div>
+        <div class="mw-chips" id="mw-chips"></div>
+        <div class="mw-body" id="mw-body"></div>
+        <div class="mw-foot">
+          <div class="mw-foot-info" id="mw-foot-info"></div>
+          <button class="mw-btn mw-btn-ghost" type="button" onclick="_dwClosePicker()">CANCEL</button>
+          <button class="mw-btn mw-btn-primary" id="mw-add" type="button">+ ADD WIDGET</button>
         </div>
       </div>
+      <div class="mw-popout-wrap" id="mw-popout-wrap"></div>
     </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-  _overlayClose(document.getElementById('dw-picker-overlay'), () => document.getElementById('dw-picker-overlay')?.remove());
+  document.body.appendChild(overlay);
+  _overlayClose(overlay, () => _dwClosePicker());
+
+  const _q = (s) => String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  function _filtered() {
+    const q = STATE.query.trim().toLowerCase();
+    return Object.entries(_DW_REG).filter(([type, reg]) => {
+      const cat = reg.cat || 'charts';
+      if (STATE.cat === 'recent') {
+        if (!_dwGetRecent().includes(type)) return false;
+      } else if (STATE.cat !== 'all' && cat !== STATE.cat) {
+        return false;
+      }
+      if (!q) return true;
+      return (reg.label || '').toLowerCase().includes(q) ||
+             (reg.desc  || '').toLowerCase().includes(q) ||
+             cat.toLowerCase().includes(q);
+    });
+  }
+
+  function _renderChips() {
+    const recentIds = _dwGetRecent();
+    const recentCount = recentIds.length;
+    const chips = [
+      { id:'all',    label:'ALL',    c:'var(--accent)', count:Object.keys(_DW_REG).length, dot:false },
+      { id:'recent', label:'RECENT', c:'var(--gold)',   count:recentCount,                 dot:true  },
+      ..._DW_CAT_ORDER.map(k => ({
+        id: k,
+        label: _DW_CATS[k].name.toUpperCase(),
+        c: _DW_CATS[k].c,
+        count: Object.values(_DW_REG).filter(r => r.cat === k).length,
+        dot: true,
+      })),
+    ];
+    document.getElementById('mw-chips').innerHTML = chips.map(c => {
+      const sel = c.id === STATE.cat;
+      const dotHtml = c.dot ? `<span class="mw-chip-dot" style="background:${c.c}"></span>` : '';
+      const style = sel ? `color:${c.c};border-color:${c.c};background:color-mix(in srgb,${c.c} 10%, transparent)` : '';
+      return `<span class="mw-chip${sel?' sel':''}" data-cat="${c.id}" style="${style}">
+        ${dotHtml}${c.label}<span class="mw-chip-count">${c.count}</span>
+      </span>`;
+    }).join('');
+  }
+
+  function _renderTile(type, reg) {
+    const cat = _DW_CATS[reg.cat || 'charts'];
+    const corner = reg.isNew
+      ? '<span class="mw-tile-new">NEW</span>'
+      : `<span class="mw-tile-cat">${cat.name.slice(0,4).toUpperCase()}</span>`;
+    const hov = STATE.hover === type ? ' hov' : '';
+    return `<div class="mw-tile${hov}" data-type="${type}" style="color:${cat.c}">
+      <div class="mw-tile-icon">${reg.icon || ''}</div>
+      <div class="mw-tile-name">${_q(reg.label)}</div>
+      <div class="mw-tile-desc">${_q(reg.desc || '')}</div>
+      ${corner}
+    </div>`;
+  }
+
+  function _renderSection(label, glyph, color, items) {
+    if (!items.length) return '';
+    const tiles = items.map(([t, r]) => _renderTile(t, r)).join('');
+    return `<div class="mw-section">
+      <div class="mw-section-head" style="color:${color}">
+        <span class="mw-section-icon">${glyph}</span>
+        <span class="mw-section-label">${label}</span>
+        <span class="mw-section-count">· ${items.length}</span>
+        <span class="mw-section-line"></span>
+      </div>
+      <div class="mw-grid">${tiles}</div>
+    </div>`;
+  }
+
+  function _renderBody() {
+    const matched = _filtered();
+    const body = document.getElementById('mw-body');
+    document.getElementById('mw-sub').textContent = `› ${matched.length} of ${Object.keys(_DW_REG).length}`;
+    if (!matched.length) {
+      body.innerHTML = `<div class="mw-empty">
+        NO WIDGETS MATCH "${_q(STATE.query)}"<br/>
+        <span>try a different search or clear filters</span>
+      </div>`;
+      _renderFoot(matched.length);
+      _renderPopout();
+      return;
+    }
+    const recentIds = _dwGetRecent();
+    const inRecent = matched.filter(([t]) => recentIds.includes(t))
+                            .sort(([a],[b]) => recentIds.indexOf(a) - recentIds.indexOf(b));
+    const inPopular = matched.filter(([_, r]) => r.popular)
+                             .filter(([t]) => !recentIds.includes(t));
+    let html = '';
+    if (STATE.cat === 'all') {
+      html += _renderSection('RECENTLY USED', '✦', 'var(--gold)',    inRecent);
+      html += _renderSection('POPULAR',       '★', 'var(--accent2)', inPopular);
+      _DW_CAT_ORDER.forEach(k => {
+        const items = matched.filter(([t, r]) => {
+          if (r.cat !== k) return false;
+          if (recentIds.includes(t)) return false;
+          if (r.popular) return false;
+          return true;
+        });
+        html += _renderSection(_DW_CATS[k].name.toUpperCase(), '◆', _DW_CATS[k].c, items);
+      });
+    } else if (STATE.cat === 'recent') {
+      html += _renderSection('RECENTLY USED', '✦', 'var(--gold)', inRecent);
+    } else {
+      html += _renderSection(_DW_CATS[STATE.cat].name.toUpperCase(), '◆',
+                             _DW_CATS[STATE.cat].c, matched);
+    }
+    body.innerHTML = html;
+    _renderFoot(matched.length);
+    // Ensure hover is valid; default to first match if not in the visible set
+    const visibleIds = matched.map(([t]) => t);
+    if (!STATE.hover || !visibleIds.includes(STATE.hover)) {
+      STATE.hover = visibleIds[0] || null;
+      // Re-highlight the new hover tile
+      body.querySelectorAll('.mw-tile').forEach(t =>
+        t.classList.toggle('hov', t.getAttribute('data-type') === STATE.hover));
+    }
+    _renderPopout();
+  }
+
+  function _renderFoot(count) {
+    const reg = STATE.hover ? _DW_REG[STATE.hover] : null;
+    const label = reg ? reg.label.toUpperCase() : 'WIDGET';
+    document.getElementById('mw-add').textContent = `+ ADD ${label}`;
+    let info = `<b>${count}</b> widget${count===1?'':'s'}`;
+    if (STATE.query) info += ` matching "${_q(STATE.query)}"`;
+    if (STATE.cat !== 'all' && STATE.cat !== 'recent') {
+      info += ` · ${_DW_CATS[STATE.cat]?.name || STATE.cat}`;
+    }
+    info += ' · <span style="opacity:0.6">hover any tile for preview</span>';
+    document.getElementById('mw-foot-info').innerHTML = info;
+  }
+
+  function _renderPopout() {
+    const wrap = document.getElementById('mw-popout-wrap');
+    const type = STATE.hover;
+    const reg = type ? _DW_REG[type] : null;
+    if (!reg) {
+      wrap.innerHTML = `<div class="mw-popout-empty">◇<br/>
+        <span>HOVER A WIDGET<br/>TO PREVIEW</span></div>`;
+      return;
+    }
+    const cat = _DW_CATS[reg.cat || 'charts'];
+    wrap.innerHTML = `
+      <div class="mw-popout" style="border-color:${cat.c}">
+        <div class="mw-po-head">
+          <div class="mw-po-icon" style="color:${cat.c}">${reg.icon || ''}</div>
+          <div>
+            <div class="mw-po-title">${_q(reg.label)}</div>
+            <div class="mw-po-cat" style="color:${cat.c}">● ${cat.name.toUpperCase()}</div>
+          </div>
+        </div>
+        <div class="mw-po-preview" id="mw-po-preview"></div>
+        <div class="mw-po-desc">${_q(reg.desc || '')}</div>
+        <div class="mw-po-meta">${(reg.meta||[]).map(m => `<span class="mw-po-meta-i">${_q(m)}</span>`).join('')}</div>
+        <button class="mw-po-add" type="button">+ ADD TO DASHBOARD</button>
+      </div>`;
+    // Inject the mini-preview DOM element
+    const builder = _DW_PREVIEW[type];
+    if (builder) {
+      try {
+        const el = builder();
+        if (el) document.getElementById('mw-po-preview').appendChild(el);
+      } catch (e) { /* preview is decorative; never block on a failure */ }
+    }
+    wrap.querySelector('.mw-po-add').addEventListener('click', () => _dwPickerAdd(type));
+  }
+
+  function _toast(name) {
+    const wrap = document.getElementById('mw-popout-wrap');
+    if (!wrap) return;
+    const t = document.createElement('div');
+    t.className = 'mw-toast';
+    t.textContent = `✓ ADDED · ${name.toUpperCase()}`;
+    wrap.appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+
+  window._dwPickerAdd = function(type) {
+    const reg = _DW_REG[type];
+    if (!reg) return;
+    const needsConfig = (reg.fields || []).some(f =>
+      f.type === 'device-select' || f.type === 'sensor-select');
+    if (needsConfig) {
+      // Hand off to the existing per-widget config form.
+      _dwClosePicker();
+      _dwSelectType(type);
+      return;
+    }
+    // Direct-add: apply defaults from the field spec, no modal pop-up.
+    const cfg = {};
+    (reg.fields || []).forEach(f => { if (f.def !== undefined) cfg[f.key] = f.def; });
+    const widgets = _dwLoad();
+    widgets.push({
+      id: Math.random().toString(36).slice(2,9),
+      type, title: reg.label, cols: reg.defaultCols,
+      w: reg.defaultCols === 2 ? 6 : 3, h: 4, cfg,
+    });
+    _dwSave(widgets);
+    _dwPushRecent(type);
+    _dwRenderAll();
+    _toast(reg.label);
+    // Keep the picker open so the user can add several in a row.
+    _renderChips();
+    _renderBody();
+  };
+
+  window._dwClosePicker = function() {
+    document.removeEventListener('keydown', _onKey);
+    document.getElementById('dw-picker-overlay')?.remove();
+  };
+
+  function _onKey(e) {
+    // Ctrl+K / Cmd+K → focus search
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      document.getElementById('mw-q')?.focus();
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); _dwClosePicker(); return; }
+    if (e.key === 'Enter')  {
+      if (STATE.hover) { e.preventDefault(); _dwPickerAdd(STATE.hover); }
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const tiles = Array.from(document.querySelectorAll('#mw-body .mw-tile'));
+      if (!tiles.length) return;
+      e.preventDefault();
+      const idx = Math.max(0, tiles.findIndex(t => t.getAttribute('data-type') === STATE.hover));
+      const next = e.key === 'ArrowDown'
+        ? Math.min(tiles.length - 1, idx + 1)
+        : Math.max(0, idx - 1);
+      STATE.hover = tiles[next].getAttribute('data-type');
+      tiles.forEach(t => t.classList.toggle('hov',
+        t.getAttribute('data-type') === STATE.hover));
+      tiles[next].scrollIntoView({ block: 'nearest' });
+      _renderPopout();
+      _renderFoot(tiles.length);
+    }
+  }
+  document.addEventListener('keydown', _onKey);
+
+  // Wire interactions on the modal shell
+  const qInput = document.getElementById('mw-q');
+  qInput.addEventListener('input', e => {
+    STATE.query = e.target.value;
+    document.getElementById('mw-clear').style.display = STATE.query ? '' : 'none';
+    _renderChips();
+    _renderBody();
+  });
+  document.getElementById('mw-clear').addEventListener('click', () => {
+    STATE.query = '';
+    qInput.value = '';
+    document.getElementById('mw-clear').style.display = 'none';
+    _renderChips();
+    _renderBody();
+  });
+  document.getElementById('mw-chips').addEventListener('click', e => {
+    const chip = e.target.closest('.mw-chip');
+    if (!chip) return;
+    const id = chip.getAttribute('data-cat');
+    // Re-clicking the active chip OR clicking ALL clears the filter
+    STATE.cat = (id === STATE.cat || id === 'all') ? 'all' : id;
+    _renderChips();
+    _renderBody();
+  });
+  document.getElementById('mw-body').addEventListener('mouseover', e => {
+    const tile = e.target.closest('.mw-tile');
+    if (!tile) return;
+    const type = tile.getAttribute('data-type');
+    if (type === STATE.hover) return;
+    STATE.hover = type;
+    document.querySelectorAll('#mw-body .mw-tile').forEach(t =>
+      t.classList.toggle('hov', t.getAttribute('data-type') === STATE.hover));
+    _renderPopout();
+    _renderFoot(_filtered().length);
+  });
+  document.getElementById('mw-body').addEventListener('click', e => {
+    const tile = e.target.closest('.mw-tile');
+    if (!tile) return;
+    _dwPickerAdd(tile.getAttribute('data-type'));
+  });
+  document.getElementById('mw-add').addEventListener('click', () => {
+    if (STATE.hover) _dwPickerAdd(STATE.hover);
+  });
+
+  // First render — pick a sensible default hover (first widget)
+  STATE.hover = Object.keys(_DW_REG)[0];
+  _renderChips();
+  _renderBody();
+  // Auto-focus the search after the modal animates in
+  setTimeout(() => qInput.focus(), 30);
 }
 
 function _dwSelectType(type) {
@@ -720,6 +1336,7 @@ function _dwConfirmAdd(type) {
   // x/y left undefined so gridstack auto-places the new widget at the first free cell.
   widgets.push({ id: Math.random().toString(36).slice(2, 9), type, title: finalTitle, cols: reg.defaultCols, w: reg.defaultCols === 2 ? 6 : 3, h: 4, cfg });
   _dwSave(widgets);
+  if (typeof _dwPushRecent === 'function') _dwPushRecent(type);
   document.getElementById('dw-cfg-overlay')?.remove();
   _dwRenderAll();
 }
@@ -1087,13 +1704,28 @@ function _dwClearLoading() {
 }
 
 // ── SSE hooks (called from app.js event handlers) ─────────────────
+// Sensor-chart widgets are throttled to one fetch every 5s per (did,sid)
+// because /history is a multi-minute range query — re-fetching on every
+// 250ms SSE batch was both wasteful AND produced visible flicker when a
+// stale request landed after a fresher one (and previously also passed an
+// undefined `minutes` arg, returning "No data" between scheduled refreshes).
+const _dwChartLastFetch = {};   // `${did}/${sid}` → epoch ms of last fetch
+const _DW_CHART_MIN_GAP = 5000;
+
 function _dwOnSensorUpdate(did, sid) {
   if (!_dwDataArrived) _dwClearLoading();
   if (activeMainTab !== 'dashboard') return;
   let topLatencyDirty = false;
   _dwLoad().forEach(w => {
-    if (w.type === 'sensor_chart' && w.cfg.did === did && w.cfg.sid === sid)
-      _dwLoadSensorChart(w.id, did, sid, w.cfg.minutes);
+    if (w.type === 'sensor_chart' && w.cfg.did === did && w.cfg.sid === sid) {
+      const k = did + '/' + sid;
+      const now = Date.now();
+      if ((now - (_dwChartLastFetch[k] || 0)) >= _DW_CHART_MIN_GAP) {
+        _dwChartLastFetch[k] = now;
+        // Always pass the live global range — w.cfg.minutes is not maintained.
+        _dwLoadSensorChart(w.id, did, sid, _dwTimeRangeMinutes());
+      }
+    }
     if (w.type === 'sensor_gauge' && w.cfg.did === did && w.cfg.sid === sid)
       _dwRefreshGauge(w.id, w.cfg);
     if (w.type === 'network_avail')    _dwRefreshNetAvail(w.id);
