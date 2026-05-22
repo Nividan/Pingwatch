@@ -174,6 +174,10 @@ async function submitAddDevice(){
 
 let _edSecIps = [];   // secondary IPs being edited
 let _edParentIds = []; // parent device IDs being edited (Live Map)
+// Per-parent port wiring (Live Map link info). {pid: {lport, rport}} —
+// keys are only device ids (group: refs never carry port info). Kept in
+// sync with _edParentIds: removing a parent prunes its port entry.
+let _edParentPorts = {};
 let _edParentDid = null;  // did of the device currently open in Edit Device
 let _edParentTierFilter = null;  // inferred tier for the device being edited (null = no filter)
 
@@ -184,6 +188,9 @@ function openEditDevice(did){
   closeM('med');
   _edSecIps = [...(dev.secondary_ips || [])];
   _edParentIds = Array.isArray(dev.parent_device_ids) ? [...dev.parent_device_ids] : [];
+  _edParentPorts = (dev.parent_device_ports && typeof dev.parent_device_ports === 'object')
+    ? JSON.parse(JSON.stringify(dev.parent_device_ports))
+    : {};
   _edParentDid = did;
   _edParentTierFilter = _edInferTierForFilter(dev);
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
@@ -414,6 +421,7 @@ function _edRenderParentChips() {
   wrap.innerHTML = _edParentIds.map((pid, i) => {
     if (typeof pid === 'string' && pid.indexOf('group:') === 0) {
       const gname = pid.slice(6);
+      // Group refs don't carry port info — wiring is per-device only.
       return `<span class="pw-chip pw-chip-group">
         <span class="pw-chip-badge">GROUP</span>${esc(gname)}
         <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
@@ -421,16 +429,43 @@ function _edRenderParentChips() {
     }
     const d = S.devices[pid];
     const label = d ? (d.name || pid) : `(missing: ${pid})`;
-    return `<span class="pw-chip">
-      ${esc(label)}
+    const ports = _edParentPorts[pid] || {};
+    const lport = esc(ports.lport || '');
+    const rport = esc(ports.rport || '');
+    const safePid = esc(pid);
+    // Inline port boxes: local (this device's port) ↔ remote (parent's port).
+    // Either field can be left blank; an entry with both blank is pruned on save.
+    return `<span class="pw-chip pw-chip-link">
+      <span class="pw-chip-label">${esc(label)}</span>
+      <input type="text" class="pw-chip-port" placeholder="local" value="${lport}"
+             maxlength="32" title="Local port on this device"
+             oninput="_edSetParentPort('${safePid}','lport',this.value)"/>
+      <span class="pw-chip-port-sep">&harr;</span>
+      <input type="text" class="pw-chip-port" placeholder="remote" value="${rport}"
+             maxlength="32" title="Remote port on the parent device"
+             oninput="_edSetParentPort('${safePid}','rport',this.value)"/>
       <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
     </span>`;
   }).join('');
 }
 
 function _edRemoveParent(idx) {
+  const pid = _edParentIds[idx];
   _edParentIds.splice(idx, 1);
+  // Prune the port entry too so a future re-add doesn't resurrect stale wiring.
+  if (pid && _edParentPorts[pid]) delete _edParentPorts[pid];
   _edRenderParentChips();
+}
+
+function _edSetParentPort(pid, key, val) {
+  if (!pid || (key !== 'lport' && key !== 'rport')) return;
+  const cur = _edParentPorts[pid] || { lport: '', rport: '' };
+  cur[key] = String(val || '').slice(0, 32);
+  if (!cur.lport && !cur.rport) {
+    delete _edParentPorts[pid];
+  } else {
+    _edParentPorts[pid] = cur;
+  }
 }
 
 function _edPopulateParentDatalist() {
@@ -743,7 +778,8 @@ async function submitEditDevice(did){
   const payload = {name, host, group, site, alerts_muted,
     snmp_community_default, snmp_version_default, vmware_user_default,
     secondary_ips: _edSecIps,
-    parent_device_ids: Array.isArray(_edParentIds) ? _edParentIds : []};
+    parent_device_ids: Array.isArray(_edParentIds) ? _edParentIds : [],
+    parent_device_ports: (_edParentPorts && typeof _edParentPorts === 'object') ? _edParentPorts : {}};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   // SNMPv3 device defaults — emit only when the section is visible (version=3).
   if(snmp_version_default === '3'){
@@ -791,12 +827,11 @@ async function submitEditDevice(did){
   }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; dev.parent_device_ids = [..._edParentIds]; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; dev.parent_device_ids = [..._edParentIds]; dev.parent_device_ports = JSON.parse(JSON.stringify(_edParentPorts || {})); if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   // Live Map runs in iframe — postMessage triggers a tree refresh so the
   // connection lines redraw without a full page reload.
   const _lf = document.getElementById('livemap-frame');
   _lf?.contentWindow?.postMessage({ type: 'lm_refresh' }, window.location.origin);
-  pruneEmptyGroups();
   updatePills();
   refreshGroupCounts();
   toast(`Saved: ${name}`, 'ok');

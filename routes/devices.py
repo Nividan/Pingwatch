@@ -127,6 +127,40 @@ _MAX_CYCLE_HOPS = 32
 _V3_LEVELS = frozenset({"", "noAuthNoPriv", "authNoPriv", "authPriv"})
 _V3_AUTH   = frozenset({"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"})
 _V3_PRIV   = frozenset({"", "DES", "AES", "AES-192", "AES-256"})
+_MAX_PORT_LEN = 32  # Switch interface names are short — Gi1/0/24, Te0/0/1, ether1, etc.
+
+
+def _normalize_parent_ports(raw, allowed_pids) -> "tuple[bool, dict, str]":
+    """Validate `parent_device_ports` input: {pid: {"lport": str, "rport": str}}.
+
+    Entries whose pid isn't in `allowed_pids` are silently dropped (e.g. user
+    removed the parent but a stale port entry lingered). Empty/all-blank port
+    pairs are dropped too, keeping the persisted dict compact.
+
+    Returns (ok, cleaned, error). Empty/missing input is valid.
+    """
+    if raw is None:
+        return True, {}, ""
+    if not isinstance(raw, dict):
+        return False, {}, "parent_device_ports must be an object"
+    cleaned: dict = {}
+    for pid, entry in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if pid not in allowed_pids:
+            continue  # drop ports for parents the user no longer has
+        if not isinstance(entry, dict):
+            return False, {}, "parent_device_ports entries must be objects"
+        lport = entry.get("lport", "")
+        rport = entry.get("rport", "")
+        if not isinstance(lport, str) or not isinstance(rport, str):
+            return False, {}, "lport/rport must be strings"
+        lport = lport.strip()[:_MAX_PORT_LEN]
+        rport = rport.strip()[:_MAX_PORT_LEN]
+        if not lport and not rport:
+            continue  # nothing worth persisting
+        cleaned[pid] = {"lport": lport, "rport": rport}
+    return True, cleaned, ""
 
 
 def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
@@ -431,6 +465,13 @@ def handle(h, method, path, body):
         parent_ok, parent_ids_clean, parent_err = _normalize_parent_ids(body.get("parent_device_ids"))
         if not parent_ok:
             h._json(400, {"error": parent_err}); return True
+        # Per-parent port wiring (Live Map link info). Validated against the
+        # *cleaned* parent list so stale pids in the map don't leak through.
+        pports_ok, parent_ports_clean, pports_err = _normalize_parent_ports(
+            body.get("parent_device_ports"), set(parent_ids_clean)
+        )
+        if not pports_ok:
+            h._json(400, {"error": pports_err}); return True
         did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
@@ -449,9 +490,15 @@ def handle(h, method, path, body):
                 if _v3_priv_pw_default:
                     STATE.devices[did].snmp_v3_priv_pass_default = _v3_priv_pw_default
                 # Drop unknown parent ids (e.g. user pasted a stale id); keep group refs.
-                STATE.devices[did].parent_device_ids = _filter_known_parents(
+                _filtered_parents = _filter_known_parents(
                     STATE, parent_ids_clean, exclude_did=did
                 )
+                STATE.devices[did].parent_device_ids = _filtered_parents
+                # Re-filter port map against the post-filter pid set so entries
+                # for dropped parents don't survive.
+                STATE.devices[did].parent_device_ports = {
+                    k: v for k, v in parent_ports_clean.items() if k in _filtered_parents
+                }
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
@@ -664,6 +711,22 @@ def handle(h, method, path, body):
                 if _detect_parent_cycle(STATE, did, cleaned_parents):
                     h._json(400, {"error": "parent assignment would create a cycle"}); return True
                 dev.parent_device_ids = cleaned_parents
+                # Keep the port map in sync with the new parent list — entries
+                # for removed parents drop out automatically.
+                dev.parent_device_ports = {
+                    k: v for k, v in (getattr(dev, "parent_device_ports", {}) or {}).items()
+                    if k in cleaned_parents
+                }
+            if "parent_device_ports" in body:
+                # Port edits without a corresponding parent list edit. Validate
+                # against the current (possibly just-updated above) parent set.
+                _allowed = set(getattr(dev, "parent_device_ids", []) or [])
+                pp_ok, pp_clean, pp_err = _normalize_parent_ports(
+                    body["parent_device_ports"], _allowed
+                )
+                if not pp_ok:
+                    h._json(400, {"error": pp_err}); return True
+                dev.parent_device_ports = pp_clean
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name

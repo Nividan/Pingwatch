@@ -128,7 +128,8 @@ def pg_create_main_schema(cur):
             external_id              TEXT DEFAULT NULL,
             discovered_at            DOUBLE PRECISION DEFAULT 0,
             discovered_from_cidr     TEXT DEFAULT '',
-            parent_device_ids        TEXT DEFAULT '[]'
+            parent_device_ids        TEXT DEFAULT '[]',
+            parent_device_ports      TEXT DEFAULT '{}'
         )""")
     # Bulk-import external_id — idempotent add for pre-existing installs.
     cur.execute("""
@@ -146,6 +147,9 @@ def pg_create_main_schema(cur):
     # Parent device linking (v1.0+, Live Map tree) — JSON array of device IDs.
     cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS parent_device_ids TEXT DEFAULT '[]'")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_parent_ids ON devices(parent_device_ids)")
+    # Per-parent port wiring (v1.x+, Live Map link info) — JSON dict keyed by
+    # parent device id → {"lport": "<local>", "rport": "<remote>"}.
+    cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS parent_device_ports TEXT DEFAULT '{}'")
     # Partial unique index — NULL external_ids don't collide.
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_external_id

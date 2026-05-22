@@ -511,9 +511,13 @@ function _devCard(d, opts) {
   const role = opts.role ? '<span class="dev-role">' + esc(opts.role) + '</span>' : '';
   // Parent linkage attributes drive the SVG connection layer in _drawConnections().
   const parents = JSON.stringify(d.parent_device_ids || []);
+  // Per-parent port wiring — {pid: {lport, rport}}. Serialised on the card so
+  // the tooltip can show "Gi0/1 ↔ Gi0/24" next to each mapping line.
+  const parentPorts = JSON.stringify(d.parent_device_ports || {});
   const tier = opts.tier || '';
   return '<div class="dev ' + status + '" data-did="' + esc(d.did) + '"' +
            ' data-parent-ids=\'' + parents.replace(/'/g, '&#39;') + '\'' +
+           ' data-parent-ports=\'' + parentPorts.replace(/'/g, '&#39;') + '\'' +
            (tier ? ' data-tier="' + esc(tier) + '"' : '') + '>' +
            '<div class="dev-row">' + icon +
              '<span class="dev-name">' + esc(d.name) + '</span>' +
@@ -547,8 +551,11 @@ function _clusterCard(c, opts) {
   const memberDids = JSON.stringify((c.cells || []).map(function(x) { return x.did; }));
   // Per-cell parent detail for the hover tooltip — lets a line know exactly
   // which cells flow through it (not just "this cluster has these parents").
+  // `pp` carries per-parent port info for this cell so the tooltip can render
+  // "Gi0/1 ↔ Gi0/24" alongside the from→to mapping.
   const cellsDetail = JSON.stringify((c.cells || []).map(function(x) {
-    return { did: x.did, name: x.name, p: x.parent_device_ids || [] };
+    return { did: x.did, name: x.name, p: x.parent_device_ids || [],
+             pp: x.parent_device_ports || {} };
   }));
   const mixedAttr = c.mixed_parents ? ' data-mixed-parents="1"' : '';
   return '<div class="' + cardCls + '" data-cluster="' + esc(c.name) + '"' +
@@ -689,8 +696,10 @@ function _renderSiteTree(name, tree) {
             tree.other.map(function(d) {
               const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
               const _parents = JSON.stringify(d.parent_device_ids || []);
+              const _pports  = JSON.stringify(d.parent_device_ports || {});
               return '<div class="dev ' + st + '" data-did="' + esc(d.did) + '"' +
                        ' data-parent-ids=\'' + _parents.replace(/'/g, '&#39;') + '\'' +
+                       ' data-parent-ports=\'' + _pports.replace(/'/g, '&#39;') + '\'' +
                        ' data-tier="other">' +
                        '<div class="dev-row">' + ICONS.sw + '<span class="dev-name">' + esc(d.name) + '</span></div>' +
                        '<div class="dev-ip">' + esc(d.host) + '</div>' +
@@ -822,10 +831,14 @@ function _drawConnections(canvasEl) {
       try { cellsDetail = JSON.parse(child.getAttribute('data-cells-detail') || '[]'); }
       catch { cellsDetail = []; }
       cellsDetail.forEach(function(cell) {
+        const pp = (cell.pp && typeof cell.pp === 'object') ? cell.pp : {};
         (cell.p || []).forEach(function(pid) {
           const parentEl = _resolveParent(pid);
           if (!parentEl || parentEl === child) return;
-          _push(parentEl, child, tier, { from: cell.name, pid: pid });
+          const wp = pp[pid] || {};
+          _push(parentEl, child, tier,
+                { from: cell.name, pid: pid,
+                  lport: wp.lport || '', rport: wp.rport || '' });
         });
       });
     } else {
@@ -833,11 +846,17 @@ function _drawConnections(canvasEl) {
       let parents;
       try { parents = JSON.parse(child.getAttribute('data-parent-ids') || '[]'); }
       catch { return; }
+      let parentPorts;
+      try { parentPorts = JSON.parse(child.getAttribute('data-parent-ports') || '{}'); }
+      catch { parentPorts = {}; }
       const fromName = _cardLabel(child);
       parents.forEach(function(pid) {
         const parentEl = _resolveParent(pid);
         if (!parentEl || parentEl === child) return;
-        _push(parentEl, child, tier, { from: fromName, pid: pid });
+        const wp = parentPorts[pid] || {};
+        _push(parentEl, child, tier,
+              { from: fromName, pid: pid,
+                lport: wp.lport || '', rport: wp.rport || '' });
       });
     }
   });
@@ -879,7 +898,8 @@ function _drawConnections(canvasEl) {
     hit.dataset.parentName = parentLabel;
     hit.dataset.childName = _cardLabel(childEl);
     hit.dataset.mappings = JSON.stringify(mappings.map(function(m) {
-      return { from: m.from, to: _refDisplayName(m.pid) };
+      return { from: m.from, to: _refDisplayName(m.pid),
+               lport: m.lport || '', rport: m.rport || '' };
     }));
     svg.appendChild(hit);
   }
@@ -1078,15 +1098,20 @@ function _onCanvasConnMove(e) {
     if (!mappings.length) mappings = [{ from: childName, to: parentName }];
     // Backward compatibility — earlier renders embedded plain strings.
     mappings = mappings.map(function(m) {
-      if (typeof m === 'string') return { from: m, to: parentName };
-      return { from: (m && m.from) || '', to: (m && m.to) || parentName };
+      if (typeof m === 'string') return { from: m, to: parentName, lport: '', rport: '' };
+      return { from:  (m && m.from)  || '',
+               to:    (m && m.to)    || parentName,
+               lport: (m && m.lport) || '',
+               rport: (m && m.rport) || '' };
     });
     if (!groups.has(key)) {
       groups.set(key, { childName: childName, parentName: parentName, items: new Map() });
     }
     const g = groups.get(key);
     mappings.forEach(function(m) {
-      const itemKey = m.from + ' → ' + m.to;
+      // Include port pair in the dedup key so two distinct port wirings on
+      // the same (child, parent) pair (e.g. dual-NIC) don't collapse.
+      const itemKey = m.from + ' → ' + m.to + ' | ' + m.lport + '↔' + m.rport;
       if (!g.items.has(itemKey)) g.items.set(itemKey, m);
     });
   });
@@ -1099,6 +1124,14 @@ function _onCanvasConnMove(e) {
     };
   });
 
+  // Render the port pair next to a mapping when at least one side is set.
+  // "Gi0/1 ↔ Gi0/24" when both, "Gi0/1 ↔ ?" when only the local side is known.
+  function _portSuffix(m) {
+    if (!m.lport && !m.rport) return '';
+    const l = m.lport || '?', r = m.rport || '?';
+    return ' <span class="lm-tt-ports">(' + esc(l) + ' ↔ ' + esc(r) + ')</span>';
+  }
+
   let html = '';
   if (sections.length === 1) {
     const s = sections[0];
@@ -1107,7 +1140,7 @@ function _onCanvasConnMove(e) {
         ' <span class="lm-tt-c">' + s.items.length + '</span></div>' +
       '<div class="lm-tt-l">' +
         s.items.map(function(m) {
-          return '<div>' + esc(m.from) + ' → ' + esc(m.to) + '</div>';
+          return '<div>' + esc(m.from) + ' → ' + esc(m.to) + _portSuffix(m) + '</div>';
         }).join('') +
       '</div>';
   } else {
@@ -1122,7 +1155,7 @@ function _onCanvasConnMove(e) {
           ' <span class="lm-tt-c">' + s.items.length + '</span></div>' +
         '<div class="lm-tt-l">' +
           s.items.map(function(m) {
-            return '<div>' + esc(m.from) + ' → ' + esc(m.to) + '</div>';
+            return '<div>' + esc(m.from) + ' → ' + esc(m.to) + _portSuffix(m) + '</div>';
           }).join('') +
         '</div>';
     });
@@ -1235,30 +1268,145 @@ function closeSidePanel() {
   sp.setAttribute('aria-hidden', 'true');
 }
 
+// Build {did → device card} and {clusterName → cluster card} lookups for a tree.
+// Devices include cluster members so any cell can be resolved by its did.
+function _buildTreeIndex(tree) {
+  const devs = {};
+  const clusters = {};
+  const flatDevs = [].concat(
+    tree.isp || [], tree.wan_switches || [], tree.firewalls || [],
+    tree.core_switches || [], tree.switches || [], tree.other || []
+  );
+  flatDevs.forEach(function(d) { devs[d.did] = d; });
+  const clusterLists = [
+    {tier: 'chassis',    list: tree.chassis     || []},
+    {tier: 'hypervisor', list: tree.hypervisors || []},
+    {tier: 'vm',         list: tree.vm_clusters || []},
+    {tier: 'ipmi',       list: tree.ipmi        || []},
+  ];
+  clusterLists.forEach(function(grp) {
+    grp.list.forEach(function(c) {
+      clusters[c.name] = {tier: grp.tier, cluster: c};
+      (c.cells || []).forEach(function(cell) {
+        devs[cell.did] = {did: cell.did, name: cell.name, host: cell.host,
+                          status: cell.status, _tier: grp.tier, _clusterName: c.name};
+      });
+    });
+  });
+  return {devs: devs, clusters: clusters};
+}
+
+// Resolve a parent_device_id entry ("group:<name>" or "<did>") to a render-ready ref.
+function _resolveParentRef(pid, idx) {
+  if (typeof pid === 'string' && pid.indexOf('group:') === 0) {
+    const name = pid.slice(6);
+    const ci = idx.clusters[name];
+    if (ci) return {kind: 'cluster', tier: ci.tier, name: name,
+                    status: ci.cluster.status, count: ci.cluster.count};
+    return {kind: 'missing', tier: 'other', name: name + ' (missing group)', status: 'unknown'};
+  }
+  const d = idx.devs[pid];
+  if (d) return {kind: 'device', tier: d._tier || 'device', did: d.did,
+                 name: d.name, host: d.host, status: d.status};
+  return {kind: 'missing', tier: 'other', name: '(off-site / missing device)', status: 'unknown'};
+}
+
+// Build an HTML row for a connection (upstream parent or downstream child).
+function _connRowHtml(ref) {
+  const st = ref.status === 'up' ? 'up' : (ref.status === 'warn' ? 'warn'
+           : (ref.status === 'down' ? 'down' : 'unknown'));
+  const sub = ref.kind === 'cluster'
+            ? (ref.count != null ? esc(String(ref.count) + ' devices') : 'cluster')
+            : esc(ref.host || '');
+  const dataAttr = ref.kind === 'cluster' ? ' data-cluster="' + esc(ref.name) + '"'
+                  : (ref.did ? ' data-did="' + esc(ref.did) + '"' : '');
+  return '<div class="lm-sp-row ' + st + '"' + dataAttr + '>' +
+           '<span class="sr-dot ' + st + '"></span>' +
+           '<span class="lm-sp-name">' + esc(ref.name) + '</span>' +
+           '<span class="lm-sp-host">' + sub + '</span>' +
+         '</div>';
+}
+
 function openClusterPanel(cname) {
   // Look up the current site's tree from cache and find the cluster cells
   const siteName = LM.currentRoute.site;
   const tree = LM.treeCache[siteName];
   if (!tree) return;
-  const all = [].concat(tree.hypervisors || [], tree.vm_clusters || [], tree.ipmi || []);
+  const all = [].concat(tree.chassis || [], tree.hypervisors || [],
+                        tree.vm_clusters || [], tree.ipmi || []);
   const c = all.find(function(x) { return x.name === cname; });
   if (!c) return;
-  const rows = c.cells.map(function(cell) {
-    const st = cell.status === 'up' ? 'up' : (cell.status === 'warn' ? 'warn' : (cell.status === 'down' ? 'down' : 'unknown'));
+
+  const idx = _buildTreeIndex(tree);
+
+  // Upstream — parents of this cluster (group-level + any per-cell parents
+  // members may have. Dedup by ref key.)
+  const upstreamSeen = {};
+  const upstream = [];
+  (c.parent_device_ids || []).forEach(function(pid) {
+    if (upstreamSeen[pid]) return;
+    upstreamSeen[pid] = true;
+    upstream.push(_resolveParentRef(pid, idx));
+  });
+
+  // Downstream — anything that points to this cluster (group:<name>) OR to
+  // an individual member did. Dedup by ref identity.
+  const byParent = tree.by_parent || {};
+  const downstreamRaw = [].concat(byParent['group:' + cname] || []);
+  (c.cells || []).forEach(function(cell) {
+    (byParent[cell.did] || []).forEach(function(r) { downstreamRaw.push(r); });
+  });
+  const downSeen = {};
+  const downstream = [];
+  downstreamRaw.forEach(function(r) {
+    const key = r.kind + ':' + (r.did || r.name);
+    if (downSeen[key]) return;
+    downSeen[key] = true;
+    if (r.kind === 'device') {
+      const d = idx.devs[r.did];
+      if (d) downstream.push({kind: 'device', tier: r.tier, did: r.did,
+                              name: d.name, host: d.host, status: d.status});
+    } else {
+      const ci = idx.clusters[r.name];
+      if (ci) downstream.push({kind: 'cluster', tier: r.tier, name: r.name,
+                               status: ci.cluster.status, count: ci.cluster.count});
+    }
+  });
+
+  // Device rows — name + IP
+  const rows = (c.cells || []).map(function(cell) {
+    const st = cell.status === 'up' ? 'up' : (cell.status === 'warn' ? 'warn'
+             : (cell.status === 'down' ? 'down' : 'unknown'));
     return '<div class="lm-sp-row ' + st + '" data-did="' + esc(cell.did) + '">' +
              '<span class="sr-dot ' + st + '"></span>' +
              '<span class="lm-sp-name">' + esc(cell.name) + '</span>' +
+             '<span class="lm-sp-host">' + esc(cell.host || '') + '</span>' +
            '</div>';
   }).join('');
-  openSidePanel(cname.toUpperCase(),
+
+  const header =
     '<div class="lm-sp-row up" style="border-left-color:var(--accent);background:rgba(0,212,255,0.06)">' +
       '<span class="lm-sp-name"><b>' + c.count + ' devices</b> · ' +
         '<span style="color:var(--up)">' + c.up + ' up</span> · ' +
         '<span style="color:var(--warn)">' + c.warn + ' warn</span> · ' +
         '<span style="color:var(--down)">' + c.down + ' down</span>' +
       '</span>' +
-    '</div>' + rows
-  );
+    '</div>';
+
+  const upBlock = upstream.length
+    ? '<div class="lm-sp-section">UPSTREAM · ' + upstream.length + '</div>' +
+      upstream.map(_connRowHtml).join('')
+    : '<div class="lm-sp-section">UPSTREAM</div>' +
+      '<div class="lm-sp-empty">No parent links</div>';
+
+  const downBlock = downstream.length
+    ? '<div class="lm-sp-section">DOWNSTREAM · ' + downstream.length + '</div>' +
+      downstream.map(_connRowHtml).join('')
+    : '';
+
+  const devBlock = '<div class="lm-sp-section">DEVICES · ' + c.count + '</div>' + rows;
+
+  openSidePanel(cname.toUpperCase(), header + upBlock + downBlock + devBlock);
 }
 
 function openDevicePanel(did) {
@@ -1266,32 +1414,66 @@ function openDevicePanel(did) {
   const siteName = LM.currentRoute.site;
   const tree = LM.treeCache[siteName];
   if (!tree) return;
-  const allDevs = [].concat(
-    tree.isp           || [],
-    tree.wan_switches  || [],
-    tree.firewalls     || [],
-    tree.core_switches || [],
-    tree.switches      || [],
-    tree.other         || [],
-    [].concat.apply([], (tree.hypervisors || []).map(function(c) { return c.cells; })),
-    [].concat.apply([], (tree.vm_clusters || []).map(function(c) { return c.cells; })),
-    [].concat.apply([], (tree.ipmi        || []).map(function(c) { return c.cells; }))
-  );
-  const d = allDevs.find(function(x) { return x.did === did; });
+  const idx = _buildTreeIndex(tree);
+  const d = idx.devs[did];
   if (!d) return;
   const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
-  openSidePanel(d.name ? d.name.toUpperCase() : 'DEVICE',
+
+  // Resolve parent refs from the device card / cell when available
+  const devCard = [].concat(
+    tree.isp || [], tree.wan_switches || [], tree.firewalls || [],
+    tree.core_switches || [], tree.switches || [], tree.other || []
+  ).find(function(x) { return x.did === did; });
+  let parentIds = (devCard && devCard.parent_device_ids) || [];
+  if (!parentIds.length) {
+    // Cell-level parent ids live inside cluster.cells
+    const clusterLists = [tree.chassis || [], tree.hypervisors || [],
+                          tree.vm_clusters || [], tree.ipmi || []];
+    for (let i = 0; i < clusterLists.length && !parentIds.length; i++) {
+      for (let j = 0; j < clusterLists[i].length && !parentIds.length; j++) {
+        const cell = (clusterLists[i][j].cells || []).find(function(x) { return x.did === did; });
+        if (cell) parentIds = cell.parent_device_ids || [];
+      }
+    }
+  }
+  const upstream = parentIds.map(function(pid) { return _resolveParentRef(pid, idx); });
+
+  // Downstream — anyone pointing at this did
+  const byParent = tree.by_parent || {};
+  const downRefs = byParent[did] || [];
+  const downstream = downRefs.map(function(r) {
+    if (r.kind === 'device') {
+      const dd = idx.devs[r.did];
+      return dd ? {kind: 'device', tier: r.tier, did: r.did,
+                   name: dd.name, host: dd.host, status: dd.status} : null;
+    }
+    const ci = idx.clusters[r.name];
+    return ci ? {kind: 'cluster', tier: r.tier, name: r.name,
+                 status: ci.cluster.status, count: ci.cluster.count} : null;
+  }).filter(Boolean);
+
+  const header =
     '<div class="lm-sp-row ' + st + '">' +
       '<span class="sr-dot ' + st + '"></span>' +
       '<span class="lm-sp-name">' + esc(d.name || '') + '</span>' +
       '<span class="lm-sp-host">' + esc(d.host || '') + '</span>' +
     '</div>' +
-    '<div style="margin-top:10px;font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.5);letter-spacing:1px">' +
+    '<div style="margin:6px 0 10px;font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.5);letter-spacing:1px">' +
       'Status: <span style="color:var(--' + (st === 'unknown' ? 'dim' : st) + ')">' + st.toUpperCase() + '</span><br/>' +
-      (d.group ? 'Group: ' + esc(d.group) + '<br/>' : '') +
-      (d.alerts ? 'Active alerts: <span style="color:var(--down)">' + d.alerts + '</span><br/>' : '') +
-    '</div>'
-  );
+      ((devCard && devCard.group) ? 'Group: ' + esc(devCard.group) + '<br/>' : '') +
+      ((devCard && devCard.alerts) ? 'Active alerts: <span style="color:var(--down)">' + devCard.alerts + '</span><br/>' : '') +
+    '</div>';
+
+  const upBlock = upstream.length
+    ? '<div class="lm-sp-section">UPSTREAM · ' + upstream.length + '</div>' +
+      upstream.map(_connRowHtml).join('')
+    : '';
+  const downBlock = downstream.length
+    ? '<div class="lm-sp-section">DOWNSTREAM · ' + downstream.length + '</div>' +
+      downstream.map(_connRowHtml).join('')
+    : '';
+
+  openSidePanel(d.name ? d.name.toUpperCase() : 'DEVICE', header + upBlock + downBlock);
 }
 
 // ─── Routing ────────────────────────────────────────────────
@@ -1416,9 +1598,15 @@ window.addEventListener('message', function(e) {
   }
 });
 
-// Side-panel close binding (delegated)
+// Side-panel close + row drill-down binding (delegated)
 document.addEventListener('click', function(e) {
-  if (e.target && e.target.id === 'lm-sp-close') closeSidePanel();
+  if (e.target && e.target.id === 'lm-sp-close') { closeSidePanel(); return; }
+  const row = e.target.closest && e.target.closest('.lm-sp-body .lm-sp-row');
+  if (!row) return;
+  const cname = row.getAttribute('data-cluster');
+  if (cname) { openClusterPanel(cname); return; }
+  const did = row.getAttribute('data-did');
+  if (did) { openDevicePanel(did); }
 });
 
 // ─── Boot ───────────────────────────────────────────────────

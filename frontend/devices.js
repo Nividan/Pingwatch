@@ -343,7 +343,6 @@ async function _bulkApplyMove(){
       dev.group = target;
       renderDp(dev);
     });
-    pruneEmptyGroups();
     if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
     else              toast(`${r.applied} device(s) moved to "${target}"`,'ok');
     if (input) input.value = '';
@@ -370,7 +369,6 @@ async function _bulkApplySiteMove(){
       dev.site = target;
       renderDp(dev);
     });
-    pruneEmptyGroups();
     window._pwSitesCache = null;  // next autocomplete fetch picks up the new site
     const lbl = target || 'Unsited';
     if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
@@ -871,20 +869,6 @@ async function _toggleMuteDevice(did){
   }
 }
 
-function pruneEmptyGroups(){
-  document.querySelectorAll('.grp-wrap').forEach(w=>{
-    const grid=w.querySelector('.grp-grid');
-    const n=grid?grid.querySelectorAll('.dc:not(.dc-add)').length:0;
-    if(n===0) w.remove();
-  });
-  // Then prune site wrappers that have no groups left in their body.
-  document.querySelectorAll('.site-wrap').forEach(sw=>{
-    const body=sw.querySelector('.site-body');
-    if(body && body.querySelectorAll('.grp-wrap').length===0) sw.remove();
-  });
-  refreshSiteCounts();
-}
-
 function renderDp(dev){
   document.getElementById('emptyMain').style.display='none';
   if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
@@ -1321,7 +1305,6 @@ function onDrop(e){
     if (siteChanged) window._pwSitesCache = null;
   }
   refreshGroupCounts();
-  pruneEmptyGroups();
   refreshSiteCounts();
 }
 

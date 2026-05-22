@@ -585,6 +585,14 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # Per-parent port wiring (v1.x+, Live Map link info). JSON dict keyed by
+        # parent device id → {"lport": "<local>", "rport": "<remote>"}. Group
+        # refs ("group:<name>") never appear here — wiring is per-device only.
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN parent_device_ports TEXT DEFAULT '{}'")
+            con.commit()
+        except Exception:
+            pass  # column already exists
         # Sites metadata sidecar (v1.0+, Live Map NOC console).
         # Distinct site names still come from devices.site / ipam_subnets.site;
         # this table stores presentation metadata (kind, pinned, display_name)

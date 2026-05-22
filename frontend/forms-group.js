@@ -401,7 +401,6 @@ async function saveEditGroup(oldName) {
           window._pwSitesCache = null;  // refresh autocomplete next open
           // Re-render moved devices so their .grp-wrap parents update.
           dids.forEach(d => { const dv = S.devices[d]; if (dv) renderDp(dv); });
-          if (typeof pruneEmptyGroups === 'function') pruneEmptyGroups();
         } catch (e) {
           toast('Site update failed: ' + (e.message || e), 'err');
           return;

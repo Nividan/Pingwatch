@@ -686,6 +686,14 @@ body {
   border-top: 1px dashed rgba(255,255,255,0.06);
   padding-top: 2px; margin-top: 2px;
 }
+/* Port pair suffix on a mapping line — monospaced + tinted so it reads as
+   wiring metadata rather than another device name. */
+.lm-tt-ports {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+  margin-left: 4px;
+}
 
 /* Tier rows (replace absolute positioning with a vertical flex stack
    that wraps gracefully when there are many cluster cards) */
@@ -948,6 +956,23 @@ body {
 .lm-sp-row.unknown { border-left-color: var(--dim); }
 .lm-sp-name { flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lm-sp-host { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: rgba(255,255,255,0.45); }
+.lm-sp-section {
+  font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 1.4px;
+  color: rgba(255,255,255,0.42);
+  padding: 10px 2px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  margin-bottom: 4px;
+}
+.lm-sp-empty {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  padding: 6px 10px; margin-bottom: 4px;
+  font-style: italic;
+}
+.lm-sp-body .lm-sp-row[data-did],
+.lm-sp-body .lm-sp-row[data-cluster] { cursor: pointer; transition: background 0.12s; }
+.lm-sp-body .lm-sp-row[data-did]:hover,
+.lm-sp-body .lm-sp-row[data-cluster]:hover { background: rgba(0,212,255,0.08); }
 
 /* ─── Modal (site CRUD) ─────────────────────────── */
 .lm-modal-overlay {
@@ -1138,6 +1163,10 @@ body {
 :root[data-theme="light"] .lm-sp-head          { background: rgba(2,136,168,0.06); border-bottom-color: var(--border); }
 :root[data-theme="light"] .lm-sp-row           { background: rgba(255,255,255,0.7); }
 :root[data-theme="light"] .lm-sp-host          { color: rgba(28,41,52,0.55); }
+:root[data-theme="light"] .lm-sp-section       { color: rgba(28,41,52,0.55); border-bottom-color: rgba(28,41,52,0.1); }
+:root[data-theme="light"] .lm-sp-empty         { color: rgba(28,41,52,0.45); }
+:root[data-theme="light"] .lm-sp-body .lm-sp-row[data-did]:hover,
+:root[data-theme="light"] .lm-sp-body .lm-sp-row[data-cluster]:hover { background: rgba(2,136,168,0.08); }
 
 /* Empty / loading */
 :root[data-theme="light"] .lm-empty { color: rgba(28,41,52,0.5); }

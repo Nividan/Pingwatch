@@ -179,6 +179,9 @@ def _device_card(d, alerts_by_did: dict, group_parents: dict | None = None) -> d
         "status":            _device_status(d),
         "alerts":            int(alerts_by_did.get(d.device_id, 0)),
         "parent_device_ids": parents,
+        # {pid: {"lport","rport"}} — wiring info attached to this device's
+        # outgoing links. Group parents are never keyed here.
+        "parent_device_ports": dict(getattr(d, "parent_device_ports", {}) or {}),
     }
 
 
@@ -206,8 +209,10 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
         cells.append({
             "did":               d.device_id,
             "name":              d.name,
+            "host":              d.host,
             "status":            st,
             "parent_device_ids": d_parents,
+            "parent_device_ports": dict(getattr(d, "parent_device_ports", {}) or {}),
         })
         alerts += int(alerts_by_did.get(d.device_id, 0))
         for p in d_parents:

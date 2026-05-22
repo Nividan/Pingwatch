@@ -56,7 +56,8 @@ def _pg_save(state):
              getattr(dev, "snmp_v3_priv_proto_default", ""),
              getattr(dev, "snmp_v3_priv_pass_default", ""),
              getattr(dev, "snmp_v3_context_default", ""),
-             json.dumps(getattr(dev, "parent_device_ids", []) or []))
+             json.dumps(getattr(dev, "parent_device_ids", []) or []),
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -138,7 +139,7 @@ def _pg_save(state):
                     "snmp_v3_user_default,snmp_v3_level_default,"
                     "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
                     "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-                    "snmp_v3_context_default,parent_device_ids) "
+                    "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, site=EXCLUDED.site, "
@@ -159,7 +160,8 @@ def _pg_save(state):
                     "snmp_v3_priv_proto_default=EXCLUDED.snmp_v3_priv_proto_default, "
                     "snmp_v3_priv_pass_default=EXCLUDED.snmp_v3_priv_pass_default, "
                     "snmp_v3_context_default=EXCLUDED.snmp_v3_context_default, "
-                    "parent_device_ids=EXCLUDED.parent_device_ids",
+                    "parent_device_ids=EXCLUDED.parent_device_ids, "
+                    "parent_device_ports=EXCLUDED.parent_device_ports",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -284,7 +286,8 @@ def db_save(state):
              getattr(dev, "snmp_v3_priv_proto_default", ""),
              getattr(dev, "snmp_v3_priv_pass_default", ""),
              getattr(dev, "snmp_v3_context_default", ""),
-             json.dumps(getattr(dev, "parent_device_ids", []) or []))
+             json.dumps(getattr(dev, "parent_device_ids", []) or []),
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -365,8 +368,8 @@ def db_save(state):
             "snmp_v3_user_default,snmp_v3_level_default,"
             "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
             "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-            "snmp_v3_context_default,parent_device_ids) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -436,7 +439,8 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_priv_pass_default,'') AS snmp_v3_priv_pass_default,"
                 "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default,"
                 "COALESCE(site,'') AS site,"
-                "COALESCE(parent_device_ids,'[]') AS parent_device_ids "
+                "COALESCE(parent_device_ids,'[]') AS parent_device_ids,"
+                "COALESCE(parent_device_ports,'{}') AS parent_device_ports "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -535,6 +539,12 @@ def _pg_load(state):
                 dev.parent_device_ids = []
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ids = []
+        try:
+            dev.parent_device_ports = json.loads(row[24] or "{}") if len(row) > 24 else {}
+            if not isinstance(dev.parent_device_ports, dict):
+                dev.parent_device_ports = {}
+        except (json.JSONDecodeError, TypeError):
+            dev.parent_device_ports = {}
         state.devices[did] = dev
 
     for row in srows:
@@ -681,7 +691,8 @@ def db_load(state):
             "COALESCE(snmp_v3_priv_proto_default,''),COALESCE(snmp_v3_priv_pass_default,''),"
             "COALESCE(snmp_v3_context_default,''),"
             "COALESCE(site,''),"
-            "COALESCE(parent_device_ids,'[]') "
+            "COALESCE(parent_device_ids,'[]'),"
+            "COALESCE(parent_device_ports,'{}') "
             "FROM devices"
         ).fetchall()
         srows = con.execute(
@@ -735,7 +746,8 @@ def db_load(state):
          v3_user_default, v3_level_default,
          v3_auth_proto_default, v3_auth_pass_default,
          v3_priv_proto_default, v3_priv_pass_default,
-         v3_context_default, site, parent_ids_json) = _row
+         v3_context_default, site, parent_ids_json,
+         parent_ports_json) = _row
         dev = Device(did, name, host, grp, site=site or "")
         try:
             n = int(did.replace("d", ""))
@@ -768,6 +780,11 @@ def db_load(state):
             dev.parent_device_ids = _pids if isinstance(_pids, list) else []
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ids = []
+        try:
+            _pports = json.loads(parent_ports_json or "{}")
+            dev.parent_device_ports = _pports if isinstance(_pports, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            dev.parent_device_ports = {}
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,

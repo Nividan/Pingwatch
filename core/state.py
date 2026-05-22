@@ -620,6 +620,11 @@ class Device:
         # supports dual-NIC and dual-homed devices. Group-level fallback lives
         # in topo_settings('pw_group_parents').
         self.parent_device_ids = []
+        # Per-parent port wiring (v1.x+) — {pid: {"lport": str, "rport": str}}.
+        # Keys only ever reference device ids (never "group:<name>"); group
+        # parents don't carry port info. Walker code on parent_device_ids is
+        # unaffected — read this map only when surfacing wiring details.
+        self.parent_device_ports = {}
         # Cached status string; invalidated (set to None) whenever a sensor's
         # alive / _threshold_state / running / alerts_muted changes, or when
         # a sensor is added/removed. Recomputed on next read.
@@ -681,6 +686,8 @@ class Device:
             "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
             # Live Map parent linking — list of device IDs this device hangs off.
             "parent_device_ids":     list(getattr(self, "parent_device_ids", []) or []),
+            # Per-parent port wiring (Live Map link info) — {pid: {lport, rport}}.
+            "parent_device_ports":   dict(getattr(self, "parent_device_ports", {}) or {}),
         }
 
 
