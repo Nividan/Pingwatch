@@ -182,9 +182,13 @@ function _rptUpdateSummary(){
   }
   const pdfLbl = pdfa ? pdfa.toUpperCase() : 'Standard PDF';
   const csvLbl = csv ? ' + CSV' : '';
+  const siteSel = document.getElementById('_rt_site');
+  const siteVal = siteSel ? (siteSel.value || '') : '';
+  const siteLbl = siteVal ? `🏢 ${siteVal}` : '🏢 All sites';
   el.innerHTML =
     `<span class="rpt-sum-pill">📄 ${esc(secCount)}</span>` +
     `<span class="rpt-sum-pill">${esc(periodLbl)}</span>` +
+    `<span class="rpt-sum-pill">${esc(siteLbl)}</span>` +
     (sevLbl ? `<span class="rpt-sum-pill">${esc(sevLbl)}</span>` : '') +
     `<span class="rpt-sum-pill">${esc(pdfLbl)}${csvLbl}</span>`;
 }
@@ -573,6 +577,13 @@ function _rptEditTemplate(tid, presetKind){
                 <div class="fh">Times use your browser's local timezone. Server converts to Unix epoch on save.</div>
               </div>
               <div class="fr">
+                <label class="fl">Site scope</label>
+                <select id="_rt_site" onchange="_rptUpdateSummary()">
+                  <option value="">All sites (overall)</option>
+                </select>
+                <div class="fh">Restrict the report to devices in one site. Affects availability, incidents, top-worst / noisy lists, and inventory counts. Leave on "All sites" for an estate-wide report.</div>
+              </div>
+              <div class="fr">
                 <label class="fl">Incident severity filter</label>
                 <select id="_rt_severity" onchange="_rptUpdateSummary()">
                   <option value="all"  ${(!cfg.severity_min || cfg.severity_min==='all')?'selected':''}>All incidents (default)</option>
@@ -615,6 +626,10 @@ function _rptEditTemplate(tid, presetKind){
         </div>
       </div>`;
     document.body.appendChild(o);
+    // Populate the Site dropdown asynchronously — uses the same /api/sites
+    // source as the Devices tab autocomplete so we get the canonical list
+    // (UNION of ipam_subnets.site + devices.site).
+    _rptLoadSites(cfg.site_filter || '');
     _rptUpdateSummary();
   })();
 }
@@ -624,6 +639,27 @@ function _rptTogglePeriod(){
   const wrap = document.getElementById('_rt_custom_wrap');
   if(!sel || !wrap) return;
   wrap.style.display = (sel.value === 'custom') ? '' : 'none';
+}
+
+async function _rptLoadSites(current){
+  const sel = document.getElementById('_rt_site');
+  if(!sel) return;
+  let sites = [];
+  try {
+    const r = await api('GET', '/api/sites');
+    sites = (r && r.sites) ? r.sites.slice() : [];
+  } catch(_) { /* leave list as just "All sites" */ }
+  sites.sort((a, b) => a.localeCompare(b));
+  const cur = current || '';
+  // Rebuild without losing the "All sites" first option.
+  const opts = ['<option value="">All sites (overall)</option>']
+    .concat(sites.map(s => `<option value="${esc(s)}" ${s===cur?'selected':''}>${esc(s)}</option>`));
+  // If the saved value isn't in the current list (site was renamed/deleted),
+  // include it as an orphan entry so the user can see it and pick something else.
+  if(cur && !sites.includes(cur)){
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)} (missing)</option>`);
+  }
+  sel.innerHTML = opts.join('');
 }
 
 async function _rptSaveTemplate(tid){
@@ -652,6 +688,7 @@ async function _rptSaveTemplate(tid){
       title:        document.getElementById('_rt_title').value.trim(),
       subtitle:     document.getElementById('_rt_subtitle').value.trim(),
       severity_min: document.getElementById('_rt_severity')?.value || 'all',
+      site_filter:  (document.getElementById('_rt_site')?.value || '').trim(),
       include_csv:  !!document.getElementById('_rt_csv')?.checked,
       pdfa_mode:    document.getElementById('_rt_pdfa')?.value || '',
     },

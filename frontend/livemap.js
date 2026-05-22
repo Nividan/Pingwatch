@@ -730,8 +730,16 @@ function _drawConnections(canvasEl) {
   // entire ESXi cluster, not individual hosts).
   const didEl = new Map();
   const groupEl = new Map();
+  // didName resolves a parent ref to its true display name — the actual
+  // device name (even when it lives INSIDE a cluster card) or, for group
+  // refs, the group name itself. Used by the tooltip so a mapping shows
+  // "esxi-12a → ESXi-luffy" rather than "esxi-12a → ESXI-Standalone".
+  const didName = new Map();
   canvasEl.querySelectorAll('.dev[data-did]').forEach(function(el) {
-    didEl.set(el.getAttribute('data-did'), el);
+    const did = el.getAttribute('data-did');
+    didEl.set(did, el);
+    const nameEl = el.querySelector('.dev-name');
+    if (nameEl) didName.set(did, (nameEl.textContent || '').trim() || did);
   });
   canvasEl.querySelectorAll('.cluster').forEach(function(el) {
     const gname = el.getAttribute('data-cluster');
@@ -742,12 +750,27 @@ function _drawConnections(canvasEl) {
     cells.forEach(function(did) {
       if (!didEl.has(did)) didEl.set(did, el);
     });
+    // Cell-level name lookup — pulled from data-cells-detail so we get the
+    // real device name regardless of whether the device has its own card.
+    let cellsDetail;
+    try { cellsDetail = JSON.parse(el.getAttribute('data-cells-detail') || '[]'); }
+    catch { cellsDetail = []; }
+    cellsDetail.forEach(function(cell) {
+      if (cell && cell.did && cell.name && !didName.has(cell.did)) {
+        didName.set(cell.did, cell.name);
+      }
+    });
   });
 
   function _resolveParent(ref) {
     if (typeof ref !== 'string' || !ref) return null;
     if (ref.indexOf('group:') === 0) return groupEl.get(ref.slice(6)) || null;
     return didEl.get(ref) || null;
+  }
+  function _refDisplayName(ref) {
+    if (typeof ref !== 'string' || !ref) return '';
+    if (ref.indexOf('group:') === 0) return ref.slice(6);
+    return didName.get(ref) || ref;
   }
 
   // Pass 1 — build parent → children map with per-cell mapping detail.
@@ -850,7 +873,13 @@ function _drawConnections(canvasEl) {
       hit.setAttribute('class', 'conn-hit');
       hit.dataset.parentName = parentLabel;
       hit.dataset.childName = _cardLabel(c.childEl);
-      hit.dataset.mappings = JSON.stringify(c.mappings.map(function(m) { return m.from; }));
+      // Store each mapping as {from, to} — `to` is the resolved parent name
+      // (specific device name when pid is a did, group name when pid is a
+      // group ref). Tooltip uses these to show the actual config target,
+      // not the cluster card the line happens to terminate at.
+      hit.dataset.mappings = JSON.stringify(c.mappings.map(function(m) {
+        return { from: m.from, to: _refDisplayName(m.pid) };
+      }));
 
       // Visible thin line on top.
       const path = document.createElementNS(svgNs, 'path');
@@ -904,25 +933,39 @@ function _onCanvasConnMove(e) {
 
   // Aggregate by (childName, parentName) so two distinct links sharing a
   // trunk show as two sections, while N overlapping segments of the same
-  // (child, parent) pair collapse into one.
+  // (child, parent) pair collapse into one. Each mapping carries the real
+  // target name (device or group) — not the cluster card the line happens
+  // to terminate at — so the tooltip reflects what's actually configured.
   const groups = new Map();
   hits.forEach(function(h) {
     const childName  = h.dataset.childName  || '';
     const parentName = h.dataset.parentName || '';
-    const key = childName + ' ' + parentName;
-    let names;
-    try { names = JSON.parse(h.dataset.mappings || '[]'); }
-    catch { names = []; }
-    if (!names.length) names = [childName];
+    const key = childName + ' → ' + parentName;
+    let mappings;
+    try { mappings = JSON.parse(h.dataset.mappings || '[]'); }
+    catch { mappings = []; }
+    if (!mappings.length) mappings = [{ from: childName, to: parentName }];
+    // Backward compatibility — earlier renders embedded plain strings.
+    mappings = mappings.map(function(m) {
+      if (typeof m === 'string') return { from: m, to: parentName };
+      return { from: (m && m.from) || '', to: (m && m.to) || parentName };
+    });
     if (!groups.has(key)) {
-      groups.set(key, { childName: childName, parentName: parentName, names: new Set() });
+      groups.set(key, { childName: childName, parentName: parentName, items: new Map() });
     }
     const g = groups.get(key);
-    names.forEach(function(n) { g.names.add(n); });
+    mappings.forEach(function(m) {
+      const itemKey = m.from + ' → ' + m.to;
+      if (!g.items.has(itemKey)) g.items.set(itemKey, m);
+    });
   });
 
   const sections = Array.from(groups.values()).map(function(g) {
-    return { childName: g.childName, parentName: g.parentName, names: Array.from(g.names) };
+    return {
+      childName: g.childName,
+      parentName: g.parentName,
+      items: Array.from(g.items.values()),
+    };
   });
 
   let html = '';
@@ -930,14 +973,14 @@ function _onCanvasConnMove(e) {
     const s = sections[0];
     html =
       '<div class="lm-tt-h">' + esc(s.childName) + ' ↔ ' + esc(s.parentName) +
-        ' <span class="lm-tt-c">' + s.names.length + '</span></div>' +
+        ' <span class="lm-tt-c">' + s.items.length + '</span></div>' +
       '<div class="lm-tt-l">' +
-        s.names.map(function(n) {
-          return '<div>' + esc(n) + ' → ' + esc(s.parentName) + '</div>';
+        s.items.map(function(m) {
+          return '<div>' + esc(m.from) + ' → ' + esc(m.to) + '</div>';
         }).join('') +
       '</div>';
   } else {
-    const total = sections.reduce(function(acc, s) { return acc + s.names.length; }, 0);
+    const total = sections.reduce(function(acc, s) { return acc + s.items.length; }, 0);
     html =
       '<div class="lm-tt-h">' + sections.length + ' OVERLAPPING LINKS' +
         ' <span class="lm-tt-c">' + total + '</span></div>';
@@ -945,10 +988,10 @@ function _onCanvasConnMove(e) {
       if (i > 0) html += '<div class="lm-tt-divider"></div>';
       html +=
         '<div class="lm-tt-sub">' + esc(s.childName) + ' ↔ ' + esc(s.parentName) +
-          ' <span class="lm-tt-c">' + s.names.length + '</span></div>' +
+          ' <span class="lm-tt-c">' + s.items.length + '</span></div>' +
         '<div class="lm-tt-l">' +
-          s.names.map(function(n) {
-            return '<div>' + esc(n) + ' → ' + esc(s.parentName) + '</div>';
+          s.items.map(function(m) {
+            return '<div>' + esc(m.from) + ' → ' + esc(m.to) + '</div>';
           }).join('') +
         '</div>';
     });
