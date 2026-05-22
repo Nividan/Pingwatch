@@ -3147,14 +3147,26 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .bk-cnt-full{color:var(--up);}
 
 /* ── Backup group section headers ───────────────────────────────── */
-.bk-grp-hdr tr{cursor:pointer;background:var(--bg3);user-select:none;}
-.bk-grp-hdr tr:hover{background:var(--bg4);}
-.bk-grp-hdr td{padding:7px 14px;font-size:11px;font-weight:700;letter-spacing:1px;
+/* Selectors match both the original `<tbody class="bk-grp-hdr"><tr>` shape
+   (enabled/disabled section dividers) and the per-site `<tr class="bk-grp-hdr">`
+   shape used for the nested site sub-headers introduced in v1.0. */
+.bk-grp-hdr tr,
+tr.bk-grp-hdr{cursor:pointer;background:var(--bg3);user-select:none;}
+.bk-grp-hdr tr:hover,
+tr.bk-grp-hdr:hover{background:var(--bg4);}
+.bk-grp-hdr td,
+tr.bk-grp-hdr td{padding:7px 14px;font-size:11px;font-weight:700;letter-spacing:1px;
   text-transform:uppercase;color:var(--text2);border-bottom:1px solid var(--border);}
+/* Site sub-header: slightly less weight + indent so it reads as subordinate
+   to the section divider above it. */
+tr.bk-site-hdr td{background:var(--bg2);padding-left:32px;font-weight:600;
+  text-transform:none;letter-spacing:0.4px;color:var(--text2);}
+tr.bk-site-hdr:hover td{background:var(--bg3);}
 .bk-grp-arr{display:inline-block;margin-right:8px;font-size:10px;
   transition:transform .2s;color:var(--text3);}
 .bk-grp-arr.open{transform:rotate(90deg);}
 .bk-grp-title{margin-right:8px;}
+.bk-site-title{font-family:'Share Tech Mono',monospace;color:var(--text);}
 .bk-grp-cnt{background:var(--bg4);border-radius:20px;padding:1px 8px;
   font-size:10px;font-weight:600;color:var(--text3);}
 tbody.bk-grp-collapsed{display:none;}

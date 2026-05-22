@@ -96,6 +96,7 @@ function _ipamRenderShell() {
       </div>
       <div class="pagehead-r">
         <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()">${icon('plus',13)} Add Subnet</button>
+        <button class="btn rbac-op" onclick="_ipamOpenImport()" title="Bulk-import subnets from a CSV file or paste">${icon('upload',13)} Import</button>
         <button class="btn rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">${icon('edit',13)} Edit</button>
         <button class="btn ghost rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">${icon('refresh',13)} Refresh DNS</button>
         <button class="btn danger rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled title="Delete this subnet">${icon('trash',13)} Remove</button>
@@ -927,6 +928,264 @@ function _ipamEditCell(td, ip) {
 }
 
 // ── Add subnet modal ───────────────────────────────────────────────────────
+// ── Bulk subnet import ────────────────────────────────────────────────────
+// Single-screen modal: paste CSV or upload a file → server-side preview →
+// per-row toggle → apply. Mirrors the device-import UX pattern but stays
+// in one modal because subnets have far fewer fields than devices.
+//
+// `opts.prefillText` (optional): seed the textarea with CSV from another
+// source — used by the Backups → Extract Subnets flow so the user lands
+// directly on the preview step.
+// `opts.banner` (optional): one-line caption shown above the textarea
+// explaining where the prefill came from.
+// `opts.autoPreview` (optional, defaults true when prefillText is set):
+// skip the upload step and run the preview immediately.
+function _ipamOpenImport(opts) {
+  opts = opts || {};
+  closeM('ipam-imp-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'ipam-imp-modal';
+  _overlayClose(o, () => closeM('ipam-imp-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,820px);max-height:88vh;display:flex;flex-direction:column">
+      <div class="mhd">
+        <div class="mttl">📥 Import Subnets</div>
+        <button class="mclose" onclick="closeM('ipam-imp-modal')">✕</button>
+      </div>
+      <div class="mbdy" id="ipam-imp-body" style="overflow:auto;flex:1">
+        <div id="ipam-imp-step-upload">
+          <div class="fh" style="margin-bottom:10px">
+            Bulk-create subnets from a CSV file. Columns:
+            <code>cidr,name,site,vlan</code> (header row optional).
+            Existing CIDRs are skipped — they won't duplicate or overwrite.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin:10px 0 14px">
+            <a class="btn ghost sm" href="/api/import/subnets/template" download="pingwatch-subnets-template.csv">
+              ${icon('download',12)} Download template
+            </a>
+            <label class="btn ghost sm" style="cursor:pointer">
+              ${icon('upload',12)} Choose CSV file…
+              <input type="file" id="ipam-imp-file" accept=".csv,.tsv,.txt,text/csv" style="display:none"/>
+            </label>
+            <span id="ipam-imp-fname" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+          <div class="fr">
+            <label class="fl" style="font-size:12px">Or paste CSV directly</label>
+            <textarea id="ipam-imp-text" rows="10"
+              placeholder="cidr,name,site,vlan&#10;10.0.0.0/24,Office LAN,HQ,10&#10;192.168.50.0/24,Lab,BSLAB,20"
+              style="width:100%;font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
+          </div>
+          <div id="ipam-imp-err" style="color:var(--down);font-size:12px;margin-top:8px;display:none"></div>
+        </div>
+        <div id="ipam-imp-step-preview" style="display:none">
+          <div id="ipam-imp-summary" style="margin-bottom:10px;font-size:13px"></div>
+          <div id="ipam-imp-table-wrap" style="border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:48vh"></div>
+        </div>
+        <div id="ipam-imp-step-result" style="display:none">
+          <div id="ipam-imp-result-body"></div>
+        </div>
+      </div>
+      <div class="mft" id="ipam-imp-foot">
+        <button class="btn-s" onclick="closeM('ipam-imp-modal')" id="ipam-imp-cancel">Cancel</button>
+        <button class="btn-p" id="ipam-imp-preview-btn" onclick="_ipamImpPreview()">Preview</button>
+        <button class="btn-p" id="ipam-imp-apply-btn"   onclick="_ipamImpApply()" style="display:none">Import 0 subnets</button>
+        <button class="btn-p" id="ipam-imp-done-btn"    onclick="closeM('ipam-imp-modal')" style="display:none">Done</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  // Wire the file picker → read into the textarea so preview only ever
+  // sends one source-of-truth payload (the textarea contents).
+  document.getElementById('ipam-imp-file').addEventListener('change', ev => {
+    const f = ev.target.files?.[0];
+    if (!f) return;
+    document.getElementById('ipam-imp-fname').textContent = f.name + ' · ' + Math.ceil(f.size/1024) + ' KB';
+    const r = new FileReader();
+    r.onload = () => { document.getElementById('ipam-imp-text').value = String(r.result || ''); };
+    r.onerror = () => { _ipamImpShowErr('Could not read file: ' + (r.error?.message || 'unknown')); };
+    r.readAsText(f);
+  });
+  // Caller-supplied prefill (e.g. from the Extract-Subnets flow). The
+  // banner sits above the textarea so the user knows where the data came
+  // from; autoPreview jumps straight to the preview step.
+  if (opts.banner) {
+    const step = document.getElementById('ipam-imp-step-upload');
+    if (step) {
+      const b = document.createElement('div');
+      b.style.cssText = 'background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);' +
+                        'border-radius:4px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--accent)';
+      b.innerHTML = opts.banner; // caller controls — banner is dev-controlled, not user input
+      step.insertBefore(b, step.firstChild);
+    }
+  }
+  if (opts.prefillText) {
+    const ta = document.getElementById('ipam-imp-text');
+    if (ta) ta.value = String(opts.prefillText);
+  }
+  const auto = opts.autoPreview !== undefined ? opts.autoPreview : !!opts.prefillText;
+  if (auto) {
+    // Defer one frame so the modal is in the DOM before we mutate the
+    // step display — _ipamImpPreview() flips to the preview step itself.
+    setTimeout(() => _ipamImpPreview(), 0);
+  } else {
+    setTimeout(() => document.getElementById('ipam-imp-text')?.focus(), 30);
+  }
+}
+
+function _ipamImpShowErr(msg) {
+  const e = document.getElementById('ipam-imp-err');
+  if (!e) return;
+  if (!msg) { e.style.display = 'none'; e.textContent = ''; return; }
+  e.textContent = msg; e.style.display = '';
+}
+
+// Mutable state for the preview→apply round trip. Closure-free so the
+// inline onclick handlers can reach it.
+let _ipamImpRows = [];
+
+async function _ipamImpPreview() {
+  _ipamImpShowErr('');
+  const text = document.getElementById('ipam-imp-text').value || '';
+  if (!text.trim()) { _ipamImpShowErr('Paste CSV or choose a file first.'); return; }
+  const btn = document.getElementById('ipam-imp-preview-btn');
+  btn.disabled = true; btn.textContent = 'Parsing…';
+  try {
+    const r = await fetch('/api/import/subnets/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { _ipamImpShowErr(j.error || ('Preview failed: ' + r.statusText)); return; }
+    _ipamImpRows = j.rows || [];
+    if (!_ipamImpRows.length) { _ipamImpShowErr('No rows found in the input.'); return; }
+    _ipamImpRenderPreview(j.valid|0, j.total|0);
+  } catch (e) {
+    _ipamImpShowErr('Preview request failed: ' + (e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Preview';
+  }
+}
+
+function _ipamImpRenderPreview(validCount, total) {
+  document.getElementById('ipam-imp-step-upload').style.display = 'none';
+  document.getElementById('ipam-imp-step-preview').style.display = '';
+  document.getElementById('ipam-imp-preview-btn').style.display = 'none';
+  document.getElementById('ipam-imp-apply-btn').style.display = '';
+  const invalid = total - validCount;
+  document.getElementById('ipam-imp-summary').innerHTML =
+    `<strong>${total}</strong> row${total===1?'':'s'} parsed · ` +
+    `<span style="color:var(--up)">${validCount} valid</span>` +
+    (invalid ? ` · <span style="color:var(--down)">${invalid} with errors</span>` : '') +
+    ` <span style="color:var(--text3);font-size:11px">— uncheck a row to skip it</span>`;
+  const rows = _ipamImpRows.map((r, i) => {
+    const ok = !!r._ok;
+    const checkbox = ok
+      ? `<input type="checkbox" data-imp-idx="${i}" checked onclick="_ipamImpToggle(${i}, this.checked)"/>`
+      : `<input type="checkbox" data-imp-idx="${i}" disabled title="${esc(r._msg||'')}"/>`;
+    const statusCell = ok
+      ? '<span style="color:var(--up)">✓</span>'
+      : `<span style="color:var(--down)" title="${esc(r._msg||'')}">✕ ${esc(r._msg||'invalid')}</span>`;
+    return `<tr style="${ok?'':'opacity:.55'}">
+      <td style="padding:6px 10px;text-align:center">${checkbox}</td>
+      <td style="padding:6px 10px;font-family:'Share Tech Mono',monospace">${esc(r.cidr||'')}</td>
+      <td style="padding:6px 10px">${esc(r.name||'—')}</td>
+      <td style="padding:6px 10px">${esc(r.site||'—')}</td>
+      <td style="padding:6px 10px;text-align:right">${r.vlan ? r.vlan : '—'}</td>
+      <td style="padding:6px 10px;font-size:11px">${statusCell}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('ipam-imp-table-wrap').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="background:var(--bg2);position:sticky;top:0">
+          <th style="padding:8px 10px;text-align:center;width:40px">
+            <input type="checkbox" id="ipam-imp-all" checked onclick="_ipamImpToggleAll(this.checked)"/>
+          </th>
+          <th style="padding:8px 10px;text-align:left">CIDR</th>
+          <th style="padding:8px 10px;text-align:left">Name</th>
+          <th style="padding:8px 10px;text-align:left">Site</th>
+          <th style="padding:8px 10px;text-align:right">VLAN</th>
+          <th style="padding:8px 10px;text-align:left">Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  _ipamImpUpdateApplyLabel();
+}
+
+function _ipamImpToggle(i, on) {
+  const r = _ipamImpRows[i];
+  if (!r || !r._ok) return;
+  r._selected = !!on;
+  _ipamImpUpdateApplyLabel();
+}
+
+function _ipamImpToggleAll(on) {
+  _ipamImpRows.forEach((r, i) => {
+    if (!r._ok) return;
+    r._selected = !!on;
+    const cb = document.querySelector(`input[data-imp-idx="${i}"]`);
+    if (cb && !cb.disabled) cb.checked = !!on;
+  });
+  _ipamImpUpdateApplyLabel();
+}
+
+function _ipamImpSelectedRows() {
+  return _ipamImpRows.filter(r => r._ok && (r._selected !== false));
+}
+
+function _ipamImpUpdateApplyLabel() {
+  const n = _ipamImpSelectedRows().length;
+  const btn = document.getElementById('ipam-imp-apply-btn');
+  if (!btn) return;
+  btn.textContent = `Import ${n} subnet${n===1?'':'s'}`;
+  btn.disabled = (n === 0);
+}
+
+async function _ipamImpApply() {
+  const sel = _ipamImpSelectedRows();
+  if (!sel.length) return;
+  const btn = document.getElementById('ipam-imp-apply-btn');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  try {
+    const r = await fetch('/api/import/subnets/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: sel }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { _ipamImpShowErr(j.error || ('Import failed: ' + r.statusText)); btn.disabled = false; return; }
+    _ipamImpRenderResult(j.created|0, j.errors || []);
+    // Refresh the IPAM sidebar so the new subnets appear immediately.
+    if (typeof _ipamLoadSubnets === 'function') _ipamLoadSubnets();
+  } catch (e) {
+    _ipamImpShowErr('Import request failed: ' + (e.message || e));
+    btn.disabled = false;
+  }
+}
+
+function _ipamImpRenderResult(created, errors) {
+  document.getElementById('ipam-imp-step-preview').style.display = 'none';
+  document.getElementById('ipam-imp-step-result').style.display = '';
+  document.getElementById('ipam-imp-apply-btn').style.display = 'none';
+  document.getElementById('ipam-imp-cancel').style.display = 'none';
+  document.getElementById('ipam-imp-done-btn').style.display = '';
+  const errList = errors.length
+    ? `<div style="margin-top:14px">
+         <div style="font-size:12px;color:var(--down);margin-bottom:6px">${errors.length} row${errors.length===1?'':'s'} failed:</div>
+         <ul style="font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--text2);max-height:30vh;overflow:auto;padding-left:18px">
+           ${errors.map(e => `<li><strong>${esc(e.cidr||'')}</strong> — ${esc(e.error||'unknown')}</li>`).join('')}
+         </ul>
+       </div>`
+    : '';
+  document.getElementById('ipam-imp-result-body').innerHTML = `
+    <div style="text-align:center;padding:18px 8px">
+      <div style="font-size:36px;color:var(--up);margin-bottom:8px">✓</div>
+      <div style="font-size:16px;font-weight:600">Imported ${created} subnet${created===1?'':'s'}</div>
+    </div>
+    ${errList}`;
+}
+
 function _ipamOpenAddSubnet() {
   closeM('ipam-add-modal');
   const o = document.createElement('div');

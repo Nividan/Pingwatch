@@ -23,9 +23,13 @@ which uses the same dedup + sensor-create path as Subnet Discovery.
 from __future__ import annotations
 
 import base64
+import csv as _csv
+import io as _io
+import ipaddress as _ipaddr
 
 from core.config import (
     _RE_IMPORT_PARSE, _RE_IMPORT_APPLY, _RE_IMPORT_SW_INSPECT,
+    _RE_IMPORT_SUB_TPL, _RE_IMPORT_SUB_PREVIEW, _RE_IMPORT_SUB_APPLY,
 )
 from core.import_parsers import PARSERS
 from core.import_parsers.solarwinds_parser import (
@@ -59,9 +63,232 @@ def _max_payload_bytes() -> int:
         return _MAX_PAYLOAD_BYTES_DEFAULT
 
 
+_SUBNET_CSV_HEADERS = ["cidr", "name", "site", "vlan"]
+_SUBNET_CSV_TEMPLATE = (
+    "cidr,name,site,vlan\n"
+    "10.0.0.0/24,Office LAN,HQ,10\n"
+    "10.0.1.0/24,Lab Servers,BSLAB,20\n"
+    "192.168.50.0/24,Guest WiFi,HQ,\n"
+    "172.16.0.0/22,Management,DC1,99\n"
+)
+
+
+def _parse_subnet_csv(text: str) -> list:
+    """Parse a CSV/TSV/paste of subnets into a list of rows annotated with
+    per-row validation results. Never raises — every parse error becomes a
+    row with `_ok=False, _msg="..."` so the UI can show the user exactly
+    which lines need fixing.
+
+    Accepted columns (case-insensitive, in any order): cidr, name, site, vlan.
+    The header row is optional — if the first row contains "cidr" we treat
+    it as headers; otherwise we assume positional order cidr,name,site,vlan.
+    """
+    out = []
+    if not (text or "").strip():
+        return out
+    # Try comma first; fall back to tab/semicolon for Excel-pasted regions.
+    sample = text[:1024]
+    delim = ","
+    if sample.count("\t") > sample.count(","):
+        delim = "\t"
+    elif sample.count(";") > sample.count(","):
+        delim = ";"
+    reader = _csv.reader(_io.StringIO(text), delimiter=delim)
+    header = None
+    seen_cidrs = set()  # detect duplicates within the same file
+    for raw in reader:
+        if not raw or all(not (c or "").strip() for c in raw):
+            continue
+        row = [(c or "").strip() for c in raw]
+        # Detect header by looking for "cidr" in any cell of the first row
+        if header is None and any(c.lower() == "cidr" for c in row):
+            header = [c.lower() for c in row]
+            continue
+        if header is None:
+            # No header — assume positional order
+            header = _SUBNET_CSV_HEADERS[:]
+        # Build {field: value} from this row
+        cells = {h: (row[i] if i < len(row) else "") for i, h in enumerate(header)}
+        cidr = cells.get("cidr", "")
+        name = cells.get("name", "")
+        site = cells.get("site", "")
+        vlan_raw = cells.get("vlan", "")
+        # VLAN coercion — bad values silently become 0 (untagged) rather than
+        # failing the row, matching the single-add endpoint's behaviour.
+        try:
+            vlan = int(vlan_raw) if vlan_raw else 0
+        except (TypeError, ValueError):
+            vlan = 0
+        if not (0 <= vlan <= 4094):
+            vlan = 0
+        # CIDR validation + canonicalisation
+        ok, msg, canonical = True, "", cidr
+        if not cidr:
+            ok, msg = False, "missing CIDR"
+        else:
+            try:
+                net = _ipaddr.ip_network(cidr, strict=False)
+                canonical = str(net)
+                if canonical in seen_cidrs:
+                    ok, msg = False, "duplicate CIDR in this file"
+                else:
+                    seen_cidrs.add(canonical)
+            except Exception:
+                ok, msg = False, f"invalid CIDR: {cidr!r}"
+        # Name length cap to match the Add Subnet modal
+        if len(name) > 100:
+            name = name[:100]
+        if len(site) > 80:
+            site = site[:80]
+        out.append({
+            "cidr": canonical, "name": name, "site": site, "vlan": vlan,
+            "_ok": ok, "_msg": msg,
+        })
+    return out
+
+
+def _apply_subnet_rows(rows: list, user: str) -> "tuple[int, list]":
+    """Create each valid row via the same db_add_subnet path the Add Subnet
+    modal uses. Returns (created_count, errors[]) so the UI can report exactly
+    which CIDRs failed and why. Skips rows that failed parse validation."""
+    from db.ipam import db_add_subnet, ipam_sync_subnet_add
+    from db.core import _db_enqueue
+    created = 0
+    errors  = []
+    for r in rows:
+        if not r.get("_ok"):
+            errors.append({"cidr": r.get("cidr", ""), "error": r.get("_msg", "validation failed")})
+            continue
+        cidr = r.get("cidr", "")
+        try:
+            new_id = db_add_subnet(
+                cidr,
+                r.get("name") or "",
+                user,
+                site=r.get("site") or "",
+                vlan=int(r.get("vlan") or 0),
+            )
+            # Mirror the single-add path: queue the sync so IPAM picks up
+            # any devices that already live in this CIDR.
+            _db_enqueue(lambda _sid=new_id, _c=cidr: ipam_sync_subnet_add(_sid, _c))
+            created += 1
+        except ValueError as e:
+            # Curated message from db_add_subnet (e.g. "Subnet '...' already exists")
+            errors.append({"cidr": cidr, "error": (e.args[0] if e.args else "duplicate")})
+        except Exception as e:
+            log.error(f"bulk subnet import: cidr={cidr!r} — {type(e).__name__}: {e}")
+            errors.append({"cidr": cidr, "error": "internal error (see server log)"})
+    return created, errors
+
+
 def handle(h, method, path, body):
+    # ── GET /api/import/subnets/template ─────────────────────────
+    # Returns a CSV template with a header row + 4 example rows. Viewer
+    # role is enough — the template is the same for everyone and has no
+    # tenant-specific data.
+    if method == "GET" and _RE_IMPORT_SUB_TPL.match(path):
+        user, _ = h._require("viewer")
+        if not user:
+            return True
+        data = _SUBNET_CSV_TEMPLATE.encode("utf-8")
+        try:
+            h.send_response(200)
+            h.send_header("Content-Type", "text/csv; charset=utf-8")
+            h.send_header(
+                "Content-Disposition",
+                'attachment; filename="pingwatch-subnets-template.csv"',
+            )
+            h.send_header("Content-Length", str(len(data)))
+            h.end_headers()
+            h.wfile.write(data)
+        except Exception as e:
+            log.warning(f"subnet template download write failed: {e}")
+        return True
+
     if method != "POST":
         return False
+
+    # ── POST /api/import/subnets/preview ─────────────────────────
+    # Parse-only. No DB writes; the response feeds the modal's preview
+    # table so the user can see which rows are valid before committing.
+    if _RE_IMPORT_SUB_PREVIEW.match(path):
+        user, _ = h._require("operator")
+        if not user:
+            return True
+        text = (body.get("text") or "")
+        if len(text.encode("utf-8")) > _max_payload_bytes():
+            h._json(413, {"error": "import payload too large"}); return True
+        rows = _parse_subnet_csv(text)
+        if len(rows) > _MAX_DEVICES_PARSED:
+            h._json(413, {
+                "error": f"too many rows ({len(rows)}); split the file into "
+                         f"chunks of ≤ {_MAX_DEVICES_PARSED}"
+            }); return True
+        h._json(200, {
+            "rows":  rows,
+            "total": len(rows),
+            "valid": sum(1 for r in rows if r.get("_ok")),
+        })
+        return True
+
+    # ── POST /api/import/subnets/apply ───────────────────────────
+    # Actually creates the subnets. The body should be the same `rows`
+    # array the preview endpoint returned (client-side toggles let users
+    # exclude rows before committing), but we re-validate each row server-
+    # side so a hand-crafted payload can't bypass validation.
+    if _RE_IMPORT_SUB_APPLY.match(path):
+        user, _ = h._require("operator")
+        if not user:
+            return True
+        rows = body.get("rows") or []
+        if not isinstance(rows, list):
+            h._json(400, {"error": "rows must be a list"}); return True
+        if len(rows) > _MAX_DEVICES_APPLIED:
+            h._json(413, {
+                "error": f"too many rows ({len(rows)}); apply in chunks of "
+                         f"≤ {_MAX_DEVICES_APPLIED}"
+            }); return True
+        # Server-side revalidation: never trust the client's _ok flag. Re-
+        # check every row's CIDR and VLAN, and detect duplicates within the
+        # apply batch even if the preview marked them valid (e.g. user
+        # un-deselected a row that conflicted with another).
+        revalidated = []
+        seen_cidrs  = set()
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            cidr_in = (r.get("cidr") or "").strip()
+            name    = (r.get("name") or "").strip()[:100]
+            site    = (r.get("site") or "").strip()[:80]
+            try:
+                vlan = int(r.get("vlan") or 0)
+            except (TypeError, ValueError):
+                vlan = 0
+            if not (0 <= vlan <= 4094):
+                vlan = 0
+            ok, msg, canonical = True, "", cidr_in
+            if not cidr_in:
+                ok, msg = False, "missing CIDR"
+            else:
+                try:
+                    canonical = str(_ipaddr.ip_network(cidr_in, strict=False))
+                    if canonical in seen_cidrs:
+                        ok, msg = False, "duplicate CIDR in this batch"
+                    else:
+                        seen_cidrs.add(canonical)
+                except Exception:
+                    ok, msg = False, f"invalid CIDR: {cidr_in!r}"
+            revalidated.append({
+                "cidr": canonical, "name": name, "site": site, "vlan": vlan,
+                "_ok": ok, "_msg": msg,
+            })
+        created, errors = _apply_subnet_rows(revalidated, user)
+        db_log_audit(
+            user, h.client_address[0], "ipam_subnet_import",
+            f"created={created} errors={len(errors)}"
+        )
+        h._json(200, {"created": created, "errors": errors})
+        return True
 
     # ── /api/import/sw/inspect ────────────────────────────────────
     if _RE_IMPORT_SW_INSPECT.match(path):
