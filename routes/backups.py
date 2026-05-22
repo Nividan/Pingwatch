@@ -205,8 +205,10 @@ def handle(h, method, path, body):
         if not user:
             return True
         did = m.group(1)
-        # Find the latest successful run for this device
-        runs = db_get_backup_history(did, limit=20) or []
+        # Find the latest successful run for this device. db_get_backup_history
+        # already returns rows ordered ts DESC, so the first row with
+        # success=True is the most recent good config.
+        runs = db_get_backup_history(did) or []
         run  = next((r for r in runs if r.get('success')), None)
         if not run:
             h._json(404, {'error': 'no successful backup found for this device'}); return True
