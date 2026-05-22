@@ -147,6 +147,7 @@ def _validate_sqlite(path) -> str:
     Run integrity_check and attempt REINDEX if needed.
     Returns 'ok' on success, error string on failure.
     """
+    con = None
     try:
         con = sqlite3.connect(path)
         ic = con.execute("PRAGMA integrity_check").fetchone()
@@ -155,25 +156,31 @@ def _validate_sqlite(path) -> str:
             if "index" in msg and "entries" in msg:
                 con.execute("REINDEX")
                 ic2 = con.execute("PRAGMA integrity_check").fetchone()
-                con.close()
                 return "ok" if ic2[0] == "ok" else ic2[0]
-            con.close()
             return ic[0]
-        con.close()
         return "ok"
     except Exception as e:
-        return str(e)
+        log.warning(f"DB import: integrity check failed on {path}: {e}")
+        return "integrity check failed"
+    finally:
+        if con is not None:
+            try: con.close()
+            except Exception: pass
 
 
 def _vacuum_file(path):
     """WAL checkpoint + VACUUM a file (best-effort)."""
+    con = None
     try:
         con = sqlite3.connect(path, timeout=30)
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         con.execute("VACUUM")
-        con.close()
     except Exception as e:
         log.warning(f"DB import: VACUUM failed on {path} (non-fatal) — {e}")
+    finally:
+        if con is not None:
+            try: con.close()
+            except Exception: pass
 
 
 def _detect_db_kind(path) -> str:
@@ -184,6 +191,7 @@ def _detect_db_kind(path) -> str:
       'logs'        — new Logs DB (has sensor_samples, no users)
       'unknown'     — cannot determine
     """
+    con = None
     try:
         con = sqlite3.connect(path)
         tables = {
@@ -191,7 +199,6 @@ def _detect_db_kind(path) -> str:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        con.close()
         has_samples = "sensor_samples" in tables
         has_users   = "users" in tables
         has_devices = "devices" in tables
@@ -203,6 +210,10 @@ def _detect_db_kind(path) -> str:
             return "logs"
     except Exception:
         pass
+    finally:
+        if con is not None:
+            try: con.close()
+            except Exception: pass
     return "unknown"
 
 

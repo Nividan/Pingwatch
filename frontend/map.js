@@ -293,47 +293,15 @@ async function deletePage(id, name) {
   });
 }
 
-// ═══════════════════════════ PINGWATCH LIVE TAB FUNCTIONS ═══════════════════════════
-
-async function switchToPingWatchPage() {
-  isPingWatchPage = true;
-  selectedEl = null;
-  sessionStorage.setItem('ntm_active_tab', 'pw');
-  renderPageBar();
-  await loadPingWatchPage();
-}
-
-async function loadPingWatchPage() {
-  const gen = ++_pageGen;
-  try {
-    const [data, ovrRes, grpRes, lnkRes, iconRes, rolesRes, subnetsRes] = await Promise.all([
-      fetch('/api/devices').then(r => r.json()),
-      api('GET', '/api/settings/pw_node_overrides').catch(() => null),
-      api('GET', '/api/settings/pw_group_overrides').catch(() => null),
-      api('GET', '/api/settings/pw_links').catch(() => null),
-      api('GET', '/api/settings/pw_group_icons').catch(() => null),
-      api('GET', '/api/topology/roles').catch(() => null),
-      api('GET', '/api/ipam/subnets').catch(() => null),
-    ]);
-    if (gen !== _pageGen) return; // superseded by a newer tab switch
-    pwDevices = data.devices || [];
-    _pwDevMap = {}; pwDevices.forEach(d => _pwDevMap[d.device_id] = d);
-    pwOverrides = ovrRes?.value || {};
-    pwGroupOverrides = grpRes?.value || {};
-    pwLinks = lnkRes?.value || [];
-    // Per-group icon defaults — may have been updated from the Devices tab's
-    // Edit Group modal between page loads; live updates from that modal also
-    // mutate `pwGroupIcons` directly + trigger renderPingWatchCanvas().
-    pwGroupIcons = (iconRes?.value && typeof iconRes.value === 'object') ? iconRes.value : {};
-    window._pwGroupIconsCache = pwGroupIcons;
-    // Topology auto-link inputs — roles map + subnet list.
-    pwRoles   = (rolesRes && rolesRes.roles) || {};
-    pwSubnets = (subnetsRes && subnetsRes.subnets) || (Array.isArray(subnetsRes) ? subnetsRes : []);
-  } catch(e) { if (gen !== _pageGen) return; pwDevices = []; _pwDevMap = {}; }
-  renderPingWatchCanvas();
-  startPwSSE();
-  fitToView();
-}
+// ═══════════════════════════ PINGWATCH LIVE TAB (REMOVED) ═══════════════
+// The live overlay moved to /livemap.html. The entry-point functions
+// (switchToPingWatchPage / loadPingWatchPage) have been deleted so the dead
+// tab can't be reactivated by accident.
+//
+// A handful of live-mode helpers below (renderPingWatchCanvas, _pwLiveUpdate,
+// startPwSSE, etc.) remain in the file — they're unreachable without the
+// entry points but are interlinked enough that surgically removing them
+// pre-1.0 is too risky. Targeted for a post-1.0 cleanup.
 
 function pwStatusColor(status) {
   if (status === 'up')   return '#00ff9d';
@@ -1226,9 +1194,7 @@ function showPwDashboardPanel() {
       <div class="dash-section-title" style="margin-bottom:8px">ACTIVE INCIDENTS</div>
       <div id="pw-incident-list">${_buildIncidentList()}</div>
     </div>
-    <div style="margin-top:14px;text-align:center">
-      <button class="btn btn-primary" style="font-size:9px;padding:5px 12px;letter-spacing:1px" onclick="loadPingWatchPage()">REFRESH</button>
-    </div>
+    <!-- REFRESH button removed: loadPingWatchPage no longer exists. -->
   `;
   document.getElementById('panel-actions').innerHTML = `
     <div style="display:flex;gap:8px;width:100%">

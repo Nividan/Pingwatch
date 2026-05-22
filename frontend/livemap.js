@@ -567,7 +567,8 @@ function _renderSiteTree(name, tree) {
         : '');
 
   // Cluster click → side panel
-  main.addEventListener('click', _siteCanvasClick);
+  // Listener is bound once in boot() now; binding here would accumulate
+  // a new handler on every site render.
 }
 
 function _renderInternetSite(name, tree) {
@@ -615,7 +616,7 @@ function _renderInternetSite(name, tree) {
         '</div>' +
       '</div>' +
     '</div>';
-  main.addEventListener('click', _siteCanvasClick);
+  // Listener is bound once in boot() — see note in _renderSiteTree.
 }
 
 function _siteCanvasClick(e) {
@@ -831,12 +832,8 @@ document.addEventListener('click', function(e) {
 });
 
 // ─── Boot ───────────────────────────────────────────────────
-async function boot() {
-  bindSidebar();
-  if (!window.location.hash) window.location.hash = '/noc';
-  await fetchSitesAndSummary();
-  handleRoute();
-  // Refresh time-ago text in the feed periodically (cheap)
+function _startLiveTick() {
+  if (LM.liveTickTimer) return;
   LM.liveTickTimer = setInterval(function() {
     if (LM.currentRoute.view !== 'noc' || !LM.summary) return;
     document.querySelectorAll('.feed-row').forEach(function(row, i) {
@@ -846,6 +843,27 @@ async function boot() {
       if (ago) ago.textContent = timeAgo(a.ts);
     });
   }, 5000);
+}
+function _stopLiveTick() {
+  if (LM.liveTickTimer) { clearInterval(LM.liveTickTimer); LM.liveTickTimer = null; }
+}
+
+async function boot() {
+  bindSidebar();
+  // Bind the canvas click handler once on the stable #lm-main element.
+  // Site renders re-set main.innerHTML which removes children but leaves
+  // the listener on the element itself; binding here keeps the count at 1
+  // regardless of how many times the user navigates between sites.
+  $('lm-main').addEventListener('click', _siteCanvasClick);
+  if (!window.location.hash) window.location.hash = '/noc';
+  await fetchSitesAndSummary();
+  handleRoute();
+  // Refresh time-ago text in the feed periodically (cheap), but pause
+  // when the iframe is hidden behind another tab so we don't burn CPU.
+  _startLiveTick();
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) _stopLiveTick(); else _startLiveTick();
+  });
 }
 
 // Expose hooks for forms-site.js

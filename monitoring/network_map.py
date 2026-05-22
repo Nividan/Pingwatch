@@ -1,16 +1,28 @@
 import sqlite3
 import json
 import os
+from contextlib import contextmanager
 
 from core.config import DB_PATH as _DB_PATH
 from core.logger import log
 from db.backend  import is_pg
 
 
+@contextmanager
 def _conn():
+    """Open a SQLite connection, commit on success / rollback on failure,
+    and ALWAYS close. The bare `sqlite3.Connection.__exit__` only commits,
+    so callers using `with _conn() as con:` were leaking handles."""
     con = sqlite3.connect(_DB_PATH)
     con.row_factory = sqlite3.Row
-    return con
+    try:
+        yield con
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def init_topo_db():

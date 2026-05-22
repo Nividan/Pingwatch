@@ -135,13 +135,14 @@ def db_rename_site_meta(old_name: str, new_name: str,
     try:
         with db_cursor("main") as cur:
             ph = "%s" if is_pg() else "?"
-            # Check old exists
-            row = cur.execute(f"SELECT 1 FROM sites WHERE name={ph}", (old,)).fetchone()
-            if not row:
+            # Check old exists.
+            # psycopg2's cursor.execute() returns None — chaining .fetchone()
+            # to it raises AttributeError on PG, so split into two statements.
+            cur.execute(f"SELECT 1 FROM sites WHERE name={ph}", (old,))
+            if not cur.fetchone():
                 return False
-            # Check new doesn't exist
-            row = cur.execute(f"SELECT 1 FROM sites WHERE name={ph}", (new,)).fetchone()
-            if row:
+            cur.execute(f"SELECT 1 FROM sites WHERE name={ph}", (new,))
+            if cur.fetchone():
                 return False
             cur.execute(f"UPDATE sites SET name={ph}, updated_ts={ph} WHERE name={ph}",
                         (new, _now(), old))

@@ -144,7 +144,9 @@ def handle(h, method, path, body):
                             f"(initiated by {user!r}, server={cfg['server']}:{cfg['port']}): {msg}")
         except Exception as e:
             log.error(f"LDAP test_connection route error (initiated by {user!r}): {e}")
-            ok, msg = False, str(e)
+            # Surface the exception type only — the full message is in the
+            # server log. Admins can correlate via the timestamp.
+            ok, msg = False, f"unexpected {type(e).__name__}; check server log"
         h._json(200, {'ok': ok, 'message': msg})
         return True
 
@@ -172,7 +174,7 @@ def handle(h, method, path, body):
         except Exception as e:
             log.error(f"LDAP test_auth route error for {test_user!r} "
                       f"(initiated by {user!r}): {e}")
-            ok, msg = False, str(e)
+            ok, msg = False, f"unexpected {type(e).__name__}; check server log"
         h._json(200, {'ok': ok, 'message': msg})
         return True
 

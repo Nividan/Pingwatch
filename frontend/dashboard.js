@@ -935,7 +935,7 @@ function _dwOpenPicker() {
         <div class="mw-head">
           <span class="mw-title">ADD WIDGET</span>
           <span class="mw-sub" id="mw-sub">› ${Object.keys(_DW_REG).length} types</span>
-          <button class="mw-x" type="button" onclick="_dwClosePicker()">✕</button>
+          <button class="mw-x" type="button" data-mw-close="1">✕</button>
         </div>
         <div class="mw-search-wrap">
           <div class="mw-search">
@@ -949,7 +949,7 @@ function _dwOpenPicker() {
         <div class="mw-body" id="mw-body"></div>
         <div class="mw-foot">
           <div class="mw-foot-info" id="mw-foot-info"></div>
-          <button class="mw-btn mw-btn-ghost" type="button" onclick="_dwClosePicker()">CANCEL</button>
+          <button class="mw-btn mw-btn-ghost" type="button" data-mw-close="1">CANCEL</button>
           <button class="mw-btn mw-btn-primary" id="mw-add" type="button">+ ADD WIDGET</button>
         </div>
       </div>
@@ -1122,7 +1122,11 @@ function _dwOpenPicker() {
       try {
         const el = builder();
         if (el) document.getElementById('mw-po-preview').appendChild(el);
-      } catch (e) { /* preview is decorative; never block on a failure */ }
+      } catch (e) {
+        // Preview is decorative — don't block — but surface the error so a
+        // regression doesn't ship silently.
+        console.warn('[dashboard] preview builder failed for', type, e);
+      }
     }
     wrap.querySelector('.mw-po-add').addEventListener('click', () => _dwPickerAdd(type));
   }
@@ -1137,7 +1141,9 @@ function _dwOpenPicker() {
     setTimeout(() => t.remove(), 1800);
   }
 
-  window._dwPickerAdd = function(type) {
+  // Local closures — not on window. Avoids stale references when the picker
+  // is opened twice in a row.
+  function _dwPickerAdd(type) {
     const reg = _DW_REG[type];
     if (!reg) return;
     const needsConfig = (reg.fields || []).some(f =>
@@ -1164,12 +1170,16 @@ function _dwOpenPicker() {
     // Keep the picker open so the user can add several in a row.
     _renderChips();
     _renderBody();
-  };
+  }
 
-  window._dwClosePicker = function() {
+  function _dwClosePicker() {
     document.removeEventListener('keydown', _onKey);
     document.getElementById('dw-picker-overlay')?.remove();
-  };
+  }
+
+  // Wire the close buttons that the template marked with data-mw-close
+  overlay.querySelectorAll('[data-mw-close]').forEach(b =>
+    b.addEventListener('click', _dwClosePicker));
 
   function _onKey(e) {
     // Ctrl+K / Cmd+K → focus search

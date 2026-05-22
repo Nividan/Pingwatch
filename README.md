@@ -47,7 +47,11 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 👤 User profiles — full name and email per user; self-service "Edit Profile" in the user menu
 - 🎨 Light / Dark theme toggle — switch from the user menu; preference persisted per user and synced across browsers/devices (`users.theme_preference` column + `localStorage` cache); instant switch with no page reload or flash-of-unthemed-content
 - 🌐 Web-based dashboard with live latency sparklines and customizable widgets; multi-dashboard tabs with rename/delete; new users get a starter layout
-- 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing
+- 🗺 Interactive Network Topology Manager (NTM) with draw.io-style editing — manual page editor renamed to **Topology Design**
+- 🛰 **Live Map** — dedicated NOC console at `/livemap.html`: hero stats (sites / devices / active alerts / 24h uptime), site-health mosaic sized by device count, OFF-Site reachability widget, sites-by-type bars, top problem sites, live alerts feed; click any site to drill in to a tier tree (Firewall → Switches → Hypervisor clusters → VM clusters + IPMI), with cluster cards showing a mini status dot-grid
+- 🏷 **Sites metadata** — sidecar `sites` table with kind (DC / LAB / PoP / EDGE / OFFICE / HQ / INTERNET), pinned flag, and optional display name; Add Site / Edit Site managed from the Devices tab (right-click any site header → Edit Site); colors propagate to the Live Map mosaic, sidebar pills, and Sites by Type widget
+- 📐 **Expandable rail sidebar** — toggle in the sidebar shows tab name labels next to icons; pushes content (does not overlay); preference persisted in `localStorage`
+- ➕ **Redesigned Add Widget modal** — searchable widget picker with category chips (Charts / Status / Events / Reports / Network), Recently Used + Popular sections, 3-column tile grid, side-popout live preview, keyboard navigation (↑↓/Enter/Esc/Ctrl-K), one-click add with confirmation toast
 - 🔒 Role-based access control: viewer / operator / admin
 - 🔑 Two-factor authentication (TOTP) — optional per user, enforceable per role; QR enrolment, recovery codes, and trusted-device management
 - 🔐 Native HTTPS / TLS 1.2+ with self-signed or imported certificates

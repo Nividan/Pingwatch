@@ -454,45 +454,7 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 [data-theme="light"] .pw-site-stat-name { color:rgba(0,0,0,0.7); }
 [data-theme="light"] .pw-site-stat-val  { color:rgba(0,0,0,0.85); }
 
-/* ── Incident cards (PingWatch Live panel) ───────────────────────── */
-.inc-list { display:flex; flex-direction:column; gap:7px; }
-.inc-card { border-radius:4px; padding:9px 11px; border-left:3px solid; }
-.inc-card-down { background:rgba(255,51,51,0.08); border-color:#ff3333; }
-.inc-card-crit { background:rgba(168,85,247,0.08); border-color:#a855f7; }
-.inc-card-warn { background:rgba(255,140,0,0.08); border-color:#ff8c00; }
-.inc-card-hdr { display:flex; align-items:center; gap:6px; margin-bottom:5px; }
-.inc-hdr-txt { font-family:'Share Tech Mono',monospace; font-size:8px; letter-spacing:1.5px; }
-.inc-card-down .inc-hdr-txt { color:#ff6666; }
-.inc-card-crit .inc-hdr-txt { color:#c084fc; }
-.inc-card-warn .inc-hdr-txt { color:#ffaa40; }
-.inc-name { font-family:'Orbitron',monospace; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.inc-meta { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(255,255,255,0.4); margin-top:2px; }
-.inc-sensors { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(255,100,100,0.7); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.inc-val { font-family:'Orbitron',monospace; font-size:12px; font-weight:700; margin-top:3px; color:#a855f7; }
-.inc-val-warn { color:#ff8c00; }
-/* Incident pulse — compositor-only (transform + opacity), zero paint per frame.
-   Previous box-shadow keyframes forced full rasterization on every tick and
-   choked the GPU pipeline browser-wide once a few incidents were on screen. */
-.inc-pulse { position:relative; display:inline-block; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-.inc-pulse::after {
-  content:''; position:absolute; inset:-1px;
-  border-radius:50%; border:2px solid currentColor; opacity:0;
-  pointer-events:none; will-change:transform, opacity;
-  animation: inc-ring 1.6s ease-out infinite;
-}
-.inc-pulse-down { background:#ff3333; color:rgba(255,51,51,0.85); }
-.inc-pulse-crit { background:#a855f7; color:rgba(168,85,247,0.85); }
-.inc-pulse-warn { background:#ff8c00; color:rgba(255,140,0,0.85); }
-.inc-pulse-crit::after { animation-duration:1.8s; }
-.inc-pulse-warn::after { animation-duration:2s; }
-@keyframes inc-ring {
-  0%   { transform:scale(0.6); opacity:0.7; }
-  70%  { transform:scale(2.4); opacity:0; }
-  100% { transform:scale(2.4); opacity:0; }
-}
-.inc-all-clear { text-align:center; padding:18px 0 8px; }
-.inc-all-clear-icon { font-size:26px; color:#00ff9d; text-shadow:0 0 10px #00ff9d; margin-bottom:6px; }
-.inc-all-clear-txt { font-family:'Share Tech Mono',monospace; font-size:9px; color:rgba(0,255,157,0.55); letter-spacing:1.5px; line-height:1.8; }
+/* Incident cards section removed — the PingWatch Live panel moved to /livemap.html. */
 
 /* ── Header stats pills ──────────────────────────────────────────── */
 #header-stats { display:flex; gap:6px; align-items:center; }
@@ -692,28 +654,7 @@ header h1 { font-family:'Orbitron',monospace; font-size:15px; color:var(--accent
 [data-theme="light"] .dash-bar-track { background: rgba(31,35,40,0.08); }
 [data-theme="light"] .dash-bar-count { color: rgba(31,35,40,0.5); }
 
-/* ── Incident cards ─────────────────────────────────────── */
-[data-theme="light"] .inc-name { color: #1f2328; }
-[data-theme="light"] .inc-meta { color: rgba(31,35,40,0.6); }
-[data-theme="light"] .inc-sensors { color: rgba(207,34,46,0.85); }
-[data-theme="light"] .inc-card-down {
-  background: rgba(207,34,46,0.08); border-color: #cf222e;
-}
-[data-theme="light"] .inc-card-down .inc-hdr-txt { color: #cf222e; }
-[data-theme="light"] .inc-card-crit {
-  background: rgba(124,58,237,0.08); border-color: #7c3aed;
-}
-[data-theme="light"] .inc-card-crit .inc-hdr-txt { color: #7c3aed; }
-[data-theme="light"] .inc-card-warn {
-  background: rgba(154,103,0,0.08); border-color: #9a6700;
-}
-[data-theme="light"] .inc-card-warn .inc-hdr-txt { color: #9a6700; }
-[data-theme="light"] .inc-val { color: #7c3aed; }
-[data-theme="light"] .inc-val-warn { color: #9a6700; }
-[data-theme="light"] .inc-all-clear-icon {
-  color: #1a7f37; text-shadow: 0 0 10px rgba(26,127,55,0.4);
-}
-[data-theme="light"] .inc-all-clear-txt { color: rgba(26,127,55,0.8); }
+/* Incident card light-theme overrides removed — see line 457 above. */
 
 /* ── Header stat pills ──────────────────────────────────── */
 [data-theme="light"] .h-stat-pill { background: rgba(255,255,255,0.85); }
@@ -773,7 +714,6 @@ html.map-idle .link-tunnel.flowing,
 html.map-idle .link-tunnel2.flowing,
 html.map-idle .pw-bw-crit.flowing,
 html.map-idle .pw-bw-warn.flowing,
-html.map-idle .inc-pulse::after,
 html.map-idle .status-border-down.recent,
 html.map-idle .logo-pulse,
 html.map-idle .led-blink {
@@ -788,7 +728,6 @@ html.map-idle .led-blink {
   .link-internet.flowing, .link-wifi.flowing,
   .link-tunnel.flowing, .link-tunnel2.flowing,
   .pw-bw-crit.flowing, .pw-bw-warn.flowing,
-  .inc-pulse::after,
   .status-border-down.recent,
   .logo-pulse {
     animation: none !important;

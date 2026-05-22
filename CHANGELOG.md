@@ -8,6 +8,78 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
 
+### Live Map — new NOC console (M1a) and per-site drill-in (M1b)
+
+Brand-new top-level page at `/livemap.html` (icon "Live Map" in the rail) that replaces the live overlay that used to live on the NTM tab. The old NTM page is now manual-only and renamed **Topology Design**. The Live Map is its own iframe — independent layout, independent state — so it doesn't fight the manual canvas editor for DOM ownership.
+
+**M1a — NOC Overview.** Default route `#/noc`. Four hero stat cards (SITES, DEVICES, ACTIVE ALERTS, UPTIME · 24H) with stacked up/warn/down bars; **site-health mosaic** with `grid-auto-flow: dense` cells sized by `sqrt(deviceCount)` and tinted by worst-status (click to drill in); **OFF-Site internet widget** rendering pinned reachability checks (latency or "— timeout"); **Sites by Type** bars per kind; **Top Problem Sites** ranked by active alerts; **Recent Alerts** feed (last 8 events, time-ago text refreshed every 5 s, paused via `visibilitychange` when the iframe is hidden).
+
+**M1b — Site Drill-In.** Route `#/site/<name>`. Flex-row tier layout: FIREWALL row centered, SWITCHES, HYPERVISORS (with IPMI inline at the trailing edge), VM CLUSTERS. Cluster cards show a mini status dot-grid (one cell per child device, auto-fit columns by `sqrt(count)`). Tier inference (`monitoring/site_tree.py`) is regex-based with a fallback to TIER_HYPERVISOR so unclassified servers still render as a cluster instead of disappearing. Internet-kind sites render as a flat reachability grid instead of forcing a tier structure that doesn't apply.
+
+**Data plane.** `monitoring/site_rollup.py` produces `site_summary_list()` (per-site up/warn/down/alerts/devices) and `noc_summary()` (hero stats, by-kind, top problems, recent alerts, off-site). Reads `STATE.devices`, `alert_events` (active/acknowledged), and `flap_log` (uptime/flap/incident counts over 24 h). `flap_log.ts` is TEXT (ISO `YYYY-MM-DDTHH:MM:SSZ`), so `_iso_utc()` and `_parse_iso_ts()` bind ISO strings rather than epoch ints to keep both PG and SQLite comparators happy. `resolved_at` is REAL/DOUBLE — the rollup uses `COALESCE(resolved_at, 0) AS rts` and treats anything > 0 as resolved.
+
+**Routes** (read-only, `viewer` role):
+- `GET /api/livemap/sites` — sidebar mosaic + rollup
+- `GET /api/livemap/noc/summary` — NOC widgets
+- `GET /api/livemap/sites/{name}/tree` — drill-in tier tree
+
+**SSE wiring.** `frontend/app.js` `_sseBatch` flush also `postMessage`s `{type:'lm_update'}` to the livemap iframe. The iframe coalesces 2 s windows, hashes the resulting payload (`name + up/warn/down/alerts + summary totals`), and skips re-render when the hash is unchanged — eliminates flicker on idle SSE bursts.
+
+**Files**: [frontend/livemap.html](frontend/livemap.html), [frontend/livemap.css](frontend/livemap.css), [frontend/livemap.js](frontend/livemap.js), [monitoring/site_rollup.py](monitoring/site_rollup.py), [monitoring/site_tree.py](monitoring/site_tree.py), [routes/livemap.py](routes/livemap.py). Sidebar nav + iframe pause/resume + theme/postMessage relay added to [frontend/index.html](frontend/index.html), [frontend/icons.js](frontend/icons.js), [frontend/app.js](frontend/app.js), [server.py](server.py).
+
+### Sites — metadata sidecar table + CRUD UI
+
+A new `sites` table stores presentation metadata for the Live Map sidebar pills, mosaic tint, and Sites by Type widget. Distinct site names still come from `devices.site` and `ipam_subnets.site`; this table only carries `kind` (`internet`/`hq`/`dc`/`lab`/`pop`/`edge`/`office`), `pinned` flag, `display_name`, `sort_order`, and timestamps. Rows are auto-created lazily by the Live Map rollup the first time it encounters an unseen site name, so fresh installs need no seeding.
+
+**Schema** ([db/core.py:577](db/core.py#L577), [db/pg_schema.py:153](db/pg_schema.py#L153)): idempotent `CREATE TABLE IF NOT EXISTS sites (...)` on both backends; PG uses `BIGINT` for timestamps, SQLite uses `INTEGER`. The IPAM `/api/sites` UNION was extended to include `sites.name` so the Devices and IPAM autocomplete pickers also see metadata-only sites.
+
+**CRUD UI in the Devices tab.** Decision: site CRUD lives in Devices (not the Live Map sidebar) because the Devices tab is where users already manage device→site assignments. The Devices toolbar gets a `+ Site` button; each site header gets a cog (⚙ Edit Site) and a right-click context menu with Edit Site / Add Site. The modal ([frontend/forms-site.js](frontend/forms-site.js)) is loaded by both the main app and the Live Map iframe; it self-injects its own CSS when run outside the iframe (because `livemap.css` only loads inside it). After save it broadcasts to every refresh hook in the current context (`_refreshDevices`, `_lmRefresh`, and a `postMessage` to the livemap-frame).
+
+**Cascade delete.** The delete flow first calls `GET /api/sites/meta/<name>/usage` to fetch `{devices, subnets}` counts and shows a second confirm modal with a cascade checkbox (defaulted ON when usage > 0). On confirm, `DELETE /api/sites/meta/<name>?cascade=1` clears `devices.site` and `ipam_subnets.site` for every row tagged with that name as well as removing the metadata row.
+
+**Endpoints**: `GET /api/sites/meta` (merged with distinct names), `POST /api/sites/meta`, `PUT /api/sites/meta/{name}` (accepts `new_name` + `also_rename` for bulk-rename of `devices.site`), `GET /api/sites/meta/{name}/usage`, `DELETE /api/sites/meta/{name}?cascade=0|1`. All writes `operator` role + audit-logged. New `_to_int()` helper in [routes/sites.py](routes/sites.py) returns the default for non-numeric input so a garbage `pinned` value never crashes with a 500.
+
+**Files**: [db/sites.py](db/sites.py), [routes/sites.py](routes/sites.py), [frontend/forms-site.js](frontend/forms-site.js); [routes/ipam.py](routes/ipam.py) (extends `/api/sites` UNION); [frontend/devices.js](frontend/devices.js) (toolbar button + site-header cog + context menu); [frontend/ipam.js](frontend/ipam.js) (empty-site placeholders for metadata-only sites).
+
+### Expandable rail sidebar
+
+The 56 px icon rail gets a toggle button that expands it to 180 px with tab name labels next to each icon. Expansion **pushes** content (does not overlay) — `#layout` uses `grid-template-columns: var(--rail-w) 1fr` and the expanded state is keyed off `#layout:has(> .rail.expanded)` (with a `.rail-expanded` class fallback on `#layout` for browsers without `:has()`). Preference persisted in `localStorage.pw_rail_expanded`. Implementation: [frontend/app.js](frontend/app.js) (`_railToggle` / `_railRestore`), [frontend/style.css](frontend/style.css) (`.rail.expanded` rules + grid override).
+
+### Add Widget modal — redesign
+
+The dashboard's "+ Add Widget" picker was rebuilt around a hi-fi design (see [design/handoff_add_widget_modal/README.md](design/handoff_add_widget_modal/README.md)). The new modal has a search input (Ctrl-K focus), category chips (ALL / RECENT / Charts / Status / Events / Reports / Network) with live counts, sectioned 3-column tile grid (RECENTLY USED · POPULAR · per-category), and a side-popout panel that renders a real DOM-backed mini-preview on hover.
+
+**Registry extensions** in [frontend/dashboard.js](frontend/dashboard.js):
+- `_DW_REG` entries gain `cat`, `desc`, `meta` (string list shown in the popout), `popular`, `isNew`.
+- `_DW_CATS` palette + `_DW_CAT_ORDER` define the section order and category colours.
+- `_DW_PREVIEW` registers 18 builders mapping every widget type to one of 12 reusable mini-render helpers (`_mpSparkline`, `_mpDevicePills`, `_mpUptimeBar`, `_mpGauge`, `_mpFlapList`, `_mpBars`, `_mpHeatmap`, `_mpDots`, `_mpSla`, `_mpInternet`, `_mpRing`, `_mpLicense`).
+
+**Interactions.** Live search filters tiles and sections; chips toggle (re-clicking the active chip clears back to ALL); ↑↓ moves the hover state with scroll-into-view; Enter adds the highlighted tile; click-on-tile adds immediately; widgets requiring per-instance config (device/sensor selectors) still hand off to the existing config-form path. Recent tracking via `localStorage.pw_widget_recent` (capped at 6). Add-confirmation surfaces a `.mw-toast` slide-in inside the popout column so the picker can stay open for adding multiple widgets in a row. The picker's `_dwPickerAdd` and `_dwClosePicker` are closure-scoped (no `window` pollution); close buttons in the template carry `data-mw-close` and are wired with `addEventListener` after the modal is appended.
+
+**Styles** ([frontend/style.css](frontend/style.css)): complete `.mw-*` block — modal shell, search, chips, body, sections, tiles, popout, foot, mini-preview helpers, `mw-toast` slide-in keyframes; full `:root[data-theme="light"]` override block for theme parity.
+
+### Sensor History Chart widget
+
+A configurable per-sensor chart widget for the dashboard. Picks a device + sensor and renders the same `sensor_chart` history view that lives in the Sensor detail panel, scoped to the dashboard's time-range selector. Avoids the flicker that an unthrottled SSE refresh would cause: refreshes guarded by `_dwChartLastFetch` with a 5-second minimum gap, and the time-range argument now correctly threads through `_dwTimeRangeMinutes()` instead of an undefined `w.cfg.minutes` reference.
+
+### Topology Design — strip + bug fixes
+
+The old NTM page is renamed **Topology Design** in the sidebar and is manual-only now. The PingWatch Live tab entry points (`switchToPingWatchPage`, `loadPingWatchPage`) and the dead REFRESH button were removed; the `.inc-*` CSS section (incident cards) was deleted from [map.css](frontend/map.css). About 500 lines of unreachable live-mode helpers (`renderPingWatchCanvas`, `_pwLiveUpdate`, `showPwDashboardPanel`) remain in [map.js](frontend/map.js) pending a post-1.0 cleanup — they're inert without the entry points but interconnected enough that surgical removal pre-release was too risky.
+
+**Bug fix**: clicking "Topology Design" used to land on an empty Main tab; you had to switch to another tab and back to see devices/links. Root cause: with the live tab gone, `isPingWatchPage` defaults to `false`, and the boot path called `switchPage(pages[0].id)` while `currentPageId` was already `1` (the Main page id) — the early-return guard at the start of `switchPage` matched and never called `loadData()`. New `_pageDataLoaded` flag in [map.js](frontend/map.js) blocks the early-return until the first load completes.
+
+### 1.0 pre-release audit fixes
+
+Surgical fixes uncovered by the pre-1.0 audit pass. Full report lives in chat history; the highlights:
+
+- **HIGH** — `db_rename_site_meta` was broken on PostgreSQL because `cursor.execute(...).fetchone()` chaining only works in SQLite (psycopg2's `execute` returns `None`). Split into two statements ([db/sites.py:135-148](db/sites.py#L135)).
+- **HIGH** — `monitoring/network_map.py:_conn()` was used as `with _conn() as con:` everywhere, but `sqlite3.Connection.__exit__` only commits — it never closes. Refactored `_conn()` into a `@contextmanager` that commits on success, rolls back on failure, and *always* closes ([monitoring/network_map.py:10-26](monitoring/network_map.py#L10)). About 20 callers fixed by the single refactor.
+- **HIGH** — Removed developer-name leak from the VM tier inference regex ([monitoring/site_tree.py:39](monitoring/site_tree.py#L39)).
+- **MEDIUM** — Three SQLite helpers in [routes/export.py](routes/export.py) (`_validate_sqlite`, `_vacuum_file`, `_detect_db_kind`) only closed the connection on the happy path; wrapped each in `try/finally` so a malformed upload no longer leaks a handle. `_validate_sqlite` no longer returns `str(e)` either — generic message + server-side log.
+- **MEDIUM** — `routes/ipam.py` subnet-add no longer surfaces `str(e)` (uses `e.args[0]` from the curated `ValueError` so the user-safe message survives but unrelated exceptions can't piggyback). LDAP test-connection / test-auth endpoints now return `"unexpected {ExceptionType}; check server log"` instead of leaking the raw message.
+- **MEDIUM** — `_DW_PREVIEW` builder failures `console.warn` instead of failing silently so QA can notice regressions.
+- **LOW** — `livemap.js` site-canvas click listener now binds once in `boot()` (was re-bound per site render — would accumulate after N navigations). `liveTickTimer` pauses on `visibilitychange` instead of burning CPU when the iframe is hidden. `routes/sites.py` `_to_int()` helper avoids 500s on garbage `pinned`/`sort_order` input. Add Widget modal's `_dwPickerAdd` / `_dwClosePicker` moved off `window` into closures.
+
 ### NTM Live — professional auto-layout (tier-ordered + orthogonal links)
 
 The auto-layout that the NTM Live tab produces on a pristine canvas was redesigned to look like a NOC tool instead of a shelf-packed grid. Four changes work together:

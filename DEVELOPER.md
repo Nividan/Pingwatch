@@ -51,7 +51,9 @@ Browser / Desktop GUI
         │   ├── smtp_alert.py          ← SMTP helper and email rendering
         │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
         │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
-        │   └── network_map.py         ← NTM topology data layer
+        │   ├── network_map.py         ← Topology Design (manual editor) data layer
+        │   ├── site_rollup.py         ← Live Map per-site + NOC rollup (sites, devices, alerts, off-site)
+        │   └── site_tree.py           ← Live Map tier inference (firewall / switch / hypervisor / VM / IPMI)
         │
         ├── backup/               ← Config backup engine
         │   ├── engine.py         ← SSH / Telnet backup engine
@@ -134,7 +136,9 @@ pingwatch/
 │   ├── smtp_alert.py            ← SMTP connection helper and email rendering (single + batched templates)
 │   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
 │   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
-│   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
+│   ├── network_map.py           ← Topology Design (manual editor) pages, nodes, links, groups (DB-backed)
+│   ├── site_rollup.py           ← Live Map roll-ups: site_summary_list() (per-site up/warn/down/alerts + metadata) and noc_summary() (hero stats, by-kind, top problems, recent alerts, off-site)
+│   └── site_tree.py             ← Tier inference + cluster grouping for the Live Map drill-in (firewall / switch / hypervisor / VM / IPMI); regex-based, falls back to TIER_HYPERVISOR so unclassified servers still render
 │
 ├── backup/
 │   ├── engine.py           ← SSH (paramiko) + Telnet connections, TOFU key verify,
@@ -184,7 +188,8 @@ pingwatch/
 │   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
 │   ├── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
 │   ├── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
-│   └── reports.py          ← Report template/schedule/history CRUD; 18 functions (db_list/get/create/update/delete for templates, schedules, history; prune, record_run, set_enabled)
+│   ├── reports.py          ← Report template/schedule/history CRUD; 18 functions (db_list/get/create/update/delete for templates, schedules, history; prune, record_run, set_enabled)
+│   └── sites.py            ← Sites metadata sidecar (Live Map): db_list_sites, db_get/upsert/ensure/rename/delete_site_meta, db_site_usage, db_distinct_site_names; lazy-creates rows when the rollup encounters an unseen devices.site value
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
@@ -206,7 +211,9 @@ pingwatch/
 │   ├── auto_discovery.py   ← Auto-discovery run-now, status, suppressed-host remove, first-scan approve
 │   ├── licenses.py         ← Device license CRUD + expiration check trigger
 │   ├── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
-│   └── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
+│   ├── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
+│   ├── sites.py            ← Sites metadata CRUD — /api/sites/meta (list, create, update/rename, delete with optional cascade); operator role; audit-logged
+│   └── livemap.py          ← Live Map read endpoints — /api/livemap/sites, /api/livemap/noc/summary, /api/livemap/sites/<name>/tree; viewer role
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -232,9 +239,13 @@ pingwatch/
     ├── logs.js             ← Top-level Logs tab (admin-only): stream sub-tabs, live tail, smart scroll-follow, min-level filter, custom time range, word-wrap, copy / CSV / JSON, keyboard shortcuts, localStorage prefs
     ├── ipam.js             ← IPAM tab
     ├── bg.js               ← Animated background canvas
-    ├── map.html            ← Network Topology Manager shell
-    ├── map.css             ← NTM styles
-    ├── map.js              ← NTM canvas engine
+    ├── map.html            ← Topology Design (manual editor) shell — PingWatch Live tab removed; entry points stripped pre-1.0
+    ├── map.css             ← Topology Design styles
+    ├── map.js              ← Topology Design canvas engine — manual pages, drag/zoom, undo/redo, links, groups
+    ├── livemap.html        ← Live Map (NOC console + site drill-in) shell — separate iframe under #liveMapView
+    ├── livemap.css         ← Live Map styles — scope bar, sidebar mosaic, hero stats, tier rows, off-site band, site-detail panel; theme parity via [data-theme="light"]
+    ├── livemap.js          ← Live Map controller: sidebar render + search, NOC widgets, SiteDetail tier rendering, SVG connection lines, SSE/postMessage fan-out from parent app.js, hash-based routing (#/noc, #/site/<name>); single delegated #lm-main click listener
+    ├── forms-site.js       ← Add/Edit/Delete Site modal — used by both the Devices tab and the Live Map sidebar; self-injects modal CSS when run in the main app context (livemap.css only loads inside the iframe); cascade-delete with usage counts
     └── fonts/              ← Self-hosted woff2 files — Exo 2, JetBrains Mono, Orbitron, Share Tech Mono (no CDN dependency; air-gapped safe)
 ```
 
@@ -640,7 +651,7 @@ The frontend is served as static files — no build step.
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.); reconciles `theme_preference` from `/api/me` into `setTheme(..., {sync:false})` after login |
 | `theme.js` | Theme manager — public API `getTheme()` / `setTheme(t, opts)` / `toggleTheme()` / `getCssVar(name)` / `getCssRgb(name)`. `setTheme` writes `<html data-theme>`, persists `localStorage.pw_theme`, postMessages the map iframe, dispatches a `themechange` `CustomEvent`, refreshes the user-menu button label, and fires `PATCH /api/me/theme` in the background (skipped when `opts.sync===false` to avoid echo when mirroring the server value). `getCssRgb()` parses `#rgb` / `#rrggbb` / `rgb()` / `rgba()` values into `[r,g,b]` tuples — used by canvas modules that need `rgba(${rgb.join(',')},${alpha})` template literals. An inline bootstrap script in `<head>` applies the attribute synchronously before CSS paints — prevents FOUC. Loaded first in the JS bundle so downstream modules can call `getCssVar()` / `getCssRgb()` during init. |
-| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. `backup_status` widget (`_dwNcmStatusRefresh`) fetches `/api/backups` + `/api/settings` in parallel; renders the existing device-config 2×2 KPI grid (OK/Failed/Never/Enabled) plus a **Database** section (`_dwRenderDbBackup`) showing last-run age (color-coded green/amber/red by overdue threshold), next scheduled run, and optional remote upload status line; clicking the DB card navigates to Settings → Database. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
+| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** + **redesigned Add Widget modal** — `_DW_REG` extended per-widget with `cat` (charts/status/events/reports/network), `desc`, `meta`, `popular`, `isNew`; `_DW_PREVIEW` registry of mini-preview DOM builders surfaces a side popout when a tile is hovered; modal shell built by `_dwOpenPicker()` — search input (Ctrl-K), category chips, Recently Used / Popular / per-category sections, 3-column tile grid, keyboard nav (↑↓/Enter/Esc), click-to-add with toast confirmation, recent tracking via `localStorage.pw_widget_recent` (cap 6); the picker's add and close handlers are closure-scoped (no window pollution). — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. `backup_status` widget (`_dwNcmStatusRefresh`) fetches `/api/backups` + `/api/settings` in parallel; renders the existing device-config 2×2 KPI grid (OK/Failed/Never/Enabled) plus a **Database** section (`_dwRenderDbBackup`) showing last-run age (color-coded green/amber/red by overdue threshold), next scheduled run, and optional remote upload status line; clicking the DB card navigates to Settings → Database. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates. History chart + sparkline canvases maintain a module-level `_SCC` RGB cache (`accent` / `up` / `warn` / `down` / `text` / `bg` / `bg2`) populated via `getCssRgb()` and invalidated on the `themechange` event; the listener iterates `_histCache` and calls `dmHistRedraw(did, sid)` on every open chart so all visible history modals repaint immediately after a theme toggle |
 | `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
@@ -660,7 +671,9 @@ The frontend is served as static files — no build step.
 | `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **sortable columns** (click headers, ▲/▼ arrows) on all 7 columns with IP-numeric, alpha, and date comparators; **filter dropdowns** on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None); sort + filter + text search compose together; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` |
 | `bg.js` | Animated background canvas (aurora + radar). Theme-aware: RGB colour cache populated via `getCssRgb()` from `--accent` / `--up` / `--text2`, refreshed by a `themechange` listener — the next RAF frame picks up the new palette without a page reload |
-| `map.js` | NTM canvas engine — drag-and-drop topology editor. Iframe theme sync: parent postMessage (`{type:'theme', value}`) + localStorage bootstrap (same-origin with parent) set `<html data-theme>` on arrival/load. Animated background palettes — two frozen objects (`_NTM_BG_PALETTES.dark` / `.light`) feeding an active `_NTM_BG` reference; `_ntmRefreshBgPalette()` swaps it and dispatches `ntm_themechange`. `initMainBg` (hex grid, matrix streams, particles, ring pulses, scan line, corner HUD, base fill) and `initDashBg` (side-panel particles + connections + scan bar) read `_NTM_BG` every frame; the `ntm_themechange` listener zeroes `hexCacheW/H` so the offscreen hex cache rebuilds with the new stroke colour on the next frame |
+| `livemap.js` | Live Map (NOC console) controller — loaded inside `/livemap.html` iframe. Sidebar render + search, NOC widget rendering, SiteDetail tier layout (firewall → switches → hypervisors + IPMI inline → VM clusters), SVG connection lines with `dashFlow` animation, hash-based routing (`#/noc`, `#/site/<name>`), SSE/postMessage fan-out from the parent app.js `_sseBatch` (2-second flush debounce). Click delegation on the stable `#lm-main` element is bound once in `boot()` so site re-renders don't accumulate listeners; `liveTickTimer` pauses on `visibilitychange` to avoid CPU churn when the iframe is hidden. `_lmRefresh` / `_lmGetSites` / `_lmGetSite` are exposed on `window` for `forms-site.js` to invalidate cached state after a CRUD operation. |
+| `forms-site.js` | Add/Edit/Delete Site modal — used from the Devices tab (the "+ Add Site" button and the right-click → "Edit Site" context menu item on a site header) and from the Live Map sidebar. Self-injects modal CSS the first time `openModal` runs (the styles live in `livemap.css`, which isn't loaded in the main app context). `_broadcastRefresh()` calls `_refreshDevices` + `_lmRefresh` + posts `{type:'lm_refresh'}` to the livemap iframe so all three surfaces re-fetch after every change. Delete flow opens a secondary confirm modal that pulls `/api/sites/meta/<name>/usage` and offers a cascade checkbox (default on when usage > 0). |
+| `map.js` | Topology Design (manual editor) canvas engine — drag-and-drop topology editor. PingWatch Live tab removed pre-1.0 (entry points stripped; the live overlay moved to `livemap.js`). A handful of unreachable live-mode helpers (`renderPingWatchCanvas`, `_pwLiveUpdate`, `showPwDashboardPanel`) remain in the file pending a post-1.0 cleanup pass. Iframe theme sync: parent postMessage (`{type:'theme', value}`) + localStorage bootstrap (same-origin with parent) set `<html data-theme>` on arrival/load. Animated background palettes — two frozen objects (`_NTM_BG_PALETTES.dark` / `.light`) feeding an active `_NTM_BG` reference; `_ntmRefreshBgPalette()` swaps it and dispatches `ntm_themechange`. `initMainBg` (hex grid, matrix streams, particles, ring pulses, scan line, corner HUD, base fill) and `initDashBg` (side-panel particles + connections + scan bar) read `_NTM_BG` every frame; the `ntm_themechange` listener zeroes `hexCacheW/H` so the offscreen hex cache rebuilds with the new stroke colour on the next frame |
 | `fonts/` | Self-hosted `.woff2` font files (Exo 2, JetBrains Mono, Orbitron, Share Tech Mono). Referenced by `@font-face` rules in `style.css` + `map.css` + inline `<style>` in `setup.html`. No external CDN — PingWatch has zero network dependencies at runtime (air-gapped safe). CSP reflects this: `style-src 'self' 'unsafe-inline'; font-src 'self';` in `server.py`. For PNG topology exports, `map.js::_inlineFontsForExport()` base64-embeds the Orbitron + Share Tech Mono woff2 files so exported images render correctly outside the app. |
 
 ---
@@ -812,6 +825,28 @@ Also extends `POST /api/login` to return `{radius_challenge: true, challenge_id,
 | `DELETE` | `/api/ipam/subnets/{id}` | Remove subnet and all allocations |
 | `GET` | `/api/ipam/subnets/{id}/ips` | IP allocations for a subnet |
 | `PUT` | `/api/ipam/ips/{subnet_id}/{ip}` | Set or clear the name for an IP |
+
+### Sites (Live Map metadata)
+
+The `sites` sidecar table stores presentation metadata only — distinct site names still come from `devices.site` and `ipam_subnets.site`. Rows are created lazily by the Live Map rollup when it sees an unseen site name.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/sites/meta` | viewer | List metadata rows merged with every distinct site name from devices + IPAM → `{sites: [{name, kind, pinned, display_name, sort_order, created_ts, updated_ts}], kinds: [...]}` |
+| `POST` | `/api/sites/meta` | operator | Create site `{name, kind, pinned?, display_name?, sort_order?}` — kinds: `internet`/`hq`/`dc`/`lab`/`pop`/`edge`/`office` |
+| `PUT` | `/api/sites/meta/{name}` | operator | Update site; accepts `kind`, `pinned`, `display_name`, `sort_order`, `new_name` (rename), `also_rename` (bulk-update `devices.site`) |
+| `GET` | `/api/sites/meta/{name}/usage` | viewer | `{devices, subnets}` — counts for the delete-confirm UI |
+| `DELETE` | `/api/sites/meta/{name}` | operator | Delete metadata row; optional `?cascade=1` also clears `devices.site` and `ipam_subnets.site` for any row carrying this name |
+
+### Live Map (NOC console)
+
+Read-only endpoints feeding the NOC console at `/livemap.html`. Updates fan out from `app.js` via `postMessage({type:'lm_update'})` to the iframe; the iframe debounces and re-fetches on a 2-second flush.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/livemap/sites` | viewer | Per-site rollup with metadata — `{sites: [{name, kind, pinned, display_name, devices, up, warn, down, alerts}]}` |
+| `GET` | `/api/livemap/noc/summary` | viewer | NOC widgets payload — `{sites:{up,warn,down,total}, devices:{...}, alerts:{active,down,warn,ack}, uptime_24h, flaps_24h, incidents_24h, by_kind:{...}, top_problems:[...], recent_alerts:[...], off_site:[...]}` |
+| `GET` | `/api/livemap/sites/{name}/tree` | viewer | Tier tree for one site — `{site:{...}, firewalls:[...], switches:[...], hypervisors:[clusters], vm_clusters:[clusters], ipmi:[clusters], other:[devices]}` |
 
 ### Device Licenses
 

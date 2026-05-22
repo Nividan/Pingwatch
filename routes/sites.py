@@ -23,6 +23,17 @@ from db import (
 )
 
 
+def _to_int(v, default: int = 0) -> int:
+    """Coerce a body field to int without crashing on garbage input.
+    Returns `default` for None / non-numeric / empty string."""
+    if v is None or v == "":
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 _RE_SITE_META_COLL  = re.compile(r"^/api/sites/meta/?$")
 _RE_SITE_META_ITEM  = re.compile(r"^/api/sites/meta/([^/]+)/?$")
 _RE_SITE_META_USAGE = re.compile(r"^/api/sites/meta/([^/]+)/usage/?$")
@@ -114,9 +125,9 @@ def handle(h, method, path, body):
         ok = db_upsert_site_meta(
             name,
             kind=kind,
-            pinned=int(body.get("pinned") or 0),
+            pinned=_to_int(body.get("pinned")),
             display_name=(body.get("display_name") or "").strip(),
-            sort_order=int(body.get("sort_order") or 0),
+            sort_order=_to_int(body.get("sort_order")),
         )
         if not ok:
             h._json(500, {"error": "failed to create site"}); return True
@@ -152,7 +163,7 @@ def handle(h, method, path, body):
         if new_name and new_name != name:
             if not existing:
                 # Bootstrap a metadata row so the rename path has something to move
-                db_upsert_site_meta(name, kind=kind, pinned=int(body.get("pinned") or 0))
+                db_upsert_site_meta(name, kind=kind, pinned=_to_int(body.get("pinned")))
             ok = db_rename_site_meta(name, new_name, also_rename_devices=also_rename)
             if not ok:
                 h._json(409, {"error": "rename failed (target may already exist)"}); return True
@@ -162,11 +173,11 @@ def handle(h, method, path, body):
         ok = db_upsert_site_meta(
             target_name,
             kind=kind,
-            pinned=int(body.get("pinned") or (existing or {}).get("pinned") or 0),
+            pinned=_to_int(body.get("pinned"), _to_int((existing or {}).get("pinned"))),
             display_name=(body.get("display_name") if "display_name" in body
                           else (existing or {}).get("display_name", "")),
-            sort_order=int(body.get("sort_order") if "sort_order" in body
-                           else (existing or {}).get("sort_order", 0)),
+            sort_order=_to_int(body.get("sort_order") if "sort_order" in body
+                               else (existing or {}).get("sort_order")),
         )
         if not ok:
             h._json(500, {"error": "failed to update site"}); return True

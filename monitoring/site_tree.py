@@ -36,8 +36,8 @@ _TIER_RULES = [
     (TIER_SWITCH,     re.compile(r"\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|"
                                  r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw|"
                                  r"l3|l2|router|rtr-)\b", re.I)),
-    (TIER_VM,         re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|nive|"
-                                 r"pingwatch|guest|tenant)\b", re.I)),
+    (TIER_VM,         re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|"
+                                 r"guest|tenant)\b", re.I)),
     (TIER_HYPERVISOR, re.compile(r"\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|"
                                  r"blade|bladecenter|esx-|hypervisor|host\d)\b", re.I)),
 ]

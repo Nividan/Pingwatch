@@ -178,7 +178,12 @@ def handle(h, method, path, body):
         try:
             new_id = db_add_subnet(canonical, name, user, site=site, vlan=vlan_id)
         except ValueError as e:
-            h._json(409, {'error': str(e)}); return True
+            # ValueError from db_add_subnet carries a curated user-facing
+            # message (e.g. "Subnet '10.0.0.0/24' already exists"). Pull the
+            # arg directly rather than str(e) so we never accidentally surface
+            # an unrelated exception that bubbles through this path.
+            msg = e.args[0] if e.args else "subnet already exists"
+            h._json(409, {'error': msg}); return True
         _sid, _cidr = new_id, canonical
         _db_enqueue(lambda: ipam_sync_subnet_add(_sid, _cidr))
         db_log_audit(user, h.client_address[0], 'ipam_subnet_add', canonical)
