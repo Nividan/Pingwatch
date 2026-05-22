@@ -640,11 +640,21 @@ body {
   color: var(--accent2); text-transform: uppercase; letter-spacing: 0.5px;
   margin-bottom: 5px; display: flex; align-items: center; gap: 6px;
 }
+.lm-tt-sub {
+  font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700;
+  color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 4px; margin-top: 2px;
+  display: flex; align-items: center; gap: 6px;
+}
 .lm-tt-c {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 16px; height: 14px; padding: 0 4px;
   background: rgba(0,212,255,0.15); border-radius: 7px;
   font-size: 9px; color: var(--accent2);
+}
+.lm-tt-divider {
+  height: 1px; margin: 8px 0;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
 }
 .lm-tt-l > div { padding: 1px 0; }
 .lm-tt-l > div + div {

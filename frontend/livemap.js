@@ -692,6 +692,9 @@ function _renderSiteTree(name, tree) {
     requestAnimationFrame(function() { _drawConnections(canvas); });
     // Redraw on resize — connection coords drift when the panel reflows.
     _bindCanvasResize(canvas);
+    // Canvas-level hover tracking: aggregates overlapping hits via
+    // elementsFromPoint so a shared trunk shows every line passing through.
+    _bindCanvasTooltip(canvas);
   }
 }
 
@@ -835,7 +838,10 @@ function _drawConnections(canvasEl) {
                 ' L ' + px + ' ' + trunkY +
                 ' L ' + px + ' ' + py;
 
-      // Invisible wider hitbox for easier hover targeting.
+      // Invisible wider hitbox for easier hover targeting. No per-path
+      // listeners — a canvas-level mousemove handler uses elementsFromPoint
+      // to find ALL overlapping hits at the cursor (so a trunk shared by
+      // two children shows both mappings at once).
       const hit = document.createElementNS(svgNs, 'path');
       hit.setAttribute('d', d);
       hit.setAttribute('stroke', 'transparent');
@@ -845,9 +851,6 @@ function _drawConnections(canvasEl) {
       hit.dataset.parentName = parentLabel;
       hit.dataset.childName = _cardLabel(c.childEl);
       hit.dataset.mappings = JSON.stringify(c.mappings.map(function(m) { return m.from; }));
-      hit.addEventListener('mouseenter', _onConnEnter);
-      hit.addEventListener('mouseleave', _onConnLeave);
-      hit.addEventListener('mousemove',  _onConnMove);
 
       // Visible thin line on top.
       const path = document.createElementNS(svgNs, 'path');
@@ -869,6 +872,9 @@ function _drawConnections(canvasEl) {
 }
 
 // ─── Connection-line tooltip ──────────────────────────────────────
+// Single canvas-level listener. On mousemove we query elementsFromPoint
+// to find EVERY .conn-hit at the cursor — so a trunk shared by two lines
+// shows both sets of mappings, not just the topmost.
 function _connTooltipEl() {
   let tip = document.getElementById('lm-conn-tooltip');
   if (!tip) {
@@ -879,39 +885,80 @@ function _connTooltipEl() {
   }
   return tip;
 }
-function _onConnEnter(e) {
-  const hit = e.currentTarget;
-  const childName  = hit.dataset.childName  || '';
-  const parentName = hit.dataset.parentName || '';
-  let names;
-  try { names = JSON.parse(hit.dataset.mappings || '[]'); }
-  catch { names = []; }
-  if (!names.length) names = [childName];
-  // Dedup while preserving order.
-  const seen = {};
-  names = names.filter(function(n) {
-    if (seen[n]) return false;
-    seen[n] = 1;
-    return true;
-  });
-  const lines = names.map(function(n) {
-    return '<div>' + esc(n) + ' → ' + esc(parentName) + '</div>';
-  }).join('');
-  const tip = _connTooltipEl();
-  tip.innerHTML =
-    '<div class="lm-tt-h">' + esc(childName) + ' ↔ ' + esc(parentName) +
-      ' <span class="lm-tt-c">' + names.length + '</span></div>' +
-    '<div class="lm-tt-l">' + lines + '</div>';
-  tip.style.display = 'block';
-}
-function _onConnLeave() {
+function _hideConnTooltip() {
   const tip = document.getElementById('lm-conn-tooltip');
   if (tip) tip.style.display = 'none';
 }
-function _onConnMove(e) {
-  const tip = document.getElementById('lm-conn-tooltip');
-  if (!tip) return;
-  // Anchor below-right of cursor; flip if clipped against the viewport.
+function _bindCanvasTooltip(canvasEl) {
+  if (canvasEl._tooltipBound) return;
+  canvasEl._tooltipBound = true;
+  canvasEl.addEventListener('mousemove', _onCanvasConnMove);
+  canvasEl.addEventListener('mouseleave', _hideConnTooltip);
+}
+function _onCanvasConnMove(e) {
+  const stack = document.elementsFromPoint(e.clientX, e.clientY);
+  const hits = stack.filter(function(el) {
+    return el && el.classList && el.classList.contains('conn-hit');
+  });
+  if (!hits.length) { _hideConnTooltip(); return; }
+
+  // Aggregate by (childName, parentName) so two distinct links sharing a
+  // trunk show as two sections, while N overlapping segments of the same
+  // (child, parent) pair collapse into one.
+  const groups = new Map();
+  hits.forEach(function(h) {
+    const childName  = h.dataset.childName  || '';
+    const parentName = h.dataset.parentName || '';
+    const key = childName + ' ' + parentName;
+    let names;
+    try { names = JSON.parse(h.dataset.mappings || '[]'); }
+    catch { names = []; }
+    if (!names.length) names = [childName];
+    if (!groups.has(key)) {
+      groups.set(key, { childName: childName, parentName: parentName, names: new Set() });
+    }
+    const g = groups.get(key);
+    names.forEach(function(n) { g.names.add(n); });
+  });
+
+  const sections = Array.from(groups.values()).map(function(g) {
+    return { childName: g.childName, parentName: g.parentName, names: Array.from(g.names) };
+  });
+
+  let html = '';
+  if (sections.length === 1) {
+    const s = sections[0];
+    html =
+      '<div class="lm-tt-h">' + esc(s.childName) + ' ↔ ' + esc(s.parentName) +
+        ' <span class="lm-tt-c">' + s.names.length + '</span></div>' +
+      '<div class="lm-tt-l">' +
+        s.names.map(function(n) {
+          return '<div>' + esc(n) + ' → ' + esc(s.parentName) + '</div>';
+        }).join('') +
+      '</div>';
+  } else {
+    const total = sections.reduce(function(acc, s) { return acc + s.names.length; }, 0);
+    html =
+      '<div class="lm-tt-h">' + sections.length + ' OVERLAPPING LINKS' +
+        ' <span class="lm-tt-c">' + total + '</span></div>';
+    sections.forEach(function(s, i) {
+      if (i > 0) html += '<div class="lm-tt-divider"></div>';
+      html +=
+        '<div class="lm-tt-sub">' + esc(s.childName) + ' ↔ ' + esc(s.parentName) +
+          ' <span class="lm-tt-c">' + s.names.length + '</span></div>' +
+        '<div class="lm-tt-l">' +
+          s.names.map(function(n) {
+            return '<div>' + esc(n) + ' → ' + esc(s.parentName) + '</div>';
+          }).join('') +
+        '</div>';
+    });
+  }
+
+  const tip = _connTooltipEl();
+  tip.innerHTML = html;
+  tip.style.display = 'block';
+
+  // Position below-right of cursor; flip if clipped against the viewport.
   const pad = 14;
   let x = e.clientX + pad, y = e.clientY + pad;
   const w = tip.offsetWidth || 200, h = tip.offsetHeight || 50;
