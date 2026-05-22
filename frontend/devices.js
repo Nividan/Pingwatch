@@ -1487,10 +1487,10 @@ function openAddDeviceGroup(group){
 }
 
 // ── Add Group modal ──────────────────────────────────────────────
-// Mirrors the Edit Group modal's field set (Site, Device Icon, Mute) so a
-// user can fully configure a group at creation time instead of having to
-// reopen it for editing. Alert Profile is omitted — it's an inheritance
-// viewer that needs an existing group to scope against.
+// Mirrors the Edit Group modal's field set (Site, Tier, Mute) so a user
+// can fully configure a group at creation time instead of having to reopen
+// it for editing. Alert Profile is omitted — it's an inheritance viewer
+// that needs an existing group to scope against.
 function openAddGroup(){
   closeM('mag');
   const o=document.createElement('div');
@@ -1524,37 +1524,20 @@ function openAddGroup(){
       </div>
 
       <div class="alrt-section">
-        <div class="alrt-section-hdr">Device Icon (NTM Live map)</div>
+        <div class="alrt-section-hdr">Tier (Live Map)</div>
         <div class="fr">
-          <select id="ag-icon">
-            <option value="">— Auto-detect from name / group —</option>
-            <option value="switch">Switch</option>
-            <option value="bb-switch">Backbone Switch</option>
+          <select id="ag-tier">
+            <option value="">— Auto-detect from name —</option>
             <option value="firewall">Firewall</option>
-            <option value="wan-switch">WAN Switch</option>
-            <option value="server">Server</option>
-            <option value="pc">PC / Workstation</option>
-            <option value="laptop">Laptop</option>
-            <option value="ap">WiFi Access Point</option>
-            <option value="connector">Cato Connector</option>
-            <option value="remote-pc">Remote PC</option>
-            <option value="cloud">Cloud / Internet</option>
-            <option value="router">Router / Gateway</option>
-            <option value="vm">Virtual Machine</option>
-            <option value="appliance">Network Appliance</option>
-            <option value="storage">Storage / NAS</option>
-            <option value="phone">IP Phone / VoIP</option>
-            <option value="camera">IP Camera / CCTV</option>
-            <option value="printer">Printer / MFP</option>
-            <option value="load-balancer">Load Balancer</option>
-            <option value="hypervisor">Hypervisor / ESXi</option>
-            <option value="ups">UPS / PDU</option>
-            <option value="container">Container Host</option>
-            <option value="ipmi">IPMI / BMC</option>
+            <option value="switch">Switch</option>
+            <option value="hypervisor">Hypervisor</option>
+            <option value="vm">VM</option>
+            <option value="ipmi">IPMI / OOB</option>
+            <option value="other">Other</option>
           </select>
           <div class="fh">
-            Default icon for every device in this group on the NTM Live map.
-            Per-device icon overrides (set from the NTM panel) still take precedence.
+            Forces every device in this group into the chosen Live Map tier.
+            Leave on Auto to use name-pattern inference.
           </div>
         </div>
       </div>
@@ -1592,7 +1575,7 @@ async function submitAddGroup(){
   const name = (document.getElementById('ag-n')?.value || '').trim();
   if(!name){ toast('Group name is required','err'); return; }
   const site  = (document.getElementById('ag-site')?.value || '').trim().slice(0, 80);
-  const icon  = (document.getElementById('ag-icon')?.value || '').trim();
+  const tier  = (document.getElementById('ag-tier')?.value || '').trim();
   const muted = !!document.getElementById('ag-muted')?.checked;
 
   const exists = document.getElementById(grpId(_dgKey(site, name)));
@@ -1611,20 +1594,20 @@ async function submitAddGroup(){
     document.getElementById('devActBar').style.display='';
   }
 
-  // Persist the group-level Device Icon default (if set). Same payload shape
-  // the Edit Group modal uses (pw_group_icons settings key + postMessage to
-  // the NTM iframe so it re-renders without a page reload).
-  if (icon) {
+  // Persist the group-level Live Map tier override (if set). Same payload
+  // shape the Edit Group modal uses (pw_group_tiers settings key + postMessage
+  // to the livemap iframe so the drill-in re-buckets without a reload).
+  if (tier) {
     try {
-      const cur = await api('GET', '/api/settings/pw_group_icons').catch(() => null);
+      const cur = await api('GET', '/api/settings/pw_group_tiers').catch(() => null);
       const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
-      map[name] = icon;
-      await api('PATCH', '/api/settings/pw_group_icons', { value: map });
-      const _mf = document.getElementById('map-frame');
-      _mf?.contentWindow?.postMessage({ type: 'pw_group_icons', value: map }, window.location.origin);
+      map[name] = tier;
+      await api('PATCH', '/api/settings/pw_group_tiers', { value: map });
+      const _lf = document.getElementById('livemap-frame');
+      _lf?.contentWindow?.postMessage({ type: 'lm_refresh' }, window.location.origin);
     } catch (e) {
-      toast('Icon save failed: ' + (e.message || e), 'err');
-      // Still proceed — the group exists; the user can re-set the icon later
+      toast('Tier save failed: ' + (e.message || e), 'err');
+      // Still proceed — the group exists; the user can re-set the tier later
     }
   }
 

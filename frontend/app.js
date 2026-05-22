@@ -1882,13 +1882,25 @@ async function _refreshDevices(){
     // Surface known sites that have no devices yet (sites added via Live Map
     // but not yet assigned). They render as empty collapsible sections so the
     // user can see at a glance which sites exist before assigning devices.
+    let hasSiteSections = false;
     try {
       const sd = await (await fetch('/api/sites')).json();
       (sd.sites||[]).forEach(name=>{
         if (typeof ensureSiteSection==='function') ensureSiteSection(name);
       });
+      hasSiteSections = (sd.sites||[]).length > 0;
       if (typeof refreshSiteCounts==='function') refreshSiteCounts();
     } catch(_) {}
+    // The initial splash/dpanels toggle in switchMainTab() only looked at
+    // devices, so a fresh install that has sites but no devices stayed on
+    // the radar splash even though we just appended empty site sections.
+    // Re-evaluate once sites have been merged.
+    if (hasSiteSections && !Object.keys(S.devices).length) {
+      const em = document.getElementById('emptyMain');
+      const dp = document.getElementById('dpanels');
+      if (em) em.style.display = 'none';
+      if (dp) dp.style.display = '';
+    }
     updatePills();
   }catch(e){}
 }

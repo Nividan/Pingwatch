@@ -647,11 +647,12 @@ body {
 }
 .sd-tier-row.center  { justify-content: center; }
 .sd-tier-row.spread  { justify-content: space-around; }
-/* IPMI lives at the right end of the HYPERVISORS row (vertically aligned
-   with the hypervisor cluster cards, not floating at the canvas top). */
+/* IPMI sits right next to the hypervisor cluster cards in the same row.
+   The dashed left border + IPMI · OOB tier tag mark it as a distinct
+   sub-tier without floating it to the right edge of the canvas. */
 .sd-ipmi-inline {
   display: flex; flex-direction: column; gap: 6px;
-  margin-left: auto; padding-left: 12px;
+  padding-left: 12px;
   border-left: 1px dashed rgba(168,85,247,0.3);
   position: relative;
 }

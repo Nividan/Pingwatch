@@ -25,8 +25,64 @@ async function _ipamInit() {
   if (!_ipamShellInited) {
     _ipamShellInited = true;
     _ipamRenderShell();
+    // Wire the right-click context menu once the shell exists.
+    _initIpamCtxMenu();
   }
   await Promise.all([_ipamLoadSubnets(), _ipamLoadLicenses()]);
+}
+
+// ── Subnet card context menu ───────────────────────────────────────────────
+// Right-click on any subnet card → Edit Subnet / Delete Subnet. Reuses the
+// devices tab's .dev-ctx-menu + .dci styling so it matches the rest of the
+// app without a separate CSS block. Both actions piggy-back on the existing
+// _ipamOpenEdit / _ipamRemoveSubnet flows, which already key on _ipamSelectedId
+// — we select the subnet first, then open the menu.
+let _icm = null;
+
+function _ipamHideCtxMenu() {
+  if (_icm) _icm.style.display = 'none';
+}
+
+function _ipamShowCtxMenu(x, y) {
+  if (!_icm) return;
+  _icm.style.display = 'block';
+  const mw = _icm.offsetWidth || 185, mh = _icm.offsetHeight || 100;
+  _icm.style.left = (x + mw > innerWidth ? x - mw : x) + 'px';
+  _icm.style.top  = (y + mh > innerHeight ? y - mh : y) + 'px';
+}
+
+function _initIpamCtxMenu() {
+  if (_icm) return;
+  _icm = document.createElement('div');
+  _icm.className = 'dev-ctx-menu';
+  _icm.id = 'ipam-ctx-menu';
+  _icm.style.display = 'none';
+  document.body.appendChild(_icm);
+  // Any click anywhere (including on the menu items themselves) closes the
+  // menu — the inline onclick handlers fire first because we attach this
+  // listener to document and bubbling lets the menu's click run before
+  // dismissal.
+  document.addEventListener('click', _ipamHideCtxMenu);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') _ipamHideCtxMenu(); });
+  // Delegate contextmenu off the sidebar list so we don't re-bind on every
+  // re-render. The list element is built by _ipamRenderShell.
+  const list = document.getElementById('ipam-subnet-list');
+  if (!list) return;
+  list.addEventListener('contextmenu', e => {
+    const card = e.target.closest('.ipam-subnet-card[data-subnet-id]');
+    if (!card) return;
+    e.preventDefault();
+    const sid = parseInt(card.getAttribute('data-subnet-id'), 10);
+    if (!sid) return;
+    // Select the subnet so the existing Edit/Remove handlers find it via
+    // _ipamSelectedId. Also visually highlights the card the user clicked.
+    _ipamOnSubnetChange(sid);
+    _icm.innerHTML = `
+      <div class="dci dci-accent" onclick="_ipamHideCtxMenu();_ipamOpenEdit()">⚙️ Edit Subnet</div>
+      <div class="dci-sep"></div>
+      <div class="dci dci-danger rbac-op" onclick="_ipamHideCtxMenu();_ipamRemoveSubnet()">🗑️ Delete Subnet</div>`;
+    _ipamShowCtxMenu(e.clientX + 2, e.clientY + 2);
+  });
 }
 
 function _ipamRenderShell() {
@@ -196,7 +252,13 @@ function _ipamRenderSidebar() {
       })
     : _ipamSubnets;
 
-  if (!visible.length) {
+  // Early-out only when there's truly nothing to render — no subnets AND no
+  // known-site placeholders to surface. Without this, a fresh install that
+  // has sites but no subnets falls through here and never reaches the
+  // known-sites merge below, so the user just sees "No subnets yet" with
+  // their sites invisible.
+  const hasKnownSitesToShow = !q && (_ipamKnownSites || []).length > 0;
+  if (!visible.length && !hasKnownSitesToShow) {
     list.innerHTML = `<div class="ipam-empty">${q ? 'No subnets match.' : 'No subnets yet — click + Add Subnet.'}</div>`;
     return;
   }
@@ -242,7 +304,7 @@ function _ipamRenderSidebar() {
       const v = s.vlan|0;
       const vlanChip = v ? `<span class="ipam-subnet-vlan" title="VLAN ${v}">V${v}</span>` : '';
       return `
-        <div class="ipam-subnet-card${active}" onclick="_ipamOnSubnetChange(${s.id})">
+        <div class="ipam-subnet-card${active}" data-subnet-id="${s.id}" onclick="_ipamOnSubnetChange(${s.id})">
           <div class="ipam-subnet-card-l">
             <div class="ipam-subnet-cidr mono">${esc(s.cidr)}${vlanChip}</div>
             <div class="ipam-subnet-meta">${esc(s.name || '—')}</div>

@@ -37,38 +37,22 @@ async function openEditGroup(groupName) {
         </div>
 
         <div class="alrt-section">
-          <div class="alrt-section-hdr">Device Icon (NTM Live map)</div>
+          <div class="alrt-section-hdr">Tier (Live Map)</div>
           <div class="fr">
-            <select id="eg-icon">
-              <option value="">— Auto-detect from name / group —</option>
-              <option value="switch">Switch</option>
-              <option value="bb-switch">Backbone Switch</option>
+            <select id="eg-tier">
+              <option value="">— Auto-detect from name —</option>
               <option value="firewall">Firewall</option>
-              <option value="wan-switch">WAN Switch</option>
-              <option value="server">Server</option>
-              <option value="pc">PC / Workstation</option>
-              <option value="laptop">Laptop</option>
-              <option value="ap">WiFi Access Point</option>
-              <option value="connector">Cato Connector</option>
-              <option value="remote-pc">Remote PC</option>
-              <option value="cloud">Cloud / Internet</option>
-              <option value="router">Router / Gateway</option>
-              <option value="vm">Virtual Machine</option>
-              <option value="appliance">Network Appliance</option>
-              <option value="storage">Storage / NAS</option>
-              <option value="phone">IP Phone / VoIP</option>
-              <option value="camera">IP Camera / CCTV</option>
-              <option value="printer">Printer / MFP</option>
-              <option value="load-balancer">Load Balancer</option>
-              <option value="hypervisor">Hypervisor / ESXi</option>
-              <option value="ups">UPS / PDU</option>
-              <option value="container">Container Host</option>
-              <option value="ipmi">IPMI / BMC</option>
+              <option value="switch">Switch</option>
+              <option value="hypervisor">Hypervisor</option>
+              <option value="vm">VM</option>
+              <option value="ipmi">IPMI / OOB</option>
+              <option value="other">Other</option>
             </select>
             <div class="fh">
-              Default icon for every device in this group on the NTM Live map.
-              Per-device icon overrides (set from the NTM panel) still take
-              precedence.
+              Forces every device in this group into the chosen Live Map tier.
+              Leave on Auto to use the name-pattern inference. Override per
+              group when the regex misclassifies, e.g. a hypervisor group
+              named without "esx" / "hyper" / "proxmox".
             </div>
           </div>
         </div>
@@ -107,15 +91,15 @@ async function openEditGroup(groupName) {
   // Site picker: prefill from the unique sites currently used by devices in
   // this group. Populate the autocomplete datalist from /api/sites.
   _loadGroupSiteState(groupName);
-  // NTM device-icon default: pull the current setting and select the option.
-  _loadGroupIconState(groupName);
+  // Live Map tier override: pull the current setting and select the option.
+  _loadGroupTierState(groupName);
 }
 
-async function _loadGroupIconState(groupName) {
-  const sel = document.getElementById('eg-icon');
+async function _loadGroupTierState(groupName) {
+  const sel = document.getElementById('eg-tier');
   if (!sel) return;
   try {
-    const r = await api('GET', '/api/settings/pw_group_icons');
+    const r = await api('GET', '/api/settings/pw_group_tiers');
     const map = (r && r.value) || {};
     const cur = map[groupName] || '';
     sel.value = cur;
@@ -213,32 +197,31 @@ async function saveEditGroup(oldName) {
   const newName = (document.getElementById('eg-name')?.value || '').trim();
   if (!newName) { toast('Group name cannot be empty', 'err'); return; }
 
-  // Device-icon default (NTM Live map) — write BEFORE rename so we can also
-  // migrate the entry if the group is being renamed in the same save.
-  const iconSel = document.getElementById('eg-icon');
-  let _iconWrote = false, _wantIcon = '', _hadIcon = '';
-  if (iconSel && iconSel.dataset.initial !== undefined) {
-    _wantIcon = (iconSel.value || '').trim();
-    _hadIcon  = iconSel.dataset.initial || '';
-    if (_wantIcon !== _hadIcon || newName !== oldName) {
+  // Live Map tier override — write BEFORE rename so the map entry can be
+  // migrated if the group is being renamed in the same save.
+  const tierSel = document.getElementById('eg-tier');
+  let _tierWrote = false;
+  if (tierSel && tierSel.dataset.initial !== undefined) {
+    const wantTier = (tierSel.value || '').trim();
+    const hadTier  = tierSel.dataset.initial || '';
+    if (wantTier !== hadTier || newName !== oldName) {
       try {
-        const cur = await api('GET', '/api/settings/pw_group_icons').catch(() => null);
+        const cur = await api('GET', '/api/settings/pw_group_tiers').catch(() => null);
         const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
         // Remove the old name's entry first (handles both rename and clear).
         delete map[oldName];
-        if (_wantIcon) map[newName] = _wantIcon;
-        await api('PATCH', '/api/settings/pw_group_icons', { value: map });
-        // NTM Live tab runs in an iframe — postMessage triggers an in-place
-        // re-render with the new icon map instead of waiting for the next
-        // full tab load.
-        const _mf = document.getElementById('map-frame');
-        _mf?.contentWindow?.postMessage(
-          { type: 'pw_group_icons', value: map },
+        if (wantTier) map[newName] = wantTier;
+        await api('PATCH', '/api/settings/pw_group_tiers', { value: map });
+        // Live Map runs in an iframe — postMessage triggers a refresh so the
+        // drill-in re-buckets devices with the new override applied.
+        const _lf = document.getElementById('livemap-frame');
+        _lf?.contentWindow?.postMessage(
+          { type: 'lm_refresh' },
           window.location.origin
         );
-        _iconWrote = true;
+        _tierWrote = true;
       } catch (e) {
-        toast('Icon save failed: ' + (e.message || e), 'err');
+        toast('Tier save failed: ' + (e.message || e), 'err');
         return;
       }
     }

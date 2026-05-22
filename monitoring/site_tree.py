@@ -16,6 +16,7 @@ import re
 from collections import defaultdict
 
 from core.app_state import STATE
+from core.logger    import log
 from monitoring.site_rollup import _site_of, _device_status, _active_alerts_by_did
 
 
@@ -25,6 +26,32 @@ TIER_HYPERVISOR = "hypervisor"
 TIER_VM         = "vm"
 TIER_IPMI       = "ipmi"
 TIER_OTHER      = "other"
+
+# Tier keys an Edit Group dropdown may persist. "auto" / "" both mean
+# "fall back to the regex inference below" — the override is opt-in.
+_VALID_TIERS = {
+    TIER_FIREWALL, TIER_SWITCH, TIER_HYPERVISOR, TIER_VM, TIER_IPMI, TIER_OTHER,
+}
+
+
+def _load_group_tier_overrides() -> dict:
+    """Load `topo_settings.pw_group_tiers` — a `{groupName: tierKey}` map.
+    Returns {} if the setting doesn't exist or anything goes wrong; the
+    regex fallback in infer_tier() handles every group either way."""
+    try:
+        from monitoring.network_map import topo_get_setting
+        row = topo_get_setting("pw_group_tiers")
+        if not row:
+            return {}
+        val = row.get("value") if isinstance(row, dict) else None
+        if not isinstance(val, dict):
+            return {}
+        # Normalize: drop entries pointing at unknown tiers so a stale
+        # entry never silently classifies devices into a non-existent tier.
+        return {k: v for k, v in val.items() if v in _VALID_TIERS}
+    except Exception as e:
+        log.debug(f"site_tree: tier overrides unavailable: {e}")
+        return {}
 
 # Order matters — first match wins. IPMI / firewall / switch use narrower rules
 # (they have distinctive vendor markers); VM and hypervisor get broader.
@@ -43,22 +70,28 @@ _TIER_RULES = [
 ]
 
 
-def infer_tier(device) -> str:
+def infer_tier(device, group_overrides: dict | None = None) -> str:
     """Best-effort tier classification for a device.
 
-    Inspects the device name plus its host string + group name. Returns
-    one of the TIER_* constants. Falls back to TIER_HYPERVISOR so generic
-    servers ("srv-01", "win-prod-db", etc.) still show up as cluster cards
-    in the drill-in instead of being lost in an OTHER bucket."""
+    Priority:
+      1. Per-group override from `topo_settings.pw_group_tiers` (set via the
+         Edit Group modal). Lets admins force a misclassified group into the
+         right tier without changing device names.
+      2. Regex inference over name + host + group string.
+      3. Fallback to TIER_HYPERVISOR so generic servers still surface as
+         cluster cards in the drill-in instead of disappearing into OTHER.
+    """
+    g = (device.group or "").strip()
+    if group_overrides and g:
+        ov = group_overrides.get(g)
+        if ov in _VALID_TIERS:
+            return ov
     name = (device.name or "")
     host = (device.host or "")
-    blob = f"{name} {host} {(device.group or '')}"
+    blob = f"{name} {host} {g}"
     for tier, rx in _TIER_RULES:
         if rx.search(blob):
             return tier
-    # Default fallback: treat unknown devices as servers (hypervisor tier).
-    # Better to surface them as cluster cards than to drop them into a hidden
-    # OTHER section. Admin can later refine with manual tier overrides.
     return TIER_HYPERVISOR
 
 
@@ -123,6 +156,8 @@ def site_tree(site_name: str) -> dict:
     """
     site_name = (site_name or "").strip()
     alerts_by_did = _active_alerts_by_did()
+    # Load once per drill-in. Admin Edit-Group overrides win over the regex.
+    group_overrides = _load_group_tier_overrides()
 
     # Bucket every device in this site by tier
     by_tier_devices = {
@@ -136,7 +171,7 @@ def site_tree(site_name: str) -> dict:
     for d in STATE.devices.values():
         if _site_of(d) != site_name:
             continue
-        tier = infer_tier(d)
+        tier = infer_tier(d, group_overrides)
         by_tier_devices[tier].append(d)
 
     # Firewalls + switches render as individual device cards
