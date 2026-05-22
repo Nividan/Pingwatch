@@ -1,4 +1,33 @@
 // ── Shared helpers (loaded first — used by all other forms-*.js files) ────
+
+/** Live Map tier dropdown — single source of truth for both Add Group and
+ *  Edit Group modals. Mirrored on the backend in monitoring/site_tree.py
+ *  _VALID_TIERS. When adding a new tier here, add the matching key + regex
+ *  in the backend too. */
+const _LM_TIER_OPTIONS = [
+  {value: '',            label: '— Auto-detect from name —'},
+  {value: 'isp',         label: 'ISP'},
+  {value: 'wan_switch',  label: 'WAN Switch'},
+  {value: 'firewall',    label: 'Firewall'},
+  {value: 'core_switch', label: 'Core Switch'},
+  {value: 'switch',      label: 'Access Switch'},
+  {value: 'chassis',     label: 'Chassis / Enclosure'},
+  {value: 'hypervisor',  label: 'Hypervisor / Server'},
+  {value: 'vm',          label: 'VM'},
+  {value: 'ipmi',        label: 'IPMI / OOB'},
+  {value: 'other',       label: 'Other'},
+];
+/** Build option HTML for the tier dropdown. `selected` is the currently
+ *  chosen value (or '' for auto-detect). */
+function _lmTierOptionsHtml(selected) {
+  const sel = String(selected == null ? '' : selected);
+  return _LM_TIER_OPTIONS.map(function(o) {
+    return '<option value="' + o.value + '"' +
+           (o.value === sel ? ' selected' : '') +
+           '>' + o.label + '</option>';
+  }).join('');
+}
+
 function closeM(id){document.getElementById(id)?.remove();}
 /** Attach backdrop-click-to-close that ignores mousedown-inside drags. */
 function _overlayClose(o, closeFn) {

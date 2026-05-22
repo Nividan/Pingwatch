@@ -1528,15 +1528,7 @@ function openAddGroup(siteName){
       <div class="alrt-section">
         <div class="alrt-section-hdr">Tier (Live Map)</div>
         <div class="fr">
-          <select id="ag-tier">
-            <option value="">— Auto-detect from name —</option>
-            <option value="firewall">Firewall</option>
-            <option value="switch">Switch</option>
-            <option value="hypervisor">Hypervisor</option>
-            <option value="vm">VM</option>
-            <option value="ipmi">IPMI / OOB</option>
-            <option value="other">Other</option>
-          </select>
+          <select id="ag-tier">${_lmTierOptionsHtml('')}</select>
           <div class="fh">
             Forces every device in this group into the chosen Live Map tier.
             Leave on Auto to use name-pattern inference.

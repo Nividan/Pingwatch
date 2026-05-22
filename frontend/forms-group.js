@@ -32,19 +32,7 @@ async function openEditGroup(groupName) {
         <div class="meg-row2">
           <div class="meg-sec">
             <div class="meg-h">Tier (Live Map)</div>
-            <select id="eg-tier">
-              <option value="">— Auto-detect from name —</option>
-              <option value="isp">ISP</option>
-              <option value="wan_switch">WAN Switch</option>
-              <option value="firewall">Firewall</option>
-              <option value="core_switch">Core Switch</option>
-              <option value="switch">Access Switch</option>
-              <option value="chassis">Chassis / Enclosure</option>
-              <option value="hypervisor">Hypervisor / Server</option>
-              <option value="vm">VM</option>
-              <option value="ipmi">IPMI / OOB</option>
-              <option value="other">Other</option>
-            </select>
+            <select id="eg-tier">${_lmTierOptionsHtml('')}</select>
             <div class="fh">Forces every device into this Live Map tier. Auto = name-pattern inference.</div>
           </div>
           <div class="meg-sec">
