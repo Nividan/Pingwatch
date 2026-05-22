@@ -518,6 +518,12 @@ function _clusterCard(c, opts) {
   opts = opts || {};
   const status = c.status === 'up' ? 'up' : (c.status === 'warn' ? 'warn' : (c.status === 'down' ? 'down' : 'unknown'));
   const icon = opts.icon || ICONS.hyp;
+  // Optional chip in the cluster head — used to mark IPMI cards as OOB
+  // (out-of-band management plane) without a separate tier-tag header.
+  // Style is keyed via the chip class so other tiers can opt into it later.
+  const chip = opts.chip
+    ? '<span class="cluster-chip ' + esc(opts.chip.cls || '') + '">' + esc(opts.chip.label) + '</span>'
+    : '';
   // Mini status grid: one LED per child device. CSS handles wrapping via
   // grid-template-columns: repeat(auto-fill, 10px) — no per-cluster column
   // count needed, so a 1-device cluster shows one LED instead of stretching
@@ -525,9 +531,11 @@ function _clusterCard(c, opts) {
   const cells = c.cells.map(function(cell) {
     return '<div class="d-' + (cell.status || 'unknown') + '" title="' + esc(cell.name) + '"></div>';
   }).join('');
-  return '<div class="cluster ' + status + '" data-cluster="' + esc(c.name) + '">' +
+  const cardCls = 'cluster' + (opts.tier ? ' tier-' + opts.tier : '') + ' ' + status;
+  return '<div class="' + cardCls + '" data-cluster="' + esc(c.name) + '">' +
            '<div class="cluster-head">' + icon +
              '<span class="cluster-title">' + esc(c.name) + '</span>' +
+             chip +
              '<span class="cluster-count">' + c.count + '</span>' +
            '</div>' +
            '<div class="cluster-grid">' + cells + '</div>' +
@@ -550,34 +558,9 @@ function renderSite(name) {
   });
 }
 
-function _offsiteBand(s, currentSite) {
-  // Render the OFF-Site band at the top of every site-detail view EXCEPT
-  // when the user is drilled into the off-site itself (avoid showing the
-  // same internet checks twice — once as the band and once as the main tree).
-  if (!s || !s.off_site || !s.off_site.length) return '';
-  const cur = (currentSite || '').toLowerCase();
-  if (cur === 'off-site' || cur === 'offsite' || cur === 'internet') return '';
-  const cards = s.off_site.map(function(o) {
-    const cls = o.status === 'up' ? 'up' : (o.status === 'warn' ? 'warn' : (o.status === 'down' ? 'down' : 'unknown'));
-    const ms = (o.latency_ms == null)
-      ? '<span class="latency down">— timeout</span>'
-      : '<span class="latency">' + o.latency_ms + 'ms</span>';
-    return '<div class="sd-offsite-card ' + cls + '">' +
-             '<div class="sd-oc-row">' + ICONS.cloud +
-               '<span class="sd-oc-name">' + esc(o.name) + '</span>' +
-             '</div>' +
-             '<div class="sd-oc-host">' + esc(o.host) + ms + '</div>' +
-           '</div>';
-  }).join('');
-  return '<div class="sd-offsite">' +
-           '<div class="sd-offsite-head">' +
-             '<span class="sd-offsite-k">SITE</span>' +
-             '<span class="sd-offsite-n">OFF-Site</span>' +
-             '<span class="sd-offsite-s">› INTERNET REACHABILITY (PINNED)</span>' +
-           '</div>' +
-           '<div class="sd-offsite-row">' + cards + '</div>' +
-         '</div>';
-}
+// (Removed) The OFF-Site context band that used to appear above every site
+// drill-in. Pinned internet reachability is already a first-class entry in
+// the sidebar; surfacing it again on every site page was redundant noise.
 
 function _renderSiteTree(name, tree) {
   const main = $('lm-main');
@@ -626,22 +609,22 @@ function _renderSiteTree(name, tree) {
     return _clusterCard(c, { icon: ICONS.vm });
   }
   function _ipmiRow(c) {
-    return _clusterCard(c, { icon: ICONS.ipmi });
+    // IPMI cluster cards live in the hypervisor row alongside the in-band
+    // clusters. The purple OOB chip on each card carries the "out-of-band
+    // management" signal that the old standalone tier-tag header carried.
+    return _clusterCard(c, {
+      icon: ICONS.ipmi,
+      tier: 'ipmi',
+      chip: { label: 'OOB', cls: 'oob' },
+    });
   }
 
-  // IPMI inline at the right end of the HYPERVISORS row, with its own
-  // tier-tag above the card. Sharing the row aligns IPMI vertically with
-  // the hypervisor cluster cards (which is what the design intends).
-  const ipmiTrailing = ipmi.length
-    ? '<div class="sd-ipmi-inline">' +
-        '<span class="tier-tag ipmi inline">IPMI · OOB</span>' +
-        ipmi.map(_ipmiRow).join('') +
-      '</div>'
-    : '';
+  // No more dedicated IPMI column — cards trail the hypervisor row as
+  // regular flex items, each carrying its own OOB chip.
+  const ipmiTrailing = ipmi.length ? ipmi.map(_ipmiRow).join('') : '';
 
   main.innerHTML =
     '<div class="sd-wrap">' +
-      _offsiteBand(LM.summary, name) +
       '<div class="site">' +
         '<div class="site-corners"><span></span><span></span><span></span><span></span></div>' +
         '<div class="site-tab">' +
