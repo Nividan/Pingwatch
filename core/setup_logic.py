@@ -509,6 +509,152 @@ def detect_pg_server() -> "tuple[bool, str]":
     return False, ""
 
 
+def install_psycopg2(progress_cb=None) -> "tuple[bool, str]":
+    """Install psycopg2 the right way for this platform.
+
+    Returns (ok, message). The message is suitable for showing in either
+    CLI or GUI status output.
+
+    Why this is more than a one-line pip install:
+
+      `psycopg2-binary` ships pre-built wheels that bundle their own copy
+      of libpq (the PostgreSQL client library) and its transitive deps —
+      including libkrb5. Those bundled libraries are built against a
+      specific glibc / kernel / CPU baseline, and on some systems (we've
+      seen RHEL 9 / Rocky 9 with certain CPUs) the bundled libkrb5
+      segfaults on first PG connection, taking the whole server with it.
+      The segfault is in C code so Python's tracebacks won't catch it —
+      systemd just sees `code=dumped, status=11/SEGV` and restart-loops.
+
+    The reliable fix is to build psycopg2 from source. The source build
+    links against the system's libpq, which was packaged with the system's
+    libkrb5 → guaranteed-compatible. Cost: needs gcc + Python headers +
+    postgresql-devel/libpq-dev on the build host (one-time).
+
+    Strategy:
+      1. Linux/macOS: try source build (`pip install --no-binary :all: psycopg2`).
+      2. If the build fails because headers are missing, auto-install build
+         deps via the system package manager and retry once.
+      3. If the source build still fails, fall back to the distro's prebuilt
+         python3-psycopg2 (when available) — same underlying solution
+         (system libpq, no bundled libkrb5).
+      4. Last-resort fallback: `psycopg2-binary` with a printed warning that
+         this is the variant known to segfault on some platforms.
+      5. Windows: use `psycopg2-binary` (the binary wheel works fine there;
+         no libkrb5 segfault has been seen on Windows).
+    """
+    import platform as _plat
+    import shutil as _sh
+
+    def _say(msg: str):
+        if callable(progress_cb):
+            try: progress_cb(msg)
+            except Exception: pass
+
+    # Already importable? Nothing to do.
+    if check_import("psycopg2"):
+        return True, "psycopg2 already installed"
+
+    _sys = _plat.system()
+
+    # ── Windows: binary wheel is the correct path ────────────────────────
+    if _sys == "Windows":
+        _say("Installing psycopg2-binary wheel ...")
+        ok, err = pip_install("psycopg2-binary>=2.9.9")
+        if ok:
+            return True, "psycopg2-binary installed"
+        return False, f"pip install failed: {err[:280]}"
+
+    # ── Linux/macOS: prefer source build ─────────────────────────────────
+    def _source_build():
+        _say("Building psycopg2 from source (this is the safe variant) ...")
+        # --no-binary :all: forces source build even if a wheel exists.
+        return pip_install("--no-binary :all: psycopg2>=2.9.9")
+
+    ok, err = _source_build()
+    if ok:
+        return True, "psycopg2 built from source (linked to system libpq)"
+
+    err_low = (err or "").lower()
+    missing_pg_config = (
+        "pg_config" in err_low and "executable not found" in err_low
+    ) or "pg_config executable" in err_low
+    missing_python_h = "python.h" in err_low or "no such file" in err_low and "python" in err_low
+
+    # ── Try to auto-install build deps once, then retry ─────────────────
+    if missing_pg_config or missing_python_h or "error: command" in err_low:
+        deps_installed = False
+        if _sh.which("apt-get"):
+            _say("Build deps missing — installing libpq-dev + python3-dev via apt ...")
+            r = subprocess.run(
+                ["sudo", "apt-get", "install", "-y",
+                 "gcc", "python3-dev", "libpq-dev"],
+                capture_output=True, text=True,
+            )
+            deps_installed = (r.returncode == 0)
+        elif _sh.which("dnf"):
+            _say("Build deps missing — installing postgresql-devel + python3-devel via dnf ...")
+            r = subprocess.run(
+                ["sudo", "dnf", "install", "-y",
+                 "gcc", "python3-devel", "postgresql-devel", "libpq-devel"],
+                capture_output=True, text=True,
+            )
+            # libpq-devel is the right name on RHEL 9+ / Fedora 38+; older
+            # platforms use postgresql-devel. dnf treats one missing name as
+            # non-fatal when others succeed, so check whether pg_config landed.
+            deps_installed = bool(_sh.which("pg_config"))
+        elif _sh.which("yum"):
+            _say("Build deps missing — installing postgresql-devel + python3-devel via yum ...")
+            r = subprocess.run(
+                ["sudo", "yum", "install", "-y",
+                 "gcc", "python3-devel", "postgresql-devel"],
+                capture_output=True, text=True,
+            )
+            deps_installed = (r.returncode == 0)
+        elif _sh.which("brew"):
+            _say("Build deps missing — installing libpq via brew ...")
+            r = subprocess.run(["brew", "install", "libpq"],
+                                capture_output=True, text=True)
+            deps_installed = (r.returncode == 0)
+
+        if deps_installed:
+            # Retry the source build now that pg_config is on PATH.
+            ok2, err2 = _source_build()
+            if ok2:
+                return True, "psycopg2 built from source after installing build deps"
+            err = err2
+
+    # ── Source build still failed: try the distro's prebuilt package ────
+    if _sh.which("apt-get"):
+        _say("Source build failed — trying python3-psycopg2 from apt ...")
+        r = subprocess.run(
+            ["sudo", "apt-get", "install", "-y", "python3-psycopg2"],
+            capture_output=False,
+        )
+        if r.returncode == 0 and check_import("psycopg2"):
+            return True, "psycopg2 installed via apt (python3-psycopg2)"
+    elif _sh.which("dnf"):
+        _say("Source build failed — trying python3-psycopg2 from dnf ...")
+        r = subprocess.run(
+            ["sudo", "dnf", "install", "-y", "python3-psycopg2"],
+            capture_output=False,
+        )
+        if r.returncode == 0 and check_import("psycopg2"):
+            return True, "psycopg2 installed via dnf (python3-psycopg2)"
+
+    # ── Last-resort fallback: binary wheel with a loud warning ──────────
+    _say("WARNING: falling back to psycopg2-binary — this wheel bundles "
+         "libpq and libkrb5, which has been seen to segfault on some Linux "
+         "systems. Install gcc + libpq-dev (apt) or postgresql-devel (dnf) "
+         "to switch to the safer source build.")
+    ok, err_bin = pip_install("psycopg2-binary>=2.9.9")
+    if ok:
+        return True, ("psycopg2-binary installed (fallback — see WARNING). "
+                      "If the server segfaults on PG connection, install "
+                      "build deps and rerun setup to switch to source build.")
+    return False, f"all install paths failed: source={err[:200]} bin={err_bin[:200]}"
+
+
 def pg_install_instructions() -> str:
     """Return distro-specific PostgreSQL install instructions."""
     import platform as _plat

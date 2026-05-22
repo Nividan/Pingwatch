@@ -820,43 +820,35 @@ def step2_database():
     _is_root = sys.platform != "win32" and os.getuid() == 0
     _sctl = ["systemctl"] if _is_root else ["sudo", "systemctl"]
 
-    # 2a. Install psycopg2-binary ───────────────────────────────────────────────
+    # 2a. Install psycopg2 ──────────────────────────────────────────────────────
+    # Use the shared install_psycopg2() helper so the CLI wizard, the GUI
+    # wizard, and any future install path all pick the right variant per
+    # platform. On Linux/macOS this builds from source so the system libpq
+    # (and its libkrb5) is used, avoiding the bundled-wheel segfault that
+    # psycopg2-binary triggers on some platforms.
     try:
         import psycopg2  # noqa: F401
         _tag("ok", "psycopg2 — Python PostgreSQL driver")
     except ImportError:
         _tag("warn", "psycopg2 is not installed (required for PostgreSQL).")
-        if _ask_yn("Install psycopg2-binary now?", default=True):
-            _tag("info", "Installing psycopg2-binary ...")
-            ok, err = _pip_install("psycopg2-binary>=2.9.9")
+        if _ask_yn("Install psycopg2 now?", default=True):
+            from core.setup_logic import install_psycopg2 as _install_pg
+            ok, msg = _install_pg(progress_cb=lambda m: _tag("info", m))
             if ok:
-                _tag("ok", "psycopg2-binary installed successfully")
+                _tag("ok", msg)
             else:
-                # Try system package as fallback
-                import shutil as _sh
-                _sys_ok = False
-                if sys.platform != "win32" and _sh.which("apt-get"):
-                    _tag("info", "pip failed — system package python3-psycopg2 may work.")
-                    if _ask_yn("Try installing python3-psycopg2 via apt-get?", default=True):
-                        r = subprocess.run(
-                            ["sudo", "apt-get", "install", "-y", "python3-psycopg2"],
-                            capture_output=False,
-                        )
-                        _sys_ok = r.returncode == 0
-                if _sys_ok:
-                    _tag("ok", "psycopg2 installed via system package manager")
-                else:
-                    _tag("error", "Could not install psycopg2-binary automatically.")
-                    _tag("info", "Install manually:")
-                    _tag("info", "  pip install psycopg2-binary")
-                    _tag("info", "  or: sudo apt install python3-psycopg2")
-                    if not _ask_yn("Continue anyway?", default=False):
-                        _tag("info", "Switching to SQLite.")
-                        from db.backend import save_config, load_config
-                        save_config({"db_backend": "sqlite"})
-                        load_config()
-                        _state["db_backend"] = "sqlite"
-                        return
+                _tag("error", f"Could not install psycopg2 automatically — {msg}")
+                _tag("info", "Install manually:")
+                _tag("info", "  pip install --no-binary :all: psycopg2")
+                _tag("info", "  or: sudo apt install python3-psycopg2")
+                _tag("info", "  or: sudo dnf install python3-psycopg2")
+                if not _ask_yn("Continue anyway?", default=False):
+                    _tag("info", "Switching to SQLite.")
+                    from db.backend import save_config, load_config
+                    save_config({"db_backend": "sqlite"})
+                    load_config()
+                    _state["db_backend"] = "sqlite"
+                    return
         else:
             _tag("warn", "Skipping — PostgreSQL backend requires psycopg2.")
             _tag("info", "Switching to SQLite.")
