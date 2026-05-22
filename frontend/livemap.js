@@ -542,10 +542,16 @@ function _clusterCard(c, opts) {
   // connection layer to map child→cluster when a parent is itself inside a cluster.
   const parents = JSON.stringify(c.parent_device_ids || []);
   const memberDids = JSON.stringify((c.cells || []).map(function(x) { return x.did; }));
+  // Per-cell parent detail for the hover tooltip — lets a line know exactly
+  // which cells flow through it (not just "this cluster has these parents").
+  const cellsDetail = JSON.stringify((c.cells || []).map(function(x) {
+    return { did: x.did, name: x.name, p: x.parent_device_ids || [] };
+  }));
   const mixedAttr = c.mixed_parents ? ' data-mixed-parents="1"' : '';
   return '<div class="' + cardCls + '" data-cluster="' + esc(c.name) + '"' +
            ' data-parent-ids=\'' + parents.replace(/'/g, '&#39;') + '\'' +
            ' data-cells=\'' + memberDids.replace(/'/g, '&#39;') + '\'' +
+           ' data-cells-detail=\'' + cellsDetail.replace(/'/g, '&#39;') + '\'' +
            (opts.tier ? ' data-tier="' + esc(opts.tier) + '"' : '') +
            mixedAttr + '>' +
            '<div class="cluster-head">' + icon +
@@ -701,6 +707,13 @@ const _CONN_STYLES = {
   'firewall':   { color: 'var(--gold)',    dashed: false }, // (root — rarely has parents)
 };
 
+function _cardLabel(el) {
+  if (!el) return '';
+  const t = el.querySelector('.dev-name') || el.querySelector('.cluster-title');
+  if (t && t.textContent) return t.textContent.trim();
+  return el.getAttribute('data-cluster') || el.getAttribute('data-did') || '';
+}
+
 function _drawConnections(canvasEl) {
   if (!canvasEl) return;
   const oldSvg = canvasEl.querySelector('.conn-svg');
@@ -723,6 +736,57 @@ function _drawConnections(canvasEl) {
     });
   });
 
+  // Pass 1 — build parent → children map with per-cell mapping detail.
+  // parentMap key: parent DOM element.
+  // value: [{ childEl, tier, mappings: [{from, pid}, ...] }]
+  // Same (parent, child) pair coalesces — duplicates from per-cell iteration are merged.
+  const parentMap = new Map();
+  function _push(parentEl, childEl, tier, mapping) {
+    let arr = parentMap.get(parentEl);
+    if (!arr) { arr = []; parentMap.set(parentEl, arr); }
+    let entry = arr.find(function(e) { return e.childEl === childEl; });
+    if (!entry) {
+      entry = { childEl: childEl, tier: tier, mappings: [] };
+      arr.push(entry);
+    }
+    entry.mappings.push(mapping);
+  }
+
+  canvasEl.querySelectorAll('[data-parent-ids]').forEach(function(child) {
+    const tier = child.getAttribute('data-tier') || 'other';
+    const isCluster = child.classList.contains('cluster');
+
+    if (isCluster) {
+      // Per-cell granularity: tooltip can show "esxi-01 → SW-A, esxi-02 → SW-B"
+      let cellsDetail;
+      try { cellsDetail = JSON.parse(child.getAttribute('data-cells-detail') || '[]'); }
+      catch { cellsDetail = []; }
+      cellsDetail.forEach(function(cell) {
+        (cell.p || []).forEach(function(pid) {
+          const parentEl = didEl.get(pid);
+          if (!parentEl || parentEl === child) return;
+          _push(parentEl, child, tier, { from: cell.name, pid: pid });
+        });
+      });
+    } else {
+      // Device card: card itself is the only "cell".
+      let parents;
+      try { parents = JSON.parse(child.getAttribute('data-parent-ids') || '[]'); }
+      catch { return; }
+      const fromName = _cardLabel(child);
+      parents.forEach(function(pid) {
+        const parentEl = didEl.get(pid);
+        if (!parentEl || parentEl === child) return;
+        _push(parentEl, child, tier, { from: fromName, pid: pid });
+      });
+    }
+  });
+
+  // Pass 2 — draw orthogonal lines with a SHARED trunk per parent.
+  // For each parent: drop straight down to trunkY, run horizontal trunk,
+  // drop straight up into each child. All children of the same parent share
+  // the trunk Y so their horizontal segments overlap, forming a single visual
+  // bus instead of a tangle of curves.
   const cRect = canvasEl.getBoundingClientRect();
   const svgNs = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNs, 'svg');
@@ -730,47 +794,120 @@ function _drawConnections(canvasEl) {
   svg.setAttribute('width', cRect.width);
   svg.setAttribute('height', cRect.height);
 
-  function _drawLine(fromEl, toEl, style) {
-    if (fromEl === toEl) return;
-    const f = fromEl.getBoundingClientRect();
-    const t = toEl.getBoundingClientRect();
-    const x1 = f.left + f.width / 2 - cRect.left;
-    const y1 = f.top - cRect.top;                  // top edge of child
-    const x2 = t.left + t.width / 2 - cRect.left;
-    const y2 = t.bottom - cRect.top;               // bottom edge of parent
-    // Cubic bezier: ease vertically with mid-Y control points so curves
-    // bow gently between tiers instead of zig-zagging.
-    const midY = (y1 + y2) / 2;
-    const path = document.createElementNS(svgNs, 'path');
-    path.setAttribute('d',
-      'M ' + x1 + ' ' + y1 +
-      ' C ' + x1 + ' ' + midY + ', ' +
-              x2 + ' ' + midY + ', ' +
-              x2 + ' ' + y2);
-    path.setAttribute('stroke', style.color);
-    path.setAttribute('stroke-width', '1.5');
-    path.setAttribute('fill', 'none');
-    path.setAttribute('vector-effect', 'non-scaling-stroke');
-    path.setAttribute('class', 'conn-line' + (style.dashed ? ' dashed' : ''));
-    if (style.dashed) path.setAttribute('stroke-dasharray', '5 5');
-    svg.appendChild(path);
-  }
+  parentMap.forEach(function(children, parentEl) {
+    const pRect = parentEl.getBoundingClientRect();
+    const px = pRect.left + pRect.width / 2 - cRect.left;
+    const py = pRect.bottom - cRect.top;
+    // Trunk Y: 22px below parent bottom, but pull up if the nearest child top
+    // is too close. Clamped so the trunk always sits in the gap, never inside
+    // a card.
+    let nearestChildTop = Infinity;
+    children.forEach(function(c) {
+      const r = c.childEl.getBoundingClientRect();
+      const top = r.top - cRect.top;
+      if (top < nearestChildTop) nearestChildTop = top;
+    });
+    const gap = nearestChildTop - py;
+    const trunkY = py + Math.max(8, Math.min(22, gap / 2));
 
-  canvasEl.querySelectorAll('[data-parent-ids]').forEach(function(child) {
-    let parents;
-    try { parents = JSON.parse(child.getAttribute('data-parent-ids') || '[]'); }
-    catch { return; }
-    if (!parents.length) return;
-    const tier = child.getAttribute('data-tier') || 'other';
-    const style = _CONN_STYLES[tier] || _CONN_STYLES.other;
-    parents.forEach(function(pid) {
-      const parentEl = didEl.get(pid);
-      if (parentEl) _drawLine(child, parentEl, style);
+    const parentLabel = _cardLabel(parentEl);
+
+    children.forEach(function(c) {
+      const r = c.childEl.getBoundingClientRect();
+      const cx = r.left + r.width / 2 - cRect.left;
+      const cy = r.top - cRect.top;
+      const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
+
+      // Path: child top ↑ trunkY → parent X → ↑ parent bottom
+      const d = 'M ' + cx + ' ' + cy +
+                ' L ' + cx + ' ' + trunkY +
+                ' L ' + px + ' ' + trunkY +
+                ' L ' + px + ' ' + py;
+
+      // Invisible wider hitbox for easier hover targeting.
+      const hit = document.createElementNS(svgNs, 'path');
+      hit.setAttribute('d', d);
+      hit.setAttribute('stroke', 'transparent');
+      hit.setAttribute('stroke-width', '12');
+      hit.setAttribute('fill', 'none');
+      hit.setAttribute('class', 'conn-hit');
+      hit.dataset.parentName = parentLabel;
+      hit.dataset.childName = _cardLabel(c.childEl);
+      hit.dataset.mappings = JSON.stringify(c.mappings.map(function(m) { return m.from; }));
+      hit.addEventListener('mouseenter', _onConnEnter);
+      hit.addEventListener('mouseleave', _onConnLeave);
+      hit.addEventListener('mousemove',  _onConnMove);
+
+      // Visible thin line on top.
+      const path = document.createElementNS(svgNs, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('stroke', style.color);
+      path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('vector-effect', 'non-scaling-stroke');
+      path.setAttribute('class', 'conn-line' + (style.dashed ? ' dashed' : ''));
+      if (style.dashed) path.setAttribute('stroke-dasharray', '5 5');
+
+      svg.appendChild(hit);
+      svg.appendChild(path);
     });
   });
 
   // Insert at start so cards stack on top of the lines.
   canvasEl.insertBefore(svg, canvasEl.firstChild);
+}
+
+// ─── Connection-line tooltip ──────────────────────────────────────
+function _connTooltipEl() {
+  let tip = document.getElementById('lm-conn-tooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'lm-conn-tooltip';
+    tip.className = 'lm-conn-tooltip';
+    document.body.appendChild(tip);
+  }
+  return tip;
+}
+function _onConnEnter(e) {
+  const hit = e.currentTarget;
+  const childName  = hit.dataset.childName  || '';
+  const parentName = hit.dataset.parentName || '';
+  let names;
+  try { names = JSON.parse(hit.dataset.mappings || '[]'); }
+  catch { names = []; }
+  if (!names.length) names = [childName];
+  // Dedup while preserving order.
+  const seen = {};
+  names = names.filter(function(n) {
+    if (seen[n]) return false;
+    seen[n] = 1;
+    return true;
+  });
+  const lines = names.map(function(n) {
+    return '<div>' + esc(n) + ' → ' + esc(parentName) + '</div>';
+  }).join('');
+  const tip = _connTooltipEl();
+  tip.innerHTML =
+    '<div class="lm-tt-h">' + esc(childName) + ' ↔ ' + esc(parentName) +
+      ' <span class="lm-tt-c">' + names.length + '</span></div>' +
+    '<div class="lm-tt-l">' + lines + '</div>';
+  tip.style.display = 'block';
+}
+function _onConnLeave() {
+  const tip = document.getElementById('lm-conn-tooltip');
+  if (tip) tip.style.display = 'none';
+}
+function _onConnMove(e) {
+  const tip = document.getElementById('lm-conn-tooltip');
+  if (!tip) return;
+  // Anchor below-right of cursor; flip if clipped against the viewport.
+  const pad = 14;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  const w = tip.offsetWidth || 200, h = tip.offsetHeight || 50;
+  if (x + w > window.innerWidth)  x = e.clientX - w - pad;
+  if (y + h > window.innerHeight) y = e.clientY - h - pad;
+  tip.style.left = x + 'px';
+  tip.style.top  = y + 'px';
 }
 
 let _canvasResizeObs = null;

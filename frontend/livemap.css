@@ -609,13 +609,47 @@ body {
 .conn-svg path.flow { animation: dashFlow 1s linear infinite; }
 
 /* Tier-aware connection lines drawn between parent/child cards in the
-   site drill-in. Color comes from the inline stroke attribute. */
+   site drill-in. Orthogonal paths with sharp 90° corners — matches the
+   handoff design. Color comes from the inline stroke attribute. */
 .conn-svg path.conn-line {
-  opacity: 0.75;
-  stroke-linecap: round;
+  opacity: 0.8;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
 }
 .conn-svg path.conn-line.dashed {
   animation: dashFlow 1.2s linear infinite;
+}
+/* Invisible wider hitbox so hover targets aren't a 1.5px sliver. */
+.conn-svg path.conn-hit {
+  pointer-events: stroke;
+  cursor: help;
+}
+
+/* Hover tooltip listing every cell→parent mapping carried by the line. */
+.lm-conn-tooltip {
+  position: fixed; pointer-events: none; z-index: 9999;
+  display: none; max-width: 360px;
+  background: var(--panel); border: 1px solid var(--accent2);
+  border-radius: 4px; padding: 8px 10px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+  color: var(--text);
+}
+.lm-tt-h {
+  font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700;
+  color: var(--accent2); text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 5px; display: flex; align-items: center; gap: 6px;
+}
+.lm-tt-c {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 14px; padding: 0 4px;
+  background: rgba(0,212,255,0.15); border-radius: 7px;
+  font-size: 9px; color: var(--accent2);
+}
+.lm-tt-l > div { padding: 1px 0; }
+.lm-tt-l > div + div {
+  border-top: 1px dashed rgba(255,255,255,0.06);
+  padding-top: 2px; margin-top: 2px;
 }
 
 /* Tier rows (replace absolute positioning with a vertical flex stack
