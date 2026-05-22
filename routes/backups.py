@@ -23,7 +23,7 @@ from db import (
     db_get_backup_list, db_get_backup_settings, db_save_backup_settings,
     db_get_backup_history, db_get_backup_run,
     db_delete_backup_run, db_ensure_backup_device,
-    db_search_configs,
+    db_search_configs, db_get_last_successful_config,
 )
 from backup.engine import do_backup
 from core.logger import log_backup as log
@@ -205,16 +205,11 @@ def handle(h, method, path, body):
         if not user:
             return True
         did = m.group(1)
-        # Find the latest successful run for this device. db_get_backup_history
-        # already returns rows ordered ts DESC, so the first row with
-        # success=True is the most recent good config.
-        runs = db_get_backup_history(did) or []
-        run  = next((r for r in runs if r.get('success')), None)
-        if not run:
+        # Use the dedicated helper — single query, returns the config text
+        # of the most recent successful run for this device (None if none).
+        config_text = db_get_last_successful_config(did)
+        if not config_text:
             h._json(404, {'error': 'no successful backup found for this device'}); return True
-        full = db_get_backup_run(run['id'])
-        if not full or not full.get('config_text'):
-            h._json(404, {'error': 'backup run has no config text'}); return True
         # Pull the device's site to pre-fill every extracted row.
         from core.app_state import STATE
         live = STATE.devices.get(did)
@@ -223,7 +218,7 @@ def handle(h, method, path, body):
         # fall back to auto-detection. Useful for non-standard exports.
         from core.subnet_extractor import extract_subnets, rows_to_csv
         vendor, rows = extract_subnets(
-            full['config_text'],
+            config_text,
             vendor_hint=(body.get('vendor') or '') if isinstance(body, dict) else '',
         )
         csv_text = rows_to_csv(rows, site=src_site)
@@ -232,11 +227,10 @@ def handle(h, method, path, body):
             f"{did} vendor={vendor or 'unknown'} found={len(rows)}",
         )
         h._json(200, {
-            'vendor':     vendor,
-            'rows':       rows,
-            'csv':        csv_text,
+            'vendor':      vendor,
+            'rows':        rows,
+            'csv':         csv_text,
             'source_site': src_site,
-            'run_id':     run.get('id'),
         })
         return True
 
