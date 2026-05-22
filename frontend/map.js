@@ -191,7 +191,7 @@ function _schedulePwLiveUpdate(did) {
 }
 
 // ═══════════════════════════ PAGES ═══════════════════════════
-let pages = [], currentPageId = 1;
+let pages = [], currentPageId = 1, _pageDataLoaded = false;
 
 async function loadPages() {
   try {
@@ -243,8 +243,9 @@ function renderPageBar() {
 }
 
 async function switchPage(id) {
-  if (id === currentPageId && !isPingWatchPage) return;
+  if (id === currentPageId && !isPingWatchPage && _pageDataLoaded) return;
   isPingWatchPage = false;
+  _pageDataLoaded = true;
   _selectedPwDid = null;
   stopPwSSE();
   currentPageId = id;
