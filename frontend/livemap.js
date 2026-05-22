@@ -825,6 +825,17 @@ function _drawConnections(canvasEl) {
     const tier = child.getAttribute('data-tier') || 'other';
     const isCluster = child.classList.contains('cluster');
 
+    // A port map entry is canonically a list of {lport, rport} pairs (LACP
+    // support — multiple physical links between the same device pair). The
+    // pre-LACP single-dict shape is tolerated for forward compatibility with
+    // stale caches. Returns [] when nothing's set so the caller can fall back
+    // to one bare mapping per parent.
+    function _portPairList(v) {
+      if (Array.isArray(v)) return v.filter(function(p) { return p && typeof p === 'object'; });
+      if (v && typeof v === 'object') return [v];
+      return [];
+    }
+
     if (isCluster) {
       // Per-cell granularity: tooltip can show "esxi-01 → SW-A, esxi-02 → SW-B"
       let cellsDetail;
@@ -835,10 +846,17 @@ function _drawConnections(canvasEl) {
         (cell.p || []).forEach(function(pid) {
           const parentEl = _resolveParent(pid);
           if (!parentEl || parentEl === child) return;
-          const wp = pp[pid] || {};
-          _push(parentEl, child, tier,
-                { from: cell.name, pid: pid,
-                  lport: wp.lport || '', rport: wp.rport || '' });
+          const pairs = _portPairList(pp[pid]);
+          if (!pairs.length) {
+            _push(parentEl, child, tier,
+                  { from: cell.name, pid: pid, lport: '', rport: '' });
+          } else {
+            pairs.forEach(function(wp) {
+              _push(parentEl, child, tier,
+                    { from: cell.name, pid: pid,
+                      lport: wp.lport || '', rport: wp.rport || '' });
+            });
+          }
         });
       });
     } else {
@@ -853,10 +871,17 @@ function _drawConnections(canvasEl) {
       parents.forEach(function(pid) {
         const parentEl = _resolveParent(pid);
         if (!parentEl || parentEl === child) return;
-        const wp = parentPorts[pid] || {};
-        _push(parentEl, child, tier,
-              { from: fromName, pid: pid,
-                lport: wp.lport || '', rport: wp.rport || '' });
+        const pairs = _portPairList(parentPorts[pid]);
+        if (!pairs.length) {
+          _push(parentEl, child, tier,
+                { from: fromName, pid: pid, lport: '', rport: '' });
+        } else {
+          pairs.forEach(function(wp) {
+            _push(parentEl, child, tier,
+                  { from: fromName, pid: pid,
+                    lport: wp.lport || '', rport: wp.rport || '' });
+          });
+        }
       });
     }
   });

@@ -173,11 +173,12 @@ async function submitAddDevice(){
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────
 
 let _edSecIps = [];   // secondary IPs being edited
-let _edParentIds = []; // parent device IDs being edited (Live Map)
-// Per-parent port wiring (Live Map link info). {pid: {lport, rport}} —
-// keys are only device ids (group: refs never carry port info). Kept in
-// sync with _edParentIds: removing a parent prunes its port entry.
-let _edParentPorts = {};
+// Parent links being edited (Live Map). One entry per chip: {pid, lport, rport}.
+// Duplicates by pid are allowed and expected — LACP / multi-link aggregations
+// connect the same device pair over multiple physical interfaces, each with
+// its own local↔remote port pair. Group refs (pid starting "group:") never
+// carry port info but still live in this array as bare entries.
+let _edParentLinks = [];
 let _edParentDid = null;  // did of the device currently open in Edit Device
 let _edParentTierFilter = null;  // inferred tier for the device being edited (null = no filter)
 
@@ -187,10 +188,28 @@ function openEditDevice(did){
   closeM('dwo');
   closeM('med');
   _edSecIps = [...(dev.secondary_ips || [])];
-  _edParentIds = Array.isArray(dev.parent_device_ids) ? [...dev.parent_device_ids] : [];
-  _edParentPorts = (dev.parent_device_ports && typeof dev.parent_device_ports === 'object')
-    ? JSON.parse(JSON.stringify(dev.parent_device_ports))
-    : {};
+  // Flatten the server's {pid, list[]} ports shape into one entry per chip.
+  // A pid with no port entries gets a single bare chip; a pid with N port
+  // pairs gets N chips. Group refs (no port info) always get one bare chip.
+  _edParentLinks = [];
+  const _srcIds = Array.isArray(dev.parent_device_ids) ? dev.parent_device_ids : [];
+  const _srcPorts = (dev.parent_device_ports && typeof dev.parent_device_ports === 'object')
+    ? dev.parent_device_ports : {};
+  _srcIds.forEach(pid => {
+    if (typeof pid !== 'string' || !pid) return;
+    const isGroup = pid.indexOf('group:') === 0;
+    const raw = _srcPorts[pid];
+    // Server canonical shape is a list, but tolerate the pre-LACP single-dict
+    // shape too in case a stale cache slipped through.
+    const pairs = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? [raw] : []);
+    if (isGroup || pairs.length === 0) {
+      _edParentLinks.push({ pid, lport: '', rport: '' });
+    } else {
+      pairs.forEach(p => _edParentLinks.push({
+        pid, lport: String(p.lport || ''), rport: String(p.rport || '')
+      }));
+    }
+  });
   _edParentDid = did;
   _edParentTierFilter = _edInferTierForFilter(dev);
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
@@ -413,12 +432,13 @@ const _GRP_SFX = '  ·  group';
 function _edRenderParentChips() {
   const wrap = document.getElementById('ed-parents-chips');
   if (!wrap) return;
-  if (!_edParentIds.length) {
+  if (!_edParentLinks.length) {
     const groupName = (document.getElementById('ed-g')?.value || '').trim();
     wrap.innerHTML = `<span class="pw-chip-empty">None — falls back to group default${groupName ? ` (${esc(groupName)})` : ''}</span>`;
     return;
   }
-  wrap.innerHTML = _edParentIds.map((pid, i) => {
+  wrap.innerHTML = _edParentLinks.map((link, i) => {
+    const pid = link.pid;
     if (typeof pid === 'string' && pid.indexOf('group:') === 0) {
       const gname = pid.slice(6);
       // Group refs don't carry port info — wiring is per-device only.
@@ -429,43 +449,34 @@ function _edRenderParentChips() {
     }
     const d = S.devices[pid];
     const label = d ? (d.name || pid) : `(missing: ${pid})`;
-    const ports = _edParentPorts[pid] || {};
-    const lport = esc(ports.lport || '');
-    const rport = esc(ports.rport || '');
-    const safePid = esc(pid);
+    const lport = esc(link.lport || '');
+    const rport = esc(link.rport || '');
     // Inline port boxes: local (this device's port) ↔ remote (parent's port).
-    // Either field can be left blank; an entry with both blank is pruned on save.
+    // Either field can be left blank; both-blank pairs are pruned on save.
     return `<span class="pw-chip pw-chip-link">
       <span class="pw-chip-label">${esc(label)}</span>
       <input type="text" class="pw-chip-port" placeholder="local" value="${lport}"
              maxlength="32" title="Local port on this device"
-             oninput="_edSetParentPort('${safePid}','lport',this.value)"/>
+             oninput="_edSetParentLinkPort(${i},'lport',this.value)"/>
       <span class="pw-chip-port-sep">&harr;</span>
       <input type="text" class="pw-chip-port" placeholder="remote" value="${rport}"
              maxlength="32" title="Remote port on the parent device"
-             oninput="_edSetParentPort('${safePid}','rport',this.value)"/>
+             oninput="_edSetParentLinkPort(${i},'rport',this.value)"/>
       <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
     </span>`;
   }).join('');
 }
 
 function _edRemoveParent(idx) {
-  const pid = _edParentIds[idx];
-  _edParentIds.splice(idx, 1);
-  // Prune the port entry too so a future re-add doesn't resurrect stale wiring.
-  if (pid && _edParentPorts[pid]) delete _edParentPorts[pid];
+  if (idx < 0 || idx >= _edParentLinks.length) return;
+  _edParentLinks.splice(idx, 1);
   _edRenderParentChips();
 }
 
-function _edSetParentPort(pid, key, val) {
-  if (!pid || (key !== 'lport' && key !== 'rport')) return;
-  const cur = _edParentPorts[pid] || { lport: '', rport: '' };
-  cur[key] = String(val || '').slice(0, 32);
-  if (!cur.lport && !cur.rport) {
-    delete _edParentPorts[pid];
-  } else {
-    _edParentPorts[pid] = cur;
-  }
+function _edSetParentLinkPort(idx, key, val) {
+  if (idx < 0 || idx >= _edParentLinks.length) return;
+  if (key !== 'lport' && key !== 'rport') return;
+  _edParentLinks[idx][key] = String(val || '').slice(0, 32);
 }
 
 function _edPopulateParentDatalist() {
@@ -522,10 +533,14 @@ function _edPopulateParentDatalist() {
 function _edCommitParentFromInput(input) {
   const raw = (input.value || '').trim();
   if (!raw) return;
-  if (_edParentIds.length >= 8) {
-    toast('Max 8 parent devices', 'err');
+  if (_edParentLinks.length >= 16) {
+    toast('Max 16 parent links', 'err');
     return;
   }
+  // Helper: a group ref appears at most once (no port info to differentiate);
+  // device refs may repeat — duplicate chips represent LACP / multi-NIC links.
+  const _hasGroupRef = (ref) => _edParentLinks.some(l => l.pid === ref);
+
   // Group entries from the datalist look like "Hypervisors  ·  group (10)".
   // Detect via the embedded sentinel and strip the suffix to recover the
   // raw group name.
@@ -537,8 +552,8 @@ function _edCommitParentFromInput(input) {
     );
     if (!exists) { toast(`Group "${gname}" not found`, 'err'); return; }
     const ref = 'group:' + gname;
-    if (_edParentIds.includes(ref)) { toast('Already added', 'err'); return; }
-    _edParentIds.push(ref);
+    if (_hasGroupRef(ref)) { toast('Group already added', 'err'); return; }
+    _edParentLinks.push({ pid: ref, lport: '', rport: '' });
     input.value = '';
     _edRenderParentChips();
     return;
@@ -550,8 +565,8 @@ function _edCommitParentFromInput(input) {
   );
   if (!match && S.devices[raw] && raw !== _edParentDid) match = S.devices[raw];
   if (match) {
-    if (_edParentIds.includes(match.device_id)) { toast('Already added', 'err'); return; }
-    _edParentIds.push(match.device_id);
+    // Duplicates allowed — each chip is a distinct physical link (LACP).
+    _edParentLinks.push({ pid: match.device_id, lport: '', rport: '' });
     input.value = '';
     _edRenderParentChips();
     return;
@@ -562,8 +577,8 @@ function _edCommitParentFromInput(input) {
   ));
   if (groupSet.has(raw)) {
     const ref = 'group:' + raw;
-    if (_edParentIds.includes(ref)) { toast('Already added', 'err'); return; }
-    _edParentIds.push(ref);
+    if (_hasGroupRef(ref)) { toast('Group already added', 'err'); return; }
+    _edParentLinks.push({ pid: ref, lport: '', rport: '' });
     input.value = '';
     _edRenderParentChips();
     return;
@@ -581,8 +596,8 @@ function _edParentInit(did) {
       if (e.key === 'Enter' || e.key === ',') {
         e.preventDefault();
         _edCommitParentFromInput(input);
-      } else if (e.key === 'Backspace' && !input.value && _edParentIds.length) {
-        _edParentIds.pop();
+      } else if (e.key === 'Backspace' && !input.value && _edParentLinks.length) {
+        _edParentLinks.pop();
         _edRenderParentChips();
       }
     });
@@ -775,11 +790,30 @@ async function submitEditDevice(did){
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  // Serialize chip list → server shape. parent_device_ids is the deduped list
+  // of unique pids; parent_device_ports groups port pairs by pid (multiple
+  // pairs per pid = LACP / multi-link).
+  const _serializedIds = [];
+  const _serializedPorts = {};
+  const _seenPids = new Set();
+  (Array.isArray(_edParentLinks) ? _edParentLinks : []).forEach(link => {
+    if (!link || typeof link.pid !== 'string' || !link.pid) return;
+    if (!_seenPids.has(link.pid)) {
+      _seenPids.add(link.pid);
+      _serializedIds.push(link.pid);
+    }
+    const lp = (link.lport || '').trim();
+    const rp = (link.rport || '').trim();
+    if (!lp && !rp) return;  // bare chip — no wiring info to persist
+    if (link.pid.indexOf('group:') === 0) return;  // group refs never carry ports
+    if (!_serializedPorts[link.pid]) _serializedPorts[link.pid] = [];
+    _serializedPorts[link.pid].push({ lport: lp, rport: rp });
+  });
   const payload = {name, host, group, site, alerts_muted,
     snmp_community_default, snmp_version_default, vmware_user_default,
     secondary_ips: _edSecIps,
-    parent_device_ids: Array.isArray(_edParentIds) ? _edParentIds : [],
-    parent_device_ports: (_edParentPorts && typeof _edParentPorts === 'object') ? _edParentPorts : {}};
+    parent_device_ids: _serializedIds,
+    parent_device_ports: _serializedPorts};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   // SNMPv3 device defaults — emit only when the section is visible (version=3).
   if(snmp_version_default === '3'){
@@ -827,7 +861,7 @@ async function submitEditDevice(did){
   }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; dev.parent_device_ids = [..._edParentIds]; dev.parent_device_ports = JSON.parse(JSON.stringify(_edParentPorts || {})); if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; dev.parent_device_ids = [..._serializedIds]; dev.parent_device_ports = JSON.parse(JSON.stringify(_serializedPorts)); if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
   // Live Map runs in iframe — postMessage triggers a tree refresh so the
   // connection lines redraw without a full page reload.
   const _lf = document.getElementById('livemap-frame');

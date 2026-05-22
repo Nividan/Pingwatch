@@ -131,11 +131,16 @@ _MAX_PORT_LEN = 32  # Switch interface names are short — Gi1/0/24, Te0/0/1, et
 
 
 def _normalize_parent_ports(raw, allowed_pids) -> "tuple[bool, dict, str]":
-    """Validate `parent_device_ports` input: {pid: {"lport": str, "rport": str}}.
+    """Validate `parent_device_ports`: {pid: [{"lport": str, "rport": str}, ...]}.
+
+    A pid may have multiple port pairs (LACP — same device pair connected over
+    multiple physical interfaces). The output shape is always a list of pairs
+    per pid; the legacy single-object shape `{pid: {lport, rport}}` is accepted
+    on input and wrapped, so older clients keep working.
 
     Entries whose pid isn't in `allowed_pids` are silently dropped (e.g. user
     removed the parent but a stale port entry lingered). Empty/all-blank port
-    pairs are dropped too, keeping the persisted dict compact.
+    pairs are dropped too. A pid whose list ends up empty is omitted entirely.
 
     Returns (ok, cleaned, error). Empty/missing input is valid.
     """
@@ -144,22 +149,28 @@ def _normalize_parent_ports(raw, allowed_pids) -> "tuple[bool, dict, str]":
     if not isinstance(raw, dict):
         return False, {}, "parent_device_ports must be an object"
     cleaned: dict = {}
-    for pid, entry in raw.items():
+    for pid, val in raw.items():
         if not isinstance(pid, str) or not pid:
             continue
         if pid not in allowed_pids:
             continue  # drop ports for parents the user no longer has
-        if not isinstance(entry, dict):
-            return False, {}, "parent_device_ports entries must be objects"
-        lport = entry.get("lport", "")
-        rport = entry.get("rport", "")
-        if not isinstance(lport, str) or not isinstance(rport, str):
-            return False, {}, "lport/rport must be strings"
-        lport = lport.strip()[:_MAX_PORT_LEN]
-        rport = rport.strip()[:_MAX_PORT_LEN]
-        if not lport and not rport:
-            continue  # nothing worth persisting
-        cleaned[pid] = {"lport": lport, "rport": rport}
+        # Accept both shapes: a single {lport,rport} dict OR a list of dicts.
+        entries = val if isinstance(val, list) else [val]
+        out_pairs = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return False, {}, "parent_device_ports entries must be objects"
+            lport = entry.get("lport", "")
+            rport = entry.get("rport", "")
+            if not isinstance(lport, str) or not isinstance(rport, str):
+                return False, {}, "lport/rport must be strings"
+            lport = lport.strip()[:_MAX_PORT_LEN]
+            rport = rport.strip()[:_MAX_PORT_LEN]
+            if not lport and not rport:
+                continue  # nothing worth persisting for this pair
+            out_pairs.append({"lport": lport, "rport": rport})
+        if out_pairs:
+            cleaned[pid] = out_pairs
     return True, cleaned, ""
 
 

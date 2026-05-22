@@ -28,6 +28,36 @@ def _int_or_none(v):
         return None
 
 
+def _normalize_pp_shape(raw) -> dict:
+    """Coerce parent_device_ports into the canonical list-of-pairs shape.
+
+    Accepts the legacy single-dict shape `{pid: {lport, rport}}` (pre-LACP
+    support) and the new shape `{pid: [{lport, rport}, ...]}`. Always returns
+    the list shape so every downstream consumer can iterate uniformly.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for pid, val in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if isinstance(val, list):
+            pairs = [p for p in val if isinstance(p, dict)]
+        elif isinstance(val, dict):
+            pairs = [val]
+        else:
+            continue
+        clean = []
+        for p in pairs:
+            l = p.get("lport", "") if isinstance(p.get("lport", ""), str) else ""
+            r = p.get("rport", "") if isinstance(p.get("rport", ""), str) else ""
+            if l or r:
+                clean.append({"lport": l, "rport": r})
+        if clean:
+            out[pid] = clean
+    return out
+
+
 def _pg_save(state):
     """Upsert all devices and sensors into PostgreSQL."""
     from db.pg_pool import pg_conn
@@ -540,9 +570,8 @@ def _pg_load(state):
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ids = []
         try:
-            dev.parent_device_ports = json.loads(row[24] or "{}") if len(row) > 24 else {}
-            if not isinstance(dev.parent_device_ports, dict):
-                dev.parent_device_ports = {}
+            _pp_raw = json.loads(row[24] or "{}") if len(row) > 24 else {}
+            dev.parent_device_ports = _normalize_pp_shape(_pp_raw)
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ports = {}
         state.devices[did] = dev
@@ -782,7 +811,7 @@ def db_load(state):
             dev.parent_device_ids = []
         try:
             _pports = json.loads(parent_ports_json or "{}")
-            dev.parent_device_ports = _pports if isinstance(_pports, dict) else {}
+            dev.parent_device_ports = _normalize_pp_shape(_pports)
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ports = {}
         state.devices[did] = dev

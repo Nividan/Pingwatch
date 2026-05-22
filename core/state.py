@@ -578,6 +578,32 @@ class Sensor:
         }
 
 
+def _coerce_parent_ports(raw) -> dict:
+    """Return parent_device_ports in canonical list-of-pairs shape regardless
+    of whether the in-memory value uses the legacy single-dict form."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for pid, val in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if isinstance(val, list):
+            pairs = [p for p in val if isinstance(p, dict)]
+        elif isinstance(val, dict):
+            pairs = [val]
+        else:
+            continue
+        clean = []
+        for p in pairs:
+            l = p.get("lport", "") if isinstance(p.get("lport", ""), str) else ""
+            r = p.get("rport", "") if isinstance(p.get("rport", ""), str) else ""
+            if l or r:
+                clean.append({"lport": l, "rport": r})
+        if clean:
+            out[pid] = clean
+    return out
+
+
 class Device:
     def __init__(self, device_id, name, host, group="Default Group", site=""):
         self.device_id   = device_id
@@ -686,8 +712,12 @@ class Device:
             "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
             # Live Map parent linking — list of device IDs this device hangs off.
             "parent_device_ids":     list(getattr(self, "parent_device_ids", []) or []),
-            # Per-parent port wiring (Live Map link info) — {pid: {lport, rport}}.
-            "parent_device_ports":   dict(getattr(self, "parent_device_ports", {}) or {}),
+            # Per-parent port wiring (Live Map link info). Canonical shape is
+            # {pid: [{lport, rport}, ...]} — a list to support LACP / multiple
+            # physical links between the same device pair. Coerce here so even
+            # if something writes the legacy single-dict shape to the field
+            # directly, the API output stays uniform.
+            "parent_device_ports":   _coerce_parent_ports(getattr(self, "parent_device_ports", {})),
         }
 
 
