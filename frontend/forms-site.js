@@ -132,8 +132,8 @@ async function openModal(mode, name) {
   const title = mode === 'edit' ? 'EDIT SITE' : 'ADD SITE';
   const nameVal = existing ? existing.name : '';
   const kindVal = existing ? existing.kind : 'lab';
-  const pinnedVal = existing && existing.pinned ? 'checked' : '';
   const displayVal = existing ? existing.display_name : '';
+  // Pin/unpin lives on the Live Map sidebar context menu now — not in this modal.
 
   const overlay = document.createElement('div');
   overlay.className = 'lm-modal-overlay';
@@ -156,11 +156,6 @@ async function openModal(mode, name) {
         '<div class="lm-field">' +
           '<label>Display name (optional)</label>' +
           '<input id="lm-f-display" type="text" maxlength="100" placeholder="(falls back to Name)" value="' + esc(displayVal) + '"/>' +
-        '</div>' +
-        '<div class="lm-field">' +
-          '<label class="check">' +
-            '<input id="lm-f-pinned" type="checkbox" ' + pinnedVal + '/> Pin to top of sidebar' +
-          '</label>' +
         '</div>' +
         (mode === 'edit' && nameVal
           ? '<div class="lm-field">' +
@@ -197,7 +192,6 @@ async function openModal(mode, name) {
   document.getElementById('lm-f-save').onclick = async function() {
     const inName    = document.getElementById('lm-f-name').value.trim();
     const inKind    = document.getElementById('lm-f-kind').value;
-    const inPinned  = document.getElementById('lm-f-pinned').checked ? 1 : 0;
     const inDisplay = document.getElementById('lm-f-display').value.trim();
     if (!inName) {
       alert('Name is required'); return;
@@ -205,9 +199,11 @@ async function openModal(mode, name) {
     try {
       if (mode === 'edit') {
         const renameDevs = !!(document.getElementById('lm-f-rename-devs') && document.getElementById('lm-f-rename-devs').checked);
+        // pinned is intentionally omitted: the PUT handler falls back to the
+        // existing value when the key is absent, so this modal never clobbers
+        // a pin state that was set from the Live Map sidebar.
         const body = {
           kind: inKind,
-          pinned: inPinned,
           display_name: inDisplay,
         };
         if (inName !== nameVal) {
@@ -223,12 +219,14 @@ async function openModal(mode, name) {
           if (!r.ok) { const j = await r.json().catch(function(){return{};}); throw new Error(j.error || r.statusText); }
         });
       } else {
+        // New sites are created unpinned; pin from the Live Map sidebar
+        // (right-click → Pin to top) after creation.
         await fetch('/api/sites/meta', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
           body: JSON.stringify({
-            name: inName, kind: inKind, pinned: inPinned, display_name: inDisplay,
+            name: inName, kind: inKind, display_name: inDisplay,
           }),
         }).then(async function(r) {
           if (!r.ok) { const j = await r.json().catch(function(){return{};}); throw new Error(j.error || r.statusText); }

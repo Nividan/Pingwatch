@@ -996,6 +996,39 @@ body {
 :root[data-theme="light"] .feed-ago     { color: rgba(28,41,52,0.5); }
 :root[data-theme="light"] .feed-loc     { color: rgba(28,41,52,0.5); }
 
+/* Sidebar context menu (right-click on a site row) */
+.lm-menu {
+  position: fixed; z-index: 10000;
+  min-width: 170px; padding: 4px 0;
+  background: #0a1118;
+  border: 1px solid #00d4ff;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.6), 0 0 18px rgba(0,212,255,0.18);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; letter-spacing: 1px;
+  color: var(--text);
+  user-select: none;
+}
+.lm-menu-item {
+  padding: 7px 14px; cursor: pointer;
+  white-space: nowrap;
+  transition: background .08s, color .08s;
+}
+.lm-menu-item:hover { background: rgba(0,212,255,0.12); color: var(--accent); }
+.lm-menu-item.disabled { color: var(--dim); cursor: default; }
+.lm-menu-item.disabled:hover { background: transparent; color: var(--dim); }
+.lm-menu-sep {
+  margin: 4px 0; height: 0;
+  border-top: 1px solid rgba(0,212,255,0.18);
+}
+:root[data-theme="light"] .lm-menu {
+  background: #ffffff;
+  border-color: #0288a8;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.18), 0 0 0 1px rgba(2,136,168,0.12);
+  color: #1c2934;
+}
+:root[data-theme="light"] .lm-menu-item:hover { background: rgba(2,136,168,0.10); color: #0288a8; }
+:root[data-theme="light"] .lm-menu-sep         { border-top-color: rgba(2,136,168,0.18); }
+
 /* Site detail (drill-in) */
 :root[data-theme="light"] .sd-offsite {
   background: linear-gradient(180deg, rgba(184,140,0,0.06) 0%, rgba(255,255,255,0.85) 100%);

@@ -162,8 +162,9 @@ function renderSidebar() {
   $('lm-search-count').textContent = String(LM.sites.length);
 }
 
-// Sidebar event delegation — runs once. Site CRUD lives in the Devices tab
-// now; the Live Map sidebar is read-only.
+// Sidebar event delegation — runs once. Click navigates; right-click opens a
+// small context menu for pin/unpin + edit (Edit Site itself still uses the
+// shared forms-site.js modal exposed on window.openSiteModal).
 function bindSidebar() {
   const sb = $('lm-sidebar');
   sb.addEventListener('click', function(e) {
@@ -176,7 +177,107 @@ function bindSidebar() {
       if (name) navigate('site', name);
     }
   });
+  sb.addEventListener('contextmenu', function(e) {
+    const row = e.target.closest('.site-row[data-site]');
+    if (!row) return;
+    const name = row.getAttribute('data-site');
+    if (!name) return;
+    e.preventDefault();
+    _siteRowMenu(e, name);
+  });
   $('lm-search').addEventListener('input', debounce(renderSidebar, 120));
+}
+
+// ─── Sidebar context menu ───────────────────────────────────
+function _lmMenuClose() {
+  document.querySelectorAll('.lm-menu').forEach(function(m) { m.remove(); });
+}
+
+function _lmMenuOpen(evt, items) {
+  _lmMenuClose();
+  const m = ce('div', 'lm-menu');
+  items.forEach(function(it) {
+    if (it.separator) { m.appendChild(ce('div', 'lm-menu-sep')); return; }
+    const row = ce('div', 'lm-menu-item' + (it.disabled ? ' disabled' : ''));
+    row.textContent = it.label;
+    if (!it.disabled) {
+      row.addEventListener('click', function() {
+        _lmMenuClose();
+        try { it.onClick(); } catch (_) {}
+      });
+    }
+    m.appendChild(row);
+  });
+  document.body.appendChild(m);
+  // Position, clamped to viewport
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const r = m.getBoundingClientRect();
+  let x = evt.clientX, y = evt.clientY;
+  if (x + r.width  > vw - 4) x = vw - r.width  - 4;
+  if (y + r.height > vh - 4) y = vh - r.height - 4;
+  m.style.left = x + 'px';
+  m.style.top  = y + 'px';
+  // Dismiss on outside click / Escape
+  const dismiss = function(ev) {
+    if (!m.contains(ev.target)) {
+      document.removeEventListener('mousedown', dismiss, true);
+      document.removeEventListener('keydown', onKey, true);
+      _lmMenuClose();
+    }
+  };
+  const onKey = function(ev) {
+    if (ev.key === 'Escape') {
+      document.removeEventListener('mousedown', dismiss, true);
+      document.removeEventListener('keydown', onKey, true);
+      _lmMenuClose();
+    }
+  };
+  setTimeout(function() {
+    document.addEventListener('mousedown', dismiss, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
+}
+
+function _siteRowMenu(evt, name) {
+  const site = LM.sitesByName[name] || {};
+  const pinned = !!site.pinned;
+  _lmMenuOpen(evt, [
+    {
+      label: pinned ? '★  Unpin from top' : '☆  Pin to top',
+      onClick: function() { _setSitePinned(name, pinned ? 0 : 1); }
+    },
+    { separator: true },
+    {
+      label: '⚙  Edit Site…',
+      onClick: function() {
+        if (typeof window.openSiteModal === 'function') {
+          window.openSiteModal('edit', name);
+        } else if (typeof window._lmOpenSiteModal === 'function') {
+          window._lmOpenSiteModal('edit', name);
+        }
+      }
+    }
+  ]);
+}
+
+async function _setSitePinned(name, value) {
+  try {
+    const r = await fetch('/api/sites/meta/' + encodeURIComponent(name), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ pinned: value })
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(function(){return{};});
+      console.warn('[livemap] pin toggle failed:', j.error || r.statusText);
+      return;
+    }
+    // Refresh sites so the row jumps between ALL SITES and PINNED.
+    await refreshAll();
+  } catch (e) {
+    console.warn('[livemap] pin toggle error:', e);
+  }
 }
 
 // ─── NOC overview rendering ─────────────────────────────────
