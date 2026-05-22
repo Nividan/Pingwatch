@@ -1058,7 +1058,7 @@ async function _ipamImpPreview() {
     if (!r.ok) { _ipamImpShowErr(j.error || ('Preview failed: ' + r.statusText)); return; }
     _ipamImpRows = j.rows || [];
     if (!_ipamImpRows.length) { _ipamImpShowErr('No rows found in the input.'); return; }
-    _ipamImpRenderPreview(j.valid|0, j.total|0);
+    _ipamImpRenderPreview(j.valid|0, j.total|0, j.existing|0);
   } catch (e) {
     _ipamImpShowErr('Preview request failed: ' + (e.message || e));
   } finally {
@@ -1066,26 +1066,49 @@ async function _ipamImpPreview() {
   }
 }
 
-function _ipamImpRenderPreview(validCount, total) {
+function _ipamImpRenderPreview(validCount, total, existing) {
   document.getElementById('ipam-imp-step-upload').style.display = 'none';
   document.getElementById('ipam-imp-step-preview').style.display = '';
   document.getElementById('ipam-imp-preview-btn').style.display = 'none';
   document.getElementById('ipam-imp-apply-btn').style.display = '';
-  const invalid = total - validCount;
+  const invalid     = total - validCount;
+  const existingCnt = existing | 0;
+  // Default-select: any row that's valid AND not already in IPAM. Existing
+  // CIDRs land in the table for visibility but unchecked + flagged so the
+  // user understands why they're being skipped (without having to wait for
+  // the apply step to surface a "duplicate" error).
+  _ipamImpRows.forEach(r => {
+    if (!r._ok) { r._selected = false; return; }
+    r._selected = !r._exists;
+  });
+  const newCount = _ipamImpRows.filter(r => r._ok && !r._exists).length;
   document.getElementById('ipam-imp-summary').innerHTML =
     `<strong>${total}</strong> row${total===1?'':'s'} parsed · ` +
-    `<span style="color:var(--up)">${validCount} valid</span>` +
+    `<span style="color:var(--up)">${newCount} new</span>` +
+    (existingCnt ? ` · <span style="color:var(--warn)">${existingCnt} already in IPAM</span>` : '') +
     (invalid ? ` · <span style="color:var(--down)">${invalid} with errors</span>` : '') +
-    ` <span style="color:var(--text3);font-size:11px">— uncheck a row to skip it</span>`;
+    ` <span style="color:var(--text3);font-size:11px">— uncheck to skip · re-check an existing row to force it (will fail)</span>`;
   const rows = _ipamImpRows.map((r, i) => {
-    const ok = !!r._ok;
-    const checkbox = ok
-      ? `<input type="checkbox" data-imp-idx="${i}" checked onclick="_ipamImpToggle(${i}, this.checked)"/>`
-      : `<input type="checkbox" data-imp-idx="${i}" disabled title="${esc(r._msg||'')}"/>`;
-    const statusCell = ok
-      ? '<span style="color:var(--up)">✓</span>'
-      : `<span style="color:var(--down)" title="${esc(r._msg||'')}">✕ ${esc(r._msg||'invalid')}</span>`;
-    return `<tr style="${ok?'':'opacity:.55'}">
+    const ok     = !!r._ok;
+    const exists = !!r._exists;
+    // Three checkbox states:
+    //   • valid & new          → checked, enabled
+    //   • valid & existing     → unchecked, enabled (user can override)
+    //   • invalid              → unchecked, disabled
+    let cbAttrs = `data-imp-idx="${i}"`;
+    if (!ok) cbAttrs += ` disabled title="${esc(r._msg||'')}"`;
+    else if (!exists) cbAttrs += ' checked';
+    if (ok) cbAttrs += ` onclick="_ipamImpToggle(${i}, this.checked)"`;
+    const checkbox = `<input type="checkbox" ${cbAttrs}/>`;
+    let statusCell;
+    if (!ok)
+      statusCell = `<span style="color:var(--down)" title="${esc(r._msg||'')}">✕ ${esc(r._msg||'invalid')}</span>`;
+    else if (exists)
+      statusCell = '<span style="color:var(--warn)" title="A subnet with this CIDR already exists in IPAM">● already exists</span>';
+    else
+      statusCell = '<span style="color:var(--up)">✓ new</span>';
+    const rowOpacity = ok ? (exists ? '0.7' : '1') : '0.55';
+    return `<tr style="opacity:${rowOpacity}">
       <td style="padding:6px 10px;text-align:center">${checkbox}</td>
       <td style="padding:6px 10px;font-family:'Share Tech Mono',monospace">${esc(r.cidr||'')}</td>
       <td style="padding:6px 10px">${esc(r.name||'—')}</td>
@@ -1094,12 +1117,17 @@ function _ipamImpRenderPreview(validCount, total) {
       <td style="padding:6px 10px;font-size:11px">${statusCell}</td>
     </tr>`;
   }).join('');
+  // "Select all" defaults to the same state as the rows we just rendered —
+  // checked only when every selectable row is selected. With existing rows
+  // unchecked by default this means the box is checked iff there are no
+  // existing duplicates in the file.
+  const allSelected = _ipamImpRows.every(r => !r._ok || r._selected !== false);
   document.getElementById('ipam-imp-table-wrap').innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead>
         <tr style="background:var(--bg2);position:sticky;top:0">
           <th style="padding:8px 10px;text-align:center;width:40px">
-            <input type="checkbox" id="ipam-imp-all" checked onclick="_ipamImpToggleAll(this.checked)"/>
+            <input type="checkbox" id="ipam-imp-all" ${allSelected?'checked':''} onclick="_ipamImpToggleAll(this.checked)"/>
           </th>
           <th style="padding:8px 10px;text-align:left">CIDR</th>
           <th style="padding:8px 10px;text-align:left">Name</th>

@@ -211,6 +211,10 @@ def handle(h, method, path, body):
     # ── POST /api/import/subnets/preview ─────────────────────────
     # Parse-only. No DB writes; the response feeds the modal's preview
     # table so the user can see which rows are valid before committing.
+    # Each row gets an `_exists` flag (set when the canonical CIDR is
+    # already in ipam_subnets) so the UI can default-uncheck duplicates
+    # and label them "already exists" instead of letting them fail at
+    # apply-time. Defense in depth — the apply path also catches this.
     if _RE_IMPORT_SUB_PREVIEW.match(path):
         user, _ = h._require("operator")
         if not user:
@@ -224,10 +228,23 @@ def handle(h, method, path, body):
                 "error": f"too many rows ({len(rows)}); split the file into "
                          f"chunks of ≤ {_MAX_DEVICES_PARSED}"
             }); return True
+        # Fetch existing CIDRs in one query and tag matching parsed rows.
+        try:
+            from db.ipam import db_list_subnets
+            existing = {(s.get("cidr") or "").strip() for s in (db_list_subnets() or [])}
+        except Exception as e:
+            log.warning(f"subnet preview: could not load existing CIDRs: {e}")
+            existing = set()
+        already = 0
+        for r in rows:
+            if r.get("_ok") and r.get("cidr") in existing:
+                r["_exists"] = True
+                already += 1
         h._json(200, {
-            "rows":  rows,
-            "total": len(rows),
-            "valid": sum(1 for r in rows if r.get("_ok")),
+            "rows":     rows,
+            "total":    len(rows),
+            "valid":    sum(1 for r in rows if r.get("_ok")),
+            "existing": already,
         })
         return True
 
