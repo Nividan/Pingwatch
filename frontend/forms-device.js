@@ -419,11 +419,12 @@ function openEditDevice(did){
 // hypervisor → switch, switch → firewall+switch, IPMI → switch,
 // firewall → firewall (root). Falls back to "anything" when we can't tell.
 const _ED_PARENT_TIER_RULES = [
-  {tier: 'ipmi',       parents: ['switch'],            rx: /\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b/i},
-  {tier: 'firewall',   parents: ['firewall'],          rx: /\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|opnsense|untangle|fw-)\b/i},
-  {tier: 'switch',     parents: ['firewall','switch'], rx: /\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|catalyst|nexus|junos|mikrotik|aruba|cisco-sw|l3|l2|router|rtr-)\b/i},
-  {tier: 'vm',         parents: ['hypervisor'],        rx: /\b(vm-|-vm\b|vms?\b|cluster-vm|guest|tenant)\b/i},
-  {tier: 'hypervisor', parents: ['switch'],            rx: /\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|blade|bladecenter|esx-|hypervisor|host\d)\b/i},
+  {tier: 'ipmi',       parents: ['switch'],                       rx: /\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b/i},
+  {tier: 'firewall',   parents: ['firewall'],                     rx: /\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|opnsense|untangle|fw-)\b/i},
+  {tier: 'switch',     parents: ['firewall','switch'],            rx: /\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|catalyst|nexus|junos|mikrotik|aruba|cisco-sw|l3|l2|router|rtr-)\b/i},
+  {tier: 'chassis',    parents: ['switch'],                       rx: /\b(bladecenter|chassis|enclosure|c[-\s]?class|c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|oa\d|onboard[-\s]?admin)\b/i},
+  {tier: 'vm',         parents: ['hypervisor'],                   rx: /\b(vm-|-vm\b|vms?\b|cluster-vm|guest|tenant)\b/i},
+  {tier: 'hypervisor', parents: ['chassis','switch'],             rx: /\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|blade|esx-|hypervisor|host\d)\b/i},
 ];
 
 function _edInferTierForFilter(dev) {

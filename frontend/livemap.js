@@ -91,6 +91,7 @@ const ICONS = {
   fw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z"/></svg>',
   sw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="9" width="18" height="6" rx="1"/><circle cx="7" cy="12" r="0.7" fill="currentColor"/><circle cx="11" cy="12" r="0.7" fill="currentColor"/><circle cx="15" cy="12" r="0.7" fill="currentColor"/><circle cx="19" cy="12" r="0.7" fill="currentColor"/></svg>',
   hyp:    '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><circle cx="6.5" cy="7" r="0.6" fill="currentColor"/><circle cx="6.5" cy="17" r="0.6" fill="currentColor"/></svg>',
+  chassis:'<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
   vm:     '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="14" rx="1"/><path d="M9 21h6M12 18v3"/></svg>',
   ipmi:   '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
   cloud:  '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.5-1A4 4 0 0 1 17 18H7z"/></svg>',
@@ -592,6 +593,7 @@ function _renderSiteTree(name, tree) {
 
   const fws  = tree.firewalls   || [];
   const sws  = tree.switches    || [];
+  const chs  = tree.chassis     || [];
   const hyps = tree.hypervisors || [];
   const vms  = tree.vm_clusters || [];
   const ipmi = tree.ipmi        || [];
@@ -615,6 +617,9 @@ function _renderSiteTree(name, tree) {
   }
   function _swRow(d) {
     return _devCard(d, { icon: ICONS.sw, tier: 'switch' });
+  }
+  function _chsRow(c) {
+    return _clusterCard(c, { icon: ICONS.chassis, tier: 'chassis' });
   }
   function _hypRow(c) {
     return _clusterCard(c, { icon: ICONS.hyp, tier: 'hypervisor' });
@@ -649,6 +654,7 @@ function _renderSiteTree(name, tree) {
         '<div class="sd-canvas">' +
           tierRow('fw',  'FIREWALL',    fws,  { render: _fwRow,  center: true }) +
           tierRow('sw',  'SWITCHES',    sws,  { render: _swRow,  center: false }) +
+          tierRow('chs', 'CHASSIS',     chs,  { render: _chsRow }) +
           tierRow('hyp', 'HYPERVISORS', hyps, { render: _hypRow, trailing: ipmiTrailing }) +
           tierRow('vm',  'VM CLUSTERS', vms,  { render: _vmRow }) +
         '</div>' +
@@ -687,7 +693,8 @@ function _renderSiteTree(name, tree) {
 // Color rules keyed by the CHILD tier (since each line ends at the child).
 const _CONN_STYLES = {
   'switch':     { color: 'var(--accent2)', dashed: false }, // FW → SW (cyan)
-  'hypervisor': { color: 'var(--up)',      dashed: false }, // SW → HYP (lime)
+  'chassis':    { color: 'var(--accent2)', dashed: false }, // SW → CHS (cyan)
+  'hypervisor': { color: 'var(--up)',      dashed: false }, // SW/CHS → HYP (lime)
   'vm':         { color: 'var(--accent2)', dashed: false }, // HYP → VM (cyan)
   'ipmi':       { color: 'var(--purple)',  dashed: true  }, // SW → IPMI (purple dashed)
   'other':      { color: 'var(--up)',      dashed: false },

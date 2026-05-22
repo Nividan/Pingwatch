@@ -9,87 +9,63 @@ async function openEditGroup(groupName) {
   o.className = 'mo'; o.id = 'meg';
   _overlayClose(o, () => closeM('meg'));
   o.innerHTML = `
-    <div class="mbox" style="min-width:520px;max-width:600px">
+    <div class="mbox meg-mbox" style="min-width:560px;max-width:640px">
       <div class="mhd">
         <div class="mttl">Edit Group — ${esc(groupName)}</div>
         <button class="mclose" onclick="closeM('meg')">&#x2715;</button>
       </div>
-      <div class="mbdy">
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Group Name</div>
-          <div class="fr">
+      <div class="mbdy meg-body">
+        <div class="meg-row2">
+          <div class="meg-sec">
+            <div class="meg-h">Group Name</div>
             <input type="text" id="eg-name" value="${esc(groupName)}" autocomplete="off"/>
-            <div class="fh">Rename this group. All devices in the group will follow.</div>
           </div>
-        </div>
-
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Site</div>
-          <div class="fr">
+          <div class="meg-sec">
+            <div class="meg-h">Site</div>
             <input type="text" id="eg-site" list="eg-site-dl"
                    placeholder="(loading…)" autocomplete="off"/>
             <datalist id="eg-site-dl"></datalist>
-            <div class="fh" id="eg-site-hint">
-              Assigning a site here applies to every device in this group.
-              Leave empty to clear (Unsited).
-            </div>
+            <div class="fh" id="eg-site-hint">Applies to every device in this group.</div>
           </div>
         </div>
 
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Tier (Live Map)</div>
-          <div class="fr">
+        <div class="meg-row2">
+          <div class="meg-sec">
+            <div class="meg-h">Tier (Live Map)</div>
             <select id="eg-tier">
               <option value="">— Auto-detect from name —</option>
               <option value="firewall">Firewall</option>
               <option value="switch">Switch</option>
+              <option value="chassis">Chassis / Enclosure</option>
               <option value="hypervisor">Hypervisor</option>
               <option value="vm">VM</option>
               <option value="ipmi">IPMI / OOB</option>
               <option value="other">Other</option>
             </select>
-            <div class="fh">
-              Forces every device in this group into the chosen Live Map tier.
-              Leave on Auto to use the name-pattern inference. Override per
-              group when the regex misclassifies, e.g. a hypervisor group
-              named without "esx" / "hyper" / "proxmox".
-            </div>
+            <div class="fh">Forces every device into this Live Map tier. Auto = name-pattern inference.</div>
+          </div>
+          <div class="meg-sec">
+            <div class="meg-h">Mute alerts</div>
+            <label class="meg-mute">
+              <input type="checkbox" id="eg-muted"/>
+              <span>🔕 Suppress for this group</span>
+            </label>
+            <div class="fh">Silences alerts &amp; flap events; probes still run.</div>
           </div>
         </div>
 
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Parent Devices (Live Map)</div>
-          <div class="fr">
-            <div id="eg-parents-chips" class="pw-chip-input"></div>
-            <input type="text" id="eg-parents-input" list="eg-parents-dl"
-                   placeholder="Type to search — Enter or comma to add" autocomplete="off"/>
-            <datalist id="eg-parents-dl"></datalist>
-            <div class="fh">
-              Default parents for every device in this group. Used to draw
-              connection lines in the Live Map (e.g. all hypervisors in this
-              cluster hang off these top-of-rack switches). Per-device parents
-              override this default when set.
-            </div>
-          </div>
+        <div class="meg-sec">
+          <div class="meg-h">Parent Devices (Live Map)</div>
+          <div id="eg-parents-chips" class="pw-chip-input"></div>
+          <input type="text" id="eg-parents-input" list="eg-parents-dl"
+                 placeholder="Type to search — Enter or comma to add" autocomplete="off"/>
+          <datalist id="eg-parents-dl"></datalist>
+          <div class="fh">Default parents for every device in this group (drives Live Map connection lines). Per-device parents override this.</div>
         </div>
 
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Alert Profile</div>
-          <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">
-            Loading\u2026
-          </div>
-        </div>
-
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Alerts</div>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-            <input type="checkbox" id="eg-muted"/>
-            <span>🔕 Mute alerts for this group</span>
-          </label>
-          <div class="fh" style="margin-top:4px">
-            Suppresses alert dispatch and flap events for every device and sensor in this
-            group. Probes still run and device cards still reflect their real status.
-          </div>
+        <div class="meg-sec">
+          <div class="meg-h">Alert Profile</div>
+          <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
         </div>
 
       </div>

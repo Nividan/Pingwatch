@@ -694,9 +694,18 @@ body {
 .tier-tag.right { left: auto; right: 16px; }
 .tier-tag.fw   { color: var(--down);    border-color: var(--down);    }
 .tier-tag.sw   { color: var(--accent);  border-color: var(--accent);  }
+.tier-tag.chs  { color: var(--gold);    border-color: var(--gold);    }
 .tier-tag.hyp  { color: var(--accent2); border-color: var(--accent2); }
 .tier-tag.vm   { color: var(--accent);  border-color: var(--accent);  }
 .tier-tag.other{ color: var(--dim);     border-color: var(--dim);     }
+/* Chassis cluster card: soft gold tint mirroring the IPMI purple treatment.
+   Reads as a distinct intermediate layer between switches and hypervisors. */
+.cluster.tier-chassis {
+  border-color: var(--gold);
+  box-shadow: 0 0 8px rgba(255,191,0,0.15);
+}
+.cluster.tier-chassis.down { box-shadow: 0 0 18px rgba(255,51,102,0.4),
+                                         inset 0 0 6px rgba(255,51,102,0.2); }
 /* The .ipmi tier no longer has its own row tag — IPMI clusters live in
    the hypervisor row carrying an OOB chip + purple card border instead. */
 

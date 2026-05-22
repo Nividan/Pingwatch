@@ -22,6 +22,7 @@ from monitoring.site_rollup import _site_of, _device_status, _active_alerts_by_d
 
 TIER_FIREWALL   = "firewall"
 TIER_SWITCH     = "switch"
+TIER_CHASSIS    = "chassis"
 TIER_HYPERVISOR = "hypervisor"
 TIER_VM         = "vm"
 TIER_IPMI       = "ipmi"
@@ -30,7 +31,8 @@ TIER_OTHER      = "other"
 # Tier keys an Edit Group dropdown may persist. "auto" / "" both mean
 # "fall back to the regex inference below" — the override is opt-in.
 _VALID_TIERS = {
-    TIER_FIREWALL, TIER_SWITCH, TIER_HYPERVISOR, TIER_VM, TIER_IPMI, TIER_OTHER,
+    TIER_FIREWALL, TIER_SWITCH, TIER_CHASSIS, TIER_HYPERVISOR,
+    TIER_VM, TIER_IPMI, TIER_OTHER,
 }
 
 
@@ -97,8 +99,10 @@ def _resolve_parents(device, group_parents: dict) -> list:
         return list(group_parents[g])
     return []
 
-# Order matters — first match wins. IPMI / firewall / switch use narrower rules
-# (they have distinctive vendor markers); VM and hypervisor get broader.
+# Order matters — first match wins. IPMI / firewall / switch / chassis use
+# narrower rules (distinctive vendor markers); VM and hypervisor get broader.
+# Chassis is matched BEFORE hypervisor so a BladeCenter chassis device is
+# slotted into the chassis tier rather than counted as a hypervisor.
 _TIER_RULES = [
     (TIER_IPMI,       re.compile(r"\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b", re.I)),
     (TIER_FIREWALL,   re.compile(r"\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|"
@@ -107,10 +111,13 @@ _TIER_RULES = [
     (TIER_SWITCH,     re.compile(r"\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|"
                                  r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw|"
                                  r"l3|l2|router|rtr-)\b", re.I)),
+    (TIER_CHASSIS,    re.compile(r"\b(bladecenter|chassis|enclosure|c[-\s]?class|"
+                                 r"c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|"
+                                 r"oa\d|onboard[-\s]?admin)\b", re.I)),
     (TIER_VM,         re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|"
                                  r"guest|tenant)\b", re.I)),
     (TIER_HYPERVISOR, re.compile(r"\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|"
-                                 r"blade|bladecenter|esx-|hypervisor|host\d)\b", re.I)),
+                                 r"blade|esx-|hypervisor|host\d)\b", re.I)),
 ]
 
 
@@ -231,6 +238,7 @@ def site_tree(site_name: str) -> dict:
     by_tier_devices = {
         TIER_FIREWALL:   [],
         TIER_SWITCH:     [],
+        TIER_CHASSIS:    [],
         TIER_HYPERVISOR: [],
         TIER_VM:         [],
         TIER_IPMI:       [],
@@ -248,17 +256,21 @@ def site_tree(site_name: str) -> dict:
     switches  = [_device_card(d, alerts_by_did, group_parents)
                  for d in by_tier_devices[TIER_SWITCH]]
 
-    # Hypervisors / VMs / IPMI render as cluster cards grouped by devices.grp
+    # Chassis / VMs / IPMI render as cluster cards grouped by devices.grp.
+    # Hypervisors do too. Chassis is its own row between switches + hypervisors.
     def _by_group(devs):
         grouped = defaultdict(list)
         for d in devs:
             grouped[(d.group or "Default Group")].append(d)
         return grouped
 
+    chs_groups   = _by_group(by_tier_devices[TIER_CHASSIS])
     hyp_groups   = _by_group(by_tier_devices[TIER_HYPERVISOR])
     vm_groups    = _by_group(by_tier_devices[TIER_VM])
     ipmi_groups  = _by_group(by_tier_devices[TIER_IPMI])
 
+    chassis     = [_cluster_card(gname, devs, alerts_by_did, group_parents)
+                   for gname, devs in sorted(chs_groups.items(),  key=lambda kv: kv[0].lower())]
     hypervisors = [_cluster_card(gname, devs, alerts_by_did, group_parents)
                    for gname, devs in sorted(hyp_groups.items(),  key=lambda kv: kv[0].lower())]
     vm_clusters = [_cluster_card(gname, devs, alerts_by_did, group_parents)
@@ -300,6 +312,9 @@ def site_tree(site_name: str) -> dict:
     for sc in switches:
         _push_ref(sc["parent_device_ids"],
                   {"kind": "device", "tier": TIER_SWITCH, "did": sc["did"]})
+    for cc in chassis:
+        _push_ref(cc["parent_device_ids"],
+                  {"kind": "cluster", "tier": TIER_CHASSIS, "name": cc["name"]})
     for hc in hypervisors:
         _push_ref(hc["parent_device_ids"],
                   {"kind": "cluster", "tier": TIER_HYPERVISOR, "name": hc["name"]})
@@ -331,6 +346,7 @@ def site_tree(site_name: str) -> dict:
         },
         "firewalls":   firewalls,
         "switches":    switches,
+        "chassis":     chassis,
         "hypervisors": hypervisors,
         "vm_clusters": vm_clusters,
         "ipmi":        ipmi,
