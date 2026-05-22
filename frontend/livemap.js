@@ -505,7 +505,12 @@ function _devCard(d, opts) {
   const status = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
   const icon = opts.icon || ICONS.sw;
   const role = opts.role ? '<span class="dev-role">' + esc(opts.role) + '</span>' : '';
-  return '<div class="dev ' + status + '" data-did="' + esc(d.did) + '">' +
+  // Parent linkage attributes drive the SVG connection layer in _drawConnections().
+  const parents = JSON.stringify(d.parent_device_ids || []);
+  const tier = opts.tier || '';
+  return '<div class="dev ' + status + '" data-did="' + esc(d.did) + '"' +
+           ' data-parent-ids=\'' + parents.replace(/'/g, '&#39;') + '\'' +
+           (tier ? ' data-tier="' + esc(tier) + '"' : '') + '>' +
            '<div class="dev-row">' + icon +
              '<span class="dev-name">' + esc(d.name) + '</span>' +
              role +
@@ -532,7 +537,16 @@ function _clusterCard(c, opts) {
     return '<div class="d-' + (cell.status || 'unknown') + '" title="' + esc(cell.name) + '"></div>';
   }).join('');
   const cardCls = 'cluster' + (opts.tier ? ' tier-' + opts.tier : '') + ' ' + status;
-  return '<div class="' + cardCls + '" data-cluster="' + esc(c.name) + '">' +
+  // Resolved parents (union across cluster members) + member dids for the
+  // connection layer to map child→cluster when a parent is itself inside a cluster.
+  const parents = JSON.stringify(c.parent_device_ids || []);
+  const memberDids = JSON.stringify((c.cells || []).map(function(x) { return x.did; }));
+  const mixedAttr = c.mixed_parents ? ' data-mixed-parents="1"' : '';
+  return '<div class="' + cardCls + '" data-cluster="' + esc(c.name) + '"' +
+           ' data-parent-ids=\'' + parents.replace(/'/g, '&#39;') + '\'' +
+           ' data-cells=\'' + memberDids.replace(/'/g, '&#39;') + '\'' +
+           (opts.tier ? ' data-tier="' + esc(opts.tier) + '"' : '') +
+           mixedAttr + '>' +
            '<div class="cluster-head">' + icon +
              '<span class="cluster-title">' + esc(c.name) + '</span>' +
              chip +
@@ -597,16 +611,16 @@ function _renderSiteTree(name, tree) {
   }
 
   function _fwRow(d) {
-    return _devCard(d, { icon: ICONS.fw, role: 'PRIMARY' });
+    return _devCard(d, { icon: ICONS.fw, role: 'PRIMARY', tier: 'firewall' });
   }
   function _swRow(d) {
-    return _devCard(d, { icon: ICONS.sw });
+    return _devCard(d, { icon: ICONS.sw, tier: 'switch' });
   }
   function _hypRow(c) {
-    return _clusterCard(c, { icon: ICONS.hyp });
+    return _clusterCard(c, { icon: ICONS.hyp, tier: 'hypervisor' });
   }
   function _vmRow(c) {
-    return _clusterCard(c, { icon: ICONS.vm });
+    return _clusterCard(c, { icon: ICONS.vm, tier: 'vm' });
   }
   function _ipmiRow(c) {
     // IPMI cluster cards live in the hypervisor row alongside the in-band
@@ -644,7 +658,10 @@ function _renderSiteTree(name, tree) {
           '<div class="sd-other-grid">' +
             tree.other.map(function(d) {
               const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
-              return '<div class="dev ' + st + '" data-did="' + esc(d.did) + '">' +
+              const _parents = JSON.stringify(d.parent_device_ids || []);
+              return '<div class="dev ' + st + '" data-did="' + esc(d.did) + '"' +
+                       ' data-parent-ids=\'' + _parents.replace(/'/g, '&#39;') + '\'' +
+                       ' data-tier="other">' +
                        '<div class="dev-row">' + ICONS.sw + '<span class="dev-name">' + esc(d.name) + '</span></div>' +
                        '<div class="dev-ip">' + esc(d.host) + '</div>' +
                      '</div>';
@@ -655,6 +672,111 @@ function _renderSiteTree(name, tree) {
   // Cluster click → side panel
   // Listener is bound once in boot() now; binding here would accumulate
   // a new handler on every site render.
+
+  // Draw parent connection lines once the layout settles. Wrapped in rAF so
+  // we read getBoundingClientRect after the browser has laid the cards out.
+  const canvas = main.querySelector('.sd-canvas');
+  if (canvas) {
+    requestAnimationFrame(function() { _drawConnections(canvas); });
+    // Redraw on resize — connection coords drift when the panel reflows.
+    _bindCanvasResize(canvas);
+  }
+}
+
+// ─── SVG connection lines ──────────────────────────────────────────
+// Color rules keyed by the CHILD tier (since each line ends at the child).
+const _CONN_STYLES = {
+  'switch':     { color: 'var(--accent2)', dashed: false }, // FW → SW (cyan)
+  'hypervisor': { color: 'var(--up)',      dashed: false }, // SW → HYP (lime)
+  'vm':         { color: 'var(--accent2)', dashed: false }, // HYP → VM (cyan)
+  'ipmi':       { color: 'var(--purple)',  dashed: true  }, // SW → IPMI (purple dashed)
+  'other':      { color: 'var(--up)',      dashed: false },
+  'firewall':   { color: 'var(--gold)',    dashed: false }, // (root — rarely has parents)
+};
+
+function _drawConnections(canvasEl) {
+  if (!canvasEl) return;
+  const oldSvg = canvasEl.querySelector('.conn-svg');
+  if (oldSvg) oldSvg.remove();
+
+  // Build did → DOM element index. Device cards are direct hits; cluster
+  // cards register their member dids so child clusters can resolve a parent
+  // that lives INSIDE another cluster (e.g. VM cluster → ESXi inside HYP cluster).
+  const didEl = new Map();
+  canvasEl.querySelectorAll('.dev[data-did]').forEach(function(el) {
+    didEl.set(el.getAttribute('data-did'), el);
+  });
+  canvasEl.querySelectorAll('.cluster').forEach(function(el) {
+    let cells;
+    try { cells = JSON.parse(el.getAttribute('data-cells') || '[]'); }
+    catch { cells = []; }
+    cells.forEach(function(did) {
+      // Don't overwrite a top-level device card with a cluster mapping.
+      if (!didEl.has(did)) didEl.set(did, el);
+    });
+  });
+
+  const cRect = canvasEl.getBoundingClientRect();
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNs, 'svg');
+  svg.setAttribute('class', 'conn-svg');
+  svg.setAttribute('width', cRect.width);
+  svg.setAttribute('height', cRect.height);
+
+  function _drawLine(fromEl, toEl, style) {
+    if (fromEl === toEl) return;
+    const f = fromEl.getBoundingClientRect();
+    const t = toEl.getBoundingClientRect();
+    const x1 = f.left + f.width / 2 - cRect.left;
+    const y1 = f.top - cRect.top;                  // top edge of child
+    const x2 = t.left + t.width / 2 - cRect.left;
+    const y2 = t.bottom - cRect.top;               // bottom edge of parent
+    // Cubic bezier: ease vertically with mid-Y control points so curves
+    // bow gently between tiers instead of zig-zagging.
+    const midY = (y1 + y2) / 2;
+    const path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('d',
+      'M ' + x1 + ' ' + y1 +
+      ' C ' + x1 + ' ' + midY + ', ' +
+              x2 + ' ' + midY + ', ' +
+              x2 + ' ' + y2);
+    path.setAttribute('stroke', style.color);
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('class', 'conn-line' + (style.dashed ? ' dashed' : ''));
+    if (style.dashed) path.setAttribute('stroke-dasharray', '5 5');
+    svg.appendChild(path);
+  }
+
+  canvasEl.querySelectorAll('[data-parent-ids]').forEach(function(child) {
+    let parents;
+    try { parents = JSON.parse(child.getAttribute('data-parent-ids') || '[]'); }
+    catch { return; }
+    if (!parents.length) return;
+    const tier = child.getAttribute('data-tier') || 'other';
+    const style = _CONN_STYLES[tier] || _CONN_STYLES.other;
+    parents.forEach(function(pid) {
+      const parentEl = didEl.get(pid);
+      if (parentEl) _drawLine(child, parentEl, style);
+    });
+  });
+
+  // Insert at start so cards stack on top of the lines.
+  canvasEl.insertBefore(svg, canvasEl.firstChild);
+}
+
+let _canvasResizeObs = null;
+function _bindCanvasResize(canvas) {
+  // Re-draw on canvas reflow (sidebar collapse, window resize).
+  if (_canvasResizeObs) _canvasResizeObs.disconnect();
+  if (typeof ResizeObserver === 'undefined') return;
+  let raf = 0;
+  _canvasResizeObs = new ResizeObserver(function() {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(function() { _drawConnections(canvas); });
+  });
+  _canvasResizeObs.observe(canvas);
 }
 
 function _renderInternetSite(name, tree) {

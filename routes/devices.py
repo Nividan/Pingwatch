@@ -116,6 +116,67 @@ def _maybe_resize_executor():
         log.info(f"Executor auto-resized to {_mw} workers ({_count} sensors)")
 
 
+_MAX_PARENT_IDS = 8
+_MAX_CYCLE_HOPS = 32
+
+
+def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
+    """Validate + dedup a parent_device_ids input.
+
+    Returns (ok, cleaned, error). Empty list is valid.
+    """
+    if raw is None:
+        return True, [], ""
+    if not isinstance(raw, list):
+        return False, [], "parent_device_ids must be a list"
+    if len(raw) > _MAX_PARENT_IDS:
+        return False, [], f"too many parents (max {_MAX_PARENT_IDS})"
+    seen = set()
+    cleaned = []
+    for p in raw:
+        if not isinstance(p, str):
+            return False, [], "parent ids must be strings"
+        p = p.strip()
+        if not p:
+            continue
+        if len(p) > 64:
+            return False, [], "parent id too long"
+        if p in seen:
+            continue
+        seen.add(p)
+        cleaned.append(p)
+    return True, cleaned, ""
+
+
+def _detect_parent_cycle(STATE, did: str, new_parents: list) -> bool:
+    """Return True if assigning new_parents to did would create a cycle.
+
+    Walks up from each candidate parent (and any parent's existing parents)
+    by BFS, looking for `did`. Short-circuits at _MAX_CYCLE_HOPS to bound
+    the worst case if the graph is already corrupted.
+    """
+    if not new_parents:
+        return False
+    visited = set()
+    queue = list(new_parents)
+    hops = 0
+    while queue and hops < _MAX_CYCLE_HOPS:
+        nxt = []
+        for pid in queue:
+            if pid == did:
+                return True
+            if pid in visited:
+                continue
+            visited.add(pid)
+            parent_dev = STATE.devices.get(pid)
+            if not parent_dev:
+                continue
+            nxt.extend(getattr(parent_dev, "parent_device_ids", []) or [])
+        queue = nxt
+        hops += 1
+    return False
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE  # always current reference
@@ -327,6 +388,11 @@ def handle(h, method, path, body):
             from db.backups import encrypt_pw
             _v3_auth_pw_default = encrypt_pw(_v3_auth_pw_default) if _v3_auth_pw_default else ""
             _v3_priv_pw_default = encrypt_pw(_v3_priv_pw_default) if _v3_priv_pw_default else ""
+        # Optional parent linkage on create — validated against existing devices.
+        # New device's own did is not yet known here, so self-parent isn't possible.
+        parent_ok, parent_ids_clean, parent_err = _normalize_parent_ids(body.get("parent_device_ids"))
+        if not parent_ok:
+            h._json(400, {"error": parent_err}); return True
         did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
@@ -344,6 +410,10 @@ def handle(h, method, path, body):
                     STATE.devices[did].snmp_v3_auth_pass_default = _v3_auth_pw_default
                 if _v3_priv_pw_default:
                     STATE.devices[did].snmp_v3_priv_pass_default = _v3_priv_pw_default
+                # Drop unknown parent ids (e.g. user pasted a stale id)
+                STATE.devices[did].parent_device_ids = [
+                    p for p in parent_ids_clean if p in STATE.devices and p != did
+                ]
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
@@ -548,6 +618,17 @@ def handle(h, method, path, body):
                     if _sip not in cleaned:
                         cleaned.append(_sip)
                 dev.secondary_ips = cleaned
+            if "parent_device_ids" in body:
+                ok, cleaned_parents, perr = _normalize_parent_ids(body["parent_device_ids"])
+                if not ok:
+                    h._json(400, {"error": perr}); return True
+                if did in cleaned_parents:
+                    h._json(400, {"error": "device cannot be its own parent"}); return True
+                # unknown parents are silently dropped (device may have been deleted)
+                cleaned_parents = [p for p in cleaned_parents if p in STATE.devices]
+                if _detect_parent_cycle(STATE, did, cleaned_parents):
+                    h._json(400, {"error": "parent assignment would create a cycle"}); return True
+                dev.parent_device_ids = cleaned_parents
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name

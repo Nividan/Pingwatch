@@ -615,6 +615,11 @@ class Device:
         self.snmp_v3_priv_proto_default = ""   # DES | AES | AES-192 | AES-256
         self.snmp_v3_priv_pass_default  = ""   # Fernet ciphertext
         self.snmp_v3_context_default    = ""
+        # Live Map parent linking (v1.0+) — JSON-persisted list of device IDs
+        # this device hangs off. Empty list = orphan / root. Multi-parent
+        # supports dual-NIC and dual-homed devices. Group-level fallback lives
+        # in topo_settings('pw_group_parents').
+        self.parent_device_ids = []
         # Cached status string; invalidated (set to None) whenever a sensor's
         # alive / _threshold_state / running / alerts_muted changes, or when
         # a sensor is added/removed. Recomputed on next read.
@@ -674,6 +679,8 @@ class Device:
             # Origin breadcrumb (Auto-Discovery). 0/"" for manually-added devices.
             "discovered_at":         float(getattr(self, "discovered_at", 0) or 0),
             "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
+            # Live Map parent linking — list of device IDs this device hangs off.
+            "parent_device_ids":     list(getattr(self, "parent_device_ids", []) or []),
         }
 
 

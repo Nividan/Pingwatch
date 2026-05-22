@@ -53,6 +53,50 @@ def _load_group_tier_overrides() -> dict:
         log.debug(f"site_tree: tier overrides unavailable: {e}")
         return {}
 
+
+def _load_group_parent_overrides() -> dict:
+    """Load `topo_settings.pw_group_parents` — `{groupName: [did, did, ...]}`.
+
+    Provides a group-level default for parent linking. Per-device
+    `parent_device_ids` overrides this when set (non-empty). Returns {}
+    on any failure — the live map just renders without group fallbacks.
+    """
+    try:
+        from monitoring.network_map import topo_get_setting
+        row = topo_get_setting("pw_group_parents")
+        if not row:
+            return {}
+        val = row.get("value") if isinstance(row, dict) else None
+        if not isinstance(val, dict):
+            return {}
+        out = {}
+        for k, v in val.items():
+            if isinstance(v, list):
+                cleaned = [p for p in v if isinstance(p, str) and p]
+                if cleaned:
+                    out[k] = cleaned
+        return out
+    except Exception as e:
+        log.debug(f"site_tree: group parent overrides unavailable: {e}")
+        return {}
+
+
+def _resolve_parents(device, group_parents: dict) -> list:
+    """Return the effective parent device IDs for `device`.
+
+    Resolution order:
+      1. `device.parent_device_ids` if non-empty (manual override).
+      2. `pw_group_parents[device.group]` if defined.
+      3. Empty list (orphan/root).
+    """
+    own = list(getattr(device, "parent_device_ids", []) or [])
+    if own:
+        return own
+    g = (getattr(device, "group", "") or "").strip()
+    if g and g in group_parents:
+        return list(group_parents[g])
+    return []
+
 # Order matters — first match wins. IPMI / firewall / switch use narrower rules
 # (they have distinctive vendor markers); VM and hypervisor get broader.
 _TIER_RULES = [
@@ -95,48 +139,71 @@ def infer_tier(device, group_overrides: dict | None = None) -> str:
     return TIER_HYPERVISOR
 
 
-def _device_card(d, alerts_by_did: dict) -> dict:
+def _device_card(d, alerts_by_did: dict, group_parents: dict | None = None) -> dict:
     """Build a minimal device card payload."""
+    parents = _resolve_parents(d, group_parents or {})
     return {
-        "did":    d.device_id,
-        "name":   d.name,
-        "host":   d.host,
-        "group":  d.group or "",
-        "status": _device_status(d),
-        "alerts": int(alerts_by_did.get(d.device_id, 0)),
+        "did":               d.device_id,
+        "name":              d.name,
+        "host":              d.host,
+        "group":             d.group or "",
+        "status":            _device_status(d),
+        "alerts":            int(alerts_by_did.get(d.device_id, 0)),
+        "parent_device_ids": parents,
     }
 
 
-def _cluster_card(name: str, devs: list, alerts_by_did: dict) -> dict:
-    """Roll a list of devices into a cluster card with mini dot-grid data."""
+def _cluster_card(name: str, devs: list, alerts_by_did: dict,
+                  group_parents: dict | None = None) -> dict:
+    """Roll a list of devices into a cluster card with mini dot-grid data.
+
+    Cluster parents = union of resolved parents across every member. If
+    members disagree (mixed parents), all listed parents are included and
+    the frontend draws a line per parent — visually the cluster fans out.
+    """
     up = warn = down = 0
     cells = []
     alerts = 0
+    parents = []
+    parents_seen = set()
+    mixed_parents = False
+    member_parent_sigs = set()
     for d in devs:
         st = _device_status(d)
         if   st == "up":   up   += 1
         elif st == "warn": warn += 1
         elif st == "down": down += 1
+        d_parents = _resolve_parents(d, group_parents or {})
         cells.append({
-            "did":    d.device_id,
-            "name":   d.name,
-            "status": st,
+            "did":               d.device_id,
+            "name":              d.name,
+            "status":            st,
+            "parent_device_ids": d_parents,
         })
         alerts += int(alerts_by_did.get(d.device_id, 0))
+        for p in d_parents:
+            if p not in parents_seen:
+                parents_seen.add(p)
+                parents.append(p)
+        member_parent_sigs.add(tuple(d_parents))
+    if len(member_parent_sigs) > 1:
+        mixed_parents = True
     # Worst-status colour for the border
     if   down: status = "down"
     elif warn: status = "warn"
     elif up:   status = "up"
     else:      status = "unknown"
     return {
-        "name":   name,
-        "count":  len(devs),
-        "status": status,
-        "up":     up,
-        "warn":   warn,
-        "down":   down,
-        "alerts": alerts,
-        "cells":  cells,
+        "name":              name,
+        "count":             len(devs),
+        "status":            status,
+        "up":                up,
+        "warn":              warn,
+        "down":              down,
+        "alerts":            alerts,
+        "cells":             cells,
+        "parent_device_ids": parents,
+        "mixed_parents":     mixed_parents,
     }
 
 
@@ -158,6 +225,7 @@ def site_tree(site_name: str) -> dict:
     alerts_by_did = _active_alerts_by_did()
     # Load once per drill-in. Admin Edit-Group overrides win over the regex.
     group_overrides = _load_group_tier_overrides()
+    group_parents   = _load_group_parent_overrides()
 
     # Bucket every device in this site by tier
     by_tier_devices = {
@@ -175,8 +243,10 @@ def site_tree(site_name: str) -> dict:
         by_tier_devices[tier].append(d)
 
     # Firewalls + switches render as individual device cards
-    firewalls = [_device_card(d, alerts_by_did) for d in by_tier_devices[TIER_FIREWALL]]
-    switches  = [_device_card(d, alerts_by_did) for d in by_tier_devices[TIER_SWITCH]]
+    firewalls = [_device_card(d, alerts_by_did, group_parents)
+                 for d in by_tier_devices[TIER_FIREWALL]]
+    switches  = [_device_card(d, alerts_by_did, group_parents)
+                 for d in by_tier_devices[TIER_SWITCH]]
 
     # Hypervisors / VMs / IPMI render as cluster cards grouped by devices.grp
     def _by_group(devs):
@@ -189,14 +259,15 @@ def site_tree(site_name: str) -> dict:
     vm_groups    = _by_group(by_tier_devices[TIER_VM])
     ipmi_groups  = _by_group(by_tier_devices[TIER_IPMI])
 
-    hypervisors = [_cluster_card(gname, devs, alerts_by_did)
+    hypervisors = [_cluster_card(gname, devs, alerts_by_did, group_parents)
                    for gname, devs in sorted(hyp_groups.items(),  key=lambda kv: kv[0].lower())]
-    vm_clusters = [_cluster_card(gname, devs, alerts_by_did)
+    vm_clusters = [_cluster_card(gname, devs, alerts_by_did, group_parents)
                    for gname, devs in sorted(vm_groups.items(),   key=lambda kv: kv[0].lower())]
-    ipmi        = [_cluster_card(gname, devs, alerts_by_did)
+    ipmi        = [_cluster_card(gname, devs, alerts_by_did, group_parents)
                    for gname, devs in sorted(ipmi_groups.items(), key=lambda kv: kv[0].lower())]
 
-    other = [_device_card(d, alerts_by_did) for d in by_tier_devices[TIER_OTHER]]
+    other = [_device_card(d, alerts_by_did, group_parents)
+             for d in by_tier_devices[TIER_OTHER]]
 
     # Site summary
     all_devs = [d for devs in by_tier_devices.values() for d in devs]
@@ -207,6 +278,47 @@ def site_tree(site_name: str) -> dict:
         elif st == "warn": warn += 1
         elif st == "down": down += 1
         alerts += int(alerts_by_did.get(d.device_id, 0))
+
+    # Build by_parent map. Keys: parent device id (string). Values: list of
+    # child references — each ref is { kind: 'device'|'cluster', tier, ...id }.
+    # Frontend uses this to draw SVG connection lines + flag cross-site /
+    # missing parents.
+    by_parent: dict = defaultdict(list)
+    orphans: list = []
+    site_dids = {d.device_id for d in all_devs}
+
+    def _push_ref(parents, ref):
+        if not parents:
+            orphans.append(ref)
+            return
+        for pid in parents:
+            by_parent[pid].append(ref)
+
+    for fc in firewalls:
+        _push_ref(fc["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_FIREWALL, "did": fc["did"]})
+    for sc in switches:
+        _push_ref(sc["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_SWITCH, "did": sc["did"]})
+    for hc in hypervisors:
+        _push_ref(hc["parent_device_ids"],
+                  {"kind": "cluster", "tier": TIER_HYPERVISOR, "name": hc["name"]})
+    for vc in vm_clusters:
+        _push_ref(vc["parent_device_ids"],
+                  {"kind": "cluster", "tier": TIER_VM, "name": vc["name"]})
+    for ic in ipmi:
+        _push_ref(ic["parent_device_ids"],
+                  {"kind": "cluster", "tier": TIER_IPMI, "name": ic["name"]})
+    for oc in other:
+        _push_ref(oc["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_OTHER, "did": oc["did"]})
+
+    # Cross-site parents — keep them in by_parent so the frontend can decide
+    # how to render. Mark with a flag so cards can show a tiny badge.
+    cross_site_parents = {pid for pid in by_parent
+                          if pid not in site_dids and pid in STATE.devices}
+    missing_parents = {pid for pid in by_parent
+                       if pid not in STATE.devices}
 
     return {
         "site": {
@@ -223,4 +335,8 @@ def site_tree(site_name: str) -> dict:
         "vm_clusters": vm_clusters,
         "ipmi":        ipmi,
         "other":       other,
+        "by_parent":          dict(by_parent),
+        "orphans":            orphans,
+        "cross_site_parents": sorted(cross_site_parents),
+        "missing_parents":    sorted(missing_parents),
     }

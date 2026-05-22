@@ -193,6 +193,9 @@ async function submitAddDevice(){
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────
 
 let _edSecIps = [];   // secondary IPs being edited
+let _edParentIds = []; // parent device IDs being edited (Live Map)
+let _edParentDid = null;  // did of the device currently open in Edit Device
+let _edParentTierFilter = null;  // inferred tier for the device being edited (null = no filter)
 
 function openEditDevice(did){
   const dev = S.devices[did];
@@ -200,6 +203,9 @@ function openEditDevice(did){
   closeM('dwo');
   closeM('med');
   _edSecIps = [...(dev.secondary_ips || [])];
+  _edParentIds = Array.isArray(dev.parent_device_ids) ? [...dev.parent_device_ids] : [];
+  _edParentDid = did;
+  _edParentTierFilter = _edInferTierForFilter(dev);
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
   const _edGroupItems = _edGroups.map(g =>
     `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault()" onclick="_edgPick(this.textContent)">${esc(g)}</div>`
@@ -283,6 +289,24 @@ function openEditDevice(did){
                  style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_edSipAdd()}"/>
           <button class="btn-s" type="button" onclick="_edSipAdd()" style="white-space:nowrap">+ Add</button>
         </div>
+
+        <div class="ed-pane-hdr" style="margin-top:18px">Parent Devices <span style="color:var(--text3);font-weight:400;font-size:12px">(Live Map)</span></div>
+        <div class="ed-pane-sub">
+          Devices this hangs off (e.g. a hypervisor's TOR switches, a VM's hypervisors).
+          Drives connection lines on the Live Map drill-in. Leave empty to inherit the
+          group default. Multi-select supports dual-NIC / dual-homed devices.
+        </div>
+        <div id="ed-parents-chips" class="pw-chip-input"></div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="ed-parents-input" list="ed-parents-dl"
+                 placeholder="Type to search devices…" autocomplete="off"
+                 style="flex:1"/>
+          <datalist id="ed-parents-dl"></datalist>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text2);white-space:nowrap;cursor:pointer;user-select:none">
+            <input type="checkbox" id="ed-parents-allTiers"/> All tiers
+          </label>
+        </div>
+        <div class="fh" id="ed-parents-hint" style="margin-top:4px"></div>
       </div>
 
       <!-- Tab: Credentials -->
@@ -384,9 +408,132 @@ function openEditDevice(did){
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
   _populateSiteDatalist('ed-site-dl');
   _edSipRender();
+  _edParentInit(did);
   _edLicLoad(did);
   _loadDeviceProfileSection(did);
   _loadDeviceRole(did);
+}
+
+// ── Parent Devices (Live Map) helpers ─────────────────────────────────
+// Tier filter mirrors monitoring/site_tree.py: VM → hypervisor parents,
+// hypervisor → switch, switch → firewall+switch, IPMI → switch,
+// firewall → firewall (root). Falls back to "anything" when we can't tell.
+const _ED_PARENT_TIER_RULES = [
+  {tier: 'ipmi',       parents: ['switch'],            rx: /\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b/i},
+  {tier: 'firewall',   parents: ['firewall'],          rx: /\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|opnsense|untangle|fw-)\b/i},
+  {tier: 'switch',     parents: ['firewall','switch'], rx: /\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|catalyst|nexus|junos|mikrotik|aruba|cisco-sw|l3|l2|router|rtr-)\b/i},
+  {tier: 'vm',         parents: ['hypervisor'],        rx: /\b(vm-|-vm\b|vms?\b|cluster-vm|guest|tenant)\b/i},
+  {tier: 'hypervisor', parents: ['switch'],            rx: /\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|blade|bladecenter|esx-|hypervisor|host\d)\b/i},
+];
+
+function _edInferTierForFilter(dev) {
+  const blob = `${dev.name || ''} ${dev.host || ''} ${dev.group || ''}`;
+  for (const rule of _ED_PARENT_TIER_RULES) {
+    if (rule.rx.test(blob)) return rule;
+  }
+  return {tier: 'hypervisor', parents: ['switch']};  // safe default
+}
+
+function _edRenderParentChips() {
+  const wrap = document.getElementById('ed-parents-chips');
+  if (!wrap) return;
+  if (!_edParentIds.length) {
+    const groupName = (document.getElementById('ed-g')?.value || '').trim();
+    wrap.innerHTML = `<span class="pw-chip-empty">None — falls back to group default${groupName ? ` (${esc(groupName)})` : ''}</span>`;
+    return;
+  }
+  wrap.innerHTML = _edParentIds.map((pid, i) => {
+    const d = S.devices[pid];
+    const label = d ? (d.name || pid) : `(missing: ${pid})`;
+    return `<span class="pw-chip">
+      ${esc(label)}
+      <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
+    </span>`;
+  }).join('');
+}
+
+function _edRemoveParent(idx) {
+  _edParentIds.splice(idx, 1);
+  _edRenderParentChips();
+}
+
+function _edPopulateParentDatalist() {
+  const dl = document.getElementById('ed-parents-dl');
+  if (!dl) return;
+  const allTiers = document.getElementById('ed-parents-allTiers')?.checked;
+  const allowed = allTiers ? null : (_edParentTierFilter ? new Set(_edParentTierFilter.parents) : null);
+  const candidates = Object.values(S.devices || {})
+    .filter(d => d.device_id !== _edParentDid)
+    .filter(d => {
+      if (!allowed) return true;
+      // Use the same rules to classify candidates. Cheap match.
+      const blob = `${d.name || ''} ${d.host || ''} ${d.group || ''}`;
+      for (const rule of _ED_PARENT_TIER_RULES) {
+        if (rule.rx.test(blob)) return allowed.has(rule.tier);
+      }
+      // Unmatched fall through as hypervisor default — allow if hypervisor allowed.
+      return allowed.has('hypervisor');
+    })
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  dl.innerHTML = candidates.map(d =>
+    `<option value="${esc(d.name || d.device_id)}"></option>`
+  ).join('');
+  // Update hint with allowed-tier summary
+  const hint = document.getElementById('ed-parents-hint');
+  if (hint) {
+    if (allTiers || !_edParentTierFilter) {
+      hint.textContent = `Showing all ${candidates.length} device(s).`;
+    } else {
+      hint.textContent = `Filtered to ${_edParentTierFilter.parents.join(' / ')} tier(s) — ${candidates.length} match(es). Tick "All tiers" to widen.`;
+    }
+  }
+}
+
+function _edCommitParentFromInput(input) {
+  const v = (input.value || '').trim();
+  if (!v) return;
+  if (_edParentIds.length >= 8) {
+    toast('Max 8 parent devices', 'err');
+    return;
+  }
+  const lc = v.toLowerCase();
+  let match = Object.values(S.devices || {}).find(
+    d => d.device_id !== _edParentDid && (d.name || '').toLowerCase() === lc
+  );
+  if (!match && S.devices[v] && v !== _edParentDid) match = S.devices[v];
+  if (!match) {
+    toast(`No device named "${v}"`, 'err');
+    return;
+  }
+  if (_edParentIds.includes(match.device_id)) {
+    toast('Already added', 'err');
+    return;
+  }
+  _edParentIds.push(match.device_id);
+  input.value = '';
+  _edRenderParentChips();
+}
+
+function _edParentInit(did) {
+  _edRenderParentChips();
+  _edPopulateParentDatalist();
+  const input = document.getElementById('ed-parents-input');
+  const allBox = document.getElementById('ed-parents-allTiers');
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        _edCommitParentFromInput(input);
+      } else if (e.key === 'Backspace' && !input.value && _edParentIds.length) {
+        _edParentIds.pop();
+        _edRenderParentChips();
+      }
+    });
+    input.addEventListener('change', () => _edCommitParentFromInput(input));
+  }
+  if (allBox) {
+    allBox.addEventListener('change', () => _edPopulateParentDatalist());
+  }
 }
 
 // Tab switcher for the Edit Device modal. Hides every .ed-tab-pane in #med
@@ -573,7 +720,8 @@ async function submitEditDevice(did){
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   const payload = {name, host, group, site, alerts_muted,
     snmp_community_default, snmp_version_default, vmware_user_default,
-    secondary_ips: _edSecIps};
+    secondary_ips: _edSecIps,
+    parent_device_ids: Array.isArray(_edParentIds) ? _edParentIds : []};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   // SNMPv3 device defaults — emit only when the section is visible (version=3).
   if(snmp_version_default === '3'){
@@ -621,7 +769,11 @@ async function submitEditDevice(did){
   }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; dev.parent_device_ids = [..._edParentIds]; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  // Live Map runs in iframe — postMessage triggers a tree refresh so the
+  // connection lines redraw without a full page reload.
+  const _lf = document.getElementById('livemap-frame');
+  _lf?.contentWindow?.postMessage({ type: 'lm_refresh' }, window.location.origin);
   pruneEmptyGroups();
   updatePills();
   refreshGroupCounts();

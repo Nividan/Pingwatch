@@ -568,6 +568,23 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Parent device linking (v1.0+, Live Map tree) — JSON array of device IDs
+        # that this device hangs off. Drives the SVG connection lines in the
+        # Live Map drill-in. Empty array = orphan/root. Multi-parent for
+        # dual-NIC/dual-homed devices. Group-level fallback lives in
+        # topo_settings('pw_group_parents').
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN parent_device_ids TEXT DEFAULT '[]'")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        try:
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_devices_parent_ids ON devices(parent_device_ids)"
+            )
+            con.commit()
+        except Exception:
+            pass
         # Sites metadata sidecar (v1.0+, Live Map NOC console).
         # Distinct site names still come from devices.site / ipam_subnets.site;
         # this table stores presentation metadata (kind, pinned, display_name)

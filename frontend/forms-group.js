@@ -58,6 +58,22 @@ async function openEditGroup(groupName) {
         </div>
 
         <div class="alrt-section">
+          <div class="alrt-section-hdr">Parent Devices (Live Map)</div>
+          <div class="fr">
+            <div id="eg-parents-chips" class="pw-chip-input"></div>
+            <input type="text" id="eg-parents-input" list="eg-parents-dl"
+                   placeholder="Type to search — Enter or comma to add" autocomplete="off"/>
+            <datalist id="eg-parents-dl"></datalist>
+            <div class="fh">
+              Default parents for every device in this group. Used to draw
+              connection lines in the Live Map (e.g. all hypervisors in this
+              cluster hang off these top-of-rack switches). Per-device parents
+              override this default when set.
+            </div>
+          </div>
+        </div>
+
+        <div class="alrt-section">
           <div class="alrt-section-hdr">Alert Profile</div>
           <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">
             Loading\u2026
@@ -93,6 +109,101 @@ async function openEditGroup(groupName) {
   _loadGroupSiteState(groupName);
   // Live Map tier override: pull the current setting and select the option.
   _loadGroupTierState(groupName);
+  // Live Map parent devices override: chip multi-select.
+  _loadGroupParentsState(groupName);
+}
+
+// ── Group Parent Devices chip input ────────────────────────────────
+// Module-level state for the open Edit Group modal. Stored as a list of
+// device IDs (not names), serialized as JSON into pw_group_parents.
+let _egParentIds = [];
+
+function _egRenderParentChips() {
+  const wrap = document.getElementById('eg-parents-chips');
+  if (!wrap) return;
+  if (!_egParentIds.length) {
+    wrap.innerHTML = '<span class="pw-chip-empty">None — devices inherit per-device parents only</span>';
+    return;
+  }
+  wrap.innerHTML = _egParentIds.map((did, i) => {
+    const d = S.devices[did];
+    const label = d ? (d.name || did) : `(missing: ${did})`;
+    return `<span class="pw-chip" data-i="${i}">
+      ${esc(label)}
+      <button class="pw-chip-x" onclick="_egRemoveParent(${i})" title="Remove">&times;</button>
+    </span>`;
+  }).join('');
+}
+
+function _egRemoveParent(idx) {
+  _egParentIds.splice(idx, 1);
+  _egRenderParentChips();
+}
+
+function _egAddParent(did) {
+  if (!did || _egParentIds.includes(did)) return;
+  if (_egParentIds.length >= 8) {
+    toast('Max 8 parent devices', 'err');
+    return;
+  }
+  _egParentIds.push(did);
+  _egRenderParentChips();
+}
+
+function _egPopulateParentDatalist() {
+  const dl = document.getElementById('eg-parents-dl');
+  if (!dl) return;
+  // Datalist is name → did mapping; we resolve on commit.
+  const opts = Object.values(S.devices || {})
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(d => `<option value="${esc(d.name || d.device_id)}" data-did="${esc(d.device_id)}"></option>`)
+    .join('');
+  dl.innerHTML = opts;
+}
+
+function _egCommitParentFromInput(input) {
+  const v = (input.value || '').trim();
+  if (!v) return;
+  // Resolve name → device_id. Case-insensitive exact match first; fall back
+  // to the literal value if it matches a device_id directly.
+  const lc = v.toLowerCase();
+  let match = Object.values(S.devices || {}).find(
+    d => (d.name || '').toLowerCase() === lc
+  );
+  if (!match && S.devices[v]) match = S.devices[v];
+  if (!match) {
+    toast(`No device named "${v}"`, 'err');
+    return;
+  }
+  _egAddParent(match.device_id);
+  input.value = '';
+}
+
+async function _loadGroupParentsState(groupName) {
+  _egParentIds = [];
+  _egPopulateParentDatalist();
+  try {
+    const r = await api('GET', '/api/settings/pw_group_parents').catch(() => null);
+    const map = (r && r.value && typeof r.value === 'object') ? r.value : {};
+    const cur = Array.isArray(map[groupName]) ? map[groupName] : [];
+    _egParentIds = cur.filter(p => typeof p === 'string' && p);
+  } catch { /* default: empty */ }
+  _egRenderParentChips();
+  // Wire up input — commit on Enter or comma.
+  const input = document.getElementById('eg-parents-input');
+  if (input) {
+    input.dataset.initial = JSON.stringify(_egParentIds);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        _egCommitParentFromInput(input);
+      } else if (e.key === 'Backspace' && !input.value && _egParentIds.length) {
+        _egParentIds.pop();
+        _egRenderParentChips();
+      }
+    });
+    input.addEventListener('change', () => _egCommitParentFromInput(input));
+  }
 }
 
 async function _loadGroupTierState(groupName) {
@@ -222,6 +333,32 @@ async function saveEditGroup(oldName) {
         _tierWrote = true;
       } catch (e) {
         toast('Tier save failed: ' + (e.message || e), 'err');
+        return;
+      }
+    }
+  }
+
+  // Live Map parent-devices override — same write-before-rename pattern.
+  const parentsInput = document.getElementById('eg-parents-input');
+  if (parentsInput && parentsInput.dataset.initial !== undefined) {
+    const wantParents = Array.isArray(_egParentIds) ? _egParentIds.slice() : [];
+    const hadParents  = JSON.parse(parentsInput.dataset.initial || '[]');
+    const same = wantParents.length === hadParents.length &&
+                 wantParents.every((p, i) => p === hadParents[i]);
+    if (!same || newName !== oldName) {
+      try {
+        const cur = await api('GET', '/api/settings/pw_group_parents').catch(() => null);
+        const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
+        delete map[oldName];
+        if (wantParents.length) map[newName] = wantParents;
+        await api('PATCH', '/api/settings/pw_group_parents', { value: map });
+        const _lf = document.getElementById('livemap-frame');
+        _lf?.contentWindow?.postMessage(
+          { type: 'lm_refresh' },
+          window.location.origin
+        );
+      } catch (e) {
+        toast('Parent save failed: ' + (e.message || e), 'err');
         return;
       }
     }
