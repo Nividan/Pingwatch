@@ -742,7 +742,7 @@ function _devSnrSummaryHtml(did){
 }
 
 // ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
-let _dcm=null, _ctxGrp=null;
+let _dcm=null, _ctxGrp=null, _ctxSite=null;
 
 function _showDcm(x,y){
   if(!_dcm) return;
@@ -795,10 +795,13 @@ function _initDevCtxMenu(){
     } else if(siteHdr){
       // Right-click on a site header — offer Edit / Add Site. We grab the
       // site name from the wrapping .site-wrap[data-site]. Unsited bucket
-      // (empty data-site) only gets "Add Site".
-      const siteName = siteHdr.closest('.site-wrap')?.dataset.site || '';
-      const editItem = siteName
-        ? `<div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('edit',${JSON.stringify(siteName)})">⚙️ Edit Site</div>
+      // (empty data-site) only gets "Add Site". Stash the name on a
+      // module-level var (mirrors the _ctxGrp pattern) so the onclick can
+      // reference it by identifier — JSON.stringify into an attribute
+      // breaks for any value with quotes/spaces and breaks the whole menu.
+      _ctxSite = siteHdr.closest('.site-wrap')?.dataset.site || '';
+      const editItem = _ctxSite
+        ? `<div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('edit',_ctxSite)">⚙️ Edit Site</div>
            <div class="dci-sep"></div>`
         : '';
       _dcm.innerHTML=`
