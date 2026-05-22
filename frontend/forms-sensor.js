@@ -139,12 +139,7 @@ function sensorFormHTML(dev, s=null) {
         <input type="text" id="as-sc" value="${esc(commVal)}" placeholder="${commHint}" autocomplete="off"/>
         ${commStatusHtml}</div>
       <div class="fr"><label class="fl">SNMP Version</label>
-        <select id="as-sv" onchange="_asSnmpVerChange()">
-          ${(()=>{const dv=s?.snmp_version||dev?.snmp_version_default||'2c';
-            return `<option value="2c" ${dv==='2c'?'selected':''}>v2c</option>
-          <option value="1"  ${dv==='1'?'selected':''}>v1</option>
-          <option value="3"  ${dv==='3'?'selected':''}>v3</option>`;})()}
-        </select>
+        <select id="as-sv" onchange="_asSnmpVerChange()">${_snmpVerOptionsHtml(s?.snmp_version || dev?.snmp_version_default || '2c')}</select>
       </div>
     </div>
     ${(() => {
@@ -169,33 +164,17 @@ function sensorFormHTML(dev, s=null) {
           <div class="fr"><label class="fl">v3 Username</label>
             <input type="text" id="as-v3-user" value="${esc(v3usr)}" placeholder="snmpuser" autocomplete="off"/></div>
           <div class="fr"><label class="fl">Security Level</label>
-            <select id="as-v3-level" onchange="_asV3LevelChange()">
-              <option value="noAuthNoPriv" ${v3lvl==='noAuthNoPriv'?'selected':''}>noAuthNoPriv</option>
-              <option value="authNoPriv"   ${v3lvl==='authNoPriv'?'selected':''}>authNoPriv</option>
-              <option value="authPriv"     ${v3lvl==='authPriv'?'selected':''}>authPriv</option>
-            </select></div>
+            <select id="as-v3-level" onchange="_asV3LevelChange()">${_snmpV3LevelOptionsHtml(v3lvl || 'noAuthNoPriv')}</select></div>
         </div>
         <div class="fgrid" id="as-v3-auth-row" style="${showAuth?'':'display:none'}">
           <div class="fr"><label class="fl">Auth Protocol</label>
-            <select id="as-v3-auth-proto">
-              <option value="SHA"     ${v3ap==='SHA'?'selected':''}>SHA</option>
-              <option value="MD5"     ${v3ap==='MD5'?'selected':''}>MD5</option>
-              <option value="SHA-224" ${v3ap==='SHA-224'?'selected':''}>SHA-224</option>
-              <option value="SHA-256" ${v3ap==='SHA-256'?'selected':''}>SHA-256</option>
-              <option value="SHA-384" ${v3ap==='SHA-384'?'selected':''}>SHA-384</option>
-              <option value="SHA-512" ${v3ap==='SHA-512'?'selected':''}>SHA-512</option>
-            </select></div>
+            <select id="as-v3-auth-proto">${_snmpV3AuthOptionsHtml(v3ap || 'SHA')}</select></div>
           <div class="fr"><label class="fl">Auth Passphrase</label>
             <input type="password" id="as-v3-auth-pass" placeholder="${hasAP?'(unchanged — inherits device default)':'min 8 chars'}" autocomplete="new-password"/></div>
         </div>
         <div class="fgrid" id="as-v3-priv-row" style="${showPriv?'':'display:none'}">
           <div class="fr"><label class="fl">Privacy Protocol</label>
-            <select id="as-v3-priv-proto">
-              <option value="AES"     ${v3pp==='AES'?'selected':''}>AES</option>
-              <option value="DES"     ${v3pp==='DES'?'selected':''}>DES</option>
-              <option value="AES-192" ${v3pp==='AES-192'?'selected':''}>AES-192</option>
-              <option value="AES-256" ${v3pp==='AES-256'?'selected':''}>AES-256</option>
-            </select></div>
+            <select id="as-v3-priv-proto">${_snmpV3PrivOptionsHtml(v3pp || 'AES')}</select></div>
           <div class="fr"><label class="fl">Privacy Passphrase</label>
             <input type="password" id="as-v3-priv-pass" placeholder="${hasPP?'(unchanged — inherits device default)':'min 8 chars'}" autocomplete="new-password"/></div>
         </div>

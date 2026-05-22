@@ -612,7 +612,7 @@ function ensureGroupSection(group, site){
   const addCard=document.createElement('div');
   addCard.className='dc dc-add';
   addCard.innerHTML='<div class="dc-add-ico">&#xFF0B;</div><div>Add Device</div>';
-  addCard.addEventListener('click',function(){ openAddDeviceGroup(group); });
+  addCard.addEventListener('click',function(){ openAddDeviceGroup(group, site || ''); });
   grid.appendChild(addCard);
 
   wrap.appendChild(hdr);
@@ -742,7 +742,7 @@ function _devSnrSummaryHtml(did){
 }
 
 // ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
-let _dcm=null, _ctxGrp=null, _ctxSite=null;
+let _dcm=null, _ctxGrp=null, _ctxGrpSite=null, _ctxSite=null;
 
 function _showDcm(x,y){
   if(!_dcm) return;
@@ -783,12 +783,14 @@ function _initDevCtxMenu(){
         <div class="dci-sep"></div>
         <div class="dci dci-danger rbac-op" onclick="_hideDcm();delDev('${did}')">🗑️ Delete Device</div>`;
     } else if(grpHdr){
-      _ctxGrp=grpHdr.closest('.grp-wrap')?.dataset.grpName||'';
+      const _gwrap = grpHdr.closest('.grp-wrap');
+      _ctxGrp     = _gwrap?.dataset.grpName || '';
+      _ctxGrpSite = _gwrap?.dataset.site    || '';
       const _isDefault = _ctxGrp === 'Default Group';
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openEditGroup==='function')openEditGroup(_ctxGrp)">⚙️ Edit Group</div>
         <div class="dci-sep"></div>
-        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp)">🖥️ Add Device</div>
+        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp,_ctxGrpSite)">🖥️ Add Device</div>
         ${_isDefault ? '' : `
         <div class="dci-sep"></div>
         <div class="dci dci-danger rbac-op" onclick="_hideDcm();_deleteGroup(${JSON.stringify(_ctxGrp)})">🗑️ Delete Group</div>`}`;
@@ -1457,7 +1459,7 @@ function renameGroup(labelEl, oldName){
     if (addCard) {
       addCard.replaceWith(addCard.cloneNode(true));
       const fresh = wrap.querySelector('.dc-add');
-      fresh.addEventListener('click', function(){ openAddDeviceGroup(newName); });
+      fresh.addEventListener('click', function(){ openAddDeviceGroup(newName, wrap.dataset.site || ''); });
     }
     // Update the label text
     const lbl = wrap.querySelector('.grp-label');
@@ -1483,9 +1485,15 @@ function cntId_refresh(wrap, key){
 }
 
 // ── Add Device pre-filled with a group ───────────────────────────
-function openAddDeviceGroup(group){
+// Site is required when the group lives under a non-Unsited site, otherwise
+// the form's blank site field re-creates the same-named group under Unsited
+// (groups are keyed by site+name).
+function openAddDeviceGroup(group, site){
   openAddDevice();
-  setTimeout(()=>{const f=document.getElementById('ad-g');if(f)f.value=group;},40);
+  setTimeout(()=>{
+    const f=document.getElementById('ad-g');     if(f) f.value=group;
+    const s=document.getElementById('ad-site');  if(s) s.value=site||'';
+  },40);
 }
 
 // ── Add Group modal ──────────────────────────────────────────────

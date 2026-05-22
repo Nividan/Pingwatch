@@ -33,44 +33,24 @@ function openAddDevice(){
             <div class="fr" id="ad-snmp-comm-row"><label class="fl">SNMP Community</label>
               <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
-              <select id="ad-snmp-ver" onchange="_adSnmpVerChange()">
-                <option value="2c" selected>v2c</option>
-                <option value="1">v1</option>
-                <option value="3">v3</option>
-              </select></div>
+              <select id="ad-snmp-ver" onchange="_adSnmpVerChange()">${_snmpVerOptionsHtml('2c')}</select></div>
           </div>
           <div id="ad-v3-block" style="display:none;border-left:2px solid var(--accent);padding-left:10px;margin-left:2px;flex-direction:column;gap:8px">
             <div class="fgrid">
               <div class="fr"><label class="fl">v3 Username</label>
                 <input type="text" id="ad-v3-user" placeholder="snmpuser" autocomplete="off"/></div>
               <div class="fr"><label class="fl">Security Level</label>
-                <select id="ad-v3-level" onchange="_adV3LevelChange()">
-                  <option value="noAuthNoPriv" selected>noAuthNoPriv</option>
-                  <option value="authNoPriv">authNoPriv</option>
-                  <option value="authPriv">authPriv</option>
-                </select></div>
+                <select id="ad-v3-level" onchange="_adV3LevelChange()">${_snmpV3LevelOptionsHtml('noAuthNoPriv')}</select></div>
             </div>
             <div class="fgrid" id="ad-v3-auth-row" style="display:none">
               <div class="fr"><label class="fl">Auth Protocol</label>
-                <select id="ad-v3-auth-proto">
-                  <option value="SHA" selected>SHA</option>
-                  <option value="MD5">MD5</option>
-                  <option value="SHA-224">SHA-224</option>
-                  <option value="SHA-256">SHA-256</option>
-                  <option value="SHA-384">SHA-384</option>
-                  <option value="SHA-512">SHA-512</option>
-                </select></div>
+                <select id="ad-v3-auth-proto">${_snmpV3AuthOptionsHtml('SHA')}</select></div>
               <div class="fr"><label class="fl">Auth Passphrase</label>
                 <input type="password" id="ad-v3-auth-pass" placeholder="min 8 chars" autocomplete="new-password"/></div>
             </div>
             <div class="fgrid" id="ad-v3-priv-row" style="display:none">
               <div class="fr"><label class="fl">Privacy Protocol</label>
-                <select id="ad-v3-priv-proto">
-                  <option value="AES" selected>AES</option>
-                  <option value="DES">DES</option>
-                  <option value="AES-192">AES-192</option>
-                  <option value="AES-256">AES-256</option>
-                </select></div>
+                <select id="ad-v3-priv-proto">${_snmpV3PrivOptionsHtml('AES')}</select></div>
               <div class="fr"><label class="fl">Privacy Passphrase</label>
                 <input type="password" id="ad-v3-priv-pass" placeholder="min 8 chars" autocomplete="new-password"/></div>
             </div>
@@ -317,44 +297,24 @@ function openEditDevice(did){
             <div class="fr" id="ed-snmp-comm-row" style="${dev.snmp_version_default==='3'?'display:none':''};"><label class="fl">SNMP Community</label>
               <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
-              <select id="ed-snmp-ver" onchange="_edSnmpVerChange()">
-                <option value="2c" ${!dev.snmp_version_default || dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
-                <option value="1"  ${dev.snmp_version_default==='1'?'selected':''}>v1</option>
-                <option value="3"  ${dev.snmp_version_default==='3'?'selected':''}>v3</option>
-              </select></div>
+              <select id="ed-snmp-ver" onchange="_edSnmpVerChange()">${_snmpVerOptionsHtml(dev.snmp_version_default || '2c')}</select></div>
           </div>
           <div id="ed-v3-block" style="${dev.snmp_version_default==='3'?'':'display:none;'}border-left:2px solid var(--accent);padding-left:10px;margin-left:2px;display:flex;flex-direction:column;gap:8px">
             <div class="fgrid">
               <div class="fr"><label class="fl">v3 Username</label>
                 <input type="text" id="ed-v3-user" value="${esc(dev.snmp_v3_user_default||'')}" placeholder="snmpuser" autocomplete="off"/></div>
               <div class="fr"><label class="fl">Security Level</label>
-                <select id="ed-v3-level" onchange="_edV3LevelChange()">
-                  <option value="noAuthNoPriv" ${(dev.snmp_v3_level_default||'noAuthNoPriv')==='noAuthNoPriv'?'selected':''}>noAuthNoPriv</option>
-                  <option value="authNoPriv"   ${dev.snmp_v3_level_default==='authNoPriv'?'selected':''}>authNoPriv</option>
-                  <option value="authPriv"     ${dev.snmp_v3_level_default==='authPriv'?'selected':''}>authPriv</option>
-                </select></div>
+                <select id="ed-v3-level" onchange="_edV3LevelChange()">${_snmpV3LevelOptionsHtml(dev.snmp_v3_level_default || 'noAuthNoPriv')}</select></div>
             </div>
             <div class="fgrid" id="ed-v3-auth-row" style="${(dev.snmp_v3_level_default==='authNoPriv'||dev.snmp_v3_level_default==='authPriv')?'':'display:none'}">
               <div class="fr"><label class="fl">Auth Protocol</label>
-                <select id="ed-v3-auth-proto">
-                  <option value="SHA"     ${(dev.snmp_v3_auth_proto_default||'SHA')==='SHA'?'selected':''}>SHA</option>
-                  <option value="MD5"     ${dev.snmp_v3_auth_proto_default==='MD5'?'selected':''}>MD5</option>
-                  <option value="SHA-224" ${dev.snmp_v3_auth_proto_default==='SHA-224'?'selected':''}>SHA-224</option>
-                  <option value="SHA-256" ${dev.snmp_v3_auth_proto_default==='SHA-256'?'selected':''}>SHA-256</option>
-                  <option value="SHA-384" ${dev.snmp_v3_auth_proto_default==='SHA-384'?'selected':''}>SHA-384</option>
-                  <option value="SHA-512" ${dev.snmp_v3_auth_proto_default==='SHA-512'?'selected':''}>SHA-512</option>
-                </select></div>
+                <select id="ed-v3-auth-proto">${_snmpV3AuthOptionsHtml(dev.snmp_v3_auth_proto_default || 'SHA')}</select></div>
               <div class="fr"><label class="fl">Auth Passphrase</label>
                 <input type="password" id="ed-v3-auth-pass" placeholder="${dev.has_snmp_v3_auth_pass_default?'(unchanged)':'min 8 chars'}" autocomplete="new-password"/></div>
             </div>
             <div class="fgrid" id="ed-v3-priv-row" style="${dev.snmp_v3_level_default==='authPriv'?'':'display:none'}">
               <div class="fr"><label class="fl">Privacy Protocol</label>
-                <select id="ed-v3-priv-proto">
-                  <option value="AES"     ${(dev.snmp_v3_priv_proto_default||'AES')==='AES'?'selected':''}>AES</option>
-                  <option value="DES"     ${dev.snmp_v3_priv_proto_default==='DES'?'selected':''}>DES</option>
-                  <option value="AES-192" ${dev.snmp_v3_priv_proto_default==='AES-192'?'selected':''}>AES-192</option>
-                  <option value="AES-256" ${dev.snmp_v3_priv_proto_default==='AES-256'?'selected':''}>AES-256</option>
-                </select></div>
+                <select id="ed-v3-priv-proto">${_snmpV3PrivOptionsHtml(dev.snmp_v3_priv_proto_default || 'AES')}</select></div>
               <div class="fr"><label class="fl">Privacy Passphrase</label>
                 <input type="password" id="ed-v3-priv-pass" placeholder="${dev.has_snmp_v3_priv_pass_default?'(unchanged)':'min 8 chars'}" autocomplete="new-password"/></div>
             </div>

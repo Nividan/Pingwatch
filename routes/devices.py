@@ -119,6 +119,15 @@ def _maybe_resize_executor():
 _MAX_PARENT_IDS = 8
 _MAX_CYCLE_HOPS = 32
 
+# SNMPv3 whitelists — single source of truth for server-side validation.
+# Empty string is accepted in every set so that an inherited / cleared value
+# round-trips correctly. Mirror of the frontend dropdown options in
+# frontend/forms-utils.js (_SNMP_V3_LEVELS / _SNMP_V3_AUTH_PROTOS /
+# _SNMP_V3_PRIV_PROTOS). Adding a new protocol means updating both sides.
+_V3_LEVELS = frozenset({"", "noAuthNoPriv", "authNoPriv", "authPriv"})
+_V3_AUTH   = frozenset({"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"})
+_V3_PRIV   = frozenset({"", "DES", "AES", "AES-192", "AES-256"})
+
 
 def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
     """Validate + dedup a parent_device_ids input.
@@ -403,10 +412,6 @@ def handle(h, method, path, body):
         if vmware_password_default:
             from db.backups import encrypt_pw
             vmware_password_default = encrypt_pw(vmware_password_default)
-        # SNMPv3 device defaults — same validation whitelists as probes.py
-        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
         snmp_v3_user_default       = body.get("snmp_v3_user_default", "").strip()
         snmp_v3_level_default      = body.get("snmp_v3_level_default", "").strip()
         if snmp_v3_level_default not in _V3_LEVELS: snmp_v3_level_default = ""
@@ -597,10 +602,6 @@ def handle(h, method, path, body):
                     from db.backups import encrypt_pw
                     dev.vmware_password_default = encrypt_pw(_vpw)
                 # empty string = keep existing (don't clear)
-            # SNMPv3 device defaults
-            _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-            _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-            _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
             if "snmp_v3_user_default" in body:
                 dev.snmp_v3_user_default = str(body["snmp_v3_user_default"]).strip()
             if "snmp_v3_level_default" in body:
@@ -903,9 +904,6 @@ def handle(h, method, path, body):
             kwargs["radius_password"] = encrypt_pw(body["radius_password"])
         # SNMPv3: validate enum fields, encrypt passphrases.  Empty field in
         # body = keep existing (placeholder-submit pattern from UI).
-        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
         if "snmp_v3_level" in kwargs and kwargs["snmp_v3_level"] not in _V3_LEVELS:
             h._json(400, {"error": "invalid snmp_v3_level"}); return True
         if "snmp_v3_auth_proto" in kwargs and kwargs["snmp_v3_auth_proto"] not in _V3_AUTH:
@@ -1126,9 +1124,6 @@ def handle(h, method, path, body):
                 radius_pw_v = encrypt_pw(radius_pw_v)
         # SNMPv3 fields — per-sensor override of device defaults.  Blank
         # fields inherit from the device at probe time (see Sensor._resolve_snmp_v3_creds).
-        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
         v3_user   = (body.get("snmp_v3_user") or "").strip()
         v3_level  = (body.get("snmp_v3_level") or "").strip()
         if v3_level not in _V3_LEVELS:
