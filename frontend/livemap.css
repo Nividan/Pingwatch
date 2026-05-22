@@ -640,7 +640,10 @@ body {
 }
 .sd-tier-row {
   display: flex; flex-wrap: wrap; gap: 12px;
-  align-items: stretch;
+  /* flex-start lets cluster cards size to their content. With stretch,
+     a 1-device BladeCenter would inherit the height of a 22-device IPMI
+     sibling and leave a giant empty gap below its single LED. */
+  align-items: flex-start;
 }
 .sd-tier-row.center  { justify-content: center; }
 .sd-tier-row.spread  { justify-content: space-around; }
@@ -763,9 +766,9 @@ body {
 }
 /* LED-style status grid: fixed 10px cells wrap to available width via
    auto-fill, so a 1-device cluster shows one LED instead of a giant block
-   and a 27-device cluster wraps cleanly into rows. */
+   and a 27-device cluster wraps cleanly into rows. No flex:1 — the grid
+   takes only the height it needs so the foot row sits right under the LEDs. */
 .cluster-grid {
-  flex: 1;
   display: grid;
   grid-template-columns: repeat(auto-fill, 10px);
   gap: 3px;
