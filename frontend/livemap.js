@@ -417,8 +417,10 @@ function _clusterCard(c, opts) {
   opts = opts || {};
   const status = c.status === 'up' ? 'up' : (c.status === 'warn' ? 'warn' : (c.status === 'down' ? 'down' : 'unknown'));
   const icon = opts.icon || ICONS.hyp;
-  // Mini status grid: one cell per child device. Auto-fit columns based on count.
-  const cols = Math.max(4, Math.min(10, Math.ceil(Math.sqrt(c.cells.length))));
+  // Mini status grid: one LED per child device. CSS handles wrapping via
+  // grid-template-columns: repeat(auto-fill, 10px) — no per-cluster column
+  // count needed, so a 1-device cluster shows one LED instead of stretching
+  // to fill 4 columns.
   const cells = c.cells.map(function(cell) {
     return '<div class="d-' + (cell.status || 'unknown') + '" title="' + esc(cell.name) + '"></div>';
   }).join('');
@@ -427,7 +429,7 @@ function _clusterCard(c, opts) {
              '<span class="cluster-title">' + esc(c.name) + '</span>' +
              '<span class="cluster-count">' + c.count + '</span>' +
            '</div>' +
-           '<div class="cluster-grid" style="grid-template-columns:repeat(' + cols + ',1fr)">' + cells + '</div>' +
+           '<div class="cluster-grid">' + cells + '</div>' +
            '<div class="cluster-foot">' +
              '<span class="cf-up">●' + c.up + '</span>' +
              '<span class="cf-warn">●' + c.warn + '</span>' +

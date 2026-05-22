@@ -738,7 +738,9 @@ body {
   transition: transform .12s;
   flex: 0 1 200px;
   min-width: 160px;
-  min-height: 110px;
+  /* No min-height: cards size to their content. .sd-tier-row's
+     align-items: stretch keeps siblings in a row matched without forcing
+     a 1-device card to reserve the same area as a 27-device card. */
 }
 .sd-tier-ipmi .cluster { flex: 0 0 auto; min-width: 0; }
 .cluster:hover { transform: translateY(-2px); }
@@ -759,21 +761,26 @@ body {
   border: 1px solid currentColor; border-radius: 2px;
   background: rgba(0,0,0,0.5);
 }
+/* LED-style status grid: fixed 10px cells wrap to available width via
+   auto-fill, so a 1-device cluster shows one LED instead of a giant block
+   and a 27-device cluster wraps cleanly into rows. */
 .cluster-grid {
-  flex: 1; display: grid; gap: 2px;
-  min-height: 40px;
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 10px);
+  gap: 3px;
+  justify-content: start;
   align-content: start;
   margin: 2px 0;
 }
 .cluster-grid > div {
-  width: 100%; aspect-ratio: 1;
-  border-radius: 1px;
-  min-height: 6px;
+  width: 10px; height: 10px;
+  border-radius: 2px;
 }
-.d-up      { background: var(--up);      box-shadow: 0 0 3px rgba(0,255,157,0.6); }
-.d-warn    { background: var(--warn);    box-shadow: 0 0 4px rgba(255,107,53,0.7); animation: dotWarn 1.8s ease-in-out infinite; }
-.d-down    { background: var(--down);    box-shadow: 0 0 5px rgba(255,51,102,0.9); animation: dotDown 1s ease-in-out infinite; }
-.d-unknown { background: var(--dim); }
+.d-up      { background: var(--up);      box-shadow: 0 0 4px rgba(0,255,157,0.7),  inset 0 0 1px rgba(255,255,255,0.35); }
+.d-warn    { background: var(--warn);    box-shadow: 0 0 5px rgba(255,107,53,0.8), inset 0 0 1px rgba(255,255,255,0.35); animation: dotWarn 1.8s ease-in-out infinite; }
+.d-down    { background: var(--down);    box-shadow: 0 0 6px rgba(255,51,102,0.95),inset 0 0 1px rgba(255,255,255,0.35); animation: dotDown 1s ease-in-out infinite; }
+.d-unknown { background: var(--dim);     box-shadow: inset 0 0 1px rgba(255,255,255,0.2); }
 .cluster-foot {
   display: flex; align-items: center; gap: 10px;
   font-family: 'Share Tech Mono', monospace; font-size: 9px;
