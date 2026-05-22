@@ -435,6 +435,11 @@ function _edInferTierForFilter(dev) {
   return {tier: 'hypervisor', parents: ['switch']};  // safe default
 }
 
+// Suffix used in the datalist + commit parser to mark a group entry.
+// Datalist values must be plain strings; embedding a sentinel lets us
+// distinguish a group like "Hypervisors" from a device named "Hypervisors".
+const _GRP_SFX = '  ·  group';
+
 function _edRenderParentChips() {
   const wrap = document.getElementById('ed-parents-chips');
   if (!wrap) return;
@@ -444,6 +449,13 @@ function _edRenderParentChips() {
     return;
   }
   wrap.innerHTML = _edParentIds.map((pid, i) => {
+    if (typeof pid === 'string' && pid.indexOf('group:') === 0) {
+      const gname = pid.slice(6);
+      return `<span class="pw-chip pw-chip-group">
+        <span class="pw-chip-badge">GROUP</span>${esc(gname)}
+        <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
+      </span>`;
+    }
     const d = S.devices[pid];
     const label = d ? (d.name || pid) : `(missing: ${pid})`;
     return `<span class="pw-chip">
@@ -463,56 +475,102 @@ function _edPopulateParentDatalist() {
   if (!dl) return;
   const allTiers = document.getElementById('ed-parents-allTiers')?.checked;
   const allowed = allTiers ? null : (_edParentTierFilter ? new Set(_edParentTierFilter.parents) : null);
+
+  function _devTier(d) {
+    const blob = `${d.name || ''} ${d.host || ''} ${d.group || ''}`;
+    for (const rule of _ED_PARENT_TIER_RULES) {
+      if (rule.rx.test(blob)) return rule.tier;
+    }
+    return 'hypervisor';  // unclassified fallback
+  }
+
   const candidates = Object.values(S.devices || {})
     .filter(d => d.device_id !== _edParentDid)
-    .filter(d => {
-      if (!allowed) return true;
-      // Use the same rules to classify candidates. Cheap match.
-      const blob = `${d.name || ''} ${d.host || ''} ${d.group || ''}`;
-      for (const rule of _ED_PARENT_TIER_RULES) {
-        if (rule.rx.test(blob)) return allowed.has(rule.tier);
-      }
-      // Unmatched fall through as hypervisor default — allow if hypervisor allowed.
-      return allowed.has('hypervisor');
-    })
+    .filter(d => allowed ? allowed.has(_devTier(d)) : true)
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  dl.innerHTML = candidates.map(d =>
-    `<option value="${esc(d.name || d.device_id)}"></option>`
-  ).join('');
-  // Update hint with allowed-tier summary
+
+  // Group candidates: aggregate per (group name → tier of majority + count).
+  // Allow a group if at least one member matches the tier filter.
+  const groupAgg = new Map();
+  Object.values(S.devices || {}).forEach(d => {
+    const g = (d.group || 'Default Group').trim();
+    if (!groupAgg.has(g)) groupAgg.set(g, { count: 0, tiers: new Set() });
+    const a = groupAgg.get(g);
+    a.count += 1;
+    a.tiers.add(_devTier(d));
+  });
+  const groupRows = [...groupAgg.entries()]
+    .filter(([g, a]) => a.count >= 2)  // singleton groups: just pick the device
+    .filter(([g, a]) => !allowed || [...a.tiers].some(t => allowed.has(t)))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const devOpts = candidates.map(d =>
+    `<option value="${esc(d.name || d.device_id)}"></option>`);
+  const grpOpts = groupRows.map(([g, a]) =>
+    `<option value="${esc(g + _GRP_SFX + ' (' + a.count + ')')}"></option>`);
+  dl.innerHTML = [...devOpts, ...grpOpts].join('');
+
   const hint = document.getElementById('ed-parents-hint');
   if (hint) {
+    const grpLabel = groupRows.length ? ` · ${groupRows.length} group(s)` : '';
     if (allTiers || !_edParentTierFilter) {
-      hint.textContent = `Showing all ${candidates.length} device(s).`;
+      hint.textContent = `Showing all ${candidates.length} device(s)${grpLabel}.`;
     } else {
-      hint.textContent = `Filtered to ${_edParentTierFilter.parents.join(' / ')} tier(s) — ${candidates.length} match(es). Tick "All tiers" to widen.`;
+      hint.textContent = `Filtered to ${_edParentTierFilter.parents.join(' / ')} tier(s) — ${candidates.length} device(s)${grpLabel}. Tick "All tiers" to widen.`;
     }
   }
 }
 
 function _edCommitParentFromInput(input) {
-  const v = (input.value || '').trim();
-  if (!v) return;
+  const raw = (input.value || '').trim();
+  if (!raw) return;
   if (_edParentIds.length >= 8) {
     toast('Max 8 parent devices', 'err');
     return;
   }
-  const lc = v.toLowerCase();
+  // Group entries from the datalist look like "Hypervisors  ·  group (10)".
+  // Detect via the embedded sentinel and strip the suffix to recover the
+  // raw group name.
+  const grpSfxIdx = raw.indexOf(_GRP_SFX);
+  if (grpSfxIdx > 0) {
+    const gname = raw.slice(0, grpSfxIdx);
+    const exists = Object.values(S.devices || {}).some(
+      d => (d.group || 'Default Group') === gname
+    );
+    if (!exists) { toast(`Group "${gname}" not found`, 'err'); return; }
+    const ref = 'group:' + gname;
+    if (_edParentIds.includes(ref)) { toast('Already added', 'err'); return; }
+    _edParentIds.push(ref);
+    input.value = '';
+    _edRenderParentChips();
+    return;
+  }
+  // Try as a device name (case-insensitive exact match).
+  const lc = raw.toLowerCase();
   let match = Object.values(S.devices || {}).find(
     d => d.device_id !== _edParentDid && (d.name || '').toLowerCase() === lc
   );
-  if (!match && S.devices[v] && v !== _edParentDid) match = S.devices[v];
-  if (!match) {
-    toast(`No device named "${v}"`, 'err');
+  if (!match && S.devices[raw] && raw !== _edParentDid) match = S.devices[raw];
+  if (match) {
+    if (_edParentIds.includes(match.device_id)) { toast('Already added', 'err'); return; }
+    _edParentIds.push(match.device_id);
+    input.value = '';
+    _edRenderParentChips();
     return;
   }
-  if (_edParentIds.includes(match.device_id)) {
-    toast('Already added', 'err');
+  // Fall back: try as a bare group name (user typed without the suffix).
+  const groupSet = new Set(Object.values(S.devices || {}).map(
+    d => (d.group || 'Default Group')
+  ));
+  if (groupSet.has(raw)) {
+    const ref = 'group:' + raw;
+    if (_edParentIds.includes(ref)) { toast('Already added', 'err'); return; }
+    _edParentIds.push(ref);
+    input.value = '';
+    _edRenderParentChips();
     return;
   }
-  _edParentIds.push(match.device_id);
-  input.value = '';
-  _edRenderParentChips();
+  toast(`No device or group named "${raw}"`, 'err');
 }
 
 function _edParentInit(did) {

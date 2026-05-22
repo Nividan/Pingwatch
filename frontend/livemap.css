@@ -656,8 +656,8 @@ body {
    that wraps gracefully when there are many cluster cards) */
 .sd-canvas {
   position: relative;           /* needed for absolute .conn-svg overlay */
-  padding: 50px 16px 16px;
-  display: flex; flex-direction: column; gap: 16px;
+  padding: 50px 16px 18px;
+  display: flex; flex-direction: column; gap: 30px;
 }
 /* Cards above the connection layer so lines pass behind them. */
 .sd-canvas > .sd-tier,

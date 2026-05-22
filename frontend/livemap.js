@@ -722,19 +722,30 @@ function _drawConnections(canvasEl) {
   // Build did → DOM element index. Device cards are direct hits; cluster
   // cards register their member dids so child clusters can resolve a parent
   // that lives INSIDE another cluster (e.g. VM cluster → ESXi inside HYP cluster).
+  // We also index cluster cards by group name so "group:<name>" parent refs
+  // resolve to the matching cluster card (e.g. a VM whose parent is the
+  // entire ESXi cluster, not individual hosts).
   const didEl = new Map();
+  const groupEl = new Map();
   canvasEl.querySelectorAll('.dev[data-did]').forEach(function(el) {
     didEl.set(el.getAttribute('data-did'), el);
   });
   canvasEl.querySelectorAll('.cluster').forEach(function(el) {
+    const gname = el.getAttribute('data-cluster');
+    if (gname) groupEl.set(gname, el);
     let cells;
     try { cells = JSON.parse(el.getAttribute('data-cells') || '[]'); }
     catch { cells = []; }
     cells.forEach(function(did) {
-      // Don't overwrite a top-level device card with a cluster mapping.
       if (!didEl.has(did)) didEl.set(did, el);
     });
   });
+
+  function _resolveParent(ref) {
+    if (typeof ref !== 'string' || !ref) return null;
+    if (ref.indexOf('group:') === 0) return groupEl.get(ref.slice(6)) || null;
+    return didEl.get(ref) || null;
+  }
 
   // Pass 1 — build parent → children map with per-cell mapping detail.
   // parentMap key: parent DOM element.
@@ -763,7 +774,7 @@ function _drawConnections(canvasEl) {
       catch { cellsDetail = []; }
       cellsDetail.forEach(function(cell) {
         (cell.p || []).forEach(function(pid) {
-          const parentEl = didEl.get(pid);
+          const parentEl = _resolveParent(pid);
           if (!parentEl || parentEl === child) return;
           _push(parentEl, child, tier, { from: cell.name, pid: pid });
         });
@@ -775,7 +786,7 @@ function _drawConnections(canvasEl) {
       catch { return; }
       const fromName = _cardLabel(child);
       parents.forEach(function(pid) {
-        const parentEl = didEl.get(pid);
+        const parentEl = _resolveParent(pid);
         if (!parentEl || parentEl === child) return;
         _push(parentEl, child, tier, { from: fromName, pid: pid });
       });

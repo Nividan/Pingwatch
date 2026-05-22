@@ -123,6 +123,10 @@ _MAX_CYCLE_HOPS = 32
 def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
     """Validate + dedup a parent_device_ids input.
 
+    Each ref is either a device id (e.g. "d1") or a group reference of the
+    form "group:<group_name>". Group refs let a child point at an entire
+    cluster (e.g. a VM hanging off "the ESXi cluster" rather than 10 hosts).
+
     Returns (ok, cleaned, error). Empty list is valid.
     """
     if raw is None:
@@ -139,8 +143,16 @@ def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
         p = p.strip()
         if not p:
             continue
-        if len(p) > 64:
-            return False, [], "parent id too long"
+        if p.startswith("group:"):
+            gname = p[6:].strip()
+            if not gname:
+                return False, [], "group reference missing group name"
+            if len(gname) > 80:
+                return False, [], "group name too long"
+            p = "group:" + gname
+        else:
+            if len(p) > 64:
+                return False, [], "parent id too long"
         if p in seen:
             continue
         seen.add(p)
@@ -151,9 +163,10 @@ def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
 def _detect_parent_cycle(STATE, did: str, new_parents: list) -> bool:
     """Return True if assigning new_parents to did would create a cycle.
 
-    Walks up from each candidate parent (and any parent's existing parents)
-    by BFS, looking for `did`. Short-circuits at _MAX_CYCLE_HOPS to bound
-    the worst case if the graph is already corrupted.
+    Walks up from each candidate parent by BFS. Group refs ("group:<name>")
+    expand to every device currently in that group — touching any of them
+    detects a cycle. Short-circuits at _MAX_CYCLE_HOPS to bound the worst
+    case if the graph is already corrupted.
     """
     if not new_parents:
         return False
@@ -162,19 +175,39 @@ def _detect_parent_cycle(STATE, did: str, new_parents: list) -> bool:
     hops = 0
     while queue and hops < _MAX_CYCLE_HOPS:
         nxt = []
-        for pid in queue:
-            if pid == did:
+        for ref in queue:
+            if ref == did:
                 return True
-            if pid in visited:
+            if ref in visited:
                 continue
-            visited.add(pid)
-            parent_dev = STATE.devices.get(pid)
-            if not parent_dev:
-                continue
-            nxt.extend(getattr(parent_dev, "parent_device_ids", []) or [])
+            visited.add(ref)
+            if ref.startswith("group:"):
+                gname = ref[6:]
+                # Walk every device currently in this group.
+                for d in STATE.devices.values():
+                    if (d.group or "").strip() == gname:
+                        if d.device_id == did:
+                            return True
+                        nxt.extend(getattr(d, "parent_device_ids", []) or [])
+            else:
+                parent_dev = STATE.devices.get(ref)
+                if not parent_dev:
+                    continue
+                nxt.extend(getattr(parent_dev, "parent_device_ids", []) or [])
         queue = nxt
         hops += 1
     return False
+
+
+def _filter_known_parents(STATE, refs: list, exclude_did: str = "") -> list:
+    """Drop unknown device refs; keep group refs (group may have no devices yet)."""
+    out = []
+    for p in refs:
+        if p.startswith("group:"):
+            out.append(p)
+        elif p in STATE.devices and p != exclude_did:
+            out.append(p)
+    return out
 
 
 def handle(h, method, path, body):
@@ -410,10 +443,10 @@ def handle(h, method, path, body):
                     STATE.devices[did].snmp_v3_auth_pass_default = _v3_auth_pw_default
                 if _v3_priv_pw_default:
                     STATE.devices[did].snmp_v3_priv_pass_default = _v3_priv_pw_default
-                # Drop unknown parent ids (e.g. user pasted a stale id)
-                STATE.devices[did].parent_device_ids = [
-                    p for p in parent_ids_clean if p in STATE.devices and p != did
-                ]
+                # Drop unknown parent ids (e.g. user pasted a stale id); keep group refs.
+                STATE.devices[did].parent_device_ids = _filter_known_parents(
+                    STATE, parent_ids_clean, exclude_did=did
+                )
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
@@ -624,8 +657,9 @@ def handle(h, method, path, body):
                     h._json(400, {"error": perr}); return True
                 if did in cleaned_parents:
                     h._json(400, {"error": "device cannot be its own parent"}); return True
-                # unknown parents are silently dropped (device may have been deleted)
-                cleaned_parents = [p for p in cleaned_parents if p in STATE.devices]
+                # Drop unknown device refs (silently — they may have been deleted);
+                # keep group refs even if the group is empty (forward-compatible).
+                cleaned_parents = _filter_known_parents(STATE, cleaned_parents, exclude_did=did)
                 if _detect_parent_cycle(STATE, did, cleaned_parents):
                     h._json(400, {"error": "parent assignment would create a cycle"}); return True
                 dev.parent_device_ids = cleaned_parents

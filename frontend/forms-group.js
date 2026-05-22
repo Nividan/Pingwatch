@@ -94,6 +94,11 @@ async function openEditGroup(groupName) {
 // device IDs (not names), serialized as JSON into pw_group_parents.
 let _egParentIds = [];
 
+// Same sentinel as Edit Device — the datalist offers "Foo  ·  group (N)"
+// entries so the user can pick a whole group as a parent without typing a
+// device id. Stored ref form: "group:<name>".
+const _EG_GRP_SFX = '  ·  group';
+
 function _egRenderParentChips() {
   const wrap = document.getElementById('eg-parents-chips');
   if (!wrap) return;
@@ -101,9 +106,16 @@ function _egRenderParentChips() {
     wrap.innerHTML = '<span class="pw-chip-empty">None — devices inherit per-device parents only</span>';
     return;
   }
-  wrap.innerHTML = _egParentIds.map((did, i) => {
-    const d = S.devices[did];
-    const label = d ? (d.name || did) : `(missing: ${did})`;
+  wrap.innerHTML = _egParentIds.map((ref, i) => {
+    if (typeof ref === 'string' && ref.indexOf('group:') === 0) {
+      const gname = ref.slice(6);
+      return `<span class="pw-chip pw-chip-group" data-i="${i}">
+        <span class="pw-chip-badge">GROUP</span>${esc(gname)}
+        <button class="pw-chip-x" onclick="_egRemoveParent(${i})" title="Remove">&times;</button>
+      </span>`;
+    }
+    const d = S.devices[ref];
+    const label = d ? (d.name || ref) : `(missing: ${ref})`;
     return `<span class="pw-chip" data-i="${i}">
       ${esc(label)}
       <button class="pw-chip-x" onclick="_egRemoveParent(${i})" title="Remove">&times;</button>
@@ -116,43 +128,72 @@ function _egRemoveParent(idx) {
   _egRenderParentChips();
 }
 
-function _egAddParent(did) {
-  if (!did || _egParentIds.includes(did)) return;
+function _egAddParent(ref) {
+  if (!ref || _egParentIds.includes(ref)) return;
   if (_egParentIds.length >= 8) {
     toast('Max 8 parent devices', 'err');
     return;
   }
-  _egParentIds.push(did);
+  _egParentIds.push(ref);
   _egRenderParentChips();
 }
 
 function _egPopulateParentDatalist() {
   const dl = document.getElementById('eg-parents-dl');
   if (!dl) return;
-  // Datalist is name → did mapping; we resolve on commit.
-  const opts = Object.values(S.devices || {})
+  const devOpts = Object.values(S.devices || {})
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-    .map(d => `<option value="${esc(d.name || d.device_id)}" data-did="${esc(d.device_id)}"></option>`)
-    .join('');
-  dl.innerHTML = opts;
+    .map(d => `<option value="${esc(d.name || d.device_id)}"></option>`);
+  // Group entries — aggregate by group name + member count. Drop singletons
+  // (a 1-device "group" adds nothing over picking the device directly).
+  const groupCount = new Map();
+  Object.values(S.devices || {}).forEach(d => {
+    const g = (d.group || 'Default Group').trim();
+    groupCount.set(g, (groupCount.get(g) || 0) + 1);
+  });
+  const grpOpts = [...groupCount.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([g, n]) => `<option value="${esc(g + _EG_GRP_SFX + ' (' + n + ')')}"></option>`);
+  dl.innerHTML = [...devOpts, ...grpOpts].join('');
 }
 
 function _egCommitParentFromInput(input) {
-  const v = (input.value || '').trim();
-  if (!v) return;
-  // Resolve name → device_id. Case-insensitive exact match first; fall back
-  // to the literal value if it matches a device_id directly.
-  const lc = v.toLowerCase();
+  const raw = (input.value || '').trim();
+  if (!raw) return;
+  // Group entry — strip the sentinel suffix and store as "group:<name>".
+  const grpSfxIdx = raw.indexOf(_EG_GRP_SFX);
+  if (grpSfxIdx > 0) {
+    const gname = raw.slice(0, grpSfxIdx);
+    const exists = Object.values(S.devices || {}).some(
+      d => (d.group || 'Default Group') === gname
+    );
+    if (!exists) { toast(`Group "${gname}" not found`, 'err'); return; }
+    _egAddParent('group:' + gname);
+    input.value = '';
+    return;
+  }
+  // Device by name (case-insensitive) or by id.
+  const lc = raw.toLowerCase();
   let match = Object.values(S.devices || {}).find(
     d => (d.name || '').toLowerCase() === lc
   );
-  if (!match && S.devices[v]) match = S.devices[v];
-  if (!match) {
-    toast(`No device named "${v}"`, 'err');
+  if (!match && S.devices[raw]) match = S.devices[raw];
+  if (match) {
+    _egAddParent(match.device_id);
+    input.value = '';
     return;
   }
-  _egAddParent(match.device_id);
-  input.value = '';
+  // Bare group name (typed without the suffix).
+  const groupSet = new Set(Object.values(S.devices || {}).map(
+    d => (d.group || 'Default Group')
+  ));
+  if (groupSet.has(raw)) {
+    _egAddParent('group:' + raw);
+    input.value = '';
+    return;
+  }
+  toast(`No device or group named "${raw}"`, 'err');
 }
 
 async function _loadGroupParentsState(groupName) {

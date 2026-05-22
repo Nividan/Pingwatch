@@ -330,10 +330,14 @@ def site_tree(site_name: str) -> dict:
 
     # Cross-site parents — keep them in by_parent so the frontend can decide
     # how to render. Mark with a flag so cards can show a tiny badge.
+    # Group refs ("group:<name>") are excluded from device-id validation —
+    # they resolve against cluster cards in the frontend, not the device map.
     cross_site_parents = {pid for pid in by_parent
-                          if pid not in site_dids and pid in STATE.devices}
+                          if not pid.startswith("group:")
+                          and pid not in site_dids and pid in STATE.devices}
     missing_parents = {pid for pid in by_parent
-                       if pid not in STATE.devices}
+                       if not pid.startswith("group:")
+                       and pid not in STATE.devices}
 
     return {
         "site": {

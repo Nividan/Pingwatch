@@ -1496,6 +1496,21 @@ select{cursor:pointer;appearance:none;
 }
 .pw-chip-x:hover{background:rgba(248,81,73,.18);color:var(--down)}
 .pw-chip-empty{color:var(--text3);font-size:11px;font-style:italic;padding:2px 4px}
+
+/* Group-ref chip variant — visually distinct so the user can tell at a glance
+   that a parent ref points at a whole group rather than a single device. */
+.pw-chip-group{
+  background:rgba(255,191,0,.10);
+  border-color:rgba(255,191,0,.35);
+}
+.pw-chip-group .pw-chip-x:hover{background:rgba(255,191,0,.22);color:var(--gold)}
+.pw-chip-badge{
+  display:inline-block;
+  font-family:'JetBrains Mono',monospace;font-size:8px;
+  letter-spacing:.5px;color:var(--gold);
+  padding:1px 4px;background:rgba(255,191,0,.18);
+  border-radius:2px;margin-right:5px;line-height:1.4;
+}
 .stpo-ico{font-size:20px;margin-bottom:3px}
 .stpo-nm{font-size:11px;font-weight:600;color:var(--text2)}
 .stpo-ds{font-size:9px;color:var(--text3);margin-top:2px}
