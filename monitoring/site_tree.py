@@ -20,19 +20,22 @@ from core.logger    import log
 from monitoring.site_rollup import _site_of, _device_status, _active_alerts_by_did
 
 
-TIER_FIREWALL   = "firewall"
-TIER_SWITCH     = "switch"
-TIER_CHASSIS    = "chassis"
-TIER_HYPERVISOR = "hypervisor"
-TIER_VM         = "vm"
-TIER_IPMI       = "ipmi"
-TIER_OTHER      = "other"
+TIER_ISP         = "isp"
+TIER_WAN_SWITCH  = "wan_switch"
+TIER_FIREWALL    = "firewall"
+TIER_CORE_SWITCH = "core_switch"
+TIER_SWITCH      = "switch"          # access switch (legacy key, renamed label)
+TIER_CHASSIS     = "chassis"
+TIER_HYPERVISOR  = "hypervisor"
+TIER_VM          = "vm"
+TIER_IPMI        = "ipmi"
+TIER_OTHER       = "other"
 
 # Tier keys an Edit Group dropdown may persist. "auto" / "" both mean
 # "fall back to the regex inference below" — the override is opt-in.
 _VALID_TIERS = {
-    TIER_FIREWALL, TIER_SWITCH, TIER_CHASSIS, TIER_HYPERVISOR,
-    TIER_VM, TIER_IPMI, TIER_OTHER,
+    TIER_ISP, TIER_WAN_SWITCH, TIER_FIREWALL, TIER_CORE_SWITCH, TIER_SWITCH,
+    TIER_CHASSIS, TIER_HYPERVISOR, TIER_VM, TIER_IPMI, TIER_OTHER,
 }
 
 
@@ -99,25 +102,44 @@ def _resolve_parents(device, group_parents: dict) -> list:
         return list(group_parents[g])
     return []
 
-# Order matters — first match wins. IPMI / firewall / switch / chassis use
-# narrower rules (distinctive vendor markers); VM and hypervisor get broader.
-# Chassis is matched BEFORE hypervisor so a BladeCenter chassis device is
-# slotted into the chassis tier rather than counted as a hypervisor.
+# Order matters — first match wins. Specific vendor markers (IPMI, firewall,
+# ISP, WAN, core) come BEFORE the generic switch rule so an N7K isn't mis-
+# bucketed as access. Chassis precedes hypervisor so a BladeCenter slots
+# into chassis, not into the generic hypervisor bucket.
 _TIER_RULES = [
-    (TIER_IPMI,       re.compile(r"\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b", re.I)),
-    (TIER_FIREWALL,   re.compile(r"\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|"
-                                 r"checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|"
-                                 r"opnsense|untangle|fw-)\b", re.I)),
-    (TIER_SWITCH,     re.compile(r"\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|"
-                                 r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw|"
-                                 r"l3|l2|router|rtr-)\b", re.I)),
-    (TIER_CHASSIS,    re.compile(r"\b(bladecenter|chassis|enclosure|c[-\s]?class|"
-                                 r"c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|"
-                                 r"oa\d|onboard[-\s]?admin)\b", re.I)),
-    (TIER_VM,         re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|"
-                                 r"guest|tenant)\b", re.I)),
-    (TIER_HYPERVISOR, re.compile(r"\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|"
-                                 r"blade|esx-|hypervisor|host\d)\b", re.I)),
+    (TIER_IPMI,        re.compile(r"\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b", re.I)),
+    (TIER_FIREWALL,    re.compile(r"\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|"
+                                  r"checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|"
+                                  r"opnsense|untangle|fw-)\b", re.I)),
+    # ISP demarc — physical link to the carrier. Distinct enough that any
+    # "isp" prefix counts; word boundary at start, separator at end so
+    # "isp_modem_01" matches but "ispybox" doesn't.
+    (TIER_ISP,         re.compile(r"\bisp\b|\bisp[-_\d]|"
+                                  r"\bstarlink\b|\bwan[-_\s]link\b|"
+                                  r"\b(?:fiber|cable)[-_\s]?isp\b|"
+                                  r"\bcarrier[-_\s]?(?:cpe|demarc)\b", re.I)),
+    # WAN switch / edge router — sits between the ISP CPE and the firewall.
+    (TIER_WAN_SWITCH,  re.compile(r"\b(wan[-_\s]?(?:sw|switch|router|gw)|"
+                                  r"edge[-_\s]?(?:router|sw|switch)|"
+                                  r"isp[-_\s]?sw|border[-_\s]?(?:sw|router))\b", re.I)),
+    # Core / aggregation. N7K / N9K, ASR, spine switches, Catalyst 6500/9500.
+    # Allows space / hyphen / underscore between vendor name and model number.
+    (TIER_CORE_SWITCH, re.compile(r"\b(core[-_\s]?(?:sw|switch|router)|core\d|"
+                                  r"aggregation|agg[-_\s]?(?:sw|switch)|backbone[-_\s]?(?:sw|switch)|"
+                                  r"l3[-_\s]?(?:sw|switch)|spine[-_\s]?(?:sw|switch)|spine\d|"
+                                  r"n[79]k|nexus[-_\s]?[79]\d{3}|asr\d|"
+                                  r"cat(?:alyst)?[-_\s]?[69]\d{3})\b", re.I)),
+    # Generic / access switch — TOR, Nexus 5K, EX2200, Catalyst 2/3/4xxx.
+    (TIER_SWITCH,      re.compile(r"\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n5k|"
+                                  r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw|"
+                                  r"l2|access[-_\s]?(?:sw|switch)|router|rtr-)\b", re.I)),
+    (TIER_CHASSIS,     re.compile(r"\b(bladecenter|chassis|enclosure|c[-\s]?class|"
+                                  r"c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|"
+                                  r"oa\d|onboard[-\s]?admin)\b", re.I)),
+    (TIER_VM,          re.compile(r"\b(vm-|-vm\b|vms?\b|cluster-vm|"
+                                  r"guest|tenant)\b", re.I)),
+    (TIER_HYPERVISOR,  re.compile(r"\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|"
+                                  r"blade|esx-|hypervisor|host\d)\b", re.I)),
 ]
 
 
@@ -236,13 +258,16 @@ def site_tree(site_name: str) -> dict:
 
     # Bucket every device in this site by tier
     by_tier_devices = {
-        TIER_FIREWALL:   [],
-        TIER_SWITCH:     [],
-        TIER_CHASSIS:    [],
-        TIER_HYPERVISOR: [],
-        TIER_VM:         [],
-        TIER_IPMI:       [],
-        TIER_OTHER:      [],
+        TIER_ISP:         [],
+        TIER_WAN_SWITCH:  [],
+        TIER_FIREWALL:    [],
+        TIER_CORE_SWITCH: [],
+        TIER_SWITCH:      [],
+        TIER_CHASSIS:     [],
+        TIER_HYPERVISOR:  [],
+        TIER_VM:          [],
+        TIER_IPMI:        [],
+        TIER_OTHER:       [],
     }
     for d in STATE.devices.values():
         if _site_of(d) != site_name:
@@ -250,11 +275,17 @@ def site_tree(site_name: str) -> dict:
         tier = infer_tier(d, group_overrides)
         by_tier_devices[tier].append(d)
 
-    # Firewalls + switches render as individual device cards
-    firewalls = [_device_card(d, alerts_by_did, group_parents)
-                 for d in by_tier_devices[TIER_FIREWALL]]
-    switches  = [_device_card(d, alerts_by_did, group_parents)
-                 for d in by_tier_devices[TIER_SWITCH]]
+    # ISP / WAN / Firewall / Core / Access render as individual device cards.
+    isp_cards     = [_device_card(d, alerts_by_did, group_parents)
+                     for d in by_tier_devices[TIER_ISP]]
+    wan_cards     = [_device_card(d, alerts_by_did, group_parents)
+                     for d in by_tier_devices[TIER_WAN_SWITCH]]
+    firewalls     = [_device_card(d, alerts_by_did, group_parents)
+                     for d in by_tier_devices[TIER_FIREWALL]]
+    core_switches = [_device_card(d, alerts_by_did, group_parents)
+                     for d in by_tier_devices[TIER_CORE_SWITCH]]
+    switches      = [_device_card(d, alerts_by_did, group_parents)
+                     for d in by_tier_devices[TIER_SWITCH]]
 
     # Chassis / VMs / IPMI render as cluster cards grouped by devices.grp.
     # Hypervisors do too. Chassis is its own row between switches + hypervisors.
@@ -306,9 +337,18 @@ def site_tree(site_name: str) -> dict:
         for pid in parents:
             by_parent[pid].append(ref)
 
+    for ic in isp_cards:
+        _push_ref(ic["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_ISP, "did": ic["did"]})
+    for wc in wan_cards:
+        _push_ref(wc["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_WAN_SWITCH, "did": wc["did"]})
     for fc in firewalls:
         _push_ref(fc["parent_device_ids"],
                   {"kind": "device", "tier": TIER_FIREWALL, "did": fc["did"]})
+    for cc in core_switches:
+        _push_ref(cc["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_CORE_SWITCH, "did": cc["did"]})
     for sc in switches:
         _push_ref(sc["parent_device_ids"],
                   {"kind": "device", "tier": TIER_SWITCH, "did": sc["did"]})
@@ -348,13 +388,16 @@ def site_tree(site_name: str) -> dict:
             "down":    down,
             "alerts":  alerts,
         },
-        "firewalls":   firewalls,
-        "switches":    switches,
-        "chassis":     chassis,
-        "hypervisors": hypervisors,
-        "vm_clusters": vm_clusters,
-        "ipmi":        ipmi,
-        "other":       other,
+        "isp":           isp_cards,
+        "wan_switches":  wan_cards,
+        "firewalls":     firewalls,
+        "core_switches": core_switches,
+        "switches":      switches,
+        "chassis":       chassis,
+        "hypervisors":   hypervisors,
+        "vm_clusters":   vm_clusters,
+        "ipmi":          ipmi,
+        "other":         other,
         "by_parent":          dict(by_parent),
         "orphans":            orphans,
         "cross_site_parents": sorted(cross_site_parents),

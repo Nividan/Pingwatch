@@ -419,12 +419,15 @@ function openEditDevice(did){
 // hypervisor → switch, switch → firewall+switch, IPMI → switch,
 // firewall → firewall (root). Falls back to "anything" when we can't tell.
 const _ED_PARENT_TIER_RULES = [
-  {tier: 'ipmi',       parents: ['switch'],                       rx: /\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b/i},
-  {tier: 'firewall',   parents: ['firewall'],                     rx: /\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|opnsense|untangle|fw-)\b/i},
-  {tier: 'switch',     parents: ['firewall','switch'],            rx: /\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n[57]k|catalyst|nexus|junos|mikrotik|aruba|cisco-sw|l3|l2|router|rtr-)\b/i},
-  {tier: 'chassis',    parents: ['switch'],                       rx: /\b(bladecenter|chassis|enclosure|c[-\s]?class|c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|oa\d|onboard[-\s]?admin)\b/i},
-  {tier: 'vm',         parents: ['hypervisor'],                   rx: /\b(vm-|-vm\b|vms?\b|cluster-vm|guest|tenant)\b/i},
-  {tier: 'hypervisor', parents: ['chassis','switch'],             rx: /\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|blade|esx-|hypervisor|host\d)\b/i},
+  {tier: 'ipmi',        parents: ['switch','core_switch'],                                     rx: /\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b/i},
+  {tier: 'isp',         parents: [],                                                           rx: /\b(isp|isp\d|isp[-_](?:gw|router|link|modem|cpe)|wan[-_]link|fiber[-_]?isp|cable[-_]?isp|starlink|carrier[-_]?(?:cpe|demarc))\b/i},
+  {tier: 'wan_switch',  parents: ['isp'],                                                      rx: /\b(wan[-_]?(?:sw|switch|router|gw)|edge[-_]?(?:router|sw|switch)|isp[-_]?sw|border[-_]?(?:sw|router))\b/i},
+  {tier: 'firewall',    parents: ['wan_switch','isp','firewall'],                              rx: /\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|opnsense|untangle|fw-)\b/i},
+  {tier: 'core_switch', parents: ['firewall','wan_switch','core_switch'],                      rx: /\b(core[-_]?(?:sw|switch|router)|core\d|aggregation|agg[-_]?(?:sw|switch)|backbone[-_]?(?:sw|switch)|l3[-_]?(?:sw|switch)|spine[-_]?(?:sw|switch)|spine\d|n[79]k|nexus[-_]?[79]\d{3}|asr\d|cat(?:alyst)?[-_]?[69]\d{3})\b/i},
+  {tier: 'switch',      parents: ['core_switch','firewall','switch'],                          rx: /\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n5k|catalyst|nexus|junos|mikrotik|aruba|cisco-sw|l2|access[-_]?(?:sw|switch)|router|rtr-)\b/i},
+  {tier: 'chassis',     parents: ['switch','core_switch'],                                     rx: /\b(bladecenter|chassis|enclosure|c[-\s]?class|c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|oa\d|onboard[-\s]?admin)\b/i},
+  {tier: 'vm',          parents: ['hypervisor'],                                               rx: /\b(vm-|-vm\b|vms?\b|cluster-vm|guest|tenant)\b/i},
+  {tier: 'hypervisor',  parents: ['chassis','switch','core_switch'],                           rx: /\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|blade|esx-|hypervisor|host\d)\b/i},
 ];
 
 function _edInferTierForFilter(dev) {

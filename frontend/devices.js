@@ -806,6 +806,8 @@ function _initDevCtxMenu(){
         : '';
       _dcm.innerHTML=`
         ${editItem}
+        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup(_ctxSite)">👥 Add Group</div>
+        <div class="dci-sep"></div>
         <div class="dci rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('add')">📍 Add Site</div>`;
     } else {
       _dcm.innerHTML=`
@@ -1491,7 +1493,7 @@ function openAddDeviceGroup(group){
 // can fully configure a group at creation time instead of having to reopen
 // it for editing. Alert Profile is omitted — it's an inheritance viewer
 // that needs an existing group to scope against.
-function openAddGroup(){
+function openAddGroup(siteName){
   closeM('mag');
   const o=document.createElement('div');
   o.className='mo';o.id='mag';
@@ -1563,6 +1565,10 @@ function openAddGroup(){
   // Populate the Site datalist from /api/sites (UNION of IPAM + devices)
   if (typeof _populateSiteDatalist === 'function') _populateSiteDatalist('ag-site-dl');
   setTimeout(()=>{
+    if(siteName){
+      const sf=document.getElementById('ag-site');
+      if(sf) sf.value=siteName;
+    }
     const inp=document.getElementById('ag-n');
     if(inp){
       inp.focus();

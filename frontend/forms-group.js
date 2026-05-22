@@ -34,10 +34,13 @@ async function openEditGroup(groupName) {
             <div class="meg-h">Tier (Live Map)</div>
             <select id="eg-tier">
               <option value="">— Auto-detect from name —</option>
+              <option value="isp">ISP</option>
+              <option value="wan_switch">WAN Switch</option>
               <option value="firewall">Firewall</option>
-              <option value="switch">Switch</option>
+              <option value="core_switch">Core Switch</option>
+              <option value="switch">Access Switch</option>
               <option value="chassis">Chassis / Enclosure</option>
-              <option value="hypervisor">Hypervisor</option>
+              <option value="hypervisor">Hypervisor / Server</option>
               <option value="vm">VM</option>
               <option value="ipmi">IPMI / OOB</option>
               <option value="other">Other</option>

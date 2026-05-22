@@ -88,7 +88,10 @@ const LM = {
 
 // Inline SVG icons (Heroicons-ish), kept tiny + cyan-tinted
 const ICONS = {
+  isp:    '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+  wan:    '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 17l4-10 4 6 4-4 4 8"/><circle cx="4" cy="17" r="1.5" fill="currentColor"/><circle cx="20" cy="19" r="1.5" fill="currentColor"/></svg>',
   fw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z"/></svg>',
+  core:   '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="10" rx="1"/><circle cx="7"  cy="12" r="0.9" fill="currentColor"/><circle cx="11" cy="12" r="0.9" fill="currentColor"/><circle cx="15" cy="12" r="0.9" fill="currentColor"/><circle cx="19" cy="12" r="0.9" fill="currentColor"/><path d="M3 11h18"/></svg>',
   sw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="9" width="18" height="6" rx="1"/><circle cx="7" cy="12" r="0.7" fill="currentColor"/><circle cx="11" cy="12" r="0.7" fill="currentColor"/><circle cx="15" cy="12" r="0.7" fill="currentColor"/><circle cx="19" cy="12" r="0.7" fill="currentColor"/></svg>',
   hyp:    '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><circle cx="6.5" cy="7" r="0.6" fill="currentColor"/><circle cx="6.5" cy="17" r="0.6" fill="currentColor"/></svg>',
   chassis:'<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
@@ -597,12 +600,15 @@ function _renderSiteTree(name, tree) {
     return;
   }
 
-  const fws  = tree.firewalls   || [];
-  const sws  = tree.switches    || [];
-  const chs  = tree.chassis     || [];
-  const hyps = tree.hypervisors || [];
-  const vms  = tree.vm_clusters || [];
-  const ipmi = tree.ipmi        || [];
+  const isps  = tree.isp           || [];
+  const wans  = tree.wan_switches  || [];
+  const fws   = tree.firewalls     || [];
+  const cores = tree.core_switches || [];
+  const sws   = tree.switches      || [];
+  const chs   = tree.chassis       || [];
+  const hyps  = tree.hypervisors   || [];
+  const vms   = tree.vm_clusters   || [];
+  const ipmi  = tree.ipmi          || [];
 
   function tierRow(cls, label, items, opts) {
     if (!items.length && !opts.alwaysShow) return '';
@@ -618,8 +624,17 @@ function _renderSiteTree(name, tree) {
            '</div>';
   }
 
+  function _ispRow(d) {
+    return _devCard(d, { icon: ICONS.isp, role: 'ISP', tier: 'isp' });
+  }
+  function _wanRow(d) {
+    return _devCard(d, { icon: ICONS.wan, tier: 'wan_switch' });
+  }
   function _fwRow(d) {
     return _devCard(d, { icon: ICONS.fw, role: 'PRIMARY', tier: 'firewall' });
+  }
+  function _coreRow(d) {
+    return _devCard(d, { icon: ICONS.core, tier: 'core_switch' });
   }
   function _swRow(d) {
     return _devCard(d, { icon: ICONS.sw, tier: 'switch' });
@@ -658,11 +673,14 @@ function _renderSiteTree(name, tree) {
           '<span class="site-tab-s">› SELECTED · MAIN INFRASTRUCTURE</span>' +
         '</div>' +
         '<div class="sd-canvas">' +
-          tierRow('fw',  'FIREWALL',    fws,  { render: _fwRow,  center: true }) +
-          tierRow('sw',  'SWITCHES',    sws,  { render: _swRow,  center: false }) +
-          tierRow('chs', 'CHASSIS',     chs,  { render: _chsRow }) +
-          tierRow('hyp', 'HYPERVISORS', hyps, { render: _hypRow, trailing: ipmiTrailing }) +
-          tierRow('vm',  'VM CLUSTERS', vms,  { render: _vmRow }) +
+          tierRow('isp',  'ISP',              isps,  { render: _ispRow,  center: true }) +
+          tierRow('wan',  'WAN SWITCH',       wans,  { render: _wanRow,  center: true }) +
+          tierRow('fw',   'FIREWALL',         fws,   { render: _fwRow,   center: true }) +
+          tierRow('core', 'CORE SWITCH',      cores, { render: _coreRow, center: false }) +
+          tierRow('sw',   'ACCESS SWITCHES',  sws,   { render: _swRow,   center: false }) +
+          tierRow('chs',  'CHASSIS',          chs,   { render: _chsRow }) +
+          tierRow('hyp',  'HYPERVISORS',      hyps,  { render: _hypRow, trailing: ipmiTrailing }) +
+          tierRow('vm',   'VM CLUSTERS',      vms,   { render: _vmRow }) +
         '</div>' +
       '</div>' +
       (tree.other && tree.other.length
@@ -700,14 +718,19 @@ function _renderSiteTree(name, tree) {
 
 // ─── SVG connection lines ──────────────────────────────────────────
 // Color rules keyed by the CHILD tier (since each line ends at the child).
+// Top-of-topology (ISP / WAN / Firewall) is yellow/gold — signals "this is
+// the carrier-facing edge". Below the firewall the LAN paints cyan / lime.
 const _CONN_STYLES = {
-  'switch':     { color: 'var(--accent2)', dashed: false }, // FW → SW (cyan)
-  'chassis':    { color: 'var(--accent2)', dashed: false }, // SW → CHS (cyan)
-  'hypervisor': { color: 'var(--up)',      dashed: false }, // SW/CHS → HYP (lime)
-  'vm':         { color: 'var(--accent2)', dashed: false }, // HYP → VM (cyan)
-  'ipmi':       { color: 'var(--purple)',  dashed: true  }, // SW → IPMI (purple dashed)
-  'other':      { color: 'var(--up)',      dashed: false },
-  'firewall':   { color: 'var(--gold)',    dashed: false }, // (root — rarely has parents)
+  'isp':         { color: 'var(--gold)',    dashed: false }, // (root)
+  'wan_switch':  { color: 'var(--gold)',    dashed: false }, // → ISP (yellow)
+  'firewall':    { color: 'var(--gold)',    dashed: false }, // → WAN/ISP (yellow)
+  'core_switch': { color: 'var(--accent2)', dashed: false }, // → FW (cyan)
+  'switch':      { color: 'var(--accent2)', dashed: false }, // → CORE/FW (cyan)
+  'chassis':     { color: 'var(--accent2)', dashed: false }, // → SW (cyan)
+  'hypervisor':  { color: 'var(--up)',      dashed: false }, // → SW/CHS (lime)
+  'vm':          { color: 'var(--accent2)', dashed: false }, // → HYP (cyan)
+  'ipmi':        { color: 'var(--purple)',  dashed: true  }, // → SW (purple dashed)
+  'other':       { color: 'var(--up)',      dashed: false },
 };
 
 function _cardLabel(el) {
@@ -845,22 +868,104 @@ function _drawConnections(canvasEl) {
   const LONG_HAUL_PX = cRect.width * 0.30;
   function _snap4(v) { return Math.round(v / 4) * 4; }
 
+  // Shared helpers used by both same-row and below-row routes.
+  function _appendHit(d, parentLabel, childEl, mappings) {
+    const hit = document.createElementNS(svgNs, 'path');
+    hit.setAttribute('d', d);
+    hit.setAttribute('stroke', 'transparent');
+    hit.setAttribute('stroke-width', '12');
+    hit.setAttribute('fill', 'none');
+    hit.setAttribute('class', 'conn-hit');
+    hit.dataset.parentName = parentLabel;
+    hit.dataset.childName = _cardLabel(childEl);
+    hit.dataset.mappings = JSON.stringify(mappings.map(function(m) {
+      return { from: m.from, to: _refDisplayName(m.pid) };
+    }));
+    svg.appendChild(hit);
+  }
+  function _appendLine(d, style, longHaul) {
+    const path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', style.color);
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('class',
+      'conn-line' +
+      (style.dashed ? ' dashed' : '') +
+      (longHaul ? ' long-haul' : ''));
+    if (style.dashed) path.setAttribute('stroke-dasharray', '5 5');
+    svg.appendChild(path);
+  }
+  function _appendNotch(x, y, color, longHaul) {
+    const dot = document.createElementNS(svgNs, 'circle');
+    dot.setAttribute('cx', x);
+    dot.setAttribute('cy', y);
+    dot.setAttribute('r', '2');
+    dot.setAttribute('fill', color);
+    dot.setAttribute('class', 'conn-notch' + (longHaul ? ' long-haul' : ''));
+    svg.appendChild(dot);
+  }
+
   parentMap.forEach(function(children, parentEl) {
     const pRect = parentEl.getBoundingClientRect();
     const pCenterX = pRect.left + pRect.width / 2 - cRect.left;
     const py = pRect.bottom - cRect.top;
+    const parentLabel = _cardLabel(parentEl);
 
     // Sort by child X — left children get left fan slots, right children get
     // right ones, so trunk segments don't cross each other.
-    const sorted = children.slice().sort(function(a, b) {
+    const sortedAll = children.slice().sort(function(a, b) {
       const aR = a.childEl.getBoundingClientRect();
       const bR = b.childEl.getBoundingClientRect();
       return (aR.left + aR.width / 2) - (bR.left + bR.width / 2);
     });
 
-    // Trunk Y: midway in the gap below the parent, clamped and snapped.
+    // Split children by whether they share a row with the parent (vertical
+    // overlap) — those route SIDE-to-SIDE through the card edges, not down
+    // to a trunk Y. Same-row connections look natural for sibling switches
+    // (e.g. an EX uplinks to a N5K beside it in the SWITCHES row).
+    const sameRow = [];
+    const below   = [];
+    sortedAll.forEach(function(c) {
+      const r = c.childEl.getBoundingClientRect();
+      // Cards are "in the same row" if their Y ranges overlap by more than
+      // a few px (defensive against minor sub-pixel layout drift).
+      const overlap = Math.min(r.bottom, pRect.bottom) - Math.max(r.top, pRect.top);
+      if (overlap > 4) sameRow.push(c);
+      else             below.push(c);
+    });
+
+    // ── Same-row routing (side-to-side through card edges) ──
+    sameRow.forEach(function(c) {
+      const r = c.childEl.getBoundingClientRect();
+      const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
+      const parentIsLeft = (pRect.left + pRect.right) < (r.left + r.right);
+      const pSideX = _snap4((parentIsLeft ? pRect.right : pRect.left) - cRect.left);
+      const cSideX = _snap4((parentIsLeft ? r.left      : r.right    ) - cRect.left);
+      const pMidY  = _snap4((pRect.top + pRect.bottom) / 2 - cRect.top);
+      const cMidY  = _snap4((r.top      + r.bottom)      / 2 - cRect.top);
+      // Z-shape with the vertical step in the middle of the gap. Drops to
+      // straight H when the two centers are at the same Y.
+      const midX = _snap4((pSideX + cSideX) / 2);
+      const d = (Math.abs(pMidY - cMidY) < 4)
+        ? 'M ' + pSideX + ' ' + pMidY + ' H ' + cSideX
+        : 'M ' + pSideX + ' ' + pMidY +
+          ' H ' + midX +
+          ' V ' + cMidY +
+          ' H ' + cSideX;
+      const longHaul = Math.abs(cSideX - pSideX) > LONG_HAUL_PX;
+      _appendHit(d, parentLabel, c.childEl, c.mappings);
+      _appendLine(d, style, longHaul);
+      _appendNotch(pSideX, pMidY, style.color, longHaul);
+      _appendNotch(cSideX, cMidY, style.color, longHaul);
+    });
+
+    // ── Below-row routing (original fan-out + trunk underlay) ──
+    if (!below.length) return;
+
     let nearestChildTop = Infinity;
-    sorted.forEach(function(c) {
+    below.forEach(function(c) {
       const r = c.childEl.getBoundingClientRect();
       const top = r.top - cRect.top;
       if (top < nearestChildTop) nearestChildTop = top;
@@ -868,35 +973,28 @@ function _drawConnections(canvasEl) {
     const gap = nearestChildTop - py;
     const trunkY = _snap4(py + Math.max(8, Math.min(22, gap / 2)));
 
-    // Fan out parent entry points. For N=1 the line keeps its single-center
-    // entry; for N>1 we spread slots within 60% of the parent card width
-    // (capped at a reasonable absolute width so a 600px parent doesn't get a
-    // 360px-wide fan).
-    const N = sorted.length;
+    const N = below.length;
     const fanWidth = N <= 1 ? 0
       : Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
     const fanStart = pCenterX - fanWidth / 2;
     const fanStep  = N > 1 ? fanWidth / (N - 1) : 0;
-    sorted.forEach(function(c, i) {
+    below.forEach(function(c, i) {
       c._entryX = (N === 1) ? pCenterX : _snap4(fanStart + i * fanStep);
     });
 
-    const parentLabel = _cardLabel(parentEl);
-
-    // ── Trunk underlay (visual backbone for multi-child parents) ──
+    // Trunk underlay
     if (N > 1) {
-      // Pick the dominant tier color so the bus matches its drops.
       const tierCounts = {};
-      sorted.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
+      below.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
       const dominantTier = Object.keys(tierCounts).sort(function(a, b) {
         return tierCounts[b] - tierCounts[a];
       })[0];
       const trunkStyle = _CONN_STYLES[dominantTier] || _CONN_STYLES.other;
-      const xs = sorted.map(function(c) {
+      const xs = below.map(function(c) {
         const r = c.childEl.getBoundingClientRect();
         return _snap4(r.left + r.width / 2 - cRect.left);
       });
-      const entryXs = sorted.map(function(c) { return c._entryX; });
+      const entryXs = below.map(function(c) { return c._entryX; });
       const trunkLeft  = Math.min(Math.min.apply(null, xs), Math.min.apply(null, entryXs));
       const trunkRight = Math.max(Math.max.apply(null, xs), Math.max.apply(null, entryXs));
       if (trunkRight - trunkLeft > 4) {
@@ -911,62 +1009,21 @@ function _drawConnections(canvasEl) {
       }
     }
 
-    sorted.forEach(function(c) {
+    below.forEach(function(c) {
       const r = c.childEl.getBoundingClientRect();
       const cx = _snap4(r.left + r.width / 2 - cRect.left);
       const cy = r.top - cRect.top;
       const entryX = c._entryX;
       const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
-
       const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
-
-      // Path: child top ↓ trunkY → entryX → ↑ parent bottom
       const d = 'M ' + cx + ' ' + cy +
                 ' V ' + trunkY +
                 ' H ' + entryX +
                 ' V ' + py;
-
-      // Hitbox — wider invisible stroke for easier hover. No per-path
-      // listeners; the canvas-level handler uses elementsFromPoint.
-      const hit = document.createElementNS(svgNs, 'path');
-      hit.setAttribute('d', d);
-      hit.setAttribute('stroke', 'transparent');
-      hit.setAttribute('stroke-width', '12');
-      hit.setAttribute('fill', 'none');
-      hit.setAttribute('class', 'conn-hit');
-      hit.dataset.parentName = parentLabel;
-      hit.dataset.childName = _cardLabel(c.childEl);
-      hit.dataset.mappings = JSON.stringify(c.mappings.map(function(m) {
-        return { from: m.from, to: _refDisplayName(m.pid) };
-      }));
-
-      // Visible line
-      const path = document.createElementNS(svgNs, 'path');
-      path.setAttribute('d', d);
-      path.setAttribute('stroke', style.color);
-      path.setAttribute('stroke-width', '1.5');
-      path.setAttribute('fill', 'none');
-      path.setAttribute('vector-effect', 'non-scaling-stroke');
-      path.setAttribute('class',
-        'conn-line' +
-        (style.dashed ? ' dashed' : '') +
-        (longHaul   ? ' long-haul' : ''));
-      if (style.dashed) path.setAttribute('stroke-dasharray', '5 5');
-
-      svg.appendChild(hit);
-      svg.appendChild(path);
-
-      // Endpoint notches — small filled dots at both ends so the line
-      // visually "plugs into" each card.
-      [[cx, cy], [entryX, py]].forEach(function(pt) {
-        const dot = document.createElementNS(svgNs, 'circle');
-        dot.setAttribute('cx', pt[0]);
-        dot.setAttribute('cy', pt[1]);
-        dot.setAttribute('r', '2');
-        dot.setAttribute('fill', style.color);
-        dot.setAttribute('class', 'conn-notch' + (longHaul ? ' long-haul' : ''));
-        svg.appendChild(dot);
-      });
+      _appendHit(d, parentLabel, c.childEl, c.mappings);
+      _appendLine(d, style, longHaul);
+      _appendNotch(cx,     cy, style.color, longHaul);
+      _appendNotch(entryX, py, style.color, longHaul);
     });
   });
 
@@ -1103,9 +1160,12 @@ function _renderInternetSite(name, tree) {
   // Collect every device in the site (flattened across whatever tiers
   // the heuristic put them in).
   const all = [].concat(
-    tree.firewalls   || [],
-    tree.switches    || [],
-    tree.other       || [],
+    tree.isp           || [],
+    tree.wan_switches  || [],
+    tree.firewalls     || [],
+    tree.core_switches || [],
+    tree.switches      || [],
+    tree.other         || [],
     [].concat.apply([], (tree.hypervisors || []).map(function(c) { return c.cells; })),
     [].concat.apply([], (tree.vm_clusters || []).map(function(c) { return c.cells; })),
     [].concat.apply([], (tree.ipmi        || []).map(function(c) { return c.cells; }))
@@ -1207,9 +1267,12 @@ function openDevicePanel(did) {
   const tree = LM.treeCache[siteName];
   if (!tree) return;
   const allDevs = [].concat(
-    tree.firewalls || [],
-    tree.switches  || [],
-    tree.other     || [],
+    tree.isp           || [],
+    tree.wan_switches  || [],
+    tree.firewalls     || [],
+    tree.core_switches || [],
+    tree.switches      || [],
+    tree.other         || [],
     [].concat.apply([], (tree.hypervisors || []).map(function(c) { return c.cells; })),
     [].concat.apply([], (tree.vm_clusters || []).map(function(c) { return c.cells; })),
     [].concat.apply([], (tree.ipmi        || []).map(function(c) { return c.cells; }))
