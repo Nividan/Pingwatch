@@ -619,6 +619,31 @@ body {
 .conn-svg path.conn-line.dashed {
   animation: dashFlow 1.2s linear infinite;
 }
+/* Long-haul lines (horizontal travel > 30% of canvas) drop to a quieter
+   visual weight so they don't outshout short critical connections. Dashed
+   animation also slows from 1.2s → 2.5s for the same reason. */
+.conn-svg path.conn-line.long-haul {
+  opacity: 0.4;
+}
+.conn-svg path.conn-line.dashed.long-haul {
+  animation: dashFlow 2.5s linear infinite;
+}
+
+/* Shared trunk underlay — thicker, faded stroke at the trunk Y for any
+   multi-child parent. Visually groups the drops as a single backbone. */
+.conn-svg path.conn-trunk-bus {
+  opacity: 0.28;
+  stroke-linecap: butt;
+}
+
+/* Endpoint dots — small filled circles where lines meet card edges so the
+   line reads as "plugged in" rather than abutting the border. */
+.conn-svg circle.conn-notch {
+  opacity: 0.85;
+}
+.conn-svg circle.conn-notch.long-haul {
+  opacity: 0.4;
+}
 /* Invisible wider hitbox so hover targets aren't a 1.5px sliver. */
 .conn-svg path.conn-hit {
   pointer-events: stroke;

@@ -820,10 +820,21 @@ function _drawConnections(canvasEl) {
   });
 
   // Pass 2 — draw orthogonal lines with a SHARED trunk per parent.
-  // For each parent: drop straight down to trunkY, run horizontal trunk,
-  // drop straight up into each child. All children of the same parent share
-  // the trunk Y so their horizontal segments overlap, forming a single visual
-  // bus instead of a tangle of curves.
+  //
+  // Layout polish:
+  //   • Fan-out: parent entry points spread across the parent's bottom edge
+  //     instead of stacking at center — no more knot at parent_X.
+  //   • Child sort: children draw L→R by their card X, so the fan-out slots
+  //     map monotonically (no crossings between trunk segments).
+  //   • 4px grid: trunk Y + entry X snap so parallel trunks align cleanly
+  //     when multiple parents share a row.
+  //   • Long-haul dim: lines whose horizontal travel exceeds 30% of the
+  //     canvas drop to opacity 0.4 + slower dash animation. Fixes the IPMI
+  //     dashed line dominating the hypervisor row visually.
+  //   • Trunk underlay: a fader, slightly thicker stroke at trunk Y unifies
+  //     multi-child connections into a readable "backbone".
+  //   • Endpoint notches: small dots where a line meets a card edge so it
+  //     reads as "plugged in" rather than abutting.
   const cRect = canvasEl.getBoundingClientRect();
   const svgNs = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNs, 'svg');
@@ -831,40 +842,92 @@ function _drawConnections(canvasEl) {
   svg.setAttribute('width', cRect.width);
   svg.setAttribute('height', cRect.height);
 
+  const LONG_HAUL_PX = cRect.width * 0.30;
+  function _snap4(v) { return Math.round(v / 4) * 4; }
+
   parentMap.forEach(function(children, parentEl) {
     const pRect = parentEl.getBoundingClientRect();
-    const px = pRect.left + pRect.width / 2 - cRect.left;
+    const pCenterX = pRect.left + pRect.width / 2 - cRect.left;
     const py = pRect.bottom - cRect.top;
-    // Trunk Y: 22px below parent bottom, but pull up if the nearest child top
-    // is too close. Clamped so the trunk always sits in the gap, never inside
-    // a card.
+
+    // Sort by child X — left children get left fan slots, right children get
+    // right ones, so trunk segments don't cross each other.
+    const sorted = children.slice().sort(function(a, b) {
+      const aR = a.childEl.getBoundingClientRect();
+      const bR = b.childEl.getBoundingClientRect();
+      return (aR.left + aR.width / 2) - (bR.left + bR.width / 2);
+    });
+
+    // Trunk Y: midway in the gap below the parent, clamped and snapped.
     let nearestChildTop = Infinity;
-    children.forEach(function(c) {
+    sorted.forEach(function(c) {
       const r = c.childEl.getBoundingClientRect();
       const top = r.top - cRect.top;
       if (top < nearestChildTop) nearestChildTop = top;
     });
     const gap = nearestChildTop - py;
-    const trunkY = py + Math.max(8, Math.min(22, gap / 2));
+    const trunkY = _snap4(py + Math.max(8, Math.min(22, gap / 2)));
+
+    // Fan out parent entry points. For N=1 the line keeps its single-center
+    // entry; for N>1 we spread slots within 60% of the parent card width
+    // (capped at a reasonable absolute width so a 600px parent doesn't get a
+    // 360px-wide fan).
+    const N = sorted.length;
+    const fanWidth = N <= 1 ? 0
+      : Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
+    const fanStart = pCenterX - fanWidth / 2;
+    const fanStep  = N > 1 ? fanWidth / (N - 1) : 0;
+    sorted.forEach(function(c, i) {
+      c._entryX = (N === 1) ? pCenterX : _snap4(fanStart + i * fanStep);
+    });
 
     const parentLabel = _cardLabel(parentEl);
 
-    children.forEach(function(c) {
+    // ── Trunk underlay (visual backbone for multi-child parents) ──
+    if (N > 1) {
+      // Pick the dominant tier color so the bus matches its drops.
+      const tierCounts = {};
+      sorted.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
+      const dominantTier = Object.keys(tierCounts).sort(function(a, b) {
+        return tierCounts[b] - tierCounts[a];
+      })[0];
+      const trunkStyle = _CONN_STYLES[dominantTier] || _CONN_STYLES.other;
+      const xs = sorted.map(function(c) {
+        const r = c.childEl.getBoundingClientRect();
+        return _snap4(r.left + r.width / 2 - cRect.left);
+      });
+      const entryXs = sorted.map(function(c) { return c._entryX; });
+      const trunkLeft  = Math.min(Math.min.apply(null, xs), Math.min.apply(null, entryXs));
+      const trunkRight = Math.max(Math.max.apply(null, xs), Math.max.apply(null, entryXs));
+      if (trunkRight - trunkLeft > 4) {
+        const bus = document.createElementNS(svgNs, 'path');
+        bus.setAttribute('d', 'M ' + trunkLeft + ' ' + trunkY + ' H ' + trunkRight);
+        bus.setAttribute('stroke', trunkStyle.color);
+        bus.setAttribute('stroke-width', '2.5');
+        bus.setAttribute('fill', 'none');
+        bus.setAttribute('vector-effect', 'non-scaling-stroke');
+        bus.setAttribute('class', 'conn-trunk-bus');
+        svg.appendChild(bus);
+      }
+    }
+
+    sorted.forEach(function(c) {
       const r = c.childEl.getBoundingClientRect();
-      const cx = r.left + r.width / 2 - cRect.left;
+      const cx = _snap4(r.left + r.width / 2 - cRect.left);
       const cy = r.top - cRect.top;
+      const entryX = c._entryX;
       const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
 
-      // Path: child top ↑ trunkY → parent X → ↑ parent bottom
-      const d = 'M ' + cx + ' ' + cy +
-                ' L ' + cx + ' ' + trunkY +
-                ' L ' + px + ' ' + trunkY +
-                ' L ' + px + ' ' + py;
+      const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
 
-      // Invisible wider hitbox for easier hover targeting. No per-path
-      // listeners — a canvas-level mousemove handler uses elementsFromPoint
-      // to find ALL overlapping hits at the cursor (so a trunk shared by
-      // two children shows both mappings at once).
+      // Path: child top ↓ trunkY → entryX → ↑ parent bottom
+      const d = 'M ' + cx + ' ' + cy +
+                ' V ' + trunkY +
+                ' H ' + entryX +
+                ' V ' + py;
+
+      // Hitbox — wider invisible stroke for easier hover. No per-path
+      // listeners; the canvas-level handler uses elementsFromPoint.
       const hit = document.createElementNS(svgNs, 'path');
       hit.setAttribute('d', d);
       hit.setAttribute('stroke', 'transparent');
@@ -873,26 +936,37 @@ function _drawConnections(canvasEl) {
       hit.setAttribute('class', 'conn-hit');
       hit.dataset.parentName = parentLabel;
       hit.dataset.childName = _cardLabel(c.childEl);
-      // Store each mapping as {from, to} — `to` is the resolved parent name
-      // (specific device name when pid is a did, group name when pid is a
-      // group ref). Tooltip uses these to show the actual config target,
-      // not the cluster card the line happens to terminate at.
       hit.dataset.mappings = JSON.stringify(c.mappings.map(function(m) {
         return { from: m.from, to: _refDisplayName(m.pid) };
       }));
 
-      // Visible thin line on top.
+      // Visible line
       const path = document.createElementNS(svgNs, 'path');
       path.setAttribute('d', d);
       path.setAttribute('stroke', style.color);
       path.setAttribute('stroke-width', '1.5');
       path.setAttribute('fill', 'none');
       path.setAttribute('vector-effect', 'non-scaling-stroke');
-      path.setAttribute('class', 'conn-line' + (style.dashed ? ' dashed' : ''));
+      path.setAttribute('class',
+        'conn-line' +
+        (style.dashed ? ' dashed' : '') +
+        (longHaul   ? ' long-haul' : ''));
       if (style.dashed) path.setAttribute('stroke-dasharray', '5 5');
 
       svg.appendChild(hit);
       svg.appendChild(path);
+
+      // Endpoint notches — small filled dots at both ends so the line
+      // visually "plugs into" each card.
+      [[cx, cy], [entryX, py]].forEach(function(pt) {
+        const dot = document.createElementNS(svgNs, 'circle');
+        dot.setAttribute('cx', pt[0]);
+        dot.setAttribute('cy', pt[1]);
+        dot.setAttribute('r', '2');
+        dot.setAttribute('fill', style.color);
+        dot.setAttribute('class', 'conn-notch' + (longHaul ? ' long-haul' : ''));
+        svg.appendChild(dot);
+      });
     });
   });
 
