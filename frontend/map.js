@@ -1337,11 +1337,11 @@ function showPwNodePanel(did) {
     document.getElementById('panel-body').innerHTML = `
       <div class="field-group">
         <div class="field-label">TYPE</div>
-        <span style="color:var(--gold);font-family:'Share Tech Mono',monospace;font-size:11px;">Cloud / Internet</span>
+        <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:11px;">Cloud / Internet</span>
       </div>
       <div class="field-group" style="margin-top:8px">
         <div class="field-label">POSITION</div>
-        <span style="color:var(--pt-dim);font-size:10px;font-family:'Share Tech Mono',monospace">Drag to reposition</span>
+        <span style="color:var(--pt-dim);font-size:10px;font-family:'JetBrains Mono',monospace">Drag to reposition</span>
       </div>
     `;
     document.getElementById('panel-actions').innerHTML = '';
@@ -1379,20 +1379,20 @@ function showPwNodePanel(did) {
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group">
       <div class="field-label">STATUS</div>
-      <span style="color:${col};font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700">${(dev.status||'unknown').toUpperCase()}</span>
+      <span style="color:${col};font-family:\'JetBrains Mono\',monospace;font-size:11px;font-weight:700">${(dev.status||'unknown').toUpperCase()}</span>
     </div>
     <div class="field-group">
       <div class="field-label">HOST / IP</div>
-      <span style="color:${col};font-family:'Share Tech Mono',monospace;font-size:11px">${escXml(dev.host)}</span>
+      <span style="color:${col};font-family:'JetBrains Mono',monospace;font-size:11px">${escXml(dev.host)}</span>
     </div>
     ${(dev.secondary_ips||[]).length ? `
     <div class="field-group">
       <div class="field-label">SECONDARY IPS</div>
-      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:var(--pt-accent);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:var(--pt-accent);font-family:'JetBrains Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
     </div>` : ''}
     <div class="field-group">
       <div class="field-label">GROUP</div>
-      <span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
+      <span style="color:var(--pt-sub);font-family:\'JetBrains Mono\',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
     </div>
     <div class="field-group">
       <div class="field-label">DEVICE ICON</div>
@@ -1403,10 +1403,10 @@ function showPwNodePanel(did) {
       <div class="dash-section-title" style="margin-bottom:4px">SENSORS</div>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">NAME</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">TYPE</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">ST</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">MS</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">NAME</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">TYPE</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">ST</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">MS</th>
         </tr></thead>
         <tbody>${sRows}</tbody>
       </table>
@@ -1419,7 +1419,7 @@ function showPwNodePanel(did) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwOverrides[did]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwNodeColor('${did}')">Reset</button>`
-          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto (status color)</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'JetBrains Mono',monospace">auto (status color)</span>`}
       </div>
     </div>
   `;
@@ -2393,7 +2393,7 @@ function renderPwLinksInLayer(layer, lblLayer) {
 // independently of zoom) + bold text — readable on both the dark map and
 // colored group rects without losing the cyber aesthetic.
 function _linkLabelSvg(lbx, lby, lbw, stroke, label) {
-  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="3" fill="rgba(5,10,20,0.95)" stroke="${stroke}" stroke-width="0.8" vector-effect="non-scaling-stroke"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" font-weight="bold">${escXml(label)}</text>`;
+  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="3" fill="rgba(5,10,20,0.95)" stroke="${stroke}" stroke-width="0.8" vector-effect="non-scaling-stroke"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="JetBrains Mono" font-size="11" font-weight="bold">${escXml(label)}</text>`;
 }
 const LINK_LBL_CHAR_PX = 6.6; // estimated px-per-char at font-size 11
 
@@ -2754,7 +2754,7 @@ function vlanBadge(p, lx, y) {
       <rect x="${bx}" y="${by}" width="${BW}" height="13" rx="2"
         fill="rgba(${rgb},0.15)" stroke="${c}" stroke-width="0.8"/>
       <text x="${(bx + BW/2).toFixed(1)}" y="${by + 10}" text-anchor="middle"
-        fill="${c}" font-family="Share Tech Mono" font-size="10">V${escXml(v)}</text>
+        fill="${c}" font-family="JetBrains Mono" font-size="10">V${escXml(v)}</text>
     </g>`;
   }).join('');
 }
@@ -2808,7 +2808,7 @@ function renderCloud(node, p, sf) {
       <line x1="-13" y1="0" x2="13" y2="0" stroke="#00d4ff" stroke-width="0.8" opacity="0.5"/>
       <circle cx="0" cy="0" r="2.5" fill="#00d4ff" opacity="0.9"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Orbitron" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(_truncName(node.name, 117, 10))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(_truncName(node.name, 117, 10))}</text>
   </g>`;
 }
 
@@ -2823,9 +2823,9 @@ function renderFirewall(node, p, sf) {
     <rect x="0" y="0" width="155" height="${H}" rx="4" fill="url(#scanlines)"/>
     <path d="M16,12 L30,8 L44,12 L44,28 Q37,38 30,40 Q23,38 16,28 Z" fill="none" stroke="#ff3366" stroke-width="1.5"/>
     <path d="M23,22 L28,27 L38,17" fill="none" stroke="#ff6b6b" stroke-width="1.5"/>
-    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(_truncName(node.name, 95))}</text>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Inter" font-size="13" font-weight="700">${escXml(_truncName(node.name, 95))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 50, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
-    ${statusText ? `<text x="52" y="66" fill="${statusColor}" font-family="Share Tech Mono" font-size="9">${statusText}</text>` : ''}
+    ${statusText ? `<text x="52" y="66" fill="${statusColor}" font-family="JetBrains Mono" font-size="9">${statusText}</text>` : ''}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="153" height="2" rx="1" fill="rgba(255,51,102,0.3)"/>
   </g>`;
@@ -2843,7 +2843,7 @@ function renderWanSwitch(node, p, sf) {
       <rect x="21" y="4" width="5" height="16" rx="1" fill="#00d4ff"/>
       <rect x="28" y="8" width="5" height="12" rx="1" fill="#00d4ff" opacity="0.8"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 157))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 157))}</text>
     ${renderSubtitleAndIP(p, 55, 38, 48, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
     <g transform="translate(8,${_vlanH(p) > 0 ? 52 : 44})">
       ${[0,11,22,33,44,55].map(x=>`<rect x="${x}" y="0" width="8" height="6" rx="1" fill="#00d4ff" opacity="${x<22?0.6:0.2}" class="led-blink"/>`).join('')}
@@ -2876,7 +2876,7 @@ function renderBBSwitch(node, p, sf) {
       <rect x="${xOffset}" y="0" width="${bw}" height="12" rx="2"
         fill="rgba(${hexToRgb(c)},0.15)" stroke="${c}" stroke-width="0.5"/>
       <text x="${xOffset + bw/2}" y="9" text-anchor="middle"
-        fill="${c}" font-family="Share Tech Mono" font-size="8">${escXml(label)}</text>
+        fill="${c}" font-family="JetBrains Mono" font-size="8">${escXml(label)}</text>
     `;
   }).join('');
 
@@ -2902,9 +2902,9 @@ function renderBBSwitch(node, p, sf) {
       `).join('')}
     </g>
 
-    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(_truncName(node.name, 230, 8.5))}</text>
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Inter" font-size="14" font-weight="700">${escXml(_truncName(node.name, 230, 8.5))}</text>
 
-    ${bbStatusText ? `<text x="${W - 8}" y="16" text-anchor="end" fill="${bbStatusColor}" font-family="Share Tech Mono" font-size="9">${bbStatusText}</text>` : ''}
+    ${bbStatusText ? `<text x="${W - 8}" y="16" text-anchor="end" fill="${bbStatusColor}" font-family="JetBrains Mono" font-size="9">${bbStatusText}</text>` : ''}
 
     ${renderSubtitleAndIP(p, 62, 44, 57, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
 
@@ -2940,11 +2940,11 @@ function renderSwitch(node, p, sf) {
         fill="${i===3?'#ffd700':'#00ff9d'}" class="led-blink" opacity="${i%2===0?1:0.5}"/>`).join('')}
     </g>
 
-    <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="11.5" font-weight="600">
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Inter" font-size="11.5" font-weight="600">
       ${escXml(_truncName(node.name, w - 58, 6.5))}
     </text>
 
-    ${swStatusText ? `<text x="${w - 6}" y="13" text-anchor="end" fill="${swStatusColor}" font-family="Share Tech Mono" font-size="8">${swStatusText}</text>` : ''}
+    ${swStatusText ? `<text x="${w - 6}" y="13" text-anchor="end" fill="${swStatusColor}" font-family="JetBrains Mono" font-size="8">${swStatusText}</text>` : ''}
 
     ${renderSubtitleAndIP(p, 50, subY, ipY, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
 
@@ -2962,7 +2962,7 @@ function renderConnector(node, p, sf) {
     <polygon points="28,10 44,26 28,42 12,26" fill="none" stroke="#ffd700" stroke-width="1.5"/>
     <polygon points="28,16 38,26 28,36 18,26" fill="rgba(255,215,0,0.15)" stroke="#ffd700" stroke-width="1"/>
     <circle cx="28" cy="26" r="3" fill="#ffd700"/>
-    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Exo 2" font-size="12" font-weight="700">${escXml(_truncName(node.name, 105))}</text>
+    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Inter" font-size="12" font-weight="700">${escXml(_truncName(node.name, 105))}</text>
     ${renderSubtitleAndIP(p, 52, 37, 51, '#ffd700', 'rgba(255,255,255,0.6)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="163" height="2" rx="1" fill="rgba(255,215,0,0.3)"/>
@@ -2980,7 +2980,7 @@ function renderAP(node, p, sf) {
       <path d="M13,26 Q17,18 21,26" fill="none" stroke="#a855f7" stroke-width="2"/>
       <circle cx="17" cy="28" r="2.5" fill="#a855f7"/>
     </g>
-    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 110))}</text>
+    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 110))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="168" height="2" rx="1" fill="rgba(168,85,247,0.3)"/>
@@ -3079,25 +3079,25 @@ function renderInfoBox(node, p, sf) {
     let body = '';
     noteRows.forEach((row, i) => {
       const yy = headerY + 4 + (i + 1) * 14;
-      body += `<text x="10" y="${yy}" fill="rgba(255,255,255,0.75)" font-family="Share Tech Mono" font-size="11">${escXml(row)}</text>`;
+      body += `<text x="10" y="${yy}" fill="rgba(255,255,255,0.75)" font-family="JetBrains Mono" font-size="11">${escXml(row)}</text>`;
     });
     notesSvg = `
       <line x1="8" y1="${dividerY}" x2="${w - 8}" y2="${dividerY}" stroke="rgba(255,107,107,0.25)" stroke-width="1" stroke-dasharray="2,3"/>
-      <text x="10" y="${headerY + 4}" fill="rgba(255,107,107,0.7)" font-family="Orbitron" font-size="9" letter-spacing="1">📝 NOTES</text>
+      <text x="10" y="${headerY + 4}" fill="rgba(255,107,107,0.7)" font-family="Inter" font-size="9" letter-spacing="1">📝 NOTES</text>
       ${body}`;
   }
   return `<g ${sf}>
     <rect x="0" y="0" width="${w}" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
       stroke-width="1" stroke-dasharray="4,3"/>
-    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="20" fill="#ff6b6b" font-family="Orbitron" font-size="12" letter-spacing="1">${escXml(_truncName(node.name, titleAvail, titleCharPx))}</text>
+    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="20" fill="#ff6b6b" font-family="Inter" font-size="12" letter-spacing="1">${escXml(_truncName(node.name, titleAvail, titleCharPx))}</text>
     ${lines.map((l,i) => {
       const color = (l && l.color) ? String(l.color) : 'rgba(255,255,255,0.6)';
       const text  = (l && l.text)  ? String(l.text)  : '';
       const rowY  = 30 + i*18;
       return `
         <rect x="6" y="${rowY}" width="3" height="13" rx="1" fill="${escXml(color)}"/>
-        <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="12">${escXml(text)}</text>
+        <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="JetBrains Mono" font-size="12">${escXml(text)}</text>
       `;
     }).join('')}
     ${notesSvg}
@@ -3111,7 +3111,7 @@ function renderGeneric(node, p, sf) {
   const H = 60 + _vlanH(p);
   return `<g ${sf}>
     <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(10,20,35,0.92)" stroke="#00d4ff" stroke-width="1.5"/>
-    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 160))}</text>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 160))}</text>
 	${p.subtitle ? svgTextLine(80, 45, p.subtitle, (p.subtitle_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && p.ip) ? svgTextLine(80, 45, p.ip, (p.ip_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && !p.ip) ? svgTextLine(80, 45, node.type, 'rgba(255,255,255,0.35)', 9) : ''}
@@ -3131,7 +3131,7 @@ function renderRouter(node, p, sf) {
       <line x1="15" y1="2" x2="15" y2="28" stroke="#00d4ff" stroke-width="0.7" opacity="0.5"/>
       <polygon points="28,12 34,15 28,18" fill="#00d4ff"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(0,212,255,0.2)"/>
@@ -3149,7 +3149,7 @@ function renderVM(node, p, sf) {
       <rect x="6" y="2" width="16" height="12" rx="2" fill="rgba(45,212,191,0.07)" stroke="#2dd4bf" stroke-width="1" opacity="0.4"/>
       <circle cx="14" cy="23" r="2" fill="#2dd4bf" opacity="0.8"/>
     </g>
-    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(45,212,191,0.2)"/>
@@ -3171,7 +3171,7 @@ function renderAppliance(node, p, sf) {
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#fb923c" stroke-width="1.5" opacity="0.7"/>`;
       }).join('')}
     </g>
-    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(251,146,60,0.2)"/>
@@ -3190,7 +3190,7 @@ function renderStorage(node, p, sf) {
       <rect x="2" y="20" width="26" height="8" rx="3" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.2"/>
       <circle cx="24" cy="14" r="2" fill="#f59e0b" class="led-blink"/>
     </g>
-    <text data-pw-name data-pw-origfill="#fcd34d" x="52" y="24" fill="${p.name_color||'#fcd34d'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#fcd34d" x="52" y="24" fill="${p.name_color||'#fcd34d'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(245,158,11,0.2)"/>
@@ -3209,7 +3209,7 @@ function renderPhone(node, p, sf) {
       <path d="M20,12 Q24,8 28,12" fill="none" stroke="#14b8a6" stroke-width="1.2" opacity="0.7"/>
       <circle cx="24" cy="14" r="1.5" fill="#14b8a6"/>
     </g>
-    <text data-pw-name data-pw-origfill="#5eead4" x="52" y="24" fill="${p.name_color||'#5eead4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#5eead4" x="52" y="24" fill="${p.name_color||'#5eead4'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(20,184,166,0.2)"/>
@@ -3228,7 +3228,7 @@ function renderCamera(node, p, sf) {
       <circle cx="11" cy="14" r="2" fill="#818cf8" opacity="0.8"/>
       <polygon points="22,10 30,6 30,22 22,18" fill="rgba(129,140,248,0.2)" stroke="#818cf8" stroke-width="1"/>
     </g>
-    <text data-pw-name data-pw-origfill="#c7d2fe" x="52" y="24" fill="${p.name_color||'#c7d2fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#c7d2fe" x="52" y="24" fill="${p.name_color||'#c7d2fe'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(129,140,248,0.2)"/>
@@ -3248,7 +3248,7 @@ function renderPrinter(node, p, sf) {
       <rect x="6" y="-4" width="16" height="6" rx="1" fill="rgba(148,163,184,0.08)" stroke="#94a3b8" stroke-width="0.8"/>
       <circle cx="23" cy="17" r="1.5" fill="#94a3b8" class="led-blink"/>
     </g>
-    <text data-pw-name data-pw-origfill="#cbd5e1" x="52" y="24" fill="${p.name_color||'#cbd5e1'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#cbd5e1" x="52" y="24" fill="${p.name_color||'#cbd5e1'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(148,163,184,0.2)"/>
@@ -3271,7 +3271,7 @@ function renderLoadBalancer(node, p, sf) {
       <polygon points="26,12 32,14 26,16" fill="#ec4899"/>
       <polygon points="26,20 32,22 26,24" fill="#ec4899"/>
     </g>
-    <text data-pw-name data-pw-origfill="#f9a8d4" x="52" y="24" fill="${p.name_color||'#f9a8d4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#f9a8d4" x="52" y="24" fill="${p.name_color||'#f9a8d4'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(236,72,153,0.2)"/>
@@ -3293,7 +3293,7 @@ function renderHypervisor(node, p, sf) {
       <circle cx="23" cy="15.5" r="1.5" fill="#3b82f6" class="led-blink" opacity="0.7"/>
       <circle cx="23" cy="24.5" r="1.5" fill="#ffd700" class="led-blink" opacity="0.5"/>
     </g>
-    <text data-pw-name data-pw-origfill="#93c5fd" x="52" y="24" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="52" y="24" fill="${p.name_color||'#93c5fd'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(59,130,246,0.2)"/>
@@ -3312,7 +3312,7 @@ function renderUPS(node, p, sf) {
       <path d="M18,10 L13,18 L17,18 L12,26" fill="none" stroke="#84cc16" stroke-width="1.8" stroke-linecap="round"/>
       <circle cx="22" cy="4" r="1.5" fill="#84cc16" class="led-blink"/>
     </g>
-    <text data-pw-name data-pw-origfill="#bef264" x="52" y="24" fill="${p.name_color||'#bef264'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#bef264" x="52" y="24" fill="${p.name_color||'#bef264'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(132,204,22,0.2)"/>
@@ -3333,7 +3333,7 @@ function renderContainer(node, p, sf) {
       <path d="M8,11 L15,14.5 L22,11" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.6"/>
       <path d="M8,16 L15,19.5 L22,16" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.4"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(56,189,248,0.2)"/>
@@ -3354,7 +3354,7 @@ function renderIPMI(node, p, sf) {
       ${[10,15,20].map(x=>`<line x1="${x}" y1="0" x2="${x}" y2="6" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
       ${[10,15,20].map(x=>`<line x1="${x}" y1="24" x2="${x}" y2="30" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
     </g>
-    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(239,68,68,0.2)"/>
@@ -3591,19 +3591,19 @@ function showNodePanel(node) {
   document.getElementById('panel-title').textContent = node.name.toUpperCase();
   document.getElementById('panel-icon').textContent = '◉';
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">TYPE</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(node.type)}</span></div>
-    <div class="field-group"><div class="field-label">POSITION</div><span style="color:var(--pt-sub);font-family:Share Tech Mono,monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
-    ${p.ip ? `<div class="field-group"><div class="field-label">IP ADDRESS</div><span style="color:${escXml(p.ip_color||'var(--accent2)')};font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(p.ip)}</span></div>` : ''}
-    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'var(--pt-sub)')};font-family:Share Tech Mono,monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
+    <div class="field-group"><div class="field-label">TYPE</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(node.type)}</span></div>
+    <div class="field-group"><div class="field-label">POSITION</div><span style="color:var(--pt-sub);font-family:'JetBrains Mono',monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
+    ${p.ip ? `<div class="field-group"><div class="field-label">IP ADDRESS</div><span style="color:${escXml(p.ip_color||'var(--accent2)')};font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(p.ip)}</span></div>` : ''}
+    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'var(--pt-sub)')};font-family:'JetBrains Mono',monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
     <div class="field-group"><div class="field-label">CONNECTED LINKS</div>
       ${links.filter(l=>l.source_id===node.id||l.target_id===node.id).map(l=>{
         const other = nodeMap[l.source_id===node.id ? l.target_id : l.source_id];
         const cfg = lcfg(l.link_type);
         return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
           <div style="width:16px;height:2px;background:${cfg.stroke};"></div>
-          <span style="font-family:Share Tech Mono,monospace;font-size:9px;color:var(--pt-sub);">${escXml(other?.name||'?')}</span>
+          <span style="font-family:\'JetBrains Mono\',monospace;font-size:9px;color:var(--pt-sub);">${escXml(other?.name||'?')}</span>
         </div>`;
-      }).join('') || '<span style="color:var(--pt-dim);font-family:Share Tech Mono,monospace;font-size:10px;">None</span>'}
+      }).join('') || `<span style="color:var(--pt-dim);font-family:'JetBrains Mono',monospace;font-size:10px;">None</span>`}
     </div>
     <div class="field-group">
       <div class="field-label">NOTES</div>
@@ -3614,7 +3614,7 @@ function showNodePanel(node) {
     <button class="btn btn-primary" style="flex:1" onclick="openEditNode(${node.id})">✎ EDIT</button>
     <button class="btn btn-danger" style="flex:1" onclick="deleteNode(${node.id})">✕ DELETE</button>
 
-    <div style="width:100%;text-align:center;font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(0,212,255,0.35);letter-spacing:1px;padding-top:6px;">ALT+DRAG → LINK</div>
+    <div style="width:100%;text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(0,212,255,0.35);letter-spacing:1px;padding-top:6px;">ALT+DRAG → LINK</div>
   `;
 }
 
@@ -3639,10 +3639,10 @@ function showLinkPanel(lk) {
   document.getElementById('panel-title').textContent = 'LINK';
   document.getElementById('panel-icon').textContent = '⟷';
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">TYPE</div><span style="color:${cfg.stroke};font-family:Share Tech Mono,monospace;font-size:11px;">${lk.link_type.toUpperCase()}</span></div>
-    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${src?.name||'?'}</span></div>
-    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${tgt?.name||'?'}</span></div>
-    ${lk.label ? `<div class="field-group"><div class="field-label">LABEL</div><span style="color:rgba(255,255,255,0.6);font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(lk.label)}</span></div>` : ''}
+    <div class="field-group"><div class="field-label">TYPE</div><span style="color:${cfg.stroke};font-family:'JetBrains Mono',monospace;font-size:11px;">${lk.link_type.toUpperCase()}</span></div>
+    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:\'JetBrains Mono\',monospace;font-size:11px;">${src?.name||'?'}</span></div>
+    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:\'JetBrains Mono\',monospace;font-size:11px;">${tgt?.name||'?'}</span></div>
+    ${lk.label ? `<div class="field-group"><div class="field-label">LABEL</div><span style="color:rgba(255,255,255,0.6);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(lk.label)}</span></div>` : ''}
   `;
   document.getElementById('panel-actions').innerHTML = `
     <button class="btn btn-primary" style="flex:1" onclick="openEditLink(${lk.id})">✎ EDIT</button>
@@ -3662,7 +3662,7 @@ function _tabMenu(e, pg) {
   ];
   items.forEach(item => {
     const row = document.createElement('div');
-    row.style.cssText = `padding:7px 14px;cursor:pointer;font-size:11px;font-family:'Share Tech Mono',monospace;letter-spacing:.5px;color:${item.danger ? '#ff5555' : 'rgba(0,212,255,0.8)'};display:flex;align-items:center;gap:8px;`;
+    row.style.cssText = `padding:7px 14px;cursor:pointer;font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:.5px;color:${item.danger ? '#ff5555' : 'rgba(0,212,255,0.8)'};display:flex;align-items:center;gap:8px;`;
     row.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
     row.onmouseenter = () => row.style.background = 'rgba(0,212,255,0.07)';
     row.onmouseleave = () => row.style.background = '';
@@ -3927,7 +3927,7 @@ function buildVlanRow(vid, color) {
   row.dataset.vid = vid;
   row.style.cssText = 'display:grid;grid-template-columns:80px 48px 1fr 32px;gap:10px;align-items:center;margin-bottom:8px;';
   row.innerHTML = `
-    <span style="font-family:Share Tech Mono,monospace;font-size:11px;font-weight:700;color:${escXml(color)};"
+    <span style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:${escXml(color)};"
       class="vlan-row-label">VLAN ${escXml(String(vid))}</span>
     <input type="color" class="field-color vlan-color-inp" value="${escXml(toHexColor(color,'#00d4ff'))}"
       style="width:48px;height:34px;" />
@@ -4017,7 +4017,7 @@ function renderVlanChips() {
   wrap.innerHTML = ids.map(v => {
     const c = VLAN_COLORS[v] || '#00d4ff';
     const rgb = hexToRgb(c);
-    return `<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:3px;background:rgba(${rgb},0.15);border:1px solid ${c};font-family:'Share Tech Mono',monospace;font-size:9px;color:${c};">V${escXml(v)}<span onclick="removeVlanChip('${escXml(v)}')" style="cursor:pointer;opacity:0.6;font-size:11px;line-height:1;margin-left:1px;">×</span></span>`;
+    return `<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:3px;background:rgba(${rgb},0.15);border:1px solid ${c};font-family:'JetBrains Mono',monospace;font-size:9px;color:${c};">V${escXml(v)}<span onclick="removeVlanChip('${escXml(v)}')" style="cursor:pointer;opacity:0.6;font-size:11px;line-height:1;margin-left:1px;">×</span></span>`;
   }).join('');
 }
 function addVlanChip(raw) {
@@ -4041,7 +4041,7 @@ function vlanDropdownFilter(q) {
   if (!matches.length) { dd.style.display = 'none'; return; }
   dd.innerHTML = matches.map(v => {
     const c = VLAN_COLORS[v] || '#00d4ff';
-    return `<div onclick="addVlanChip('${v}')" style="padding:5px 8px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:10px;color:${c};border-bottom:1px solid rgba(0,212,255,0.08);" onmouseenter="this.style.background='rgba(0,212,255,0.08)'" onmouseleave="this.style.background=''">VLAN${v}</div>`;
+    return `<div onclick="addVlanChip('${v}')" style="padding:5px 8px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:10px;color:${c};border-bottom:1px solid rgba(0,212,255,0.08);" onmouseenter="this.style.background='rgba(0,212,255,0.08)'" onmouseleave="this.style.background=''">VLAN${v}</div>`;
   }).join('');
   dd.style.display = 'block';
 }
@@ -4148,7 +4148,7 @@ function svgTextLine(x, y, text, fill, size = 9, weight = 'normal', cls = '') {
     .replaceAll('&','&amp;')
     .replaceAll('<','&lt;')
     .replaceAll('>','&gt;');
-  return `<text x="${x}" y="${y}" fill="${fill}" font-family="Share Tech Mono" font-size="${size}" font-weight="${weight}"${cls ? ` class="${cls}"` : ''}>${safe}</text>`;
+  return `<text x="${x}" y="${y}" fill="${fill}" font-family="JetBrains Mono" font-size="${size}" font-weight="${weight}"${cls ? ` class="${cls}"` : ''}>${safe}</text>`;
 }
 
 function escXml(s) {
@@ -4183,7 +4183,7 @@ function renderOutsideLabel(node, p, cx, baseH, opts = {}) {
   // VLAN badge sits below the last text line
   const yBadge = (line3Text ? yLine3 : line2Text ? yLine2 : yName) + 8;
 
-  // Truncate name to fit within node width — Exo 2 bold 13px ≈ 7.5px/char
+  // Truncate name to fit within node width — Inter bold 13px ≈ 7.5px/char
   const nodeW    = opts.nodeW || (cx * 2);
   const maxChars = Math.max(8, Math.floor(nodeW / 7.5));
   const rawName  = node.name || '';
@@ -4192,18 +4192,18 @@ function renderOutsideLabel(node, p, cx, baseH, opts = {}) {
   const origFill = opts.nameFill || '#93c5fd';
   const svgContent = `
     <text data-pw-name data-pw-origfill="${origFill}" x="${cx}" y="${yName}" text-anchor="middle"
-      fill="${nameFill}" font-family="Exo 2" font-size="${nameSize}"
+      fill="${nameFill}" font-family="Inter" font-size="${nameSize}"
       font-weight="700"${glow ? ` filter="${glow}"` : ''}>${escXml(dispName)}</text>
 
     ${line2Text ? `
       <text${line2IsIP ? ' data-pw-ip' : ''} x="${cx}" y="${yLine2}" text-anchor="middle"
-        fill="${line2Color}" font-family="Share Tech Mono"
+        fill="${line2Color}" font-family="JetBrains Mono"
         font-size="${line2Size}"${line2IsIP ? ' font-weight="700" filter="url(#glow-blue)"' : ' opacity="0.85"'}>${escXml(line2Text)}</text>
     ` : ''}
 
     ${line3Text ? `
       <text data-pw-ip x="${cx}" y="${yLine3}" text-anchor="middle"
-        fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono"
+        fill="${p.ip_color || '#00d4ff'}" font-family="JetBrains Mono"
         font-size="${line2Size}" font-weight="700" filter="url(#glow-blue)">${escXml(line3Text)}</text>
     ` : ''}
 
@@ -4364,7 +4364,7 @@ function renderSubtitleAndIP(p, x, ySubtitle, yIP, subtitleFill, ipFill) {
     out += svgTextLine(x, ySubtitle, sub, subColor, 9);
 
   if (ip)
-    out += `<text data-pw-ip x="${x}" y="${sub ? yIP : ySubtitle}" fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono" font-size="9" font-weight="700" filter="url(#glow-blue)">${String(ip).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}</text>`;
+    out += `<text data-pw-ip x="${x}" y="${sub ? yIP : ySubtitle}" fill="${p.ip_color || '#00d4ff'}" font-family="JetBrains Mono" font-size="9" font-weight="700" filter="url(#glow-blue)">${String(ip).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}</text>`;
 
   return out;
 }
@@ -4578,7 +4578,7 @@ function _pwLinkModal(src, tgt, onSave) {
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:13px;color:var(--pt);margin-bottom:16px;font-weight:600;letter-spacing:1px;">NEW LINK</div>
-    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_pwlm_type" class="field-select">
@@ -4657,7 +4657,7 @@ function openBulkLinkModal() {
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
       <input id="_blm_search" type="text" placeholder="Search devices…" class="field-input" style="margin-bottom:4px;"/>
@@ -4675,7 +4675,7 @@ function openBulkLinkModal() {
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
       <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…" class="field-input"/>
     </div>
-    <div id="_blm_status" style="font-size:10px;color:var(--pt-dimmer);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
+    <div id="_blm_status" style="font-size:10px;color:var(--pt-dimmer);margin-bottom:10px;font-family:'JetBrains Mono',monospace;min-height:14px;"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
       <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
       <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
@@ -4741,7 +4741,7 @@ function bulkLinkSelectedTo(tgtDid) {
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_blm2_type" class="field-select">
@@ -4904,7 +4904,7 @@ function renderSites() {
     lbl.setAttribute('y', s.y + 20);
     lbl.setAttribute('fill', s.color);
     lbl.setAttribute('font-size', '14');
-    lbl.setAttribute('font-family', "'Orbitron',monospace");
+    lbl.setAttribute('font-family', "\'Inter\',sans-serif");
     lbl.setAttribute('font-weight', '800');
     lbl.setAttribute('letter-spacing', '1.5');
     lbl.textContent = s.name.toUpperCase();
@@ -4917,7 +4917,7 @@ function renderSites() {
     cnt.setAttribute('text-anchor', 'end');
     cnt.setAttribute('fill', s.color + 'cc');
     cnt.setAttribute('font-size', '11');
-    cnt.setAttribute('font-family', "'Share Tech Mono',monospace");
+    cnt.setAttribute('font-family', "\'JetBrains Mono\',monospace");
     cnt.textContent = `${s.device_count} device${s.device_count === 1 ? '' : 's'}`;
     gg.appendChild(cnt);
 
@@ -4945,7 +4945,7 @@ function renderGroups() {
     const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
     lbl.setAttribute('fill', g.color);
     lbl.setAttribute('font-size','14');
-    lbl.setAttribute('font-family',"'Orbitron',monospace");
+    lbl.setAttribute('font-family',"\'Inter\',sans-serif");
     lbl.setAttribute('font-weight','900');
     lbl.setAttribute('letter-spacing','2');
     lbl.setAttribute('filter','url(#glow-group)');
@@ -5103,9 +5103,9 @@ function showGroupPanel(g) {
   // Escape key for safe embedding inside a JS string in an HTML attribute
   const jsGkey = gkey.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
-    <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'Share Tech Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
-    <div class="field-group"><div class="field-label">SIZE</div><span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
+    <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
+    <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'JetBrains Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
+    <div class="field-group"><div class="field-label">SIZE</div><span style="color:var(--pt-sub);font-family:'JetBrains Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
     ${isPwGroup ? `
     <div class="field-group" style="margin-top:12px">
       <div class="field-label">COLOR OVERRIDE</div>
@@ -5115,7 +5115,7 @@ function showGroupPanel(g) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwGroupOverrides[gkey]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGkey}')">Reset</button>`
-          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'JetBrains Mono',monospace">auto</span>`}
       </div>
     </div>` : ''}
   `;
@@ -5260,8 +5260,8 @@ function showPwLinkPanel(lkId) {
   document.getElementById('panel-title').textContent = 'PW LINK';
   document.getElementById('panel-icon').textContent = '⟷';
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.src_did))}</span></div>
-    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
+    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.src_did))}</span></div>
+    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
     <div class="field-group"><div class="field-label">TYPE</div>
       <select onchange="setPwLinkType('${lkId}',this.value)" class="field-select">
         ${['trunk','access','internet','ztna','ipsec','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
@@ -5428,11 +5428,14 @@ async function _inlineFontsForExport() {
   // Inline self-hosted fonts into the exported SVG/PNG so labels render
   // correctly when the file is opened outside the app. Fetched from /fonts/
   // — no external CDN dependency, works fully offline.
+  // Inline a small set of the most-used weights — the PNG export only
+  // needs labels readable, not the full type system.
   const FONTS = [
-    { family: 'Orbitron',        weight: 400, file: 'orbitron-v35-latin-regular.woff2'        },
-    { family: 'Orbitron',        weight: 700, file: 'orbitron-v35-latin-700.woff2'            },
-    { family: 'Orbitron',        weight: 900, file: 'orbitron-v35-latin-900.woff2'            },
-    { family: 'Share Tech Mono', weight: 400, file: 'share-tech-mono-v16-latin-regular.woff2' },
+    { family: 'Inter',         weight: 400, file: 'inter-v20-latin-regular.woff2'        },
+    { family: 'Inter',         weight: 600, file: 'inter-v20-latin-600.woff2'            },
+    { family: 'Inter',         weight: 700, file: 'inter-v20-latin-700.woff2'            },
+    { family: 'Inter',         weight: 900, file: 'inter-v20-latin-900.woff2'            },
+    { family: 'JetBrains Mono', weight: 400, file: 'jetbrains-mono-v24-latin-regular.woff2' },
   ];
   const parts = [];
   for (const f of FONTS) {
@@ -5581,7 +5584,7 @@ async function importPwLayout(file) {
     const nGroups = Object.keys(data.pwGroupOverrides).length;
     const nLinks  = data.pwLinks.length;
     _confirm(
-      `Import layout?<br><br><span style="font-family:Share Tech Mono,monospace;font-size:11px;color:rgba(0,212,255,0.7)">${nNodes} node overrides · ${nGroups} groups · ${nLinks} links</span><br><br>This will replace the current PingWatch layout.`,
+      `Import layout?<br><br><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:rgba(0,212,255,0.7)">${nNodes} node overrides · ${nGroups} groups · ${nLinks} links</span><br><br>This will replace the current PingWatch layout.`,
       () => {
         pwOverrides      = data.pwOverrides;
         pwGroupOverrides = data.pwGroupOverrides;
@@ -5618,12 +5621,12 @@ function showMultiPanel() {
       const dot = `<span style="color:${c};font-size:9px">●</span>`;
       return `<div style="display:flex;align-items:center;gap:5px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
         ${dot}
-        <span style="font-family:'Share Tech Mono',monospace;font-size:9px;color:rgba(255,255,255,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escXml(d.name)}</span>
-        <span style="font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">${escXml(d.host)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(255,255,255,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escXml(d.name)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">${escXml(d.host)}</span>
       </div>`;
     }).join('');
     const moreRow = selDevs.length > 12
-      ? `<div style="font-size:9px;color:var(--pt-dimmer);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
+      ? `<div style="font-size:9px;color:var(--pt-dimmer);font-family:'JetBrains Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
       : '';
 
     const _typeOpts = [
@@ -5642,9 +5645,9 @@ function showMultiPanel() {
       <div class="panel-section">
         <div class="panel-section-title">SELECTION — ${selDevs.length} DEVICES</div>
         <div style="display:flex;gap:10px;margin-bottom:8px">
-          <span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#00ff9d">▲ ${upCount} UP</span>
-          ${downCount ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#ff3333">▼ ${downCount} DOWN</span>` : ''}
-          ${unkCount  ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#888">? ${unkCount}</span>` : ''}
+          <span style="font-size:9px;font-family:'JetBrains Mono',monospace;color:#00ff9d">▲ ${upCount} UP</span>
+          ${downCount ? `<span style="font-size:9px;font-family:'JetBrains Mono',monospace;color:#ff3333">▼ ${downCount} DOWN</span>` : ''}
+          ${unkCount  ? `<span style="font-size:9px;font-family:'JetBrains Mono',monospace;color:#888">? ${unkCount}</span>` : ''}
         </div>
         <div style="max-height:160px;overflow-y:auto;">${devRows}${moreRow}</div>
       </div>
@@ -5946,7 +5949,7 @@ function showDashboardPanel() {
           <span class="dash-bar-count">${c}</span>
         </div>`).join('')}
     </div>` : ''}
-    ${!nodes.length ? '<div style="color:rgba(255,255,255,0.18);font-family:Share Tech Mono,monospace;font-size:10px;text-align:center;padding:16px 0;letter-spacing:1px;">RIGHT-CLICK TO ADD DEVICES</div>' : ''}
+    ${!nodes.length ? '<div style="color:rgba(255,255,255,0.18);font-family:\'JetBrains Mono\',monospace;font-size:10px;text-align:center;padding:16px 0;letter-spacing:1px;">RIGHT-CLICK TO ADD DEVICES</div>' : ''}
   `;
   document.getElementById('panel-actions').innerHTML = '';
 }
@@ -6105,7 +6108,7 @@ function initMainBg() {
     drawHexGrid(W, H, t);
 
     // Data streams
-    ctx.font = '10px Share Tech Mono';
+    ctx.font = '10px JetBrains Mono';
     const sC = BG.stream, sH = BG.streamHot;
     streams.forEach(s => {
       s.y += s.speed;

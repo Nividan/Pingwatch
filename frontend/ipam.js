@@ -973,7 +973,7 @@ function _ipamOpenImport(opts) {
             <label class="fl" style="font-size:12px">Or paste CSV directly</label>
             <textarea id="ipam-imp-text" rows="10"
               placeholder="cidr,name,site,vlan&#10;10.0.0.0/24,Office LAN,HQ,10&#10;192.168.50.0/24,Lab,BSLAB,20"
-              style="width:100%;font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
+              style="width:100%;font-family:'JetBrains Mono',monospace;font-size:12px"></textarea>
           </div>
           <div id="ipam-imp-err" style="color:var(--down);font-size:12px;margin-top:8px;display:none"></div>
         </div>
@@ -1110,7 +1110,7 @@ function _ipamImpRenderPreview(validCount, total, existing) {
     const rowOpacity = ok ? (exists ? '0.7' : '1') : '0.55';
     return `<tr style="opacity:${rowOpacity}">
       <td style="padding:6px 10px;text-align:center">${checkbox}</td>
-      <td style="padding:6px 10px;font-family:'Share Tech Mono',monospace">${esc(r.cidr||'')}</td>
+      <td style="padding:6px 10px;font-family:\'JetBrains Mono\',monospace">${esc(r.cidr||'')}</td>
       <td style="padding:6px 10px">${esc(r.name||'—')}</td>
       <td style="padding:6px 10px">${esc(r.site||'—')}</td>
       <td style="padding:6px 10px;text-align:right">${r.vlan ? r.vlan : '—'}</td>
@@ -1201,7 +1201,7 @@ function _ipamImpRenderResult(created, errors) {
   const errList = errors.length
     ? `<div style="margin-top:14px">
          <div style="font-size:12px;color:var(--down);margin-bottom:6px">${errors.length} row${errors.length===1?'':'s'} failed:</div>
-         <ul style="font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--text2);max-height:30vh;overflow:auto;padding-left:18px">
+         <ul style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text2);max-height:30vh;overflow:auto;padding-left:18px">
            ${errors.map(e => `<li><strong>${esc(e.cidr||'')}</strong> — ${esc(e.error||'unknown')}</li>`).join('')}
          </ul>
        </div>`

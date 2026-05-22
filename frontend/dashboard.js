@@ -758,7 +758,7 @@ function _mpUptimeBar() {
     <span class="mw-po-preview-label">24H · 99.42% UP</span>
     <div style="display:flex;flex-direction:column;padding:12px 6px;gap:10px;height:100%">
       <div style="display:flex;gap:1px;height:32px;margin-top:14px">${bars}</div>
-      <div style="display:flex;justify-content:space-between;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">
+      <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">
         <span>00:00</span><span>12:00</span><span>NOW</span>
       </div>
     </div>`);
@@ -775,8 +775,8 @@ function _mpGauge() {
       <path d="M20 100 A80 80 0 0 1 140 35" fill="none" stroke="var(--warn)" stroke-width="10" stroke-linecap="round"/>
       <line x1="100" y1="100" x2="140" y2="50" stroke="var(--accent)" stroke-width="2"/>
       <circle cx="100" cy="100" r="4" fill="var(--accent)"/>
-      <text x="100" y="80" font-family="Orbitron" font-weight="900" font-size="28" fill="#fff" text-anchor="middle">74</text>
-      <text x="100" y="95" font-family="Share Tech Mono" font-size="9" fill="rgba(255,255,255,0.4)" text-anchor="middle">CPU %</text>
+      <text x="100" y="80" font-family="Inter" font-weight="900" font-size="28" fill="#fff" text-anchor="middle">74</text>
+      <text x="100" y="95" font-family="JetBrains Mono" font-size="9" fill="rgba(255,255,255,0.4)" text-anchor="middle">CPU %</text>
     </svg>
   </div>`);
 }
@@ -880,11 +880,11 @@ function _mpRing() {
               stroke-dasharray="14 302" stroke-dashoffset="-234" transform="rotate(-90 100 65)"/>
       <circle cx="100" cy="65" r="48" fill="none" stroke="var(--down)" stroke-width="14"
               stroke-dasharray="20 302" stroke-dashoffset="-248" transform="rotate(-90 100 65)"/>
-      <text x="100" y="60" font-family="Orbitron" font-weight="900" font-size="22" fill="#fff" text-anchor="middle">84</text>
-      <text x="100" y="76" font-family="Share Tech Mono" font-size="9" fill="rgba(255,255,255,0.45)" text-anchor="middle">DEVICES</text>
-      <text x="40"  y="125" font-family="Share Tech Mono" font-size="9" fill="var(--up)">● 78 UP</text>
-      <text x="100" y="125" font-family="Share Tech Mono" font-size="9" fill="var(--warn)" text-anchor="middle">● 2 WARN</text>
-      <text x="160" y="125" font-family="Share Tech Mono" font-size="9" fill="var(--down)" text-anchor="end">● 4 DOWN</text>
+      <text x="100" y="60" font-family="Inter" font-weight="900" font-size="22" fill="#fff" text-anchor="middle">84</text>
+      <text x="100" y="76" font-family="JetBrains Mono" font-size="9" fill="rgba(255,255,255,0.45)" text-anchor="middle">DEVICES</text>
+      <text x="40"  y="125" font-family="JetBrains Mono" font-size="9" fill="var(--up)">● 78 UP</text>
+      <text x="100" y="125" font-family="JetBrains Mono" font-size="9" fill="var(--warn)" text-anchor="middle">● 2 WARN</text>
+      <text x="160" y="125" font-family="JetBrains Mono" font-size="9" fill="var(--down)" text-anchor="end">● 4 DOWN</text>
     </svg>
   </div>`);
 }
@@ -894,10 +894,10 @@ function _mpLicense() {
       <div style="display:flex;gap:1px;height:22px;background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.2)">
         <div style="width:64%;background:var(--accent);box-shadow:inset 0 0 8px rgba(255,255,255,0.2)"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;margin-top:4px;font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.45)">
+      <div style="display:flex;justify-content:space-between;margin-top:4px;font-family:'JetBrains Mono',monospace;font-size:8px;color:rgba(255,255,255,0.45)">
         <span>Used 64</span><span>Free 36</span><span>EXP 2027-03-15</span>
       </div>
-      <div style="margin-top:10px;padding:6px 8px;border:1px dashed rgba(255,107,53,0.3);font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--warn)">
+      <div style="margin-top:10px;padding:6px 8px;border:1px dashed rgba(255,107,53,0.3);font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--warn)">
         ⚠ Renewal in 287 days
       </div>
     </div>`);

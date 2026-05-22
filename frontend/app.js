@@ -403,7 +403,7 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
     codeField.placeholder='6-digit code or recovery code';
     codeField.autocomplete='one-time-code';
     codeField.maxLength=20;
-    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:0.5px;text-align:center;';
     if(passField&&passField.parentNode){passField.parentNode.insertBefore(codeField, passField.nextSibling);}
   }
   codeField.style.display='block';
@@ -507,7 +507,7 @@ function _showRadiusChallengePrompt(challengeId, username, prompt){
     respField.placeholder='Enter response';
     respField.autocomplete='one-time-code';
     respField.maxLength=64;
-    respField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    respField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:0.5px;text-align:center;';
     if(promptEl&&promptEl.parentNode){promptEl.parentNode.insertBefore(respField, promptEl.nextSibling);}
   }
   respField.style.display='block';

@@ -799,7 +799,7 @@ function openDevicePanel(did) {
       '<span class="lm-sp-name">' + esc(d.name || '') + '</span>' +
       '<span class="lm-sp-host">' + esc(d.host || '') + '</span>' +
     '</div>' +
-    '<div style="margin-top:10px;font-family:\'Share Tech Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.5);letter-spacing:1px">' +
+    '<div style="margin-top:10px;font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(255,255,255,0.5);letter-spacing:1px">' +
       'Status: <span style="color:var(--' + (st === 'unknown' ? 'dim' : st) + ')">' + st.toUpperCase() + '</span><br/>' +
       (d.group ? 'Group: ' + esc(d.group) + '<br/>' : '') +
       (d.alerts ? 'Active alerts: <span style="color:var(--down)">' + d.alerts + '</span><br/>' : '') +
