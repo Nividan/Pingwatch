@@ -387,6 +387,10 @@ function _ipamClassify(entry) {
   // Stale = discovered previously, didn't respond in the last subnet scan.
   // modified_at stays as the "last seen alive" timestamp on the row.
   if (kind === 'stale')    return 'stale';
+  // Discovered = scanner saw the IP alive. Treat as "in use" regardless of
+  // whether reverse DNS resolved — an IP without a PTR record but responding
+  // to ping is still occupied.
+  if (kind === 'discovered') return 'used';
   // Heuristic fallback for legacy allocations without a kind tag
   const name = (entry.name || '').toLowerCase();
   const dns  = (entry.dns_name || '').toLowerCase();
@@ -770,13 +774,17 @@ function _ipamRenderTable() {
   const rows = page.map(e => {
     const used    = !!e.name;
     const kind    = (e.kind || '').toLowerCase();
-    // Status pill — kind takes precedence over the generic used/free label
+    // Status pill — kind takes precedence over the generic used/free label.
+    // 'discovered' is its own badge so the user can tell a scan-populated row
+    // (which may have an empty name when reverse DNS failed) from a manually-
+    // assigned one. The class still uses the 'used' colour family.
     let badge;
-    if      (kind === 'gateway')  badge = `<span class="ipam-kbadge gw">Gateway</span>`;
-    else if (kind === 'reserved') badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
-    else if (kind === 'conflict') badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
-    else if (kind === 'stale')    badge = `<span class="ipam-kbadge stale" title="Discovered previously, did not respond in the last scan">Stale</span>`;
-    else                          badge = used
+    if      (kind === 'gateway')    badge = `<span class="ipam-kbadge gw">Gateway</span>`;
+    else if (kind === 'reserved')   badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
+    else if (kind === 'conflict')   badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
+    else if (kind === 'stale')      badge = `<span class="ipam-kbadge stale" title="Discovered previously, did not respond in the last scan">Stale</span>`;
+    else if (kind === 'discovered') badge = `<span class="ipam-kbadge disc" title="Responded to the last subnet scan">Discovered</span>`;
+    else                            badge = used
       ? `<span class="ipam-used">Used</span>`
       : `<span class="ipam-free">Free</span>`;
     const dateStr = e.modified_at
@@ -785,9 +793,18 @@ function _ipamRenderTable() {
     const devBadge = e.device_id
       ? `<span class="ipam-dev-badge" title="Auto-populated from device">🔗</span>`
       : '';
+    // A discovered IP without a name is a real responder whose PTR lookup
+    // failed — show a hint that's distinct from the "Free" prompt so the user
+    // can tell at a glance: this IP responded, just didn't resolve.
     const nameText = e.name
       ? devBadge + esc(e.name)
-      : (canEdit ? '<span style="color:var(--text3);font-style:italic">click to assign…</span>' : '<span style="color:var(--text3)">—</span>');
+      : (kind === 'discovered'
+          ? (canEdit
+              ? '<span style="color:var(--text3);font-style:italic" title="No reverse DNS — click to name">no hostname</span>'
+              : '<span style="color:var(--text3)">no hostname</span>')
+          : (canEdit
+              ? '<span style="color:var(--text3);font-style:italic">click to assign…</span>'
+              : '<span style="color:var(--text3)">—</span>'));
     const nameCell = canEdit
       ? `<td class="ipam-name-cell" onclick="_ipamEditCell(this,'${esc(e.ip)}')">${nameText}</td>`
       : `<td>${nameText}</td>`;
