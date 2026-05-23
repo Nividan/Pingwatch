@@ -608,6 +608,95 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
     _db_enqueue(_do)
 
 
+def db_search_allocations(q: str, limit: int = 50) -> list:
+    """Cross-subnet allocation search for the Ctrl+K palette.
+
+    Matches on IP (prefix), name (substring case-insensitive), and dns_name
+    (substring case-insensitive). Joins ipam_subnets so the result rows carry
+    the subnet's id/cidr/name — the UI needs that to navigate from a palette
+    hit straight to the right subnet view.
+
+    `limit` is hard-capped at 200 to keep the response cheap on big inventories.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    try:
+        limit = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
+    like = f"%{q.lower()}%"
+    # IP prefix match — most lookups start with the first octets.
+    ip_like = f"{q}%"
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    """SELECT a.ip, a.name, a.modified_by, a.modified_at, a.device_id,
+                              a.dns_name, COALESCE(a.kind,'') AS kind,
+                              s.id   AS subnet_id, s.cidr AS subnet_cidr,
+                              s.name AS subnet_name
+                       FROM ip_allocations a
+                       JOIN ipam_subnets   s ON s.id = a.subnet_id
+                       WHERE a.ip LIKE %s
+                          OR LOWER(a.name)     LIKE %s
+                          OR LOWER(a.dns_name) LIKE %s
+                       ORDER BY a.ip
+                       LIMIT %s""",
+                    (ip_like, like, like, limit)
+                )
+                return [
+                    {"ip": r["ip"], "name": r["name"] or "",
+                     "dns_name": r["dns_name"] or "",
+                     "device_id": r["device_id"] or "",
+                     "kind": r.get("kind") or "",
+                     "modified_by": r["modified_by"] or "",
+                     "modified_at": r["modified_at"] or 0,
+                     "subnet_id":   r["subnet_id"],
+                     "subnet_cidr": r["subnet_cidr"],
+                     "subnet_name": r["subnet_name"] or ""}
+                    for r in cur.fetchall()
+                ]
+        except Exception as e:
+            log.error(f"IPAM search error (q={q!r}): {e}")
+            return []
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        rows = con.execute(
+            """SELECT a.ip, a.name, a.modified_by, a.modified_at, a.device_id,
+                      a.dns_name, COALESCE(a.kind,'') AS kind,
+                      s.id, s.cidr, s.name
+               FROM ip_allocations a
+               JOIN ipam_subnets   s ON s.id = a.subnet_id
+               WHERE a.ip LIKE ?
+                  OR LOWER(a.name)     LIKE ?
+                  OR LOWER(a.dns_name) LIKE ?
+               ORDER BY a.ip
+               LIMIT ?""",
+            (ip_like, like, like, limit)
+        ).fetchall()
+        return [
+            {"ip": r[0], "name": r[1] or "",
+             "dns_name": r[5] or "",
+             "device_id": r[4] or "",
+             "kind": r[6] or "",
+             "modified_by": r[2] or "",
+             "modified_at": r[3] or 0,
+             "subnet_id":   r[7],
+             "subnet_cidr": r[8],
+             "subnet_name": r[9] or ""}
+            for r in rows
+        ]
+    except Exception as e:
+        log.error(f"IPAM search error (q={q!r}): {e}")
+        return []
+    finally:
+        con.close()
+
+
 def apply_subnet_scan_results(subnet_id: int, results: list, user: str) -> dict:
     """Write the alive IPs from a finished discovery scan into ip_allocations
     and flip previously-discovered IPs that didn't respond this round to

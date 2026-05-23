@@ -24,6 +24,7 @@ from core.config import (
     _RE_IPAM_SUBNET_SCAN,
     _RE_IPAM_SUBNET_SCAN_POLL,
     _RE_IPAM_SUBNET_SCAN_CANCEL,
+    _RE_IPAM_SEARCH,
     _RE_IPAM_IP,
     _RE_IPAM_AD_TOGGLE,
     _RE_TOPOLOGY_ROLES,
@@ -47,6 +48,7 @@ from db import (
     db_clear_allocation,
     db_mark_allocations_stale,
     apply_subnet_scan_results,
+    db_search_allocations,
     db_get_device_roles,
 )
 from db.ipam import ipam_sync_subnet_add
@@ -224,6 +226,23 @@ def handle(h, method, path, body):
         user, _ = h._require('viewer')
         if not user: return True
         h._json(200, {'subnets': db_list_subnets()})
+        return True
+
+    # ── GET /api/ipam/search?q=… ──────────────────────────────────
+    # Backs the Ctrl+K palette's IP suggestions. Matches the query against IP
+    # prefix, name (substring), and dns_name (substring) across every subnet.
+    # Capped at 50 results — palette UI only renders ~10–20 anyway.
+    if _RE_IPAM_SEARCH.match(path) and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(h.path).query)
+        q = (qs.get('q', [''])[0] or '').strip()[:80]
+        if not q:
+            h._json(200, {'results': []})
+            return True
+        results = db_search_allocations(q, limit=50)
+        h._json(200, {'results': results})
         return True
 
     # ── POST /api/ipam/subnets ────────────────────────────────────

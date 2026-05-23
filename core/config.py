@@ -132,6 +132,8 @@ _RE_IPAM_SUBNET_DNS = re.compile(r'^/api/ipam/subnets/(\d+)/dns/refresh$')
 _RE_IPAM_SUBNET_SCAN        = re.compile(r'^/api/ipam/subnets/(\d+)/scan$')
 _RE_IPAM_SUBNET_SCAN_POLL   = re.compile(r'^/api/ipam/subnets/(\d+)/scan/([a-f0-9]{8,32})$')
 _RE_IPAM_SUBNET_SCAN_CANCEL = re.compile(r'^/api/ipam/subnets/(\d+)/scan/([a-f0-9]{8,32})/cancel$')
+# Cross-subnet IP search — backs the Ctrl+K palette's IP suggestions.
+_RE_IPAM_SEARCH     = re.compile(r'^/api/ipam/search$')
 _RE_IPAM_IP         = re.compile(r'^/api/ipam/ips/(\d+)/([^/]+)$')
 # Topology role tags (NTM Live auto-link anchors): switch / gateway / backbone
 _RE_TOPOLOGY_ROLES  = re.compile(r'^/api/topology/roles$')

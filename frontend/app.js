@@ -612,7 +612,7 @@ function _openCmdPalette(){
     <div class="pw-cmd-box" onclick="event.stopPropagation()">
       <div class="pw-cmd-input-row">
         <span class="pw-cmd-input-ico">${typeof icon==='function'?icon('search',14):''}</span>
-        <input id="pw-cmd-inp" type="text" placeholder="Search devices, sensors, IPs…  (Esc to close)"
+        <input id="pw-cmd-inp" type="text" placeholder="Search devices, sensors, IPs, hostnames…  (Esc to close)"
                autocomplete="off" spellcheck="false">
         <span class="pw-cmd-input-kbd">Esc</span>
       </div>
@@ -639,6 +639,11 @@ function _closeCmdPalette(){
   _cmdResults = [];
   _cmdSelIdx = 0;
 }
+
+// Token bumps on each keystroke so a slow /api/ipam/search response from a
+// previous query can't overwrite the current results when it finally lands.
+let _cmdIpFetchToken = 0;
+let _cmdIpFetchTimer = null;
 
 function _cmdPaletteSearch(){
   const inp = document.getElementById('pw-cmd-inp');
@@ -673,6 +678,38 @@ function _cmdPaletteSearch(){
   _cmdResults = out.slice(0, 40);
   _cmdSelIdx = 0;
   _cmdPaletteRender();
+
+  // IPAM allocations live in the DB, not in S — fetch async so the palette
+  // stays responsive. Debounce 180ms to skip mid-typing churn. Race-guarded:
+  // a stale response will see its token mismatch and bail without re-rendering.
+  if (_cmdIpFetchTimer) clearTimeout(_cmdIpFetchTimer);
+  if (!q) return;
+  const myToken = ++_cmdIpFetchToken;
+  _cmdIpFetchTimer = setTimeout(async () => {
+    try {
+      const r = await fetch('/api/ipam/search?q=' + encodeURIComponent(q));
+      if (!r.ok) return;
+      if (myToken !== _cmdIpFetchToken) return;  // user kept typing — drop stale
+      const j = await r.json();
+      const ips = (j.results || []).slice(0, 20).map(row => ({
+        kind: 'ip',
+        ip: row.ip,
+        name: row.name || '',
+        dns_name: row.dns_name || '',
+        device_id: row.device_id || '',
+        ip_kind: row.kind || '',   // gateway/reserved/discovered/stale/…
+        subnet_id:   row.subnet_id,
+        subnet_cidr: row.subnet_cidr,
+        subnet_name: row.subnet_name || '',
+      }));
+      if (myToken !== _cmdIpFetchToken) return;
+      // Merge in front of the existing results so IPs surface prominently
+      // — that's what the user typed an IP-looking string for.
+      _cmdResults = ips.concat(_cmdResults.filter(r => r.kind !== 'ip')).slice(0, 60);
+      _cmdSelIdx = 0;
+      _cmdPaletteRender();
+    } catch { /* network blip — keep the sync results we already rendered */ }
+  }, 180);
 }
 
 function _cmdPaletteRender(){
@@ -682,9 +719,34 @@ function _cmdPaletteRender(){
     wrap.innerHTML = '<div class="pw-cmd-empty">No matches.</div>';
     return;
   }
+  const ips  = _cmdResults.filter(r => r.kind==='ip');
   const devs = _cmdResults.filter(r => r.kind==='device');
   const sens = _cmdResults.filter(r => r.kind==='sensor');
   let html = '';
+  if (ips.length) {
+    html += '<div class="pw-cmd-section">IPs</div>';
+    ips.forEach(r => {
+      const idx = _cmdResults.indexOf(r);
+      // Right-side meta: subnet CIDR + optional subnet label so the user can
+      // tell which network the hit lives in. Hostname (or dns_name) goes in
+      // the main slot — useful when matching by hostname rather than IP.
+      const subLabel = r.subnet_name ? r.subnet_cidr + ' · ' + r.subnet_name : r.subnet_cidr;
+      const nameSlot = r.name || r.dns_name || (r.ip_kind === 'discovered' ? 'no hostname' : '—');
+      // Map allocation kind → an existing status colour so the dot stays
+      // visually consistent with the rest of the palette.
+      const dotCls = r.device_id ? 'up'
+                   : r.ip_kind === 'stale'      ? 'warn'
+                   : r.ip_kind === 'discovered' ? 'up'
+                   : r.ip_kind === 'gateway'    ? 'up'
+                   : r.ip_kind === 'conflict'   ? 'down'
+                   : 'unknown';
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-dot ${dotCls}"></span>
+        <span class="pw-cmd-name"><span class="pw-cmd-ip">${esc(r.ip)}</span> ${esc(nameSlot)}</span>
+        <span class="pw-cmd-meta">${esc(subLabel)}</span>
+      </div>`;
+    });
+  }
   if (devs.length) {
     html += '<div class="pw-cmd-section">Devices</div>';
     devs.forEach((r,i) => {
@@ -733,7 +795,25 @@ function _cmdPickIdx(idx){
   const r = _cmdResults[idx];
   if (!r) return;
   _closeCmdPalette();
-  // Switch to Devices tab so the user lands somewhere coherent
+  if (r.kind === 'ip') {
+    // Navigate to IPAM → select the right subnet → focus the matching row.
+    // _ipamOnSubnetChange is async (fetches allocations); the focus has to
+    // wait for it to land, hence the .then(). All three globals live in
+    // ipam.js, present whenever the IPAM tab has been rendered at least once.
+    if (typeof switchMainTab === 'function') switchMainTab('ipam');
+    setTimeout(() => {
+      if (typeof _ipamOnSubnetChange === 'function' && r.subnet_id) {
+        const p = _ipamOnSubnetChange(r.subnet_id);
+        const focus = () => {
+          if (typeof _ipamFocusIp === 'function') _ipamFocusIp(r.ip);
+        };
+        if (p && typeof p.then === 'function') p.then(focus, focus);
+        else                                   setTimeout(focus, 100);
+      }
+    }, 50);
+    return;
+  }
+  // Default: switch to Devices tab so the user lands somewhere coherent
   if (typeof switchMainTab === 'function') switchMainTab('devices');
   // Open the device's detail window
   if (typeof openDevWin === 'function' && r.did) {
