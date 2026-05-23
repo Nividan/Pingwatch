@@ -4440,6 +4440,16 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 @media (max-width:880px){
   .pagehead{ flex-direction:column;align-items:stretch; }
 }
+/* Vertical separator between toolbar button groups. Used in the IPAM
+   pagehead to split "always available" actions (Add / Import) from the
+   actions that act on the currently-selected subnet. */
+.ipam-tb-divider{
+  display:inline-block;
+  width:1px;height:20px;
+  background:var(--border);
+  margin:0 4px;
+  align-self:center;
+}
 
 /* ── Buttons (new vocabulary — coexists with legacy .btn-sm/.btn-p) ── */
 .btn{

@@ -95,10 +95,14 @@ function _ipamRenderShell() {
         <div class="sub" id="ipam-sub">Subnets and per-host allocation tracking.</div>
       </div>
       <div class="pagehead-r">
-        <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()">${icon('plus',13)} Add Subnet</button>
+        <!-- Left group — always available (subnet inventory). -->
+        <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()" title="Create a new subnet">${icon('plus',13)} Add Subnet</button>
         <button class="btn rbac-op" onclick="_ipamOpenImport()" title="Bulk-import subnets from a CSV file or paste">${icon('upload',13)} Import</button>
+        <span class="ipam-tb-divider" aria-hidden="true"></span>
+        <!-- Right group — operate on the selected subnet. Disabled until one is picked. -->
+        <button class="btn rbac-op" id="ipam-scan-btn" onclick="_ipamScanActive()" disabled title="Ping every IP in this subnet and populate the grid with the active ones (no devices created)">${icon('activity',13)} Scan hosts</button>
+        <button class="btn rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" disabled title="Resolve reverse DNS for every IP in this subnet">${icon('refresh',13)} Refresh DNS</button>
         <button class="btn rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">${icon('edit',13)} Edit</button>
-        <button class="btn ghost rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">${icon('refresh',13)} Refresh DNS</button>
         <button class="btn danger rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled title="Delete this subnet">${icon('trash',13)} Remove</button>
       </div>
     </div>
@@ -344,11 +348,8 @@ function _ipamRenderMain(subnet) {
         <div class="ipam-main-title mono">${esc(subnet.cidr)}</div>
         <div class="ipam-main-sub">${esc(meta)}</div>
       </div>
-      <div class="ipam-main-head-r">
-        <button class="btn ghost sm rbac-op" id="ipam-scan-btn" onclick="_ipamScanActive()" title="Ping every IP in this subnet and populate the grid with the active ones (no devices created)">${icon('activity',12)} Scan active</button>
-        <button class="btn ghost sm" onclick="_ipamRefreshDns()" title="Rescan subnet (refresh DNS + allocations)">${icon('refresh',12)} Rescan</button>
-        <button class="btn sm rbac-op" onclick="_ipamOpenReserve()" title="Reserve an IP">${icon('plus',12)} Reserve</button>
-      </div>
+      <!-- Per-subnet actions (Scan, Refresh DNS, Edit, Remove) live in the
+           top toolbar so the user has one consistent control surface. -->
     </div>
     <div class="ipam-kpis" id="ipam-kpis"></div>
     <div class="ipam-section">
@@ -460,31 +461,34 @@ function _ipamFocusIp(ip) {
   if (inp) { inp.value = ip; _ipamOnSearch(ip); }
 }
 
-function _ipamOpenReserve() {
-  // Stub for now — the existing Edit-cell flow lets users assign a name to a row.
-  // A dedicated Reserve modal can come later; for now, focus the first free
-  // row's name cell so the user can type into it.
-  const free = _ipamAllIps.find(e => !e.name && !e.device_id);
-  if (free && typeof toast === 'function') {
-    toast(`Tip: click any "click to assign…" cell in the table to reserve an IP (next free: ${free.ip}).`, 'info');
-  }
+// IDs of the toolbar buttons that act on the currently-selected subnet —
+// gated together by _ipamOnSubnetChange so the user can never click into a
+// nonsensical state (e.g. "Scan hosts" with no subnet picked).
+const _IPAM_SELECTED_BTN_IDS = ['ipam-scan-btn', 'ipam-dns-btn', 'ipam-edit-btn', 'ipam-rm-btn'];
+
+function _ipamSetSelectedBtnsDisabled(disabled) {
+  _IPAM_SELECTED_BTN_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (disabled) el.setAttribute('disabled', '');
+    else          el.removeAttribute('disabled');
+  });
 }
 
 // ── Subnet selection ───────────────────────────────────────────────────────
 async function _ipamOnSubnetChange(idVal) {
   _ipamCancelDnsInterval();   // cancel any in-flight DNS poll for previous subnet
+  _ipamCancelScanPoll();      // ditto for the active-host scan poller
   const id = parseInt(idVal);
   if (!id) {
     _ipamSelectedId = null;
-    document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
-    document.getElementById('ipam-edit-btn')?.setAttribute('disabled', '');
+    _ipamSetSelectedBtnsDisabled(true);
     return;
   }
   _ipamSelectedId = id;
   _ipamSortCol = 'status_ip'; _ipamSortDir = 1;
   _ipamFilterStatus = ''; _ipamFilterLic = '';
-  document.getElementById('ipam-rm-btn')?.removeAttribute('disabled');
-  document.getElementById('ipam-edit-btn')?.removeAttribute('disabled');
+  _ipamSetSelectedBtnsDisabled(false);
 
   // Refresh sidebar so the active card highlights immediately
   _ipamRenderSidebar();
@@ -1609,7 +1613,10 @@ function _ipamCancelScanPoll() {
 function _ipamScanBtnState(label, disabled) {
   const btn = document.getElementById('ipam-scan-btn');
   if (!btn) return;
-  btn.disabled = !!disabled;
+  // Stay consistent with the rest of the selected-subnet button group: if the
+  // user deselected the subnet mid-scan, keep the button disabled regardless
+  // of what the call site requested.
+  btn.disabled = !!disabled || !_ipamSelectedId;
   // Preserve the icon — replace just the text node trailing the SVG.
   const svg = btn.querySelector('svg');
   btn.innerHTML = '';
@@ -1628,7 +1635,7 @@ async function _ipamScanActive() {
     if (!r.ok) {
       const msg = (await r.json().catch(() => ({}))).error || 'scan start failed';
       toast(msg, 'err');
-      _ipamScanBtnState('Scan active', false);
+      _ipamScanBtnState('Scan hosts', false);
       return;
     }
     const j = await r.json();
@@ -1637,7 +1644,7 @@ async function _ipamScanActive() {
     else                   toast('Subnet scan started', 'info');
   } catch {
     toast('Scan start failed', 'err');
-    _ipamScanBtnState('Scan active', false);
+    _ipamScanBtnState('Scan hosts', false);
     return;
   }
   _ipamScanInflight = { subnet_id: subnetId, scan_id: scanId };
@@ -1658,7 +1665,7 @@ async function _ipamScanActive() {
         // 404 = the scan_id has been purged from the registry (TTL expired).
         // Treat as done and reload so any partial results show up.
         _ipamCancelScanPoll();
-        _ipamScanBtnState('Scan active', false);
+        _ipamScanBtnState('Scan hosts', false);
         await _ipamReloadCurrentSubnet();
         return;
       }
@@ -1674,7 +1681,7 @@ async function _ipamScanActive() {
         // done / cancelled / error → close the poller and reload allocations
         // so the new kind='discovered' rows appear in the grid.
         _ipamCancelScanPoll();
-        _ipamScanBtnState('Scan active', false);
+        _ipamScanBtnState('Scan hosts', false);
         if (st.state === 'done') {
           toast(`Scan complete — ${p.alive || 0} alive host(s)`, 'ok');
         } else if (st.state === 'cancelled') {
@@ -1689,7 +1696,7 @@ async function _ipamScanActive() {
     }
     if (polls >= 600) {
       _ipamCancelScanPoll();
-      _ipamScanBtnState('Scan active', false);
+      _ipamScanBtnState('Scan hosts', false);
       toast('Scan poll timeout — refresh manually if needed', 'warn');
     }
   }, 2000);
