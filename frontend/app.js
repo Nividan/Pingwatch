@@ -703,9 +703,12 @@ function _cmdPaletteSearch(){
         subnet_name: row.subnet_name || '',
       }));
       if (myToken !== _cmdIpFetchToken) return;
-      // Merge in front of the existing results so IPs surface prominently
-      // — that's what the user typed an IP-looking string for.
-      _cmdResults = ips.concat(_cmdResults.filter(r => r.kind !== 'ip')).slice(0, 60);
+      // Keep devices on top — they're the most common target and shouldn't
+      // shift when the async IP fetch lands. Order: devices, IPs, sensors.
+      const sync = _cmdResults.filter(r => r.kind !== 'ip');
+      const devs = sync.filter(r => r.kind === 'device');
+      const sens = sync.filter(r => r.kind === 'sensor');
+      _cmdResults = devs.concat(ips).concat(sens).slice(0, 60);
       _cmdSelIdx = 0;
       _cmdPaletteRender();
     } catch { /* network blip — keep the sync results we already rendered */ }
@@ -719,10 +722,21 @@ function _cmdPaletteRender(){
     wrap.innerHTML = '<div class="pw-cmd-empty">No matches.</div>';
     return;
   }
-  const ips  = _cmdResults.filter(r => r.kind==='ip');
   const devs = _cmdResults.filter(r => r.kind==='device');
+  const ips  = _cmdResults.filter(r => r.kind==='ip');
   const sens = _cmdResults.filter(r => r.kind==='sensor');
   let html = '';
+  if (devs.length) {
+    html += '<div class="pw-cmd-section">Devices</div>';
+    devs.forEach((r,i) => {
+      const idx = _cmdResults.indexOf(r);
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-dot ${r.status}"></span>
+        <span class="pw-cmd-name">${esc(r.name)}</span>
+        <span class="pw-cmd-meta">${esc(r.host)}${r.vendor?' · '+esc(r.vendor):''}</span>
+      </div>`;
+    });
+  }
   if (ips.length) {
     html += '<div class="pw-cmd-section">IPs</div>';
     ips.forEach(r => {
@@ -744,17 +758,6 @@ function _cmdPaletteRender(){
         <span class="pw-cmd-dot ${dotCls}"></span>
         <span class="pw-cmd-name"><span class="pw-cmd-ip">${esc(r.ip)}</span> ${esc(nameSlot)}</span>
         <span class="pw-cmd-meta">${esc(subLabel)}</span>
-      </div>`;
-    });
-  }
-  if (devs.length) {
-    html += '<div class="pw-cmd-section">Devices</div>';
-    devs.forEach((r,i) => {
-      const idx = _cmdResults.indexOf(r);
-      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
-        <span class="pw-cmd-dot ${r.status}"></span>
-        <span class="pw-cmd-name">${esc(r.name)}</span>
-        <span class="pw-cmd-meta">${esc(r.host)}${r.vendor?' · '+esc(r.vendor):''}</span>
       </div>`;
     });
   }
