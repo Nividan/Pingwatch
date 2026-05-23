@@ -974,6 +974,57 @@ body {
 .lm-sp-body .lm-sp-row[data-did]:hover,
 .lm-sp-body .lm-sp-row[data-cluster]:hover { background: rgba(0,212,255,0.08); }
 
+/* ─── Sensor rows (device panel) ─────────────────── */
+/* Tighter than connection rows — there can be many sensors per device. */
+.lm-sp-section.warn { color: var(--warn); }
+.lm-sp-srow {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; margin-bottom: 2px;
+  background: rgba(255,255,255,0.02);
+  border-left: 2px solid var(--dim);
+  border-radius: 2px;
+  font-size: 11px;
+}
+.lm-sp-srow.up   { border-left-color: var(--up); }
+.lm-sp-srow.warn { border-left-color: var(--warn); background: rgba(240,165,0,0.06); }
+.lm-sp-srow.down { border-left-color: var(--down); background: rgba(248,81,73,0.07); }
+.lm-sp-srow-main { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
+.lm-sp-srow-name {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lm-sp-srow-type {
+  font-family: 'Share Tech Mono', monospace; font-size: 8px; letter-spacing: 0.8px;
+  color: rgba(255,255,255,0.5);
+  padding: 1px 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+}
+.lm-sp-srow-issue {
+  flex: 1 1 auto; text-align: right;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: rgba(255,255,255,0.65);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-left: 6px;
+}
+.lm-sp-srow.warn .lm-sp-srow-issue { color: var(--warn); }
+.lm-sp-srow.down .lm-sp-srow-issue { color: var(--down); }
+.lm-sp-toggle {
+  display: block; width: 100%;
+  margin-top: 4px; padding: 4px 8px;
+  background: rgba(0,212,255,0.05); border: 1px solid rgba(0,212,255,0.15);
+  color: var(--accent2); border-radius: 2px; cursor: pointer;
+  font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 1px;
+}
+.lm-sp-toggle:hover { background: rgba(0,212,255,0.12); }
+
+:root[data-theme="light"] .lm-sp-srow         { background: rgba(255,255,255,0.7); }
+:root[data-theme="light"] .lm-sp-srow.warn    { background: rgba(240,165,0,0.10); }
+:root[data-theme="light"] .lm-sp-srow.down    { background: rgba(248,81,73,0.10); }
+:root[data-theme="light"] .lm-sp-srow-name    { color: var(--text); }
+:root[data-theme="light"] .lm-sp-srow-type    { color: rgba(28,41,52,0.55); background: rgba(28,41,52,0.06); }
+:root[data-theme="light"] .lm-sp-srow-issue   { color: rgba(28,41,52,0.7); }
+
 /* ─── Modal (site CRUD) ─────────────────────────── */
 .lm-modal-overlay {
   position: fixed; inset: 0;

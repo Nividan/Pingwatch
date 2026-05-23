@@ -1434,6 +1434,97 @@ function openClusterPanel(cname) {
   openSidePanel(cname.toUpperCase(), header + upBlock + downBlock + devBlock);
 }
 
+// Monotonic token so a fast click-through (panel A → panel B before A's
+// /api/devices fetch resolves) doesn't let the older response overwrite the
+// newer panel's sensor section.
+let _devPanelToken = 0;
+
+function _sensorStatusKey(s) {
+  // Match the badge logic in the Devices view: explicit down beats threshold
+  // warn/crit; missing data → unknown.
+  if (s.alerts_muted) return 'muted';
+  if (!s.running)     return 'paused';
+  if (s.alive === false) return 'down';
+  if (s.alive === true) {
+    if (s.threshold_state === 'crit') return 'down';
+    if (s.threshold_state === 'warn') return 'warn';
+    return 'up';
+  }
+  return 'unknown';
+}
+
+function _sensorIssueText(s) {
+  // Pick the most diagnostic single line for the row. last_detail covers
+  // probe errors ("timeout", "connection refused", "200 OK"); threshold lines
+  // describe the breach when the probe itself succeeded.
+  const detail = (s.last_detail || '').trim();
+  if (s.alive === false) return detail || 'probe failed';
+  if (s.threshold_state === 'crit' || s.threshold_state === 'warn') {
+    const lbl = s.threshold_state.toUpperCase();
+    if (s.last_value != null && s.snmp_unit) return lbl + ' · ' + s.last_value + ' ' + s.snmp_unit;
+    if (s.last_ms != null) return lbl + ' · ' + s.last_ms + 'ms';
+    return lbl + (detail ? ' · ' + detail : '');
+  }
+  return detail;
+}
+
+function _sensorRowHtml(s) {
+  const st = _sensorStatusKey(s);
+  // Map non-status keys to a colour-equivalent for the dot CSS.
+  const dotCls = (st === 'paused' || st === 'muted' || st === 'unknown') ? 'unknown' : st;
+  const stype = (s.stype || '').toUpperCase();
+  const issue = _sensorIssueText(s);
+  return '<div class="lm-sp-srow ' + dotCls + '">' +
+           '<span class="sr-dot ' + dotCls + '"></span>' +
+           '<span class="lm-sp-srow-main">' +
+             '<span class="lm-sp-srow-name">' + esc(s.name || s.sensor_id || '?') + '</span>' +
+             (stype ? '<span class="lm-sp-srow-type">' + esc(stype) + '</span>' : '') +
+           '</span>' +
+           (issue ? '<span class="lm-sp-srow-issue">' + esc(issue) + '</span>' : '') +
+         '</div>';
+}
+
+function _renderSensorBlock(devDict, showAll) {
+  const sensors = Array.isArray(devDict && devDict.sensors) ? devDict.sensors : [];
+  if (!sensors.length) {
+    return '<div class="lm-sp-section">SENSORS</div>' +
+           '<div class="lm-sp-empty">No sensors configured</div>';
+  }
+  // Failing = down (alive false) OR threshold warn/crit. Paused/muted sensors
+  // aren't "issues" — they're explicitly suppressed and would just noise the
+  // failing list.
+  const failing = sensors.filter(function(s) {
+    if (s.alerts_muted || !s.running) return false;
+    if (s.alive === false) return true;
+    if (s.threshold_state === 'crit' || s.threshold_state === 'warn') return true;
+    return false;
+  });
+  const otherCount = sensors.length - failing.length;
+  const list = showAll ? sensors : failing;
+  // Sort: down first, then warn, then everything else by name.
+  const rank = { down: 0, warn: 1, up: 2, unknown: 3, paused: 4, muted: 5 };
+  list.sort(function(a, b) {
+    const ra = rank[_sensorStatusKey(a)] ?? 9;
+    const rb = rank[_sensorStatusKey(b)] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  const header = failing.length
+    ? '<div class="lm-sp-section warn">FAILING SENSORS · ' + failing.length + '</div>'
+    : '<div class="lm-sp-section">SENSORS · ALL HEALTHY</div>';
+  const rows = list.length
+    ? list.map(_sensorRowHtml).join('')
+    : '<div class="lm-sp-empty">No failing sensors</div>';
+  // Toggle: only useful when there are other sensors beyond what's already shown.
+  let toggle = '';
+  if (otherCount > 0) {
+    toggle = showAll
+      ? '<button class="lm-sp-toggle" data-show="failing">Show failing only</button>'
+      : '<button class="lm-sp-toggle" data-show="all">Show all (' + sensors.length + ')</button>';
+  }
+  return header + rows + toggle;
+}
+
 function openDevicePanel(did) {
   // Try to find this device in the current tree first
   const siteName = LM.currentRoute.site;
@@ -1497,9 +1588,46 @@ function openDevicePanel(did) {
     ? '<div class="lm-sp-section">DOWNSTREAM · ' + downstream.length + '</div>' +
       downstream.map(_connRowHtml).join('')
     : '';
+  // Sensor section is fetched async so the panel opens instantly. Show a
+  // skeleton row while in-flight; replace with the real list when the
+  // /api/devices/{did} response lands (and the user hasn't moved on).
+  const sensorSkeleton =
+    '<div id="lm-sp-sensors">' +
+      '<div class="lm-sp-section">SENSORS</div>' +
+      '<div class="lm-sp-empty">Loading…</div>' +
+    '</div>';
 
-  openSidePanel(d.name ? d.name.toUpperCase() : 'DEVICE', header + upBlock + downBlock);
+  openSidePanel(d.name ? d.name.toUpperCase() : 'DEVICE',
+                header + upBlock + downBlock + sensorSkeleton);
+
+  // Race guard: each open bumps the token; only the latest open is allowed
+  // to mutate the DOM. Prevents a slow fetch on device A from blowing away
+  // panel B's sensor list when the user click-throughs quickly.
+  const myToken = ++_devPanelToken;
+  _devPanelDid    = did;
+  _devPanelShowAll = false;
+
+  api('GET', '/api/devices/' + encodeURIComponent(did)).then(function(devDict) {
+    if (myToken !== _devPanelToken) return;
+    const slot = document.getElementById('lm-sp-sensors');
+    if (!slot) return;
+    _devPanelLastDict = devDict;
+    slot.innerHTML = _renderSensorBlock(devDict, _devPanelShowAll);
+  }).catch(function() {
+    if (myToken !== _devPanelToken) return;
+    const slot = document.getElementById('lm-sp-sensors');
+    if (slot) slot.innerHTML =
+      '<div class="lm-sp-section">SENSORS</div>' +
+      '<div class="lm-sp-empty">Failed to load sensors</div>';
+  });
 }
+
+// Panel-scoped state that drives the show-all toggle. Kept module-scoped (not
+// closure-scoped) so the panel-body click handler can read it without rebinding
+// per open.
+let _devPanelDid      = null;
+let _devPanelLastDict = null;
+let _devPanelShowAll  = false;
 
 // ─── Routing ────────────────────────────────────────────────
 function parseHash() {
@@ -1626,6 +1754,17 @@ window.addEventListener('message', function(e) {
 // Side-panel close + row drill-down binding (delegated)
 document.addEventListener('click', function(e) {
   if (e.target && e.target.id === 'lm-sp-close') { closeSidePanel(); return; }
+  // Sensor section show-all / show-failing toggle — re-render in place using
+  // the cached dict so we don't refetch.
+  const toggle = e.target.closest && e.target.closest('.lm-sp-toggle');
+  if (toggle) {
+    _devPanelShowAll = toggle.getAttribute('data-show') === 'all';
+    const slot = document.getElementById('lm-sp-sensors');
+    if (slot && _devPanelLastDict) {
+      slot.innerHTML = _renderSensorBlock(_devPanelLastDict, _devPanelShowAll);
+    }
+    return;
+  }
   const row = e.target.closest && e.target.closest('.lm-sp-body .lm-sp-row');
   if (!row) return;
   const cname = row.getAttribute('data-cluster');
