@@ -161,11 +161,11 @@ def _breaker_note_failure(exc):
 def _breaker_note_success():
     """Record a successful connect. If we were tracking an outage, log a
     single INFO with the duration + suppressed-error count and reset state."""
+    global _breaker_outage_start, _breaker_suppressed_count
     # Fast path: read without taking the lock. CPython makes this safe and
     # avoids contention on every healthy connection.
     if _breaker_outage_start is None:
         return
-    global _breaker_outage_start, _breaker_suppressed_count
     with _breaker_lock:
         if _breaker_outage_start is None:
             return  # another thread already cleared the breaker
