@@ -1,12 +1,16 @@
 """
 routes/ipam.py — IPAM (IP address management) API endpoints.
 
-GET    /api/ipam/subnets                    → list all subnets (viewer)
-POST   /api/ipam/subnets                    → add subnet  {cidr, name}  (operator)
-DELETE /api/ipam/subnets/<id>               → remove subnet + allocations (operator)
-GET    /api/ipam/subnets/<id>/ips           → get all allocations for subnet (viewer)
-POST   /api/ipam/subnets/<id>/dns/refresh   → trigger background DNS resolution (operator)
-PUT    /api/ipam/ips/<subnet_id>/<ip>       → set IP name {name} (operator)
+GET    /api/ipam/subnets                              → list all subnets (viewer)
+POST   /api/ipam/subnets                              → add subnet  {cidr, name}  (operator)
+DELETE /api/ipam/subnets/<id>                         → remove subnet + allocations (operator)
+GET    /api/ipam/subnets/<id>/ips                     → get all allocations for subnet (viewer)
+POST   /api/ipam/subnets/<id>/dns/refresh             → trigger background DNS resolution (operator)
+POST   /api/ipam/subnets/<id>/scan                    → kick off active-host scan, auto-populates
+                                                         ip_allocations with kind='discovered' (operator)
+GET    /api/ipam/subnets/<id>/scan/<scan_id>          → poll scan progress (viewer)
+POST   /api/ipam/subnets/<id>/scan/<scan_id>/cancel   → cancel running scan (operator)
+PUT    /api/ipam/ips/<subnet_id>/<ip>                 → set IP name {name} (operator)
 """
 
 import ipaddress
@@ -17,6 +21,9 @@ from core.config import (
     _RE_IPAM_SUBNET,
     _RE_IPAM_SUBNET_IPS,
     _RE_IPAM_SUBNET_DNS,
+    _RE_IPAM_SUBNET_SCAN,
+    _RE_IPAM_SUBNET_SCAN_POLL,
+    _RE_IPAM_SUBNET_SCAN_CANCEL,
     _RE_IPAM_IP,
     _RE_IPAM_AD_TOGGLE,
     _RE_TOPOLOGY_ROLES,
@@ -34,9 +41,11 @@ from db import (
     db_set_auto_discover,
     db_update_subnet,
     db_approve_first_scan,
+    db_set_subnet_last_scan,
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
+    db_mark_allocations_stale,
     db_get_device_roles,
 )
 from db.ipam import ipam_sync_subnet_add
@@ -84,6 +93,140 @@ def _dns_refresh_worker(subnet_id, ip_list):
     finally:
         with _dns_refresh_lock_mutex:
             _dns_refresh_lock.pop(subnet_id, None)
+
+
+# ── Active-host scan (auto-populate allocations) ───────────────────────────
+# Tracks at most one scan per subnet at a time. Calling /scan again while a
+# scan is running returns the existing scan_id instead of starting a duplicate.
+_active_scans       = {}   # subnet_id → scan_id of an in-progress active-host scan
+_active_scans_mutex = threading.Lock()
+
+# Allocations are only auto-managed when their `kind` slot is empty or already
+# marked 'discovered'. Anything the user has tagged (gateway/reserved/etc) is
+# left alone — discovery should never clobber human-set metadata.
+_DISCOVERY_KIND = 'discovered'
+_DISCOVERY_USER = 'discovery'
+
+
+def _scan_apply_worker(subnet_id: int, scan_id: str, user: str):
+    """Background thread: polls the discovery scan and, when it finishes,
+    upserts the alive IPs into ip_allocations with kind='discovered'.
+
+    Dedup rules — runs against the *current* allocations at apply time so a
+    concurrent manual edit isn't overwritten:
+      • allocation has a device_id           → skip (already monitored)
+      • allocation.kind in {gateway,reserved,
+        conflict,switch,backbone,core}       → skip (user-tagged)
+      • allocation.modified_by is a real user
+        and the name is non-empty            → skip (manual entry)
+      • everything else                      → upsert kind='discovered',
+                                                name=hostname or existing name
+    """
+    from monitoring.subnet_discovery import get_scan
+    poll_interval = 1.0
+    deadline_s = 30 * 60  # hard cap so a stuck scan can't leak the thread
+    started = _now_monotonic()
+    try:
+        while True:
+            if _now_monotonic() - started > deadline_s:
+                log.warning(f"IPAM scan apply: deadline exceeded for subnet={subnet_id} scan={scan_id}")
+                return
+            st = get_scan(scan_id)
+            if not st:
+                # Scan was purged from the registry before we could read it.
+                log.warning(f"IPAM scan apply: scan {scan_id} vanished before completion")
+                return
+            state = st.get('state')
+            if state == 'running':
+                import time as _t
+                _t.sleep(poll_interval)
+                continue
+            if state in ('done', 'cancelled', 'error'):
+                if state != 'done':
+                    log.info(f"IPAM scan apply: scan {scan_id} ended state={state}; nothing to apply")
+                    return
+                results = st.get('results') or []
+                _apply_scan_results(subnet_id, results, user)
+                return
+            # Unknown state — bail without applying.
+            log.warning(f"IPAM scan apply: scan {scan_id} unknown state={state!r}")
+            return
+    finally:
+        with _active_scans_mutex:
+            # Only clear if we still own the slot; a later scan may have replaced
+            # us if the registry was racy.
+            if _active_scans.get(subnet_id) == scan_id:
+                _active_scans.pop(subnet_id, None)
+
+
+def _apply_scan_results(subnet_id: int, results: list, user: str) -> None:
+    """Write the alive IPs from a finished scan into ip_allocations and flip
+    previously-discovered IPs that didn't respond this round to kind='stale'.
+    Never clobbers human-managed entries (gateway/reserved/named, or anything
+    tied to a monitored device)."""
+    import time as _t
+    # Kinds that mean 'user has touched this' — discovery must not overwrite.
+    _PROTECTED_KINDS = {'gateway', 'reserved', 'conflict', 'switch', 'backbone', 'core'}
+    existing = db_get_allocations(subnet_id) or {}
+    alive_set = set()
+    upserted = 0
+    skipped  = 0
+    for row in results:
+        ip = (row.get('ip') or '').strip()
+        if not ip:
+            continue
+        alive_set.add(ip)
+        hostname = (row.get('hostname') or '').strip()
+        cur = existing.get(ip) or {}
+        cur_kind = (cur.get('kind') or '').strip().lower()
+        cur_name = (cur.get('name') or '').strip()
+        cur_devid = (cur.get('device_id') or '').strip()
+        cur_modby = (cur.get('modified_by') or '').strip()
+        if cur_devid:
+            skipped += 1  # already monitored — leave alone
+            continue
+        if cur_kind in _PROTECTED_KINDS:
+            skipped += 1
+            continue
+        # Manual entry: non-empty name set by a real user (not by discovery
+        # or auto-discovery), and not yet tagged as discovered/stale.
+        if cur_name and cur_modby and cur_modby != _DISCOVERY_USER \
+                and cur_kind not in (_DISCOVERY_KIND, 'stale'):
+            skipped += 1
+            continue
+        # Decide the name: keep an existing discovery name if hostname lookup
+        # failed this time around (PTR temporarily unavailable etc.).
+        new_name = hostname or cur_name or ''
+        db_upsert_allocation(subnet_id, ip, new_name, _DISCOVERY_USER,
+                             device_id='', kind=_DISCOVERY_KIND)
+        upserted += 1
+    # ── Stale pass ────────────────────────────────────────────────────────
+    # Any IP that was previously kind='discovered' but didn't respond in this
+    # scan gets flipped to 'stale'. modified_at stays put — that's the "last
+    # seen alive" timestamp the UI can show. db_mark_allocations_stale only
+    # touches rows whose kind is 'discovered' or empty AND has no device_id,
+    # so this can't accidentally clobber gateways/reserved/monitored entries.
+    stale_candidates = [
+        ip for ip, a in existing.items()
+        if ip not in alive_set
+        and (a.get('kind') or '').strip().lower() == _DISCOVERY_KIND
+    ]
+    if stale_candidates:
+        db_mark_allocations_stale(subnet_id, stale_candidates)
+    # Stamp the subnet's last-scan timestamp so the UI knows when the most
+    # recent sweep ran. Reuses the auto-discovery column — semantically it's
+    # just "last subnet sweep completed at" regardless of trigger.
+    try:
+        db_set_subnet_last_scan(subnet_id, _t.strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as e:
+        log.warning(f"IPAM scan apply: failed to stamp last_scan_ts on subnet={subnet_id}: {e}")
+    log.info(f"IPAM scan apply: subnet={subnet_id} alive={len(alive_set)} "
+             f"upserted={upserted} skipped={skipped} staled={len(stale_candidates)} by={user!r}")
+
+
+def _now_monotonic() -> float:
+    import time as _t
+    return _t.monotonic()
 
 
 def handle(h, method, path, body):
@@ -347,6 +490,88 @@ def handle(h, method, path, body):
         t.start()
         log.info(f"IPAM DNS refresh started: subnet {sub['cidr']!r} ({len(ip_list)} IPs) by {user!r}")
         h._json(202, {'ok': True, 'total': len(ip_list)})
+        return True
+
+    # ── POST /api/ipam/subnets/<id>/scan ──────────────────────────
+    # Kicks off an active-host scan for the subnet and registers an applier
+    # thread that writes alive IPs into ip_allocations with kind='discovered'.
+    m = _RE_IPAM_SUBNET_SCAN.match(path)
+    if m and method == 'POST':
+        user, _ = h._require('operator')
+        if not user: return True
+        subnet_id = int(m.group(1))
+        sub = db_get_subnet(subnet_id)
+        if not sub:
+            h._json(404, {'error': 'Subnet not found'}); return True
+        with _active_scans_mutex:
+            existing = _active_scans.get(subnet_id)
+            if existing:
+                # Return the in-flight scan_id so the UI can pick up polling
+                # instead of failing with a 409.
+                h._json(200, {'ok': True, 'scan_id': existing, 'already_running': True})
+                return True
+        # Reuse the discovery scanner with skip_monitored=False so already-
+        # monitored IPs still get refreshed in the allocation grid. Mode is
+        # 'ping' (cheaper, no port-scan enrichment) — IPAM only needs the
+        # ip + hostname; sensor-suggestion data isn't displayed in the grid.
+        from monitoring.subnet_discovery import start_scan
+        scan_id, err = start_scan(sub['cidr'], skip_monitored=False, mode='ping')
+        if not scan_id:
+            log.warning(f"IPAM scan start failed: subnet={subnet_id} cidr={sub['cidr']!r} err={err!r}")
+            h._json(400, {'error': err or 'scan start failed'}); return True
+        with _active_scans_mutex:
+            _active_scans[subnet_id] = scan_id
+        t = threading.Thread(
+            target=_scan_apply_worker,
+            args=(subnet_id, scan_id, user),
+            daemon=True,
+            name=f"pw-ipam-scan-apply-{subnet_id}",
+        )
+        t.start()
+        db_log_audit(user, h.client_address[0], 'ipam_subnet_scan',
+                     f"{sub['cidr']} scan_id={scan_id}")
+        log.info(f"IPAM scan started: subnet={subnet_id} cidr={sub['cidr']!r} "
+                 f"scan_id={scan_id} by={user!r}")
+        h._json(202, {'ok': True, 'scan_id': scan_id})
+        return True
+
+    # ── GET /api/ipam/subnets/<id>/scan/<scan_id> ─────────────────
+    m = _RE_IPAM_SUBNET_SCAN_POLL.match(path)
+    if m and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        subnet_id = int(m.group(1))
+        scan_id   = m.group(2)
+        from monitoring.subnet_discovery import get_scan
+        st = get_scan(scan_id)
+        if not st:
+            h._json(404, {'error': 'scan not found'}); return True
+        # Return a slim view — we don't surface the result rows (the apply
+        # thread writes them straight to the DB). Frontend just needs progress
+        # + a "done" signal to trigger an allocation reload.
+        h._json(200, {
+            'scan_id':     st.get('scan_id'),
+            'state':       st.get('state'),
+            'phase':       st.get('phase'),
+            'progress':    st.get('progress'),
+            'started_at':  st.get('started_at'),
+            'finished_at': st.get('finished_at'),
+            'error':       st.get('error') or '',
+        })
+        return True
+
+    # ── POST /api/ipam/subnets/<id>/scan/<scan_id>/cancel ────────
+    m = _RE_IPAM_SUBNET_SCAN_CANCEL.match(path)
+    if m and method == 'POST':
+        user, _ = h._require('operator')
+        if not user: return True
+        subnet_id = int(m.group(1))
+        scan_id   = m.group(2)
+        from monitoring.subnet_discovery import cancel_scan
+        ok = cancel_scan(scan_id)
+        if ok:
+            log.info(f"IPAM scan cancelled: subnet={subnet_id} scan_id={scan_id} by={user!r}")
+        h._json(200, {'ok': bool(ok)})
         return True
 
     # ── PUT /api/ipam/ips/<subnet_id>/<ip> ───────────────────────

@@ -602,6 +602,64 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
     _db_enqueue(_do)
 
 
+def db_mark_allocations_stale(subnet_id: int, ips: list) -> None:
+    """Flip a batch of discovered allocations to kind='stale' without bumping
+    modified_at — preserving the timestamp as "last time this IP was seen
+    alive." Only affects rows whose current kind is 'discovered' or already
+    'stale'; rows with user-set tags (gateway/reserved/...) or a device_id
+    are skipped at the SQL level so we never clobber human metadata.
+
+    `ips` is a list of IP strings (str). No-op on empty list. Enqueued write.
+    """
+    if not ips:
+        return
+    def _do():
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor('main') as cur:
+                    cur.execute(
+                        "UPDATE ip_allocations SET kind='stale' "
+                        "WHERE subnet_id=%s "
+                        "  AND ip = ANY(%s) "
+                        "  AND COALESCE(device_id,'')='' "
+                        "  AND COALESCE(kind,'') IN ('discovered','')",
+                        (subnet_id, list(ips))
+                    )
+                    log.debug(f"IPAM mark stale: subnet={subnet_id} affected={cur.rowcount} "
+                              f"requested={len(ips)}")
+            except Exception as e:
+                log.error(f"IPAM mark stale error (subnet={subnet_id}): {e}")
+            return
+
+        con = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            # SQLite has no ANY(); chunk the IN-list so a /16 sweep doesn't
+            # exceed the variable limit (default 999).
+            CHUNK = 500
+            affected = 0
+            for i in range(0, len(ips), CHUNK):
+                chunk = ips[i:i+CHUNK]
+                ph = ",".join("?" * len(chunk))
+                cur = con.execute(
+                    f"UPDATE ip_allocations SET kind='stale' "
+                    f"WHERE subnet_id=? "
+                    f"  AND ip IN ({ph}) "
+                    f"  AND COALESCE(device_id,'')='' "
+                    f"  AND COALESCE(kind,'') IN ('discovered','')",
+                    (subnet_id, *chunk)
+                )
+                affected += cur.rowcount
+            con.commit()
+            log.debug(f"IPAM mark stale: subnet={subnet_id} affected={affected} "
+                      f"requested={len(ips)}")
+        except Exception as e:
+            log.error(f"IPAM mark stale error (subnet={subnet_id}): {e}")
+        finally:
+            con.close()
+    _db_enqueue(_do)
+
+
 def db_clear_allocation(subnet_id: int, ip: str) -> None:
     """Remove a specific IP allocation. Enqueued write."""
     def _do():

@@ -2500,6 +2500,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-leg.gw  { background:var(--up); }
 .ipam-leg.rsv { background:var(--warn); }
 .ipam-leg.cfl { background:var(--down); }
+/* Stale = previously discovered but didn't respond in the last scan. Dim,
+   desaturated so it reads as "was here, isn't now" rather than a status. */
+.ipam-leg.stale{ background:var(--text3); opacity:.55; }
 
 .ipam-heatmap{
   display:grid;
@@ -2530,6 +2533,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-hm-cell.gw  { background:var(--up); }
 .ipam-hm-cell.rsv { background:var(--warn); }
 .ipam-hm-cell.cfl { background:var(--down); }
+.ipam-hm-cell.stale{ background:var(--text3); opacity:.55; }
 
 /* Inline edit cell — name input + kind picker */
 .ipam-edit-row{
@@ -2565,6 +2569,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-kbadge.gw  { color:var(--up);   background:var(--up-bg);   border-color:color-mix(in srgb, var(--up) 40%, var(--border)); }
 .ipam-kbadge.rsv { color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .ipam-kbadge.cfl { color:var(--down); background:var(--down-bg); border-color:color-mix(in srgb, var(--down) 40%, var(--border)); }
+.ipam-kbadge.stale { color:var(--text3); background:transparent; border-color:var(--border2); }
 
 /* ── Log viewer (top-level Logs tab) ──────────────────────────────────── */
 #logsView{flex:1;display:none;flex-direction:column;overflow:hidden;}

@@ -345,6 +345,7 @@ function _ipamRenderMain(subnet) {
         <div class="ipam-main-sub">${esc(meta)}</div>
       </div>
       <div class="ipam-main-head-r">
+        <button class="btn ghost sm rbac-op" id="ipam-scan-btn" onclick="_ipamScanActive()" title="Ping every IP in this subnet and populate the grid with the active ones (no devices created)">${icon('activity',12)} Scan active</button>
         <button class="btn ghost sm" onclick="_ipamRefreshDns()" title="Rescan subnet (refresh DNS + allocations)">${icon('refresh',12)} Rescan</button>
         <button class="btn sm rbac-op" onclick="_ipamOpenReserve()" title="Reserve an IP">${icon('plus',12)} Reserve</button>
       </div>
@@ -359,6 +360,7 @@ function _ipamRenderMain(subnet) {
           <span><i class="ipam-leg gw"></i>Gateway</span>
           <span><i class="ipam-leg rsv"></i>Reserved</span>
           <span><i class="ipam-leg cfl"></i>Conflict</span>
+          <span title="Discovered previously but didn't respond in the last scan"><i class="ipam-leg stale"></i>Stale</span>
         </div>
       </div>
       <div class="ipam-heatmap" id="ipam-heatmap"></div>
@@ -381,6 +383,9 @@ function _ipamClassify(entry) {
   if (kind === 'gateway')  return 'gw';
   if (kind === 'reserved') return 'rsv';
   if (kind === 'conflict') return 'cfl';
+  // Stale = discovered previously, didn't respond in the last subnet scan.
+  // modified_at stays as the "last seen alive" timestamp on the row.
+  if (kind === 'stale')    return 'stale';
   // Heuristic fallback for legacy allocations without a kind tag
   const name = (entry.name || '').toLowerCase();
   const dns  = (entry.dns_name || '').toLowerCase();
@@ -766,6 +771,7 @@ function _ipamRenderTable() {
     if      (kind === 'gateway')  badge = `<span class="ipam-kbadge gw">Gateway</span>`;
     else if (kind === 'reserved') badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
     else if (kind === 'conflict') badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
+    else if (kind === 'stale')    badge = `<span class="ipam-kbadge stale" title="Discovered previously, did not respond in the last scan">Stale</span>`;
     else                          badge = used
       ? `<span class="ipam-used">Used</span>`
       : `<span class="ipam-free">Free</span>`;
@@ -1582,6 +1588,111 @@ function _ipamCancelDnsInterval() {
     clearInterval(_ipamDnsInterval);
     _ipamDnsInterval = null;
   }
+}
+
+// ── Active-host scan (auto-populate allocations) ──────────────────────────
+// Kicks off a ping sweep across the selected subnet; alive IPs land in the
+// allocation grid with kind='discovered'. Polls progress on a 2-second
+// cadence and reloads the subnet view on completion. Bound to module scope
+// so a navigation away from the subnet cancels the poller.
+let _ipamScanPollTimer = null;
+let _ipamScanInflight  = null;  // { subnet_id, scan_id }
+
+function _ipamCancelScanPoll() {
+  if (_ipamScanPollTimer) {
+    clearInterval(_ipamScanPollTimer);
+    _ipamScanPollTimer = null;
+  }
+  _ipamScanInflight = null;
+}
+
+function _ipamScanBtnState(label, disabled) {
+  const btn = document.getElementById('ipam-scan-btn');
+  if (!btn) return;
+  btn.disabled = !!disabled;
+  // Preserve the icon — replace just the text node trailing the SVG.
+  const svg = btn.querySelector('svg');
+  btn.innerHTML = '';
+  if (svg) btn.appendChild(svg);
+  btn.appendChild(document.createTextNode(' ' + label));
+}
+
+async function _ipamScanActive() {
+  if (!_ipamSelectedId) return;
+  const subnetId = _ipamSelectedId;
+  _ipamCancelScanPoll();
+  _ipamScanBtnState('Starting…', true);
+  let scanId;
+  try {
+    const r = await fetch(`/api/ipam/subnets/${subnetId}/scan`, {method: 'POST'});
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || 'scan start failed';
+      toast(msg, 'err');
+      _ipamScanBtnState('Scan active', false);
+      return;
+    }
+    const j = await r.json();
+    scanId = j.scan_id;
+    if (j.already_running) toast('Scan already in progress — joining', 'info');
+    else                   toast('Subnet scan started', 'info');
+  } catch {
+    toast('Scan start failed', 'err');
+    _ipamScanBtnState('Scan active', false);
+    return;
+  }
+  _ipamScanInflight = { subnet_id: subnetId, scan_id: scanId };
+
+  // Poll progress every 2s; reload subnet allocations when scan completes.
+  // Cap at 600 polls (~20 min) so a stuck scan can't leak the timer.
+  let polls = 0;
+  _ipamScanPollTimer = setInterval(async () => {
+    polls++;
+    // User may have navigated away to a different subnet — abandon the poll.
+    if (!_ipamScanInflight || _ipamScanInflight.subnet_id !== _ipamSelectedId) {
+      _ipamCancelScanPoll();
+      return;
+    }
+    try {
+      const r = await fetch(`/api/ipam/subnets/${subnetId}/scan/${scanId}`);
+      if (!r.ok) {
+        // 404 = the scan_id has been purged from the registry (TTL expired).
+        // Treat as done and reload so any partial results show up.
+        _ipamCancelScanPoll();
+        _ipamScanBtnState('Scan active', false);
+        await _ipamReloadCurrentSubnet();
+        return;
+      }
+      const st = await r.json();
+      const p = st.progress || {};
+      if (st.state === 'running') {
+        const total   = p.total || 0;
+        const checked = p.checked || 0;
+        const alive   = p.alive || 0;
+        const pctTxt  = total ? Math.floor(100 * checked / total) + '%' : '…';
+        _ipamScanBtnState(`Scanning ${pctTxt} · ${alive} alive`, true);
+      } else {
+        // done / cancelled / error → close the poller and reload allocations
+        // so the new kind='discovered' rows appear in the grid.
+        _ipamCancelScanPoll();
+        _ipamScanBtnState('Scan active', false);
+        if (st.state === 'done') {
+          toast(`Scan complete — ${p.alive || 0} alive host(s)`, 'ok');
+        } else if (st.state === 'cancelled') {
+          toast('Scan cancelled', 'info');
+        } else if (st.error) {
+          toast('Scan error: ' + st.error, 'err');
+        }
+        await _ipamReloadCurrentSubnet();
+      }
+    } catch {
+      // Network blip — keep polling, will recover on next tick.
+    }
+    if (polls >= 600) {
+      _ipamCancelScanPoll();
+      _ipamScanBtnState('Scan active', false);
+      toast('Scan poll timeout — refresh manually if needed', 'warn');
+    }
+  }, 2000);
 }
 
 async function _ipamRefreshDns() {
