@@ -296,6 +296,11 @@ def pg_create_main_schema(cur):
         ("ipam_subnets", "dns_server",              "TEXT DEFAULT ''"),
         # IPAM VLAN tagging (v1.0+) — see db/core.py for rationale
         ("ipam_subnets", "vlan",                    "INTEGER DEFAULT 0"),
+        # Auto-host-scan (v1.x+) — periodically sweep subnet for alive IPs
+        # and populate ip_allocations with kind='discovered', WITHOUT creating
+        # monitored devices. Independent of auto_discover: enable on networks
+        # where you want visibility but no monitoring side-effects.
+        ("ipam_subnets", "auto_host_scan",          "INTEGER DEFAULT 0"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -442,7 +447,8 @@ def pg_create_main_schema(cur):
             auto_discover       INTEGER DEFAULT 0,
             first_scan_approved INTEGER DEFAULT 0,
             last_auto_scan_ts   TIMESTAMP DEFAULT NULL,
-            dns_server          TEXT DEFAULT ''
+            dns_server          TEXT DEFAULT '',
+            auto_host_scan      INTEGER DEFAULT 0
         )""")
     cur.execute("ALTER TABLE ipam_subnets ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
     cur.execute(

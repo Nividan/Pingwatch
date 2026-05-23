@@ -46,6 +46,7 @@ from db import (
     db_upsert_allocation,
     db_clear_allocation,
     db_mark_allocations_stale,
+    apply_subnet_scan_results,
     db_get_device_roles,
 )
 from db.ipam import ipam_sync_subnet_add
@@ -101,12 +102,6 @@ def _dns_refresh_worker(subnet_id, ip_list):
 _active_scans       = {}   # subnet_id → scan_id of an in-progress active-host scan
 _active_scans_mutex = threading.Lock()
 
-# Allocations are only auto-managed when their `kind` slot is empty or already
-# marked 'discovered'. Anything the user has tagged (gateway/reserved/etc) is
-# left alone — discovery should never clobber human-set metadata.
-_DISCOVERY_KIND = 'discovered'
-_DISCOVERY_USER = 'discovery'
-
 
 def _scan_apply_worker(subnet_id: int, scan_id: str, user: str):
     """Background thread: polls the discovery scan and, when it finishes,
@@ -160,68 +155,14 @@ def _scan_apply_worker(subnet_id: int, scan_id: str, user: str):
 
 
 def _apply_scan_results(subnet_id: int, results: list, user: str) -> None:
-    """Write the alive IPs from a finished scan into ip_allocations and flip
-    previously-discovered IPs that didn't respond this round to kind='stale'.
-    Never clobbers human-managed entries (gateway/reserved/named, or anything
-    tied to a monitored device)."""
-    import time as _t
-    # Kinds that mean 'user has touched this' — discovery must not overwrite.
-    _PROTECTED_KINDS = {'gateway', 'reserved', 'conflict', 'switch', 'backbone', 'core'}
-    existing = db_get_allocations(subnet_id) or {}
-    alive_set = set()
-    upserted = 0
-    skipped  = 0
-    for row in results:
-        ip = (row.get('ip') or '').strip()
-        if not ip:
-            continue
-        alive_set.add(ip)
-        hostname = (row.get('hostname') or '').strip()
-        cur = existing.get(ip) or {}
-        cur_kind = (cur.get('kind') or '').strip().lower()
-        cur_name = (cur.get('name') or '').strip()
-        cur_devid = (cur.get('device_id') or '').strip()
-        cur_modby = (cur.get('modified_by') or '').strip()
-        if cur_devid:
-            skipped += 1  # already monitored — leave alone
-            continue
-        if cur_kind in _PROTECTED_KINDS:
-            skipped += 1
-            continue
-        # Manual entry: non-empty name set by a real user (not by discovery
-        # or auto-discovery), and not yet tagged as discovered/stale.
-        if cur_name and cur_modby and cur_modby != _DISCOVERY_USER \
-                and cur_kind not in (_DISCOVERY_KIND, 'stale'):
-            skipped += 1
-            continue
-        # Decide the name: keep an existing discovery name if hostname lookup
-        # failed this time around (PTR temporarily unavailable etc.).
-        new_name = hostname or cur_name or ''
-        db_upsert_allocation(subnet_id, ip, new_name, _DISCOVERY_USER,
-                             device_id='', kind=_DISCOVERY_KIND)
-        upserted += 1
-    # ── Stale pass ────────────────────────────────────────────────────────
-    # Any IP that was previously kind='discovered' but didn't respond in this
-    # scan gets flipped to 'stale'. modified_at stays put — that's the "last
-    # seen alive" timestamp the UI can show. db_mark_allocations_stale only
-    # touches rows whose kind is 'discovered' or empty AND has no device_id,
-    # so this can't accidentally clobber gateways/reserved/monitored entries.
-    stale_candidates = [
-        ip for ip, a in existing.items()
-        if ip not in alive_set
-        and (a.get('kind') or '').strip().lower() == _DISCOVERY_KIND
-    ]
-    if stale_candidates:
-        db_mark_allocations_stale(subnet_id, stale_candidates)
-    # Stamp the subnet's last-scan timestamp so the UI knows when the most
-    # recent sweep ran. Reuses the auto-discovery column — semantically it's
-    # just "last subnet sweep completed at" regardless of trigger.
-    try:
-        db_set_subnet_last_scan(subnet_id, _t.strftime("%Y-%m-%d %H:%M:%S"))
-    except Exception as e:
-        log.warning(f"IPAM scan apply: failed to stamp last_scan_ts on subnet={subnet_id}: {e}")
-    log.info(f"IPAM scan apply: subnet={subnet_id} alive={len(alive_set)} "
-             f"upserted={upserted} skipped={skipped} staled={len(stale_candidates)} by={user!r}")
+    """Thin shim around the shared db.ipam.apply_subnet_scan_results — logs the
+    per-call stats so the manual-scan flow shows up as a single audit-style
+    line in the server log. The actual upsert + stale logic lives in db.ipam
+    so monitoring/auto_discovery.py can share it without a route dependency."""
+    stats = apply_subnet_scan_results(subnet_id, results, user)
+    log.info(f"IPAM scan apply: subnet={subnet_id} "
+             f"alive={stats['alive']} upserted={stats['upserted']} "
+             f"skipped={stats['skipped']} staled={stats['staled']} by={user!r}")
 
 
 def _now_monotonic() -> float:
@@ -399,6 +340,12 @@ def handle(h, method, path, body):
             if new_ad != int(sub.get('auto_discover') or 0):
                 updates['auto_discover'] = new_ad
                 audit_parts.append(f"auto_discover={bool(new_ad)}")
+
+        if 'auto_host_scan' in body:
+            new_ahs = 1 if body.get('auto_host_scan') else 0
+            if new_ahs != int(sub.get('auto_host_scan') or 0):
+                updates['auto_host_scan'] = new_ahs
+                audit_parts.append(f"auto_host_scan={bool(new_ahs)}")
 
         if 'dns_server' in body:
             raw = (body.get('dns_server') or '').strip()

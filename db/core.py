@@ -741,6 +741,9 @@ def db_init():
             "ALTER TABLE ipam_subnets ADD COLUMN first_scan_approved INTEGER DEFAULT 0",
             "ALTER TABLE ipam_subnets ADD COLUMN last_auto_scan_ts   TEXT    DEFAULT NULL",
             "ALTER TABLE ipam_subnets ADD COLUMN dns_server          TEXT    DEFAULT ''",
+            # Auto-host-scan (v1.x+) — independent of auto_discover. Sweeps for
+            # alive IPs and writes ip_allocations rows with kind='discovered'.
+            "ALTER TABLE ipam_subnets ADD COLUMN auto_host_scan      INTEGER DEFAULT 0",
         ]:
             try:
                 con.execute(_ad_col)

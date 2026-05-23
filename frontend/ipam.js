@@ -711,7 +711,10 @@ function _ipamRenderGlobalResults(results, q) {
     const nameText = e.name ? devBadge + esc(e.name) : '<span style="color:var(--text3)">—</span>';
     const dns = e.dns_name || '';
     const dnsDisplay = dns.length > 30 ? dns.slice(0, 28) + '…' : dns;
-    return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
+    // Row tint follows occupancy, not just `name` — so a discovered IP with
+    // no PTR still gets the green left-border.
+    const rowCls = _ipamClassify(e) !== 'free' ? 'ipam-row-used' : 'ipam-row-free';
+    return `<tr class="${rowCls}">
       <td class="ipam-ip">${esc(e.ip)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(e.subnetLabel)}</td>
       <td>${nameText}</td>
@@ -818,7 +821,10 @@ function _ipamRenderTable() {
     const dns = e.dns_name || '';
     const dnsDisplay = dns.length > 35 ? dns.slice(0, 33) + '…' : dns;
     const dnsCell = `<td class="ipam-dns" title="${esc(dns)}">${dnsDisplay ? esc(dnsDisplay) : '<span class="ipam-ts">—</span>'}</td>`;
-    return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
+    // Row tint follows occupancy classification, not just whether a name is
+    // set — so a discovered IP with no PTR still gets the green left-border.
+    const rowCls = _ipamClassify(e) !== 'free' ? 'ipam-row-used' : 'ipam-row-free';
+    return `<tr class="${rowCls}">
       <td class="ipam-ip">${esc(e.ip)}</td>
       ${nameCell}
       ${dnsCell}
@@ -1348,6 +1354,7 @@ function _ipamOpenEdit() {
   closeM('ipam-edit-modal');
 
   const adChecked   = !!(sub.auto_discover | 0);
+  const ahsChecked  = !!(sub.auto_host_scan | 0);
   const alreadyHadFirstScan = !!(sub.first_scan_approved | 0) || !!sub.last_auto_scan_ts;
   const lastScanStr = sub.last_auto_scan_ts || '—';
 
@@ -1392,15 +1399,25 @@ function _ipamOpenEdit() {
         </div>
 
         <div class="ipam-edit-sec">
-          <div class="ipam-edit-hd">Auto-Discovery</div>
+          <div class="ipam-edit-hd">Scheduled scans</div>
           <label class="cb-row" style="padding:4px 0">
             <input type="checkbox" id="ipam-edit-ad" ${adChecked?'checked':''}/>
-            <span>Auto-discover new hosts in this subnet</span>
+            <span>Auto-discover new hosts <em style="color:var(--text3);font-style:normal">(creates devices)</em></span>
           </label>
           <div class="fh" style="margin-bottom:6px">
             Periodically scan this subnet. New hosts become devices with a ping sensor
             plus any services the Port Scanner detects. Global cadence + safety rails
             live in Settings → 📡 Auto-Discovery.
+          </div>
+          <label class="cb-row" style="padding:4px 0;margin-top:4px">
+            <input type="checkbox" id="ipam-edit-ahs" ${ahsChecked?'checked':''}/>
+            <span>Auto-host-scan <em style="color:var(--text3);font-style:normal">(IPAM only — no devices created)</em></span>
+          </label>
+          <div class="fh" style="margin-bottom:6px">
+            Periodically ping every IP in this subnet and populate the IPAM grid
+            with active responders (kind = <code>discovered</code>). Use for networks
+            you want visibility into without committing to monitoring every host.
+            Shares the same global cadence as Auto-Discovery.
           </div>
           <div id="ipam-ad-confirm" class="ipam-ad-confirm" style="display:${(!adChecked || alreadyHadFirstScan)?'none':'flex'}">
             <div style="font-size:13px;font-weight:600;margin-bottom:4px">⚠ First-scan cap applies</div>
@@ -1508,10 +1525,11 @@ async function _ipamSaveEdit() {
   const vlanRaw = (document.getElementById('ipam-edit-vlan')?.value || '').trim();
   const body = {
     name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
-    site:          (document.getElementById('ipam-edit-site')?.value || '').trim(),
-    vlan:          vlanRaw ? Math.max(0, Math.min(4094, parseInt(vlanRaw, 10) || 0)) : 0,
-    auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
-    dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
+    site:           (document.getElementById('ipam-edit-site')?.value || '').trim(),
+    vlan:           vlanRaw ? Math.max(0, Math.min(4094, parseInt(vlanRaw, 10) || 0)) : 0,
+    auto_discover:  !!document.getElementById('ipam-edit-ad')?.checked  ? 1 : 0,
+    auto_host_scan: !!document.getElementById('ipam-edit-ahs')?.checked ? 1 : 0,
+    dns_server:     (document.getElementById('ipam-edit-dns')?.value || '').trim(),
   };
   if (modal?.dataset.adApprove === '1') body.approve_first_scan = 1;
 

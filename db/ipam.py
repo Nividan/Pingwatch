@@ -26,7 +26,8 @@ _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "last_auto_scan_ts, "
                 "COALESCE(dns_server,'')         AS dns_server, "
                 "COALESCE(site,'')               AS site, "
-                "COALESCE(vlan,0)                AS vlan")
+                "COALESCE(vlan,0)                AS vlan, "
+                "COALESCE(auto_host_scan,0)      AS auto_host_scan")
 
 
 def _fmt_ts(v) -> str:
@@ -51,7 +52,8 @@ def _row_to_subnet_pg(r) -> dict:
             "last_auto_scan_ts":   _fmt_ts(r.get("last_auto_scan_ts")),
             "dns_server":          (r.get("dns_server") or ""),
             "site":                (r.get("site") or ""),
-            "vlan":                int(r.get("vlan") or 0)}
+            "vlan":                int(r.get("vlan") or 0),
+            "auto_host_scan":      int(r.get("auto_host_scan") or 0)}
 
 
 def _row_to_subnet_sqlite(r) -> dict:
@@ -62,7 +64,8 @@ def _row_to_subnet_sqlite(r) -> dict:
             "last_auto_scan_ts":   _fmt_ts(r[7]),
             "dns_server":          (r[8] or "") if len(r) > 8 else "",
             "site":                (r[9] or "") if len(r) > 9 else "",
-            "vlan":                int(r[10] or 0) if len(r) > 10 else 0}
+            "vlan":                int(r[10] or 0) if len(r) > 10 else 0,
+            "auto_host_scan":      int(r[11] or 0) if len(r) > 11 else 0}
 
 
 def db_list_subnets() -> list:
@@ -142,6 +145,9 @@ _SUBNET_UPDATABLE_FIELDS = {
     # so the user gets a stable result ("invalid -> untagged" is recoverable;
     # silent drop leaves the previous VLAN in place which is surprising).
     "vlan":                ("INT_RANGE", (0, 4094)),
+    # Auto-host-scan (v1.x+) — independent of auto_discover; toggled per subnet
+    # so the discovery loop knows whether to run the IPAM-only sweep for it.
+    "auto_host_scan":      ("INT",     None),
 }
 
 
@@ -600,6 +606,77 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
         finally:
             con.close()
     _db_enqueue(_do)
+
+
+def apply_subnet_scan_results(subnet_id: int, results: list, user: str) -> dict:
+    """Write the alive IPs from a finished discovery scan into ip_allocations
+    and flip previously-discovered IPs that didn't respond this round to
+    kind='stale'. Never clobbers human-managed entries.
+
+    Used by:
+      • routes/ipam.py — manual "Scan hosts" button
+      • monitoring/auto_discovery.py — scheduled auto-host-scan flow
+
+    `results` is the list returned by monitoring/subnet_discovery.get_scan(),
+    each row having at least {ip, hostname}. Returns a stats dict
+    {alive, upserted, skipped, staled} so callers can log a summary.
+    """
+    import time as _t
+    # Kinds that mean 'user has touched this' — discovery must not overwrite.
+    _PROTECTED_KINDS = {'gateway', 'reserved', 'conflict', 'switch', 'backbone', 'core'}
+    _DISCOVERY_KIND  = 'discovered'
+    _DISCOVERY_USER  = 'discovery'
+
+    existing = db_get_allocations(subnet_id) or {}
+    alive_set = set()
+    upserted = 0
+    skipped  = 0
+    for row in results:
+        ip = (row.get('ip') or '').strip()
+        if not ip:
+            continue
+        alive_set.add(ip)
+        hostname = (row.get('hostname') or '').strip()
+        cur = existing.get(ip) or {}
+        cur_kind  = (cur.get('kind') or '').strip().lower()
+        cur_name  = (cur.get('name') or '').strip()
+        cur_devid = (cur.get('device_id') or '').strip()
+        cur_modby = (cur.get('modified_by') or '').strip()
+        if cur_devid:
+            skipped += 1  # already monitored — leave alone
+            continue
+        if cur_kind in _PROTECTED_KINDS:
+            skipped += 1
+            continue
+        # Manual entry: non-empty name set by a real user (not by discovery
+        # or auto-discovery), and not yet tagged as discovered/stale.
+        if cur_name and cur_modby and cur_modby != _DISCOVERY_USER \
+                and cur_kind not in (_DISCOVERY_KIND, 'stale'):
+            skipped += 1
+            continue
+        new_name = hostname or cur_name or ''
+        db_upsert_allocation(subnet_id, ip, new_name, _DISCOVERY_USER,
+                             device_id='', kind=_DISCOVERY_KIND)
+        upserted += 1
+    # Stale pass — previously-discovered IPs that didn't respond this round.
+    # db_mark_allocations_stale is SQL-protected against clobbering monitored
+    # or user-tagged rows, so this is safe even with a stale `existing` view.
+    stale_candidates = [
+        ip for ip, a in existing.items()
+        if ip not in alive_set
+        and (a.get('kind') or '').strip().lower() == _DISCOVERY_KIND
+    ]
+    if stale_candidates:
+        db_mark_allocations_stale(subnet_id, stale_candidates)
+    # Stamp the subnet's last-scan timestamp regardless of trigger.
+    try:
+        db_set_subnet_last_scan(subnet_id, _t.strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as e:
+        log.warning(f"IPAM scan apply: failed to stamp last_scan_ts on subnet={subnet_id}: {e}")
+    return {"alive":    len(alive_set),
+            "upserted": upserted,
+            "skipped":  skipped,
+            "staled":   len(stale_candidates)}
 
 
 def db_mark_allocations_stale(subnet_id: int, ips: list) -> None:
