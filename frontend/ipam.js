@@ -610,10 +610,17 @@ function _ipamSortCmp(a, b) {
       r = (a.modified_by || '').localeCompare(b.modified_by || ''); break;
     case 'modified_at':
       r = (a.modified_at || 0) - (b.modified_at || 0); break;
-    case 'status_ip': // default: Used first, then by IP
-      r = (a.name ? 0 : 1) - (b.name ? 0 : 1);
+    case 'status_ip': {
+      // Default: any occupied IP first (Used / Discovered / Gateway / Reserved
+      // / Conflict / Stale), then Free — and within each bucket sorted by IP.
+      // Using _ipamClassify so a discovered row with no PTR (empty name) still
+      // groups with the in-use ones instead of being scattered with Free.
+      const aOccupied = _ipamClassify(a) !== 'free' ? 0 : 1;
+      const bOccupied = _ipamClassify(b) !== 'free' ? 0 : 1;
+      r = aOccupied - bOccupied;
       if (r === 0) r = _ipamIpCmp(a.ip, b.ip);
       return r; // default sort ignores direction toggle
+    }
     default:
       r = _ipamIpCmp(a.ip, b.ip);
   }
