@@ -123,7 +123,7 @@ def _do_insert_samples(rows):
     t0 = time.monotonic()
     try:
         if is_pg():
-            from db.pg_pool import pg_conn
+            from db.pg_pool import pg_conn, is_pg_in_outage
             import psycopg2.extras
             try:
                 with pg_conn("logs") as con:
@@ -134,7 +134,13 @@ def _do_insert_samples(rows):
                         page_size=1000,
                     )
             except Exception as e:
-                log.error(f"DB flush samples error: {e}")
+                # During a known PG outage the breaker has already logged the
+                # WARNING; let it count this attempt silently. Otherwise log
+                # the actual error so non-outage failures still surface.
+                if is_pg_in_outage():
+                    log.debug(f"DB flush samples skipped (PG outage): {e}")
+                else:
+                    log.error(f"DB flush samples error: {e}")
             return
         # SQLite
         con = None

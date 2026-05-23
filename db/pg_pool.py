@@ -7,6 +7,7 @@ SQLite backend.
 """
 
 import threading
+import time
 from contextlib import contextmanager
 
 from core.logger import log
@@ -14,6 +15,20 @@ from core.logger import log
 _pool = None   # psycopg2.pool.ThreadedConnectionPool (created by pg_init_pool)
 _pool_sema = None  # threading.Semaphore — gates getconn() so callers block instead of crashing
 _pool_closed = False  # set by pg_close_pool(); makes pg_conn fail fast post-shutdown
+
+# ── Outage circuit breaker ───────────────────────────────────────────────────
+# When PG goes down (restart, crash, network blip) every background worker —
+# sample flush, autosave, report scheduler, etc. — independently retries on its
+# own cadence and each one logs a full OperationalError traceback. The result
+# is dozens of identical errors per minute until PG comes back.
+#
+# This breaker collapses that into one WARNING at the start of an outage and
+# one INFO when PG reconnects, including how many errors were suppressed.
+# Exceptions still propagate normally so callers skip their cycle and retry
+# next time — only the log output is throttled, not the control flow.
+_breaker_lock = threading.Lock()
+_breaker_outage_start = None    # float epoch when current outage began (None = healthy)
+_breaker_suppressed_count = 0   # connect failures silenced during the current outage
 
 
 class PoolClosedError(Exception):
@@ -115,6 +130,59 @@ def pg_test_connection(host, port, dbname, user, password):
         return False, str(e)
 
 
+def is_pg_in_outage() -> bool:
+    """Return True if the circuit breaker is currently tracking a PG outage.
+
+    Callers that log their own connection-error tracebacks (sample flush,
+    autosave, query helpers) should gate those logs on this so the operator
+    sees one WARNING at outage start instead of dozens of repeated ERRORs."""
+    # CPython makes a bare load atomic; no lock needed for a hot-path read.
+    return _breaker_outage_start is not None
+
+
+def _breaker_note_failure(exc):
+    """Record a connect-phase failure. The first failure of an outage logs a
+    single WARNING with a short version of the error; later failures in the
+    same outage are silently counted and reported at reconnect time."""
+    global _breaker_outage_start, _breaker_suppressed_count
+    with _breaker_lock:
+        if _breaker_outage_start is None:
+            _breaker_outage_start = time.time()
+            _breaker_suppressed_count = 0
+            first_line = str(exc).strip().splitlines()[0][:200] if exc else ""
+            log.warning(
+                "PostgreSQL unreachable — suppressing repeated connection errors: %s",
+                first_line,
+            )
+        else:
+            _breaker_suppressed_count += 1
+
+
+def _breaker_note_success():
+    """Record a successful connect. If we were tracking an outage, log a
+    single INFO with the duration + suppressed-error count and reset state."""
+    # Fast path: read without taking the lock. CPython makes this safe and
+    # avoids contention on every healthy connection.
+    if _breaker_outage_start is None:
+        return
+    global _breaker_outage_start, _breaker_suppressed_count
+    with _breaker_lock:
+        if _breaker_outage_start is None:
+            return  # another thread already cleared the breaker
+        duration_s = time.time() - _breaker_outage_start
+        suppressed = _breaker_suppressed_count
+        _breaker_outage_start = None
+        _breaker_suppressed_count = 0
+    # Format the log line outside the lock so I/O doesn't serialize work.
+    if suppressed:
+        log.info(
+            "PostgreSQL reconnected after %.1fs outage (%d suppressed errors)",
+            duration_s, suppressed,
+        )
+    else:
+        log.info("PostgreSQL reconnected after %.1fs outage", duration_s)
+
+
 @contextmanager
 def pg_conn(schema="main"):
     """Yield a connection from the pool with ``search_path`` set.
@@ -144,18 +212,32 @@ def pg_conn(schema="main"):
         # between the early check and our semaphore acquire.
         if _pool_closed or _pool is None:
             raise PoolClosedError("PostgreSQL pool is closed")
-        con = _pool.getconn()
-        # Health check: detect stale connections after PG restart
+        # ── Connect phase ─────────────────────────────────────────────────
+        # Failures here mean PG is unreachable (refused, SSL drop, auth, etc.)
+        # — route them through the breaker so log spam stays bounded. The use
+        # phase below is intentionally outside this try so caller SQL errors
+        # don't get classified as connection outages.
         try:
-            con.cursor().execute("SELECT 1")
-        except Exception:
-            _pool.putconn(con, close=True)   # properly discard stale connection
-            con = None
             con = _pool.getconn()
-        cur = con.cursor()
-        cur.execute("SET search_path TO %s, public", (schema,))
-        cur.execute(f"SET statement_timeout TO '{_stmt_to}s'")
-        cur.close()
+            # Health check: detect stale connections after PG restart
+            try:
+                con.cursor().execute("SELECT 1")
+            except Exception:
+                _pool.putconn(con, close=True)   # properly discard stale connection
+                con = None
+                con = _pool.getconn()
+            cur = con.cursor()
+            cur.execute("SET search_path TO %s, public", (schema,))
+            cur.execute(f"SET statement_timeout TO '{_stmt_to}s'")
+            cur.close()
+        except PoolClosedError:
+            raise  # shutdown signal, not an outage
+        except Exception as e:
+            _breaker_note_failure(e)
+            raise
+        # Reached PG successfully — close any open outage window.
+        _breaker_note_success()
+        # ── Use phase ─────────────────────────────────────────────────────
         yield con
         con.commit()
     except Exception:

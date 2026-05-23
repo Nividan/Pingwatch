@@ -278,7 +278,13 @@ def _pg_save(state):
                 cur.execute("DELETE FROM sensors")
             cur.close()
     except Exception as e:
-        log.error(f"DB save error: {e}")
+        # Stay quiet during a known PG outage — the breaker has already raised
+        # the WARNING. Surface real errors otherwise.
+        from db.pg_pool import is_pg_in_outage
+        if is_pg_in_outage():
+            log.debug(f"DB save skipped (PG outage): {e}")
+        else:
+            log.error(f"DB save error: {e}")
 
 
 def db_save(state):

@@ -93,6 +93,16 @@ def db_query(schema: str, query: str, params: tuple = ()) -> list:
         if type(e).__name__ == "PoolClosedError":
             log.debug(f"db_query skipped (pool closed): {query[:60]}…")
             return []
+        # Quiet path during a known PG outage: the circuit breaker has already
+        # logged a single WARNING for the outage, so a per-query ERROR here
+        # would just be noise.
+        try:
+            from db.pg_pool import is_pg_in_outage
+            if is_pg_in_outage():
+                log.debug(f"db_query skipped (PG outage) [{query[:60]}…]")
+                return []
+        except Exception:
+            pass
         log.error(f"db_query failed [{query[:60]}…]: {type(e).__name__}: {e}")
         return []
 
