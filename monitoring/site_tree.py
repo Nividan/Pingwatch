@@ -38,6 +38,19 @@ _VALID_TIERS = {
     TIER_CHASSIS, TIER_HYPERVISOR, TIER_VM, TIER_IPMI, TIER_OTHER,
 }
 
+# Per-device Topology Role (ip_allocations.kind, set in the Edit Device modal)
+# → live-map tier. This is an explicit, user-set signal so it outranks both
+# the per-group override and the regex inference. Backbone (aggregation) and
+# core both render in the single CORE SWITCH row; gateway is the edge/firewall
+# row. The remaining roles ('reserved'/'conflict'/'discovered') aren't tier
+# signals and are intentionally absent — they fall through to the regex.
+_ROLE_TO_TIER = {
+    "core":     TIER_CORE_SWITCH,
+    "backbone": TIER_CORE_SWITCH,
+    "switch":   TIER_SWITCH,
+    "gateway":  TIER_FIREWALL,
+}
+
 
 def _load_group_tier_overrides() -> dict:
     """Load `topo_settings.pw_group_tiers` — a `{groupName: tierKey}` map.
@@ -56,6 +69,21 @@ def _load_group_tier_overrides() -> dict:
         return {k: v for k, v in val.items() if v in _VALID_TIERS}
     except Exception as e:
         log.debug(f"site_tree: tier overrides unavailable: {e}")
+        return {}
+
+
+def _load_device_role_overrides() -> dict:
+    """Load per-device Topology Role tags — `{device_id: roleKey}` sourced from
+    ip_allocations.kind (set via the Edit Device modal). Kept only when the role
+    maps to a live-map tier via _ROLE_TO_TIER; everything else is dropped so a
+    non-tier kind never reaches infer_tier(). Returns {} on any failure — the
+    regex fallback in infer_tier() then handles every device either way."""
+    try:
+        from db import db_get_device_roles
+        roles = db_get_device_roles() or {}
+        return {did: r for did, r in roles.items() if r in _ROLE_TO_TIER}
+    except Exception as e:
+        log.debug(f"site_tree: device role overrides unavailable: {e}")
         return {}
 
 
@@ -143,17 +171,26 @@ _TIER_RULES = [
 ]
 
 
-def infer_tier(device, group_overrides: dict | None = None) -> str:
+def infer_tier(device, group_overrides: dict | None = None,
+               role_overrides: dict | None = None) -> str:
     """Best-effort tier classification for a device.
 
     Priority:
-      1. Per-group override from `topo_settings.pw_group_tiers` (set via the
+      1. Per-device Topology Role (`ip_allocations.kind`, set in the Edit Device
+         modal). The most specific, explicitly user-set signal, so it wins over
+         everything below — including a per-group override.
+      2. Per-group override from `topo_settings.pw_group_tiers` (set via the
          Edit Group modal). Lets admins force a misclassified group into the
          right tier without changing device names.
-      2. Regex inference over name + host + group string.
-      3. Fallback to TIER_HYPERVISOR so generic servers still surface as
+      3. Regex inference over name + host + group string.
+      4. Fallback to TIER_HYPERVISOR so generic servers still surface as
          cluster cards in the drill-in instead of disappearing into OTHER.
     """
+    if role_overrides:
+        role = role_overrides.get(getattr(device, "device_id", ""))
+        tier = _ROLE_TO_TIER.get(role)
+        if tier:
+            return tier
     g = (device.group or "").strip()
     if group_overrides and g:
         ov = group_overrides.get(g)
@@ -257,8 +294,10 @@ def site_tree(site_name: str) -> dict:
     """
     site_name = (site_name or "").strip()
     alerts_by_did = _active_alerts_by_did()
-    # Load once per drill-in. Admin Edit-Group overrides win over the regex.
+    # Load once per drill-in. Per-device role wins over the group override,
+    # which in turn wins over the regex.
     group_overrides = _load_group_tier_overrides()
+    role_overrides  = _load_device_role_overrides()
     group_parents   = _load_group_parent_overrides()
 
     # Bucket every device in this site by tier
@@ -277,7 +316,7 @@ def site_tree(site_name: str) -> dict:
     for d in STATE.devices.values():
         if _site_of(d) != site_name:
             continue
-        tier = infer_tier(d, group_overrides)
+        tier = infer_tier(d, group_overrides, role_overrides)
         by_tier_devices[tier].append(d)
 
     # ISP / WAN / Firewall / Core / Access render as individual device cards.
