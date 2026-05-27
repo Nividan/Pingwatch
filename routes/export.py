@@ -663,10 +663,27 @@ def handle(h, method, path, body):
         f_search   = qs.get("search", [""])[0].lower()
         f_limit    = min(int(qs.get("limit", ["2000"])[0] or 2000), 5000)
 
+        # Multi-select level filter — exact-match set, e.g. levels=WARNING,ERROR.
+        # WARN normalises to WARNING; selecting ERROR also matches CRITICAL (the
+        # UI folds CRITICAL into the Error pill). Empty set = all levels.
+        f_levels = set()
+        for _lv in (qs.get("levels", [""])[0]).upper().split(","):
+            _lv = "WARNING" if _lv.strip() == "WARN" else _lv.strip()
+            if _lv:
+                f_levels.add(_lv)
+        if "ERROR" in f_levels:
+            f_levels.add("CRITICAL")
+
         # Normalise WARN → WARNING for the minimum-level comparison.
         _LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "WARN": 30,
                        "ERROR": 40, "CRITICAL": 50}
         f_minlvl_rank = _LEVEL_RANK.get(f_minlvl, 0)
+
+        # Per-level tally over the time+search window, computed BEFORE the level
+        # filter below — powers the faceted count badges so each level shows its
+        # window total regardless of which levels are selected. CRITICAL folds
+        # into ERROR to match the four-pill UI.
+        counts = {"DEBUG": 0, "INFO": 0, "WARNING": 0, "ERROR": 0}
 
         try:
             with open(fpath, "r", encoding="utf-8", errors="replace") as _lf:
@@ -689,17 +706,29 @@ def handle(h, method, path, body):
                     filtered.append(line)
                 continue
             ts, lvl, msg = ml.group(1), ml.group(2), ml.group(3)
-            _pass = True
-            if f_level and lvl != f_level:
-                _pass = False; continue
-            if f_minlvl_rank and _LEVEL_RANK.get(lvl, 0) < f_minlvl_rank:
-                _pass = False; continue
+            _pass = False
+            # Time + search gate first: these define the "window" the count
+            # badges summarize.
             if f_after and ts <= f_after:
-                _pass = False; continue
+                continue
             if f_before and ts >= f_before:
-                _pass = False; continue
+                continue
             if f_search and f_search not in line.lower():
-                _pass = False; continue
+                continue
+            # Tally per level for the window (before the level filter below).
+            _cnt_lvl = ("WARNING" if lvl == "WARN" else
+                        "ERROR"   if lvl == "CRITICAL" else lvl)
+            if _cnt_lvl in counts:
+                counts[_cnt_lvl] += 1
+            # Level filter, applied last so it never skews the counts above.
+            if f_levels and ("WARNING" if lvl == "WARN" else lvl) not in f_levels:
+                continue
+            # Legacy single-level params (kept for back-compat; the UI sends levels=).
+            if f_level and lvl != f_level:
+                continue
+            if f_minlvl_rank and _LEVEL_RANK.get(lvl, 0) < f_minlvl_rank:
+                continue
+            _pass = True
             filtered.append(line)
 
         shown = filtered[-f_limit:]
@@ -727,6 +756,7 @@ def handle(h, method, path, body):
             "total":    total,
             "filtered": len(filtered),
             "shown":    len(shown),
+            "counts":         counts,
             "file_size":      file_size,
             "rotated_count":  rotated_count,
         })

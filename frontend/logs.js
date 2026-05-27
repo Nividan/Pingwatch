@@ -7,7 +7,7 @@
 // ── state ────────────────────────────────────────────────────────────────────
 let _lvBooted    = false;
 let _lvStream    = 'app';
-let _lvFilter    = { timeRange: '6h', minLevel: '', search: '', customFrom: '', customTo: '' };
+let _lvFilter    = { timeRange: '6h', levels: [], search: '', customFrom: '', customTo: '' };
 let _lvLive      = false;
 let _lvTimer     = null;
 let _lvFollow    = true;        // stick to bottom as new lines arrive
@@ -28,6 +28,12 @@ function _lvPrefsLoad() {
     const p = JSON.parse(raw);
     if (p.stream)   _lvStream = p.stream;
     if (p.filter)   _lvFilter = { ..._lvFilter, ...p.filter };
+    // Migrate legacy single-level pref (`minLevel` string) → multi-select array.
+    if (p.filter && typeof p.filter.minLevel === 'string' && !Array.isArray(p.filter.levels)) {
+      _lvFilter.levels = p.filter.minLevel ? [p.filter.minLevel] : [];
+    }
+    if (!Array.isArray(_lvFilter.levels)) _lvFilter.levels = [];
+    delete _lvFilter.minLevel;
     if (typeof p.wrap === 'boolean')   _lvWrap = p.wrap;
     if (typeof p.follow === 'boolean') _lvFollow = p.follow;
   } catch(e) {}
@@ -106,10 +112,6 @@ function _logsInit() {
           <span style="font-size:11px;color:var(--text3)">to</span>
           <input type="datetime-local" id="lvFCustomTo" class="pw-input" onchange="_lvOnFilter()">
         </div>
-        <select id="lvFLevel" class="pw-select" style="display:none" onchange="_lvOnFilter()">
-          <option value=""></option><option value="DEBUG"></option><option value="INFO"></option>
-          <option value="WARNING"></option><option value="ERROR"></option><option value="CRITICAL"></option>
-        </select>
         <div class="search" style="flex:1;max-width:380px">
           ${icon('search',14)}
           <input id="lvFSearch" type="search" placeholder="Search logs…" oninput="_lvOnFilter()" class="lv-search pw-input" style="width:100%">
@@ -131,7 +133,6 @@ function _logsInit() {
   // Restore UI controls from state
   const el = id => document.getElementById(id);
   el('lvFTime').value   = _lvFilter.timeRange || '6h';
-  el('lvFLevel').value  = _lvFilter.minLevel || '';
   el('lvFSearch').value = _lvFilter.search  || '';
   el('lvFCustomFrom').value = _lvFilter.customFrom || '';
   el('lvFCustomTo').value   = _lvFilter.customTo   || '';
@@ -214,8 +215,9 @@ function _lvJumpToLive() {
 
 // ── filters ──────────────────────────────────────────────────────────────────
 function _lvOnFilter() {
+  // Level selection is owned by the pills (_lvSetLevel), not this handler —
+  // this fires for the time-range, custom-date, and search controls only.
   _lvFilter.timeRange  = document.getElementById('lvFTime').value;
-  _lvFilter.minLevel   = document.getElementById('lvFLevel').value;
   _lvFilter.search     = document.getElementById('lvFSearch').value;
   _lvFilter.customFrom = document.getElementById('lvFCustomFrom').value;
   _lvFilter.customTo   = document.getElementById('lvFCustomTo').value;
@@ -224,9 +226,8 @@ function _lvOnFilter() {
   _lvFetch(true);
 }
 function _lvClearFilters() {
-  _lvFilter = { timeRange: '6h', minLevel: '', search: '', customFrom: '', customTo: '' };
+  _lvFilter = { timeRange: '6h', levels: [], search: '', customFrom: '', customTo: '' };
   document.getElementById('lvFTime').value   = '6h';
-  document.getElementById('lvFLevel').value  = '';
   document.getElementById('lvFSearch').value = '';
   document.getElementById('lvFCustomFrom').value = '';
   document.getElementById('lvFCustomTo').value   = '';
@@ -236,33 +237,34 @@ function _lvClearFilters() {
   _lvFetch(true);
 }
 
-// Inline level segmented filter — pills with live counts replace the old dropdown
+// Inline level segmented filter — multi-select toggles with live counts.
+// "All" (empty lvl) clears the set; each level pill toggles in/out of it.
 function _lvSetLevel(lvl) {
-  _lvFilter.minLevel = lvl || '';
-  const sel = document.getElementById('lvFLevel');
-  if (sel) sel.value = _lvFilter.minLevel;
+  if (!lvl) {
+    _lvFilter.levels = [];                  // "All" → no level filter
+  } else {
+    const i = _lvFilter.levels.indexOf(lvl);
+    if (i >= 0) _lvFilter.levels.splice(i, 1);   // toggle off
+    else        _lvFilter.levels.push(lvl);      // toggle on
+  }
   _lvUpdateLevelPills();
   _lvPrefsSave();
   _lvFetch(true);
 }
 function _lvUpdateLevelPills() {
+  const sel = _lvFilter.levels || [];
   document.querySelectorAll('.lv-lvl-pill').forEach(p => {
-    p.classList.toggle('active', (p.dataset.lvl || '') === (_lvFilter.minLevel || ''));
+    const lvl = p.dataset.lvl || '';
+    // A level pill lights when it's in the set; "All" lights when the set is empty.
+    p.classList.toggle('active', lvl ? sel.includes(lvl) : sel.length === 0);
   });
 }
-// Recompute Debug/Info/Warn/Error counts from the rendered lines and refresh the pills + subtitle.
-function _lvUpdateCounts(rawText, r) {
-  const counts = { DEBUG: 0, INFO: 0, WARNING: 0, ERROR: 0 };
-  if (rawText) {
-    for (const line of rawText.split('\n')) {
-      const m = _LV_LINE_RE.exec(line);
-      if (!m) continue;
-      let lv = m[2];
-      if (lv === 'WARN') lv = 'WARNING';
-      if (lv === 'CRITICAL') lv = 'ERROR';
-      if (counts[lv] !== undefined) counts[lv] += 1;
-    }
-  }
+// Refresh the Debug/Info/Warn/Error badges + subtitle. Counts come from the
+// server (`r.counts`) — they reflect the whole time+search window per level,
+// independent of which levels are selected, so the badges act as a faceted
+// preview instead of zeroing out the unselected levels.
+function _lvUpdateCounts(r) {
+  const counts = (r && r.counts) || { DEBUG: 0, INFO: 0, WARNING: 0, ERROR: 0 };
   document.querySelectorAll('.lv-lvl-cnt').forEach(el => {
     const k = el.dataset.cnt;
     el.textContent = counts[k] != null ? counts[k] : 0;
@@ -292,14 +294,16 @@ function _lvApplyWrapUI() {
 // ── fetch + render ───────────────────────────────────────────────────────────
 function _lvBuildQuery() {
   const q = new URLSearchParams();
-  // Exact-match per design: clicking "Info" shows only Info, not Info-and-above.
-  // Backend supports both `level=` (exact) and `min_level=` (inclusive).
-  // The "Error" pill is the exception — fold CRITICAL into it since the design
-  // has no separate CRITICAL pill and the row renderer already styles CRITICAL
-  // with the same red badge as ERROR.
-  if (_lvFilter.minLevel) {
-    if (_lvFilter.minLevel === 'ERROR') q.set('min_level', 'ERROR');
-    else                                q.set('level',     _lvFilter.minLevel);
+  // Multi-select levels → exact-match set sent as `levels=`. Empty = all levels.
+  // The Error pill folds CRITICAL in (no separate CRITICAL pill; the renderer
+  // already styles CRITICAL with the same red badge as ERROR).
+  if (_lvFilter.levels && _lvFilter.levels.length) {
+    const set = [];
+    _lvFilter.levels.forEach(l => {
+      set.push(l);
+      if (l === 'ERROR') set.push('CRITICAL');
+    });
+    q.set('levels', set.join(','));
   }
   if (_lvFilter.search)   q.set('search',    _lvFilter.search);
 
@@ -362,7 +366,7 @@ async function _lvFetch(resetScroll) {
     : `<div class="lv-empty">No log lines match the current filters.</div>`;
 
   // Refresh level pill counts + dynamic subtitle from this batch
-  _lvUpdateCounts(r.lines || '', r);
+  _lvUpdateCounts(r);
 
   // Legacy status bar (if it still exists in some old layout cache)
   if (status) {
