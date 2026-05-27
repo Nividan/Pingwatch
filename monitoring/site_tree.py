@@ -278,6 +278,180 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
     }
 
 
+# ─── Crossing-reduction ordering ───────────────────────────────────────────
+# The Live Map draws a connection line from every card to its parent. Cards are
+# laid out left→right inside their tier row, so a child placed far from its
+# parent forces a long line that crosses its neighbours. We reduce crossings by
+# ordering each tier with the classic layered-graph median (barycenter)
+# heuristic: a card's position is pulled toward the median position of the cards
+# it connects to in the adjacent tiers. The result is a pure function of the
+# parent graph + names (never live status), so card order stays stable across
+# status updates — only an actual topology change reshuffles anything.
+
+# Vertical order of the tiers for the sweep. IPMI renders trailing in the
+# hypervisor row, but it parents to switches, so it sits as its own layer here
+# and gets ordered by its switch parents. `other` is excluded — it renders
+# outside the connection canvas, so its order never affects crossings.
+_SWEEP_ORDER = [
+    TIER_ISP, TIER_WAN_SWITCH, TIER_FIREWALL, TIER_CORE_SWITCH, TIER_SWITCH,
+    TIER_CHASSIS, TIER_HYPERVISOR, TIER_IPMI, TIER_VM,
+]
+
+
+def _median(vals: list):
+    """Median of a list of floats, or None when empty."""
+    s = sorted(vals)
+    n = len(s)
+    if not n:
+        return None
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def _card_id(card: dict) -> str:
+    """Stable identity: a device card's did, or 'group:<name>' for a cluster."""
+    if "did" in card:
+        return card["did"]
+    return "group:" + (card.get("name") or "")
+
+
+def _card_sort_name(card: dict) -> str:
+    return (card.get("name") or "").lower()
+
+
+def _order_site_tiers(tiers: dict, by_parent: dict) -> None:
+    """Reorder each tier's card list (in place) to minimize connection-line
+    crossings. `tiers` maps every _SWEEP_ORDER key to its card list."""
+
+    # Deterministic seed so the sweep — and any tier the graph can't order —
+    # is reproducible run to run.
+    for key in _SWEEP_ORDER:
+        tiers[key].sort(key=_card_sort_name)
+
+    def _pos_index():
+        """Map did / group-name → normalized slot center in [0,1] for the
+        CURRENT order. Cluster members all resolve to their cluster's slot."""
+        did_pos, grp_pos = {}, {}
+        for key in _SWEEP_ORDER:
+            cards = tiers[key]
+            n = len(cards) or 1
+            for i, card in enumerate(cards):
+                norm = (i + 0.5) / n
+                if "did" in card:
+                    did_pos[card["did"]] = norm
+                else:
+                    grp_pos[card.get("name", "")] = norm
+                    for cell in card.get("cells", []):
+                        did_pos[cell["did"]] = norm
+        return did_pos, grp_pos
+
+    def _resolve(pid, did_pos, grp_pos):
+        if isinstance(pid, str) and pid.startswith("group:"):
+            return grp_pos.get(pid[6:])
+        return did_pos.get(pid)
+
+    def _child_keys(card):
+        """The parent-refs that point AT this card (so by_parent[...] yields
+        its children)."""
+        if "did" in card:
+            return [card["did"]]
+        keys = ["group:" + (card.get("name") or "")]
+        for cell in card.get("cells", []):
+            keys.append(cell["did"])
+        return keys
+
+    def _reorder(cards, key_fn):
+        n = len(cards) or 1
+        decorated = []
+        for i, card in enumerate(cards):
+            k = key_fn(card)
+            if k is None:                    # no resolvable neighbour → hold slot
+                k = (i + 0.5) / n
+            decorated.append((k, _card_sort_name(card), card))
+        decorated.sort(key=lambda t: (t[0], t[1]))
+        cards[:] = [c for _, _, c in decorated]
+
+    def _down_pass():
+        # Order each tier by the median position of its PARENTS (above). Rebuild
+        # the index per tier so lower tiers see the new order set this pass.
+        for key in _SWEEP_ORDER:
+            did_pos, grp_pos = _pos_index()
+            def parent_key(card, _dp=did_pos, _gp=grp_pos):
+                pos = [p for p in (_resolve(pid, _dp, _gp)
+                                   for pid in card.get("parent_device_ids", []))
+                       if p is not None]
+                return _median(pos)
+            _reorder(tiers[key], parent_key)
+
+    def _up_pass():
+        # Order each tier by the median position of its CHILDREN (below).
+        for key in reversed(_SWEEP_ORDER):
+            did_pos, grp_pos = _pos_index()
+            def child_key(card, _dp=did_pos, _gp=grp_pos):
+                pos = []
+                for ck in _child_keys(card):
+                    for ref in by_parent.get(ck, []):
+                        p = (_gp.get(ref.get("name")) if ref.get("kind") == "cluster"
+                             else _dp.get(ref.get("did")))
+                        if p is not None:
+                            pos.append(p)
+                return _median(pos)
+            _reorder(tiers[key], child_key)
+
+    # Alternating sweeps converge the layout; end on a down-pass so children
+    # finish aligned under their parents (the dominant visual).
+    _up_pass()
+    _down_pass()
+    _up_pass()
+    _down_pass()
+
+    # Same-row adjacency: pull intra-tier linked cards (e.g. an access switch
+    # uplinking to a sibling switch) next to each other so the side-to-side
+    # line stays a short hop instead of arcing across the row. Runs last so the
+    # barycenter sweep can't undo it.
+    for key in _SWEEP_ORDER:
+        cards = tiers[key]
+        if len(cards) < 3:
+            continue
+        ids = {_card_id(c): c for c in cards}
+        adj = defaultdict(set)
+        for c in cards:
+            cid = _card_id(c)
+            for pid in c.get("parent_device_ids", []):
+                tgt = None
+                if isinstance(pid, str) and pid.startswith("group:"):
+                    g = "group:" + pid[6:]
+                    if g in ids:
+                        tgt = g
+                elif pid in ids:
+                    tgt = pid
+                if tgt and tgt != cid:
+                    adj[cid].add(tgt)
+                    adj[tgt].add(cid)
+        if not adj:
+            continue
+        placed, out = set(), []
+        for c in cards:
+            cid = _card_id(c)
+            if cid in placed:
+                continue
+            # Gather this card's connected component, then emit its members
+            # contiguously in their current (barycenter) order.
+            comp, stack = set(), [cid]
+            while stack:
+                x = stack.pop()
+                if x in comp:
+                    continue
+                comp.add(x)
+                stack.extend(adj.get(x, ()))
+            for cc in cards:
+                ccid = _card_id(cc)
+                if ccid in comp and ccid not in placed:
+                    out.append(cc)
+                    placed.add(ccid)
+        cards[:] = out
+
+
 def site_tree(site_name: str) -> dict:
     """Compute the tier tree for a single site.
 
@@ -422,6 +596,24 @@ def site_tree(site_name: str) -> dict:
     missing_parents = {pid for pid in by_parent
                        if not pid.startswith("group:")
                        and pid not in STATE.devices}
+
+    # Reorder tiers in place to minimize connection-line crossings. by_parent
+    # is keyed by parent ref and is unaffected by card order, so it's safe to
+    # read here and still return as-is.
+    _order_site_tiers(
+        {
+            TIER_ISP:         isp_cards,
+            TIER_WAN_SWITCH:  wan_cards,
+            TIER_FIREWALL:    firewalls,
+            TIER_CORE_SWITCH: core_switches,
+            TIER_SWITCH:      switches,
+            TIER_CHASSIS:     chassis,
+            TIER_HYPERVISOR:  hypervisors,
+            TIER_IPMI:        ipmi,
+            TIER_VM:          vm_clusters,
+        },
+        by_parent,
+    )
 
     return {
         "site": {

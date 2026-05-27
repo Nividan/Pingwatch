@@ -742,6 +742,15 @@ const _CONN_STYLES = {
   'other':       { color: 'var(--up)',      dashed: false },
 };
 
+// Vertical tier index — mirrors site_tree._SWEEP_ORDER. A link whose endpoints
+// are ≥2 apart "skips" a tier; such links are candidates for side-channel
+// routing so they don't run straight through the intervening row's cards.
+// IPMI shares the hypervisor row's index since it renders trailing in it.
+const _TIER_INDEX = {
+  isp: 0, wan_switch: 1, firewall: 2, core_switch: 3, switch: 4,
+  chassis: 5, hypervisor: 6, ipmi: 6, vm: 7, other: 8,
+};
+
 function _cardLabel(el) {
   if (!el) return '';
   const t = el.querySelector('.dev-name') || el.querySelector('.cluster-title');
@@ -952,6 +961,34 @@ function _drawConnections(canvasEl) {
     svg.appendChild(dot);
   }
 
+  // Card-rect index (canvas-relative) for skip-tier cross-detection. A skip
+  // link only diverts to a side-channel when its straight vertical would
+  // actually pass through some OTHER card — clean drops stay straight.
+  const cardRects = [];
+  canvasEl.querySelectorAll('.dev, .cluster').forEach(function(el) {
+    const r = el.getBoundingClientRect();
+    cardRects.push({ el: el,
+      left: r.left - cRect.left, right: r.right - cRect.left,
+      top:  r.top  - cRect.top,  bottom: r.bottom - cRect.top });
+  });
+  function _verticalCrossesCard(x, yTop, yBot, childEl, parentEl) {
+    for (let i = 0; i < cardRects.length; i++) {
+      const cr = cardRects[i];
+      if (cr.el === childEl || cr.el === parentEl) continue;
+      if (x > cr.left + 2 && x < cr.right - 2 &&
+          yBot > cr.top + 2 && yTop < cr.bottom - 2) return true;
+    }
+    return false;
+  }
+
+  // Lane bookkeeping (greedy interval colouring), shared across all parents:
+  //   placedTrunks — horizontal trunk buses, separated by Y lane within a band
+  //                  (same parent-row) so parallel trunks never stack.
+  //   sideLanes    — skip-tier verticals in a left/right gutter, separated so
+  //                  multiple long-haul links don't overlap in the margin.
+  const placedTrunks = [];
+  const sideLanes = [];
+
   parentMap.forEach(function(children, parentEl) {
     const pRect = parentEl.getBoundingClientRect();
     const pCenterX = pRect.left + pRect.width / 2 - cRect.left;
@@ -1006,43 +1043,68 @@ function _drawConnections(canvasEl) {
       _appendNotch(cSideX, cMidY, style.color, longHaul);
     });
 
-    // ── Below-row routing (original fan-out + trunk underlay) ──
+    // ── Below-row routing (laned trunk + skip-tier side-channels) ──
     if (!below.length) return;
 
-    let nearestChildTop = Infinity;
+    // Adjacent-tier children share a fanned trunk just below the parent.
+    // Skip-tier children (≥2 tiers down) may need a gutter to avoid running
+    // straight through the intervening row's cards.
+    const parentTier = parentEl.getAttribute('data-tier') || 'other';
+    const pIdx = _TIER_INDEX[parentTier] != null ? _TIER_INDEX[parentTier] : 99;
+    const trunkKids = [], skipKids = [];
     below.forEach(function(c) {
-      const r = c.childEl.getBoundingClientRect();
-      const top = r.top - cRect.top;
-      if (top < nearestChildTop) nearestChildTop = top;
-    });
-    const gap = nearestChildTop - py;
-    const trunkY = _snap4(py + Math.max(8, Math.min(22, gap / 2)));
-
-    const N = below.length;
-    const fanWidth = N <= 1 ? 0
-      : Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
-    const fanStart = pCenterX - fanWidth / 2;
-    const fanStep  = N > 1 ? fanWidth / (N - 1) : 0;
-    below.forEach(function(c, i) {
-      c._entryX = (N === 1) ? pCenterX : _snap4(fanStart + i * fanStep);
+      const cIdx = _TIER_INDEX[c.tier] != null ? _TIER_INDEX[c.tier] : 99;
+      (Math.abs(cIdx - pIdx) >= 2 ? skipKids : trunkKids).push(c);
     });
 
-    // Trunk underlay
-    if (N > 1) {
-      const tierCounts = {};
-      below.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
-      const dominantTier = Object.keys(tierCounts).sort(function(a, b) {
-        return tierCounts[b] - tierCounts[a];
-      })[0];
-      const trunkStyle = _CONN_STYLES[dominantTier] || _CONN_STYLES.other;
-      const xs = below.map(function(c) {
+    // ---- adjacent-tier children: fan-out + a Y-laned shared trunk ----
+    if (trunkKids.length) {
+      let nearestChildTop = Infinity;
+      trunkKids.forEach(function(c) {
+        const top = c.childEl.getBoundingClientRect().top - cRect.top;
+        if (top < nearestChildTop) nearestChildTop = top;
+      });
+      const gap = nearestChildTop - py;
+
+      const N = trunkKids.length;
+      const fanWidth = N <= 1 ? 0
+        : Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
+      const fanStart = pCenterX - fanWidth / 2;
+      const fanStep  = N > 1 ? fanWidth / (N - 1) : 0;
+      trunkKids.forEach(function(c, i) {
+        c._entryX = (N === 1) ? pCenterX : _snap4(fanStart + i * fanStep);
+      });
+
+      const xs = trunkKids.map(function(c) {
         const r = c.childEl.getBoundingClientRect();
         return _snap4(r.left + r.width / 2 - cRect.left);
       });
-      const entryXs = below.map(function(c) { return c._entryX; });
+      const entryXs = trunkKids.map(function(c) { return c._entryX; });
       const trunkLeft  = Math.min(Math.min.apply(null, xs), Math.min.apply(null, entryXs));
       const trunkRight = Math.max(Math.max.apply(null, xs), Math.max.apply(null, entryXs));
-      if (trunkRight - trunkLeft > 4) {
+
+      // Lane: lowest Y-slot in this parent-row band whose X-span doesn't
+      // overlap an already-placed trunk — so sibling trunks never stack on the
+      // same pixel row. Band groups parents at a near-identical bottom edge.
+      const band = Math.round(py / 6);
+      let lane = 0;
+      while (placedTrunks.some(function(t) {
+        return t.band === band && t.lane === lane &&
+               !(trunkRight < t.left - 6 || trunkLeft > t.right + 6);
+      })) lane++;
+      placedTrunks.push({ band: band, lane: lane, left: trunkLeft, right: trunkRight });
+      let trunkY = _snap4(py + Math.max(8, Math.min(22, gap / 2)) + lane * 8);
+      const maxY = _snap4(nearestChildTop - 6);
+      if (trunkY > maxY) trunkY = maxY;
+
+      // Trunk underlay
+      if (N > 1 && trunkRight - trunkLeft > 4) {
+        const tierCounts = {};
+        trunkKids.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
+        const dominantTier = Object.keys(tierCounts).sort(function(a, b) {
+          return tierCounts[b] - tierCounts[a];
+        })[0];
+        const trunkStyle = _CONN_STYLES[dominantTier] || _CONN_STYLES.other;
         const bus = document.createElementNS(svgNs, 'path');
         bus.setAttribute('d', 'M ' + trunkLeft + ' ' + trunkY + ' H ' + trunkRight);
         bus.setAttribute('stroke', trunkStyle.color);
@@ -1052,23 +1114,67 @@ function _drawConnections(canvasEl) {
         bus.setAttribute('class', 'conn-trunk-bus');
         svg.appendChild(bus);
       }
+
+      trunkKids.forEach(function(c) {
+        const r = c.childEl.getBoundingClientRect();
+        const cx = _snap4(r.left + r.width / 2 - cRect.left);
+        const cy = r.top - cRect.top;
+        const entryX = c._entryX;
+        const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
+        const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
+        const d = 'M ' + cx + ' ' + cy +
+                  ' V ' + trunkY +
+                  ' H ' + entryX +
+                  ' V ' + py;
+        _appendHit(d, parentLabel, c.childEl, c.mappings);
+        _appendLine(d, style, longHaul);
+        _appendNotch(cx,     cy, style.color, longHaul);
+        _appendNotch(entryX, py, style.color, longHaul);
+      });
     }
 
-    below.forEach(function(c) {
+    // ---- skip-tier children: straight drop when clear, gutter when blocked ----
+    skipKids.forEach(function(c) {
       const r = c.childEl.getBoundingClientRect();
       const cx = _snap4(r.left + r.width / 2 - cRect.left);
       const cy = r.top - cRect.top;
-      const entryX = c._entryX;
+      const pY = _snap4(py);
       const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
-      const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
+      // Reordering usually parks the child under its parent, so a straight
+      // vertical clears every intervening card — keep it straight when so.
+      if (!_verticalCrossesCard(cx, pY, cy, c.childEl, parentEl)) {
+        const d = 'M ' + cx + ' ' + cy + ' V ' + pY +
+                  (Math.abs(cx - pCenterX) > 2 ? ' H ' + _snap4(pCenterX) : '');
+        const longHaul = Math.abs(cx - pCenterX) > LONG_HAUL_PX;
+        _appendHit(d, parentLabel, c.childEl, c.mappings);
+        _appendLine(d, style, longHaul);
+        _appendNotch(cx, cy, style.color, longHaul);
+        _appendNotch(_snap4(pCenterX), pY, style.color, longHaul);
+        return;
+      }
+      // Blocked → run up a side gutter on the nearer canvas edge, with its own
+      // vertical lane so multiple skip links don't overlap in the margin.
+      const leftSide = ((cx + pCenterX) / 2) < (cRect.width / 2);
+      const top = Math.min(pY, cy), bot = Math.max(pY, cy);
+      let glane = 0;
+      while (sideLanes.some(function(s) {
+        return s.side === leftSide && s.lane === glane &&
+               !(bot < s.top - 6 || top > s.bottom + 6);
+      })) glane++;
+      sideLanes.push({ side: leftSide, lane: glane, top: top, bottom: bot });
+      // Left gutter hugs the canvas edge (x<16), staying left of the
+      // absolutely-positioned tier-tag labels so it never crosses them.
+      const gutterX = _snap4(leftSide ? (8 + glane * 9)
+                                      : (cRect.width - 12 - glane * 9));
       const d = 'M ' + cx + ' ' + cy +
-                ' V ' + trunkY +
-                ' H ' + entryX +
-                ' V ' + py;
+                ' V ' + _snap4(cy - 6) +
+                ' H ' + gutterX +
+                ' V ' + pY +
+                ' H ' + _snap4(pCenterX);
       _appendHit(d, parentLabel, c.childEl, c.mappings);
-      _appendLine(d, style, longHaul);
-      _appendNotch(cx,     cy, style.color, longHaul);
-      _appendNotch(entryX, py, style.color, longHaul);
+      _appendLine(d, style, true);   // long-haul styling (dimmed, slower dash)
+      _appendNotch(cx, cy, style.color, true);
+      _appendNotch(_snap4(pCenterX), pY, style.color, true);
     });
   });
 
